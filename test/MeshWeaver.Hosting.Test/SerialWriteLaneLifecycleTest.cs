@@ -451,4 +451,41 @@ public class SerialWriteLaneLifecycleTest
                 write.Dispose();
         }
     }
+    [Fact]
+    public async Task ADeleteGivenUpWhileWaitingForABudgetSlot_IsAbandoned_NeitherCreditedNorRun()
+    {
+        using var registry = new IoPoolRegistry(new IoPoolOptions { PostgresWrite = 1 });
+        var budget = registry.Get(IoPoolNames.PostgresWriteBudgetPrefix + "Postgres");
+        var holder = registry.GetSerialLane("pg:Postgres:budgetholder", budget);
+        var waiter = registry.GetSerialLane("pg:Postgres:budgetwaiter", budget);
+        var invoked = 0;
+        var next = new ReplaySubject<int>();
+        IDisposable? holderWrite = null, nextWrite = null;
+        try
+        {
+            holderWrite = holder.Run(ParkedLeaf).Subscribe(_ => { }, _ => { });
+            await LaneReading(holder, r => r.InFlight == 1).Should().Within(Bound).Emit("the holder takes the only budget slot");
+            var delete = waiter.Run(_ => { Interlocked.Increment(ref invoked); return Task.FromResult(2); }, isDelete: true)
+                .Subscribe(_ => { }, _ => { });
+            await LaneReading(waiter, r => r.AwaitingDelete).Should().Within(Bound).Emit("the delete waits for a budget slot");
+
+            delete.Dispose();
+            var reading = waiter.Read();
+            reading.AwaitingBudget.Should().BeFalse("🚨 an abandoned budget wait must leave the readings at once");
+            reading.AwaitingDelete.Should().BeFalse();
+            MeshExtensions.EarnsQueueCredit(MeshExtensions.WriteLaneAdmissions(registry), MeshExtensions.WriteLaneAdmissions(registry))
+                .Should().BeFalse("no delete waits any more, so none earns credit");
+
+            // The lane moves on without waiting for the slot.
+            nextWrite = waiter.Run(_ => Task.FromResult(7)).Subscribe(next);
+        }
+        finally
+        {
+            Volatile.Write(ref _release, 1);
+        }
+        (await next.Should().Within(Bound).Emit("the next write on the lane runs")).Should().Be(7);
+        Volatile.Read(ref invoked).Should().Be(0, "🚨 the abandoned delete's delegate must never be invoked");
+        holderWrite?.Dispose();
+        nextWrite?.Dispose();
+    }
 }

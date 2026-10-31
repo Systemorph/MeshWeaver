@@ -125,6 +125,14 @@ public sealed class SerialWriteLane : IDisposable
                 // never reports a write that will not run (the dequeue takes the same transition).
                 if (pending.TryLeaveQueue())
                     LeaveQueue(isDelete);
+                // Given up while its turn WAITS FOR A BUDGET SLOT: abandoned at once — it leaves the
+                // readings (no queue credit for a write nobody waits for), its budget wait is
+                // withdrawn, its delegate is never invoked, and the lane moves on.
+                else
+                {
+                    pending.MarkGivenUp();
+                    pending.AbandonIfAwaiting();
+                }
                 // 🚨 The cancel is raised OFF the disposing thread: cancelling runs the leaf's
                 // registered callbacks (a database cancel request) synchronously, and the thread giving
                 // up may be a hub turn or a watchdog. The lane is still held until the leaf terminates.
@@ -171,39 +179,64 @@ public sealed class SerialWriteLane : IDisposable
                 $"Write lane '{Name}' is draining; a write subscribed after the drain began does not run."));
 
         Interlocked.Increment(ref _admitted);
-        Volatile.Write(ref _awaitingDelete, pending.IsDelete ? 1 : 0);
-        Volatile.Write(ref _awaitingBudget, 1);
-        CancellationTokenSource? linked = null;
-        return _budget.Invoke(budgetCt =>
+        return Observable.Create<Unit>(item =>
+        {
+            CancellationTokenSource? linked = null;
+            var budgetWait = new SingleAssignmentDisposable();
+            var ended = 0;
+
+            // Ends this write's turn exactly once — after its leaf terminated, or when it was abandoned
+            // while still waiting for a slot. The state is cleared BEFORE the completion is forwarded:
+            // Concat starts the next write from inside that completion.
+            void EndTurn()
             {
-                // The budget granted a slot: from here the write EXECUTES.
-                Volatile.Write(ref _headIsDelete, pending.IsDelete ? 1 : 0);
-                Volatile.Write(ref _inFlight, 1);
-                Volatile.Write(ref _awaitingBudget, 0);
-                Volatile.Write(ref _awaitingDelete, 0);
-                // The caller's cancellation linked into the leaf, disposed when the leaf has
-                // terminated (below) — no awaited helper outside the pool.
-                linked = CancellationTokenSource.CreateLinkedTokenSource(cancel.Token, budgetCt);
-                return io(linked.Token);
-            })
-            // Deliver the outcome to THIS write's caller, and end the item normally either way, so
-            // the next write runs after this leaf terminated — never before.
-            .Materialize()
-            .Do(notification => Deliver(notification, observer, context))
-            .Where(_ => false)
-            .Select(_ => Unit.Default)
-            // 🚨 Cleared BEFORE the item's completion is forwarded, never in a Finally: Concat starts
-            // the next write from inside that completion, and a Finally runs after it — it would
-            // clear the NEXT write's head state (a running delete would read as no write at all).
-            .Do(_ => { }, () =>
-            {
+                if (Interlocked.Exchange(ref ended, 1) != 0)
+                    return;
                 linked?.Dispose();
                 Volatile.Write(ref _inFlight, 0);
                 Volatile.Write(ref _headIsDelete, 0);
                 Volatile.Write(ref _awaitingBudget, 0);
                 Volatile.Write(ref _awaitingDelete, 0);
                 Finish(pending.Ticket);
+                item.OnCompleted();
+            }
+
+            Volatile.Write(ref _awaitingDelete, pending.IsDelete ? 1 : 0);
+            Volatile.Write(ref _awaitingBudget, 1);
+            pending.Await(() =>
+            {
+                // Abandoned before a slot was granted: withdraw the budget wait (IoPool's acquisition
+                // is cancellable by unsubscribing — no slot is taken or leaked) and end the turn.
+                budgetWait.Dispose();
+                EndTurn();
             });
+            budgetWait.Disposable = _budget.Invoke(budgetCt =>
+                {
+                    // The slot is granted. Claim the turn for EXECUTION — or, when the caller already
+                    // abandoned it, do not invoke the delegate at all.
+                    if (!pending.TryExecute())
+                        return Task.FromCanceled<T>(new CancellationToken(canceled: true));
+                    Volatile.Write(ref _headIsDelete, pending.IsDelete ? 1 : 0);
+                    Volatile.Write(ref _inFlight, 1);
+                    Volatile.Write(ref _awaitingBudget, 0);
+                    Volatile.Write(ref _awaitingDelete, 0);
+                    // The caller's cancellation linked into the leaf, disposed when the turn ends —
+                    // no awaited helper outside the pool.
+                    linked = CancellationTokenSource.CreateLinkedTokenSource(cancel.Token, budgetCt);
+                    return io(linked.Token);
+                })
+                .Materialize()
+                .Subscribe(notification =>
+                {
+                    // Deliver the outcome to THIS write's caller (an abandoned one has no caller left),
+                    // and end the turn only once the leaf has terminated.
+                    if (!pending.IsAbandoned)
+                        Deliver(notification, observer, context);
+                    if (notification.Kind != NotificationKind.OnNext)
+                        EndTurn();
+                });
+            return budgetWait;
+        });
     }
 
     /// <summary>
@@ -282,6 +315,38 @@ public sealed class SerialWriteLane : IDisposable
     private sealed class PendingWrite(bool isDelete)
     {
         private int _left;
+        // 0 = not yet at its turn, 1 = waiting for a budget slot, 2 = executing, 3 = abandoned while
+        // waiting. Execution and abandonment race for the same CAS out of 1, so exactly one wins.
+        private int _phase;
+        private Action? _abandon;
+
+        /// <summary>Enters the budget wait, with what to do if the caller abandons it there.</summary>
+        public void Await(Action abandon)
+        {
+            _abandon = abandon;
+            Interlocked.Exchange(ref _phase, 1);
+            // Given up in the moment between its dequeue and this wait: abandon it now.
+            if (Volatile.Read(ref _givenUp) != 0)
+                AbandonIfAwaiting();
+        }
+
+        private int _givenUp;
+
+        /// <summary>Records that the caller gave the write up after its dequeue.</summary>
+        public void MarkGivenUp() => Interlocked.Exchange(ref _givenUp, 1);
+
+        /// <summary>Claims the turn for execution; <c>false</c> when the caller abandoned it first.</summary>
+        public bool TryExecute() => Interlocked.CompareExchange(ref _phase, 2, 1) == 1;
+
+        /// <summary>Abandons the turn if it is still waiting for a budget slot.</summary>
+        public void AbandonIfAwaiting()
+        {
+            if (Interlocked.CompareExchange(ref _phase, 3, 1) == 1)
+                _abandon?.Invoke();
+        }
+
+        /// <summary>Whether the caller abandoned the turn while it waited for a slot.</summary>
+        public bool IsAbandoned => Volatile.Read(ref _phase) == 3;
 
         public bool IsDelete { get; } = isDelete;
 
