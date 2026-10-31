@@ -1894,7 +1894,9 @@ public static class StaticRepoImporter
                             }
 
                             // Incremental skip: unchanged since the last import (same source token) AND the
-                            // node is actually present (so a drifted/deleted node still re-imports). Skips the
+                            // node is actually present (so a DELETED node still re-imports). A node a runtime
+                            // writer CHANGED since is NOT detected here — the token describes the source, not
+                            // the live node — so only Force or Reconcile re-applies it (#6639). Skips the
                             // expensive cross-hub upsert + owner re-render. Token is over the RAW source node,
                             // matching what the manifest stored.
 
@@ -1983,7 +1985,12 @@ public static class StaticRepoImporter
 
                             // Reconcile was requested because this ledger disagrees with the live
                             // sources; evaluate the write with conflict protection instead of trusting it.
-                            if (policy?.Reconcile != true && target is not null
+                            // 🚨 Force bypasses this skip too (#6639). The manifest token records what the
+                            // import last WROTE, not what the node holds now, so "token unchanged" cannot
+                            // tell an untouched node from one a runtime writer overwrote since. A forced
+                            // import exists to discard exactly that drift; skipping here made it report
+                            // "Imported" while the drifted rows stayed as they were.
+                            if (policy?.Reconcile != true && policy?.Force != true && target is not null
                                 && manifest.TryGetValue(path, out var prevToken)
                                 && string.Equals(prevToken, token, StringComparison.Ordinal))
                             {
