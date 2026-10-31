@@ -344,32 +344,32 @@ unknown member at that same nesting level. Without that distinction, the first c
 roll after strict import refused five valid deployment files
 ([Memex #601](https://github.com/Systemorph/Memex/issues/601)).
 
-#### A compiled NodeType's abstract member, and a subtype nothing here knows
+#### A compiled NodeType's abstract member imports verbatim
 
 Strictness is about **lossy** reads, never about content this process merely cannot type
-([#6639](https://github.com/Systemorph/MeshWeaver/issues/6639)). Two rules keep the line in the right
-place:
+([#6639](https://github.com/Systemorph/MeshWeaver/issues/6639)). A runtime-compiled NodeType's
+content type reaches the importing hub through the mesh content-type map, because a compiled type is
+never adopted into a long-lived hub's type registry. So when that content has a member declared as
+an abstract base (`SectionCover Cover`), the subtype its `$type` names cannot be resolved there,
+and the serializer cannot instantiate the member. A forced update once refused a whole Space over
+fourteen valid section files for exactly this reason.
 
-- **A compiled build's subtypes come from that build.** A runtime-compiled NodeType's content is
-  reached on the importing hub through the mesh content-type map, because a compiled type is never
-  adopted into a long-lived hub's type registry. Its members typed as an abstract base
-  (`SectionCover Cover`) were then unreadable there: the polymorphic resolver looked for subtypes
-  only in that registry, found none, and the serializer refused the abstract member — a forced
-  update refused a whole Space over fourteen valid section files. `PolymorphicTypeInfoResolver` now
-  reads the subtypes of a base from a collectible assembly out of that same assembly, under the
-  discriminator the owning hub writes (the short name), without registering anything. A short name
-  two subtypes of the same build share is added for NEITHER — binding whichever the assembly
-  enumerated first would put one record's content into the other and silently drop members — so
-  that content stays raw JSON.
-- **A subtype nothing can resolve is kept verbatim.** When a `$type` under an abstract member names
-  a type no build in this process defines, the content stays as its raw JSON and is imported
-  byte for byte. Only a `JsonException` — an authored member this image would DROP — still refuses
-  the snapshot; the "cannot instantiate an abstract type" failure is not lossy and no longer does
-  (`JsonElementNormalizer.KeepsRawJson`, the one rule for the object converter and the content-type
-  recovery).
+That failure is not lossy, so it no longer refuses. The content stays as its raw JSON and is
+imported byte for byte, `$type` and every member included. The rule lives in one place,
+`JsonElementNormalizer.KeepsRawJson`, shared by the object converter and the content-type recovery:
 
-`CompiledAbstractMemberImportsTest` loads its types from a collectible copy of the test assembly —
-the state a compiled NodeType leaves a mesh hub in — and measures both rules.
+- a `JsonException` (an authored member this image would DROP) still refuses the snapshot;
+- a `NotSupportedException` (a type this process cannot instantiate) keeps the raw JSON.
+
+`ReadOnlyCollectionConverter<T>` follows the same rule for an abstract-typed collection. It reports
+an uninstantiable element as a `NotSupportedException`; it used to rethrow it as an
+`InvalidOperationException`, which read as a lossy bind.
+
+The imported node is stored correctly, but it is untyped on a hub other than its NodeType's own.
+Binding compiled subtypes to their CLR types on the importing hub is a separate design question, not
+part of this rule. `CompiledAbstractMemberImportsTest` loads its types from a collectible copy of the
+test assembly, which is the state a compiled NodeType leaves a mesh hub in, and measures the member,
+the unknown-`$type` and the collection shapes.
 
 #### A retired `MeshNode` field is a build error, not a tolerated field
 
