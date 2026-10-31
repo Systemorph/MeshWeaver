@@ -289,6 +289,46 @@ Tests:
 - Which of the 48 clones belonged to GitSync and which to request-path reads. The temp directories carry no owner.
 - That the nine 08:33–08:35Z listing refusals on `5j9gx` were a wave and not that replica's first listing read. Either is consistent with the log.
 
+## After the live index sources: what the AUTH FILTER still read per request (#7354)
+
+MeshWeaver.Plugins#4472 moved the index's install records and partition registry onto mesh-scoped
+live listings (`PluginBundleIndexSources`), so index assembly opens no mesh query per poll. The
+consumer side still logged three `plugin-registry-standard` attempts with `Result: '503'` after that
+build was running: two at ~25.6 s and one at **10.09 s**. The consumer log does not name the route,
+so which request each one was is NOT established — index assembly, another route, or a cold replica
+after a pod roll all remain possible. What the timings FIT is the auth filter every registry route
+passes first, which was found to still pay a mesh read per request in two places. Those two costs are
+real and are fixed whatever the three 503s turn out to have been:
+
+- **The instance and grant mirrors were idle-released between polls.** `InstanceRegistryAuthenticator`
+  reads each leg as a `Take(1)` off the process-wide `IMeshNodeStreamCache`, which releases a read entry
+  with no live subscriber after `ReadStreamIdleExpiration` (ten minutes). A consumer's safety-net poll
+  comes every thirty minutes, so every poll found both mirrors cold and opened a fresh owner
+  subscription under the ten-second budget. That fits the 10.09 s shape (as would a first request on a
+  freshly rolled replica, which this change does not avoid). The authenticator now HOLDS one
+  subscription on each mirror it has found present, so the cache never releases it. The hold ends when
+  the node is deleted (the mirror completes), when the mirror faults (the next request re-holds it), or
+  when the mesh disposes the service. It is bounded by the registered instances, never by presented keys:
+  an unknown key is refused by the listing before any mirror is opened.
+- **The plan ladder re-ran a mesh query whenever its one-minute snapshot had expired**, which for a
+  poller is every request. That read sat after the ten-second legs and outside their deadline, bounded
+  only by the query fan-in's own budget. Ten seconds of legs plus up to fifteen of ladder fits inside
+  the registry's twenty-five-second answer deadline, which then answers 503. That is consistent with
+  the ~25.6 s shape, but the consumer log does not name the route, so it is not established. The ladder
+  is now ONE synced listing of `Admin/Tiers` in the same cache (`PlanTierLadder.ListingId`), hydrated
+  once per process and kept current by the change feed.
+
+Pinned by `RegistryAuthenticationOpensNoReadPerRequestTest` (`MeshWeaver.Hosting.Test`). It shortens the
+idle window to 500 ms. Then: no leg's mirror is released across a full idle sweep, ten concurrent
+resolutions afterwards release or re-open nothing, and ten concurrent ladder reads share one listing.
+It was red before the change: all three legs released, and no ladder listing existed. The negative
+control: a grant widened after the idle window, and then a disable, are each what the next resolution
+decides with, and a tier added after the first ladder read reaches a later one.
+
+To tell the route on the consumer side next time, the registry clients' resilience events now carry
+`Operation Key: '<METHOD> <path>'` (MeshWeaver.Plugins `ServiceDefaults`). The registry side already
+names the path in both of its 503 lines.
+
 ## The second defect: exhaustion leaves no readable mark
 
 When the attempts do exhaust, nothing an operator can see records it:
