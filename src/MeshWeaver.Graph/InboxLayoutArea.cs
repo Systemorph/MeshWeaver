@@ -565,7 +565,7 @@ public static class InboxLayoutArea
 
     /// <summary>
     /// The tag checkboxes: Important first, then each tag by use with its count; the ones in <paramref name="ticked"/> are
-    /// ticked. 🚨 While the rows are INCOMPLETE (a source still stands in, <see cref="FanIn"/>), a ticked box whose tag
+    /// ticked. 🚨 While the rows are INCOMPLETE (<see cref="Incomplete"/>: a source stands in or could not be read), a ticked box whose tag
     /// is absent from them is kept from <paramref name="held"/>, ticked: its tag may sit only in the source that has not
     /// answered, and dropping it would untick it — silently widening the filter — by the time that source answers. Pure.
     /// </summary>
@@ -981,19 +981,20 @@ public static class InboxLayoutArea
                     return Observable.Return((ImmutableList<InboxRow>.Empty, (string?)labels[section.Source], 0));
                 });
 
-        // The merged rows, and whether any source still stands in (so they are incomplete).
+        // The merged rows, and whether they are incomplete (a source stands in or could not be read).
         IObservable<(ImmutableList<InboxRow> Rows, bool Incomplete)> Merged(string term) => FanIn(
                 sections.Select(section => (labels[section.Source], Leg(section, term))), legBound)
             .Do(legs =>
             {
                 host.UpdateData(UnreadId, UnreadNotice(host, legs.Select(leg => leg.Unread)));
-                host.UpdateData(SlowId, SlowNotice(host, legs.Select(leg => leg.Slow)));
+                if (SlowSources(legs.Select(leg => leg.Slow), display: legBound is not null) is { } slow)
+                    host.UpdateData(SlowId, SlowNotice(host, slow));
                 // Each leg against ITS OWN bound — a provider may ask for fewer than the page's.
                 host.UpdateData(CappedId, Capped(sections.Zip(legs, (section, leg) => (section.Query, leg.Fetched)))
                     ? host.Localize("inbox.capped")
                     : string.Empty);
             })
-            .Select(legs => (Rows: InboxRows.Merge(legs.Select(leg => leg.Rows)), Incomplete: legs.Any(leg => leg.Slow is not null)))
+            .Select(legs => (Rows: InboxRows.Merge(legs.Select(leg => leg.Rows)), Incomplete: Incomplete(legs.Select(leg => (leg.Unread, leg.Slow)))))
             .Do(merged => host.UpdateData(KindLabelsId, KindLabels(categories, InboxRows.CategoryCounts(merged.Rows))));
 
         // The date bounds (before:/after:) are applied to the rows by InboxRows.Apply; only the
@@ -1069,6 +1070,25 @@ public static class InboxLayoutArea
             })
             .CombineLatest()
             .Select(answers => answers.ToImmutableList());
+
+    /// <summary>
+    /// The sources the slow notice names, once each — or null when this feed must not publish the notice at all. Only
+    /// the bounded DISPLAY feed knows which sources stand in: an action's preflight has no bound, so it never carries a
+    /// stand-in and would clear the notice while the grid still omits the silent source. Pure.
+    /// </summary>
+    /// <param name="slow">Each leg's stand-in label, or null when it answered.</param>
+    /// <param name="display">Whether this is the bounded display feed.</param>
+    internal static ImmutableList<string>? SlowSources(IEnumerable<string?> slow, bool display)
+        => display ? slow.OfType<string>().Distinct(StringComparer.Ordinal).ToImmutableList() : null;
+
+    /// <summary>
+    /// Whether the merged rows are INCOMPLETE: a leg still stands in (<c>Slow</c>) or could not be read (<c>Unread</c>) —
+    /// including a silent leg the query's stall terminal ended. Either way a source's rows are missing, so a ticked tag
+    /// absent from the rows may be that source's and must stay ticked. Pure.
+    /// </summary>
+    /// <param name="legs">Each leg's unread label and stand-in label.</param>
+    internal static bool Incomplete(IEnumerable<(string? Unread, string? Slow)> legs)
+        => legs.Any(leg => leg.Slow is not null || leg.Unread is not null);
 
     /// <summary>The notice for the sources that have not answered: empty when none, else the sentence naming each once.</summary>
     internal static string SlowNotice(LayoutAreaHost host, IEnumerable<string?> slow)

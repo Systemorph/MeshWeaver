@@ -194,4 +194,24 @@ public class InboxSlowSourcesAndChromeTest
         InboxLayoutArea.TagItems(counts, "Important", [urgent], held: null)
             .Select(item => item.Key).Should().Equal([reply], "once every source answered, a tag no row carries is gone");
     }
+
+    [Fact]
+    public void ALegEndedByTheStallTerminal_KeepsTheRowsIncomplete()
+    {
+        // Slow, then the query's stall terminal ends it: the leg turns from a stand-in into an unreadable source.
+        InboxLayoutArea.Incomplete([(null, null), (null, "Gmail")]).Should().BeTrue("a stand-in leaves the rows incomplete");
+        InboxLayoutArea.Incomplete([(null, null), ("Gmail", null)]).Should().BeTrue(
+            "a leg the stall terminal ended has contributed no rows either — a tag only it carries must stay ticked");
+        InboxLayoutArea.Incomplete([(null, null), (null, null)]).Should().BeFalse("every source answered");
+    }
+
+    [Fact]
+    public void OnlyTheDisplayFeed_PublishesTheSlowNotice()
+    {
+        // The action preflight has no bound, so it never carries a stand-in: were it to publish, it would clear the
+        // notice while the display grid still omits the silent source.
+        InboxLayoutArea.SlowSources([null, null], display: false).Should().BeNull("the preflight publishes no slow notice");
+        InboxLayoutArea.SlowSources([null, "Gmail", "Gmail"], display: true).Should().Equal(["Gmail"]);
+        InboxLayoutArea.SlowSources([null, null], display: true).Should().BeEmpty("the display clears it once all answered");
+    }
 }
