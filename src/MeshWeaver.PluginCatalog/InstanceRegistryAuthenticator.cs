@@ -61,8 +61,18 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     // 🚨 One standing subscription per mirror this resolution reads (MeshWeaver#7354), so the
     // cache's idle sweep never releases it between two polls. Instance state on a mesh-scoped
     // singleton (NoStaticState); a slot is removed pair-exact when its mirror terminates.
-    private readonly ConcurrentDictionary<string, SingleAssignmentDisposable> holds = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, HoldSlot> holds = new(StringComparer.Ordinal);
+    private long holdSequence;
     private int disposed;
+
+    /// <summary>One hold: its subscription, and the order in which it was STARTED — the order in
+    /// which it reached the cache, which is what decides whether it can be on an older mirror than a
+    /// hold already published.</summary>
+    private sealed class HoldSlot(long sequence)
+    {
+        public long Sequence { get; } = sequence;
+        public SingleAssignmentDisposable Subscription { get; } = new();
+    }
 
     /// <summary>Retry-After (seconds) an endpoint advertises when resolution was UNAVAILABLE.
     /// Matches the API-token leg's <c>ApiTokenAuthenticationHandler.RetryAfterSeconds</c>.</summary>
@@ -757,15 +767,18 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     {
         if (Volatile.Read(ref disposed) != 0)
             return;
-        var slot = new SingleAssignmentDisposable();
         var source = HoldOverride is { } test
             ? test(path)
             : hub.ServiceProvider.GetService<AccessService>()
                 .RunAsSystem(() => (IObservable<MeshNode>)hub.GetMeshNodeStream(path));
+        // The sequence is taken immediately before the subscription reaches the cache: a hold that
+        // started LATER attached to the same or a NEWER mirror (the cache only ever replaces an entry
+        // it has evicted), so a higher sequence is never the staler hold.
+        var slot = new HoldSlot(Interlocked.Increment(ref holdSequence));
         // Assigned AFTER Subscribe returns: a mirror that terminates synchronously releases the slot
         // first, and assigning to a disposed SingleAssignmentDisposable disposes the subscription on
         // the spot — so a terminated hold never lingers.
-        slot.Disposable = source.Subscribe(
+        slot.Subscription.Disposable = source.Subscribe(
             _ => { },
             ex =>
             {
@@ -775,21 +788,31 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                 Release(path, slot);
             },
             () => Release(path, slot));
+        BeforePublish?.Invoke(path);
 
-        // 🚨 RENEW, never skip: this request's hold REPLACES whatever slot the path has, and the
-        // replaced one is disposed only after this one is subscribed — so the entry never drops to
-        // zero subscribers. Skipping when a slot exists lost the hold when that slot's mirror had
-        // already faulted but its terminal had not been delivered yet: the request read a fresh
-        // entry, the late terminal then removed the old slot, and the fresh entry was left unheld
-        // for the idle sweep. A late terminal now releases only its OWN slot (pair-exact), which is
-        // no longer in the map. The renewal is an in-memory attach to a live cache entry, not a read.
+        // 🚨 RENEW, never skip — and never let an OLDER renewal win. This request's hold replaces the
+        // slot the path has only when it STARTED later than that slot, and the replaced one is disposed
+        // only after this one is subscribed, so the entry never drops to zero subscribers.
+        //   • Skipping when a slot existed lost the hold when that slot's mirror had already faulted
+        //     but its terminal had not been delivered: the request read a fresh entry, the late
+        //     terminal removed the old slot, and the fresh entry was left unheld for the idle sweep.
+        //   • Replacing unconditionally lost it the other way: a renewal that subscribed to the OLD
+        //     mirror and paused before publishing overwrote (and disposed) a later renewal on the
+        //     replacement, and its own terminal then left the path unheld.
+        // A superseded renewal disposes itself; a late terminal releases only its own slot
+        // (pair-exact). The renewal is an in-memory attach to a live cache entry, not a read.
         while (true)
         {
             if (holds.TryGetValue(path, out var current))
             {
+                if (current.Sequence > slot.Sequence)
+                {
+                    slot.Subscription.Dispose();
+                    return;
+                }
                 if (holds.TryUpdate(path, slot, current))
                 {
-                    current.Dispose();
+                    current.Subscription.Dispose();
                     break;
                 }
             }
@@ -799,7 +822,7 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
 
         // A terminal delivered before the slot was installed, or a Dispose that ran meanwhile, found
         // nothing to remove — remove it now.
-        if (slot.IsDisposed || Volatile.Read(ref disposed) != 0)
+        if (slot.Subscription.IsDisposed || Volatile.Read(ref disposed) != 0)
             Release(path, slot);
     }
 
@@ -809,12 +832,16 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// </summary>
     internal Func<string, IObservable<MeshNode>>? HoldOverride { get; init; }
 
+    /// <summary>Runs between a hold's subscription and its publication. Test seam: it lets an
+    /// overlapping renewal finish while this one is paused before publishing.</summary>
+    internal Action<string>? BeforePublish { get; init; }
+
     /// <summary>Drops <paramref name="slot"/> for <paramref name="path"/>, pair-exact so a newer
     /// hold on the same path is never touched, and disposes its subscription.</summary>
-    private void Release(string path, SingleAssignmentDisposable slot)
+    private void Release(string path, HoldSlot slot)
     {
-        holds.TryRemove(new KeyValuePair<string, SingleAssignmentDisposable>(path, slot));
-        slot.Dispose();
+        holds.TryRemove(new KeyValuePair<string, HoldSlot>(path, slot));
+        slot.Subscription.Dispose();
     }
 
     /// <summary>The paths whose mirrors this authenticator currently holds. Test seam.</summary>

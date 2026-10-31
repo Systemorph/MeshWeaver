@@ -188,4 +188,40 @@ public class RegistryHoldSurvivesALateTerminalTest(ITestOutputHelper output) : H
             "the late terminal of the OLD mirror releases only its own slot — the replacement stays held");
         replacement.Live.Should().Be(1, "the replacement mirror keeps its standing subscriber, so the idle sweep cannot release it");
     }
+
+    /// <summary>
+    /// Overlapping renewals (review of #7729): renewal A subscribes to the OLD mirror and pauses
+    /// before publishing; renewal B, started later, subscribes to the replacement and publishes. When A
+    /// resumes it must NOT overwrite B — replacing unconditionally disposed B's healthy hold, and A's
+    /// own terminal then left the path unheld. The pause is the hook between subscription and
+    /// publication, which runs B to completion inside A's window, deterministically.
+    /// </summary>
+    [Fact]
+    public void AnOlderRenewalPausedBeforePublishing_DoesNotOverwriteALaterOne()
+    {
+        var old = new LateMirror();
+        var replacement = new LateMirror();
+        var served = new Queue<LateMirror>(new[] { old, replacement });
+        var paused = 0;
+        InstanceRegistryAuthenticator? authenticator = null;
+        authenticator = new InstanceRegistryAuthenticator(GetHost(), NullLogger<InstanceRegistryAuthenticator>.Instance)
+        {
+            HoldOverride = _ => served.Dequeue(),
+            // A is paused here; B (the next renewal) runs start to finish inside A's window.
+            BeforePublish = path =>
+            {
+                if (Interlocked.Exchange(ref paused, 1) == 0)
+                    authenticator!.Hold(path);
+            },
+        };
+        using var _ = authenticator;
+
+        authenticator.Hold(Path);
+        // A's mirror was the old one: its fault is delivered now.
+        old.FaultLate(new IOException("owner unreachable"));
+
+        authenticator.HeldPaths.Should().Contain(Path, "B, the later renewal, still holds the path");
+        replacement.Live.Should().Be(1, "B's subscription on the replacement mirror was not disposed by A's late publication");
+        old.Live.Should().Be(0, "A, superseded, disposed its own subscription instead of publishing");
+    }
 }
