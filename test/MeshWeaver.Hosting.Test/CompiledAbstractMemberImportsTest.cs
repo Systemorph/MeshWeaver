@@ -40,6 +40,28 @@ public record CompiledNonProportionalCover(string Currency, decimal Retention, d
 public record CompiledProportionalCover(string Currency, decimal Share)
     : CompiledSectionCover(Currency);
 
+/// <summary>Content whose abstract-typed member is a READ-ONLY COLLECTION — the shape the mesh's
+/// <c>ReadOnlyCollectionConverter</c> reads element by element — of a base this reader has NO
+/// subtype for: its only subtypes share one contested name, so neither is added.</summary>
+public record CompiledLayeredContent(string Name, IReadOnlyCollection<CompiledOrphanLayer> Layers);
+
+/// <summary>An abstract base whose every subtype carries a contested name.</summary>
+public abstract record CompiledOrphanLayer(string Code);
+
+/// <summary>Declares one of the two same-named layers.</summary>
+public static class FirstLayerFamily
+{
+    /// <summary>Same short name as <see cref="SecondLayerFamily.CompiledLayer"/>.</summary>
+    public record CompiledLayer(string Code, int Rank) : CompiledOrphanLayer(Code);
+}
+
+/// <summary>Declares the other same-named layer.</summary>
+public static class SecondLayerFamily
+{
+    /// <summary>Same short name as <see cref="FirstLayerFamily.CompiledLayer"/>.</summary>
+    public record CompiledLayer(string Code, string Label) : CompiledOrphanLayer(Code);
+}
+
 /// <summary>Content whose abstract member has two subtypes sharing ONE short name — the contested
 /// discriminator a compiled build can carry when two namespaces (here: two declaring classes) each
 /// define a record of the same name.</summary>
@@ -222,6 +244,58 @@ public class CompiledAbstractMemberImportsTest(ITestOutputHelper output) : Monol
         }
     }
 
+    /// <summary>The collection shape of the negative control: an <c>IReadOnlyCollection</c> of an
+    /// abstract base this reader has no subtype for (its only subtypes carry a contested name). The
+    /// collection converter reads elements one by one and must report the failure as what it is — a
+    /// type it cannot instantiate — so the strict import keeps the raw JSON instead of refusing the
+    /// snapshot. It re-threw that as an <see cref="InvalidOperationException"/>, which the strict
+    /// import treats as a lossy bind and refuses.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnUninstantiableElementInACollectionOfTheAbstractBase_ImportsVerbatim()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sectionNodeType = await DeclaredNodeType(ct);
+        var layeredNodeType = await DeclaredNodeType(ct);
+        var alc = LoadCompiledCopy(sectionNodeType, out var compiledSection);
+        try
+        {
+            var layered = compiledSection.Assembly
+                .GetType(typeof(CompiledLayeredContent).FullName!, throwOnError: true)!;
+            Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>()
+                .Register(layered, layeredNodeType);
+            var space = await ArmedSpace(ct);
+            repoClient.Files =
+            [
+                new RepoFile("Submissions/LayeredSection.json", $$$$"""
+                    {"id":"LayeredSection","nodeType":"{{{{layeredNodeType}}}}","content":{"$type":"{{{{nameof(CompiledLayeredContent)}}}}","name":"Layered","layers":[{"$type":"CompiledLayer","code":"A","rank":1},{"$type":"CompiledLayer","code":"B","label":"second family","attachment":7}]}}
+                    """),
+            ];
+
+            var outcome = await Sync.ReimportAtCommit(space, HeadSha, UserId)
+                .Materialize()
+                .FirstAsync()
+                .Timeout(TestTimeouts.Convergence)
+                .Await(ct);
+            outcome.Exception.Should().BeNull(
+                "an element this reader has no subtype for cannot be instantiated, which is not lossy when the raw "
+                + "JSON is kept — the collection shape must not refuse the snapshot either: "
+                + outcome.Exception?.Message);
+
+            var content = await ContentOf($"{space}/Submissions/LayeredSection", ct);
+            var layers = content.GetProperty("layers");
+            layers.GetArrayLength().Should().Be(2, "both authored elements are stored");
+            layers[1].GetProperty("label").GetString().Should().Be("second family");
+            layers[1].GetProperty("attachment").GetInt32().Should().Be(7,
+                "the authored bytes are stored verbatim");
+
+            await CommitAcknowledged(space, ct);
+        }
+        finally
+        {
+            alc.Unload();
+        }
+    }
+
     /// <summary>A short name two subtypes of the same build share resolves to NEITHER: content
     /// naming it stays raw JSON, never bound to whichever subtype the assembly enumerated first
     /// (which would drop the other's members and materialise foreign defaults). A subtype whose
@@ -309,6 +383,9 @@ public class CompiledAbstractMemberImportsTest(ITestOutputHelper output) : Monol
     }
 
     private async Task<JsonElement> CoverOf(string path, CancellationToken ct)
+        => (await ContentOf(path, ct)).GetProperty("cover").Clone();
+
+    private async Task<JsonElement> ContentOf(string path, CancellationToken ct)
     {
         // The authoritative node: the import has completed, so the node exists, and its NodeType
         // (DeclaredNodeType) activates a per-node hub through the default node configuration.
@@ -320,7 +397,7 @@ public class CompiledAbstractMemberImportsTest(ITestOutputHelper output) : Monol
         var json = JsonSerializer.Serialize(node!.Content, Mesh.JsonSerializerOptions);
         Output.WriteLine($"{path}: {json}");
         using var document = JsonDocument.Parse(json);
-        return document.RootElement.GetProperty("cover").Clone();
+        return document.RootElement.Clone();
     }
 
     private async Task CommitAcknowledged(string space, CancellationToken ct)
