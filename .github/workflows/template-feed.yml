@@ -304,7 +304,7 @@ jobs:
       # package cache; then restores the GUI shape the same way. Its credential is this job's own
       # token, the one the user's PAT stands in for. Runs whatever the visibility check said, so a
       # red names every defect at once.
-      - name: A template installed from the feed restores against the feed
+      - name: A template installed from the feed restores and builds against the feed
         if: ${{ !cancelled() && steps.push.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -352,8 +352,16 @@ jobs:
           print(f"the installed template pins the same {len(want)} MeshWeaver packages as the set's generated template")
           PY
           dotnet restore "$slnx" --nologo
-          dotnet restore "$RUNNER_TEMP/template-gui/Memex.slnx" --nologo
-          echo "a template installed from the feed at $VERSION restores against the feed, and so does the GUI shape"
+          # A template that restores but does not COMPILE is just as unusable: an <Import> of a file
+          # the generator never copied (MSB4019) or a linked source still pointing at the source
+          # tree's layout (CS2001) passes every restore. Build what the user would build.
+          dotnet build "$slnx" --no-restore --nologo
+          # Its OWN empty cache: NuGet takes an already-cached package without consulting the
+          # source mapping, so a shared cache would let the GUI shape pass on the headless restore's
+          # downloads while a fresh GUI consumer fails.
+          mkdir -p "$RUNNER_TEMP/restore-cache-gui"
+          NUGET_PACKAGES="$RUNNER_TEMP/restore-cache-gui" dotnet restore "$RUNNER_TEMP/template-gui/Memex.slnx" --nologo
+          echo "a template installed from the feed at $VERSION restores and builds against the feed, and the GUI shape restores"
 
   verdict:
     name: "Template feed verdict"

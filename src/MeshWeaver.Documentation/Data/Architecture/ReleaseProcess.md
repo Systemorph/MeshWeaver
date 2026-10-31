@@ -466,7 +466,8 @@ release) and, when that run SEALED a set — `Promote`, `Verify every image ship
 8. **proves a user can restore**: with an empty package cache and the job's own token as the
    credential, it installs `MeshWeaver.MemexTemplate` from the feed at the set's version,
    instantiates it under a name other than `Memex`, checks that it pins exactly what the set's
-   generated template pins, and restores it against the feed;
+   generated template pins, restores it against the feed and **builds** it (a template that restores
+   but does not compile is just as unusable);
    then restores the `--with-gui` shape the same way. Steps 7 and 8 both run after a successful
    push, so one red names every defect at once.
 
