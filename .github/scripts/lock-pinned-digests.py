@@ -722,16 +722,17 @@ def _without_path(text: str, path: str) -> str:
 def public_diagnostic(text: str, limit: int, path: str | None = None) -> str:
     """A raw diagnostic (`gh`/`az` stderr or stdout) CUT to `limit` — but only after everything the
     public log withholds is gone (#7724 review). A cut first can stop INSIDE a withheld value, and
-    the prefix it leaves matches nothing the filter knows. Normalized whitespace; both the raw and
-    the URL-DECODED spelling are filtered, and `path` (a file the scan could not read, before the
-    withheld set exists) is removed in every spelling. Pure, apart from reading that set."""
-    text = " ".join(text.split())
+    the prefix it leaves matches nothing the filter knows. Both the raw and the URL-DECODED
+    spelling are filtered, and `path` (a file the scan could not read, before the withheld set
+    exists) is removed in every spelling. Whitespace is normalized LAST, after every match (#7724
+    review): collapsing it first rewrites a value with repeated spaces or tabs into a spelling
+    nothing withheld matches. Pure, apart from reading that set."""
     if path:
         text = _without_path(text, path)
     text = unquote(public_text(text))
     if path:
         text = _without_path(text, path)
-    return public_text(text)[:limit]
+    return " ".join(public_text(text).split())[:limit]
 
 
 def public_text(text: str) -> str:
@@ -9196,6 +9197,13 @@ env:
         # literal path no longer matches (#7724 review).
         ("an overlay with a LITERAL-PERCENT path whose read FAILED",
          "deployments/aks/fabrikam%20prod/values.yaml",
+         lambda endpoint: (1, "", f"HTTP 502: Bad Gateway (https://api.github.com/{endpoint})")),
+        # REPEATED whitespace, which collapsing before the match would rewrite (#7724 review).
+        ("an overlay with a DOUBLE-SPACE path whose read FAILED",
+         "deployments/aks/fabrikam  prod/values.yaml",
+         lambda endpoint: (1, "", f"HTTP 502: Bad Gateway (https://api.github.com/{endpoint})")),
+        ("an overlay with a TAB in its path whose read FAILED",
+         "deployments/aks/fabrikam\tprod/values.yaml",
          lambda endpoint: (1, "", f"HTTP 502: Bad Gateway (https://api.github.com/{endpoint})")),
     )
     _saved_gh = consistency.gh_api
