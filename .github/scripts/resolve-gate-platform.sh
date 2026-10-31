@@ -234,6 +234,28 @@ if [ "${1:-}" = "--self-test" ]; then
        --set 3.0.0-ci.8547 --wait-seconds 0 2>&1)"
   grep -q 'had not reached the platform volume' <<<"$o" || fail "the AHEAD refusal must name the cadence (got: $o)"
   grep -q 'Do NOT bump' <<<"$o" || fail "the AHEAD refusal must not send the reader to bump the digest (got: $o)"
+  # 5c'. The AHEAD timeout reads the refresh's OWN last verdict off the volume, so the shard log
+  #      tells "the refresh stopped completing ticks" from "it ran and refused". Three volumes, one
+  #      per reading; each assertion names a phrase only that reading prints (negative controls:
+  #      the other two must NOT print it).
+  grep -q 'NO retention.json' <<<"$o" || fail "an AHEAD timeout on a volume with no retention.json must say the refresh never completed a tick (got: $o)"
+  stale_at="$(date -u -d '@1000000000' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r 1000000000 +%Y-%m-%dT%H:%M:%SZ)"
+  fresh_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{\n  "written-at": "%s",\n  "space": {"refusals": []}\n}\n' "$stale_at" > "$ahead/retention.json"
+  o="$("$self" --volume-root "$ahead" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8547 --wait-seconds 0 2>&1)"
+  grep -q 'HAS NOT COMPLETED A TICK' <<<"$o" || fail "a STALE retention.json must be read as a refresh that stopped completing ticks (got: $o)"
+  grep -q "written at $stale_at" <<<"$o" || fail "the stale reading must name when the last verdict was written (got: $o)"
+  grep -q 'IS completing ticks' <<<"$o" && fail "a stale verdict must not read as a live refresh (got: $o)"
+  printf '{\n  "written-at": "%s",\n  "space": {"refusals": [{"rule": "current", "set": "3.0.0-ci.8547", "reason": "share full"}]}\n}\n' "$fresh_at" > "$ahead/retention.json"
+  o="$("$self" --volume-root "$ahead" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8547 --wait-seconds 0 2>&1)"
+  grep -q 'IS completing ticks' <<<"$o" || fail "a FRESH retention.json must be read as a live refresh that declined (got: $o)"
+  grep -q 'share full' <<<"$o" || fail "the fresh reading must carry the refresh's own refusal text (got: $o)"
+  grep -q 'HAS NOT COMPLETED A TICK' <<<"$o" && fail "a fresh verdict must not read as a stopped refresh (got: $o)"
+  grep -q 'NO retention.json' <<<"$o" && fail "a present retention.json must not read as absent (got: $o)"
+  grep -q '^mode=container$' <<<"$o" && fail "reading the verdict must not turn the refusal into a pull (got: $o)"
+  rm -f "$ahead/retention.json"
 
   # 5d. OVERTAKEN inside the kept window: the volume holds #8400 and #8600, the caller wants #8547.
   #     Absent and bracketed ⇒ it was never installed and never will be, so this is RED AT ONCE
@@ -401,6 +423,46 @@ listing() {  # every set directory, in-flight ones NAMED as such rather than lis
   printf '%s' "${out:- none}"
 }
 
+# 🚨 WHY A SET DID NOT ARRIVE, IN THE REFRESH'S OWN WORDS. The refresh writes
+# `<root>/retention.json` at the end of every tick it COMPLETES (Systemorph/Memex#343): when it
+# wrote it, the share's free/total bytes and install floor, and every refusal (space, capability,
+# defect). This shard mounts the same share, so it can read that verdict, and a shard log is the
+# one place everybody who meets this red can read. Without it the timeout said only "read that
+# CronJob's last runs", which needs the cluster, and every satellite went red at once on
+# 2026-10-31 with nothing in any log to tell "the refresh stopped running" from "the refresh ran
+# and refused". The two are told apart by the file's AGE:
+#   * older than REFRESH_STALE_SECONDS: no tick has completed since — the pod is not being
+#     created, not scheduled, or fails before the end of rule 1. A cluster-side failure, and the
+#     verdict below is the LAST one it managed to write;
+#   * fresh: the refresh IS completing ticks and still did not install this set — its refusals say
+#     why (a full share is the one that never clears on its own).
+# 2400 s is the Job's activeDeadlineSeconds (a tick under concurrencyPolicy Forbid can hold the
+# schedule that long), plus one 10-minute period.
+REFRESH_STALE_SECONDS=3000
+epoch_of() {  # <UTC ISO-8601 'YYYY-MM-DDTHH:MM:SSZ'> → epoch seconds, empty when unparsable
+  date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || true
+}
+refresh_verdict() {
+  local file="$VOLUME_ROOT/retention.json" written at age body
+  if [ ! -f "$file" ]; then
+    printf '%s' " The volume carries NO retention.json, which the refresh writes at the end of every tick it completes — it has never completed one on this share."
+    return 0
+  fi
+  written="$(sed -n 's/.*"written-at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" 2>/dev/null | sed -n 1p || true)"
+  body="$(tr -s ' \n\t' ' ' < "$file" 2>/dev/null | head -c 2000 || true)"
+  at="$(epoch_of "${written:-}")"
+  if [ -z "$at" ]; then
+    printf '%s' " The refresh's last verdict ($file) carries no readable written-at ('${written:-}'): $body"
+    return 0
+  fi
+  age=$(( $(date -u +%s) - at ))
+  if [ "$age" -gt "$REFRESH_STALE_SECONDS" ]; then
+    printf '%s' " 🚨 THE REFRESH HAS NOT COMPLETED A TICK FOR ${age}s: its last verdict ($file) was written at $written. So it is not that the refresh ran and declined this set — its pod is not being created, not being scheduled, or fails before writing (a registry/GitHub credential, the resolver, the share, the namespace quota). That is a cluster-side failure: read the CronJob's Jobs, pods and events in namespace ci-platform. Its last verdict: $body"
+  else
+    printf '%s' " The refresh IS completing ticks (its verdict, $file, is ${age}s old, written at $written) and still did not install this set — read its refusals: $body"
+  fi
+}
+
 # The core-CD run number a set name carries, in BOTH notations (policy `platform-semver-versioning`,
 # core Doc/Architecture/PlatformVersioning): `3.0.0-ci.8547` → `8547` (and the withdrawn
 # `3.1.0-ci.7841` → `7841`); from line 3.1 on, `3.1.10050` → `10050` — the PATCH is the same
@@ -538,9 +600,9 @@ if ! set_is_complete; then
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
       if [ "$reason" = arriving ]; then
-        die "the set for ${SET_LABEL}tester digest ${resolved} was INSTALLING when this shard arrived (${flight:-$SET_DIR}) and its .complete did not land within ${waited}s. The digest is right and was merely early, so $NOT_THE_DIGEST An install takes ~200 s on the share, so a wait that runs out means the refresh pod died mid-extract or the share stalled — read that pod's log. $REFRESH_JOB. The volume holds:$(listing). $NO_PULL"
+        die "the set for ${SET_LABEL}tester digest ${resolved} was INSTALLING when this shard arrived (${flight:-$SET_DIR}) and its .complete did not land within ${waited}s. The digest is right and was merely early, so $NOT_THE_DIGEST An install takes ~200 s on the share, so a wait that runs out means the refresh pod died mid-extract or the share stalled — read that pod's log. $REFRESH_JOB.$(refresh_verdict) The volume holds:$(listing). $NO_PULL"
       fi
-      die "${SET_LABEL}tester digest ${resolved} had not reached the platform volume at '$VOLUME_ROOT' after ${waited}s — the volume's newest installed set is still core CD #${newest:-none}. $REFRESH_JOB is a 10-minute CronJob that takes ~200 s to install, so a run triggered by the seal is ahead of it by design and this shard waits; a wait that runs out means the refresh is not running, is failing, or is further behind than one period. Read that CronJob's last runs. $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
+      die "${SET_LABEL}tester digest ${resolved} had not reached the platform volume at '$VOLUME_ROOT' after ${waited}s — the volume's newest installed set is still core CD #${newest:-none}. $REFRESH_JOB is a 10-minute CronJob that takes ~200 s to install, so a run triggered by the seal is ahead of it by design and this shard waits; a wait that runs out means the refresh is not running, is failing, or is further behind than one period.$(refresh_verdict) $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
     fi
     # SMB has no inotify and the runner's mount caches attributes for 30 s (`actimeo=30`), so the
     # condition is re-READ on an interval. This is a poll of the condition, not a sleep for time.

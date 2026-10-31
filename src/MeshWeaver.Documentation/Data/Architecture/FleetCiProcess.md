@@ -108,6 +108,23 @@ and every heavy leg misses the mount, falls back to pulling the image, and that 
 `the platform mount at /opt/platform holds no COMPLETE set for the run's tester digest` beside it.
 That is what held Plugins `main` red on the evening of 2026-09-13 while the freeze named `8506`.
 
+**2a. When the NEWEST set does not arrive, the shard log says whether the refresh is running.** A
+run triggered by a seal is ahead of the volume by design, so `resolve-gate-platform` waits (900 s)
+for the set's `.complete`. When that wait runs out, the refusal now carries the refresh's OWN last
+verdict, read from `/opt/platform/retention.json` on the same share: the refresh writes that file
+at the end of every tick it completes (Memex#343), with the share's free space, its install floor
+and every refusal. Read the refusal by the file's AGE:
+
+- **"THE REFRESH HAS NOT COMPLETED A TICK FOR Ns"** — the file is older than the Job's 2400 s
+  deadline plus one period. The refresh is not declining the set: its pod is not created, not
+  scheduled, or fails before the end of its first rule (a credential, the resolver, the share, the
+  namespace quota). That is a cluster-side failure, and every satellite goes red on it at once —
+  measured 2026-10-31, when set `3.1.12262` never reached the volume and the satellites' gate
+  shards timed out with nothing in any log naming why. Neither a re-run nor a digest bump helps.
+- **"The refresh IS completing ticks … read its refusals"** — the refresh runs and declined; the
+  verdict that follows names why (a full share is the refusal that does not clear on its own).
+- **"NO retention.json"** — the refresh has never completed a tick on this share.
+
 **3. Until Plugins#1809 a freeze had to be a git REF.** The three image lanes handed
 `MW_PLATFORM_REF` straight to `actions/checkout`, so a set name died on
 `+refs/heads/3.0.0-ci.8506*:… exit 1` and every image lane was down from the moment the variable
