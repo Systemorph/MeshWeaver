@@ -571,6 +571,10 @@ jobs:
       event: ${{ github.event_name }}
       label: ci-combo-unverified
       issue-title: "ci-combo-unverified: the fleet's rolls are not combo-verified"
+      # ADVISORY, never sev:H (#4413): under policy `platform-rolls-independently-of-packages` the
+      # combo verdict holds no roll, so an unverified fleet is not a primary path broken. Omitting
+      # this takes the reporter's sev:H default — a release blocker. check-combo-verify.py holds it.
+      severity: sev:M
       control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
       scripts-ref: main
     secrets:
@@ -598,6 +602,10 @@ jobs:
       event: ${{ github.event_name }}
       label: ci-combo-unverified
       issue-title: "ci-combo-unverified: the fleet's rolls are not combo-verified"
+      # ADVISORY, never sev:H (#4413): under policy `platform-rolls-independently-of-packages` the
+      # combo verdict holds no roll, so an unverified fleet is not a primary path broken. Omitting
+      # this takes the reporter's sev:H default — a release blocker. check-combo-verify.py holds it.
+      severity: sev:M
       control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
       scripts-ref: main
     secrets:

@@ -588,10 +588,88 @@ migrated activation there refuses and hands off again, and each hop is a distinc
 subscriber's bounded re-arm budget. That is bounded and loud (the give-up logs a Warning), never a
 silent wait. A cluster-wide drain signal would remove it.
 
+What this section does not cover, the next one does: work the grain accepted **before** the stop
+(#7470).
+
 What this does **not** cover: a subscriber that was already **warm** when the silo began stopping still
 gets no goodbye from the leaving host, because its `StreamEndedEvent` rides the refused router like any
 other outbound message. It recovers on its next request to the address, which is now refused
 honestly and handed off.
+
+## 🚨 …and work it accepted BEFORE the stop is refused too (#7470)
+
+The intake refusal above covers what arrives **after** `ApplicationStopping`. It did not cover what the
+leaving host accepted just **before** it. Measured on a roll: a cache hub's `SubscribeRequest` for a
+per-node hub reached the leaving silo about 2 s before its SIGTERM. The grain accepted it as
+`Submitted`, parked it on a hub still being built, and its trail ended *"Forwarded … no handler was
+ever entered"*. Nothing NACKed it, and the subscriber waited out its full 60 s. About 330 sibling
+subscribes from the same cache hub stalled the same way at the same moment. Accepted work reaches a
+leaving host in two shapes:
+
+1. **Parked on a hub still being built.** When the build finished after the stop, the delivery was
+   posted to the hub, and its `SubscribeAck` and first Full were refused at the router.
+2. **Queued behind a busy hub, or answered after the stop.** The hub handled the request after the
+   stop, and its reply was refused at the router.
+
+**The fix: the leaving host answers what it accepted, on the one outbound path the gate still
+allows.** The router's outbound gate stays where it is. Two pieces close the gap:
+
+- **A parked delivery is refused the moment the host begins to stop.** `MessageHubGrain` parks a
+  delivery on `HubReadyUnlessTheHostLeaves`: the hub's readiness raced against `ApplicationStopping`.
+  A built hub replays synchronously, so it always wins when it exists. An unbuilt one loses to the
+  stop, and the delivery is settled with the same `ShuttingDown` refusal the intake gate gives
+  (`LeavingHostRefusal`). `NackParkedDelivery` posts it to the sender. The sender re-asks, the re-ask
+  meets the intake gate on a grain turn, and the address is handed off.
+- **A reply the host can no longer deliver becomes a refusal to its requester.** When the router
+  refuses an outbound delivery that carries a `RequestId`, it also posts a `ShuttingDown`
+  `DeliveryFailure` to that delivery's target (the requester), correlated to the requester's own
+  request id (`RefuseUndeliverableReply`). A `SubscribeAck` produced after the stop therefore reaches
+  the subscriber as a refusal it rides out. The same conversion runs when a reply passed the gate
+  before the stop and is refused at the dispatch seam after it. A reply that is itself a
+  `DeliveryFailure` (or a `[CanBeIgnored]` message) is never converted (`AnswerPolicy.MayAnswer`):
+  it is already a verdict, often a terminal one, and must not become a retryable `ShuttingDown`.
+
+**Which path the refusal takes, and why it is safe.** Both refusals carry
+`OrleansRoutingService.LeavingHostRefusalProperty`, and the stop gate lets a stamped delivery through.
+The stamp is honoured only while membership still reports this silo `Active`
+(`LocalSiloMayStillPlace`), and that is the gate's own premise. The gate exists because a silo that has
+**left** the active set cannot place `IRoutingGrain`, and Orleans logs an error per attempt (#1107).
+While the silo is still `Active` (the linger window, in which the drain hand-off runs) placement
+works. After it leaves, a stamped refusal is dropped exactly as before, and by then membership has
+moved and the sender's own transport fails over. The membership verdict is re-read immediately before
+every `RouteMessage` attempt, retries included, because a refusal can wait on its sender's attach or
+claim while the silo leaves the active set.
+
+Sending the refusals before the gate closes was rejected. It would race the router's own
+`ApplicationStopping` callback, and it could not reach a reply that a hub produces after the stop.
+The exemption cannot feed a loop: a refusal is never itself answered (`AnswerPolicy`), and a stamped
+delivery is never converted again. The volume is bounded by the work the host had accepted.
+
+Pinned by `AParkedSubscribeOnALeavingSiloIsRefusedTest` (MeshWeaver.FaultInjection.Test, on the
+[fault-injection harness](../FaultInjectionHarness)):
+
+- **The case.** The owner's grain is activated on silo 1 with its hub build held
+  (`FaultInjectionCluster.HubBuilds`). A subscribe from silo 0 is parked there, and the harness's
+  `Parked` signal confirms it. Silo 1 is then told to stop and lingers. The subscriber must be served
+  within 10 s by a new activation on silo 0 while silo 1's build is still held.
+- **Without the router exemption.** The test is red at its 10 s bound: the refusal is dropped at the
+  gate, so nothing answers the parked subscribe.
+- **The stop race on its own.** `AParkedRequestOnALeavingSiloWithNoHandOffIsRefusedTest` isolates it.
+  Every other silo is recorded as draining (`FaultInjectionCluster.LeaveNoHandOffTarget`), so the
+  lingering grain has no hand-off target and nothing migrates or deactivates it. Its build stays held
+  for the whole case: the long cold build. A request from silo 0 parked there must be refused
+  `ShuttingDown` within 10 s. Without the race it is red at that bound, because nothing ever answers
+  it. In the two-silo case above, the hand-off's deactivation settles the parked delivery even without
+  the race, which is why that case alone could not show the race was needed.
+- **Negative control.** `ASubscribeParkedOnASiloThatStaysUpIsAnsweredTest`: the same parked subscribe
+  on a silo that stays up is answered by that silo once its build is released.
+- **The router half.** It is pinned in `OrleansRoutingShutdownClassificationTest` and
+  `SiloShutdownActivationGateTest`:
+  - a stamped refusal still reaches grain placement while the host stops, but not once the silo
+    has left the active set before the dispatch;
+  - an undeliverable reply answers its requester `ShuttingDown`, including when it is refused after
+    the gate;
+  - a refused verdict (`DeliveryFailure`) and a delivery that is not a reply are not converted.
 
 ## A write is a rider too (#5011, MeshWeaver.Plugins#2403)
 

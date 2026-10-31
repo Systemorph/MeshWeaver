@@ -156,10 +156,13 @@ public static class IoPoolNames
     /// ONE in-flight WRITE. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
     ///
     /// <para>The partitioned backend no longer files its node writes here: each partition schema
-    /// has its own write lane (one write at a time, so writes to one partition stay ordered — a
-    /// lightweight serial queue in MeshWeaver.Plugins, not a pool, because every pool parks a
-    /// canceller thread and an instance has hundreds of schemas), and every write takes a slot of
-    /// <see cref="PostgresWriteBudgetPrefix"/> (MeshWeaver#7464). The process-wide-serializer
+    /// has its own write lane — a <c>SerialWriteLane</c> obtained from
+    /// <c>IoPoolRegistry.GetSerialLane</c> under the name <c>pg:{providerName}:{schema}</c>: one
+    /// write at a time, so writes to one partition stay ordered, and not a pool, because every pool
+    /// parks a canceller thread and an instance has hundreds of schemas. Every write takes a slot of
+    /// <see cref="PostgresWriteBudgetPrefix"/>, and the registry reports the lanes
+    /// (<c>SerialLaneSnapshot</c>) to the delete no-progress watchdog's queue credit
+    /// (MeshWeaver#7464). The process-wide-serializer
     /// reading below describes the shape before that split; it still holds for provisioning and the
     /// stores that keep the provider-wide name (the event log, the instance store).</para>
     ///

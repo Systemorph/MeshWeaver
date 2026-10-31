@@ -48,6 +48,37 @@ public record PostOptions(Address Sender)
     public PostOptions AcceptingProgress() => WithProperty(AcceptsProgress, "true");
 
     /// <summary>
+    /// Well-known property key a hub stamps on a request it awaits as a STREAM
+    /// (<c>MessageHubExtensions.ObserveStreamed</c>): it understands response PARTS, so the handler
+    /// may answer with any number of parts (<see cref="ResponsePart"/>) before the one terminal
+    /// reply. Its absence — a caller that awaits a single reply, or an image that predates streamed
+    /// responses — means a part would be read as the reply, so the handler answers ONCE.
+    /// </summary>
+    public const string AcceptsResponseParts = nameof(AcceptsResponseParts);
+
+    /// <summary>
+    /// Well-known property key on a response PART: its zero-based sequence number, as an invariant
+    /// integer string. A part is correlated exactly as the reply is (<see cref="RequestId"/>), never
+    /// consumes the awaiting callback, and restarts the request's silence deadline. The awaiting hub
+    /// re-orders parts by this number, because a transport may deliver them out of order.
+    /// </summary>
+    public const string ResponsePart = nameof(ResponsePart);
+
+    /// <summary>
+    /// Well-known property key on the TERMINAL reply of a streamed response: how many parts were
+    /// sent before it, as an invariant integer string. The awaiting hub completes the stream only
+    /// once that many parts have been delivered, so a part that overtook nothing and arrives after
+    /// the reply is still delivered in order.
+    /// </summary>
+    public const string ResponsePartCount = nameof(ResponsePartCount);
+
+    /// <summary>
+    /// Returns a copy of these options stamped <see cref="AcceptsResponseParts"/>.
+    /// </summary>
+    /// <returns>A new <see cref="PostOptions"/> declaring that the sender understands response parts.</returns>
+    public PostOptions AcceptingResponseParts() => WithProperty(AcceptsResponseParts, "true");
+
+    /// <summary>
     /// Well-known property key a PRODUCER stamps on a request it re-asks on a transient
     /// <c>ShuttingDown</c> answer: it observes the reply and, on the refusal an activation gives
     /// while it goes down, sends the request again to the address's next activation.

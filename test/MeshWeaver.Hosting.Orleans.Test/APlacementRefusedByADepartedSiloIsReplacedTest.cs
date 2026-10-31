@@ -186,7 +186,8 @@ public class APlacementRefusedByADepartedSiloIsReplacedTest(APlacementRefusedByA
             .DeliverMessage(new MessageDelivery<PingRequest>(
                 sender.Address, new Address(path), new PingRequest(), sender.JsonSerializerOptions));
 
-    private static async Task<ImmutableList<(string Message, ErrorType Type)>> RunLeg(
+    /// <summary>Runs the production delivery leg over the controlled switch and collects every NACK it posts.</summary>
+    internal static async Task<ImmutableList<(string Message, ErrorType Type)>> RunLeg(
         DepartedOwnerRefusal grainCall, string path, int maxRetries, CancellationToken ct)
     {
         var nacks = ImmutableList<(string Message, ErrorType Type)>.Empty;
@@ -219,7 +220,7 @@ public class APlacementRefusedByADepartedSiloIsReplacedTest(APlacementRefusedByA
 /// actually fired.
 /// </summary>
 internal sealed class DepartedOwnerRefusal(
-    SiloUnavailableException refusal, int refusals, Func<Task<IMessageDelivery>> forward)
+    Exception refusal, int refusals, Func<Task<IMessageDelivery>> forward)
 {
     private int attempts;
     private IMessageDelivery? landed;

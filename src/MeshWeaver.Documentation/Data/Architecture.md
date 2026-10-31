@@ -97,6 +97,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Executive Assistant Credential Reads](ExecutiveAssistantCredentialReads) — a turn that waits for a mesh read holds the queue that read's reply must travel through, and the timeout was rendered as "you never connected"
 - [Bounds Must Be Ordered](BoundsMustBeOrdered)
 - [Message-Based Communication](MessageBasedCommunication)
+- [Streamed Responses](StreamedResponses) — a reply that arrives in parts: parts re-ordered by number, a silence bound restarted by every part, opt-in on both ends
 - [A Request a Hub Sends to Itself](SelfAddressedRequests) — node CRUD is issued on the hub that executes it, so routing and the reply leg cannot lose it; what that leaves, and why an empty queue at the timeout proves nothing when the handler answers from a detached observable
 - [Router Traffic Detection](RouterTrafficDetection) — the detector has two sites; the receiver names the two addresses, the origin names the call site, and a ratchet per tree keeps the seams adopted
 - [No Static State](NoStaticState)
@@ -446,6 +447,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Bake Seal — NodeOps Saturation](BakeSealNodeOpsSaturation) — the mesh's ONE node-CRUD hub stops draining under a bulk burst, and every consumer then reports its own bound
 - [Live Query Re-query Cost](LiveQueryRequeryCost) — every write re-walked the security fold's permanent live queries, so one write cost more the larger the mesh; a live raw query now ignores a change whose old and new node types it can never return
 - [A Vanished Child Is Absent](AVanishedChildIsAbsent) — a child directory deleted while its parent was listed failed the whole file-system listing, and a live re-query then reported every row under the parent removed and never listed the write it was answering
+- [A Hub Collection That Leads Back To Itself](HubCollectionCycle) — a hub-backed collection whose answer cycles back asked forever, one nested SelectMany per round, until one terminal signal overflowed the stack; the cycle is now refused by name
 - [The /api/content 503](ContentRoute503) — three causes with different fixes, why the third wears the first's signature, and the black-box discriminator that needs no log line
 - [Refused Replies During Teardown](RefusedRepliesDuringTeardown) — every failure route answers the SENDER, which for a reply is the responder; the answer the caller is parked on is dropped with nobody told
 - [Refusing a Lost User Action](RefusingALostUserAction) — a click whose stream is gone is refused out loud instead of dropped as churn; why "deliver it anyway" is not implementable as stated

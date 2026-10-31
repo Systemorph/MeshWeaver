@@ -2713,12 +2713,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // to them. So the signals are attached FIRST and the verdict is then taken again, through
             // the verdict cache — a hit only while the fold's inputs are still the ones the admission
             // read — and every revision holds until that answer.
-            var standing = Observable.Create<bool>(observer =>
-                {
-                    var attached = signals.Subscribe(observer);
-                    observer.OnNext(false);
-                    return attached;
-                })
+            var standing = ReDecisionTriggers(signals)
                 .Select(bypassCache => Observable.Defer(() => ProbeEffectivePermissions(path, captured, bypassCache))
                     .Take(1)
                     .Select(probe => new StandingRead(
@@ -2827,6 +2822,30 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     .StartWith((PermissionCheckOutcome?)null)
                 : Observable.Return(read.Outcome))
             .Switch();
+
+    /// <summary>
+    /// What re-decides a followed standing Read (<see cref="FollowStandingRead"/>): the initial
+    /// re-check (<c>false</c> — through the verdict cache) once <paramref name="signals"/> are
+    /// ATTACHED, then every signal (<c>true</c> when it must bypass that cache).
+    ///
+    /// <para>🚨 <b>One at a time.</b> The signals commit on whatever thread their source runs on, and
+    /// the initial re-check is emitted on the subscribing thread, so the two can arrive together.
+    /// They are merged — Rx's <c>Merge</c> forwards under one gate — never written into the same
+    /// observer from both threads. That observer feeds a <c>Switch</c>, which takes a new inner's id
+    /// under its gate but swaps the inner subscription OUTSIDE it: two triggers delivered at once
+    /// could leave the OLDER inner installed, disposing the newest re-check while ignoring the
+    /// older one's answer, so the standing Read stayed pending until the permission-establishment
+    /// budget refused a reader whose grant stood (MeshWeaver Graph.Test
+    /// <c>OpenSubscriptionEndsWithTheReadTest</c>, refused exactly one budget after it opened).</para>
+    ///
+    /// <para><b>Attached first.</b> <c>Merge</c> subscribes its sources in order, so the signals are
+    /// attached before the initial re-check is emitted: a commit that lands while that re-check
+    /// reads is still announced. A <c>StartWith</c> would emit before attaching and lose it.</para>
+    /// </summary>
+    /// <param name="signals">The access signals; <c>true</c> when the re-check must bypass the verdict cache.</param>
+    /// <returns>The serialized triggers, the initial one emitted after the signals are attached.</returns>
+    internal static IObservable<bool> ReDecisionTriggers(IObservable<bool> signals)
+        => Observable.Merge(signals, Observable.Return(false));
 
     /// <summary>One settled (or, as <see cref="Pending"/>, in-flight) re-check of a followed standing Read.</summary>
     /// <param name="Outcome">The verdict; <c>null</c> while a re-check is in flight.</param>

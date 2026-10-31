@@ -446,10 +446,14 @@ release) and, when that run SEALED a set — `Promote`, `Verify every image ship
 
 1. reads the set's commits and version from the run's `promotion-record` (`3.1.<run>`, core sha,
    Plugins sha);
-2. runs the template generator from that Plugins commit against that core commit, at that version;
-3. **derives** the package list from the generated `Directory.Packages.props` — every `MeshWeaver.*`
-   pin — plus the ProjectReference closure of each (`dotnet pack` turns a project reference into a
-   package dependency, so the pinned ids alone would not restore). Nothing is hand-listed
+2. runs the template generator from that Plugins commit against that core commit, at that version,
+   in **both shapes**: the headless default (what the template package ships) and `--with-gui`
+   (which pins the private GUI's packages as well);
+3. **derives** the package list from the generated `Directory.Packages.props` of both shapes — the
+   union of their `MeshWeaver.*` pins, a RED if they pin one id at two versions — plus the
+   ProjectReference closure of each (`dotnet pack` turns a project reference into a package
+   dependency, so the pinned ids alone would not restore), plus the `dotnet new` template package
+   itself, `MeshWeaver.MemexTemplate`, at the set's version. Nothing is hand-listed
    (`.github/scripts/template-feed.py plan`);
 4. packs the platform-line packages at the set's version, and an **own-line** package (a csproj
    that declares its own `<Version>` — today `MeshWeaver.Aspire.Hosting.Memex`, policy
@@ -458,7 +462,21 @@ release) and, when that run SEALED a set — `Promote`, `Verify every image ship
    dependency of every package is itself published by the lane (`template-feed.py verify`);
 6. pushes with the workflow's `GITHUB_TOKEN` (`packages: write`) and `--skip-duplicate`, so a
    version already on the feed is skipped rather than an error; and
-7. reads every package's visibility back and is RED unless each is `private`.
+7. reads every package's visibility back and is RED unless each is `private`; and
+8. **proves a user can restore**: with an empty package cache and the job's own token as the
+   credential, it installs `MeshWeaver.MemexTemplate` from the feed at the set's version,
+   instantiates it under a name other than `Memex`, checks that it pins exactly what the set's
+   generated template pins, restores it against the feed and **builds** it (a template that restores
+   but does not compile is just as unusable);
+   then restores the `--with-gui` shape the same way. Steps 7 and 8 both run after a successful
+   push, so one red names every defect at once.
+
+Because the template package rides the set, a template installed from the feed pins exactly the set
+it was published with — never a local `0.0.0-local` pack or the retired `3.0.0-rc7` on nuget.org,
+whose pins the feed does not hold (MeshWeaver#7660). The restore proof exists because packing and
+pushing say nothing about restoring: the generated `nuget.config` once mapped `MeshWeaver.*` to a
+`../packages` folder source as well, and NuGet fails every restore with `NU1301` when such a folder
+is missing — invisible to every check the lane had.
 
 It is RED — never green — when the template pins an id that no project in core `src/` or Plugins
 `src/` packs, when it pins an id above the version the lane packs it at (a NuGet pin is a minimum),
@@ -500,6 +518,19 @@ dotnet nuget update source github --username <github-user> --password <PAT with 
 or, without writing the token into the file, the environment form NuGet reads for that source:
 `NuGetPackageSourceCredentials_github="Username=<github-user>;Password=<PAT>"`. The generated
 template's README states the same steps.
+
+The template itself comes from the same feed. From a directory whose `nuget.config` declares that
+`github` source with those credentials, install the set you want and instantiate it:
+
+```bash
+dotnet new install MeshWeaver.MemexTemplate::3.1.<run>
+dotnet new meshweaver-memex -n MyPortal
+```
+
+`-n` renames the solution and the host projects (`MyPortal.slnx`, `MyPortal.Portal.Monolith`,
+`aspire/MyPortal.AppHost`, …) and nothing else: package ids and package APIs
+(`MeshWeaver.Aspire.Hosting.Memex`, `AddMemex`) and `Memex.Portal.Shared` keep their names. A
+template from before that fix renamed every occurrence of `Memex`; with one of those, keep `-n Memex`.
 
 ---
 

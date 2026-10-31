@@ -127,8 +127,27 @@ each still resolve the instance.
   still bypasses the live read, so the classification tests in MeshWeaver.Plugins
   (`InstanceKeyUnavailableNotUnknownTest`) and here (`BuildPrincipalAuthenticationTest`) keep pinning
   the same rules.
-- The plan ladder (`PlanTierLadder.Read`) is a listing with its own one-minute snapshot and a
-  fail-closed fallback; it was not the measured cause and is untouched.
+- The plan ladder's fail-closed fallback. Since #7354 the ladder is one live listing of `Admin/Tiers`
+  in the process-wide cache, no longer a query re-run after a one-minute snapshot (see below).
+
+## The mirrors are HELD, so "hydrated once per process" holds (#7354)
+
+Property 1 above was true only within the cache's idle window. A read entry with no live subscriber
+is released after `ReadStreamIdleExpiration` (ten minutes), and every leg is a `Take(1)`. A consumer
+that polls less often than that, as the registry safety net does every thirty minutes, found the
+instance and grant mirrors released on every poll. It paid a fresh owner subscription under the
+ten-second budget each time.
+
+The authenticator now keeps one standing subscription, as System, on each mirror it has found
+present (`InstanceRegistryAuthenticator.Hold`). The hold ends when the node is deleted (the mirror
+completes), when the mirror faults (the cache evicts it and the next request re-holds a fresh one),
+or when the mesh disposes the service. Nothing re-subscribes on its own. An unknown key opens no
+mirror, so the set is bounded by the registered instances. The change feed still drives the held
+mirror, so a disable or a grant change is still seen by the next request.
+
+Pinned by `RegistryAuthenticationOpensNoReadPerRequestTest` (`MeshWeaver.Hosting.Test`) with a 500 ms
+idle window. See [The Plugin Registry Index's Per-Request Cost](../PluginRegistryIndexCost) for the
+503 shapes this closes.
 
 Related: [Durable But Unreadable](../DurableButUnreadable) — the OTHER way this authenticator answers
 503, permanently, when the node it needs was never readable at all.

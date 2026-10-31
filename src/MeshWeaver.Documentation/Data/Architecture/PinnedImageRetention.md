@@ -936,10 +936,47 @@ things the fleet lanes read are private, and neither may reach that log in plain
   non-empty, so their verdicts do not change. The `out-of-estate` line now reads *decided by:
   (stated in the private roster; …)*. Who decides is recorded in the private roster, and that is
   where to read it.
+- **A customer portal recorded in the fleet's own deployments repository.** Neither rule above
+  reaches it: its repository is the fleet's and it is not in the private roster. But its deployment
+  id is the customer's name, and the lock printed it in the record path
+  (`…/Deployments/<id>.json`), the overlay path (`…/<id>/values.<id>.public.yaml`), the
+  installation row and the out-of-scope summary. So every record is classified where it is read,
+  by its own `owner`: only an owner in `FLEET_RECORD_OWNERS` makes it the fleet's. Any other record,
+  including one with no owner or one that does not parse, has its identity fields (`id`, `host`,
+  `namespace`, `helmRelease`, `database`, `keyVaultSecretPrefix`, `configPath`, `owner`, …)
+  **withheld**. An installation an overlay declares that no fleet-owned record in the SAME
+  repository names is withheld too, with its host. The match is per repository because an
+  installation's identity is `owner/name:id`, and it is exact: the extra spellings a value is
+  redacted under never vouch for anything. Every overlay PATH is withheld whole unless it sits under
+  the `configPath` of a fleet record in its own repository and declares only fleet ids. This covers
+  an overlay that declares no installation at all, whose path still names its directory. An
+  overlay in a repository with no deployment records (a chart repository) therefore prints as
+  `***`. An installation's HOST is exempt only under the same association, because a failed probe
+  prints it. A non-fleet record is withheld by its whole path too, since a parent directory can
+  name the client. A registry host that only non-fleet files pin in is withheld, because a
+  customer's own registry is named after the customer. A host that any fleet file also pins stays
+  printed. Image repositories follow the same rule. One that only non-fleet files reference is
+  withheld as its exact string, never by its last segment, which is often a shared word. One
+  that a fleet file also pins stays printed. One cost follows: a host pinned only by a chart repository's overlays prints as `***`
+  too. An identifier containing a line break makes the run red, because the filter replaces values
+  within one line. Every raw `gh`/`az` diagnostic goes through `public_diagnostic` before it is
+  cut. It is filtered in its raw and its URL-decoded spelling, and a failed read's path is removed
+  in every spelling: raw, encoded, decoded and literal `%`. Only then is it cut, because a cut through
+  a long path leaves a fragment the whole-path value no longer matches. A record or overlay the scan could not read cannot
+  say whose it is, so it is withheld as well: a record by its stem, an overlay by its whole path. Withheld means *not printed*, not masked. `main()` wraps stdout and stderr
+  in `PublicLog`, which replaces each withheld value with `***` case-insensitively, a whole line
+  at a time, before the runner sees it. The step summary goes through the same filter. The run
+  prints only the count (*deployment records: N read, K not the fleet's own; M identifier(s) …
+  withheld*). An identifier shorter than three characters cannot be withheld without shredding
+  every line, so the run goes red instead of printing it. Checked against the real tree and the
+  first apply-mode run on the earlier fix: every line that named a customer is replaced, and no
+  other line changes.
 
-Both are pinned by self-test arms, and each arm was checked by reverting the code it guards: ghrest's
-*private names are masked before they are returned*, and ARM 35 and ARM 36b of
-`lock-pinned-digests.py --self-test`. Run logs that already carry such text are not changed by this
+All three are pinned by self-test arms, and each arm was checked by reverting the code it guards:
+ghrest's *private names are masked before they are returned*, and ARM 35, ARM 36b and ARM 42 of
+`lock-pinned-digests.py --self-test`. ARM 42 renders the real `report()` over a fixture customer,
+proves the unfiltered output names it, proves the filtered output does not, and keeps the fleet's
+own overlay path printed as the negative control. Run logs that already carry such text are not changed by this
 fix. Deleting them is a maintainer's act (`DELETE /repos/{owner}/{repo}/actions/runs/{id}/logs`).
 
 ### The exact commands, by hand
