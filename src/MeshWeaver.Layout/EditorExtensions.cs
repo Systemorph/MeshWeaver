@@ -618,16 +618,48 @@ public static class EditorExtensions
         var propertySkinLabel = propertyInfo.GetEditorLabel(viewerLocale);
         string? label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
 
-        var xmlDocs = serviceProvider.GetRequiredService<ITypeRegistry>().XmlDocs();
+        // The description: a declared [Description] wins; otherwise the property's XML-doc summary.
+        // The summary is NEVER read here. This runs while the form is built, on the rendering hub's
+        // turn, and a cold read would load and parse the assembly's documentation file on it (#7386).
+        // Already in memory (TrySummary reads nothing): the text itself, exactly as before. Cold: the
+        // skin carries a DATA-BOUND description, a pointer into the area's /data that is seeded empty
+        // when the field renders and filled with the summary once the mesh's I/O edge has read it
+        // (hub.ObserveXmlDocsSummary). Both clients bind a skin Description (Blazor PropertyView's
+        // DataBind, React PropertySkin's useResolve), so the field renders at once and the line follows.
+        var declaredDescription = propertyInfo.LocalizedDescription(viewerLocale);
+        object? description = declaredDescription;
+        string? descriptionDataId = null;
+        if (declaredDescription is null)
+        {
+            if (serviceProvider.GetRequiredService<ITypeRegistry>().XmlDocs().TrySummary(propertyInfo, out var summary))
+                description = summary;
+            else
+            {
+                descriptionDataId = XmlDocDescriptionDataId(propertyInfo);
+                description = new JsonPointerReference(LayoutAreaReference.GetDataPointer(descriptionDataId));
+            }
+        }
 
         Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
             skin with
             {
                 Name = propertyInfo.Name.ToCamelCase(),
-                Description = propertyInfo.LocalizedDescription(viewerLocale)
-                              ?? xmlDocs.Summary(propertyInfo),
+                Description = description,
                 Label = propertySkinLabel
             };
+
+        // Wraps a field's view so that, when its description is data-bound, rendering the field also
+        // feeds the summary into the area's /data, seeded empty so the binding never waits on the read.
+        Func<LayoutAreaHost, RenderingContext, TView> Described<TView>(Func<LayoutAreaHost, RenderingContext, TView> view)
+            => descriptionDataId is null
+                ? view
+                : (host, ctx) =>
+                {
+                    host.RegisterForDisposal(ctx.Area,
+                        host.FeedData(ctx.Area, descriptionDataId,
+                            host.Hub.ObserveXmlDocsSummary(propertyInfo).StartWith(string.Empty)));
+                    return view(host, ctx);
+                };
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
 
 
@@ -635,46 +667,59 @@ public static class EditorExtensions
         var uiControlAttribute = propertyInfo.GetCustomAttribute<UiControlAttribute>();
         // Only use UiControlAttribute if it specifies a control type (not just styling)
         if (uiControlAttribute != null && (uiControlAttribute.EditControlType != null || uiControlAttribute.DisplayControlType != null))
-            return editor.WithView((host, _) => RenderControl(host, uiControlAttribute.ControlType, propertyInfo, label, jsonPointerReference, uiControlAttribute.Options), skinConfiguration);
+            return editor.WithView(Described((host, _) => RenderControl(host, uiControlAttribute.ControlType, propertyInfo, label, jsonPointerReference, uiControlAttribute.Options)), skinConfiguration);
 
 
         var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
         if (dimensionAttribute != null)
         {
             if (dimensionAttribute.Options is not null)
-                return editor.WithView((host, _) => RenderListControl(host, Controls.Select, jsonPointerReference, dimensionAttribute.Options).WithAriaLabel(propertySkinLabel), skinConfiguration);
-            return editor.WithView((host, ctx) =>
+                return editor.WithView(Described((host, _) => RenderListControl(host, Controls.Select, jsonPointerReference, dimensionAttribute.Options).WithAriaLabel(propertySkinLabel)), skinConfiguration);
+            return editor.WithView(Described((host, ctx) =>
             {
                 var id = Guid.NewGuid().AsString();
                 host.RegisterForDisposal(ctx.Area,
                     host.FeedData(ctx.Area, id, GetStream(host, dimensionAttribute)));
                 return RenderListControl(host, Controls.Select, jsonPointerReference, id).WithAriaLabel(propertySkinLabel);
-            }, skinConfiguration);
+            }), skinConfiguration);
         }
 
 
         if (PickableEnumType(propertyInfo.PropertyType) is { } enumType)
-            return editor.WithView((host, _) =>
+            return editor.WithView(Described((host, _) =>
             {
                 // #4284: same gap as the unskinned dispatch above — no branch, property dropped.
                 // The options render on THIS host, so they take its captured viewer's language.
                 var id = Guid.NewGuid().AsString();
                 host.UpdateData(id, ConvertEnumToOptions(enumType, ViewerLocaleOf(host)));
                 return RenderListControl(host, Controls.Select, jsonPointerReference, id).WithAriaLabel(propertySkinLabel);
-            }, skinConfiguration);
+            }), skinConfiguration);
         if (propertyInfo.PropertyType.IsNumber())
-            return editor.WithView((host, _) => RenderControl(host, typeof(NumberFieldControl), propertyInfo, label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)), skinConfiguration);
+            return editor.WithView(Described((host, _) => RenderControl(host, typeof(NumberFieldControl), propertyInfo, label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType))), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(string))
-            return editor.WithView((host, _) => RenderControl(host, typeof(TextFieldControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
+            return editor.WithView(Described((host, _) => RenderControl(host, typeof(TextFieldControl), propertyInfo, label, jsonPointerReference)), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
-            return editor.WithView((host, _) => RenderControl(host, typeof(DateTimeControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
+            return editor.WithView(Described((host, _) => RenderControl(host, typeof(DateTimeControl), propertyInfo, label, jsonPointerReference)), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(bool) || propertyInfo.PropertyType == typeof(bool?))
-            return editor.WithView((host, _) => RenderControl(host, typeof(CheckBoxControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
+            return editor.WithView(Described((host, _) => RenderControl(host, typeof(CheckBoxControl), propertyInfo, label, jsonPointerReference)), skinConfiguration);
 
         // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
         return editor;
     }
 
+
+    /// <summary>
+    /// The <c>/data</c> key a form field's data-bound XML-doc description is fed under: one per
+    /// documented member, so re-building the form re-binds the same entry instead of minting another.
+    /// A documentation ID is unique only WITHIN an assembly: two assemblies — or two collectible builds
+    /// of one NodeType — can declare the same <c>P:Ns.Type.Prop</c> with different summaries, and one
+    /// area may show forms over both. The defining module's build identity (its MVID) keeps their
+    /// entries apart; the same build always maps to the same key.
+    /// </summary>
+    private static string XmlDocDescriptionDataId(PropertyInfo propertyInfo)
+        => $"xmlDoc:{propertyInfo.Module.ModuleVersionId:N}:"
+           + (XmlDocs.DocumentationId(propertyInfo)
+              ?? $"{propertyInfo.DeclaringType?.FullName}.{propertyInfo.Name}");
 
     private static IObservable<IReadOnlyCollection<Option>> GetStream(LayoutAreaHost host, DimensionAttribute dimensionAttribute)
     {
