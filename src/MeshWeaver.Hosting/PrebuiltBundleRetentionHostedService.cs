@@ -176,9 +176,9 @@ public sealed class PrebuiltBundleRetentionHostedService(
                     // line is the only production-visible evidence that it attempted and lost the lease.
                     logger.LogWarning(
                         "PrebuiltBundleRetention: {Replica} skipped this pass over {Root} — the lease at {Lease} is "
-                        + "held by pass {Holder} on {HolderReplica} until {Until:O}, which runs the one sweep",
+                        + "held by {Holder}, which runs the one sweep",
                         replica, root, PrebuiltBundleRetentionLease.LeasePath,
-                        verdict.Lease.Holder, verdict.Lease.Replica ?? "(unnamed)", verdict.Lease.Until);
+                        PrebuiltBundleRetentionLease.DescribeHolder(verdict.Lease));
             },
             // The sweep's outcome is recorded whatever the release does (#7459): a release that faults is
             // its own line, and the lease lapses at its hold's end — the pass is NOT reported as a fault.
