@@ -109,10 +109,57 @@ public static class PackageDependencyFloorGate
     }
 
     /// <summary>
-    /// <see cref="Unmet"/> against what <paramref name="hub"/>'s process has loaded. A mesh with no
-    /// <see cref="ILoadedPackageModules"/> (no module host), an empty reading and a reading that
-    /// faults all judge nothing — the fault is logged, and the update is decided as it was before
-    /// this gate existed.
+    /// The first requirement of <paramref name="candidate"/> that the LANDED module set does not
+    /// meet — the very verdict the module-set proposal reaches (<see cref="ModuleDependencyFloor.Unmet"/>)
+    /// over the install records with <paramref name="candidate"/> in its own record's place. Null
+    /// when every requirement the landed set can judge is met. Pure.
+    ///
+    /// <para>🚨 MeshWeaver#6192 (reopened 2026-10-31): the installer judged only what the process
+    /// LOADED, the proposal judges the landed activation entry, and the two can differ (an image
+    /// copy reads newer than a landed generation the next boot projects). An update admitted on
+    /// the loaded reading alone gave the record a floor the landed set did not meet, and every
+    /// landing wave on every replica was then refused. Judging the same entry makes "installed"
+    /// imply "proposable".</para>
+    /// </summary>
+    /// <param name="candidate">The package version a source serves.</param>
+    /// <param name="installed">This deployment's install records (dependency id → module mapping).</param>
+    /// <param name="landed">The activation list the proposal derives the set from.</param>
+    public static UnmetPackageDependency? UnmetAgainstLanded(
+        PackageManifest candidate, IReadOnlyList<PackageManifest> installed, ModuleActivationList landed)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(installed);
+        ArgumentNullException.ThrowIfNull(landed);
+        if (candidate.Requires.IsEmpty || string.IsNullOrWhiteSpace(candidate.Id))
+            return null;
+        var withCandidate = installed
+            .Where(p => !string.Equals(p.Id, candidate.Id, StringComparison.Ordinal))
+            .Append(candidate)
+            .ToImmutableList();
+        return ModuleDependencyFloor.Unmet(withCandidate, landed)
+                .FirstOrDefault(u => string.Equals(u.Dependent, candidate.Id, StringComparison.Ordinal))
+            is { } floor
+            ? new UnmetPackageDependency(floor.Requirement, floor.Dependency, floor.Module, floor.LoadedVersion)
+            : null;
+    }
+
+    /// <summary>
+    /// The verdict on <paramref name="candidate"/> for this deployment: its requirements judged
+    /// against the module THIS PROCESS has loaded for each dependency (<see cref="Unmet"/>) AND
+    /// against the landed activation entry the module-set proposal judges
+    /// (<see cref="UnmetAgainstLanded"/>). Either unmet holds the update.
+    ///
+    /// <para>🚨 <b>A reading that cannot be had HOLDS, it never admits</b> (MeshWeaver#6192): a
+    /// loaded or landed reading that answers nothing, or faults, yields an
+    /// <see cref="UnmetPackageDependency"/> carrying <see cref="UnmetPackageDependency.Unjudged"/>.
+    /// It used to judge nothing and let the update through — the direction that let a record take
+    /// a floor the proposal then refused on every wave. The hold names why, and the first pass
+    /// whose readings answer decides again (<see cref="ClearMetHold"/>).</para>
+    ///
+    /// <para>Unchanged: a host with neither reading (no module host at all) and a candidate that
+    /// declares nothing judge nothing; a dependency with no loaded and no landed module here (a
+    /// content-only package) is not judged — the reading ANSWERED, and absent there means "not
+    /// judged", exactly as on the GitSync lane.</para>
     /// </summary>
     /// <param name="hub">The calling hub.</param>
     /// <param name="candidate">The package version a source serves.</param>
@@ -123,19 +170,39 @@ public static class PackageDependencyFloorGate
     {
         ArgumentNullException.ThrowIfNull(hub);
         ArgumentNullException.ThrowIfNull(candidate);
-        if (candidate.Requires.IsEmpty
-            || hub.ServiceProvider.GetService<ILoadedPackageModules>() is not { } modules)
+        var modules = hub.ServiceProvider.GetService<ILoadedPackageModules>();
+        var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+        if (candidate.Requires.IsEmpty || (modules is null && landing is null))
             return Observable.Return<UnmetPackageDependency?>(null);
-        return modules.Read()
-            .Take(1)
-            .DefaultIfEmpty(ImmutableDictionary<string, LoadedPackageModule>.Empty)
-            .Select(loaded => Unmet(candidate, loaded))
+
+        var againstLoaded = modules is null
+            ? Observable.Return<UnmetPackageDependency?>(null)
+            : modules.Read()
+                .Take(1)
+                .Select(loaded => Unmet(candidate, loaded))
+                .DefaultIfEmpty(UnmetPackageDependency.Unread(candidate,
+                    "the loaded-module reading answered nothing"));
+        var againstLanded = landing is null
+            ? Observable.Return<UnmetPackageDependency?>(null)
+            : landing.GetActivation()
+                .Take(1)
+                .SelectMany(activation => ModuleDependencyFloor.ReadInstalled(hub)
+                    .Take(1)
+                    .Select(installed => UnmetAgainstLanded(candidate, installed, activation)))
+                .DefaultIfEmpty(UnmetPackageDependency.Unread(candidate,
+                    "the landed activation record or the install records answered nothing"));
+
+        return againstLoaded
+            .SelectMany(unmet => unmet is not null
+                ? Observable.Return<UnmetPackageDependency?>(unmet)
+                : againstLanded)
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex,
-                    "Package update: the loaded modules could not be read, so the requirements of {Id} "
-                    + "are NOT judged on this pass.", candidate.Id);
-                return Observable.Return<UnmetPackageDependency?>(null);
+                    "Package update: the module readings could not be read, so the update of {Id} is "
+                    + "HELD on this pass (never admitted unjudged, MeshWeaver#6192).", candidate.Id);
+                return Observable.Return<UnmetPackageDependency?>(
+                    UnmetPackageDependency.Unread(candidate, ex.Message));
             });
     }
 
@@ -151,6 +218,9 @@ public static class PackageDependencyFloorGate
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(unmet);
         var version = candidate.ReleasedVersion ?? candidate.Version ?? candidate.ModuleVersion ?? "the served version";
+        if (unmet.Unjudged is { Length: > 0 } why)
+            return $"held: {version} — {HoldMarker}{unmet.Requirement} could not be judged: {why}; "
+                + "updates once the module readings answer and every requirement is met";
         return $"held: {version} — {HoldMarker}{unmet.Requirement} is not met: this instance runs "
             + $"'{unmet.Module}' (package '{unmet.Dependency}') at {unmet.LoadedVersion}; updates once a "
             + $"satisfying '{unmet.Dependency}' is loaded";
@@ -299,4 +369,28 @@ public static class PackageDependencyFloorGate
 /// <param name="Module">The dependency's module (entry-assembly name).</param>
 /// <param name="LoadedVersion">The version of that module this process has loaded.</param>
 public sealed record UnmetPackageDependency(
-    string Requirement, string Dependency, string Module, string LoadedVersion);
+    string Requirement, string Dependency, string Module, string LoadedVersion)
+{
+    /// <summary>
+    /// Set when the requirement was NOT judged because a reading could not be had (it answered
+    /// nothing, or faulted) — the reason, in words. Such a verdict HOLDS the update exactly as an
+    /// unmet one does (MeshWeaver#6192): an unread dependency is never read as a met one.
+    /// </summary>
+    public string? Unjudged { get; init; }
+
+    /// <summary>The verdict for a candidate whose requirements could not be judged (pure).</summary>
+    /// <param name="candidate">The candidate.</param>
+    /// <param name="why">Why no verdict could be reached.</param>
+    public static UnmetPackageDependency Unread(PackageManifest candidate, string why)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        return new UnmetPackageDependency(
+            string.Join(", ", candidate.Requires.Select(r => r.Trim())),
+            Dependency: "",
+            Module: "",
+            LoadedVersion: "")
+        {
+            Unjudged = why,
+        };
+    }
+}

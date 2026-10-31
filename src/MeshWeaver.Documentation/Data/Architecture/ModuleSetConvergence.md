@@ -383,6 +383,28 @@ a satisfying dependency applies the update for all of them, the same limit as th
 two records was not read from the logs; all of them go through the orchestrator. Pinned by
 `PackageDependencyFloorHoldTest`; with the gate unwired the held arms never record a hold.
 
+🚨 **The installer and the proposal now judge the SAME entry, and no reading is never "met" (#6192, reopened).**
+Measured on memex.systemorph.com on 2026-10-31: a freshly started replica installed Chat 1.8.0
+(`requires AI@^1.43.0`) at 03:16:12Z while the activation record landed `MeshWeaver.AI` at 1.42.3,
+and from 03:16:57Z every landing wave on every replica was refused for it. Later candidates
+(1.8.1–1.8.3) were held as designed, so the gate was wired, but it judged only the LOADED reading,
+and a reading that answered nothing or faulted judged nothing and let the update through. Two
+things changed. First, `PackageDependencyFloorGate.Evaluate` also judges the candidate against
+the landed activation entry the proposal reads (`UnmetAgainstLanded` →
+`ModuleDependencyFloor.Unmet`, over the install records with the candidate in its own record's
+place), so an update is only admitted when the next proposal will accept it. Second, a loaded or
+landed reading that answers nothing, or faults, HOLDS the update: the record's `heldUpdate` says
+the requirement "could not be judged" and why, and the first pass whose readings answer decides
+again. Not changed: a host with no module host at all, a candidate that declares nothing, a
+dependency with no loaded and no landed module here, and a fresh install. The registry MODULE lane
+(`RegistryUpdateReconciler.AdoptOne`) now asks the same question before it lands a dependent's
+module, through the policy-decline seam (`DependencyDecline`). It had landed Chat's module 1.8.2 at
+08:22Z beside AI 1.42.3 while Chat's content update was held for that same requirement. A
+broadcast whose package listing cannot be read declines rather than landing unjudged. Pinned by
+`ADependencyUpdateIsJudgedAgainstTheLandedSetTest`. Which of the two readings let the 03:16 install
+through, an empty or faulted loaded reading or an image copy reading newer than the landed
+entry, was not read from that replica's logs; the change closes both.
+
 🚨 **The per-process limit has a COMPILE half, and it is closed (#6195).** The import and the
 installer judge the floor where SOURCES are written; once one replica that meets the floor has
 written them, every replica reads them — and a NodeType's hub is placed on whichever replica asks

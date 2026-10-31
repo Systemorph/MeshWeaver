@@ -1201,7 +1201,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                         // Not installed here → somebody else's module; nothing to reconcile.
                         ? Observable.Return<LandedModule?>(null)
                         : AdoptOne(bundles, registryName, pkg.Id, pkg.Module!, recordPath,
-                            record.ContentAs<PackageManifest>(hub.JsonSerializerOptions)));
+                            record.ContentAs<PackageManifest>(hub.JsonSerializerOptions), served: pkg));
             })
             .ToObservable()
             .Concat()
@@ -1260,7 +1260,25 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                                 name, packageId);
                             return Observable.Return<LandedModule?>(null);
                         }
-                        return AdoptOne(bundles, name, packageId, module, recordPath, manifest);
+                        // 🚨 MeshWeaver#6192 — the served listing carries the requirements the
+                        // module lane must judge before it lands a dependent's module. A listing
+                        // that cannot be read yields null, which DECLINES (DependencyDecline); the
+                        // next pass reads it again.
+                        var source = new RegistryPackageSource(hub, registry.Url, token) { Bundles = bundles };
+                        return source.ListPackages(EffectiveRef(registry.Ref))
+                            .Take(1)
+                            .Select(packages => packages.FirstOrDefault(p =>
+                                string.Equals(p.Id, packageId, StringComparison.Ordinal)))
+                            .DefaultIfEmpty(null)
+                            .Catch((Exception ex) =>
+                            {
+                                logger.LogWarning(ex,
+                                    "[RegistryUpdate] {Name}: the listing of {Package} could not be read, so its "
+                                    + "module is not landed on this pass (its requirements are unjudged). Cause: {Cause}",
+                                    name, packageId, ex.Message);
+                                return Observable.Return<PackageManifest?>(null);
+                            })
+                            .SelectMany(served => AdoptOne(bundles, name, packageId, module, recordPath, manifest, served));
                     });
             })
             // The wave of one: ends the same way every wave ends (#3395) — set, then activation.
@@ -1410,7 +1428,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// <returns>The module and version that LANDED, or null when nothing did.</returns>
     private IObservable<LandedModule?> AdoptOne(
         PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath,
-        PackageManifest? record) =>
+        PackageManifest? record, PackageManifest? served) =>
         // 🚨 policy packages-auto-update — the module lands on TWO inputs only: a newer version was
         // published, and its declared platform floor is met (the floor is decided inside the adopt,
         // ModuleUpdateDecision). The package's own policy still speaks (an administrator's
@@ -1421,9 +1439,14 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         // content repo — exactly the dependency the policy rules out. The CONTENT half of a
         // sync-owned partition still has one writer, its sync (PackageUpdateReconciler); only the
         // code no longer waits for it.
-        bundles
+        // 🚨 …and the dependency floor (MeshWeaver#6192): a dependent's module never lands beside a
+        // dependency that does not satisfy what the served version requires — the same verdict the
+        // content half and the module-set proposal reach. It rides the policy-decline seam, so a
+        // declined module is reported and left as it is, exactly like a None policy.
+        DependencyDecline(hub, served, logger)
+            .SelectMany(dependencyDecline => bundles
             .AdoptModuleOutcome(packageId, moduleName, recordPath, unattended: true,
-                policyDecline: PolicyDecline(record))
+                policyDecline: PolicyDecline(record) ?? dependencyDecline))
             // 🚨 A HANG is worse than a failure here: the packages run as one sequential Concat,
             // so a single adopt that never answers (a wedged record read, a download that stalls)
             // silently starves EVERY package after it — on memex.systemorph.com the Northwind
@@ -1445,6 +1468,32 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     packageId, registryName, ex.Message);
                 return Observable.Return<LandedModule?>(null);
             });
+
+    /// <summary>
+    /// 🚨 MeshWeaver#6192 — the module lane's half of the dependency floor: why a dependent's
+    /// module must NOT land, or null when it may. The served listing's requirements are judged the
+    /// way the content half judges them (<see cref="PackageDependencyFloorGate.Evaluate"/> — the
+    /// loaded reading and the landed activation entry the proposal reads), so the module lane can
+    /// never land a dependent build its dependency does not satisfy. Measured on
+    /// memex.systemorph.com 2026-10-31: Chat's module 1.8.2 landed beside AI 1.42.3 while Chat's
+    /// content update was held for exactly that requirement.
+    ///
+    /// <para>A listing that could not be read (<paramref name="served"/> null) DECLINES — no reading
+    /// is never a licence to land; the next pass reads the listing again.</para>
+    /// </summary>
+    /// <param name="hub">The mesh hub.</param>
+    /// <param name="served">The registry's listing of the package, or null when it could not be read.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>Cold; emits exactly once.</returns>
+    internal static IObservable<string?> DependencyDecline(IMessageHub hub, PackageManifest? served, ILogger? logger)
+        => served is null
+            ? Observable.Return<string?>(
+                "the registry's listing of this package could not be read, so its requirements could not "
+                + "be judged (MeshWeaver#6192) — the module lands on a pass that reads them")
+            : PackageDependencyFloorGate.Evaluate(hub, served, logger)
+                .Select(unmet => unmet is null
+                    ? null
+                    : PackageDependencyFloorGate.HeldSentence(served, unmet) + " (MeshWeaver#6192)");
 
     /// <summary>One module a wave landed, and the version it landed.</summary>
     /// <param name="Module">The module's entry-assembly name.</param>
