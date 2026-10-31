@@ -2730,7 +2730,15 @@ Any signal from outside the path's own partition and the global inputs re-checks
 cache, whose generation does not move with those inputs. The follow does not start from the
 admission's verdict: it attaches its signals first, then takes the verdict again, so a revocation
 that commits while the admission is still being decided is not missed
-(`ACacheRead_RevokedWhileItsAdmissionIsDecided_IsNeverServed`). A grant the type's read RULE gave
+(`ACacheRead_RevokedWhileItsAdmissionIsDecided_IsNeverServed`). The signals and that initial
+re-check reach the re-check's `Switch` ONE AT A TIME (`MeshNodeStreamCache.ReDecisionTriggers`, a
+`Merge` that attaches the signals before it emits the initial trigger). They used to be written into
+the same observer from two threads: the initial re-check on the subscribing thread, a commit's signal
+on its own. Rx's `Switch` swaps its inner subscription outside its gate, so two triggers at once
+could leave the older inner installed — the newest re-check disposed, the older one's answer
+ignored — and the standing Read stayed pending until the permission-establishment budget refused a
+reader whose grant stood, exactly one budget after it opened and before it received anything
+(`StandingReadReDecisionTriggersTest`). A grant the type's read RULE gave
 (the fold denied, e.g. a satellite read through its MainNode) rests on the node's own fields, so the
 rule is asked about each revision itself and again on every settled re-check: a satellite repointed
 at a MainNode the reader cannot read is refused on that revision

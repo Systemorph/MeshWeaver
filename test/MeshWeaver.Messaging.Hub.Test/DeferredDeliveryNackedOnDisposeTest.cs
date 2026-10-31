@@ -546,6 +546,115 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             "a release is fire-and-forget: a ShuttingDown NACK to its sender answers no question (#6890)");
     }
 
+    private static readonly Address DeadReleaseReceiverAddress = new("dead-release-receiver", "1");
+    private static readonly Address DeadUndeclaredAddress = new("dead-undeclared", "1");
+
+    /// <summary>
+    /// A hub that is already DEAD and a delivery that still reaches it — the routing window
+    /// <c>RidingOutAShuttingDownAddress</c> documents (a disposing hub stays registered with its
+    /// parent until <c>ShutDown</c>). Delivered straight into the dead instance so the window is
+    /// deterministic rather than millisecond-timed.
+    /// </summary>
+    private async Task<IMessageHub> DeadHostedHub(IMessageHub host, Address address, Type messageType)
+    {
+        var hub = host.GetHostedHub(address, c => c.WithTypes(messageType));
+        hub.Should().NotBeNull();
+        hub!.Dispose();
+        await hub.DisposalCompleted.FirstAsync().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+        return hub;
+    }
+
+    /// <summary>
+    /// Education#414 (journey run 41168294738, 30-solutions FactPath): the portal popped a blocking
+    /// "Something went wrong" modal reading <c>Hub sync/… is shutting down (RunLevel=Dead, …) —
+    /// cannot process UnsubscribeRequest</c>, and the dialog then intercepted the learner's Run
+    /// click. The intake gate of a DEAD hub NACKed a RELEASE back to its sender.
+    ///
+    /// <para><b>Why that NACK is wrong.</b> It is the same fact #6890 settled for the deferred
+    /// path: a release asks its RECEIVER to let go of state the receiver holds, and the receiver is
+    /// the hub being disposed — its disposal released everything it held. The release is
+    /// fire-and-forget, so the ShuttingDown NACK answers no question; it lands at the subscriber as
+    /// an un-awaited <see cref="DeliveryFailure"/>, which the portal's error sink reports as a
+    /// modal.</para>
+    ///
+    /// <para><b>Control.</b> <see cref="AnUndeclaredMessage_AtADeadHub_IsStillNacked"/> delivers a
+    /// message that releases nothing through the same dead hub, and its sender IS told — which
+    /// also proves this instrument can see a NACK at all.</para>
+    /// </summary>
+    [Fact]
+    public async Task AReleaseReachingADeadHub_IsNotNackedToItsSender()
+    {
+        var host = GetHost();
+        var dead = await DeadHostedHub(host, DeadReleaseReceiverAddress, typeof(ReleaseNotice));
+
+        dead.DeliverMessage(new MessageDelivery<ReleaseNotice>(new ReleaseNotice(),
+            new PostOptions(host.Address).WithTarget(DeadReleaseReceiverAddress),
+            host.JsonSerializerOptions));
+
+        // FIFO marker: any NACK the dead hub posted to the host is queued ahead of this read.
+        await host.Observe<GatedResponse>(new OutboundRead(), o => o.WithTarget(host.Address))
+            .FirstAsync().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        strayFailuresAtHost.Should().NotContain(
+            f => f.Message != null && f.Message.Contains(nameof(ReleaseNotice), StringComparison.Ordinal),
+            "the release asked a dead hub to let go of state its own disposal already released; a "
+            + "ShuttingDown NACK to a fire-and-forget sender answers no question (Education#414)");
+    }
+
+    private static readonly Address DeadHostQualifiedReceiverAddress = new("dead-hosted-release-receiver", "1");
+
+    /// <summary>
+    /// The same release, but addressed HOST-QUALIFIED (<c>{host}~{receiver}</c>) — the shape routing
+    /// forwards unchanged after resolving the inner address (<c>RouteConfiguration.RouteAddressToHub</c>).
+    /// It is still FOR this hub, so it must not be mistaken for transit and NACKed (review on #7738).
+    /// </summary>
+    [Fact]
+    public async Task AHostQualifiedReleaseReachingADeadHub_IsNotNackedToItsSender()
+    {
+        var host = GetHost();
+        var dead = await DeadHostedHub(host, DeadHostQualifiedReceiverAddress, typeof(ReleaseNotice));
+
+        dead.DeliverMessage(new MessageDelivery<ReleaseNotice>(new ReleaseNotice(),
+            new PostOptions(host.Address).WithTarget(DeadHostQualifiedReceiverAddress with { Host = host.Address }),
+            host.JsonSerializerOptions));
+
+        await host.Observe<GatedResponse>(new OutboundRead(), o => o.WithTarget(host.Address))
+            .FirstAsync().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        strayFailuresAtHost.Should().NotContain(
+            f => f.Message != null && f.Message.Contains(nameof(ReleaseNotice), StringComparison.Ordinal),
+            "a host-qualified target names the same receiver once the Host is stripped, exactly as "
+            + "NotifyAsync compares it; the release is not in transit");
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL for the case above: the same dead hub, a message that does NOT declare
+    /// itself a release — its sender is still NACKed ShuttingDown, exactly as before.
+    /// </summary>
+    [Fact]
+    public async Task AnUndeclaredMessage_AtADeadHub_IsStillNacked()
+    {
+        var host = GetHost();
+        var dead = await DeadHostedHub(host, DeadUndeclaredAddress, typeof(UndeclaredNotice));
+
+        dead.DeliverMessage(new MessageDelivery<UndeclaredNotice>(new UndeclaredNotice(),
+            new PostOptions(host.Address).WithTarget(DeadUndeclaredAddress),
+            host.JsonSerializerOptions));
+
+        await host.Observe<GatedResponse>(new OutboundRead(), o => o.WithTarget(host.Address))
+            .FirstAsync().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        strayFailuresAtHost.Should().Contain(
+            f => f.ErrorType == ErrorType.ShuttingDown
+                 && f.Message != null && f.Message.Contains(nameof(UndeclaredNotice), StringComparison.Ordinal),
+            "a message that releases nothing keeps the ShuttingDown NACK — only the declaration "
+            + "moves it, and without this the test above could pass on an instrument that sees nothing");
+    }
+
     /// <summary>A request whose payload names the read it is — the shape of a GetDataRequest's reference.</summary>
     private record ReferencedRead(string Reference) : IRequest<GatedResponse>, IDescribedForDiagnostics
     {

@@ -298,6 +298,24 @@ at the gate when it asks for its slot (`QueuedAhead` — 5.4 s of queue on a 4 s
 its turn, and a leaf admitted and hung in its own lane fails inside two budgets while an
 unrelated lane keeps advancing. With the stalled-lane condition removed, the second case ran to 27 s.
 
+### A delete queued in a serial write lane behind another kind of write earns credit (MeshWeaver#7464)
+
+The Postgres backend writes each partition schema through its own `SerialWriteLane` (one write at a
+time, on slots of the `pg-write:{provider}` budget) rather than through one process-wide cap-1 pool. A
+partition-root or membership write parked on a database-wide lock then holds that schema's lane, and a
+delete leaf queued behind it waits in a lane that does not move — which the rule above reads as a
+stall. The lanes are therefore read too (`IoPoolRegistry.SerialLaneSnapshot`), and unlike a pool a
+lane knows the KIND of its writes: how many deletes wait, and whether the write in flight is a delete.
+
+- A delete queued behind a write that is NOT a delete earns credit: it is waiting its turn behind a
+  write that is not this delete's own leaf.
+- A lane whose head IS a delete and stood still still denies credit, exactly as a cap-1 pool always
+  has: that head may be this delete's own admitted leaf hanging.
+- With nothing queued, nothing is credited, and the four-budget cap still bounds the total.
+
+Pinned by `DeleteQueuedInASerialWriteLaneEarnsCreditTest` (with the new clause removed, the first case
+fails), and in MeshWeaver.Plugins by the Postgres lane tests.
+
 🚨 **A pool's `Waiting` is not its queue order — read `BehindCap` before claiming a leaf is behind
 other work.** A pool counts a leaf as waiting from the moment it is ACCEPTED, one ThreadPool hop
 before the leaf reaches the gate (`IoPoolAdmission.BeforeGate`), and the gate is first-come-first-served

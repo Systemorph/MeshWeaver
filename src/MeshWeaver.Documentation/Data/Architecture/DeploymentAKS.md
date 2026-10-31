@@ -324,12 +324,42 @@ room there (a portal: `cpu: "4"`, `memory: "8Gi"`):
 The chart renders it as cluster-autoscaler **overprovisioning**: per pool a Deployment
 `node-headroom-<pool>` of `pause` containers whose requests equal its limits, pinned to the pool by
 `kubernetes.azure.com/agentpool`, running under the `PriorityClass` `node-headroom` — value `-10`
-(below every real workload, which runs at priority 0, and not below the cluster autoscaler's
-expendable cutoff, so an evicted placeholder still asks for a node), `globalDefault: false`,
-`preemptionPolicy: Never`. When a
-surge pod (or any real pod) cannot otherwise schedule, the scheduler **preempts** a placeholder and
-places the real pod in its slot at once; the evicted placeholder goes `Pending`, and the cluster
-autoscaler adds a node for it — so the slot is restored before the next roll needs it.
+(not below the cluster autoscaler's expendable cutoff, so an evicted placeholder still asks for a
+node), `globalDefault: false`, `preemptionPolicy: Never`. When a pod that is **allowed to preempt
+it** (see the invariant below — a portal surge pod is) cannot otherwise schedule, the scheduler
+**preempts** a placeholder and places that pod in its slot at once; the evicted placeholder goes
+`Pending`, and the cluster autoscaler adds a node for it — so the slot is restored before the next
+roll needs it.
+
+**The ordering invariant — a placeholder yields only to a pod that outranks it.** "Any real pod
+preempts the placeholder" is FALSE, for two reasons the scheduler applies to every pod:
+
+- **Kubernetes preempts only for a STRICTLY higher priority.** A pod at `-10` — the same value as
+  `node-headroom` — displaces no placeholder, however long it waits.
+- **A pod whose PriorityClass has `preemptionPolicy: Never` displaces nothing at all**, whatever its
+  value. It waits for a slot to free up on its own.
+
+And the placeholder cannot simply move lower to get out of the way: the cluster autoscaler ignores
+pods below its expendable cutoff (`--expendable-pods-priority-cutoff`, `-10`), so a placeholder under
+`-10` that is evicted would never get a node back and the slot would never be restored. Hence:
+
+1. `node-headroom` stays at exactly `-10`, `preemptionPolicy: Never`;
+2. **every pod that can land on a pool carrying a placeholder runs under a PriorityClass strictly
+   above `-10` whose `preemptionPolicy` lets it preempt** (`PreemptLowerPriority`, the default).
+   Portals and the other production workloads run at priority 0 and satisfy it; anything that sits
+   at `-10` or carries `preemptionPolicy: Never` on such a pool does not, and on a full pool it waits
+   behind an idle `pause` container.
+
+The trigger was the CI infrastructure on `silos`: the `ci-platform-refresh` CronJob ran under
+`arc-runner-low` (`-10`, `preemptionPolicy: Never` — see [Self-Hosted Runners](../SelfHostedRunners))
+and could not take a placeholder's slot on a full pool. Systemorph/Memex
+[#921](https://github.com/Systemorph/Memex/pull/921) adds the PriorityClass `ci-infra` (`-9`, may
+preempt, below every portal) for the CI infrastructure on `silos` — the `ci-platform-refresh`
+CronJob, the ARC controllers and listeners, the NuGet-cache and artifact-store CronJobs — and the
+check `scripts/check-headroom-preemptable.py`, which reads every pod spec declared under
+`deployments/aks` and fails on any that can land on a `nodeHeadroom` pool without a class strictly
+above `node-headroom` that may preempt. Runner pods keep `arc-runner-low`: they run on the CI pools,
+which carry no placeholder.
 
 - **Declared on the control record only.** The placeholder is cluster-scoped, like a cluster
   manifest; declared on every instance it would hold one slot per instance instead of one per pool.
@@ -339,8 +369,8 @@ autoscaler adds a node for it — so the slot is restored before the next roll n
 - **The cost is the slot: it stays idle.** At most one extra node per pool, and only while the
   real workloads leave no slot free; the autoscaler never exceeds the pool's `maxCount`.
 - **What it does NOT guarantee.** At the pool's `maxCount` the evicted placeholder cannot get a
-  node, so the slot is consumed until something leaves. Any normal-priority pod preempts it too — a
-  KEDA scale-out takes the slot exactly as a surge pod does. The pool bound therefore still has to
+  node, so the slot is consumed until something leaves. Any pod that satisfies the invariant above
+  preempts it too — a KEDA scale-out takes the slot exactly as a surge pod does. The pool bound therefore still has to
   hold the floors, the surge pods AND the placeholder; the estate's pool-fit check counts the
   placeholder as a pod.
 - **The PriorityClass is INFRA-DECLARED — the chart only references it.** A PriorityClass is

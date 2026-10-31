@@ -166,6 +166,18 @@ answer:
 | a message the routing layer may not answer: `[CanBeIgnored]` (`StreamEndedEvent`, `HeartBeatEvent`) or a `DeliveryFailure` | Debug | no sender awaits a reply, and `NackThroughParent` posts none (`AnswerPolicy`). Dropping it for a hub that is going away is what the declaration asks for (#5718) |
 | anything else, from another sender | **Error** | the waiter may take the NACK as final. That is the report worth an issue |
 
+**The same release, arriving AFTER the gates.** A release can also reach a hub that is already past
+its intake gate — `DisposeHostedHubs` or `Dead`, still registered with its parent, so routing hands it
+the delivery (see [Riding Out a ShuttingDown Address](../RidingOutAShuttingDownAddress)). The intake
+gate applies the release row above too: a release addressed to the refusing hub is dropped with a
+Debug line and `NACK_DECLINED reason=release-to-disposing-hub` on its trail, never NACKed. Before
+that, the subscriber received an un-awaited `ShuttingDown` failure — *"Hub sync/… is shutting down
+(RunLevel=Dead, …) — cannot process UnsubscribeRequest"* — and the portal raised it as a blocking
+"Something went wrong" modal that swallowed the user's next click (Education#414). A release in
+TRANSIT through a dying router is still owed to a live receiver and keeps its NACK. Pinned by
+`DeferredDeliveryNackedOnDisposeTest.AReleaseReachingADeadHub_IsNotNackedToItsSender`, with
+`AnUndeclaredMessage_AtADeadHub_IsStillNacked` as the control.
+
 The first cleanup of this table, the self-heal's own recycle, no longer discards anything: it queues
 behind the gates (`HubSelfRecycleExtensions.RecycleSelfAfterAcceptedWork`, #5356). `[ReaskedOnShutdown]`
 makes a claim about EVERY producer of the type, so a new producer must ride the refusal out too.

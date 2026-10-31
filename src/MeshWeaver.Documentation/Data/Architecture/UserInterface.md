@@ -141,6 +141,32 @@ After the initial load, only *changes* travel over the wire. MeshWeaver uses **J
 
 A counter incrementing once sends a single-operation patch rather than re-sending the entire control tree. This keeps real-time dashboards snappy even under heavy update rates.
 
+### When a first frame is slow
+
+Every area open on the owner hub passes three points before the subscriber can see the area:
+
+1. **Base frame.** The host sets an empty store with the "Building layout…" progress marker. The subscriber gets this almost at once.
+2. **Compose.** The host has a rendered store carrying a control for the requested area. This interval covers more than the view's inputs: scheduling the render subscription off the hub's turn, the view function and every stream it combines, rendering the control tree, and any other renderers of the same area.
+3. **Delivery.** The owner hub's update queue applies that store update and the stream publishes it (`SetCurrent` compares and emits it to subscribers). Then the patch travels to the subscriber.
+
+`LayoutAreaHost` times all three, once per open, and writes a single line when the requested area first appears in its store:
+
+```text
+FIRST FULL FRAME of layout area 'InstallCta' on Northwind after 1012 ms:
+base frame at 31 ms, first control composed at 990 ms, then the owner's update queue applied it
+(slow-first-frame threshold 1000 ms; -1 = hop not passed)
+```
+
+- **Level.** The line is `Debug` by default, so a healthy open writes nothing to Loki. It is `Information` only when the first full frame took longer than `Layout:SlowFirstFrameThreshold`, a `TimeSpan` that defaults to one second. A shelf of N cards opens 2N areas, so logging every open at `Information` would cost Loki on every page view, while the slow open is the anomaly an operator needs to see.
+- **Cost.** One latch and three timestamps per host, read where the host already passes. No timer, no subscription, and no second line for later updates of the same area.
+- **Reading it.**
+  - A large gap between the base frame and "composed" is time spent producing the rendered store: the view's inputs, or the scheduling and rendering around them. Narrow it further by timing the view's inputs directly; the line alone does not say which.
+  - A large gap between "composed" and the total means the owner's update queue or the publication is slow. The delivery mark is taken once the update has committed, so a failed update never reports.
+  - The clock starts when the owner CONSTRUCTS the host, not when the subscriber asks for the area. Whatever a subscriber measures beyond the total is therefore not transport alone. It also holds the subscribe request's routing, the owner hub's activation, the work before the host was built, the patch's return trip, and the subscriber's own processing. The line does not split these. Measure them separately before calling the remainder transport.
+  - An area composed inside its own update (`UpdateArea`) marks compose inside the update and delivery once it committed, so the two are close together.
+
+The code is `FirstFrameTiming` (MeshWeaver.Layout). Systemorph/MeshWeaver.Plugins#4399, a Store row that arrived about a second after its base frame on production and in no test rig, is the reason it exists.
+
 ---
 
 ## Handling User Interactions

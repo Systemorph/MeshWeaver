@@ -5638,6 +5638,12 @@ public static class MeshExtensions
     /// budget. The rule errs only toward the old behaviour: an unrelated lane that stalls denies credit, so a
     /// queued leaf may fail at one budget as it did before #1198.</para>
     ///
+    /// <para>The registry's <see cref="SerialWriteLane"/>s are read too (MeshWeaver#7464): the Postgres
+    /// backend writes each partition schema through one, so a delete leaf queued behind a write parked on a
+    /// database lock waits in a lane that does not move. Such a lane knows whether its head is a delete, so a
+    /// delete queued behind a write of another kind earns credit (EarnsQueueCredit), while a lane whose head
+    /// is a delete that stood still still denies it.</para>
+    ///
     /// <para>What it cannot see is a leaf stuck OUTSIDE every pool while the lanes advance for others. That
     /// is why total credit is capped at QueueCreditBudgets budgets: past it the watchdog fails as before,
     /// naming the pools (IoPoolQueueReport). Read-only: lock-free counters from IoPoolRegistry.Snapshot,
@@ -5654,8 +5660,8 @@ public static class MeshExtensions
         return Observable.Interval(interval)
             .Select(_ => WriteLaneAdmissions(ioPools))
             .Scan(
-                (Previous: (ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)>?)null,
-                 Current: ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)>.Empty),
+                (Previous: (ImmutableDictionary<string, WriteLaneState>?)null,
+                 Current: ImmutableDictionary<string, WriteLaneState>.Empty),
                 (acc, current) => (acc.Current, current))
             .Select(pair => pair.Previous is { } previous && EarnsQueueCredit(previous, pair.Current))
             .Scan(
@@ -5668,42 +5674,78 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// The cap-1 pg:/sf: write lanes as one point-in-time reading: per lane, the admissions granted so far,
-    /// whether it holds work (in flight or waiting), and whether work is queued on it.
+    /// One write lane at one sample, as the queue credit reads it (MeshWeaver#7464).
     /// </summary>
-    private static ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> WriteLaneAdmissions(
+    /// <param name="Admitted">Writes the lane has admitted so far (monotonic).</param>
+    /// <param name="Busy">Whether it holds work, in flight or waiting.</param>
+    /// <param name="Queued">Whether work is waiting on it.</param>
+    /// <param name="HeadMayBeDelete">
+    /// Whether the write in flight may be a delete. Always <c>true</c> for a cap-1 pool, whose
+    /// leaves carry no kind; a <see cref="SerialWriteLane"/> knows.
+    /// </param>
+    /// <param name="WaitingDeletes">Deletes queued on the lane; 0 for a pool, which cannot tell.</param>
+    internal readonly record struct WriteLaneState(
+        long Admitted, bool Busy, bool Queued, bool HeadMayBeDelete, int WaitingDeletes);
+
+    /// <summary>
+    /// The write lanes as one point-in-time reading: the cap-1 pg:/sf: POOLS and the registry's
+    /// <see cref="SerialWriteLane"/>s (the Postgres backend's per-schema lanes, MeshWeaver#7464), per
+    /// lane the admissions so far, whether it holds work, whether work is queued on it, and — for a
+    /// serial lane — whether its head is a delete and how many deletes wait.
+    /// </summary>
+    internal static ImmutableDictionary<string, WriteLaneState> WriteLaneAdmissions(
         IoPoolRegistry ioPools) =>
         ioPools.Snapshot()
             .Where(reading => reading.MaxConcurrency == 1
                               && (reading.Name.StartsWith(IoPoolNames.PostgresAdapterPrefix, StringComparison.Ordinal)
                                   || reading.Name.StartsWith(IoPoolNames.SnowflakeAdapterPrefix, StringComparison.Ordinal)))
-            .ToImmutableDictionary(
-                reading => reading.Name,
-                reading => ((long)reading.QueueWait.Samples,
-                    reading.InFlight > 0 || reading.Waiting > 0,
-                    reading.Waiting > 0),
-                StringComparer.Ordinal);
+            .Select(reading => (Key: "pool:" + reading.Name, State: new WriteLaneState(
+                (long)reading.QueueWait.Samples,
+                reading.InFlight > 0 || reading.Waiting > 0,
+                reading.Waiting > 0,
+                HeadMayBeDelete: true,
+                WaitingDeletes: 0)))
+            .Concat(ioPools.SerialLaneSnapshot()
+                .Select(lane => (Key: "lane:" + lane.Name, State: new WriteLaneState(
+                    lane.Admitted,
+                    lane.InFlight > 0 || lane.Waiting > 0 || lane.AwaitingBudget,
+                    // A turn waiting for a budget slot is QUEUED (on the budget), not executing: a
+                    // saturated budget must not make a waiting delete read as a stalled executing one.
+                    lane.Waiting > 0 || lane.AwaitingBudget,
+                    lane.HeadIsDelete,
+                    lane.WaitingDeletes + (lane.AwaitingDelete ? 1 : 0)))))
+            .ToImmutableDictionary(entry => entry.Key, entry => entry.State, StringComparer.Ordinal);
 
     /// <summary>
-    /// Whether the interval between two write-lane readings earns queue credit: a lane with queued work
-    /// advanced, and no lane that held work at the start of the interval stood still (see QueueWaitCredit).
+    /// Whether the interval between two write-lane readings earns queue credit (see QueueWaitCredit).
+    ///
+    /// <para>It earns when no lane whose head MAY be a delete stood still while holding work, and
+    /// either a lane with queued work advanced, or a delete is queued in a serial lane behind a write
+    /// that is NOT a delete. The first is the #1198 rule. The second is MeshWeaver#7464: a
+    /// <see cref="SerialWriteLane"/> parked on a database lock by another kind of write holds every
+    /// delete queued behind it, and those deletes are waiting their turn, not stuck — while a lane
+    /// whose head is a delete that stood still may be THIS delete's own admitted leaf hanging, so it
+    /// still denies credit exactly as a cap-1 pool always has.</para>
     /// </summary>
-    private static bool EarnsQueueCredit(
-        ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> previous,
-        ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> current)
+    internal static bool EarnsQueueCredit(
+        ImmutableDictionary<string, WriteLaneState> previous,
+        ImmutableDictionary<string, WriteLaneState> current)
     {
         var advanced = false;
+        var deleteWaitsBehindAnotherWrite = false;
         foreach (var (name, now) in current)
         {
             if (!previous.TryGetValue(name, out var was))
                 continue;
             var moved = now.Admitted > was.Admitted;
-            if (was.Busy && now.Busy && !moved)
+            if (was.Busy && now.Busy && !moved && (was.HeadMayBeDelete || now.HeadMayBeDelete))
                 return false;
             if (now.Queued && moved)
                 advanced = true;
+            if (now.WaitingDeletes > 0 && was.WaitingDeletes > 0 && !now.HeadMayBeDelete && !was.HeadMayBeDelete)
+                deleteWaitsBehindAnotherWrite = true;
         }
-        return advanced;
+        return advanced || deleteWaitsBehindAnotherWrite;
     }
 
     /// <summary>
