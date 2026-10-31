@@ -1544,8 +1544,20 @@ public sealed class MessageHub : IMessageHub
             {
                 lock (gate)
                 {
-                    if (done || ReadNumber(part, PostOptions.ResponsePart) is not { } sequence || sequence < next)
+                    if (done)
                         return;
+                    // A part whose number is unreadable cannot be placed, and the reply counting it would
+                    // then wait out the silence bound for nothing: a broken stream, faulted now.
+                    if (ReadNumber(part, PostOptions.ResponsePart) is not { } sequence)
+                    {
+                        done = true;
+                        observer.OnError(new InvalidOperationException(
+                            $"A streamed response part carries an invalid {PostOptions.ResponsePart} "
+                            + $"'{part.Properties[PostOptions.ResponsePart]}'."));
+                        return;
+                    }
+                    if (sequence < next)
+                        return;   // a duplicate of a part already emitted
                     pending = pending.SetItem(sequence, part);
                     Drain();
                 }

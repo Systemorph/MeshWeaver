@@ -16,7 +16,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// </summary>
 public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private record CountRequest(int Parts, bool Reversed = false, bool GoSilent = false, bool OverCount = false, string? RawCount = null) : IRequest<CountDone>;
+    private record CountRequest(int Parts, bool Reversed = false, bool GoSilent = false, bool OverCount = false, string? RawCount = null, string? RawSequence = null) : IRequest<CountDone>;
 
     /// <summary>Parts paced in time: part i is sent at <c>Offsets[i]</c> ms, the reply at <c>ReplyAt</c> ms.</summary>
     private record PacedRequest(int[] Offsets, int ReplyAt) : IRequest<CountDone>;
@@ -48,6 +48,12 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
                 {
                     // The caller awaits ONE reply: never send it a part it would read as the reply.
                     hub.Post(new CountDone("single"), o => o.ResponseFor(request));
+                    return request.Processed();
+                }
+                if (ask.RawSequence is { } rawSequence)
+                {
+                    hub.Post(new CountPart(0), o => o.ResponseFor(request).WithProperty(PostOptions.ResponsePart, rawSequence));
+                    hub.PostFinalResponse(request, new CountDone("streamed"), 1);
                     return request.Processed();
                 }
                 var order = Enumerable.Range(0, ask.Parts);
@@ -212,5 +218,38 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
 
         seen.Last().Kind.Should().Be(System.Reactive.NotificationKind.OnError);
         seen.Last().Exception!.Message.Should().Contain(PostOptions.ResponsePartCount);
+    }
+
+    /// <summary>A part whose number is unreadable faults the stream at once — never a wait for a part that cannot be placed.</summary>
+    [Fact]
+    public async Task An_invalid_part_number_faults_the_stream_at_once()
+    {
+        var client = ClientWithSilenceBound(TimeSpan.FromSeconds(30));
+
+        var seen = await client.ObserveStreamed(new CountRequest(0, RawSequence: "abc"), o => o.WithTarget(CreateHostAddress()))
+            .Materialize()
+            .ToList()
+            .Should().Within(10.Seconds()).Emit("well inside the 30 s silence bound");
+
+        seen.Last().Kind.Should().Be(System.Reactive.NotificationKind.OnError);
+        seen.Last().Exception!.Message.Should().Contain(PostOptions.ResponsePart);
+    }
+
+    /// <summary>
+    /// Several streams answered at once between the same two hubs are counted per REQUEST by the storm
+    /// breaker: three streams of 900 parts (2,700 parts of one type, one sender, one target, in a burst)
+    /// all complete, though the breaker trips a single bucket at 2,000 within a second.
+    /// </summary>
+    [Fact]
+    public async Task Concurrent_streams_between_two_hubs_are_not_one_storm()
+    {
+        var client = ClientWithSilenceBound(TimeSpan.FromSeconds(10));
+
+        var all = await Observable.Merge(Enumerable.Range(0, 3).Select(_ =>
+                client.ObserveStreamed(new CountRequest(900), o => o.WithTarget(CreateHostAddress())).Count()))
+            .ToList()
+            .Should().Within(30.Seconds()).Emit();
+
+        all.Should().Equal([901, 901, 901], "every stream delivers its 900 parts and its reply");
     }
 }
