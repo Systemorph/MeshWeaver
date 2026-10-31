@@ -604,6 +604,19 @@ source switches in charge. The counts are read before any filter applies
 (`InboxRows.CategoryCounts`). The menu sits in a COLLAPSIBLE splitter pane: the platform
 splitter's own handle hides it and gives the list the width.
 
+🚨 **The chrome shows monochrome glyphs; a brand mark identifies a SOURCE** (maintainer, 2026-10-30:
+*"icons from teams / outlook / google don't mix well with other icons"*). A category's symbol is
+`InboxSourceIcons.CategoryIcon`: the table's Fluent glyph for the category (Conversations → a chat
+bubble, Mail → an envelope), else the first Fluent glyph among its sources, else the fallback — never a
+full-colour logo, even when the category's first source carries one (Conversations listed WhatsApp
+first and showed its logo). Logos stay in the per-item Source column and on a source's account row.
+
+**What a package puts on the inbox page** is declared as data: a `UiContribution` of context
+**`Inbox`** (`UiContribution.InboxContext`) embeds its `Area` of the person's own user node — or of an
+`Address` inside the contribution's own partition — above the list, beside the notices, in `Order`
+(`UiContributionProjection.ProjectInboxAreas`). The Mail package uses it for its **Accounts** button,
+which opens the Mail app's accounts view, and for a note per listed source that is not connected.
+
 **Only connected sources (policy `inbox-connected-sources-only`).** A source names how to tell it is
 connected for a viewer — `InboxQueryLeg.ConnectedWhen`, a query for its credential, its account
 record or a first message over its channel, anchored on the viewer's partition exactly as the leg
@@ -716,6 +729,12 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
   never look like an empty one. It is re-read when the search changes or the page is reopened, never
   on a timer — a provider that stays broken would otherwise be re-queried and re-logged for as long
   as any inbox is open.
+- **A source that does not ANSWER never holds the others** (2026-10-30, "mails load forever"). The legs
+  are combined with one bound per leg on its FIRST answer (`InboxLayoutArea.FanIn`, `LegAnswerWait` =
+  10 s): a leg still silent then stands in as an empty answer, the other sources are listed, and a
+  notice names it — `inbox.slow`, *"Did not answer yet, so the list shows the other sources: Gmail"*. Its
+  own answer replaces the stand-in whenever it arrives. Before the bound, `CombineLatest` waited for every
+  leg, so one silent provider kept the whole list spinning.
 - **The handler builds its write INSIDE the call.** `Update` captures the caller's identity when it
   is constructed, and the inbox opens the clicker's scope only around the call. A write deferred to
   subscription runs, for every item after the first, on the previous write's completion thread — as
