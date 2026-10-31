@@ -1,8 +1,11 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using Microsoft.Reactive.Testing;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -11,54 +14,89 @@ namespace MeshWeaver.Graph.Test;
 /// Three faults a fresh install showed on the inbox (2026-10-30), pinned:
 /// <list type="bullet">
 ///   <item>one source that never answers held the whole list ("mails load forever") — now each source has a bound on
-///     its first answer, the others are listed, and the silent one is NAMED;</item>
+///     its first answer, the others are listed, and the silent one is NAMED; an action's preflight waits for real
+///     answers and never acts on a stand-in;</item>
 ///   <item>the Kind filter showed a full-colour WhatsApp logo for Conversations — the chrome shows monochrome glyphs
 ///     only, brand marks identify a source in its own column;</item>
-///   <item>a package had no way onto the inbox — the <see cref="UiContribution.InboxContext"/> lane embeds its area.</item>
+///   <item>a package had no way onto the inbox — the <see cref="UiContribution.InboxContext"/> lane embeds its area,
+///     gated like every embedding lane.</item>
 /// </list>
+/// Every timer runs on a virtual scheduler: the verdicts never depend on thread-pool timing.
 /// </summary>
 public class InboxSlowSourcesAndChromeTest
 {
     private static readonly ImmutableList<InboxRow> OneRow = [new InboxRow { Path = "jroe/_Email/1", Title = "Hello" }];
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
 
-    [Fact(Timeout = 20_000)]
-    public async Task ASourceThatNeverAnswers_DoesNotHoldTheOthers_AndIsNamed()
+    private static List<ImmutableList<(ImmutableList<InboxRow> Rows, string? Unread, int Fetched, string? Slow)>> Record(
+        IObservable<ImmutableList<(ImmutableList<InboxRow> Rows, string? Unread, int Fetched, string? Slow)>> answers)
     {
-        var answers = InboxLayoutArea.FanIn(
+        var seen = new List<ImmutableList<(ImmutableList<InboxRow> Rows, string? Unread, int Fetched, string? Slow)>>();
+        answers.Subscribe(seen.Add);
+        return seen;
+    }
+
+    [Fact]
+    public void ASourceThatNeverAnswers_DoesNotHoldTheOthers_AndIsNamed()
+    {
+        var scheduler = new TestScheduler();
+        var seen = Record(InboxLayoutArea.FanIn(
             [
                 ("Outlook", Observable.Return((OneRow, (string?)null, 1))),
                 ("Gmail", Observable.Never<(ImmutableList<InboxRow>, string?, int)>()),
             ],
-            TimeSpan.FromMilliseconds(200));
+            Bound, scheduler));
 
-        var first = await answers.FirstAsync().Timeout(TimeSpan.FromSeconds(5)).Await(TestContext.Current.CancellationToken);
+        seen.Should().BeEmpty("before the bound, the list waits for the silent source");
+        scheduler.AdvanceBy(Bound.Ticks);
 
-        first.Should().HaveCount(2);
+        var first = seen.Should().ContainSingle().Subject;
         first[0].Rows.Should().Equal(OneRow, "the source that answered is listed");
         first[0].Slow.Should().BeNull();
         first[1].Rows.Should().BeEmpty();
         first[1].Slow.Should().Be("Gmail", "the silent source is named, never left to spin");
     }
 
-    [Fact(Timeout = 20_000)]
-    public async Task ASlowSource_ReplacesItsStandIn_WhenItAnswers()
+    [Fact]
+    public void ASlowSource_ReplacesItsStandIn_WhenItAnswers()
     {
-        var late = Observable.Timer(TimeSpan.FromMilliseconds(400)).Select(_ => (OneRow, (string?)null, 1));
-        var answers = InboxLayoutArea.FanIn([("Gmail", late)], TimeSpan.FromMilliseconds(100));
+        var scheduler = new TestScheduler();
+        var gmail = new Subject<(ImmutableList<InboxRow>, string?, int)>();
+        var seen = Record(InboxLayoutArea.FanIn([("Gmail", gmail)], Bound, scheduler));
 
-        var seen = await answers.Take(2).ToList().Timeout(TimeSpan.FromSeconds(5)).Await(TestContext.Current.CancellationToken);
+        scheduler.AdvanceBy(Bound.Ticks);
+        gmail.OnNext((OneRow, null, 1));
 
+        seen.Should().HaveCount(2);
         seen[0][0].Slow.Should().Be("Gmail");
         seen[1][0].Slow.Should().BeNull("the late answer replaces the stand-in");
         seen[1][0].Rows.Should().Equal(OneRow);
     }
 
-    [Fact(Timeout = 20_000)]
-    public async Task ASourceThatAnswersInTime_GetsNoStandIn()
+    [Fact]
+    public void AnAnswerBeforeTheBound_IsNeverFollowedByAStandIn()
     {
-        var answers = InboxLayoutArea.FanIn([("Outlook", Observable.Return((OneRow, (string?)null, 1)))], TimeSpan.FromMilliseconds(100));
-        var all = await answers.Take(TimeSpan.FromMilliseconds(500)).ToList().Timeout(TimeSpan.FromSeconds(5)).Await(TestContext.Current.CancellationToken);
-        all.Should().ContainSingle().Which[0].Slow.Should().BeNull("no stand-in once the source answered");
+        var scheduler = new TestScheduler();
+        var outlook = new Subject<(ImmutableList<InboxRow>, string?, int)>();
+        var seen = Record(InboxLayoutArea.FanIn([("Outlook", outlook)], Bound, scheduler));
+
+        outlook.OnNext((OneRow, null, 1));
+        scheduler.AdvanceBy(Bound.Ticks * 2);
+
+        seen.Should().ContainSingle().Which[0].Slow.Should().BeNull("the arbitration is serialized: a deadline after the answer emits nothing");
+    }
+
+    [Fact]
+    public void WithoutABound_ThePreflightWaitsForEveryRealAnswer()
+    {
+        var scheduler = new TestScheduler();
+        var gmail = new Subject<(ImmutableList<InboxRow>, string?, int)>();
+        var seen = Record(InboxLayoutArea.FanIn([("Outlook", Observable.Return((OneRow, (string?)null, 1))), ("Gmail", gmail)], bound: null, scheduler));
+
+        scheduler.AdvanceBy(Bound.Ticks * 6);
+        seen.Should().BeEmpty("an action never acts on a stand-in: it waits for the slow source's real answer");
+        gmail.OnNext((OneRow, null, 1));
+        seen.Should().ContainSingle().Which.Should().OnlyContain(leg => leg.Slow == null);
     }
 
     // ── the chrome: glyphs only ────────────────────────────────────────────
@@ -87,23 +125,57 @@ public class InboxSlowSourcesAndChromeTest
 
     // ── the Inbox contribution lane ────────────────────────────────────────
 
+    private static (MeshNode, UiContribution) C(string path, UiContribution content) => (MeshNode.FromPath(path), content);
+
+    private static readonly MeshNode UserHome = MeshNode.FromPath("jroe") with { NodeType = UserNodeType.NodeType };
+
     [Fact]
-    public void AnInboxContribution_IsEmbedded_OnlyFromItsOwnPartition_InOrder()
+    public void AnInboxContribution_IsEmbedded_OnlyFromItsOwnPartition_InOrder_WithAUniqueId()
     {
-        static (MeshNode, UiContribution) C(string path, UiContribution content) => (MeshNode.FromPath(path), content);
         var contributions = new[]
         {
-            C("Mail/Inbox/Accounts", new UiContribution { Context = UiContribution.InboxContext, Area = "InboxAccounts", Order = 10 }),
-            C("Other/Inbox/First", new UiContribution { Context = UiContribution.InboxContext, Area = "Early", Order = 1 }),
+            C("Mail/Inbox/Status", new UiContribution { Context = UiContribution.InboxContext, Area = "InboxAccounts", Order = 10 }),
+            C("Other/Inbox/Status", new UiContribution { Context = UiContribution.InboxContext, Area = "Early", Order = 1 }),
             C("Other/Inbox/Foreign", new UiContribution { Context = UiContribution.InboxContext, Area = "X", Address = "Mail" }),
             C("Other/Inbox/Admin", new UiContribution { Context = UiContribution.InboxContext, Area = "Y", Gates = new UiContributionGates { AdminOnly = true } }),
             C("Mail/Profile/Z", new UiContribution { Context = UiContribution.ProfileContext, Area = "Z" }),
         };
 
-        var areas = UiContributionProjection.ProjectInboxAreas(contributions, "jroe", isAdmin: false, viewerId: "jroe");
+        var areas = UiContributionProjection.ProjectInboxAreas(contributions, "jroe", UserHome, isAdmin: false, viewerId: "jroe");
 
         areas.Select(a => (a.Area, a.Address)).Should().Equal([("Early", null), ("InboxAccounts", null)],
             "in order; an address outside the contributor's partition, an admin-only entry for a non-admin and another context are dropped");
+        areas.Select(a => a.Id).Should().OnlyHaveUniqueItems("two packages' Inbox/Status must never share a layout slot");
         UiContributionSeedValidation.PlatformContexts.Should().Contain(UiContribution.InboxContext, "a seed naming it is not 'declared by nobody'");
+    }
+
+    [Fact]
+    public void AShapeGate_IsHeldBack_UntilTheUserNodeIsKnown_AndThenDecidedOnIt()
+    {
+        var excluded = new[]
+        {
+            C("Mail/Inbox/NotOnHomes", new UiContribution
+            {
+                Context = UiContribution.InboxContext, Area = "A", Gates = new UiContributionGates { ExcludePartitionRoot = true },
+            }),
+        };
+        UiContributionProjection.ProjectInboxAreas(excluded, "jroe", userNode: null, isAdmin: false, viewerId: "jroe")
+            .Should().BeEmpty("a gate that needs the node's shape narrows while the node is unknown, never fails open");
+    }
+
+    [Fact]
+    public void AnInboxContribution_NeedsTheViewersLivePermission()
+    {
+        var contributions = new[]
+        {
+            C("Mail/Inbox/Read", new UiContribution { Context = UiContribution.InboxContext, Area = "R" }),
+            C("Mail/Inbox/Sync", new UiContribution { Context = UiContribution.InboxContext, Area = "S", RequiredPermission = Permission.Sync }),
+        };
+        var projected = UiContributionProjection.ProjectInboxAreas(contributions, "jroe", UserHome, isAdmin: false, viewerId: "jroe");
+
+        UiContributionProjection.FilterInboxAreas(projected, Permission.Read).Select(a => a.Area).Should().Equal(["R"],
+            "an entry demanding Sync is hidden from a viewer without it");
+        UiContributionProjection.FilterInboxAreas(projected, Permission.Read | Permission.Sync).Select(a => a.Area).Should().Equal(["R", "S"]);
+        UiContributionProjection.FilterInboxAreas(projected, Permission.None).Should().BeEmpty("never less than Read");
     }
 }

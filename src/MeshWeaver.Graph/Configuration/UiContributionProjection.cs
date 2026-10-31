@@ -215,35 +215,55 @@ internal static class UiContributionProjection
     /// <summary>
     /// Projects the catalog's <see cref="UiContribution.InboxContext"/> entries into the areas the unified inbox of the
     /// user at <paramref name="userPath"/> embeds above its list, in <see cref="UiContribution.Order"/>: the closed
-    /// node-shape gates against the user's PATH (no node is read first), and the partition rule of every embedding
-    /// contribution (<see cref="IsInContributorsPartition"/>). A null address means the user node's own hub. Pure.
+    /// node-shape gates against the USER node, the partition rule of every embedding contribution
+    /// (<see cref="IsInContributorsPartition"/>) and the permission floor, carried for the live filter
+    /// (<see cref="FilterInboxAreas"/>). 🚨 While the node is not known, an entry whose gates need its SHAPE
+    /// (<c>ExcludePartitionRoot</c>, <c>SyncedOnly</c>, <c>NodeTypes</c>) is held back — a missing node narrows, never
+    /// widens. The id is the contribution's full path, URL-safe, so two packages' <c>Inbox/Status</c> never share a
+    /// slot. A null address means the user node's own hub. Pure.
     /// </summary>
     /// <param name="contributions">The catalog snapshot.</param>
     /// <param name="userPath">The inbox's user node.</param>
+    /// <param name="userNode">That node, or null while it loads.</param>
     /// <param name="isAdmin">Whether the viewer is a platform admin.</param>
     /// <param name="viewerId">The viewer's id, for the viewer-home gate.</param>
-    public static IReadOnlyList<(string Id, string? Address, string Area, int Order)> ProjectInboxAreas(
+    public static IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> ProjectInboxAreas(
         IReadOnlyList<(MeshNode Node, UiContribution Content)> contributions,
         string userPath,
+        MeshNode? userNode,
         bool isAdmin,
         string? viewerId)
     {
-        var areas = new List<(string Id, string? Address, string Area, int Order)>();
+        var areas = new List<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)>();
         foreach (var (node, contribution) in contributions)
         {
             if (contribution.Context != UiContribution.InboxContext)
                 continue;
             if (contribution.Area is not { Length: > 0 } area)
                 continue;
-            if (!PassesNodeGates(contribution.Gates, userPath, null, isAdmin, viewerId))
+            if (userNode is null && NeedsNodeShape(contribution.Gates))
+                continue;
+            if (!PassesNodeGates(contribution.Gates, userPath, userNode, isAdmin, viewerId))
                 continue;
             var address = contribution.Address is { Length: > 0 } declared ? declared.Trim('/') : null;
             if (address is not null && !IsInContributorsPartition(address, node.Path))
                 continue;
-            areas.Add((node.Id is { Length: > 0 } id ? id : area, address, area, contribution.Order));
+            var id = System.Buffers.Text.Base64Url.EncodeToString(System.Text.Encoding.UTF8.GetBytes(node.Path ?? area));
+            areas.Add((id, address, area, contribution.Order, RequiredPermissionFloor(contribution)));
         }
         return [.. areas.OrderBy(a => a.Order).ThenBy(a => a.Id, StringComparer.Ordinal)];
     }
+
+    /// <summary>The projected inbox areas the viewer's LIVE permissions on the user node allow (at least Read each). Pure.</summary>
+    /// <param name="areas">The projected areas.</param>
+    /// <param name="permissions">The viewer's effective permissions on the user node.</param>
+    public static IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> FilterInboxAreas(
+        IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> areas, Permission permissions)
+        => [.. areas.Where(a => permissions.HasFlag(a.RequiredPermission))];
+
+    /// <summary>Whether <paramref name="gates"/> can only be decided on the anchoring node's SHAPE. Pure.</summary>
+    private static bool NeedsNodeShape(UiContributionGates? gates)
+        => gates is not null && (gates.ExcludePartitionRoot || gates.SyncedOnly || gates.NodeTypes is { Count: > 0 });
 
     /// <summary>
     /// Projects the catalog's <see cref="UiContribution.ProfileContext"/> entries into profile-page

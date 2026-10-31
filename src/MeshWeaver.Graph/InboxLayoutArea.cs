@@ -322,7 +322,10 @@ public static class InboxLayoutArea
         // lists is also handed to the toolbar, which shows an act only where it has something to act on.
         var shown = new BehaviorSubject<(ImmutableList<InboxRow> Rows, int? NeedsYou)>((ImmutableList<InboxRow>.Empty, null));
         host.RegisterForDisposal(shown);
-        var rows = Rows(host, sections, owner, zone, acts.Rereads, (list, needsYou) => shown.OnNext((list, needsYou)));
+        var rows = Rows(host, sections, owner, zone, acts.Rereads, (list, needsYou) => shown.OnNext((list, needsYou)), LegAnswerWait);
+        // What Delete and Decide re-read at the click: every source's REAL answer, never a slow source's stand-in — an
+        // action must not skip a ticked row because its source has not answered yet. Not shown: it reports nothing.
+        var actionRows = Rows(host, sections, owner, zone, acts.Rereads);
         // The framework owns the subscription: it is disposed with the area and a feed failure goes to the area-error boundary.
         host.SubscribeToDataStream(DecideStyleId, shown.CombineLatest(host.RowSelection(InboxRows.SelectionId),
                 (feed, selected) => ToolbarOf(feed.Rows, selected, owner, feed.NeedsYou))
@@ -422,15 +425,15 @@ public static class InboxLayoutArea
         var toolbar = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(4)
             .WithView(IconButton(host.Localize("inbox.delete"), FluentIcons.Delete(), Appearance.Stealth)
                 .WithShortcut(DeleteShortcut)
-                .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, rows)), "Delete")
+                .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, actionRows)), "Delete")
             .WithView(IconButton(host.Localize("inbox.undo"), FluentIcons.ArrowUndo(), Appearance.Stealth)
                 .WithReactiveClickAction(ctx => Undo(ctx, acts)), "Undo")
             // Decide every ticked approval request — the approval's own type decides and authorizes,
             // as the clicker (InboxApprovals). Other ticked rows are left alone.
             .WithView((IconButton(host.Localize("inbox.approve"), FluentIcons.Checkmark(), Appearance.Stealth) with { Style = decideStyle })
-                .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Approve)), "Approve")
+                .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, actionRows, ApprovalDecisions.Approve)), "Approve")
             .WithView((IconButton(host.Localize("inbox.reject"), FluentIcons.Dismiss(), Appearance.Stealth) with { Style = decideStyle })
-                .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Reject)), "Reject");
+                .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, actionRows, ApprovalDecisions.Reject)), "Reject");
 
         // What the source filter hides, as ONE quiet line with the way back.
         var hiddenLine = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8)
@@ -660,12 +663,13 @@ public static class InboxLayoutArea
     /// <param name="source">The answers.</param>
     /// <param name="wait">How long the source may stay silent.</param>
     /// <param name="fallback">What a silent source reads as.</param>
-    internal static IObservable<T> FirstAnswerWithin<T>(IObservable<T> source, TimeSpan wait, T fallback)
+    /// <param name="scheduler">Timer seam for tests.</param>
+    internal static IObservable<T> FirstAnswerWithin<T>(IObservable<T> source, TimeSpan wait, T fallback, IScheduler? scheduler = null)
         => Observable.Create<T>(observer =>
         {
             var gate = new object();
             var answered = false;
-            var timer = Observable.Timer(wait).Subscribe(_ =>
+            var timer = Observable.Timer(wait, scheduler ?? DefaultScheduler.Instance).Subscribe(_ =>
                 {
                     lock (gate)
                     {
@@ -850,9 +854,17 @@ public static class InboxLayoutArea
     /// the sources switched on and put in the chosen order. A leg that cannot be read contributes no
     /// rows and is LOGGED — one provider's failure must not blank the list the others feed.
     /// </summary>
+    /// <param name="host">The inbox area's host.</param>
+    /// <param name="sections">The resolved legs.</param>
+    /// <param name="owner">The inbox's owner.</param>
+    /// <param name="zone">The viewer's time zone.</param>
+    /// <param name="rereads">Ticks that read every leg again.</param>
+    /// <param name="onShown">Told what the list shows, on every change.</param>
+    /// <param name="legBound">The bound on each leg's FIRST answer (<see cref="FanIn"/>) — the DISPLAY's; null for an
+    /// action's preflight, which must act on every source's real answer and never on a stand-in.</param>
     internal static IObservable<ImmutableList<InboxRow>> Rows(
         LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone,
-        IObservable<long>? rereads = null, Action<ImmutableList<InboxRow>, int?>? onShown = null)
+        IObservable<long>? rereads = null, Action<ImmutableList<InboxRow>, int?>? onShown = null, TimeSpan? legBound = null)
     {
         // Resolved ONCE, on the render turn — the connection reads answer on another thread.
         var allSources = host.Localize("inbox.only.all");
@@ -874,14 +886,14 @@ public static class InboxLayoutArea
                 host.UpdateData(SourceOptionsId, SourceOptions(allSources,
                     sourceOptions.Where(s => connected.Contains(s.Id)).Select(s => (s.Key, s.Label, s.Icon))));
             })
-            .Select(connected => RowsOf(host, [.. sections.Where(s => connected.Contains(s.Source))], owner, zone, viewer, rereads, onShown))
+            .Select(connected => RowsOf(host, [.. sections.Where(s => connected.Contains(s.Source))], owner, zone, viewer, rereads, onShown, legBound))
             .Switch();
     }
 
     /// <summary>The rows of <paramref name="sections"/> — the connected sources' legs.</summary>
     private static IObservable<ImmutableList<InboxRow>> RowsOf(
         LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone, AccessContext? viewerContext,
-        IObservable<long>? rereads, Action<ImmutableList<InboxRow>, int?>? onShown = null)
+        IObservable<long>? rereads, Action<ImmutableList<InboxRow>, int?>? onShown = null, TimeSpan? legBound = null)
     {
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
@@ -957,7 +969,7 @@ public static class InboxLayoutArea
                 });
 
         IObservable<ImmutableList<InboxRow>> Merged(string term) => FanIn(
-                sections.Select(section => (labels[section.Source], Leg(section, term))), LegAnswerWait)
+                sections.Select(section => (labels[section.Source], Leg(section, term))), legBound)
             .Do(legs =>
             {
                 host.UpdateData(UnreadId, UnreadNotice(host, legs.Select(leg => leg.Unread)));
@@ -1025,26 +1037,22 @@ public static class InboxLayoutArea
     /// answer or a stand-in, then on every change.
     /// </summary>
     /// <param name="legs">Each leg with the label its notice names.</param>
-    /// <param name="bound">How long a leg's first answer may take.</param>
+    /// <param name="bound">How long a leg's first answer may take; null waits for every leg's real answer (an action's preflight).</param>
     /// <param name="scheduler">Timer seam for tests.</param>
     internal static IObservable<ImmutableList<(ImmutableList<InboxRow> Rows, string? Unread, int Fetched, string? Slow)>> FanIn(
         IEnumerable<(string Label, IObservable<(ImmutableList<InboxRow> Rows, string? Unread, int Fetched)> Leg)> legs,
-        TimeSpan bound, IScheduler? scheduler = null)
-        => legs.Select(leg => WithFirstAnswerBound(
-                leg.Leg.Select(answer => (answer.Rows, answer.Unread, answer.Fetched, Slow: (string?)null)),
-                bound,
-                (ImmutableList<InboxRow>.Empty, (string?)null, 0, (string?)leg.Label),
-                scheduler))
+        TimeSpan? bound, IScheduler? scheduler = null)
+        // 🚨 The arbitration between a leg's first answer and its deadline is SERIALIZED (FirstAnswerWithin): the stand-in
+        // is emitted only while no real answer has been, so it can never land after — and replace — the real rows.
+        => legs.Select(leg =>
+            {
+                var answers = leg.Leg.Select(answer => (answer.Rows, answer.Unread, answer.Fetched, Slow: (string?)null));
+                return bound is { } wait
+                    ? FirstAnswerWithin(answers, wait, (ImmutableList<InboxRow>.Empty, (string?)null, 0, (string?)leg.Label), scheduler)
+                    : answers;
+            })
             .CombineLatest()
             .Select(answers => answers.ToImmutableList());
-
-    /// <summary>
-    /// <paramref name="source"/>, preceded by <paramref name="placeholder"/> when it has not emitted within
-    /// <paramref name="bound"/> — its first value then follows. A source that answers in time is passed through as it is.
-    /// </summary>
-    internal static IObservable<T> WithFirstAnswerBound<T>(IObservable<T> source, TimeSpan bound, T placeholder, IScheduler? scheduler = null)
-        => source.Publish(shared => shared.Merge(
-            Observable.Timer(bound, scheduler ?? DefaultScheduler.Instance).Select(_ => placeholder).TakeUntil(shared)));
 
     /// <summary>The notice for the sources that have not answered: empty when none, else the sentence naming each once.</summary>
     internal static string SlowNotice(LayoutAreaHost host, IEnumerable<string?> slow)
@@ -1059,25 +1067,36 @@ public static class InboxLayoutArea
     /// none is declared.
     /// </summary>
     private static IObservable<UiControl?> ContributedAreas(LayoutAreaHost host, string owner)
-    {
-        if (host.Hub.ServiceProvider.GetService<UiContributionCatalog>() is not { } catalog)
-            return Observable.Return<UiControl?>(null);
-        var userPath = host.Hub.Address.ToString();
-        return catalog.Contributions
-            .CombineLatest(AdminAppNodeType.LiveAdminVerdict(host.Hub, owner),
-                (contributions, isAdmin) => UiContributionProjection.ProjectInboxAreas(contributions, userPath, isAdmin, owner))
-            .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal)
+        // A fault reaches the area's error boundary, which says so — never an empty lane that hides the entries.
+        => InboxContributions(host, owner)
             .Select(areas =>
             {
                 if (areas.Count == 0)
                     return (UiControl?)null;
                 var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(12);
-                foreach (var (id, address, area, _) in areas)
-                    row = row.WithView(Controls.LayoutArea(address is null ? host.Hub.Address : new Address(address), area)
-                        .WithShowProgress(false), "Contribution-" + id);
+                foreach (var entry in areas)
+                    row = row.WithView(Controls.LayoutArea(entry.Address is null ? host.Hub.Address : new Address(entry.Address), entry.Area)
+                        .WithShowProgress(false), "Contribution-" + entry.Id);
                 return (UiControl?)row;
-            })
-            .Catch((Exception _) => Observable.Return<UiControl?>(null));
+            });
+
+    /// <summary>
+    /// The inbox contributions this viewer sees, live: the catalog projected against the user node's SHAPE (read live,
+    /// so a shape gate is decided on the node, never on its absence) and filtered by the viewer's LIVE effective
+    /// permissions on it — the profile and settings lanes' rule. Data only.
+    /// </summary>
+    private static IObservable<IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)>> InboxContributions(
+        LayoutAreaHost host, string owner)
+    {
+        if (host.Hub.ServiceProvider.GetService<UiContributionCatalog>() is not { } catalog)
+            return Observable.Return<IReadOnlyList<(string, string?, string, int, Permission)>>([]);
+        var userPath = host.Hub.Address.ToString();
+        var userNode = host.Workspace.GetMeshNodeStream().Select(node => (MeshNode?)node).StartWith((MeshNode?)null);
+        return catalog.Contributions
+            .CombineLatest(userNode, AdminAppNodeType.LiveAdminVerdict(host.Hub, owner), host.Hub.GetEffectivePermissions(userPath),
+                (contributions, node, isAdmin, permissions) => UiContributionProjection.FilterInboxAreas(
+                    UiContributionProjection.ProjectInboxAreas(contributions, userPath, node, isAdmin, owner), permissions))
+            .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal);
     }
 
     /// <summary>
