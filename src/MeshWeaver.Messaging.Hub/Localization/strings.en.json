@@ -2142,6 +2142,7 @@
   "inbox.capped": "Some sources list only their newest items. Use the search to find older ones.",
   "inbox.hidden": "{0} item(s) needing you are hidden by the source filter.",
   "inbox.unread": "Could not be read — change the search or reopen the page to try again: {0}",
+  "inbox.slow": "Did not answer yet, so the list shows the other sources: {0}",
   "inbox.source.Notifications": "Notifications",
   "inbox.approvals.requestedFrom": "Requested from {0}",
   "inbox.approvals.approvedBy": "Approved by {0}",

@@ -68,6 +68,15 @@ public static class InboxLayoutArea
     /// <summary>The data id of the notice naming the sources that could not be read; empty when all were.</summary>
     public const string UnreadId = "inboxUnread";
 
+    /// <summary>
+    /// The data id of the notice naming the sources that have not answered within <see cref="LegAnswerWait"/>; empty
+    /// when every source answered. The list shows what the others sent meanwhile — one silent source never holds it.
+    /// </summary>
+    public const string SlowId = "inboxSlow";
+
+    /// <summary>How long one source may take to answer before the list goes on without it and names it.</summary>
+    internal static readonly TimeSpan LegAnswerWait = TimeSpan.FromSeconds(10);
+
     /// <summary>The data id of the notice shown when a source answered as many rows as it was asked for; empty otherwise.</summary>
     public const string CappedId = "inboxCapped";
 
@@ -281,6 +290,7 @@ public static class InboxLayoutArea
             host.UpdateData(AccountOptionsId, AccountOptions(host.Localize("inbox.account.all"), []));
             EnsurePreferences(host, owner, sections);
             host.UpdateData(UnreadId, string.Empty);
+            host.UpdateData(SlowId, string.Empty);
             host.UpdateData(CappedId, string.Empty);
             host.UpdateData(HiddenId, string.Empty);
             host.UpdateData(DecideStyleId, HiddenStyle);
@@ -432,6 +442,10 @@ public static class InboxLayoutArea
         var main = Controls.Stack.WithWidth("100%").WithVerticalGap(8)
             .WithView(Controls.H2(host.Localize("inbox.title")).WithStyle("margin: 0;"), "Title")
             .WithView(toolbar, "Toolbar")
+            // What packages put on the inbox (UiContribution, context Inbox): Mail's Accounts button and its notes.
+            .WithView(ContributedAreas(host, owner), "Contributed")
+            // Names the sources that have not answered yet — the list shows the others meanwhile.
+            .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(SlowId))), "Slow")
             // Says which sources could not be read — an unreadable source must never look like an
             // empty one. Bound: it appears and clears with the reads, with no re-render.
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(UnreadId))), "Unread")
@@ -566,7 +580,7 @@ public static class InboxLayoutArea
     internal static ImmutableList<(string Key, string Label, string Icon)> CategoriesOf(LayoutAreaHost host, ImmutableArray<InboxSection> sections)
         => [.. sections.GroupBy(s => s.Category, StringComparer.Ordinal)
             .Select(c => (Key: c.Key, Label: Label(key => host.Localize(key), c.First().CategoryLabelKey, c.Key),
-                Icon: c.Select(s => s.SourceIcon).FirstOrDefault(i => i.Length > 0) ?? string.Empty))];
+                Icon: InboxSourceIcons.CategoryIcon(c.Key, c.Select(s => s.SourceIcon))))];
 
     /// <summary>
     /// The side menu's options: All (empty key), then each category with its symbol and count — the
@@ -942,12 +956,12 @@ public static class InboxLayoutArea
                     return Observable.Return((ImmutableList<InboxRow>.Empty, (string?)labels[section.Source], 0));
                 });
 
-        IObservable<ImmutableList<InboxRow>> Merged(string term) => sections
-            .Select(section => Leg(section, term))
-            .CombineLatest()
+        IObservable<ImmutableList<InboxRow>> Merged(string term) => FanIn(
+                sections.Select(section => (labels[section.Source], Leg(section, term))), LegAnswerWait)
             .Do(legs =>
             {
                 host.UpdateData(UnreadId, UnreadNotice(host, legs.Select(leg => leg.Unread)));
+                host.UpdateData(SlowId, SlowNotice(host, legs.Select(leg => leg.Slow)));
                 // Each leg against ITS OWN bound — a provider may ask for fewer than the page's.
                 host.UpdateData(CappedId, Capped(sections.Zip(legs, (section, leg) => (section.Query, leg.Fetched)))
                     ? host.Localize("inbox.capped")
@@ -1002,6 +1016,69 @@ public static class InboxLayoutArea
     /// <param name="legs">Each leg's query and how many nodes it fetched.</param>
     internal static bool Capped(IEnumerable<(string Query, int Fetched)> legs)
         => legs.Any(leg => leg.Fetched >= InboxQueries.EffectiveLimit(leg.Query));
+
+    /// <summary>
+    /// Every leg's answer, combined — with ONE bound per leg on its FIRST answer: a leg that has not answered within
+    /// <paramref name="bound"/> stands in as an empty answer naming its source (<c>Slow</c>), so the others are listed
+    /// at once, and its own answer replaces the stand-in whenever it arrives. Without the bound one source that never
+    /// answers holds every other one, and the list spins for all of them (2026-10-30). Emits once every leg has an
+    /// answer or a stand-in, then on every change.
+    /// </summary>
+    /// <param name="legs">Each leg with the label its notice names.</param>
+    /// <param name="bound">How long a leg's first answer may take.</param>
+    /// <param name="scheduler">Timer seam for tests.</param>
+    internal static IObservable<ImmutableList<(ImmutableList<InboxRow> Rows, string? Unread, int Fetched, string? Slow)>> FanIn(
+        IEnumerable<(string Label, IObservable<(ImmutableList<InboxRow> Rows, string? Unread, int Fetched)> Leg)> legs,
+        TimeSpan bound, IScheduler? scheduler = null)
+        => legs.Select(leg => WithFirstAnswerBound(
+                leg.Leg.Select(answer => (answer.Rows, answer.Unread, answer.Fetched, Slow: (string?)null)),
+                bound,
+                (ImmutableList<InboxRow>.Empty, (string?)null, 0, (string?)leg.Label),
+                scheduler))
+            .CombineLatest()
+            .Select(answers => answers.ToImmutableList());
+
+    /// <summary>
+    /// <paramref name="source"/>, preceded by <paramref name="placeholder"/> when it has not emitted within
+    /// <paramref name="bound"/> — its first value then follows. A source that answers in time is passed through as it is.
+    /// </summary>
+    internal static IObservable<T> WithFirstAnswerBound<T>(IObservable<T> source, TimeSpan bound, T placeholder, IScheduler? scheduler = null)
+        => source.Publish(shared => shared.Merge(
+            Observable.Timer(bound, scheduler ?? DefaultScheduler.Instance).Select(_ => placeholder).TakeUntil(shared)));
+
+    /// <summary>The notice for the sources that have not answered: empty when none, else the sentence naming each once.</summary>
+    internal static string SlowNotice(LayoutAreaHost host, IEnumerable<string?> slow)
+    {
+        var names = slow.OfType<string>().Distinct(StringComparer.Ordinal).ToImmutableList();
+        return names.IsEmpty ? string.Empty : host.Localize("inbox.slow", string.Join(", ", names));
+    }
+
+    /// <summary>
+    /// The areas packages embed on the inbox (<see cref="UiContribution.InboxContext"/>), live from the catalog: one
+    /// row of embedded areas of the user node (or of the contribution's own partition), in their order. Nothing while
+    /// none is declared.
+    /// </summary>
+    private static IObservable<UiControl?> ContributedAreas(LayoutAreaHost host, string owner)
+    {
+        if (host.Hub.ServiceProvider.GetService<UiContributionCatalog>() is not { } catalog)
+            return Observable.Return<UiControl?>(null);
+        var userPath = host.Hub.Address.ToString();
+        return catalog.Contributions
+            .CombineLatest(AdminAppNodeType.LiveAdminVerdict(host.Hub, owner),
+                (contributions, isAdmin) => UiContributionProjection.ProjectInboxAreas(contributions, userPath, isAdmin, owner))
+            .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal)
+            .Select(areas =>
+            {
+                if (areas.Count == 0)
+                    return (UiControl?)null;
+                var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(12);
+                foreach (var (id, address, area, _) in areas)
+                    row = row.WithView(Controls.LayoutArea(address is null ? host.Hub.Address : new Address(address), area)
+                        .WithShowProgress(false), "Contribution-" + id);
+                return (UiControl?)row;
+            })
+            .Catch((Exception _) => Observable.Return<UiControl?>(null));
+    }
 
     /// <summary>
     /// The notice for the sources that could not be read: empty when every leg answered, else the

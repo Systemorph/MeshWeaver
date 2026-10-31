@@ -2142,6 +2142,7 @@
   "inbox.capped": "Einige Quellen zeigen nur ihre neuesten Einträge. Ältere finden Sie über die Suche.",
   "inbox.hidden": "{0} Eintrag/Einträge, die auf Sie warten, sind durch den Quellenfilter ausgeblendet.",
   "inbox.unread": "Konnte nicht gelesen werden — Suche ändern oder Seite neu öffnen, um es erneut zu versuchen: {0}",
+  "inbox.slow": "Hat noch nicht geantwortet, daher zeigt die Liste die anderen Quellen: {0}",
   "inbox.source.Notifications": "Benachrichtigungen",
   "inbox.approvals.requestedFrom": "Angefragt bei {0}",
   "inbox.approvals.approvedBy": "Genehmigt von {0}",
