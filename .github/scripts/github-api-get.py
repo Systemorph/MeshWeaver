@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""github-api-get.py <path> — one GitHub REST GET for a shell script, with a verdict-safe exit code.
+"""github-api-get.py <path> [--download <file>] — one GitHub REST GET for a shell script, with a
+verdict-safe exit code.
 
 Shell gates used to write `gh api … || continue`, which turns EVERY failure — a rate limit, a 5xx, a
 dropped connection — into "this candidate does not exist" and lets the script conclude from the
@@ -17,6 +18,12 @@ Retry and classification are `scripts/read-current-pr-body.py`'s `api_get` (one 
 bounded backoff honouring `retry-after` / `x-ratelimit-reset`, and a wait the budget cannot cover
 is not slept. The budget is shared by every call of one script through GITHUB_API_DEADLINE (epoch
 seconds), so N lookups cannot add up to N budgets. Token: GH_TOKEN, else GITHUB_TOKEN.
+
+`--download <file>` writes the answer's BYTES to <file> instead of JSON to stdout — an artifact's
+`actions/artifacts/<id>/zip`, whose 302 to signed storage is followed without the token. It replaces
+`gh run download`, which answered a rate limit with a bare non-zero exit nobody could classify
+(MeshWeaver#7448): the same four exit codes hold, so a rate-limited download is NO VERDICT naming
+the reset, never "could not be downloaded".
 """
 
 import importlib.util
@@ -37,8 +44,13 @@ def _load_reader():
 
 
 def main(argv):
-    if len(argv) != 2 or not argv[1] or argv[1].startswith("/"):
-        print("usage: github-api-get.py <repos/...path>", file=sys.stderr)
+    dest = None
+    if len(argv) == 4 and argv[2] == "--download" and argv[3]:
+        dest = argv[3]
+    elif len(argv) != 2:
+        argv = []
+    if len(argv) < 2 or not argv[1] or argv[1].startswith("/"):
+        print("usage: github-api-get.py <repos/...path> [--download <file>]", file=sys.stderr)
         return 1
     path = argv[1]
     reader = _load_reader()
@@ -47,7 +59,7 @@ def main(argv):
               else reader.DEFAULT_BUDGET_SECONDS)
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     try:
-        body = reader.api_get(path, token=token, budget_seconds=budget)
+        body = reader.api_get(path, token=token, budget_seconds=budget, dest=dest)
     except reader.ApiUnavailable as error:
         print(f"::error title=NO VERDICT — GitHub API::{error.sentence()}", file=sys.stderr)
         return reader.NO_VERDICT_EXIT
@@ -56,7 +68,8 @@ def main(argv):
             return 4
         print(f"::error::GitHub refused {error} — not a transient failure, so no retry.", file=sys.stderr)
         return 1
-    json.dump(body, sys.stdout)
+    if dest is None:
+        json.dump(body, sys.stdout)
     return 0
 
 

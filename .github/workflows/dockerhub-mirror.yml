@@ -76,3 +76,63 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Sync
         run: bash .github/scripts/dockerhub-mirror.sh sync
+
+  # ─────────────────────── A RED HERE HAS AN AUDIENCE (#7416) ───────────────────────
+  # A digest the mirror cannot restore turns every PR job that pulls it red later, on Docker Hub's
+  # limit. A pull request's own run is visible on the PR, so the event guard leaves it out — the
+  # guard reads the EVENT, never whether a secret is set.
+  # A scheduled run reaches no pull request, no reviewer and no check list, so without these two
+  # jobs its red is red in an empty room — the shape that left lock-pinned-digests.yml red for six
+  # days. The red lands on this lane's OWN ci-failure ledger (node-repo-ci-failure.yml: one issue,
+  # a dated entry per red run, reopened rather than re-filed, closed by the next green, a signed
+  # event to the control portal's triage inbox each way). `always()` is deliberate: a job cut at
+  # its timeout is exactly a red this must report. check-scheduled-lane-reporters.py holds the pair.
+  lane-red:
+    name: "The Docker Hub mirror is red: file it, tell the control portal"
+    needs: [self-test, sync]
+    if: always() && github.event_name != 'pull_request' && (needs.self-test.result != 'success' || needs.sync.result != 'success')
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: failure
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-dockerhub-mirror-red
+      issue-title: "dockerhub-mirror: a declared Docker Hub digest is not on the mirror"
+      # A scheduled lane's red is a bug at sev:M — tracked, not a release gate (#7416 owner decision).
+      severity: sev:M
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+
+  lane-green:
+    name: "The Docker Hub mirror is green: close the ledger"
+    needs: [self-test, sync]
+    if: always() && github.event_name != 'pull_request' && needs.self-test.result == 'success' && needs.sync.result == 'success'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: success
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-dockerhub-mirror-red
+      issue-title: "dockerhub-mirror: a declared Docker Hub digest is not on the mirror"
+      # A scheduled lane's red is a bug at sev:M — tracked, not a release gate (#7416 owner decision).
+      severity: sev:M
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}

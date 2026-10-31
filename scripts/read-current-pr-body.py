@@ -37,6 +37,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import time
 import urllib.error
@@ -112,13 +113,22 @@ def _opener():
 
 def api_get(path, *, token, base_url=None, budget_seconds=DEFAULT_BUDGET_SECONDS,
             urlopen=None, sleep=time.sleep, clock=time.time, accept="application/vnd.github+json",
-            raw=False, user_agent="MeshWeaver-read-current-pr-body"):
+            raw=False, user_agent="MeshWeaver-read-current-pr-body", dest=None):
     """GET one REST path; JSON on success (the decoded text when `raw`), ApiUnavailable /
     ApiRefused otherwise. Every CI caller that asks GitHub something shares THIS classification
     (probe-fleet-read.py, check-cross-repo-pair.py, transitional_allow.py, check-shared-rules.py,
-    github-api-get.py) — a second copy is how "lacks a grant, or is rate-limited" got written."""
+    github-api-get.py) — a second copy is how "lacks a grant, or is rate-limited" got written.
+
+    `dest` (a path) streams the BYTES of a successful answer to that file and returns None — an
+    artifact `…/zip`, whose 302 to signed storage is followed WITHOUT the token. A connection that
+    drops mid-body is transient like any other and the file is rewritten from the start on retry
+    (MeshWeaver#7448: `gh run download` gave a rate limit no classification at all)."""
     base_url = (base_url or os.environ.get("GITHUB_API_URL") or "https://api.github.com").rstrip("/")
     urlopen = urlopen or _opener()
+    if dest is not None:
+        # Opened once up front: an unwritable destination is the caller's defect, raised here —
+        # inside the loop its OSError would read as a transport failure and become NO VERDICT.
+        open(dest, "wb").close()
     deadline = clock() + budget_seconds
     attempt = 0
     while True:
@@ -134,6 +144,10 @@ def api_get(path, *, token, base_url=None, budget_seconds=DEFAULT_BUDGET_SECONDS
         headers, reset_epoch = None, None
         try:
             with urlopen(request, timeout=30) as response:
+                if dest is not None:
+                    with open(dest, "wb") as sink:
+                        shutil.copyfileobj(response, sink, 1 << 20)
+                    return None
                 text = response.read().decode("utf-8")
                 return text if raw else json.loads(text)
         except urllib.error.HTTPError as error:

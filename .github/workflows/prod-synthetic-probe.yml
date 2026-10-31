@@ -94,8 +94,8 @@
 #   - each verdict names what it means: a route wedge, a portal contradicting its own sitemap, and
 #     an unreadable declaration are three different reds with three different messages, so the next
 #     reader does not start where #3578's reader had to.
-#   A failed scheduled run e-mails the workflow's last committer; the run summary carries the
-#   evidence. Silence means all configured public-readable targets passed, and (unlike a log-based
+#   A failed scheduled run lands on this lane's ci-failure ledger (`lane-red` / `lane-green` at the
+#   end of this file, #7416) and the run summary carries the evidence. Silence means all configured public-readable targets passed, and (unlike a log-based
 #   watcher) a probe that cannot reach one of those targets is a FAILURE, never a skip. Deployments
 #   that deny anonymous reads remain under deployment health monitoring, not this anonymous probe.
 name: Prod synthetic probe
@@ -399,3 +399,63 @@ jobs:
             exit 1
           fi
           echo "public page OK: $pub serves 200 and $app 301s to it"
+
+  # ─────────────────────── A RED HERE HAS AN AUDIENCE (#7416) ───────────────────────
+  # The e-mail to the last committer of this file is not a durable reporter: it reaches one
+  # person, whoever last edited the YAML. A 15-minute red appends to ONE open issue (the
+  # ledger trims past its cap), it does not file one per run.
+  # A scheduled run reaches no pull request, no reviewer and no check list, so without these two
+  # jobs its red is red in an empty room — the shape that left lock-pinned-digests.yml red for six
+  # days. The red lands on this lane's OWN ci-failure ledger (node-repo-ci-failure.yml: one issue,
+  # a dated entry per red run, reopened rather than re-filed, closed by the next green, a signed
+  # event to the control portal's triage inbox each way). `always()` is deliberate: a job cut at
+  # its timeout is exactly a red this must report. check-scheduled-lane-reporters.py holds the pair.
+  lane-red:
+    name: "The prod probe is red: file it, tell the control portal"
+    needs: [probe]
+    if: always() && needs.probe.result != 'success'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: failure
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-prod-synthetic-probe-red
+      issue-title: "prod-synthetic-probe: a public portal fails the synthetic probe"
+      # A scheduled lane's red is a bug at sev:M — tracked, not a release gate (#7416 owner decision).
+      severity: sev:M
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+
+  lane-green:
+    name: "The prod probe is green: close the ledger"
+    needs: [probe]
+    if: always() && needs.probe.result == 'success'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: success
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-prod-synthetic-probe-red
+      issue-title: "prod-synthetic-probe: a public portal fails the synthetic probe"
+      # A scheduled lane's red is a bug at sev:M — tracked, not a release gate (#7416 owner decision).
+      severity: sev:M
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}

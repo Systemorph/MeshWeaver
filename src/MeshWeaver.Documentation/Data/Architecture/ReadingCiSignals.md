@@ -293,9 +293,14 @@ results — `success`, `failure`, or `skipped` where a red ancestor can skip tha
 all-green (#7458): `needs.b.result == 'failure'` misses `b` SKIPPED behind a red `a`, and a predicate
 checked one red at a time misses two reds at once. And a cause is compared only when every failed job
 carries an error signature: a caller that passes none, or a job that printed no error, reads `n/a`,
-never "same". Known
-debt sits in `.github/scheduled-lane-reporters.allow` with a reason per line; that list only shrinks —
-an entry for a lane that is gone, unscheduled, or now reports is stale and reds. Satellites are not
+never "same". Exemptions
+sit in `.github/scheduled-lane-reporters.allow` with a reason per line; that list only shrinks —
+an entry for a lane that is gone, unscheduled, or now reports is stale and reds. Its KNOWN DEBT
+section is empty: `arm-credential`, `dockerhub-mirror`, `prod-synthetic-probe` and `shared-rules`
+carry the ledger pair (`lane-red` / `lane-green`, each under its own `ci-<lane>-red` label at
+`sev:M`). What remains are lanes with a reporter of their own the guard cannot recognise by shape
+(`control-always-latest`, `main-cd`) and the catch-up ticks of pull-request lanes, whose outcome
+shows on the pull requests. Satellites are not
 yet held to it: the gate is not wired into `node-repo-validate.yml`, so a satellite's scheduled lane
 is covered only where its `ci.yml` follows the caller contract in `node-repo-ci-failure.yml`'s header.
 
