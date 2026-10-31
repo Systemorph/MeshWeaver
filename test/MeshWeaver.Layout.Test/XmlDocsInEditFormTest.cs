@@ -169,12 +169,12 @@ public class XmlDocsInEditFormTest(ITestOutputHelper output) : HubTestBase(outpu
 
         var stack = await stream.GetControlStream(TwoBuildsArea)
             .Should().Within(10.Seconds()).Match(x => x is StackControl, "the area renders both forms at once");
-        var pointers = new System.Collections.Generic.List<JsonPointerReference>();
+        var pointers = System.Collections.Immutable.ImmutableList<JsonPointerReference>.Empty;
         foreach (var child in stack.Should().BeOfType<StackControl>().Subject.Areas)
         {
             var editor = await stream.GetControlStream(child.Area!.ToString()!)
                 .Should().Within(10.Seconds()).Match(x => x is EditorControl, "each build's form renders");
-            pointers.Add(editor.Should().BeOfType<EditorControl>().Subject
+            pointers = pointers.Add(editor.Should().BeOfType<EditorControl>().Subject
                 .Areas.SelectMany(a => a.Skins.OfType<PropertySkin>())
                 .Single(s => s.Name is string name && name == "label")
                 .Description.Should().BeOfType<JsonPointerReference>("both builds are cold while the edge is held").Subject);
