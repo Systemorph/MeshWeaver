@@ -153,6 +153,17 @@ public record UiContribution
     public const string AppSettingsContext = "AppSettings";
 
     /// <summary>
+    /// The UNIFIED INBOX context (<c>/{user}/Inbox</c>, <c>InboxLayoutArea</c>): a contribution here EMBEDS the layout
+    /// area <see cref="Area"/> of the hub at <see cref="Address"/> (unset ⇒ the person's own user node) above the
+    /// inbox list, beside its notices, sorted by <see cref="Order"/> — the lane a package uses to put its own way in
+    /// on the inbox (the Mail package's Accounts button and its not-connected notes) without the inbox naming it.
+    /// The address obeys the partition rule of every embedding context; the node-shape gates are evaluated against
+    /// the user node's PATH only (the inbox renders before the node is read), so a gate that needs the node's shape
+    /// narrows the entry away, never widens it.
+    /// </summary>
+    public const string InboxContext = "Inbox";
+
+    /// <summary>
     /// Which menu the entry contributes to: <c>Node</c>, <c>Mesh</c>, <c>Settings</c> (the GLOBAL
     /// settings page), <c>NodeSettings</c> (the PER-NODE settings page), <c>TopBar</c>, <c>AI</c>,
     /// <c>Profile</c>, <c>PersonApp</c>, <c>AppSettings</c> (with <see cref="Host"/>) or any key a
