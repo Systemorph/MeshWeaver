@@ -413,6 +413,17 @@ The store-level half is pinned in `FileSystemAssemblyStoreTest`
 (`Put_same_version_different_bytes_publishes_the_new_bytes_under_their_own_name`,
 `TryGetBuildPath_*`).
 
+### A module swap's recycle wave waits for an in-flight step
+
+A live module swap recycles the hubs bound to the swapped generations in one wave. A hub with a
+step in flight, meaning work held through `hub.BeginAsyncOperation()` such as a module reload's
+Landing, is NOT torn down under that step. The wave posts the same `DisposeRequest` (same `Reason`,
+same `CascadedFrom`) when the step ends, and it does not wait for that to answer. Until the step
+ends, that one activation keeps serving the previous generation. This is the one place a
+recycle deliberately arrives late; every other recycle on this page still lands at once. See
+[Live Module Update](../LiveModuleUpdate), section *A hub with a step in flight is recycled when the
+step ends*, and MeshWeaver#7324.
+
 ### A dispose is still not a fix by itself
 
 The contract says what the re-read binds; it cannot make a build exist. **A recycle is never

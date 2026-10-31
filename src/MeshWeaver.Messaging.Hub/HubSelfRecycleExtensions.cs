@@ -47,6 +47,19 @@ public static class HubSelfRecycleExtensions
     /// fault reaches nothing but its own callback, so without one it would be silent.</param>
     public static void RecycleSelfAfterAcceptedWork(
         this IMessageHub hub, string reason, ILogger? logger = null)
+        => hub.PostSelfRecycleAfterAcceptedWork(new DisposeRequest { Reason = reason }, logger);
+
+    /// <summary>
+    /// <see cref="RecycleSelfAfterAcceptedWork"/> with the whole <see cref="DisposeRequest"/> supplied
+    /// by the caller, for a self-recycle that must carry more than a reason: a module swap's deferred
+    /// recycle (#7324) carries <see cref="DisposeRequest.CascadedFrom"/> (it must not cascade) and
+    /// <see cref="DisposeRequest.ForActivation"/>. Same ordering, same guard.
+    /// </summary>
+    /// <param name="hub">The hub recycling itself.</param>
+    /// <param name="request">The request to post to itself. Carry a <see cref="DisposeRequest.Reason"/>.</param>
+    /// <param name="logger">Where a fault of the recycle turn is reported.</param>
+    public static void PostSelfRecycleAfterAcceptedWork(
+        this IMessageHub hub, DisposeRequest request, ILogger? logger = null)
         // 🚨 Posted as the HUB, explicitly. The callers are watchers whose callbacks run on a
         // publisher's thread (a change feed's post-commit Do, a type stream's emission), which
         // carries no AccessContext. The DisposeRequest this used to post is [CanBeIgnored] and
@@ -57,15 +70,14 @@ public static class HubSelfRecycleExtensions
                 _ =>
                 {
                     if (!hub.IsDisposing)
-                        hub.Post(new DisposeRequest { Reason = reason },
-                            o => o.WithTarget(hub.Address));
+                        hub.Post(request, o => o.WithTarget(hub.Address));
                     return Task.CompletedTask;
                 },
                 ex =>
                 {
                     logger?.LogWarning(ex,
                         "Self-recycle of {Address} could not be posted ({Reason}); the hub keeps "
-                        + "serving until it is recycled some other way", hub.Address, reason);
+                        + "serving until it is recycled some other way", hub.Address, request.Reason ?? DisposeRequest.ReasonNotStated);
                     return Task.CompletedTask;
                 }),
             o => o.WithTarget(hub.Address).ImpersonateAsHub(hub.Address));

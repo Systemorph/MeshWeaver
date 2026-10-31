@@ -348,7 +348,8 @@ public static class ModuleReloadExecutor
         /// when it ends.</para>
         ///
         /// <para><b>The other half: when the hub IS torn down mid-step</b> (a recycle, a drain, a
-        /// host stop — the hold defers only idle retirement), <see cref="StepHold"/> says so ONCE,
+        /// host stop — the hold defers idle retirement and a module swap's recycle wave, which recycles
+        /// the hub when the step ends, #7324 — but no other teardown), <see cref="StepHold"/> says so ONCE,
         /// at Warning, with the hub's own <see cref="MessageHub.DisposalAttribution"/> — WHO tore
         /// it down and WHY. The step lines and the dispose reasons are Information, which the
         /// cluster does not ship, so a request that re-entered Landing 13 times left one line in
