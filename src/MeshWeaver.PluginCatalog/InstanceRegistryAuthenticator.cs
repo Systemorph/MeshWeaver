@@ -753,32 +753,61 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// a hold is only ever (re)taken by a request that found the node present.</para>
     /// </summary>
     /// <param name="path">The node path the listing has shown to exist.</param>
-    private void Hold(string path)
+    internal void Hold(string path)
     {
         if (Volatile.Read(ref disposed) != 0)
             return;
         var slot = new SingleAssignmentDisposable();
-        if (!holds.TryAdd(path, slot))
-            return;
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var source = HoldOverride is { } test
+            ? test(path)
+            : hub.ServiceProvider.GetService<AccessService>()
+                .RunAsSystem(() => (IObservable<MeshNode>)hub.GetMeshNodeStream(path));
         // Assigned AFTER Subscribe returns: a mirror that terminates synchronously releases the slot
         // first, and assigning to a disposed SingleAssignmentDisposable disposes the subscription on
         // the spot — so a terminated hold never lingers.
-        slot.Disposable = accessService.RunAsSystem(() => (IObservable<MeshNode>)hub.GetMeshNodeStream(path))
-            .Subscribe(
-                _ => { },
-                ex =>
+        slot.Disposable = source.Subscribe(
+            _ => { },
+            ex =>
+            {
+                logger.LogDebug(ex,
+                    "Instance key resolution: the held mirror of {Path} faulted — released; the next "
+                    + "request that finds the node present holds a fresh one", path);
+                Release(path, slot);
+            },
+            () => Release(path, slot));
+
+        // 🚨 RENEW, never skip: this request's hold REPLACES whatever slot the path has, and the
+        // replaced one is disposed only after this one is subscribed — so the entry never drops to
+        // zero subscribers. Skipping when a slot exists lost the hold when that slot's mirror had
+        // already faulted but its terminal had not been delivered yet: the request read a fresh
+        // entry, the late terminal then removed the old slot, and the fresh entry was left unheld
+        // for the idle sweep. A late terminal now releases only its OWN slot (pair-exact), which is
+        // no longer in the map. The renewal is an in-memory attach to a live cache entry, not a read.
+        while (true)
+        {
+            if (holds.TryGetValue(path, out var current))
+            {
+                if (holds.TryUpdate(path, slot, current))
                 {
-                    logger.LogDebug(ex,
-                        "Instance key resolution: the held mirror of {Path} faulted — released; the next "
-                        + "request that finds the node present holds a fresh one", path);
-                    Release(path, slot);
-                },
-                () => Release(path, slot));
-        // A Dispose that ran between the TryAdd and the assignment above missed this slot.
-        if (Volatile.Read(ref disposed) != 0)
+                    current.Dispose();
+                    break;
+                }
+            }
+            else if (holds.TryAdd(path, slot))
+                break;
+        }
+
+        // A terminal delivered before the slot was installed, or a Dispose that ran meanwhile, found
+        // nothing to remove — remove it now.
+        if (slot.IsDisposed || Volatile.Read(ref disposed) != 0)
             Release(path, slot);
     }
+
+    /// <summary>
+    /// The stream a hold subscribes to, injectable so the renewal can be pinned against a mirror
+    /// whose terminal arrives late. Production holds the owner's mirror in the process-wide cache.
+    /// </summary>
+    internal Func<string, IObservable<MeshNode>>? HoldOverride { get; init; }
 
     /// <summary>Drops <paramref name="slot"/> for <paramref name="path"/>, pair-exact so a newer
     /// hold on the same path is never touched, and disposes its subscription.</summary>
