@@ -106,6 +106,12 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     private readonly string resolvedArea;
 
+    /// <summary>The first-full-frame clock of this open — one latch, three timestamps (see <see cref="FirstFrameTiming"/>).</summary>
+    private readonly FirstFrameTiming firstFrame = new();
+
+    /// <summary>Above this, the first-full-frame line is <c>Information</c>; otherwise <c>Debug</c>.</summary>
+    private readonly TimeSpan slowFirstFrameThreshold;
+
     /// <summary>
     /// Id of the EntityStore "data"-collection item carrying the phase-aware
     /// loading progress (<c>{ message, progress }</c>). Seeded by
@@ -139,6 +145,8 @@ public record LayoutAreaHost : IDisposable
         var isDefaultArea = string.IsNullOrEmpty(reference.Area);
         var resolvedArea = isDefaultArea ? ResolveDefaultArea() : reference.Area!;
         this.resolvedArea = resolvedArea;
+        slowFirstFrameThreshold = FirstFrameTiming.ThresholdFrom(
+            workspace.Hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
         var context = new RenderingContext(resolvedArea) { Layout = reference.Layout };
 
         // Capture the delivery-scoped AccessContext (AsyncLocal only) at construction time.
@@ -299,6 +307,7 @@ public record LayoutAreaHost : IDisposable
                     coll => coll.SetItem(string.Empty, new NamedAreaControl(resolvedArea)));
 
             observer.OnNext(baseStore);
+            firstFrame.MarkBase();
 
             // Framework milestones — phase-aware progress written through the
             // same "data/progress" item the base frame seeded. Pure display:
@@ -565,6 +574,8 @@ public record LayoutAreaHost : IDisposable
         // Materialise once: Updates is a lazily-composed Concat chain (DisposeChildAreas
         // removals ++ render additions) and is read twice below.
         var updates = result.Updates as IReadOnlyCollection<EntityUpdate> ?? result.Updates.ToArray();
+        if (CarriesRequestedArea(result.Store))
+            firstFrame.MarkComposed();
         Stream.Update(current =>
         {
             var store = current ?? new EntityStore();
@@ -603,7 +614,27 @@ public record LayoutAreaHost : IDisposable
             // subscription, so this line said "(null)" for exactly the renders #1182 was
             // about. The render-FAILURE paths were fixed there; these two remaining
             // diagnostics still carried the same null.
-        }, ex => logger.LogWarning(ex, "Cannot apply render for {Area}", resolvedArea));
+        }, ex => logger.LogWarning(ex, "Cannot apply render for {Area}", resolvedArea), ReportFirstFullFrame);
+    }
+
+    /// <summary>Whether <paramref name="store"/> holds a control for the area this host renders.</summary>
+    private bool CarriesRequestedArea(EntityStore? store) =>
+        store?.GetCollection(LayoutAreaReference.Areas) is { } areas
+        && areas.Instances.TryGetValue(resolvedArea, out var control)
+        && control is not null;
+
+    /// <summary>
+    /// Writes the first-full-frame line (<see cref="FirstFrameTiming"/>) the first time the stream's
+    /// COMMITTED store carries the requested area. Passed to <c>Stream.Update</c> as its applied
+    /// callback, which runs in the same turn right after <c>SetCurrent</c> compared and published the
+    /// change — so the delivery mark includes publication, and an update that failed (or was refused)
+    /// never consumes the latch. One latch: every later update is a single volatile read.
+    /// </summary>
+    private void ReportFirstFullFrame()
+    {
+        if (firstFrame.Reported || !CarriesRequestedArea(Stream.Current?.Value))
+            return;
+        firstFrame.ReportDelivered(logger, slowFirstFrameThreshold, Hub.Address, resolvedArea);
     }
 
     /// <summary>
@@ -1211,6 +1242,9 @@ public record LayoutAreaHost : IDisposable
         {
             var changes = DisposeChildAreas(store ?? new EntityStore(), context);
             var updates = RenderArea(context, view, changes.Store);
+            // This path composes INSIDE the update: compose is marked here, delivery once it committed.
+            if (CarriesRequestedArea(updates.Store))
+                firstFrame.MarkComposed();
             return Stream.ApplyChanges(
                 new(
                     updates.Store,
@@ -1218,7 +1252,7 @@ public record LayoutAreaHost : IDisposable
                 Stream.StreamId
                     )
             );
-        }, ex => logger.LogWarning(ex, "Cannot update {Area}", context.Area));
+        }, ex => logger.LogWarning(ex, "Cannot update {Area}", context.Area), ReportFirstFullFrame);
     }
 
     /// <summary>
@@ -1904,6 +1938,10 @@ public record LayoutAreaHost : IDisposable
             return;
 
         var errorControl = CreateRenderErrorControl(ex);
+        // The error frame IS the area's first visible control when it lands before any content, so
+        // it is timed like one: composed now, delivered once the update has committed.
+        if (string.Equals(area, resolvedArea, StringComparison.Ordinal))
+            firstFrame.MarkComposed();
 
         Stream.Update(current =>
         {
@@ -1916,7 +1954,7 @@ public record LayoutAreaHost : IDisposable
             if (Stream.HubIfHeld() is not { } errorHub)
                 return null;
             return new ChangeItem<EntityStore>(store, Stream.StreamId, errorHub.Version);
-        }, updateEx => logger.LogWarning(updateEx, "Cannot surface render error for {Area}", area));
+        }, updateEx => logger.LogWarning(updateEx, "Cannot surface render error for {Area}", area), ReportFirstFullFrame);
     }
 
     /// <summary>
