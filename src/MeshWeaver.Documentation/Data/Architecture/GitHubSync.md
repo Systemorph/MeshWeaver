@@ -220,7 +220,9 @@ null. The rule is structural, so it needs no knowledge of which providers are re
 **Where Azure Repos lives.** In MeshWeaver.Plugins: `src/MeshWeaver.GitSync.AzureRepos` (with
 `Azure.Identity`), registered by the portal composition with `services.AddAzureReposGitHosting()`. The
 platform ships no hosting provider of its own; without that registration an Azure Repos URL is a plain
-git remote. The `gitsync.azure.*` refusal texts stay in the platform's catalog, which the provider
+git remote: it is cloned and pushed with git alone. The GitHub REST repo preflight (existence check and
+auto-create) runs for `github.com` remotes only, so an unclaimed remote on any other host never has its
+path read as a GitHub owner/repo. The `gitsync.azure.*` refusal texts stay in the platform's catalog, which the provider
 renders through. It left in three steps — seam, module taking the kind over from a built-in copy,
 platform deleting its copy — see [Carving Projects Out Of Core](../CarvingProjectsOutOfCore).
 

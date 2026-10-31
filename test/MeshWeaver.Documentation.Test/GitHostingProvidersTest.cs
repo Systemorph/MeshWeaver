@@ -126,6 +126,28 @@ public class GitHostingProvidersTest
             .Select(a => a.Name).Should().NotContain("Azure.Identity");
     }
 
+    [Theory]
+    [InlineData("https://dev.azure.com/acme/Content/_git/content")]
+    [InlineData("https://acme.visualstudio.com/Content/_git/content")]
+    [InlineData("https://gitlab.example.com/acme/content.git")]
+    [InlineData("http://git.example.com/acme/content.git")]
+    public void TheGitHubRepoPreflight_SkipsARemoteThatIsNotOnGitHub(string repositoryUrl)
+    {
+        // With no provider claiming it, an Azure Repos (or any non-GitHub) http(s) remote reaches the
+        // git-protocol client. Its repo-existence step is GitHub REST: run there, the URL's first two
+        // path segments are read as a GitHub owner/repo, so the push fails before cloning or, with
+        // auto-create, creates an unrelated GitHub repository. Only a github.com remote may run it.
+        GitProtocolRepoClient.RunsGitHubRepoPreflight(repositoryUrl).Should().BeFalse(
+            "the GitHub REST preflight must never act on a repository hosted elsewhere");
+    }
+
+    [Theory]
+    [InlineData("https://github.com/acme/content")]
+    [InlineData("https://GitHub.com/acme/content.git")]
+    public void TheGitHubRepoPreflight_RunsForAGitHubRemote(string repositoryUrl)
+        // The negative control: a github.com remote keeps its repo-existence / auto-create step.
+        => GitProtocolRepoClient.RunsGitHubRepoPreflight(repositoryUrl).Should().BeTrue();
+
     [Fact]
     public void TheRouter_ForwardsEveryInterfaceMember_DefaultedOnesIncluded()
     {
