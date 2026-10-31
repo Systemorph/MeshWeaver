@@ -14,8 +14,9 @@ namespace MeshWeaver.Graph.Security;
 /// - Create: requires the operation's natural permission on MainNode (Comment
 ///   for Comment nodes, Thread for Thread/ThreadMessage nodes, Update otherwise)
 /// - Update/Delete: requires Update on MainNode
-/// A policy on the path between the MainNode and where the satellite lands still applies: while one
-/// restricts, the same permission must also hold at the landing path (stricter outcome wins).
+/// A policy or a denied role on the path between the MainNode and where the satellite lands still
+/// applies: while one restricts, the same permission must also hold at the landing path (stricter
+/// outcome wins).
 /// </summary>
 public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAccessRule
 {
@@ -136,7 +137,8 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
     /// policy exists, the same permission must ALSO hold where the satellite lands, and the stricter
     /// outcome wins. Without one the landing check is not run: the landing inherits every grant of the
     /// main node, and skipping it keeps additive surfaces that are declared on the main node alone (a
-    /// type gate's public cover) reaching the satellites they always reached.
+    /// type gate's public cover) reaching the satellites they always reached. A role DENIED to the
+    /// caller on a scope in between counts the same way: it subtracts that role from the landing.
     /// </summary>
     private IObservable<bool> WithInterveningPolicies(
         NodeValidationContext context, string userId, string mainNodePath, Permission permission,
@@ -161,7 +163,13 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
         // emitting thread carried. A token admitted at the main node would then pass an
         // intervening `Api = false` (review of #7676).
         var landingCheck = hub.CheckPermission(landingPath, userId, permission);
+        // A role DENIED on a scope in between subtracts it from the landing exactly as a policy
+        // restricts it, so either one makes the landing decide too (stricter outcome wins).
         var atLanding = PermissionEvaluator.ObserveRestrictingPolicyBetween(hub, mainNodePath, landingPath)
+            .CombineLatest(
+                PermissionEvaluator.ObserveDeniedRoleBetween(hub, mainNodePath, landingPath, userId),
+                (policy, denial) => policy || denial)
+            .DistinctUntilChanged()
             .Select(restricted => restricted ? landingCheck : Observable.Return(true))
             .Switch();
         return viaMainNode.CombineLatest(atLanding, (main, landing) => main && landing);
