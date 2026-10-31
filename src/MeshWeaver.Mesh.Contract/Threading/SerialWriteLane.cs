@@ -51,6 +51,11 @@ public sealed class SerialWriteLane : IDisposable
     private int _waiting;
     private int _waitingDeletes;
     private int _inFlight;
+    // The write whose turn it is but which is still WAITING for a budget slot — not yet executing.
+    // Kept apart from _inFlight so a saturated budget never makes a waiting delete read as an
+    // executing delete that stood still (which denies the delete watchdog its queue credit).
+    private int _awaitingBudget;
+    private int _awaitingDelete;
     private int _headIsDelete;
 
     /// <param name="name">The lane's name, as its readings report it.</param>
@@ -123,7 +128,20 @@ public sealed class SerialWriteLane : IDisposable
                 // 🚨 The cancel is raised OFF the disposing thread: cancelling runs the leaf's
                 // registered callbacks (a database cancel request) synchronously, and the thread giving
                 // up may be a hub turn or a watchdog. The lane is still held until the leaf terminates.
-                TaskPoolScheduler.Default.Schedule(() => cancel.Cancel());
+                TaskPoolScheduler.Default.Schedule(() =>
+                {
+                    // Cancel() runs the leaf's registered callbacks and rethrows what they threw; on a
+                    // scheduled action nobody observes, so it is reported here rather than lost.
+                    try
+                    {
+                        cancel.Cancel();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogError(ex,
+                            "[SerialWriteLane] a cancellation callback of a write on lane {Lane} threw", Name);
+                    }
+                });
             });
         });
 
@@ -138,7 +156,7 @@ public sealed class SerialWriteLane : IDisposable
     {
         // Given up while queued: it already left the counters, nothing runs, the lane moves on.
         if (!pending.TryLeaveQueue())
-            return Observable.Empty<Unit>().Finally(() => Finish(pending.Ticket));
+            return Observable.Empty<Unit>().Do(_ => { }, () => Finish(pending.Ticket));
         LeaveQueue(pending.IsDelete);
 
         // The lane was disposed (its mesh is tearing down) before this write's turn: the write never
@@ -153,13 +171,18 @@ public sealed class SerialWriteLane : IDisposable
                 $"Write lane '{Name}' is draining; a write subscribed after the drain began does not run."));
 
         Interlocked.Increment(ref _admitted);
-        Volatile.Write(ref _headIsDelete, pending.IsDelete ? 1 : 0);
-        Volatile.Write(ref _inFlight, 1);
+        Volatile.Write(ref _awaitingDelete, pending.IsDelete ? 1 : 0);
+        Volatile.Write(ref _awaitingBudget, 1);
         CancellationTokenSource? linked = null;
         return _budget.Invoke(budgetCt =>
             {
+                // The budget granted a slot: from here the write EXECUTES.
+                Volatile.Write(ref _headIsDelete, pending.IsDelete ? 1 : 0);
+                Volatile.Write(ref _inFlight, 1);
+                Volatile.Write(ref _awaitingBudget, 0);
+                Volatile.Write(ref _awaitingDelete, 0);
                 // The caller's cancellation linked into the leaf, disposed when the leaf has
-                // terminated (Finally below) — no awaited helper outside the pool.
+                // terminated (below) — no awaited helper outside the pool.
                 linked = CancellationTokenSource.CreateLinkedTokenSource(cancel.Token, budgetCt);
                 return io(linked.Token);
             })
@@ -169,11 +192,16 @@ public sealed class SerialWriteLane : IDisposable
             .Do(notification => Deliver(notification, observer, context))
             .Where(_ => false)
             .Select(_ => Unit.Default)
-            .Finally(() =>
+            // 🚨 Cleared BEFORE the item's completion is forwarded, never in a Finally: Concat starts
+            // the next write from inside that completion, and a Finally runs after it — it would
+            // clear the NEXT write's head state (a running delete would read as no write at all).
+            .Do(_ => { }, () =>
             {
                 linked?.Dispose();
                 Volatile.Write(ref _inFlight, 0);
                 Volatile.Write(ref _headIsDelete, 0);
+                Volatile.Write(ref _awaitingBudget, 0);
+                Volatile.Write(ref _awaitingDelete, 0);
                 Finish(pending.Ticket);
             });
     }
@@ -188,7 +216,8 @@ public sealed class SerialWriteLane : IDisposable
         => Observable.Start(
                 () => Deliver(System.Reactive.Notification.CreateOnError<T>(refusal), observer, context),
                 TaskPoolScheduler.Default)
-            .Finally(() => Finish(ticket));
+            // Before the completion is forwarded — see Start.
+            .Do(_ => { }, () => Finish(ticket));
 
     // Monotonic: turns end in ticket order, and this keeps the mark from ever moving backwards.
     private void Finish(long ticket)
@@ -292,7 +321,9 @@ public sealed class SerialWriteLane : IDisposable
         Volatile.Read(ref _inFlight),
         Math.Max(0, Volatile.Read(ref _waiting)),
         Math.Max(0, Volatile.Read(ref _waitingDeletes)),
-        Volatile.Read(ref _headIsDelete) == 1);
+        Volatile.Read(ref _headIsDelete) == 1,
+        Volatile.Read(ref _awaitingBudget) == 1,
+        Volatile.Read(ref _awaitingDelete) == 1);
 
     /// <summary>
     /// Disposes the lane: every write that has not started yet — queued now or subscribed later —
@@ -317,6 +348,9 @@ public sealed class SerialWriteLane : IDisposable
 /// <param name="InFlight">1 while a write is running, else 0.</param>
 /// <param name="Waiting">Writes queued behind it.</param>
 /// <param name="WaitingDeletes">How many of the queued writes are deletes.</param>
-/// <param name="HeadIsDelete">Whether the write in flight is a delete.</param>
+/// <param name="HeadIsDelete">Whether the write in flight (executing) is a delete.</param>
+/// <param name="AwaitingBudget">Whether the write whose turn it is still waits for a budget slot.</param>
+/// <param name="AwaitingDelete">Whether that write, waiting for a budget slot, is a delete.</param>
 public readonly record struct SerialWriteLaneReading(
-    string Name, long Admitted, int InFlight, int Waiting, int WaitingDeletes, bool HeadIsDelete);
+    string Name, long Admitted, int InFlight, int Waiting, int WaitingDeletes, bool HeadIsDelete,
+    bool AwaitingBudget = false, bool AwaitingDelete = false);

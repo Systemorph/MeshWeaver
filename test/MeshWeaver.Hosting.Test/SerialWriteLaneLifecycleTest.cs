@@ -390,4 +390,65 @@ public class SerialWriteLaneLifecycleTest
                 write.Dispose();
         }
     }
+    [Fact]
+    public async Task ADeleteWaitingForASaturatedBudget_IsNotAStalledExecutingDelete()
+    {
+        using var registry = new IoPoolRegistry(new IoPoolOptions { PostgresWrite = 1 });
+        var budget = registry.Get(IoPoolNames.PostgresWriteBudgetPrefix + "Postgres");
+        var holder = registry.GetSerialLane("pg:Postgres:holder", budget);
+        var waiter = registry.GetSerialLane("pg:Postgres:waiter", budget);
+        var writes = new List<IDisposable>();
+        try
+        {
+            writes.Add(holder.Run(ParkedLeaf).Subscribe(_ => { }, _ => { }));
+            await LaneReading(holder, r => r.InFlight == 1).Should().Within(Bound).Emit("the holder takes the only budget slot");
+            writes.Add(waiter.Run(_ => Task.FromResult(2), isDelete: true).Subscribe(_ => { }, _ => { }));
+            await LaneReading(waiter, r => r.AwaitingBudget && r.AwaitingDelete)
+                .Should().Within(Bound).Emit("the delete's turn has come, and it waits for a budget slot");
+
+            var reading = waiter.Read();
+            reading.InFlight.Should().Be(0, "a delete waiting for a slot is not executing");
+            reading.HeadIsDelete.Should().BeFalse();
+            MeshExtensions.EarnsQueueCredit(MeshExtensions.WriteLaneAdmissions(registry), MeshExtensions.WriteLaneAdmissions(registry))
+                .Should().BeTrue("🚨 the delete waits on a budget held by another lane's non-delete write — waiting its turn");
+        }
+        finally
+        {
+            Volatile.Write(ref _release, 1);
+            foreach (var write in writes)
+                write.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task ALaneCreatedWhileADrainRuns_IsClosed()
+    {
+        var grace = TimeSpan.FromMilliseconds(400);
+        using var registry = new IoPoolRegistry(new IoPoolOptions { DrainGrace = grace });
+        var budget = registry.Get(IoPoolNames.PostgresWriteBudgetPrefix + "Postgres");
+        var stuck = registry.GetSerialLane("pg:Postgres:draining", budget);
+        var writes = new List<IDisposable>();
+        var drained = new ReplaySubject<int>();
+        try
+        {
+            writes.Add(stuck.Run(ParkedLeaf).Subscribe(_ => { }, _ => { }));
+            await LaneReading(stuck, r => r.InFlight == 1).Should().Within(Bound).Emit("a lane is stuck, so the drain waits");
+            writes.Add(Observable.Start(() => registry.DrainAll(), System.Reactive.Concurrency.TaskPoolScheduler.Default).Subscribe(drained));
+            await Observable.Interval(TimeSpan.FromMilliseconds(5)).StartWith(0L)
+                .Where(_ => stuck.IsDraining).Should().Within(Bound).Emit("the drain has begun");
+
+            var late = registry.GetSerialLane("pg:Postgres:newduringdrain", budget);
+            late.IsDraining.Should().BeTrue("🚨 a lane created while a drain runs must be closed, not run writes outside it");
+            var outcome = new ReplaySubject<int>();
+            writes.Add(late.Run(_ => Task.FromResult(1)).Subscribe(outcome));
+            (await Fault(outcome).Should().Within(Bound).Emit("its writes are refused"))
+                .Should().BeOfType<OperationCanceledException>();
+        }
+        finally
+        {
+            Volatile.Write(ref _release, 1);
+            foreach (var write in writes)
+                write.Dispose();
+        }
+    }
 }

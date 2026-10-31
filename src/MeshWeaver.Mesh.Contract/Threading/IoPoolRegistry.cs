@@ -20,6 +20,8 @@ public sealed class IoPoolRegistry : IDisposable
     private readonly ConcurrentDictionary<string, IoPool> _pools = new(StringComparer.Ordinal);
     // Serial write lanes (SerialWriteLane) by name — an instance field, so they die with the mesh.
     private readonly ConcurrentDictionary<string, SerialWriteLane> _lanes = new(StringComparer.Ordinal);
+    // Set once DrainAll begins: every lane asked for after that is created CLOSED (GetSerialLane).
+    private int _lanesDraining;
     private readonly IoPoolOptions _options;
     private readonly ILogger<IoPoolRegistry>? _logger;
     private int _disposing;
@@ -147,6 +149,11 @@ public sealed class IoPoolRegistry : IDisposable
         var lane = _lanes.GetOrAdd(name, n => candidate = new SerialWriteLane(n, budget, _logger));
         if (candidate is not null && !ReferenceEquals(lane, candidate))
             candidate.Dispose();
+
+        // A lane asked for while a DRAIN runs is closed at once: its writes are refused like any
+        // write subscribed after the drain began, instead of running outside the drain.
+        if (Volatile.Read(ref _lanesDraining) != 0)
+            lane.CloseForDrain();
 
         // Re-check: disposal may have begun between the check above and the add, after its
         // snapshot of _lanes. Pull the lane back out and refuse.
@@ -298,6 +305,8 @@ public sealed class IoPoolRegistry : IDisposable
         // to new writes at once, and then all of them are watched TOGETHER under ONE stall bound: the
         // wait goes on while any lane's writes advance and ends after one DrainGrace in which none
         // did — never a fresh grace per lane, which would multiply the bound by the lane count.
+        // Published BEFORE the snapshot: a lane created from here on is closed by GetSerialLane.
+        Volatile.Write(ref _lanesDraining, 1);
         var lanes = _lanes.Values.ToArray();
         foreach (var lane in lanes)
             lane.CloseForDrain();

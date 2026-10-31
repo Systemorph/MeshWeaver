@@ -5708,10 +5708,12 @@ public static class MeshExtensions
             .Concat(ioPools.SerialLaneSnapshot()
                 .Select(lane => (Key: "lane:" + lane.Name, State: new WriteLaneState(
                     lane.Admitted,
-                    lane.InFlight > 0 || lane.Waiting > 0,
-                    lane.Waiting > 0,
+                    lane.InFlight > 0 || lane.Waiting > 0 || lane.AwaitingBudget,
+                    // A turn waiting for a budget slot is QUEUED (on the budget), not executing: a
+                    // saturated budget must not make a waiting delete read as a stalled executing one.
+                    lane.Waiting > 0 || lane.AwaitingBudget,
                     lane.HeadIsDelete,
-                    lane.WaitingDeletes))))
+                    lane.WaitingDeletes + (lane.AwaitingDelete ? 1 : 0)))))
             .ToImmutableDictionary(entry => entry.Key, entry => entry.State, StringComparer.Ordinal);
 
     /// <summary>
