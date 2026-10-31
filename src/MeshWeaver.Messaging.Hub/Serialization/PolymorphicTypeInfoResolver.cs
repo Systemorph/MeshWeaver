@@ -287,21 +287,13 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
             if (candidate == baseType || candidate.IsGenericType
                 || !IsValidDerivedTypeForBase(baseType, candidate))
                 continue;
-            var alreadyAdded = false;
-            for (var i = 0; i < derivedTypes.Count; i++)
-            {
-                if (derivedTypes[i].DerivedType != candidate)
-                    continue;
-                alreadyAdded = true;
-                break;
-            }
-            if (alreadyAdded)
-                continue;
+            // 🚨 An ALREADY-MAPPED subtype still claims its formatted name and is counted: a type
+            // mapped under an alias through the base is written under its OWN name wherever it is
+            // serialised by runtime type (a read-only collection's elements), so a same-named
+            // sibling must not be handed that name — reading it back would pick the wrong subtype.
             var discriminator = typeRegistry is TypeRegistry concreteRegistry
                 ? concreteRegistry.FormatType(candidate)
                 : candidate.Name;
-            if (taken.Contains(discriminator))
-                continue;
             discovered.Add((candidate, discriminator));
         }
         foreach (var claim in discovered.GroupBy(d => d.Discriminator, StringComparer.Ordinal))
@@ -310,7 +302,18 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
             if (claim.Count() > 1)
                 continue;
             var (type, discriminator) = claim.First();
-            derivedTypes.Add(new JsonDerivedType(type, discriminator));
+            if (taken.Contains(discriminator))
+                continue;
+            var alreadyAdded = false;
+            for (var i = 0; i < derivedTypes.Count; i++)
+            {
+                if (derivedTypes[i].DerivedType != type)
+                    continue;
+                alreadyAdded = true;
+                break;
+            }
+            if (!alreadyAdded)
+                derivedTypes.Add(new JsonDerivedType(type, discriminator));
         }
     }
 

@@ -51,6 +51,28 @@ public abstract record CompiledAliasedBase(string Code);
 /// <summary>The aliased subtype.</summary>
 public record CompiledAliasedItem(string Code, int Rank) : CompiledAliasedBase(Code);
 
+/// <summary>Content with a read-only collection of a base that ALIASES one of two same-named
+/// subtypes by attribute alone and leaves the other unmapped.</summary>
+public record CompiledAliasCollectionContent(string Name, IReadOnlyCollection<CompiledAliasCollectionBase> Items);
+
+/// <summary>Maps the first same-named subtype under an alias; the second is unmapped.</summary>
+[System.Text.Json.Serialization.JsonDerivedType(typeof(FirstAliasFamily.CompiledAliasShared), "shared-alias")]
+public abstract record CompiledAliasCollectionBase(string Code);
+
+/// <summary>Declares the aliased same-named subtype.</summary>
+public static class FirstAliasFamily
+{
+    /// <summary>Same short name as <see cref="SecondAliasFamily.CompiledAliasShared"/>; aliased.</summary>
+    public record CompiledAliasShared(string Code, int Rank) : CompiledAliasCollectionBase(Code);
+}
+
+/// <summary>Declares the unmapped same-named subtype.</summary>
+public static class SecondAliasFamily
+{
+    /// <summary>Same short name as <see cref="FirstAliasFamily.CompiledAliasShared"/>; unmapped.</summary>
+    public record CompiledAliasShared(string Code, string Label) : CompiledAliasCollectionBase(Code);
+}
+
 /// <summary>Content whose abstract-typed member is a READ-ONLY COLLECTION — the shape the mesh's
 /// <c>ReadOnlyCollectionConverter</c> reads element by element — of a base this reader has NO
 /// subtype for: its only subtypes share one contested name, so neither is added.</summary>
@@ -331,6 +353,56 @@ public class CompiledAbstractMemberImportsTest(ITestOutputHelper output) : Monol
             using var written = JsonDocument.Parse(JsonSerializer.Serialize(typed, aliased, Mesh.JsonSerializerOptions));
             written.RootElement.GetProperty("item").GetProperty("$type").GetString().Should().Be("item-alias",
                 "a write keeps the declared discriminator, not the subtype's short name");
+        }
+        finally
+        {
+            alc.Unload();
+        }
+    }
+
+    /// <summary>An aliased subtype still claims its own short name: a collection writes its elements
+    /// by runtime type, so the aliased <c>First.CompiledAliasShared</c> goes out as
+    /// <c>"CompiledAliasShared"</c>. Discovery must not hand that name to the unmapped same-named
+    /// <c>Second.CompiledAliasShared</c>, or the round trip reads the element back as the WRONG
+    /// subtype, silently dropping <c>rank</c>.</summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AnAliasedSubtypesShortName_IsNotHandedToItsSameNamedSibling()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var compiledNodeType = await DeclaredNodeType(ct);
+        var alc = LoadCompiledCopy(compiledNodeType, out var compiledSection);
+        try
+        {
+            var assembly = compiledSection.Assembly;
+            var content = assembly.GetType(typeof(CompiledAliasCollectionContent).FullName!, throwOnError: true)!;
+            var baseType = assembly.GetType(typeof(CompiledAliasCollectionBase).FullName!, throwOnError: true)!;
+            var first = assembly.GetType(typeof(FirstAliasFamily.CompiledAliasShared).FullName!, throwOnError: true)!;
+            var second = assembly.GetType(typeof(SecondAliasFamily.CompiledAliasShared).FullName!, throwOnError: true)!;
+            Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>()
+                .Register(content, compiledNodeType + "AliasCollection");
+
+            var items = Array.CreateInstance(baseType, 1);
+            items.SetValue(Activator.CreateInstance(first, "X", 5), 0);
+            var original = Activator.CreateInstance(content, "A", items);
+            var json = JsonSerializer.Serialize(original, content, Mesh.JsonSerializerOptions);
+            Output.WriteLine($"written: {json}");
+
+            var read = JsonSerializer.Deserialize<object>(json, Mesh.JsonSerializerOptions);
+            Output.WriteLine($"read: {read?.GetType().FullName}");
+            if (read is JsonElement raw)
+            {
+                raw.GetProperty("items")[0].GetProperty("rank").GetInt32().Should().Be(5,
+                    "kept raw, the element is stored verbatim");
+                return;
+            }
+            read.Should().NotBeNull();
+            var element = ((System.Collections.IEnumerable)content
+                .GetProperty(nameof(CompiledAliasCollectionContent.Items))!.GetValue(read)!)
+                .Cast<object>().Single();
+            element.GetType().Should().NotBeSameAs(second,
+                "the element was written as the aliased First subtype; binding it to the same-named "
+                + "Second subtype silently drops its 'rank'");
+            element.GetType().Should().BeSameAs(first);
         }
         finally
         {
