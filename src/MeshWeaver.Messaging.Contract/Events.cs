@@ -348,6 +348,19 @@ public record DisposeRequest
     public string? CascadedFrom { get; init; }
 
     /// <summary>
+    /// The ONE activation this request is for, as <see cref="ShutdownNack.ActivationToken"/> of the
+    /// hub instance, or <c>null</c> for whatever activation lives at the address on delivery (every
+    /// ordinary recycle).
+    ///
+    /// <para>Set by a poster whose request may be DELIVERED long after it decided which activation
+    /// to recycle: a module swap's deferred recycle (#7324), posted when a step ends. If that
+    /// activation was replaced in the meantime, the request is ignored on delivery instead of
+    /// tearing down the successor, which already binds the current generation. It could be in the
+    /// middle of its own step.</para>
+    /// </summary>
+    public string? ForActivation { get; init; }
+
+    /// <summary>
     /// What <c>[QUIESCE-START]</c> prints for a <see cref="DisposeRequest"/> whose poster supplied
     /// no <see cref="Reason"/>. Spelled once so a log reader and a log QUERY agree on the token.
     /// </summary>

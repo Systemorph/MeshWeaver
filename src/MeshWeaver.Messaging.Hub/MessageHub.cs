@@ -4853,6 +4853,18 @@ public sealed class MessageHub : IMessageHub
             return request.Ignored();
         }
 
+        // A request for ONE activation (#7324: a swap's deferred recycle, delivered when a step
+        // ended) that reaches a DIFFERENT one is stale: the activation it was for is already gone,
+        // and this one is its successor. Ignoring it is the whole point of carrying the identity.
+        if (request.Message.ForActivation is { } forActivation
+            && !string.Equals(forActivation, ShutdownNack.ActivationToken(this), StringComparison.Ordinal))
+        {
+            logger.LogInformation(
+                "Ignored a DisposeRequest for activation #{For} at {Address}: this is activation #{This}, its successor ({Reason})",
+                forActivation, Address, ShutdownNack.ActivationToken(this), request.Message.Reason ?? DisposeRequest.ReasonNotStated);
+            return request.Ignored();
+        }
+
         // 🚨 A RECYCLE MUST REACH THE SUBSCRIBERS IT IS ABOUT TO ORPHAN — and this turn is the
         // only place it can (Systemorph/MeshWeaver#2533 / #2551).
         //

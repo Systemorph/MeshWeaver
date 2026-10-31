@@ -112,6 +112,71 @@ public sealed class ASwapWaveDefersAHubWithAStepInFlightTest : MonolithMeshTestB
             .Where(r => r > retirements)
             .FirstAsync()
             .Timeout(Budget).Await(ct);
+        // …and the finished retire leaves the updater: a process-lifetime updater must not keep one
+        // entry per deferred swap (#7727 review).
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Updater.PendingRetires)
+            .Where(n => n == 0)
+            .FirstAsync()
+            .Timeout(Budget).Await(ct);
+    }
+
+    /// <summary>
+    /// A deferred recycle names the activation it is for (<see cref="DisposeRequest.ForActivation"/>),
+    /// and a different activation at that address ignores it on delivery (#7727 review): a request
+    /// posted when a step ended can reach the address after that activation was replaced, and must not
+    /// tear down the successor. Both requests travel from one sender to one address in order, so when
+    /// the matching one has torn the hub down the stale one has already been delivered.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ARequestForAnotherActivation_IsIgnoredOnDelivery()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hub = await Live(IdlePath, ct);
+        var issuing = Mesh.NodeOperationIssuingHub();
+
+        issuing.Post(new DisposeRequest { Reason = "test: for ANOTHER activation", ForActivation = "NOTTHIS0" },
+            o => o.WithTarget(new Address(IdlePath)));
+        issuing.Post(new DisposeRequest { Reason = "test: for THIS activation", ForActivation = ShutdownNack.ActivationToken(hub) },
+            o => o.WithTarget(new Address(IdlePath)));
+
+        await hub.RunLevelChanged.LastOrDefaultAsync().Timeout(Budget).Await(ct);
+        var attribution = (hub as MessageHub)?.DisposalAttribution ?? "";
+        attribution.Should().Contain("for THIS activation");
+        attribution.Should().NotContain("for ANOTHER activation",
+            "a request for a different activation is stale at this one and must be ignored");
+    }
+
+    /// <summary>
+    /// The deferred recycle resolves its issuing hub when the step ENDS (#7727 review). The off-router
+    /// node-operation hub can be recycled on its own while a step runs, and a post through the retired
+    /// one would be refused, leaving the held activation on the old generation for good.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task TheIssuingHubRecycledDuringTheStep_DoesNotStrandTheDeferredRecycle()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var held = await Live(HeldPath, ct);
+
+        var step = held.BeginAsyncOperation();
+        try
+        {
+            var outcome = await Updater.Swap(Write("g2", Source(reachesEveryHub: true)), "test: the issuer goes mid-step")
+                .Timeout(Budget).Await(ct);
+            outcome.Deferred.Should().Be(1, outcome.Reason);
+
+            var issuer = Mesh.NodeOperationIssuingHub();
+            issuer.Dispose();
+            await issuer.RunLevelChanged.LastOrDefaultAsync().Timeout(Budget).Await(ct);
+            Mesh.NodeOperationIssuingHub().Should().NotBeSameAs(issuer, "the arrangement: a fresh issuing hub replaces the retired one");
+        }
+        finally
+        {
+            step.Dispose();
+        }
+
+        await held.RunLevelChanged.LastOrDefaultAsync().Timeout(Budget).Await(ct);
+        ((held as MessageHub)?.DisposalAttribution ?? "").Should().Contain("ModuleLiveUpdate");
     }
 
     /// <summary>

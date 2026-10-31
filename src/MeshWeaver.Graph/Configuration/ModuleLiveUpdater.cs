@@ -556,8 +556,10 @@ public sealed class ModuleLiveUpdater : IDisposable
                 continue;
             }
             deferred = deferred.Add(group.Key);
-            deferredHubs = deferredHubs.Add(held);
-            RecycleWhenItsStepEnds(held, group.Key, because, origin, issuing);
+            // EVERY captured activation of the address joins the retire (#7727 review): one that an
+            // unrelated recycle is already tearing down still runs the old generation until it is dead.
+            deferredHubs = deferredHubs.AddRange(group);
+            RecycleWhenItsStepEnds(held, group.Key, because, origin);
         }
 
         var waited = hubs.Where(h => !deferred.Contains(ActivationRecycle.PathOf(h))).ToImmutableList();
@@ -598,8 +600,13 @@ public sealed class ModuleLiveUpdater : IDisposable
             // with it), and has no bound: a step that runs on keeps its generation loaded, which is
             // exactly "in use". Never a timer-unload.
             var names = string.Join(", ", retiring.Select(g => g.Name).Distinct());
-            background.Add(DeadAll(waited.AddRange(deferredHubs))
+            // Removed from `background` the moment it ends, so a process-lifetime updater does not
+            // accumulate one entry per deferred swap (#7727 review); still cancelled by Dispose.
+            var retire = new SingleAssignmentDisposable();
+            background.Add(retire);
+            retire.Disposable = DeadAll(waited.AddRange(deferredHubs.Distinct(ReferenceEqualityComparer.Instance).Cast<IMessageHub>()))
                 .SelectMany(_ => Retire())
+                .Finally(() => background.Remove(retire))
                 .Subscribe(
                     unloaded => logger?.Log(unloaded ? LogLevel.Information : LogLevel.Warning,
                         "[ModuleLiveUpdate] the deferred activations of the swap of {Modules} have shut down; the old generation(s) were {Outcome}",
@@ -667,9 +674,11 @@ public sealed class ModuleLiveUpdater : IDisposable
     /// FIRST instant (<see cref="IMessageHub.ShuttingDown"/>, which replays). This is before the
     /// teardown disposes the step and fires <see cref="HubStepsInFlight.Idle"/>, so nothing is posted:
     /// a request posted then would reach the address's NEXT activation, which already binds the
-    /// current generation (#6800). Disposing this updater cancels every pending deferral.</para>
+    /// current generation (#6800). The request also names the activation it is for
+    /// (<see cref="DisposeRequest.ForActivation"/>), so one that is replaced AFTER the post and before
+    /// delivery ignores it too. Disposing this updater cancels every pending deferral.</para>
     /// </summary>
-    private void RecycleWhenItsStepEnds(IMessageHub held, string path, string because, string origin, IMessageHub issuing)
+    private void RecycleWhenItsStepEnds(IMessageHub held, string path, string because, string origin)
     {
         var fresh = new Deferral(origin);
         var deferral = deferrals.GetOrAdd(held, fresh);
@@ -693,8 +702,14 @@ public sealed class ModuleLiveUpdater : IDisposable
                     {
                         Reason = string.Join(" | ", reasons) + " (deferred until its in-flight step ended)",
                         CascadedFrom = deferral.Origin,
+                        // For THIS activation only: if it is replaced before delivery, the request is
+                        // ignored there instead of tearing down the successor (#7727 review).
+                        ForActivation = ShutdownNack.ActivationToken(held),
                     };
-                    issuing.Post(request, o => o.WithTarget(new Address(path)));
+                    // The issuing hub is resolved NOW, when the step ended — never captured when the
+                    // swap began: that off-router hub can be recycled independently while a step runs,
+                    // and a post through the retired one would be refused (#7727 review).
+                    meshHub.NodeOperationIssuingHub().Post(request, o => o.WithTarget(new Address(path)));
                     deferredRecycles.OnNext((path, request.Reason));
                 },
                 ex => logger?.LogWarning(ex,
@@ -705,6 +720,9 @@ public sealed class ModuleLiveUpdater : IDisposable
     /// <summary>Every deferred recycle this updater POSTED, as (address, reason) — the instrument the
     /// swap's own tests read (#7727 review). Hot; never replays.</summary>
     internal IObservable<(string Path, string Reason)> DeferredRecyclesIssued => deferredRecycles.AsObservable();
+
+    /// <summary>How many deferred retires are still pending — each leaves when it ends (#7727 review).</summary>
+    internal int PendingRetires => background.Count;
 
     /// <summary>
     /// The live per-node hubs of THIS process that run a swapped generation's configuration or types:

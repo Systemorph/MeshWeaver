@@ -309,6 +309,14 @@ disposes the step and fires the idle signal, so no request is posted. A request 
 reach the address's next activation, which already binds the current generation. Disposing the
 updater cancels every pending deferral and every pending retire.
 
+**The request names its activation.** The deferred `DisposeRequest` carries
+`ForActivation` (the hub instance's activation token). If the activation is replaced after the post
+and before delivery, the successor ignores the request instead of being torn down by it. The
+issuing hub is resolved when the step ends, never captured when the swap began, because that
+off-router hub can be recycled on its own while a step runs. Every captured activation of a deferred
+address joins the retire, and a finished retire leaves the updater, so a process-lifetime updater
+does not accumulate one entry per deferred swap.
+
 **A step that starts just as the deferred recycle is posted** can still be torn down by it. That is the
 ordinary case every step is built for: steps are idempotent and resume on the next activation. What
 the deferral removes is the wave landing in the MIDDLE of a long step, every time.
@@ -338,6 +346,8 @@ hub is swapped while one probe hub holds a step:
 - A held hub torn down by an unrelated recycle, whose teardown releases the step, gets no deferred
   recycle at all.
 - A step held on a hosted child defers its per-node owner.
+- A request for another activation is ignored on delivery; the one for this activation recycles it.
+- An issuing hub recycled during the step does not strand the deferred recycle.
 
 Red before the fix: the swap answered only after every hub of its wave was dead, the held one
 included.
