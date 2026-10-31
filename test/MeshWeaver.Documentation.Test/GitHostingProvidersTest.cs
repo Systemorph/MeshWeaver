@@ -131,12 +131,15 @@ public class GitHostingProvidersTest
     [InlineData("https://acme.visualstudio.com/Content/_git/content")]
     [InlineData("https://gitlab.example.com/acme/content.git")]
     [InlineData("http://git.example.com/acme/content.git")]
+    [InlineData("ssh://git@github.com/acme/private.git")]
+    [InlineData("git@github.com:acme/private.git")]
     public void TheGitHubRepoPreflight_SkipsARemoteThatIsNotOnGitHub(string repositoryUrl)
     {
         // With no provider claiming it, an Azure Repos (or any non-GitHub) http(s) remote reaches the
         // git-protocol client. Its repo-existence step is GitHub REST: run there, the URL's first two
         // path segments are read as a GitHub owner/repo, so the push fails before cloning or, with
-        // auto-create, creates an unrelated GitHub repository. Only a github.com remote may run it.
+        // auto-create, creates an unrelated GitHub repository. Only a github.com http(s) remote may run
+        // it: an SSH remote authenticates with its key, which the REST token cannot stand in for.
         GitProtocolRepoClient.RunsGitHubRepoPreflight(repositoryUrl).Should().BeFalse(
             "the GitHub REST preflight must never act on a repository hosted elsewhere");
     }

@@ -679,9 +679,14 @@ public sealed class GitProtocolRepoClient(
     /// <summary>True for a <c>github.com</c> remote — the only one the GitHub REST surface (repo
     /// existence / create) applies to. Any other http(s) remote (an Azure Repos URL no provider
     /// claimed, a GitHub Enterprise or other host) goes straight to git: read as a GitHub
-    /// owner/repo, its path would make the preflight fail the push or create an unrelated repo.</summary>
+    /// owner/repo, its path would make the preflight fail the push or create an unrelated repo.
+    /// An SSH remote (<c>ssh://git@github.com/…</c>, <c>git@github.com:…</c>) also goes straight to
+    /// git: its access comes from the key, and a token without REST access must not block a push
+    /// the key allows.</summary>
     internal static bool RunsGitHubRepoPreflight(string url)
-        => GitRepositoryProvider.Classify(url) == GitRepositoryProvider.GitHub;
+        => (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+           && GitRepositoryProvider.Classify(url) == GitRepositoryProvider.GitHub;
 
     /// <summary>An abbreviated commit SHA (7–39 hex chars) — resolvable via REST only; the wire
     /// protocol fetches refs and FULL 40-char SHAs.</summary>
