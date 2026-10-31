@@ -107,3 +107,61 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.fleet-token.outputs.token }}
         run: python3 .github/scripts/check-shared-rules.py
+
+  # ─────────────────────── A RED HERE HAS AN AUDIENCE (#7416) ───────────────────────
+  # Drift between the fleet's instruction files is found ONLY here while core is quiet.
+  # A scheduled run reaches no pull request, no reviewer and no check list, so without these two
+  # jobs its red is red in an empty room — the shape that left lock-pinned-digests.yml red for six
+  # days. The red lands on this lane's OWN ci-failure ledger (node-repo-ci-failure.yml: one issue,
+  # a dated entry per red run, reopened rather than re-filed, closed by the next green, a signed
+  # event to the control portal's triage inbox each way). `always()` is deliberate: a job cut at
+  # its timeout is exactly a red this must report. check-scheduled-lane-reporters.py holds the pair.
+  lane-red:
+    name: "The shared-rule sweep is red: file it, tell the control portal"
+    needs: [sweep]
+    if: always() && needs.sweep.result != 'success'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: failure
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-shared-rules-red
+      issue-title: "shared-rules: the fleet's shared rule blocks disagree"
+      # A scheduled lane's red is a bug at sev:M — tracked, not a release gate (#7416 owner decision).
+      severity: sev:M
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+
+  lane-green:
+    name: "The shared-rule sweep is green: close the ledger"
+    needs: [sweep]
+    if: always() && needs.sweep.result == 'success'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: success
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-shared-rules-red
+      issue-title: "shared-rules: the fleet's shared rule blocks disagree"
+      # A scheduled lane's red is a bug at sev:M — tracked, not a release gate (#7416 owner decision).
+      severity: sev:M
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}

@@ -148,6 +148,15 @@ Three changes, all in core:
    closing-keyword gate's label probe says the same sentence instead of *"the token cannot read
    issues"*. Both scripts carry self-tests against a fake API (a 403 rate limit → NO VERDICT, a 404 →
    skip, a 200 → the normal verdict) that run before the real call.
+
+   **The DOWNLOAD goes through the same reader.** The first fix left the last step on
+   `gh run download … || "if gh printed a rate limit above, this is NO VERDICT"`, which handed the
+   classification back to whoever read the log. `fetch-deployed-plugin-set.sh` now downloads each
+   artifact as `actions/artifacts/<id>/zip` through `github-api-get.py --download <file>`: a rate
+   limit on the download is NO VERDICT naming the status and the reset, like any lookup; a 404 there
+   (the artifact expired between the listing and the download) is a plain red; and the 302 to signed
+   storage is followed WITHOUT the token. The self-test serves the zips from the fake API and puts a
+   `gh` on `PATH` that fails if anything still calls it.
 2. **The pull-request body is read ONCE per run attempt, on an App's budget.** The `pr-body` job in
    `dotnet-test.yml` reads it with a `fleet-reader` installation token, which has its own, larger
    bucket than the repository's `GITHUB_TOKEN` (see [GitHub App Credentials](../GitHubAppCredentials)),
