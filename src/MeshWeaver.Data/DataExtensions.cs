@@ -3429,10 +3429,46 @@ public static class DataExtensions
     {
         // The descriptions are XML-doc summaries: the answer is posted once their documentation
         // files are in memory, read on the mesh's I/O edge — never on this handler's turn (#7386).
-        hub.SubscribeHeldUntilTerminal(ObserveDomainTypes(hub), types => types
+        // The answer therefore outlives the turn, so it gets HandleGetDataRequest's two guarantees:
+        // ONE answer (a single CAS'd claim), and an answer even when the hub is disposed while the
+        // read is still queued — a recycle must not leave the caller waiting out its timeout.
+        var answered = 0;
+        bool TryClaim() => Interlocked.CompareExchange(ref answered, 1, 0) == 0;
+
+        // Captured on the handler's turn, while the scope is provably alive — the disposal arm runs
+        // where re-resolving the parent can throw, and the parent post is then the only route left.
+        var parentHub = hub.Configuration.ParentHub;
+        var detach = new SingleAssignmentDisposable();
+
+        var subscription = ObserveDomainTypes(hub)
+            .Take(1)
+            // Runs after the observer's terminal arm has claimed the answer (or on dispose).
+            .Finally(() =>
+            {
+                if (Volatile.Read(ref answered) != 0)
+                    detach.Dispose();
+            })
             .Subscribe(
-                list => hub.Post(new DomainTypesResponse(list), o => o.ResponseFor(request)),
-                ex => hub.Post(DeliveryFailure.FromException(request, ex), o => o.ResponseFor(request))));
+                list =>
+                {
+                    if (TryClaim())
+                        hub.Post(new DomainTypesResponse(list), o => o.ResponseFor(request));
+                },
+                ex =>
+                {
+                    if (TryClaim())
+                        hub.Post(DeliveryFailure.FromException(request, ex), o => o.ResponseFor(request));
+                });
+
+        detach.Disposable = hub.RegisterForDisposalDetachable(Disposable.Create(() =>
+        {
+            subscription.Dispose();
+            if (TryClaim())
+                NackShuttingDown(hub, parentHub, request,
+                    $"GetDomainTypesRequest at '{hub.Address}': the owning hub was disposed while the type "
+                    + "descriptions were still being read — it is shutting down and never answered. "
+                    + "Retry against the fresh activation.");
+        }));
         return request.Processed();
     }
 
@@ -3938,9 +3974,17 @@ public static class DataExtensions
     /// </summary>
     private static void NackSilentRead(
         IMessageHub hub, IMessageHub? parent, IMessageDelivery<GetDataRequest> request, string reason)
+        => NackShuttingDown(hub, parent, request,
+            $"GetDataRequest({request.Message.Reference}) at '{hub.Address}': {reason}");
+
+    /// <summary>
+    /// Answers <paramref name="request"/> with an <see cref="ErrorType.ShuttingDown"/>
+    /// <see cref="DeliveryFailure"/> from a teardown path: through this hub while it can still post,
+    /// otherwise through <paramref name="parent"/> (captured while the scope was alive).
+    /// </summary>
+    private static void NackShuttingDown(
+        IMessageHub hub, IMessageHub? parent, IMessageDelivery request, string message)
     {
-        var message =
-            $"GetDataRequest({request.Message.Reference}) at '{hub.Address}': {reason}";
         // 🚨 Everything here runs on a teardown path, where this hub's ServiceProvider may
         // already be gone — resolving a logger can itself throw ObjectDisposedException. Logging
         // must never mask (or replace) the NACK it is reporting, so it gets its own guard and the

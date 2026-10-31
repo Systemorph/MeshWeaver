@@ -43,9 +43,9 @@ public static class StandardReducers
             // and both read XML-doc summaries — a cold read parses a documentation file. A reducer
             // runs synchronously on the turn that reduces, so each is a stream fed from the mesh's
             // I/O edge instead (#7386, Doc/Architecture/XmlDocumentationReader).
-            .AddWorkspaceReferenceStream<object>((workspace, reference, _) =>
+            .AddWorkspaceReferenceStream<object>((workspace, reference, configuration) =>
                 reference is SchemaReference or DataModelReference
-                    ? CreateDocumentedReferenceStream(workspace, (WorkspaceReference<object>)reference)
+                    ? CreateDocumentedReferenceStream(workspace, (WorkspaceReference<object>)reference, configuration)
                     : null)
             .AddWorkspaceReferenceStream<object>(
                 (workspace, reference, configuration) =>
@@ -559,8 +559,15 @@ public static class StandardReducers
     /// <see cref="DataExtensions.ObserveDomainTypes"/>) and pushed into the stream — so neither the
     /// subscribing turn nor a store change ever reads a documentation file. A workspace with no data
     /// source has neither, as before.
+    /// <para>🚨 The caller's <paramref name="configuration"/> is applied to the stream: a REMOTE
+    /// subscription supplies its client id, subscriber and subscriber identity through it
+    /// (<c>JsonSynchronizationStream</c>'s subscribe path), and a stream built without them emits
+    /// under a fresh client id that the waiting remote stream never matches.</para>
     /// </summary>
-    private static ISynchronizationStream<object>? CreateDocumentedReferenceStream(IWorkspace workspace, WorkspaceReference<object> reference)
+    private static ISynchronizationStream<object>? CreateDocumentedReferenceStream(
+        IWorkspace workspace,
+        WorkspaceReference<object> reference,
+        Func<StreamConfiguration<object>, StreamConfiguration<object>>? configuration)
     {
         if (!workspace.DataContext.DataSources.Any())
             return null;
@@ -570,7 +577,7 @@ public static class StandardReducers
             hub,
             reference,
             workspace.ReduceManager.ReduceTo<object>(),
-            c => c);
+            configuration);
 
         var value = reference switch
         {

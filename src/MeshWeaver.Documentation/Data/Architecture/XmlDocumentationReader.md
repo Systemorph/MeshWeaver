@@ -152,8 +152,18 @@ warm lookup emits synchronously without asking the edge.
   reducers over the store: neither depends on the data, and a reducer runs on the turn that reduces,
   so each is a stream fed from the edge that lives until it is disposed. Query completion's
   `ContentSchemaFacts.FromType` runs on the edge the same way.
-  `XmlDocsOffTheRequestPathTest` (Layout.Test) holds the edge for each of the four paths and checks
-  no snapshot was loaded before the release; before the change none of them reached the edge at all.
+  Two consequences of answering later than the turn, both pinned:
+  - The stream applies the caller's stream configuration. A remote subscriber's client id arrives
+    through it, and a stream built without it emits to nobody.
+  - `GetDomainTypesRequest` answers once (a CAS'd claim), and a hub disposed while the read is still
+    queued answers `ErrorType.ShuttingDown` rather than leaving the caller to its timeout. That is the
+    same contract `GetDataRequest` keeps.
+
+  `XmlDocsOffTheRequestPathTest` (Layout.Test) covers these paths:
+  - For each of the four paths, it holds the edge and checks that no snapshot was loaded before the
+    release. Before the change none of them reached the edge at all.
+  - It subscribes to both streams remotely.
+  - It disposes the owner while a type listing is still being read.
 
 **Still synchronous, and known.** The editor form's field descriptions
 (`EditorExtensions.MapToSkinnedControl`) still call `Summary` directly. They are built into the skin

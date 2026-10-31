@@ -42,6 +42,55 @@ public class XmlDocsOffTheRequestPathTest(ITestOutputHelper output) : HubTestBas
             .WithServices(services => services.AddSingleton<IBlockingReadScheduler>(held))
             .AddData(data => data.AddSource(ds => ds.WithType<TodoCategory>(t => t.WithInitialData([new TodoCategory { Name = "Work", DisplayName = "Work", Description = "Work items" }]))));
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration)
+            .WithRoutes(r => r.RouteAddress(HostType, (_, d) => d.Package()))
+            .AddData();
+
+    /// <summary>
+    /// A REMOTE subscriber of the schema and data-model streams receives their value. The owner's
+    /// subscribe path configures the stream it builds with the subscriber's client id; a stream that
+    /// drops that configuration emits under a fresh id the waiting remote stream never matches.
+    /// </summary>
+    [HubFact]
+    public async Task RemoteSchemaAndDataModelStreams_ReachTheSubscriber()
+    {
+        held.Release();
+        var host = GetHost();
+        var workspace = GetClient().GetWorkspace();
+
+        var schema = await workspace.GetRemoteStream(CreateHostAddress(), new SchemaReference(nameof(TodoCategory)))
+            .Select(c => c.Value)
+            .Should().Within(10.Seconds()).Match(v => v is not null, "the remote schema stream carries the owner's schema");
+        JsonSerializer.Serialize(schema, host.JsonSerializerOptions).Should().Contain(ExpectedSummary(host));
+
+        var model = await workspace.GetRemoteStream(CreateHostAddress(), new DataModelReference())
+            .Select(c => c.Value)
+            .Should().Within(10.Seconds()).Match(v => v is not null, "the remote data-model stream carries the owner's types");
+        JsonSerializer.Serialize(model, host.JsonSerializerOptions).Should().Contain(nameof(TodoCategory));
+    }
+
+    /// <summary>
+    /// A GetDomainTypesRequest whose description read is still queued when the owning hub is disposed
+    /// is answered with a ShuttingDown failure — never left to the caller's timeout.
+    /// </summary>
+    [HubFact]
+    public async Task GetDomainTypes_OwnerDisposedWhileReading_AnswersShuttingDown()
+    {
+        var host = GetHost();
+        var answer = GetClient().Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateHostAddress()))
+            .Materialize()
+            .Should().Within(10.Seconds()).Match(n => n.Kind != NotificationKind.OnCompleted, "the caller is answered when the owner goes away mid-read");
+
+        await held.Requests.Should().Within(10.Seconds()).Emit("the description read is queued on the held edge");
+        host.Dispose();
+
+        var notification = await answer;
+        notification.Kind.Should().Be(NotificationKind.OnError, "the owner never produced the listing");
+        var failure = notification.Exception.Should().BeOfType<DeliveryFailureException>().Subject;
+        failure.Failure.ErrorType.Should().Be(ErrorType.ShuttingDown, "a recycle mid-read is a retryable shutdown, not a fault");
+    }
+
     [HubFact]
     public async Task GetDomainTypes_ReadsNoDocumentationFile_TheEdgeDoes()
     {
