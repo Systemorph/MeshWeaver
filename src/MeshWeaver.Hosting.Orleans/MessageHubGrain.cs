@@ -1548,17 +1548,35 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// once when it already has; never on a host with no application lifetime.
     /// </summary>
     private IObservable<Unit> HostLeaving()
+        => Observable.Defer(() => WhenStopping(
+            meshHub.ServiceProvider.GetService<IHostApplicationLifetime>()?.ApplicationStopping
+            ?? CancellationToken.None));
+
+    /// <summary>
+    /// One notification when <paramref name="stopping"/> is cancelled (at once when it already is);
+    /// never for a token that cannot be cancelled.
+    ///
+    /// <para>🚨 <b>Unsubscribing UNREGISTERS, never disposes, the registration</b> (review of #7734).
+    /// <c>CancellationTokenRegistration.Dispose()</c> blocks until a callback running on another
+    /// thread has finished. In <see cref="HubReadyUnlessTheHostLeaves"/> this sits under <c>Amb</c>:
+    /// when the readiness arm wins, Rx disposes this arm while holding Amb's gate, and if the stop's
+    /// callback is at that moment waiting for the same gate, both threads wait on each other, and
+    /// <c>ApplicationStopping</c> never returns. <c>Unregister()</c> never waits; a callback already
+    /// running finishes on its own. The same inversion and the same cure as <c>IoPool</c>'s drain
+    /// registration. Pinned by <c>HostStopSignalTest</c>.</para>
+    /// </summary>
+    /// <param name="stopping">The host's stopping token.</param>
+    internal static IObservable<Unit> WhenStopping(CancellationToken stopping)
         => Observable.Create<Unit>(observer =>
         {
-            var stopping = meshHub.ServiceProvider.GetService<IHostApplicationLifetime>()?.ApplicationStopping
-                           ?? CancellationToken.None;
             if (!stopping.CanBeCanceled)
                 return Disposable.Empty;
-            return stopping.Register(() =>
+            var registration = stopping.Register(() =>
             {
                 observer.OnNext(Unit.Default);
                 observer.OnCompleted();
             });
+            return Disposable.Create(() => registration.Unregister());
         });
 
     /// <summary>
