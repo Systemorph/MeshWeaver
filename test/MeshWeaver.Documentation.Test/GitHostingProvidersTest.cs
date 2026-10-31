@@ -4,6 +4,9 @@ using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.GitSync;
 using MeshWeaver.Fixture;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Documentation.Test;
@@ -104,6 +107,49 @@ public class GitHostingProvidersTest
         provider.CommitAuthorEmail.Should().Be("noreply@meshweaver.cloud");
         provider.DisplayNameKey.Should().Be("ui.gitSync.provider.Example");
     }
+
+    [Fact]
+    public void ThePlatform_ShipsNoHostingProviderOfItsOwn()
+    {
+        // Azure Repos left with Azure.Identity: it is a module's contribution now. What the platform
+        // registers by itself claims nothing, so every URL stays on the GitHub / git path.
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+        services.AddSingleton(new IoPoolRegistry(new IoPoolOptions()));
+        services.AddGitHubSyncServices();
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<GitHostingProviders>();
+        registry.All.Should().BeEmpty();
+        registry.Classify("https://dev.azure.com/acme/Content/_git/content").Should().Be(GitRepositoryProvider.Git,
+            "without the module an Azure Repos URL is a plain git remote");
+        typeof(GitHostingProviders).Assembly.GetReferencedAssemblies()
+            .Select(a => a.Name).Should().NotContain("Azure.Identity");
+    }
+
+    [Theory]
+    [InlineData("https://dev.azure.com/acme/Content/_git/content")]
+    [InlineData("https://acme.visualstudio.com/Content/_git/content")]
+    [InlineData("https://gitlab.example.com/acme/content.git")]
+    [InlineData("http://git.example.com/acme/content.git")]
+    [InlineData("ssh://git@github.com/acme/private.git")]
+    [InlineData("git@github.com:acme/private.git")]
+    public void TheGitHubRepoPreflight_SkipsARemoteThatIsNotOnGitHub(string repositoryUrl)
+    {
+        // With no provider claiming it, an Azure Repos (or any non-GitHub) http(s) remote reaches the
+        // git-protocol client. Its repo-existence step is GitHub REST: run there, the URL's first two
+        // path segments are read as a GitHub owner/repo, so the push fails before cloning or, with
+        // auto-create, creates an unrelated GitHub repository. Only a github.com http(s) remote may run
+        // it: an SSH remote authenticates with its key, which the REST token cannot stand in for.
+        GitProtocolRepoClient.RunsGitHubRepoPreflight(repositoryUrl).Should().BeFalse(
+            "the GitHub REST preflight must never act on a repository hosted elsewhere");
+    }
+
+    [Theory]
+    [InlineData("https://github.com/acme/content")]
+    [InlineData("https://GitHub.com/acme/content.git")]
+    public void TheGitHubRepoPreflight_RunsForAGitHubRemote(string repositoryUrl)
+        // The negative control: a github.com remote keeps its repo-existence / auto-create step.
+        => GitProtocolRepoClient.RunsGitHubRepoPreflight(repositoryUrl).Should().BeTrue();
 
     [Fact]
     public void TheRouter_ForwardsEveryInterfaceMember_DefaultedOnesIncluded()
