@@ -136,13 +136,34 @@ public sealed class IoPoolRegistry : IDisposable
     /// <returns>The lane.</returns>
     public SerialWriteLane GetSerialLane(string name, IIoPool budget)
     {
-        // A lane that loses the GetOrAdd race holds no thread and nothing queued; it is disposed so
-        // its drain subscription ends.
+        // 🚨 Never repopulate a closed registry (the same two checks as Get): a lane added after
+        // Dispose() cleared _lanes would be disposed by nobody. A refused caller gets a DISPOSED
+        // lane, which answers every write with an ObjectDisposedException rather than running it.
+        if (Volatile.Read(ref _disposing) != 0)
+            return RefusedLane(name, budget);
+
+        // A lane that loses the GetOrAdd race holds no thread and nothing queued; it is disposed.
         SerialWriteLane? candidate = null;
         var lane = _lanes.GetOrAdd(name, n => candidate = new SerialWriteLane(n, budget, _logger));
         if (candidate is not null && !ReferenceEquals(lane, candidate))
             candidate.Dispose();
+
+        // Re-check: disposal may have begun between the check above and the add, after its
+        // snapshot of _lanes. Pull the lane back out and refuse.
+        if (Volatile.Read(ref _disposing) != 0 && _lanes.TryRemove(name, out var raced))
+        {
+            raced.Dispose();
+            return RefusedLane(name, budget);
+        }
+
         return lane;
+    }
+
+    private SerialWriteLane RefusedLane(string name, IIoPool budget)
+    {
+        var refused = new SerialWriteLane(name, budget, _logger);
+        refused.Dispose();
+        return refused;
     }
 
     /// <summary>
@@ -414,7 +435,8 @@ public sealed class IoPoolRegistry : IDisposable
         if (Interlocked.CompareExchange(ref _disposing, 1, 0) != 0) return;
 
         // The serial lanes hold no thread; their in-flight writes are leaves of the budget pools
-        // drained below. Completing them stops anything still queued from being started.
+        // drained below. Disposing a lane answers every write that has not started with an
+        // ObjectDisposedException at its turn, so no caller is left without a verdict.
         foreach (var lane in _lanes.Values)
             lane.Dispose();
         _lanes.Clear();

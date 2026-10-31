@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -28,9 +29,10 @@ namespace MeshWeaver.Mesh.Threading;
 public sealed class SerialWriteLane : IDisposable
 {
     private readonly ISubject<IObservable<Unit>> _queue = Subject.Synchronize(new Subject<IObservable<Unit>>());
-    private readonly IDisposable _drain;
     private readonly IIoPool _budget;
+    private readonly ILogger? _logger;
 
+    private int _disposed;
     private long _admitted;
     private int _waiting;
     private int _waitingDeletes;
@@ -44,9 +46,12 @@ public sealed class SerialWriteLane : IDisposable
     {
         Name = name;
         _budget = budget;
+        _logger = logger;
         // Each queued item terminates normally whatever its write did (its outcome is delivered to
         // its own caller, see Run), so the drain never stops on one write's fault.
-        _drain = _queue.Concat().Subscribe(
+        // The drain lives as long as the lane: the subject holds it, and Dispose deliberately does not
+        // end it (see Dispose).
+        _queue.Concat().Subscribe(
             _ => { },
             ex => logger?.LogError(ex,
                 "[SerialWriteLane] lane {Lane} faulted; later writes on it get no verdict", name));
@@ -72,38 +77,133 @@ public sealed class SerialWriteLane : IDisposable
     public IObservable<T> Run<T>(Func<CancellationToken, Task<T>> io, bool isDelete = false)
         => Observable.Create<T>(observer =>
         {
-            // Rx's CancellationDisposable: disposing it cancels the token, idempotently.
-            var cancel = new CancellationDisposable();
-            var item = Observable.Defer(() =>
-            {
-                Interlocked.Decrement(ref _waiting);
-                if (isDelete)
-                    Interlocked.Decrement(ref _waitingDeletes);
-                // Given up while queued: nothing runs, so the lane moves straight on.
-                if (cancel.IsDisposed)
-                    return Observable.Empty<Unit>();
-                Interlocked.Increment(ref _admitted);
-                Volatile.Write(ref _headIsDelete, isDelete ? 1 : 0);
-                Volatile.Write(ref _inFlight, 1);
-                return _budget.Invoke(budgetCt => RunLinked(io, cancel.Token, budgetCt))
-                    // Deliver the outcome to THIS write's caller, and end the item normally either
-                    // way, so the next write runs after this leaf terminated — never before.
-                    .Materialize()
-                    .Do(notification => notification.Accept(observer))
-                    .Where(_ => false)
-                    .Select(_ => Unit.Default)
-                    .Finally(() =>
-                    {
-                        Volatile.Write(ref _inFlight, 0);
-                        Volatile.Write(ref _headIsDelete, 0);
-                    });
-            });
+            // 🚨 THE CALLER'S IDENTITY, captured HERE. A queued write is started by Concat from the
+            // PREVIOUS write's completion flow, so without this its leaf and its observer would run
+            // under whichever AccessContext that flow carried (none, or another caller's). The
+            // AccessContext lives in AsyncLocals, which the ExecutionContext carries.
+            var context = ExecutionContext.Capture();
+            var pending = new PendingWrite(isDelete);
+            var cancel = new CancellationTokenSource();
             Interlocked.Increment(ref _waiting);
             if (isDelete)
                 Interlocked.Increment(ref _waitingDeletes);
+
+            var item = Observable.Create<Unit>(laneObserver =>
+            {
+                IDisposable started = Disposable.Empty;
+                RunIn(context, () => started = Start(io, observer, pending, cancel, context).Subscribe(laneObserver));
+                return started;
+            });
             _queue.OnNext(item);
-            return cancel;
+
+            return Disposable.Create(() =>
+            {
+                // Given up while QUEUED: leave the live counters now, exactly once, so a queue reading
+                // never reports a write that will not run (the dequeue takes the same transition).
+                if (pending.TryLeaveQueue())
+                    LeaveQueue(isDelete);
+                // 🚨 The cancel is raised OFF the disposing thread: cancelling runs the leaf's
+                // registered callbacks (a database cancel request) synchronously, and the thread giving
+                // up may be a hub turn or a watchdog. The lane is still held until the leaf terminates.
+                TaskPoolScheduler.Default.Schedule(() => cancel.Cancel());
+            });
         });
+
+    /// <summary>
+    /// The write at its turn: skipped when given up or when the lane is disposed (the caller is
+    /// told), otherwise run on a slot of the budget with the caller's cancellation linked in, its
+    /// outcome delivered to its caller, and the lane released only once the leaf has terminated.
+    /// </summary>
+    private IObservable<Unit> Start<T>(
+        Func<CancellationToken, Task<T>> io, IObserver<T> observer, PendingWrite pending,
+        CancellationTokenSource cancel, ExecutionContext? context)
+    {
+        // Given up while queued: it already left the counters, nothing runs, the lane moves on.
+        if (!pending.TryLeaveQueue())
+            return Observable.Empty<Unit>();
+        LeaveQueue(pending.IsDelete);
+
+        // The lane was disposed (its mesh is tearing down) before this write's turn: the write never
+        // runs, and its caller is TOLD so instead of waiting for a verdict nobody sends.
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            Deliver(System.Reactive.Notification.CreateOnError<T>(new ObjectDisposedException(Name,
+                $"Write lane '{Name}' was disposed before this write's turn; the write did not run.")), observer, context);
+            return Observable.Empty<Unit>();
+        }
+
+        Interlocked.Increment(ref _admitted);
+        Volatile.Write(ref _headIsDelete, pending.IsDelete ? 1 : 0);
+        Volatile.Write(ref _inFlight, 1);
+        CancellationTokenSource? linked = null;
+        return _budget.Invoke(budgetCt =>
+            {
+                // The caller's cancellation linked into the leaf, disposed when the leaf has
+                // terminated (Finally below) — no awaited helper outside the pool.
+                linked = CancellationTokenSource.CreateLinkedTokenSource(cancel.Token, budgetCt);
+                return io(linked.Token);
+            })
+            // Deliver the outcome to THIS write's caller, and end the item normally either way, so
+            // the next write runs after this leaf terminated — never before.
+            .Materialize()
+            .Do(notification => Deliver(notification, observer, context))
+            .Where(_ => false)
+            .Select(_ => Unit.Default)
+            .Finally(() =>
+            {
+                linked?.Dispose();
+                Volatile.Write(ref _inFlight, 0);
+                Volatile.Write(ref _headIsDelete, 0);
+            });
+    }
+
+    private void LeaveQueue(bool isDelete)
+    {
+        Interlocked.Decrement(ref _waiting);
+        if (isDelete)
+            Interlocked.Decrement(ref _waitingDeletes);
+    }
+
+    private static void RunIn(ExecutionContext? context, Action action)
+    {
+        if (context is null)
+            action();
+        else
+            ExecutionContext.Run(context, static state => ((Action)state!)(), action);
+    }
+
+    /// <summary>One write's single transition out of the queue — by its turn or by its caller giving up.</summary>
+    private sealed class PendingWrite(bool isDelete)
+    {
+        private int _left;
+
+        public bool IsDelete { get; } = isDelete;
+
+        /// <summary><c>true</c> exactly once: for whichever of dequeue and give-up comes first.</summary>
+        public bool TryLeaveQueue() => Interlocked.Exchange(ref _left, 1) == 0;
+    }
+
+    /// <summary>
+    /// Hands one write's outcome to its caller. 🚨 Isolated: a caller's observer that throws (a
+    /// disposed result subject, a faulting continuation) must not become an error on the lane's
+    /// drain — that would stop the drain for good while the registry keeps handing out this lane, and
+    /// every later write to it would get no verdict. The throw is the caller's defect and is logged
+    /// as such; the lane moves on.
+    /// </summary>
+    private void Deliver<T>(System.Reactive.Notification<T> notification, IObserver<T> observer, ExecutionContext? context)
+    {
+        try
+        {
+            // Under the caller's own identity — see Run.
+            RunIn(context, () => notification.Accept(observer));
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex,
+                "[SerialWriteLane] the caller of a write on lane {Lane} threw while receiving its {Kind}; "
+                + "the lane continues with the next write", Name, notification.Kind);
+        }
+    }
 
     /// <summary>A point-in-time reading of this lane, from lock-free counters.</summary>
     public SerialWriteLaneReading Read() => new(
@@ -114,19 +214,19 @@ public sealed class SerialWriteLane : IDisposable
         Math.Max(0, Volatile.Read(ref _waitingDeletes)),
         Volatile.Read(ref _headIsDelete) == 1);
 
-    private static async Task<T> RunLinked<T>(
-        Func<CancellationToken, Task<T>> io, CancellationToken caller, CancellationToken pool)
-    {
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(caller, pool);
-        return await io(linked.Token).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public void Dispose()
-    {
-        _queue.OnCompleted();
-        _drain.Dispose();
-    }
+    /// <summary>
+    /// Disposes the lane: every write that has not started yet — queued now or subscribed later —
+    /// is answered with an <see cref="ObjectDisposedException"/> when its turn comes, instead of
+    /// being dropped; a write already running is NOT cut off and still delivers its outcome (its I/O
+    /// is a leaf of the budget pool, which the mesh drains and cancels on its own).
+    ///
+    /// <para>🚨 Deliberately neither completing the queue nor disposing the drain: completing it
+    /// would silently ignore a write subscribed a moment later, and disposing the drain would
+    /// unsubscribe the running write's delivery and every queued item — callers waiting for a
+    /// verdict that no one sends. The flag is the whole admission decision, read by each write at
+    /// its turn, so there is no window in which a write is accepted and never answered.</para>
+    /// </summary>
+    public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
 }
 
 /// <summary>
