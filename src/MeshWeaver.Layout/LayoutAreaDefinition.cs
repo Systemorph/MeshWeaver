@@ -29,8 +29,20 @@ public record LayoutAreaDefinition(string Area, string Url)
     public LayoutAreaDefinition WithImageUrl(string imageUrl) =>
         this with { ImageUrl = imageUrl };
 
-    /// <summary>Short description of the area's purpose, shown in the catalog and tooltips.</summary>
+    /// <summary>
+    /// Short description of the area's purpose, shown in the catalog and tooltips. When nothing
+    /// declares one, it is the XML-doc summary of the area's view method — filled in when the
+    /// definitions are SERVED (<c>LayoutDefinition.ObserveVisibleAreaDefinitions</c>), never when the
+    /// layout is configured, because reading a documentation file is I/O.
+    /// </summary>
     public string? Description { get; set; }
+
+    /// <summary>
+    /// The view method whose XML-doc summary is this area's description when none is declared.
+    /// Kept instead of the text so that configuring a hub's layout reads no documentation file.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal System.Reflection.MethodInfo? SummarySource { get; init; }
     /// <summary>Returns a copy with <paramref name="description"/> as the area description.</summary>
     /// <param name="description">The new description text.</param>
     public LayoutAreaDefinition WithDescription(string description) =>

@@ -84,4 +84,25 @@ internal sealed class InMemoryStaticRepoSource(
             return true;
         return ignoreRules.IsIgnored(nodePath[prefix.Length..]);
     }
+
+    /// <summary>
+    /// 🚨 The Space's own Ignore PATTERNS exclude this node (issue #7611) — not a hold, and not the
+    /// README slot a non-package repository never mirrors. The importer then prunes the node when its
+    /// manifest records that this sync imported it, so an Ignore pattern added after the first import
+    /// removes what it now excludes instead of leaving a frozen copy nobody on a one-way Space can
+    /// delete. A node the mesh minted under the pattern was never imported, so it stays.
+    /// </summary>
+    public bool IsRetiredFromMirror(string nodePath)
+    {
+        if (string.IsNullOrEmpty(nodePath)
+            || string.Equals(nodePath, partition, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var prefix = partition + "/";
+        if (!nodePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var relative = nodePath[prefix.Length..];
+        if (!ownsReadme && string.Equals(relative, "README", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return ignoreRules.IsIgnoredByPattern(relative);
+    }
 }

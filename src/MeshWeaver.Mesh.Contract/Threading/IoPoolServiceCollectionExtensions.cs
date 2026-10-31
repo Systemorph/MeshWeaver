@@ -33,6 +33,10 @@ public static class IoPoolServiceCollectionExtensions
         // DrainAll() cancel+joins them before the scope disposes / NodeType ALCs unload (the endemic
         // teardown SIGSEGV).
         services.TryAddSingleton<IPooledSubscribeScheduler, IoPoolSubscribeScheduler>();
+        // The blocking-read edge for code below this assembly — the XML-documentation reader's cold
+        // read of a documentation file runs here, never on the thread that is building a view
+        // (Doc/Architecture/XmlDocumentationReader).
+        services.TryAddSingleton<IBlockingReadScheduler, IoPoolBlockingReadScheduler>();
         // The async half of mesh teardown — resources enqueue async cleanup here from
         // their sync Dispose(); the mesh's DisposeAsync drains it before the scope dies.
         services.TryAddSingleton<AsyncDisposeQueue>();

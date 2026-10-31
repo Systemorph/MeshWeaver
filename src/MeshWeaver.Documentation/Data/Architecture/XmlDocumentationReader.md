@@ -90,11 +90,88 @@ A collectible NodeType assembly's texts are not interned: the runtime's intern p
 alive after its load context unloads. Interning shares immutable VALUES, never a cache entry, so
 no snapshot and no cached miss is visible to another mesh.
 
-**The first read is synchronous.** A cold lookup reads and parses the file on the caller's thread,
-exactly as Namotion did. It is not warmed through the IO pool: `IIoPool` lives in
-`MeshWeaver.Mesh.Contract`, which depends on the assembly the reader lives in, and a warm-up the
-synchronous description then waited for would be a blocking bridge. Moving it off the render path
-means making the description a data-bound value rather than a string read during rendering.
+**A cold read happens at the I/O edge, never while a view is built or a hub is configured**
+(#7386). The reader has two halves:
+
+| Call | Reads a file? | Use it |
+|---|---|---|
+| `Summary(member)` | yes, on the CALLER's thread, when the assembly's snapshot is cold | only where the caller already is an I/O edge, or after `WhenLoaded` has emitted |
+| `TrySummary(member, out text)` | never | to ask whether the answer is already in memory |
+| `WhenLoaded(members, io)` / `hub.WhenXmlDocsLoaded(members)` | through `io` only | before composing synchronous reads into a view or a response |
+| `ObserveSummary(member, io)` / `hub.ObserveXmlDocsSummary(member)` | through `io` only | to data-bind one summary |
+
+`WhenLoaded` is cold. When every snapshot the lookups need is in memory it emits synchronously on
+subscribe, so a warm mesh renders exactly as before. Otherwise it runs the lookups, and with them
+the cold reads, through an `IBlockingReadScheduler`, and emits once they are done. The synchronous
+`Summary` calls for the same members are then dictionary hits. The reader lives in
+`MeshWeaver.Messaging.Hub` and cannot reference `IIoPool` (which lives in `MeshWeaver.Mesh.Contract`,
+a dependent), so the edge is an abstraction in `MeshWeaver.Messaging.Contract` that `AddIoPools`
+implements on the `FileSystem` pool's blocking scheduler (`IoPoolBlockingReadScheduler`). That makes
+each read a tracked leaf that mesh teardown drains. A hub without I/O pools resolves no edge, and
+the reader then hops the work onto the task pool, so the subscribing thread still never reads.
+
+Nothing waits on a read. A view renders its structure at once and the summary binds later, which
+is the "Templates first, data later" rule in [Data Binding](/Doc/GUI/DataBinding):
+
+- **Domain views.** The Catalog and Edit pages render the type's summary as a data-bound hint line
+  (`DomainViews.DescriptionOf`). On the Data Model detail page (`RenderTypeDetails`, also used by the
+  NodeType `$Model` area) the title row renders at once. The summary and the property table bind
+  once the type's and its properties' summaries are in memory.
+- **Layout-area descriptions.** Configuring a layout records the view METHOD on the
+  `LayoutAreaDefinition` (`SummarySource`) and reads nothing. This matters because the layout is
+  built during hub initialization. The text is filled in when the definitions are served:
+  `LayoutDefinition.ObserveVisibleAreaDefinitions` backs the layout-area catalog, the `layoutAreas`
+  stream and `GetDataRequest`, `GetLayoutAreasRequest` and area autocomplete. A description that is
+  declared explicitly (`[Display(Description=…)]` or `WithDescription`) still wins.
+
+  Moving the listing off the turn exposed a second answer. Every `GetDataRequest` handler on a hub
+  sees the request, and the generic data handler (`DataExtensions.HandleGetDataRequest`) used to
+  read the slash and bare spellings `layoutAreas/` and `layoutAreas` as a data collection. Those
+  are the forms `MeshOperations.Get` sends for `@Node/layoutAreas/`. The handler answered
+  `Collections layoutAreas are not mapped to any source`. While the layout handler answered on the
+  same turn, its listing arrived first and the wrong answer went unnoticed. Once a cold read moved
+  the listing to the I/O pool, the error arrived first on every first read of a mesh. The generic
+  parse now recognises `layoutAreas` in every spelling, so both handlers answer the listing.
+  `LayoutAreaRetrievalTest` (Graph.Test) pins the colon, slash and bare forms.
+- **Schema area.** The exporter walks the type's whole property graph, which reaches documentation
+  files nobody can name in advance. So the `Schema` area renders the schema on the `FileSystem` pool
+  rather than warming a member list.
+
+`XmlDocsOffTheRenderPathTest` (Layout.Test) proves the first two. It holds the host's edge and
+checks that, with the Catalog rendered and the area list requested, no snapshot was loaded
+(`TrySummary` is `false`); before the change both were. It then releases the edge and checks that
+the served description is the view method's summary. `XmlDocsTest.TheReactiveLookup_ReadsAtTheEdge_ThenAnswersFromMemory`
+proves the reader half: nothing is read on subscribe, the read happens when the edge runs, and a
+warm lookup emits synchronously without asking the edge.
+
+- **Type listings and JSON schemas.** `GetDomainTypesRequest` and a `GetDataRequest` for
+  `DataModelReference` answer once every listed type's summary is in memory
+  (`DataExtensions.ObserveDomainTypes`). A `SchemaReference` — by request or as a workspace stream —
+  is generated on the edge (`DataExtensions.ObserveSchema`, through `hub.OnXmlDocsReadEdge(...)`),
+  because the exporter walks the whole property graph. The schema and data model are no longer
+  reducers over the store: neither depends on the data, and a reducer runs on the turn that reduces,
+  so each is a stream fed from the edge that lives until it is disposed. Query completion's
+  `ContentSchemaFacts.FromType` runs on the edge the same way.
+  Two consequences of answering later than the turn, both pinned:
+  - The stream applies the caller's stream configuration. A remote subscriber's client id arrives
+    through it, and a stream built without it emits to nobody.
+  - `GetDomainTypesRequest` answers once (a CAS'd claim), and a hub disposed while the read is still
+    queued answers `ErrorType.ShuttingDown` rather than leaving the caller to its timeout. That is the
+    same contract `GetDataRequest` keeps.
+
+  `XmlDocsOffTheRequestPathTest` (Layout.Test) covers these paths:
+  - For each of the four paths, it holds the edge and checks that no snapshot was loaded before the
+    release. Before the change none of them reached the edge at all.
+  - It subscribes to both streams remotely.
+  - It disposes the owner while a type listing is still being read.
+
+**Still synchronous, and known.** The editor form's field descriptions
+(`EditorExtensions.MapToSkinnedControl`) still call `Summary` directly. They are built into the skin
+of a synchronous public `Edit` API, and binding them needs the client renderer to bind a skin's
+`Description`, which is a change in the client repository as well. A read there loads a cold
+assembly once per mesh. `NodeTypeDataModelAreas.SnapshotModel` also generates the content type's
+schema synchronously, but only after the probe's schema stream has emitted from the edge, so the
+documentation files it needs are already in memory.
 
 **Rendering** matches what the platform has always shown (Namotion's formatting-free mode):
 `<see>`/`<seealso>` render as their text, else the `langword`, else the cref's last name segment
@@ -167,3 +244,6 @@ member shape.
 - Read docs only through the mesh's `XmlDocsReader` (`hub.XmlDocs()`). Do not add another reader, a second cache, or a `static` one.
 - Keep the read OFF hub construction: `TypeDisplayMetadata.Description` is lazy for the #613 reason
   above — the lookup still reflects over the type.
+- A view, a layout configuration or a request handler never calls `Summary` on a cold assembly:
+  compose the synchronous reads after `hub.WhenXmlDocsLoaded(...)`, or bind `hub.ObserveXmlDocsSummary(...)`.
+  `TrySummary` is the only lookup that is guaranteed not to read.

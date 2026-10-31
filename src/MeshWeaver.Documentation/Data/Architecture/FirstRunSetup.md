@@ -310,8 +310,11 @@ copy lives in this repository's string catalog (`setup.*`, `view.pending*`, `hom
    `InstanceStorageSelection` always allowed) instead of a connection string. The host's manifest
    layer resolves the name against its own configuration at the next boot. SQLite and a pasted
    connection string stay available.
-4. **The registration key is optional and says so.** `setup.identity.key.help`: empty means the
-   free plan; a key is a pre-minted coupon a registry administrator hands a customer; the
+4. **The coupon or registration key is optional and says so.** `setup.identity.key.help`: empty
+   means the free plan; a Personal or Pro coupon (an `mwr_` registration key the registry
+   administrator mints with a plan, an expiry and a usage cap) registers the instance on that plan
+   from the start, and is checked before the id is claimed, so a wrong one costs nothing; a Store
+   coupon code from an app's Subscribe page is redeemed there, after setup, not here; the
    administrator can raise the plan later without one. A registry that refuses an OPEN registration
    is told apart from one that refuses a key (`setup.registry.refusedOpen` / `refusedKey`), the
    person's answers stay filled in, and each server-side refusal is shown beside its field.

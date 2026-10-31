@@ -230,8 +230,11 @@ So these node types carry an `INodeTypeAccessRule` whose non-admin leg is the or
 | `Space` (the ROOT node only) | **Read** — only while the Space is system-owned | Update, Delete, and every child node | `SpaceAccessRule.ReadAccess` (MeshWeaver.Graph) |
 | `Thread` (a conversation, root or delegated) | **Read, Update, Comment, Thread** — observe and steer: read it, post into it, stop or redirect its round | Delete; every thread in ANOTHER person's home partition; the thread's `MainNode` and every other data node | `ThreadAccessRule` (MeshWeaver.AI, MeshWeaver.Plugins) |
 | `ThreadMessage` (a conversation's cells) | **Read**; Create and Update of the cells the admin's OWN rounds write | Delete; Update of a cell somebody else wrote; home-partition threads as above | `ThreadAccessRule` (MeshWeaver.AI, MeshWeaver.Plugins) |
+| `Feedback/Feedback` (a submission under `Feedback/_Submissions`) | **Read** — every submission; its own submitter reads it on the same rule | Create, Update, Delete; a draft in a person's home partition; every other node type | `FeedbackSubmissionAccessRule` (MeshWeaver.AI, MeshWeaver.Plugins) |
 
-**Observing and steering system agent threads (maintainer, 2026-10-04).** The conversations the platform's own agents run — the pull-request babysitter and fixer, triage, the bug-fix pool, supervisor relaunches — live in system and package partitions (for example under `Hosting/Triage/_Thread`), where no person holds a write grant. *"Make a standing rule for global admin for access … same as Claude Code"*: a platform admin must be able to open such a thread, type into it while it runs and stop or redirect its round. That is the third row above, and it is the ONLY data-shaped widening a platform admin has. Steering a round means the round's next turn runs as the admin who sent the message — exactly as it would for any other sender — so it acts with the admin's own grants, never with the agent's. A thread in a person's home partition (a partition whose root is a `User`) is that person's private conversation and is not covered. Non-CRUD permissions (`Comment`, `Thread`) reach a rule through `INodeTypePermissionRule`, which the delivery gate consults after a denial exactly as it consults `INodeTypeAccessRule` for Read/Update/Delete; and the stream-cache read gate now consults the Read rule too, so a node view, a query and a subscription answer the same question the same way. Pinned in core by `NodeTypePermissionRuleTest` and in the AI engine by `GlobalAdminThreadAccessTest`.
+**Observing and steering system agent threads (maintainer, 2026-10-04).** The conversations the platform's own agents run — the pull-request babysitter and fixer, triage, the bug-fix pool, supervisor relaunches — live in system and package partitions (for example under `Hosting/Triage/_Thread`), where no person holds a write grant. *"Make a standing rule for global admin for access … same as Claude Code"*: a platform admin must be able to open such a thread, type into it while it runs and stop or redirect its round. That is the third row above, and it is one of exactly TWO data-shaped widenings a platform admin has — the other is reading feedback submissions, below. Steering a round means the round's next turn runs as the admin who sent the message — exactly as it would for any other sender — so it acts with the admin's own grants, never with the agent's. A thread in a person's home partition (a partition whose root is a `User`) is that person's private conversation and is not covered. Non-CRUD permissions (`Comment`, `Thread`) reach a rule through `INodeTypePermissionRule`, which the delivery gate consults after a denial exactly as it consults `INodeTypeAccessRule` for Read/Update/Delete; and the stream-cache read gate now consults the Read rule too, so a node view, a query and a subscription answer the same question the same way. Pinned in core by `NodeTypePermissionRuleTest` and in the AI engine by `GlobalAdminThreadAccessTest`.
+
+**Reading feedback submissions — the submitter's own, and every one for a global admin** (policy [`global-admin-reads-feedback-submissions`](../PolicyNotProse)). A submitted feedback record is moved, as System, from the submitter's draft in their own partition to `Feedback/_Submissions/{id}`, a protected segment where no person holds a grant, and a redirect is left at the old address. Until this rule the redirect led the submitter to *"Access denied: user '…' lacks Read permission on 'Feedback/_Submissions/…'"* (and `get` answered `Not found`): the person who filed the report could not read it, and neither could the global administrator who triages it. The required behaviour: the `Feedback/Feedback` type declares `FeedbackSubmissionAccessRule`: the ordinary fold first, and only when it denies, Read is granted on a node under `Feedback/_Submissions/` to (1) the real user the STORED record's `submittedBy` names, and (2) a global administrator by `hub.IsGlobalAdmin(userId)`. It declares Read and nothing else, so Update, Delete and Create stay on the fold — a submitter cannot rewrite a record triage has annotated, and an admin cannot edit someone else's words. `submittedBy` is content the author typed; because the rule grants Read only, naming somebody else there can only show that person the author's own words, never anything of theirs. The caller must be a real user (never anonymous, public, the system or a hub principal), and a draft in a home partition is never widened. **Owed until the MeshWeaver.Plugins half is merged and live on an instance** ([Systemorph/MeshWeaver.Plugins#4789](https://github.com/Systemorph/MeshWeaver.Plugins/pull/4789)): the rule and its test, `FeedbackSubmissionAccessTest` (an outsider denied, a global admin still refused on a non-feedback node it holds no grant on). Until then a submission still answers the submitter with the refusal above.
 
 The fold itself is untouched — `GetEffectivePermissions` still answers `None` for the admin on both paths, which is what `SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest` pins: the widening comes from the rule, consulted by all three seams (`RlsNodeValidator`, the `[RequiresPermission]` delivery gate, the delete pre-flight) through `NodeTypeAccessRuleGate`, so an ordinary viewer's check is byte-for-byte what it was. A sync config carries the repo, branch and last-sync state — never a credential; that is the separate `GitHubCredential` node in the owner's own partition. Deleting the **Space** of a system-owned partition is deliberately NOT widened: a paid plugin's Space is system-owned too, and its `_Access` entitlement grants would go with it.
 
@@ -511,9 +514,12 @@ Reading per SCOPE instead multiplied that one read by the depth of the path **an
 
 🚨 **The same classification puts a `_Policy` under a satellite segment out of the fold's reach.** The policy read is a CONTENT query, so it never returns a `_Policy` whose scope lies under a configured satellite segment, such as `{partition}/_Storage/_Policy` or `{node}/_Thread/_Policy`. On Postgres that row is stored in the segment's table. In memory it is dropped like every other satellite row. The fold also reads only the id `_Policy`. Until `PolicyPlacementValidator`, both placements could be created, read back by path, and **never applied**. A `BreaksInheritance` policy at `{partition}/_Storage` left the inherited partition grant in force. The same node declared statically DID apply, because `CollectStaticPolicies` reads the static providers directly and never passes through the query. `PolicyPlacementValidator` now refuses a runtime `PartitionAccessPolicy` CREATE in either placement.
 
-**A `PartitionAccessPolicy` is create-only, and ONE guard enforces it: `PolicyCommitGuard`, at the owner's COMMIT point.** It is created as `{scope}/_Policy`. Retyping an existing node into one is unsupported by design on every route. The guard is an `IEntityCommitGuard`, consulted in the turn that applies a write, against the entity exactly as it would commit and the entity the owner holds under that key. Two places commit into an owner, and both consult it:
+**A `PartitionAccessPolicy` is create-only, and ONE guard enforces it: `PolicyCommitGuard`, at the owner's COMMIT point.** It is created as `{scope}/_Policy`. Retyping an existing node into one is unsupported by design on every route. The guard is an `IEntityCommitGuard`, consulted in the turn that applies a write, against the entity exactly as it would commit and the entity the owner holds under that key. Three places commit into an owner, and all three consult the guards through the ONE helper, `EntityCommitGuards.FirstRefusal`:
 - `ApplyMeshNodePatchInTurn`, the merge turn of a merge patch. This covers every `GetMeshNodeStream(path).Update` from another hub, `IMeshService.UpdateNode`, and the upsert's update branch.
 - `WorkspaceOperations`, the apply turn of a `DataChangeRequest`. This covers a synced write-back, an entity-reference patch, a full entity or an `EntityDeltaUpdate`, and a node carried to a hub that is not its own.
+- `MeshNodeStreamHandle.UpdateOwn`, the commit turn of an OWN write: `GetMeshNodeStream().Update` (or `Overwrite`) issued on the owning hub itself. Code that runs on the owner as a person writes this way: the `RollbackNodeRequest` handler (a client request that needs only Update), an activity script on its own hub, a layout-area action. Until this route consulted the guards, every commit-point rule was skipped on it, so a rollback or an own-hub write could commit what every routed write is refused. The writer judged is the identity the write was issued under. `AdoptPersisted`, which observes state that is already durable and writes nothing, is the one own commit the guards do not judge.
+
+A new route that commits into an owner's store must call `EntityCommitGuards.FirstRefusal` in its commit turn; a route that does not is a bypass of every rule below. Pinned by `RetypingIntoAPolicy_ThroughTheOwnersOwnStream_IsRefused`, `AScopedToken_CannotRewriteItsOwnRecord_ThroughTheOwnersOwnStream`, `ARepointThroughTheSatellitesOwnStream_IsRefused` and `RollbackMeetsTheCommitGuardsTest`.
 
 It refuses two things:
 - **A node held as another type that would commit as a policy.** This applies whatever produced the value: a literal, a string splice, a stale-base three-way merge, or a patch queued behind another that changed the type first.
@@ -1289,6 +1295,25 @@ reaches `user_effective_permissions` and `partition_access` like an assignment d
 lists the partition for the subject. A rule change re-projects every partition; a root whose type
 or content changes re-projects its own partition, but only when some rule names its type.
 
+**Both evaluators match the content filter against the SAME bytes: the root's STORED JSON.** The
+fold's root read carries the query qualifier `content:stored` (`ParsedQuery.StoredContent`): a
+provider that stores serialised JSON hands the `content` column back as a `JsonElement` instead of
+deserialising it, and the node-stream cache passes such a result through untouched instead of
+re-typing it for the caller's options. Without it the fold matched a DESERIALISED root written back
+by the current serializer, and that round trip is lossy in two directions, both reachable on rows an
+older serializer (or an untyped write) left behind (#7426):
+
+- a field ABSENT from the stored JSON whose CLR member has a non-default initializer read as that
+  initializer — the fold granted where Postgres' `content->>'field'` is NULL;
+- an explicit CLR default stored in the JSON (`"approved": false`) was omitted on the way back — the
+  fold denied where Postgres matches `'false'`.
+
+Neither direction can be repaired by re-saving the root (for a row that already lost a value, the
+stored bytes are the truth both evaluators now agree on). Pinned by `GrantRuleStoredContentTest`
+(MeshWeaver.Hosting.Test: both directions on legacy-shaped rows, plus a typed row as the negative
+control) and, for the Postgres provider honouring the qualifier, by MeshWeaver.Plugins'
+grant-rule parity test.
+
 > ⚠️ **One pre-existing difference between the evaluators applies here too.** The C# fold denies by
 > ROLE (a `Denied: Viewer` removes the Viewer role and nothing else), the SQL projection by
 > PERMISSION (a denied Viewer writes deny rows for Viewer's permissions, which also block an Editor's
@@ -1404,6 +1429,178 @@ a future "just check the claims" is a regression, not a shortcut.
 > every token already minted. Authority is read from the authority, at the point of use.
 
 Pinned by `ApiTokenCapabilityFreshnessTest` (core) and `PaywallRealGateShapeTests` (plugins).
+
+## A token's principal is bound to its writer
+
+An API token record's `UserId` is the principal every token verdict authenticates as (core
+`ApiTokenVerdict`, and the Plugins `ApiTokenService.Validate`). So no writer except System may choose
+it (`ApiTokenPrincipalBinding`):
+
+- a node that newly carries a token (a create, or a write that turns a node into one) names only the
+  WRITER, with no service identity. A service token is the one exception: it names a service object
+  id only from inside that service's own token namespace, with the matching identity path, which only
+  the platform admin surface can write;
+- a node that already carries a token keeps its principal and its service identity path. A revoke or
+  a relabel lands; a rename never does.
+
+The credential is recognised by its CONTENT, read exactly as the verdict reads it
+(`ApiTokenVerdict.ReadToken`), never by the node type, so retyping a node cannot hide a credential from
+the rule. It is enforced at both write seams: the create chain (`RlsNodeValidator`, ahead of the
+own-scope shortcut that otherwise lets a person write anything into their own partition) and the
+owner's commit point (`ApiTokenPrincipalCommitGuard`, an `IEntityCommitGuard`), which every routed
+update, merge patch, data change and own-hub write meets. Binding at the write side covers both verdicts at once.
+
+A token record or index commits only at ITS OWN hub. A data change sent to another node's hub can
+carry one, and that hub holds no predecessor under its key, so a rewrite would read as a create there
+and a service token's replaced hash would pass in the service's own namespace. Such a carried write by
+anyone but System is refused at the commit point.
+
+**The verdict binds the principal to the record's LOCATION** (`ApiTokenVerdict.IsBoundToItsLocation`).
+The write rules above cover the seams they see; several write routes do not reach them (a node cleared
+and restored, a data change reaching a cold owner, a transient confirmed straight to storage, content
+read differently by the writer and the verifier). So the verdict does not trust the record's `UserId`
+on its own: the index is written only by the platform, as System, and names the path the token was
+minted at. A person's token authenticates only from `{UserId}/…`, and a service's only from its own
+token namespace under `Admin/_ServiceIdentity`. Whatever reaches a record in a person's own partition,
+it can only ever be a credential for that person. The location is CLASSIFIED before its principal is
+read: the service namespace authenticates only a service id, never its partition's name; the
+pre-migration layout `User/{userId}/…` only its second segment; and a principal is never empty,
+System, or a multi-segment path. A legacy index that carries the record itself never authenticates
+as System.
+
+**A writer-chosen main node outside the node's ancestry does not delegate alone.** Satellite delegation
+(`SatelliteAccessRule`) authorises a satellite against its main node. When the WRITER chooses that
+pointer — on a create, or on an update that changes it — and it is not the satellite's OWNER, the
+write must also pass the path check where the node lands. The owner is the path before the satellite
+segment only when that segment holds the node directly (`Space/Doc` for `Space/Doc/_Comment/c1`);
+otherwise it is the parent, so a node under an ordinary `_` content segment or nested inside another
+satellite never borrows an owner above a scope that can break the inherited grant. A stored off-partition main
+node still governs reads. The own-main-node shortcut trusts only an ancestor main node
+(`MainNodeTrust`).
+
+**An update never repoints a satellite's main node.** The stored pointer decides who reads and writes
+the satellite and where its grants project, so a write that changed it would let its writer decide
+access: move a comment or thread under a main node they cannot write to, or point it at one whose
+grants it then borrows. Any change to `MainNode` on an update of a satellite is REFUSED, for every
+writer except System, even to a target the writer may write: this is the update half of the create
+rule, ownership derives from the path or the stored node and is never chosen. The one change allowed
+is path-derived: a never-set self-default moving to the satellite's owner, which is what the create
+and upsert normalisation writes. A satellite here is a node type governed by `SatelliteAccessRule` or
+a standard satellite type. A node that merely lives under an underscore segment (an app tile under
+`_App`) keeps a pointer its owner chose.
+
+The refusal is held at two seams, both reading `MainNodeTrust.Repoints`: the rule itself, when it is
+asked about an update with the stored node, and the owner's commit point
+(`SatelliteMainNodeCommitGuard`). The commit point is the one that matters for a routed write: a merge
+patch reaches the owning hub, whose delivery check decides from the STORED node and never sees the
+proposed pointer. An own-hub write (`UpdateOwn`, e.g. an activity script repointing its own
+activity) meets the same commit point. A commit guard cannot read or wait, so it cannot re-validate a new target, which is
+one more reason the rule refuses rather than re-checks. Pinned by `SatelliteMainNodeRepointTest`
+(a routed repoint to a locked target and to the writer's own target are both refused; an update that
+keeps the pointer lands; the rule refuses a changed pointer and allows the path-derived one).
+
+**The invariant.** For every write by anyone but System that commits a satellite (a node of a
+satellite type before the write, after it, or both), the committed `MainNode` is one of exactly two
+values:
+
+- the STORED satellite's pointer, unchanged byte for byte; or
+- EXACTLY the satellite's path-derived security owner (`MainNodeTrust.OwnerOf`), and only where nothing
+  satellite-shaped was stored: the stored pointer was never set (empty, or the node itself), or the node
+  is entering the satellite class by a retype.
+
+A satellite CARRIED in a data change to another node's hub is refused outright, because that hub holds
+no predecessor and cannot tell a create from a rewrite. A create at the satellite's own hub is the
+creation chain's decision (the landing check above). The comparison is RAW and ordinal: `""` and `"/"`
+differ (the rule falls back to the node's own path for the first and delegates the second to the root
+scope), and so do case variants, trailing slashes and `..` segments.
+
+So a writer can move a satellite's delegation only to its path-derived owner, and only when nothing
+chose it before. A pointer that differs from that owner was written by the platform (System) or by the
+create chain, and has stood unchanged since. In particular the storage owner of the first satellite
+segment, which the platform's create and upsert normalisation writes, is NOT accepted from a writer.
+For a nested satellite it sits above the security owner (`Doc` against `Doc/_Thread/t1` for
+`Doc/_Thread/t1/_Comment/c1`). A user's upsert of a nested satellite whose stored pointer is unset is
+therefore refused; the platform repairs such rows as System.
+
+**Why the owner is not simply always derived from the path.** The stored pointer is load-bearing for
+satellites that are LEGITIMATELY governed by a node other than their path owner: an activity run for
+another node, a notification addressed to a person, a user activity naming its target. It is also what
+`is:main` and the SQL grant projection (`COALESCE(main_node, namespace)`) read. Deciding access by the
+path alone would silently change who can read those satellites, in core and in every module. Holding
+the WRITE side instead (only System or the create chain chooses a pointer; a writer keeps it or sets
+the path owner) closes the same class without moving any existing decision.
+
+A module's satellite type counts too: the guard classifies through the rule set
+(`NodeTypeAccessRuleSet.IsGovernedBy<SatelliteAccessRule>`), which tests the leased rule itself rather
+than the lease wrapper `Find` returns.
+
+Pinned by `SatelliteMainNodeRepointTest.TheInvariant_HoldsForEveryRouteThatSetsAPointer`, one row per
+route that can set a pointer:
+
+- update and merge patch: keep, chosen target, the writer's own target, a stored off-ancestry pointer
+  moved to the path owner;
+- normalisation of an unset or self pointer: to the exact owner, to the outer storage owner of a nested
+  satellite, to `/`, a trailing slash, a case variant, a `..` path, an ancestor;
+- retype in with the owner, self, empty, a chosen pointer or the outer owner, and retype out;
+- carried writes, whatever they carry;
+- a create at the satellite's own hub.
+
+A row that lands must leave the pointer at the stored value or exactly the path owner. Also pinned by
+`ANestedSatelliteStoredUnset_CannotBeNormalisedToTheOuterOwner` (routed end to end) and
+`ModuleSatelliteMainNodeRepointTest` (MeshWeaver.Compiler.Pipeline.Test).
+
+**A create never trusts a caller-supplied `MainNode`.** The RLS own-scope shortcut keys on the path
+(`{userId}/…`) and, for an existing node, on its STORED main node. It used to accept the main node a
+create proposed, which let a person create anywhere — a service's token namespace in the Admin
+partition included — by naming themselves. Every platform writer that sets the main node to the user
+writes under `{userId}/…`, which the path shortcut covers.
+
+Pinned by `ApiTokenPrincipalBindingTest` (the owner of a token cannot rename its principal to System
+or to another person; a person creates a token only for themselves, whatever the node is typed as;
+the owner's relabel and their own token are the controls; a stored record authenticates only as the
+principal of its location; a person cannot write into a service token namespace by naming themselves
+as main node).
+
+## Auditing token principals
+
+A token record's `UserId` is the principal every token verdict authenticates as. The **token principal
+audit** (`TokenPrincipalAudit`, #7598) lists every token record on an instance whose principal is not
+bound to it. It is **read-only**: it lists and never revokes.
+
+**What it flags** (`TokenPrincipalFinding`):
+
+- `PrincipalOutsideLocation`: a person's token outside `{UserId}/…`, or a service's outside its own
+  token namespace (`Admin/_ServiceIdentity/{svc}/ApiToken`);
+- `PrincipalDiffersFromCreator`: a person's token whose principal is not the person who created the
+  record (records created by System, such as migrations, are not judged on this);
+- `NamesSystem`: any token naming System, a case variant included.
+
+The location test is the verdict's own (`ApiTokenVerdict.IsBoundToItsLocation`), never a copy, so the
+audit lists exactly the records the verdict would not authenticate. That includes a service namespace
+naming its partition (`Admin`), the pre-migration layout naming `User`, and a path-shaped principal.
+
+Index rows (`ApiToken/{prefix}`, which name the record they point to) are not credentials and are
+skipped. A finding names the record's path, id, label, principal and creator. The `TokenHash` field is
+never copied into the report.
+
+**How to run it.** A platform admin creates a request node in the Admin partition of the instance to
+audit. The request's own hub checks again that its creator is a platform admin, then runs the sweep as
+System and writes the result back onto the same node. Over MCP, on each instance:
+
+```
+create {"id":"audit-<date>","namespace":"Admin/_TokenAudit","name":"Token principal audit",
+        "nodeType":"TokenPrincipalAudit","content":{"$type":"TokenPrincipalAudit","reason":"<why>"}}
+get @Admin/_TokenAudit/audit-<date>
+```
+
+The `get` also activates the request's hub. Read `status` (`Running` → `Done`, or `Refused` /
+`Failed` with `error`), then the DENOMINATOR before the findings: `partitionsRead` (null means the
+store did not report it, and is never read as "all"), `tokensRead`, and `complete` / `incomplete`. A
+result whose `complete` is false is a FLOOR. The sweep reads `nodeType:ApiToken partitions:all` and,
+because a declared fan-out never enumerates the system schemas, the Admin partition on its own anchor.
+
+Pinned by `TokenPrincipalAuditTest` (a mismatching token is listed, a matching one is not, no hash in
+the report; a platform admin's request runs, an ordinary user's is refused).
 
 ## Scoped API tokens — a cap, never a grant
 

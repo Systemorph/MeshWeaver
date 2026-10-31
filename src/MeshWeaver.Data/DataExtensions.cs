@@ -14,6 +14,7 @@ using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,6 +31,9 @@ namespace MeshWeaver.Data;
 /// </summary>
 public static class DataExtensions
 {
+    /// <summary>The unified-reference prefix of a hub's layout-area listing, as callers spell it.</summary>
+    private const string LayoutAreasPrefix = "layoutAreas";
+
     /// <summary>
     /// Parses a unified path into prefix and remaining path.
     /// Supports both formats:
@@ -61,6 +65,20 @@ public static class DataExtensions
                 var remainingPath = slashIndex < path.Length - 1 ? path[(slashIndex + 1)..] : null;
                 return (potentialPrefix, remainingPath);
             }
+        }
+
+        // The layout-area LISTING in its slash and bare spellings (`layoutAreas/`, `layoutAreas`) —
+        // the forms MeshOperations.Get sends for `@Node/layoutAreas/`. Every GetDataRequest handler on
+        // a hub sees the request, the layout plugin's own handler included; read as the default `data`
+        // prefix, this handler answered "Collections layoutAreas are not mapped to any source", and
+        // that wrong answer won whenever the listing was not posted on the same turn (a cold read of
+        // the area descriptions, Doc/Architecture/XmlDocumentationReader). Matched exactly, as
+        // MeshOperations matches it, so no data collection can be mistaken for it.
+        var firstSegment = slashIndex > 0 ? path[..slashIndex] : path;
+        if (string.Equals(firstSegment, LayoutAreasPrefix, StringComparison.Ordinal))
+        {
+            var remainingPath = slashIndex > 0 && slashIndex < path.Length - 1 ? path[(slashIndex + 1)..] : null;
+            return (LayoutAreasPrefix.ToLowerInvariant(), remainingPath);
         }
 
         // No prefix - default to "data"
@@ -2698,21 +2716,6 @@ public static class DataExtensions
     /// action-block turn (which wedged SubscribeRequest). The merge lambda is a PURE, bounded
     /// transform — no IO, no nested re-entrant subscribe.</para>
     /// </summary>
-    /// <summary>
-    /// The first <see cref="MeshWeaver.Mesh.IEntityCommitGuard"/> refusal for committing
-    /// <paramref name="after"/> in place of <paramref name="before"/>, or null. Synchronous: it runs
-    /// on the commit turn.
-    /// </summary>
-    internal static string? FirstCommitRefusal(
-        IReadOnlyList<MeshWeaver.Mesh.IEntityCommitGuard> guards, string collection, object? before,
-        object after, string ownerPath, AccessContext? writer, System.Text.Json.JsonSerializerOptions options)
-    {
-        foreach (var guard in guards)
-            if (guard.Refusal(collection, before, after, ownerPath, writer, options) is { } refusal)
-                return refusal;
-        return null;
-    }
-
     private static void ApplyMeshNodePatchInTurn<T>(
         ISynchronizationStream<T> stream,
         ISynchronizationStream<EntityStore> primary,
@@ -3223,7 +3226,7 @@ public static class DataExtensions
                     // it replaces, in THIS turn — after every earlier queued write has merged, and
                     // after the owner's own merge semantics (splices, stale-base three-way merges)
                     // produced the value that would commit. Refused here, nothing commits.
-                    if (FirstCommitRefusal(commitGuards, collectionName, liveEntity, merged,
+                    if (MeshWeaver.Mesh.EntityCommitGuards.FirstRefusal(commitGuards, collectionName, liveEntity, merged,
                             hub.Address.Path, request.AccessContext, jsonOpts) is { } commitRefusal)
                     {
                         hub.NoteRequestStage(request.Id, "PATCH_COMMIT_REFUSED");
@@ -3424,8 +3427,48 @@ public static class DataExtensions
 
     private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request)
     {
-        var types = GetDomainTypes(hub);
-        hub.Post(new DomainTypesResponse(types), o => o.ResponseFor(request));
+        // The descriptions are XML-doc summaries: the answer is posted once their documentation
+        // files are in memory, read on the mesh's I/O edge — never on this handler's turn (#7386).
+        // The answer therefore outlives the turn, so it gets HandleGetDataRequest's two guarantees:
+        // ONE answer (a single CAS'd claim), and an answer even when the hub is disposed while the
+        // read is still queued — a recycle must not leave the caller waiting out its timeout.
+        var answered = 0;
+        bool TryClaim() => Interlocked.CompareExchange(ref answered, 1, 0) == 0;
+
+        // Captured on the handler's turn, while the scope is provably alive — the disposal arm runs
+        // where re-resolving the parent can throw, and the parent post is then the only route left.
+        var parentHub = hub.Configuration.ParentHub;
+        var detach = new SingleAssignmentDisposable();
+
+        var subscription = ObserveDomainTypes(hub)
+            .Take(1)
+            // Runs after the observer's terminal arm has claimed the answer (or on dispose).
+            .Finally(() =>
+            {
+                if (Volatile.Read(ref answered) != 0)
+                    detach.Dispose();
+            })
+            .Subscribe(
+                list =>
+                {
+                    if (TryClaim())
+                        hub.Post(new DomainTypesResponse(list), o => o.ResponseFor(request));
+                },
+                ex =>
+                {
+                    if (TryClaim())
+                        hub.Post(DeliveryFailure.FromException(request, ex), o => o.ResponseFor(request));
+                });
+
+        detach.Disposable = hub.RegisterForDisposalDetachable(Disposable.Create(() =>
+        {
+            subscription.Dispose();
+            if (TryClaim())
+                NackShuttingDown(hub, parentHub, request,
+                    $"GetDomainTypesRequest at '{hub.Address}': the owning hub was disposed while the type "
+                    + "descriptions were still being read — it is shutting down and never answered. "
+                    + "Retry against the fresh activation.");
+        }));
         return request.Processed();
     }
 
@@ -3931,9 +3974,17 @@ public static class DataExtensions
     /// </summary>
     private static void NackSilentRead(
         IMessageHub hub, IMessageHub? parent, IMessageDelivery<GetDataRequest> request, string reason)
+        => NackShuttingDown(hub, parent, request,
+            $"GetDataRequest({request.Message.Reference}) at '{hub.Address}': {reason}");
+
+    /// <summary>
+    /// Answers <paramref name="request"/> with an <see cref="ErrorType.ShuttingDown"/>
+    /// <see cref="DeliveryFailure"/> from a teardown path: through this hub while it can still post,
+    /// otherwise through <paramref name="parent"/> (captured while the scope was alive).
+    /// </summary>
+    private static void NackShuttingDown(
+        IMessageHub hub, IMessageHub? parent, IMessageDelivery request, string message)
     {
-        var message =
-            $"GetDataRequest({request.Message.Reference}) at '{hub.Address}': {reason}";
         // 🚨 Everything here runs on a teardown path, where this hub's ServiceProvider may
         // already be gone — resolving a logger can itself throw ObjectDisposedException. Logging
         // must never mask (or replace) the NACK it is reporting, so it gets its own guard and the
@@ -4045,7 +4096,8 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Observable for SchemaReference — synchronous schema generation.
+    /// Observable for SchemaReference — the schema is generated on the mesh's XML-doc read edge
+    /// (<see cref="ObserveSchema"/>).
     /// </summary>
     private static IObservable<GetDataResponse> GetDataResponseObservable(
         IMessageHub hub,
@@ -4056,20 +4108,19 @@ public static class DataExtensions
         if (typeName is null)
             return Observable.Return(new GetDataResponse(new SchemaInfo("", "{}"), hub.Version));
 
-        var schema = GenerateJsonSchema(hub, typeName);
-        return Observable.Return(new GetDataResponse(new SchemaInfo(typeName, schema), hub.Version));
+        return ObserveSchema(hub, typeName).Select(schema => new GetDataResponse(schema, hub.Version));
     }
 
     /// <summary>
-    /// Observable for DataModelReference — synchronous list of registered types.
+    /// Observable for DataModelReference — the registered types, once their descriptions are in
+    /// memory (<see cref="ObserveDomainTypes"/>).
     /// </summary>
     private static IObservable<GetDataResponse> GetDataResponseObservable(
         IMessageHub hub,
         DataModelReference _,
         GetDataRequest __)
     {
-        var types = GetDomainTypes(hub).ToList();
-        return Observable.Return(new GetDataResponse(types, hub.Version));
+        return ObserveDomainTypes(hub).Select(types => new GetDataResponse(types, hub.Version));
     }
 
     /// <summary>
@@ -4530,6 +4581,33 @@ public static class DataExtensions
 
         return ContentJsonSchema.Generate(typeDefinition!.Type, hub.JsonSerializerOptions, MeshWeaver.Messaging.Serialization.XmlDocsExtensions.XmlDocs(hub)).ToJsonString();
     }
+
+    /// <summary>
+    /// The JSON schema of <paramref name="typeName"/>, generated on the mesh's XML-doc read edge
+    /// (<see cref="MeshWeaver.Messaging.Serialization.XmlDocsExtensions.OnXmlDocsReadEdge{T}"/>). The
+    /// generator reads the summary of every property it walks — documentation files of assemblies
+    /// nobody can name in advance — so it never runs on a handler's or a reducer's turn (#7386).
+    /// </summary>
+    internal static IObservable<SchemaInfo> ObserveSchema(IMessageHub hub, string typeName)
+        => hub.OnXmlDocsReadEdge(ct =>
+        {
+            // A drained edge never starts a generation; once started it is ONE call into the
+            // schema exporter, whose property walk offers no step boundary to check between.
+            ct.ThrowIfCancellationRequested();
+            return new SchemaInfo(typeName, GenerateJsonSchema(hub, typeName));
+        });
+
+    /// <summary>
+    /// <see cref="GetDomainTypes"/>, emitted once every listed type's XML-doc summary is in memory:
+    /// at once when it already is, otherwise after the cold reads have run on the mesh's I/O edge
+    /// (<see cref="MeshWeaver.Messaging.Serialization.XmlDocsExtensions.WhenXmlDocsLoaded(ITypeDefinition, IMessageHub, IEnumerable{System.Reflection.MemberInfo})"/>).
+    /// </summary>
+    internal static IObservable<IReadOnlyList<TypeDescription>> ObserveDomainTypes(IMessageHub hub)
+        => Observable.Defer(() => hub.GetWorkspace().DataContext.TypeSources.Values
+            .Select(ts => ts.TypeDefinition.WhenXmlDocsLoaded(hub, [ts.TypeDefinition.Type]))
+            .Concat()
+            .ToList()
+            .Select(_ => (IReadOnlyList<TypeDescription>)GetDomainTypes(hub).ToImmutableList()));
 
     internal static IEnumerable<TypeDescription> GetDomainTypes(IMessageHub hub)
     {

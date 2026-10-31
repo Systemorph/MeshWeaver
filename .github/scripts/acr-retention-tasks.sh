@@ -194,10 +194,15 @@ cmd_verify() {
       # NEXT real drift on this task — the same failure the instance roster's stale-entry arm
       # exists for.
       if [ "$ahead" != "  " ] && [ "${ahead#* $task }" != "$ahead" ]; then
-        echo "::error::tasks.json declares recordAheadOfRegistry for '$task' and there is NO drift."
-        echo "  The record has been applied, so the declaration now excuses nothing and would"
-        echo "  excuse the next real drift on this task. Delete it from tasks.json."
-        drift=1
+        if [ "${MW_ACR_JUST_APPLIED:-}" = "1" ]; then
+          echo "  $task: the record is now APPLIED, so tasks.json's recordAheadOfRegistry for it is"
+          echo "    stale — NEXT STEP: delete it in a core pull request (a stand-alone verify reds on it)."
+        else
+          echo "::error::tasks.json declares recordAheadOfRegistry for '$task' and there is NO drift."
+          echo "  The record has been applied, so the declaration now excuses nothing and would"
+          echo "  excuse the next real drift on this task. Delete it from tasks.json."
+          drift=1
+        fi
       fi
     fi
     rm -f "$live" "${live}.diff"
@@ -367,15 +372,35 @@ cmd_apply() {
     local schedule
     schedule=$(python3 -c "import json;d=json.load(open('$RECORD/tasks.json'));print(next(t['schedule'] for t in d['tasks'] if t['name']=='$task'))")
     echo "applying $task (schedule $schedule) from $recorded"
+    # 🚨 THE SCHEDULE IS A TIMER TRIGGER, NOT A TASK PROPERTY. `az acr task update` has no
+    # `--schedule` (only `az acr task create` does, as a shortcut that creates the trigger), so the
+    # first governed apply died `unrecognized arguments: --schedule 0 3 * * *` before it changed
+    # anything (MeshWeaver#3438, Ops/Actions/registry-retention-apply-3438, Memex run 40555776172).
+    # The definition goes through `task update --file`; the schedule through `task timer`, on the
+    # trigger the task already carries — or a new one when it carries none.
     az acr task update --registry "$REGISTRY" --name "$task" \
-      --file "$recorded" --schedule "$schedule" -o none || return 1
+      --file "$recorded" -o none || return 1
+    local timer
+    timer=$(az acr task show --registry "$REGISTRY" --name "$task" \
+              --query "trigger.timerTriggers[0].name" -o tsv) || return 1
+    if [ -n "$timer" ]; then
+      az acr task timer update --registry "$REGISTRY" --name "$task" \
+        --timer-name "$timer" --schedule "$schedule" -o none || return 1
+    else
+      az acr task timer add --registry "$REGISTRY" --name "$task" \
+        --timer-name "t1" --schedule "$schedule" -o none || return 1
+    fi
     local status
     status=$(python3 -c "import json;d=json.load(open('$RECORD/tasks.json'));print(next(t['status'] for t in d['tasks'] if t['name']=='$task'))")
     az acr task update --registry "$REGISTRY" --name "$task" \
       --status "$status" -o none || return 1
   done
   echo "applied; re-verifying:"
-  cmd_verify
+  # 🚨 `apply` IS what makes a `recordAheadOfRegistry` declaration stale, so its own re-verify must
+  # not read that as drift: the governed apply that closed the gap would otherwise report FAILED
+  # after changing the registry exactly as approved. It is still printed, as the next step to take;
+  # a stand-alone `verify` keeps refusing it.
+  MW_ACR_JUST_APPLIED=1 cmd_verify
 }
 
 case "${1:-}" in

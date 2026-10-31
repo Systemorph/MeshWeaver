@@ -212,7 +212,7 @@ the departing types, and which of the three answers each of them gets.
 | `Mesh.Operations` | 4 726 | **yes** | PluginTester (Portal.Shared and LocalMesh consume it from plugins) | **stays** |
 | `Testcontainers` | 385 | no | nothing: its two consumers (`Memex.Portal.Shared.Test`, `MeshWeaver.Testcontainers.Test`) were already in plugins | moved out — free |
 | `Hosting.AspNetCore` | 3 970 | no | a satellite's compiled module (the endpoint hook); seven Plugins modules' published bytes (`PortalApplication` and three more) | **split** — the host-only half of `Portal/` moved out (see below); the rest stays |
-| `Markdown.Export.Contract` | 355 | no | `PortalApplication`, which stays | **stays** |
+| `Markdown.Export.Contract` | 355 | no | one `AddMarkdownExportTypes()` call in `PortalApplication`, which moved to the contract's owner | moved out — see below |
 
 Everything not listed is kernel: messaging, data, layout, the mesh contract, hosting, the compiler
 and NuGet resolution, packaging.
@@ -236,8 +236,9 @@ That is why `Hosting.AspNetCore` was split rather than moved (see "Splitting `Ho
 below): the hook (`MeshEndpointProviderAttribute`, `ModuleEndpointDataSource`, the endpoint and static-asset
 extensions) is a platform extension point, and `Portal/` is host code. That split changes which
 assembly declares public types, so it needs type forwarders and is a design change, not a move.
-`Markdown.Export.Contract` is pinned by `Hosting.AspNetCore` alone (`PortalApplication`), so it waits
-with it. 🚨 **Before calling any move free, grep the satellites' `.csproj` files for
+`Markdown.Export.Contract` was pinned by `Hosting.AspNetCore` alone, through one type-registration
+call in `PortalApplication`. It did not have to wait for that split: the call moved to the
+contract's owner and the contract followed (see "Moving `Markdown.Export.Contract`" below). 🚨 **Before calling any move free, grep the satellites' `.csproj` files for
 `$(MeshWeaverRoot)/src/<Project>`**, not only core's.
 
 ### The `ProjectReference` graph lies about all of them
@@ -280,8 +281,7 @@ holds into `MeshWeaver.Hosting.AspNetCore` were read from the metadata:
 | `Portal.UserIdentityCache`, `Portal.UserIdentityLookup` | Mail.MicrosoftGraph |
 
 Those types stay, together with what their public signatures name (`ICircuitContextAccessor`,
-`UserDirectoryReading`, `PortalErrorReporting`) and the one package `PortalApplication` needs,
-`MeshWeaver.Markdown.Export.Contract`. The text search for the namespace finds more. Courses and Mcp
+`UserDirectoryReading`, `PortalErrorReporting`). The text search for the namespace finds more. Courses and Mcp
 mention `UserContextMiddleware` in comments, for instance. But a comment is not a `TypeRef`, so a text
 search over-counts.
 
@@ -315,6 +315,39 @@ new namespace to any switch.**
 today, plus a source search of every Systemorph repository for the namespace (only
 MeshWeaver.SocialMedia uses it, and only the endpoint hook). A module that some other estate built and
 published from a private fork would not be seen.
+
+### Moving `Markdown.Export.Contract`: the registration goes where the contract goes
+
+The document-export wire contract (`ExportDocumentRequest`/`Response`, `DocumentExportOptions`,
+`ExportFormat`, `ExportFidelity`, `RenderedDocument`, `CorporateIdentity` and
+`AddMarkdownExportTypes()`) is a SOURCE move to `MeshWeaver.Plugins/src/MeshWeaver.Markdown.Export.Contract`,
+beside the engine that implements it; the assembly and namespace names are unchanged. Its only core
+consumer was `PortalApplication.DefaultPortalConfig`, which called `AddMarkdownExportTypes()` on every
+portal hub — no `PortalApplication` signature names a contract type, so no published module binds
+the contract THROUGH `Hosting.AspNetCore`.
+
+The registration was the hard part, and it moved to `MeshWeaver.Blazor` (`BlazorViewRegistry.AddBlazor`),
+which already referenced the contract and already registered the types on the mesh hub. That covers
+every hub that exchanges these messages:
+
+- **the mesh hub** — `MeshBuilder.AddBlazor` applies `AddBlazor` to it, as before;
+- **every portal hub** — the same `AddBlazor` now appends the registration to the layout client's
+  `PortalConfiguration`, which `PortalApplication` applies to each circuit's hub. So the portal hub
+  carries the types on its OWN registry exactly as before, and would still resolve them through its
+  parent chain without that;
+- **the node hubs that handle an export** — the engine's `ExportDocumentHandler` registers them, as
+  before.
+
+`PortalApplication` is constructed only by the Blazor host (`MeshBuilder.AddBlazor` registers it), so
+no host can build a portal hub without that layout-client configuration. The React, React Native and
+portal-next clients post the literal discriminator `"ExportDocumentRequest"`, keyed by type NAME, so
+they are unaffected.
+
+`ExportDocumentControl` stays in core's `MeshWeaver.Layout` with every other `UiControl`; only its
+registration lives in the contract. The contract still ships in the portal image, through
+`MeshWeaver.Blazor`, so MeshWeaver.Plugins lists it in `src/platform-shipped.txt` and the Export
+bundle carries no second copy. It referenced no package, so no `PackageVersion` left core with it.
+Pair: Systemorph/MeshWeaver.Plugins#4724 (add) with this repository's delete.
 
 ## Feature folders inside content-surface projects
 
@@ -381,6 +414,58 @@ addresses refused). Its two callers are both published plugin bytes (the OgCard 
 `Memex.Portal.Shared` in the image), so the move would need answer 2 of the ladder for each, for
 668 lines. Reconsider it when another carve out of `MeshWeaver.Graph` is sequencing the same
 republish anyway.
+
+### Why the Deployment record stays
+
+`src/MeshWeaver.Deployment.Contract` holds the Deployment record (`DeploymentContent`, its fluent
+builder, the configuration binding and the portal-config derivation). It is in the content surface
+because `MeshWeaver.PluginCatalog` references it, so that the in-mesh Hosting sources compile against
+it. Its consumers are all outside core. A move into the Hosting package's module
+(`MeshWeaver.SelfUpdate.Aks`) was built end to end, following MailCopy's order, and then **rejected
+by the maintainer**. The record stays here.
+
+**What was built** (Systemorph/MeshWeaver.Plugins#4740, closed):
+
+- a new namespace, `MeshWeaver.Hosting.Deployment`, so the module copy and core's still-exported
+  `MeshWeaver.Deployment` could coexist;
+- the files compiled into the module's own dll. An in-mesh compile composes an installed module by
+  that entry assembly alone (`CompileReferences.ComposeWithModules`), so a library shipped beside it
+  would have been invisible to the Hosting sources;
+- a second, dependency-free compilation for the Aspire package, and every Hosting source switched;
+- `MeshWeaver.SelfUpdate.Aks` added to the Plugins CI module lists (`MW_INMESH_MODULES`, the gate's
+  and publish-bake's module artifacts, the build host's stage requirements). Before, no Hosting source
+  bound the module, so CI never composed it.
+
+**What it measured:**
+
+- **The bake's compile passed.** 166 of 166 NodeTypes compiled with the module composed into the
+  reference set, and a local compile of the 48 Hosting types was clean.
+- **The mesh lane's runtime compile failed on 24 Hosting types.** The gate's mesh WITHDREW the
+  module at boot: `IncompatibleModule ... Cannot build 'AcrTagLister' ... 'SelfUpdateOptions options'
+  is not registered`. A module's shared instances are built eagerly, and one constructor that cannot
+  be resolved withdraws the whole module. A withdrawn module contributes nothing to the compile, so
+  every Hosting type that names the record failed `CS0234` on `MeshWeaver.Hosting.Deployment`. Content
+  that binds another module in the same lane (`Collaboration/Review` against
+  `MeshWeaver.Markdown.Collaboration`) compiled, because that module installed.
+
+**Why it stays.** The failure was fixable, and a fallback registration made the module buildable on
+that host. But it showed what the home costs. Today the Hosting package's content depends on a
+platform type that is present on every host. In the module, it would depend on its module INSTALLING
+on that host. Any reason a module is withdrawn (a constructor dependency, a version skew against the
+image) would then take down every Hosting NodeType, where today it costs only the module's features.
+For the fleet-operations package that is a new failure mode, and it is the one place that new
+failure mode must not be added.
+
+**Two things this established, which hold beyond this record:**
+
+1. **A package's module reaches the in-mesh compile only once it has INSTALLED.** Being composed
+   into the bake's reference set is not enough. The runtime compile reads the installed-module set,
+   which leaves out a withdrawn module, so a green bake can sit beside a red mesh lane for the same
+   content.
+2. **`MeshWeaver.SelfUpdate.Aks` has a hidden dependency on the portal registering
+   `SelfUpdateOptions`.** Only `Memex.Portal.Shared`'s `AddSelfUpdate` registers it, and
+   `AcrTagLister` and `KubernetesDeploymentUpdater` take it. On a host that does not compose the
+   self-update poller, the module is withdrawn.
 
 ### MailCopy: moved into the Mail module
 
@@ -773,7 +858,7 @@ into the control instance's inbox, and memex's fan-out.
 | `deploy/CHANGE-PROPAGATION.md` | the platform's own delivery cost model | stays: it measures core's CI/CD and the bake tax, and `Directory.Build.props` cites it as the cost/benefit record of the framework-identity stamp. It belongs in the doc tree rather than `deploy/` — a follow-up, not a move |
 | `edge-images.yml`, `dockerhub-mirror.yml` | build (images the product or its CI runs) | stays |
 | `build-follow.yml`, `build-host-publication.yml`, `build-follow.py`, `build-executor.py`, `build-artifacts-fetch.py`, `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py`, `node-repo-scope.py`, `ci-artifact-store.py` | build (the CI side of a host run; helpers the runner image READS at the set's commit) | stays |
-| `src/MeshWeaver.Deployment.Contract` (`BuildHostsBlock`, `BuildHostSetKeys`, `BuildHostRetention`, `CoreTestsDigest`) | contract | stays: the receivers in MeshWeaver.Plugins and the records compile against it |
+| `src/MeshWeaver.Deployment.Contract` (`BuildHostsBlock`, `BuildHostSetKeys`, `BuildHostRetention`, `CoreTestsDigest`) | contract | **stays** (tried, measured, decided): the receivers in MeshWeaver.Plugins and the records compile against it, and the module home makes every Hosting NodeType depend on a module installing — see "Why the Deployment record stays" |
 
 🚨 **The runner image is two repositories' bytes, like the operator's.** The runner is
 MeshWeaver.Deploy's; its helpers and `meshweaver-plugin-build` are core's, fetched BY COMMIT inside

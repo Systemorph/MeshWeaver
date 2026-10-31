@@ -119,6 +119,44 @@ public static class PrebuiltAssemblySeeder
             ("framework", LiveFrameworkMvid.ToString()), ("arch", ReleaseArchitecture.Live.ToString()))];
     }
 
+    /// <summary>The keyed form of <see cref="DeclaredModuleWithoutInstallRecordParkReason"/> (#7336).</summary>
+    /// <param name="nodeTypePath">The refused NodeType.</param>
+    /// <param name="moduleVersion">The module version the partition root declares.</param>
+    public static ImmutableList<KeyedText> DeclaredModuleWithoutInstallRecordParkText(string nodeTypePath, string moduleVersion)
+    {
+        var slash = nodeTypePath.IndexOf('/');
+        var partition = slash > 0 ? nodeTypePath[..slash] : nodeTypePath;
+        return [KeyedText.Of("compile.refusal.declaredModuleNoInstallRecord",
+            ("path", nodeTypePath), ("partition", partition), ("version", moduleVersion),
+            ("framework", LiveFrameworkMvid.ToString()), ("arch", ReleaseArchitecture.Live.ToString()))];
+    }
+
+    /// <summary>
+    /// The NAMED refusal the compile watcher parks a NodeType with when its partition root DECLARES a
+    /// module version (<see cref="NodeTypeDefinition.CurrentModuleVersion"/>), the partition tracks no
+    /// source on this mesh, no prebuilt bundle for this framework identity names the type, and no
+    /// install record (<c>Plugins/{id}</c>) says a package was installed into the partition
+    /// (MeshWeaver#7336). Such a partition is a module's leftover copy — a removal that did not
+    /// finish, or an install whose record is gone — and compiling it would serve old code as if it
+    /// were current. A registry-installed package HAS a record and keeps compiling locally. Pure.
+    /// </summary>
+    /// <param name="nodeTypePath">The refused NodeType.</param>
+    /// <param name="moduleVersion">The module version the partition root declares.</param>
+    public static string DeclaredModuleWithoutInstallRecordParkReason(string nodeTypePath, string moduleVersion)
+    {
+        var slash = nodeTypePath.IndexOf('/');
+        var partition = slash > 0 ? nodeTypePath[..slash] : nodeTypePath;
+        return $"Module content without an install record: partition '{partition}' declares module "
+            + $"version {moduleVersion}, so NodeType '{nodeTypePath}' is a module's content, but the "
+            + $"partition tracks no source on this mesh (no configured sync source), no prebuilt bundle "
+            + $"for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} names this type, and no "
+            + $"install record (Plugins/…) names '{partition}'. This is a module's leftover copy, and "
+            + "this mesh does not compile it — a local build would serve old code as if it were current. "
+            + $"Fix: install the package into '{partition}', add a sync source for it (Partition Sync "
+            + "administration), or finish removing the partition; then request a release to retry "
+            + "(MeshWeaver#7336).";
+    }
+
     /// <summary>
     /// The NAMED refusal the compile watcher parks a NodeType of UNKNOWN module membership with
     /// (MeshWeaver#6930): it never adopted a bundle, its partition tracks no source, and the

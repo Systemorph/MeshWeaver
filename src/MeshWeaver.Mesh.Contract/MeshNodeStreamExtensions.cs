@@ -1729,6 +1729,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // turn (a DI touch from a turn that can run at teardown throws). See the #6673 gate below.
             var versionGuard = _workspace.Hub.ServiceProvider
                 .GetService<MeshWeaver.Mesh.Services.RecentlyDeletedRegistry>();
+            // 🚨 THE COMMIT POINT for an OWN write — the same IEntityCommitGuards the merge patch and
+            // the data-change apply ask. Before this, an own write committed without them, so every
+            // rule judged at the commit point (policy create-only, token-record and token-principal
+            // rules, …) was skipped by any code that wrote through the owner's own stream as a person:
+            // a rollback request, an activity script on its own hub, a layout-area action. Resolved
+            // here for the same reason as the version guard above.
+            var commitGuards = adoptPersisted
+                ? []
+                : _workspace.Hub.ServiceProvider.GetServices<MeshWeaver.Mesh.IEntityCommitGuard>().ToArray();
 
             // 🚨 Single-emit guard shared by the post-write stream echo AND the no-op
             // short-circuit below. Without it a no-op write would either hang (echo never
@@ -1954,6 +1963,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             {
                                 Version = MeshNode.NextVersion(Math.Max(current.Version, updated.Version))
                             };
+                            // 🚨 THE COMMIT POINT (IEntityCommitGuard): the node exactly as it would
+                            // commit, against the one it replaces, judged as the writer whose identity
+                            // the write was issued under. Refused, nothing commits and the writer hears
+                            // the refusal. Never for an adoption, which observes state already durable.
+                            if (MeshWeaver.Mesh.EntityCommitGuards.FirstRefusal(commitGuards, nameof(MeshNode),
+                                    current, updated, _workspace.Hub.Address.Path, auditContext, _jsonOptions)
+                                is { } commitRefusal)
+                                throw new MeshNodeStreamException(new MeshNodeError(
+                                    MeshNodeErrorCode.Validation, current.Path, commitRefusal));
                         }
                         // Stamp BEFORE the commit — the echo subscription above only emits
                         // once it can see this write's Version on the target node.
@@ -3824,13 +3842,29 @@ public static class MeshNodeStreamExtensions
                 // "owner answered, reply lost" indistinguishable. HostedHubCreation.Never is a pure
                 // probe — a dictionary lookup that must NEVER activate the hub as a side effect of
                 // diagnosing it.
+                //
+                // 🚨 Looked up on the MESH hub, never on the caller's hub (#7395). A per-node hub is a
+                // hosted hub of the mesh ROOT (MessageHubGrain and MeshExtensions both create it
+                // there), while the caller is a sibling — the reads hub, a NodeType hub, a session
+                // hub — whose own hosted collection never holds it. Asking the caller therefore
+                // answered "NO LOCAL HUB" even with the owner's activation (dying or successor)
+                // sitting on this very pod, so the reading could not tell the two apart.
+                // The activation token and IsShuttingDown are printed beside the owner's state for
+                // the same question: the token is the one a ShuttingDown NACK carries, so a target
+                // that is STILL the refusing activation (shutting down, same token) is the dying
+                // hub holding the re-probe. A successor with a new token says only that the address
+                // reactivated: at RunLevel=Starting it is still initializing (the re-probe may be
+                // deferred behind its gates), while at Started it is up, so slow activation does
+                // not explain the silence and its queue / pending callbacks must be read.
                 string targetState;
                 try
                 {
                     targetState = string.Equals(hub.Address.ToString(), path, StringComparison.Ordinal)
                         ? "Target: this hub itself."
-                        : hub.GetHostedHub(new Address(path), HostedHubCreation.Never) is { } owner
-                            ? $"Target: {owner.GetPendingRequestDiagnostics()}"
+                        : hub.GetMeshHub().GetHostedHub(new Address(path), HostedHubCreation.Never) is { } owner
+                            ? $"Target: {owner.GetPendingRequestDiagnostics()} "
+                              + $"IsShuttingDown={owner.IsShuttingDown} "
+                              + $"{ShutdownNack.FormatActivationTag(owner)}"
                             : $"Target: NO LOCAL HUB at '{path}' — it never activated here (or is owned "
                               + "by another silo), so no reply was ever going to be produced.";
                 }

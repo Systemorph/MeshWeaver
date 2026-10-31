@@ -197,12 +197,7 @@ public class ObjectPolymorphicConverter(
                             cleanedElement, typeInfo.Type, options)
                         : JsonElementNormalizer.Deserialize(cleanedElement, typeInfo!.Type, options))!;
                 }
-                catch (Exception ex) when (
-                    options.UnmappedMemberHandling != JsonUnmappedMemberHandling.Disallow
-                    && (ex is JsonException
-                        or NotSupportedException
-                        or InvalidOperationException
-                        or ArgumentException))
+                catch (Exception ex) when (JsonElementNormalizer.KeepsRawJson(ex, options))
                 {
                     // Registered type but the stored JSON no longer fits it. Don't throw
                     // (a throw faults the node read → wedged grain); preserve the raw JSON
@@ -312,12 +307,7 @@ public class ObjectPolymorphicConverter(
             result = JsonSerializer.Deserialize(ref reader, typeInfo!.Type, options)!;
             return true;
         }
-        catch (Exception ex) when (
-            options.UnmappedMemberHandling != JsonUnmappedMemberHandling.Disallow
-            && (ex is JsonException
-                or NotSupportedException
-                or InvalidOperationException
-                or ArgumentException))
+        catch (Exception ex) when (JsonElementNormalizer.KeepsRawJson(ex, options))
         {
             // Same contract as the general path: a registered type whose stored JSON no longer fits
             // is preserved as raw JSON (a throw faults the node read → wedged grain), logged loud.

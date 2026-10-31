@@ -54,7 +54,7 @@ name: Node repo review answered (reusable)
 #     pull_request_review:
 #       types: [submitted, dismissed]
 #     pull_request_review_comment:
-#       types: [created, deleted]
+#       types: [deleted]          # NOT `created` — see "ONE RUN PER REPLY" below
 #   permissions:
 #     contents: read
 #     pull-requests: read
@@ -74,6 +74,26 @@ name: Node repo review answered (reusable)
 #         actions: write     # the `refresh` job only — see "THE SELF-REFRESH" below
 #       with:
 #         scripts-ref: <the SAME 40-char core sha>
+#
+# 🚨 ONE RUN PER REPLY (MeshWeaver#7187). A reply to a finding raises BOTH `pull_request_review:
+# submitted` and `pull_request_review_comment: created`, in the same second — every review comment
+# belongs to a review. Listening to both judged every reply twice (each judgement spends REST calls on
+# the caller's 1,000/hour `github.token` budget), so a burst of 27 replies on core #7180 started ~60
+# runs and the installation's budget ran out. Measured on core 2026-10-30: 232 of 232 comment runs had
+# a same-head review run within 15 s. So the caller listens to `created` NOT AT ALL; `deleted` stays,
+# because a reply going raises no review event and can make a thread unanswered again. The predicate's
+# self-test asserts this contract and core's caller (`trigger_contract_failures`).
+#
+# ⏳ OPT-IN: PENDING WHILE ANSWERING (policy review-pending-while-answering). With the default empty
+# `verdict-check-run` the lane behaves exactly as before. To have the context read PENDING (not red)
+# while threads await answers, the caller changes three things together, and its roster row lands in
+# core first (as `pending:`):
+#       schedule:                               # under `on:` — the sweep that re-judges pending verdicts
+#         - cron: "4,19,34,49 * * * *"
+#       permissions: … checks: write …          # on the `uses:` job (the verdict check-run is written)
+#       with:
+#         verdict-check-run: review-answered / Automatic review answered   # EXACTLY as protection lists it
+# Core opts its own `lane` job in, so the path is exercised on live pull requests there first.
 #
 # 🛡️ What the caller must NOT add (each is a skip-trapdoor — a skipped required context counts as
 # SATISFIED under both classic protection and rulesets):
@@ -142,10 +162,27 @@ on:
         required: false
         type: number
         default: 60
+      verdict-check-run:
+        description: >-
+          OPT-IN (policy review-pending-while-answering). The caller's REQUIRED context name, exactly as
+          branch protection lists it (e.g. `review-answered / Automatic review answered`). When set, a
+          same-repository, non-Dependabot pull request's verdict is written through the Checks API as ONE
+          check-run of that name per head — PENDING (in_progress, still blocking) while threads await
+          answers or the head awaits its review inside the deadlines (policy review-answer-deadline),
+          success when answered, failure past a deadline or when unmeasured — and the judging job is
+          renamed so its own check-run never carries the name. The caller must then ALSO grant
+          `checks: write` on its `uses:` job and add a `schedule:` trigger (the sweep that re-judges a
+          pending verdict). Empty (the default): exactly the old red/green, unchanged.
+        required: false
+        type: string
+        default: ""
 
 jobs:
   answered:
-    name: Automatic review answered
+    # ⏳ The shape is chosen by NAME, never by skipping (a skipped required context counts as satisfied):
+    # opted in (`verdict-check-run`) and judging a same-repository, non-Dependabot pull request or the sweep,
+    # this job is the verdict WRITER and its own check-run must not carry the required name.
+    name: ${{ (inputs.verdict-check-run != '' && (github.event_name == 'schedule' || (github.event_name != 'merge_group' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && 'Review answered — verdict writer' || 'Automatic review answered' }}
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     # 30 = the 15-minute bounded wait for the review + the 3-minute settle cap + the 5-minute API outage
     # budget (MW_API_OUTAGE_WAIT_MINUTES, MeshWeaver#7187) + headroom for the fetch and the reads.
@@ -159,15 +196,20 @@ jobs:
     # workflow does — which is why the context is made REQUIRED in step 3, not trusted to exist.)
     # `checks: read` — the head's `internal-review` check runs, read for the reviewer-unavailable
     # degradation on every evaluation (a PRIVATE caller's token cannot list them without it).
-    permissions:
-      contents: read
-      pull-requests: read
-      issues: read
-      checks: read
+    #
+    # 🚨 NO `permissions:` BLOCK HERE, ON PURPOSE (policy review-pending-while-answering). The verdict writer
+    # needs `checks: write`, and a called job's `permissions:` is a HARD requirement on every caller: writing
+    # `checks: write` here would startup_fail every caller that has not granted it — five of six call this lane
+    # at `@main` (the #3933 outage shape, .github/lane-caller-grants.yml). Without a block the job holds exactly
+    # what its caller grants on the `uses:` job, recorded per caller in that roster: `contents`,
+    # `pull-requests`, `issues` and `checks` at `read` for a caller that has not opted in (plus the `actions:
+    # write` its `refresh` job needs), and `checks: write` for one that has.
     # When the GREEN verdict was taken — the `refresh` job re-runs only a read run that STARTED
     # before it (one that started later judged a state no older than this one).
     outputs:
       evaluated-at: ${{ steps.verdict-time.outputs.at }}
+      # The writer's reading: success | pending | failure (empty in the job-shaped check).
+      verdict-state: ${{ steps.judge.outputs.verdict-state }}
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
@@ -206,10 +248,16 @@ jobs:
           QUEUE_REF: ${{ github.event.merge_group.head_ref }}
           WAIT_MINUTES: ${{ inputs.wait-for-review-minutes }}
           SETTLE_SECONDS: ${{ inputs.settle-replies-seconds }}
+          VERDICT_CHECK_RUN: ${{ (inputs.verdict-check-run != '' && (github.event_name == 'schedule' || (github.event_name != 'merge_group' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'))) && inputs.verdict-check-run || '' }}
           MW_API_OUTAGE_WAIT_MINUTES: "5"
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "merge_group" ]; then
+          if [ -n "${VERDICT_CHECK_RUN:-}" ] && [ "$EVENT_NAME" = "schedule" ]; then
+            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --verdict-sweep --verdict-check-run "$VERDICT_CHECK_RUN"
+          elif [ -n "${VERDICT_CHECK_RUN:-}" ]; then
+            # The writer: judged once, no review/settle wait (a pending verdict is not red; the sweep re-judges it).
+            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --pr "$PR" --verdict-check-run "$VERDICT_CHECK_RUN"
+          elif [ "$EVENT_NAME" = "merge_group" ]; then
             python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --merge-group-ref "$QUEUE_REF" --wait-for-review "$WAIT_MINUTES" --settle-replies "$SETTLE_SECONDS"
           elif [ -n "${PR:-}" ]; then
             python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --pr "$PR" --wait-for-review "$WAIT_MINUTES" --settle-replies "$SETTLE_SECONDS"
@@ -286,9 +334,16 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           RUN_ID: ${{ github.run_id }}
           EVALUATED_AT: ${{ needs.answered.outputs.evaluated-at }}
+          VERDICT_STATE: ${{ needs.answered.outputs.verdict-state }}
           MW_API_OUTAGE_WAIT_MINUTES: "5"
         run: |
           set -euo pipefail
+          # The verdict writer passes the job on PENDING too (pending is not red). Nothing is refreshed then: a
+          # pending verdict is not GREEN, and the writer's own check-run is the one every later event updates.
+          if [ -n "${VERDICT_STATE:-}" ] && [ "$VERDICT_STATE" != "success" ]; then
+            echo "  verdict ${VERDICT_STATE} (the writer's check-run carries it) — nothing to refresh until it is GREEN"
+            exit 0
+          fi
           python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --refresh-read-run \
             --event "$EVENT_NAME" --pr "${PR:-}" --run-id "$RUN_ID" --evaluated-at "$EVALUATED_AT"
 

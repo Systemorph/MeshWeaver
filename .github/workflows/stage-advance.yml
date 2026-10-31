@@ -18,8 +18,11 @@ name: Stage advance (review landed → start the suites)
 on:
   check_run:
     types: [completed]
-  pull_request_review_comment:
-    types: [created]
+  # 🚨 NOT `pull_request_review_comment` (MeshWeaver#7187; the lane header carries the rule, and
+  # MeshWeaver.Plugins#3101 dropped it there). A reply raises `pull_request_review: submitted` in the
+  # same second, so the comment trigger ran this listener twice per reply — 232 of 232 core comment
+  # runs of `Review answered` on 2026-10-30 had a same-head review run within 15 s.
+  # check-review-answered.py --self-test refuses the trigger here.
   pull_request_review:
     types: [submitted]
   schedule:
@@ -50,7 +53,7 @@ jobs:
       scripts-ref: ${{ github.sha }}
   on-answer:
     if: >-
-      (github.event_name == 'pull_request_review_comment' || github.event_name == 'pull_request_review')
+      github.event_name == 'pull_request_review'
       && github.event.pull_request.head.repo.fork != true
     uses: ./.github/workflows/node-repo-stage-advance.yml
     with:

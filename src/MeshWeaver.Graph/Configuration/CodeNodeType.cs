@@ -387,9 +387,14 @@ public static class CodeNodeType
                                 // of silence — a healthy cell computing past it is still running, and
                                 // the kernel will settle its Activity when it ends. Failing it here
                                 // would mark a live run Failed (and race the kernel's own Complete).
-                                // What a timeout CAN say — nothing came back — the Activity already
-                                // says by staying Running; the delivery faults above it (DeliveryFailure,
-                                // NotFound) and a failed reply are the verdicts this path writes.
+                                // What a timeout CAN say — nothing came back YET — it states as a
+                                // FACT on the Activity (ReplyOverdueSince, MarkAwaitingKernel), and
+                                // the Activity's OWNER turns it into the keyed notice only while the
+                                // run is still Running (KernelReplyOverdue): the run is visibly
+                                // waiting instead of silently Running (#7362), a late reply still
+                                // settles it normally, and a notice never outlives the kernel's answer.
+                                // The delivery faults (DeliveryFailure, NotFound) and a failed reply
+                                // are the verdicts this path writes.
                                 hub.Observe<SubmitCodeResponse>(submit, o => o.WithTarget(submitTarget))
                                     .Take(1)
                                     .Subscribe(
@@ -407,11 +412,14 @@ public static class CodeNodeType
                                         ex =>
                                         {
                                             if (ex is TimeoutException)
+                                            {
                                                 logger?.LogInformation(
                                                     "CodeNodeType: no reply for C# run {Activity} within the request "
                                                     + "budget — the run is still the kernel's; its Activity stays "
                                                     + "authoritative and is settled when the script ends",
                                                     activityPath);
+                                                MarkAwaitingKernel(hub, activityPath);
+                                            }
                                             else
                                                 FailActivity(hub, activityPath,
                                                     RunFailed("C#", $"{ex.GetType().Name}: {ex.Message}"), ex);
@@ -593,6 +601,39 @@ public static class CodeNodeType
                 .WithKey("activity.codeRun.failedNoReason", ("language", language))
             : new LogMessage($"{language} run failed: {reason}", LogLevel.Error)
                 .WithKey("activity.codeRun.failed", ("language", language), ("reason", reason));
+
+    /// <summary>
+    /// States on a run's Activity that the kernel has not answered within this hub's request budget
+    /// (#7362). This hub does NOT own the Activity, so its write runs on a mirror and ships a merge
+    /// patch: it therefore writes only a FACT, <see cref="ActivityLog.ReplyOverdueSince"/>, and
+    /// writes it unconditionally — a one-field patch that cannot touch the transcript or the status
+    /// whatever the owner holds by the time it lands. The owning Activity hub folds it
+    /// (<see cref="MeshWeaver.Kernel.Hub.KernelReplyOverdue"/>): a still-running run shows the
+    /// keyed "no answer from the kernel yet" notice, a finished one shows nothing.
+    ///
+    /// <para>As System, in a SYNCHRONOUS scope around the Update call and its Subscribe: this runs
+    /// from the reply wait's timeout, which fires on a timer thread that carries no user context —
+    /// a write there would fail closed. It is infrastructure progress on the activity, the same
+    /// identity <c>ActivityLogLogger</c> writes it with.</para>
+    /// </summary>
+    internal static void MarkAwaitingKernel(IMessageHub hub, string activityPath)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(LoggerCategory);
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var overdueSince = DateTime.UtcNow;
+        using (access?.ImpersonateAsSystem())
+            hub.GetWorkspace().GetMeshNodeStream(activityPath).Update<ActivityLog>((node, log) =>
+                    // null means ABSENT — the dispatcher created this activity before it posted, so
+                    // there is no run to state anything about. Present-but-unreadable content faults
+                    // the typed overload instead of being written over.
+                    log is null ? node : node with { Content = log with { ReplyOverdueSince = overdueSince } })
+                .Subscribe(
+                    _ => { },
+                    ex => logger?.LogWarning(ex,
+                        "CodeNodeType: failed to state on ActivityLog {Activity} that its kernel has not answered yet",
+                        activityPath));
+    }
 
     /// <summary>The transcript entry for a foreign-language run with no worker connected.</summary>
     internal static LogMessage NoWorkerConnected(string language, string target) =>

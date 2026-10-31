@@ -76,6 +76,9 @@ on:
       api-url:
         description: The build API base the follow jobs read (https://<instance>/api/builds); empty with `actions` when none is configured.
         value: ${{ jobs.executor.outputs.api-url }}
+      stage-executors:
+        description: "Per declared stage, who carries its verdict, as JSON — {\"<stage>\": \"host\" | \"host-forced\"} (policy per-stage-ci-equivalence). Read `fromJSON(stage-executors)['<stage>'] || executor`: `{}` (the default) is today's behaviour for every stage."
+        value: ${{ jobs.executor.outputs.stage-executors }}
 
 jobs:
   executor:
@@ -87,6 +90,7 @@ jobs:
     outputs:
       executor: ${{ steps.decide.outputs.executor }}
       api-url: ${{ steps.decide.outputs.api-url }}
+      stage-executors: ${{ steps.decide.outputs.stage-executors || '{}' }}
     steps:
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - name: The repository's stage declaration (head)

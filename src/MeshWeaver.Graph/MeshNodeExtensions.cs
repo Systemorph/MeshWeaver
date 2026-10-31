@@ -33,45 +33,17 @@ public static class MeshNodeExtensions
     public static void UpdateMeshNode(this ISynchronizationStream<EntityStore> stream,
          Func<MeshNode, MeshNode> update, string? nodePath = null)
     {
-        // Get the data source's own EntityStore stream — this is the same stream that
-        // CreateSynchronizationStream reduces from, so updates propagate to all subscribers.
+        // 🚨 Through the ONE mutation API, never a raw write into the data source's store: that
+        // committed without the owner's commit guards (IEntityCommitGuard), so every rule judged at the
+        // commit point was skipped on this route. GetMeshNodeStream routes the hub's own node to the
+        // guarded own-write turn and any other path to its owner.
         var workspace = stream.Host.GetWorkspace();
-        var dataSource = workspace.DataContext.GetDataSourceForType(typeof(MeshNode));
-        if (dataSource == null)
-            throw new InvalidOperationException("No data source registered for MeshNode");
-        var dsStream = dataSource.GetStreamForPartition(null)
-            ?? throw new InvalidOperationException("No stream for MeshNode partition");
-
-        dsStream.Update(state =>
+        (nodePath is null ? workspace.GetMeshNodeStream() : workspace.GetMeshNodeStream(nodePath))
+            .Update(update)
+            .Subscribe(_ => { }, ex =>
         {
-            var store = state ?? new EntityStore();
-            var collection = store.Collections.GetValueOrDefault(nameof(MeshNode));
-            if (collection is null)
-                throw new InvalidOperationException(
-                    $"MeshNode collection not found in stream. Available collections: [{string.Join(", ", store.Collections.Keys)}]");
-
-            var nodeId = nodePath is null ? null : nodePath.Contains('/') ? nodePath[(nodePath.LastIndexOf('/') + 1)..] : nodePath;
-            var current = (nodeId is null ?
-                collection.Instances.Values.FirstOrDefault() : collection.Instances.GetValueOrDefault(nodeId)) as MeshNode;
-            if (current == null)
-                throw new InvalidOperationException(
-                    $"MeshNode '{nodePath}' (id='{nodeId}') not found in stream. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
-
-            var updated = update(current);
-            if (string.IsNullOrEmpty(updated.Id))
-                throw new InvalidOperationException(
-                    $"UpdateMeshNode produced a node with empty Id for path '{nodePath}'");
-
-            var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
-            return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
-                [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }],
-                dsStream.StreamId));
-        }, ex =>
-        {
-            // Best effort BY CONSTRUCTION: this is a stream Update's exception callback, and the
-            // commonest reason it fires is that the stream is dead — in which case the hub that
-            // died is the one holding the log sink, and this static extension has no other. The
-            // refusal itself is still reported to the producer by SignalDisposedToProducer.
+            // This void extension has no caller to answer, so a refusal (a commit guard, a dead hub)
+            // is reported here. Best effort BY CONSTRUCTION: when the hub died it took the log sink.
             var logger = stream.TryGetHub()?.ServiceProvider.GetService<ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Graph.UpdateMeshNode");
             logger?.LogError(ex, "UpdateMeshNode failed for {NodePath}", nodePath);
@@ -580,6 +552,8 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(EventSubscriptionStatus), nameof(EventSubscriptionStatus));
         typeRegistry.WithType(typeof(EventTriggerType), nameof(EventTriggerType));
         typeRegistry.WithType(typeof(EventContinuationType), nameof(EventContinuationType));
+        // What a DeliverTo node receives inside its own content (EventContinuationType.DeliverToNode).
+        typeRegistry.WithType(typeof(EventDelivery), nameof(EventDelivery));
         // ScheduledAction — the LEGACY predecessor EventSubscription supersedes. Still a built-in
         // NodeType, and EventSubscriptionRunner's startup migration reads it the same way, so it
         // needs the same registration: unresolvable, the migration silently folds nothing and an

@@ -266,4 +266,100 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
 
         outcome.Values.Should().ContainSingle("a watch that ended can no longer see a loss — the guard must not vanish silently");
     }
+
+    // ── Fenced: the pass starts only once its own claim is seen live (#7459) ──────────────────────────
+
+    private sealed class CountingPass
+    {
+        public Subject<int> Results { get; } = new();
+        public int Subscriptions { get; private set; }
+        public IObservable<int> Pass => Observable.Defer(() =>
+        {
+            Subscriptions++;
+            return Results;
+        });
+    }
+
+    /// <summary>
+    /// 🚨 #7459, the double drop. Two takes were acknowledged and lost together with the lease node's owner
+    /// (this holder's at <c>OurGeneration</c> and the take before it), the replacement owner reloaded the lease
+    /// two generations back, and another replica took it there, landing a generation BELOW this holder's. The
+    /// fence reads that as a snapshot from before the take and waits past it, so the pass used to sweep from
+    /// the verdict on until its deadline, beside the new holder. It must not start until its own claim is
+    /// seen on the live lease.
+    /// </summary>
+    [Fact]
+    public void AHolderWhoseFirstLookIsATakeBelowItsGeneration_NeverStartsItsPass()
+    {
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var pass = new CountingPass();
+        var outcome = new Outcome<int>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Fenced(live, OurClaim, OurGeneration, pass.Pass));
+
+        live.OnNext(Claimed(ClaimedAt, 9, OurGeneration - 1));
+
+        pass.Subscriptions.Should().Be(0,
+            "the live lease names another pass, and this holder's own claim was never seen there — it must not sweep");
+        outcome.Error.Should().BeNull("an older generation alone cannot tell a lost take from a stale snapshot, so it waits");
+
+        live.OnCompleted();
+        pass.Subscriptions.Should().Be(0);
+        outcome.Error.Should().BeOfType<OperationCanceledException>(
+            "a lease that can no longer be followed stops the holder before it starts, and leaves the lease to lapse");
+    }
+
+    [Fact]
+    public void AHolderWhoseClaimIsSeen_RunsItsPass_AndALaterLossStillStopsIt()
+    {
+        // NEGATIVE CONTROL: the ordinary holder, whose own claim is what the live lease carries.
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var pass = new CountingPass();
+        var outcome = new Outcome<int>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Fenced(live, OurClaim, OurGeneration, pass.Pass));
+
+        live.OnNext(Ours);
+        pass.Subscriptions.Should().Be(1, "the claim is seen: the pass starts");
+        pass.Results.OnNext(1);
+        outcome.Values.Should().Equal(1);
+
+        live.OnNext(Claimed(ClaimedAt, 9, OurGeneration - 1));
+        outcome.Error.Should().BeOfType<OperationCanceledException>("once seen, any state without the claim is a loss");
+    }
+
+    [Fact]
+    public void AnOlderSnapshot_ThenTheClaim_StartsThePass_WhichCompletesNormally()
+    {
+        // CONTROL: a replayed snapshot from before the take delays the start, it never stops it.
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var pass = new CountingPass();
+        var outcome = new Outcome<int>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Fenced(live, OurClaim, OurGeneration, pass.Pass));
+
+        live.OnNext(PrebuiltBundleRetentionLeaseState.Lapsed with { Generation = OurGeneration - 1 });
+        pass.Subscriptions.Should().Be(0);
+        live.OnNext(Ours);
+        pass.Subscriptions.Should().Be(1);
+
+        pass.Results.OnNext(4);
+        pass.Results.OnCompleted();
+        outcome.Values.Should().Equal(4);
+        outcome.Error.Should().BeNull();
+        outcome.Completed.Should().BeTrue("the pass's own completion ends the watch");
+    }
+
+    [Fact]
+    public void ALeaseStreamThatFaultsBeforeTheClaimIsSeen_IsACancellation_AndThePassNeverStarts()
+    {
+        var fault = new InvalidOperationException("lease stream failed");
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var pass = new CountingPass();
+        var outcome = new Outcome<int>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Fenced(live, OurClaim, OurGeneration, pass.Pass));
+
+        live.OnError(fault);
+
+        pass.Subscriptions.Should().Be(0);
+        outcome.Error.Should().BeOfType<OperationCanceledException>(
+            "never an ordinary fault, which would release the lease").Which.InnerException.Should().BeSameAs(fault);
+    }
 }

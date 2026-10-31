@@ -153,9 +153,12 @@ namespace MeshWeaver.Hosting
         /// <see cref="PostOptions.RequestId"/> — an ANSWER somebody is waiting for — is carried, and
         /// only to a recipient that ALREADY exists: a hosted hub (<see cref="HostedHubCreation.Never"/>:
         /// nothing is built during teardown) or, failing that, a recipient registered with this router
-        /// as a stream — the two recipient kinds, in the order, the live path serves. Everything else
-        /// keeps the historical drop: fire-and-forget traffic and new requests have nothing to finish
-        /// here, and answering them is the storm shape the guard exists to avoid. The recipient's own
+        /// as a stream — the two recipient kinds, in the order, the live path serves. A REQUEST whose
+        /// sender is waiting on it is not routed either, but it is no longer dropped: it was accepted
+        /// while the mesh was live, so it is refused back to that sender
+        /// (<see cref="AnswerRequestRefusedDuringMeshTeardown"/>). Fire-and-forget traffic keeps the
+        /// historical drop — nobody awaits it, and answering it is the storm shape the guard exists to
+        /// avoid. The recipient's own
         /// intake gate still decides what it accepts — a Quiescing hub admits answers by design, a hub
         /// past its own <c>DisposeHostedHubs</c> refuses them — so this adds no admission rule.</para>
         ///
@@ -170,7 +173,12 @@ namespace MeshWeaver.Hosting
         private void RouteReplyDuringMeshTeardown(IMessageDelivery delivery)
         {
             if (!TryGetReplyCorrelation(delivery, out var requestId))
+            {
+                // Not an answer: nothing is routed for it here. A REQUEST its sender is waiting on is
+                // refused back to that sender; everything else keeps the historical drop.
+                AnswerRequestRefusedDuringMeshTeardown(delivery);
                 return;
+            }
 
             var address = GetHostAddress(delivery.Target!);
 
@@ -183,6 +191,90 @@ namespace MeshWeaver.Hosting
                 return;
 
             DeliverReplyToLiveRecipient(delivery, requestId, address);
+        }
+
+        /// <summary>
+        /// 🚨 True when <paramref name="delivery"/> is a REQUEST whose sender is WAITING for its answer —
+        /// it was posted through <c>hub.Observe</c>, which stamps <see cref="PostOptions.AcceptsProgress"/>
+        /// on every request it awaits and on nothing else. Correlated replies are excluded (they are
+        /// carried, see <see cref="RouteReplyDuringMeshTeardown"/>), and so is everything the
+        /// answer-once contract forbids answering (<see cref="AnswerPolicy.MayAnswer"/>).
+        ///
+        /// <para>This is deliberately NARROWER than "any answerable delivery". Fire-and-forget traffic
+        /// leaves no callback behind, so answering it during a teardown is pure added traffic — the
+        /// storm shape the teardown guards exist to keep closed — and it stays a drop. A request posted
+        /// without <c>Observe</c> (a pre-serialised external frame, an image that predates the stamp)
+        /// degrades to that historical drop, never to answering something nobody asked about.</para>
+        /// </summary>
+        private static bool IsAwaitedRequest(IMessageDelivery delivery) =>
+            delivery.Sender is not null
+            && delivery.Target is not null
+            && !delivery.Properties.ContainsKey(PostOptions.RequestId)
+            && delivery.Properties.ContainsKey(PostOptions.AcceptsProgress)
+            && delivery.MayAnswer();
+
+        /// <summary>
+        /// 🚨 Gives a request this router will NOT route — because the mesh is tearing down — a
+        /// TERMINAL answer at its sender, instead of dropping it while that sender waits.
+        ///
+        /// <para><b>The defect this closes.</b> A request the mesh ACCEPTED while it was live is routed
+        /// asynchronously (path resolution, hub creation, the per-address activation queue), and that
+        /// route can end after the mesh has passed <see cref="MessageHubRunLevel.DisposeHostedHubs"/>.
+        /// Every branch that ends a route there declined to answer — "the recipients are gone",
+        /// "recipients are likely also disposing", "nobody is waiting" — which is the #2778 assumption
+        /// again, and false for the same reason #4023 found for replies: a hosted hub whose parent is in
+        /// <c>DisposeHostedHubs</c> has only just been asked to go down, and while it is Quiescing it is
+        /// waiting for exactly these answers. Measured on a Plugins CI leg: a cache hub's
+        /// <c>SubscribeRequest@Plugins/_Policy</c> was enqueued on the mesh while it was <c>Started</c>,
+        /// routed 26 ms later after <c>Mesh.Dispose()</c>, and then neither handled nor refused — the
+        /// callback sat out its whole quiesce budget and the teardown check failed a passing test.</para>
+        ///
+        /// <para><b>Why the answer is handed to the sender directly.</b> The mesh's own <c>Post</c> is the
+        /// wrong carrier here: past <c>DisposeHostedHubs</c> its intake admits a reply only until
+        /// <c>ShutDown</c>, and the activation queue can be disposed after that. The refusal goes the way
+        /// every teardown-time answer of this router goes — <see cref="DeliverReplyToLiveRecipient"/>: to
+        /// a recipient that ALREADY exists (nothing is created), whose own intake decides whether it still
+        /// takes replies. No live recipient leaves a NAMED drop on the request's trail.</para>
+        ///
+        /// <para><b>Why this cannot storm.</b> It is one <see cref="DeliveryFailure"/> per refused request,
+        /// and a <see cref="DeliveryFailure"/> is never answered (<see cref="AnswerPolicy"/>). It is
+        /// classified <see cref="ErrorType.ShuttingDown"/> with the routing layer's own sentence
+        /// (<c>"Mesh is shutting down, cannot route to …"</c>, no owner banner), so the consumers that
+        /// re-ask read it as a ROUTE refusal: the sync stream rides it out paced and bounded on its time
+        /// axis (#6729) and the node stream cache files it in its transient breaker — neither re-asks
+        /// unpaced, and a hub that is going down disposes its streams before either budget runs out.
+        /// Requests nobody awaits are excluded by <see cref="IsAwaitedRequest"/>.</para>
+        /// </summary>
+        /// <param name="delivery">The request this router is declining to route.</param>
+        /// <param name="errorType">The verdict's classification — <see cref="ErrorType.ShuttingDown"/> unless the
+        /// route had already reached a different verdict (e.g. an authoritative NotFound).</param>
+        /// <param name="message">The verdict's text; defaults to the routing layer's shutdown sentence.</param>
+        /// <param name="nodeAbsent">Whether the verdict is the typed "no node at this path" fact (#6626).</param>
+        /// <returns><c>true</c> when a live recipient took the answer.</returns>
+        protected bool AnswerRequestRefusedDuringMeshTeardown(
+            IMessageDelivery delivery,
+            ErrorType errorType = ErrorType.ShuttingDown,
+            string? message = null,
+            bool nodeAbsent = false)
+        {
+            if (!IsAwaitedRequest(delivery))
+                return false;
+            var target = GetHostAddress(delivery.Target!);
+            var failure = new MessageDelivery<DeliveryFailure>(
+                new DeliveryFailure(delivery)
+                {
+                    ErrorType = errorType,
+                    Message = message
+                              ?? $"Mesh is shutting down, cannot route to {target} "
+                              + $"(mesh {Mesh.Address} at RunLevel={Mesh.RunLevel}; the request was accepted "
+                              + "before the teardown began and its route ended after it)",
+                    NodeAbsent = nodeAbsent,
+                },
+                new PostOptions(Mesh.Address).ResponseFor(delivery),
+                Mesh.JsonSerializerOptions);
+            Mesh.NoteRequestStage(delivery.Id,
+                $"REQUEST_REFUSED_DURING_MESH_TEARDOWN target={target} errorType={errorType} meshRunLevel={Mesh.RunLevel}");
+            return DeliverReplyToLiveRecipient(failure, delivery.Id, GetHostAddress(delivery.Sender!));
         }
 
         /// <summary>True when <paramref name="delivery"/> is an ANSWER — it carries the
@@ -205,25 +297,27 @@ namespace MeshWeaver.Hosting
         /// recipient kinds, in the same order, the live path serves. With neither, the drop stands
         /// and is named on the request's trail.
         /// </summary>
-        private void DeliverReplyToLiveRecipient(IMessageDelivery delivery, string requestId, Address address)
+        /// <returns><c>true</c> when a live recipient was handed the delivery.</returns>
+        private bool DeliverReplyToLiveRecipient(IMessageDelivery delivery, string requestId, Address address)
         {
             if (Mesh.GetHostedHub(address, HostedHubCreation.Never) is { } recipient)
             {
                 Mesh.NoteRequestStage(requestId,
                     $"REPLY_ROUTED_DURING_MESH_TEARDOWN to={recipient.Address} meshRunLevel={Mesh.RunLevel}");
                 recipient.DeliverMessage(delivery);
-                return;
+                return true;
             }
 
             if (TryDeliverToRegisteredStream(address, delivery))
             {
                 Mesh.NoteRequestStage(requestId,
                     $"REPLY_ROUTED_DURING_MESH_TEARDOWN to=stream:{address} meshRunLevel={Mesh.RunLevel}");
-                return;
+                return true;
             }
 
             Mesh.NoteRequestStage(requestId,
                 $"REPLY_UNROUTABLE_DURING_MESH_TEARDOWN target={delivery.Target} — no live recipient");
+            return false;
         }
 
         /// <summary>
@@ -251,7 +345,12 @@ namespace MeshWeaver.Hosting
                 activationSerializers.TryRemove(
                     new KeyValuePair<Address, ActivationSerializer>(hostAddress, serializer));
                 if (Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                {
+                    // The same teardown verdict RouteInMesh gives at its top: an answer is carried,
+                    // a request its sender awaits is refused back to it, the rest is dropped.
+                    RouteReplyDuringMeshTeardown(delivery);
                     return;
+                }
                 var hosted = Mesh.GetHostedHub(hostAddress, HostedHubCreation.Never);
                 if (hosted is not null)
                 {
@@ -268,9 +367,15 @@ namespace MeshWeaver.Hosting
             // IRoutingService.DeliverMessage and it packages, so this guard's payload is
             // ALWAYS RawJson and the old CLR-type test never matched (#1485).
             // Also never post once the mesh is tearing down — the recipients are gone.
-            if (!delivery.MayAnswer()
-                || Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            if (!delivery.MayAnswer())
                 return;
+            // Past DisposeHostedHubs the mesh's own Post is no carrier — but a sender that is still
+            // waiting is still owed the verdict, so it goes to that sender directly.
+            if (Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            {
+                AnswerRequestRefusedDuringMeshTeardown(delivery, ErrorType.Unavailable, ex.Message);
+                return;
+            }
             // 🚨 Routing infrastructure's OWN post. ResponseFor carries the failed
             // request's identity when it had one; when it didn't, run under System so
             // the courier's NACK is never attributed to a null principal (the routing
@@ -319,6 +424,12 @@ namespace MeshWeaver.Hosting
             private int pending;
             private bool completed;
 
+            // Every delivery accepted into this queue whose route has not STARTED yet. Its route
+            // claims it on entry; what Dispose still finds here never left the queue and is answered
+            // there (by reference: two deliveries are never "the same" by value).
+            private readonly ConcurrentDictionary<IMessageDelivery, byte> unanswered =
+                new(ReferenceEqualityComparer.Instance);
+
             public ActivationSerializer(RoutingServiceBase owner, Address address)
             {
                 this.owner = owner;
@@ -332,18 +443,34 @@ namespace MeshWeaver.Hosting
             private IObservable<IMessageDelivery> RouteOne(IMessageDelivery delivery) =>
                 Observable.Defer(() =>
                 {
+                    // 🚨 Ownership is taken when the route STARTS, before any side effect: from here on
+                    // the route (its verdict, or its fault NACK below) answers, and Dispose never does.
+                    // Claiming only after the route's verdict raced it: the route could hand the
+                    // delivery to its recipient and Dispose, on another thread, still refuse it as
+                    // "cannot route" (review of #7673). Losing the claim means Dispose answered first.
+                    if (!Claim(delivery))
+                        return Observable.Empty<IMessageDelivery>();
+
                     // Never resolve, activate or post once the mesh is tearing down. The ONE
                     // exception is an ANSWER to a caller that is still waiting (#4023): it is
                     // carried to a recipient that already exists — nothing is created — exactly as
                     // RouteReplyDuringMeshTeardown does for a delivery that did not queue here.
+                    //
+                    // 🚨 …and a REQUEST that waited in this queue while the mesh crossed the mark is
+                    // refused back to its waiting sender, never dropped: it was accepted while the
+                    // mesh was live, and its sender holds a callback for it.
                     if (owner.Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                     {
                         if (TryGetReplyCorrelation(delivery, out var requestId))
                             owner.DeliverReplyToLiveRecipient(delivery, requestId, address);
+                        else
+                            owner.AnswerRequestRefusedDuringMeshTeardown(delivery);
                         return Observable.Empty<IMessageDelivery>();
                     }
                     return owner.RouteMessage(delivery, address);
                 })
+                // This RouteOne owns the delivery once it is claimed (Dispose skips it), so a fault
+                // anywhere in its route is NACKed here — and nowhere else.
                 .Catch<IMessageDelivery, Exception>(ex =>
                 {
                     owner.NackRouteFailure(delivery, ex);
@@ -351,11 +478,20 @@ namespace MeshWeaver.Hosting
                 })
                 .Finally(OnMessageDone);
 
+            /// <summary>
+            /// Takes ownership of answering <paramref name="delivery"/>. Exactly one of two claims it: the
+            /// route, when it STARTS and before any side effect (its verdict or fault NACK then answers),
+            /// or <see cref="Dispose"/>, for a delivery whose route never started. So a sender is
+            /// answered at most once, and never refused for a request its route already handed over.
+            /// </summary>
+            private bool Claim(IMessageDelivery delivery) => unanswered.TryRemove(delivery, out _);
+
             public bool TryEnqueue(IMessageDelivery delivery)
             {
                 lock (gate)
                 {
                     if (completed) return false;
+                    unanswered[delivery] = 0;
                     pending++;
                     // OnNext under the lock is safe: the lock is reentrant, and a
                     // synchronously-completing inner (e.g. a fast error) re-enters
@@ -390,6 +526,14 @@ namespace MeshWeaver.Hosting
             /// cancels its Timeout timer, releasing the TimerQueue root that would
             /// otherwise pin the disposed MeshHub. Idempotent with the self-retire
             /// path via the <c>completed</c> flag.
+            ///
+            /// <para>🚨 Tearing the pump down CUTS every delivery still queued, and each of them was
+            /// accepted while the mesh was live. A request among them whose sender is still waiting is
+            /// refused back to it (<see cref="AnswerRequestRefusedDuringMeshTeardown"/>), and an answer
+            /// among them is carried. A delivery whose route already STARTED is not answered here: its
+            /// route claimed it before any side effect and may already have handed it to its recipient,
+            /// so a refusal would be false (review of #7673). Such a route cut mid-flight keeps the
+            /// historical drop.</para>
             /// </summary>
             public void Dispose()
             {
@@ -400,6 +544,15 @@ namespace MeshWeaver.Hosting
                 }
                 inbox.OnCompleted();
                 pump.Dispose();
+                foreach (var delivery in unanswered.Keys)
+                {
+                    if (!Claim(delivery))
+                        continue;
+                    if (TryGetReplyCorrelation(delivery, out var requestId))
+                        owner.DeliverReplyToLiveRecipient(delivery, requestId, address);
+                    else
+                        owner.AnswerRequestRefusedDuringMeshTeardown(delivery);
+                }
             }
         }
 
@@ -506,6 +659,10 @@ namespace MeshWeaver.Hosting
             // NotFound in the mesh; the unanswered case (DeliveryFailure / [CanBeIgnored] / mesh
             // shutting down) is classified so it can still be reported, and ReportFailure's own
             // guards suppress exactly the same three shapes.
+            // Past DisposeHostedHubs the verdict still reaches a sender that is waiting for it.
+            else if (Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                senderNacked = AnswerRequestRefusedDuringMeshTeardown(
+                    delivery, ErrorType.NotFound, failureMessage, nodeAbsent: true);
             return senderNacked
                 ? delivery.FailedAndNacked(failureMessage)
                 : delivery.Failed(failureMessage, ErrorType.NotFound);

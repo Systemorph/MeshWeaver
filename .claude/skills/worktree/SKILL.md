@@ -131,6 +131,9 @@ instead of capturing the param; do NOT just `NoWarn` it.
 
 ### 3. Only push when that Release/`-warnaserror` build is clean
 
+Run `python3 scripts/preflight-pr.py --body-file <draft body>` before opening or pushing a PR — it runs
+the body-declaration gates and the source-guard root scan locally ([PrePrPreflight](../../../src/MeshWeaver.Documentation/Data/Architecture/PrePrPreflight.md)).
+
 Then verify the PR check went green (`gh pr checks`) before declaring done. Full PR/merge gate:
 [/pullrequest](../pullrequest/SKILL.md).
 

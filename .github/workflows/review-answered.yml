@@ -15,7 +15,16 @@
 #                          unlabeled, because the waiver IS a label
 #   pull_request_review    submitted (the reviewer's own review; a person's reply creates one too)
 #                          and dismissed
-#   pull_request_review_comment  created / deleted — a finding arriving, a reply arriving or going
+#   pull_request_review_comment  deleted ONLY — a reply going. NOT `created` (MeshWeaver#7187): every
+#                          review comment, a finding or a person's reply, belongs to a review, and
+#                          `pull_request_review: submitted` fires for it in the same second. So a
+#                          `created` trigger re-judged a state the review event already reports, and
+#                          a burst of N replies started 2N runs. Measured 2026-10-30 07:49–16:45Z on
+#                          this file's last 500 runs: 232 of 232 comment runs had a same-head review
+#                          run within 15 s, and 83 of them still executed a full judgement (two,
+#                          with the lane) of a state the review event reports. A deletion raises no
+#                          review event, so `deleted` stays: a reply going can make a thread
+#                          unanswered again, and nothing else would re-judge a GREEN verdict.
 #   merge_group            the queue entry is judged again with the data as it stands at admission;
 #                          the pull request number comes from the queue ref
 #                          gh-readonly-queue/main/pr-<N>-<sha>
@@ -57,10 +66,19 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   pull_request_review:
     types: [submitted, dismissed]
+  # 🚨 `deleted` ONLY — see the header (MeshWeaver#7187). check-review-answered.py --self-test refuses
+  # `created` here and in the lane's caller contract.
   pull_request_review_comment:
-    types: [created, deleted]
+    types: [deleted]
   merge_group:
     types: [checks_requested]
+  # ⏳ Policy review-pending-while-answering: the verdict WRITER's sweep. A pending verdict (threads awaiting
+  # answers, a review awaiting arrival) changes with NO event here when Copilot's review lands (its own event
+  # is `action_required`, see `--wait-for-review` below) or a deadline passes (policy review-answer-deadline),
+  # so every 15 minutes `--verdict-sweep` re-judges the open pull requests whose verdict check-run is pending
+  # or unmeasured — and nothing else (each other pull request costs one listing read).
+  schedule:
+    - cron: "4,19,34,49 * * * *"
 
 # Reads only, and only what the predicate needs: the pull request, its reviews and review comments
 # (pull-requests), the label events that attribute a waiver (issues), and the checkout (contents).
@@ -81,10 +99,10 @@ permissions:
 # of one pull request are two different commits with two separate check-runs. So a re-queue of the
 # same pull request may evaluate concurrently with an older entry, by design.
 #
-# NEVER cancelled mid-read: a review lands as one `submitted` event plus one `created` event per
-# inline comment, and the evaluation that runs LAST must be the one that read LAST. GitHub keeps one
-# pending run per group, so a burst of fourteen comments collapses to the running evaluation plus
-# the newest pending one. Cancelling would also eject a merge-queue entry rather than retry it.
+# NEVER cancelled mid-read: a burst of replies lands as one `submitted` review event per reply (the
+# comment's own `created` event is no longer a trigger — MeshWeaver#7187), and the evaluation that
+# runs LAST must be the one that read LAST. GitHub keeps one pending run per group, so a burst of
+# fourteen replies collapses to the running evaluation plus the newest pending one. Cancelling would also eject a merge-queue entry rather than retry it.
 # 🚨 AND IT IS SPLIT BY EVENT, because branch protection does not read all of them. Measured on
 # #4649, head 94fc73b4fdaa — fifteen runs of this workflow, eight of which published a check-run,
 # and the rollup that branch protection consumes carried exactly THREE:
@@ -109,8 +127,8 @@ permissions:
 #
 # Splitting the group by event class fixes the eviction deterministically: the survivor of the
 # `gate` lane is always a run whose verdict is READ, and the settle wait above means it judges a
-# state that has stopped moving. The `feedback` lane keeps the comment-driven runs — they still give
-# the author a fast reading on the PR page — without letting them take the gate lane's slot.
+# state that has stopped moving. The `feedback` lane keeps the comment-driven runs — since
+# MeshWeaver#7187 only a reply being DELETED starts one — without letting them take the gate lane's slot.
 #
 # 🚨 This does NOT make the comment-driven green mean anything to branch protection — but the lane's
 # `refresh` job now carries it there: on a GREEN comment- or review-driven verdict it re-runs the
@@ -124,9 +142,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ⏳ PENDING WHILE ANSWERING (policy review-pending-while-answering, deadlines: review-answer-deadline).
+  # For a same-repository, non-Dependabot pull request (and the schedule's sweep) this job is the verdict
+  # WRITER: it judges once and writes the required context `Automatic review answered` THROUGH THE CHECKS API
+  # — ONE check-run per head, `in_progress` (no conclusion: still BLOCKS, never satisfied) while threads await
+  # answers or the head awaits its review inside the deadlines, `success` when answered, `failure` past a
+  # deadline, on a refusal, or when the state could not be measured. The job is then NAMED differently, so its
+  # own check-run never carries the required name, and it goes red only on a real failure. Everywhere else —
+  # a fork (read-only token: no verdict could be written), Dependabot (read-only token), the merge queue — the
+  # job keeps the required name and its old red/green, unchanged. The one condition that picks the shape is
+  # written TWICE below (the job name and VERDICT_CHECK_RUN); the predicate's self-test asserts they agree.
+  # 🛡️ Still no job-level `if:` — the shape is chosen by NAME, never by skipping.
   answered:
-    name: Automatic review answered
+    name: ${{ (github.event_name == 'schedule' || (github.event_name != 'merge_group' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) && 'Review answered — verdict writer' || 'Automatic review answered' }}
     runs-on: ubuntu-latest
+    # The verdict writer's one write: POST/PATCH the head's `Automatic review answered` check-run.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      checks: write
     # 30 = the 15-minute bounded wait below + the 3-minute settle cap + the 5-minute API outage budget
     # (MW_API_OUTAGE_WAIT_MINUTES, MeshWeaver#7187) + headroom for the checkout and the reads. The
     # review wait is not slack: it is the measured consequence of the reviewer's own event being
@@ -205,10 +240,17 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
           QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+          VERDICT_CHECK_RUN: ${{ (github.event_name == 'schedule' || (github.event_name != 'merge_group' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) && 'Automatic review answered' || '' }}
           MW_API_OUTAGE_WAIT_MINUTES: "5"
+        # The writer takes NO review wait and NO settle wait: a pending verdict is not red, the sweep above
+        # re-judges it, and every evaluation PATCHes the same check-run (the newest READ stands).
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "merge_group" ]; then
+          if [ -n "${VERDICT_CHECK_RUN:-}" ] && [ "$EVENT_NAME" = "schedule" ]; then
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --verdict-sweep --verdict-check-run "$VERDICT_CHECK_RUN"
+          elif [ -n "${VERDICT_CHECK_RUN:-}" ]; then
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --verdict-check-run "$VERDICT_CHECK_RUN"
+          elif [ "$EVENT_NAME" = "merge_group" ]; then
             python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --merge-group-ref "$QUEUE_REF" --wait-for-review 15 --settle-replies 60
           else
             python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --wait-for-review 15 --settle-replies 60
@@ -255,7 +297,10 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
-      checks: read
+      checks: write       # the lane's verdict writer (opted in below) — policy review-pending-while-answering
       actions: write
     with:
       scripts-ref: ${{ github.sha }}
+      # Core opts its lane in, so the writer path every satellite will adopt runs on live pull requests here
+      # first. NOT required in core: the ruleset requires the bare `Automatic review answered` above.
+      verdict-check-run: 'lane / Automatic review answered'

@@ -46,6 +46,65 @@ public static class XmlDocsExtensions
     /// <returns>The reader.</returns>
     public static XmlDocsReader XmlDocs(this IMessageHub hub) => hub.TypeRegistry.XmlDocs();
 
+    /// <summary>
+    /// Emits once the documentation of <paramref name="members"/> is in memory: at once when it already
+    /// is, otherwise after the cold reads have run on the mesh's I/O pool
+    /// (<see cref="XmlDocsReader.WhenLoaded"/>). A view or handler that reads summaries composes its
+    /// synchronous reads AFTER this emission, so the thread building it never reads a file.
+    /// </summary>
+    /// <param name="hub">Any hub of the mesh.</param>
+    /// <param name="members">The types and members whose summaries are about to be read.</param>
+    /// <returns>A single <see cref="System.Reactive.Unit"/>; cold.</returns>
+    public static IObservable<System.Reactive.Unit> WhenXmlDocsLoaded(this IMessageHub hub, IEnumerable<MemberInfo> members)
+        => hub.XmlDocs().WhenLoaded(members, hub.BlockingReadScheduler());
+
+    /// <summary>
+    /// The XML-doc summary of <paramref name="member"/> as a data-bound value
+    /// (<see cref="XmlDocsReader.ObserveSummary"/>): emitted at once when in memory, otherwise after
+    /// the cold read has run on the mesh's I/O pool.
+    /// </summary>
+    /// <param name="hub">Any hub of the mesh.</param>
+    /// <param name="member">The type or member.</param>
+    /// <returns>The rendered summary text, empty when there is none; cold, one value.</returns>
+    public static IObservable<string> ObserveXmlDocsSummary(this IMessageHub hub, MemberInfo member)
+        => hub.XmlDocs().ObserveSummary(member, hub.BlockingReadScheduler());
+
+    /// <summary>
+    /// <see cref="WhenXmlDocsLoaded(IMessageHub, IEnumerable{MemberInfo})"/> for the reader
+    /// <paramref name="typeDefinition"/>'s registry owns — the one its
+    /// <see cref="XmlDocsSummary(ITypeDefinition, MemberInfo)"/> reads — with <paramref name="hub"/>'s
+    /// I/O pool doing the cold reads. A definition that is not a hub registry's uses the hub's reader.
+    /// </summary>
+    /// <param name="typeDefinition">The type definition whose summaries are about to be read.</param>
+    /// <param name="hub">The hub whose mesh I/O pool performs any cold read.</param>
+    /// <param name="members">The types and members whose summaries are about to be read.</param>
+    /// <returns>A single <see cref="System.Reactive.Unit"/>; cold.</returns>
+    public static IObservable<System.Reactive.Unit> WhenXmlDocsLoaded(this ITypeDefinition typeDefinition, IMessageHub hub, IEnumerable<MemberInfo> members)
+        => (typeDefinition is TypeDefinition definition ? definition.DisplayMetadata.Docs : hub.XmlDocs())
+            .WhenLoaded(members, hub.BlockingReadScheduler());
+
+    /// <summary>
+    /// Runs <paramref name="work"/> — a computation that reads XML-doc summaries of members nobody can
+    /// name in advance, such as a JSON schema walking a type's whole property graph — on the mesh's
+    /// blocking-read edge, never on the subscribing hub's turn. With no edge registered (a hub without
+    /// I/O pools) the work is hopped onto the task pool, as <see cref="XmlDocsReader.WhenLoaded"/> does.
+    /// </summary>
+    /// <typeparam name="T">The result type.</typeparam>
+    /// <param name="hub">Any hub of the mesh.</param>
+    /// <param name="work">The work; observes the cancellation token before it starts.</param>
+    /// <returns>The result, emitted once; cold.</returns>
+    public static IObservable<T> OnXmlDocsReadEdge<T>(this IMessageHub hub, Func<CancellationToken, T> work)
+        => hub.BlockingReadScheduler() is { } io
+            ? io.InvokeBlocking(work)
+            : System.Reactive.Linq.Observable.SubscribeOn(
+                System.Reactive.Linq.Observable.Defer(() => System.Reactive.Linq.Observable.Return(work(CancellationToken.None))),
+                System.Reactive.Concurrency.TaskPoolScheduler.Default);
+
+    // Optional on purpose: a bare messaging-only hub registers no I/O pools, and the reader then hops
+    // the read onto the task pool itself rather than reading on the caller's thread.
+    private static IBlockingReadScheduler? BlockingReadScheduler(this IMessageHub hub)
+        => hub.ServiceProvider.GetService(typeof(IBlockingReadScheduler)) as IBlockingReadScheduler;
+
     /// <summary>The mesh's XML-documentation reader, reached through a hub's type registry.</summary>
     /// <param name="typeRegistry">A hub's type registry (<see cref="IMessageHub.TypeRegistry"/>).</param>
     /// <returns>The reader.</returns>

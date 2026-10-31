@@ -147,6 +147,8 @@ public static class GraphConfigurationExtensions
             // HOSTS of the requested NodeTypes, read from its mesh hub's HostedHubsCollection.
             // Doc/Architecture/StaleStateUntilRecycle → "Recycling a type".
             builder.AddActivationRecycle();
+            // #7598 — the read-only token principal audit, run as System for a platform admin.
+            builder.AddTokenPrincipalAudit();
             // The installed-module fingerprint (#1644): resolves the mesh's InstalledModuleAssembly
             // set (empty when no modules) — stamped by compile write-backs as CompiledModulesHash.
             builder.ConfigureServices(s => s.AddSingleton(sp => InstalledModulesFingerprint.Live(sp)));
@@ -448,6 +450,12 @@ public static class GraphConfigurationExtensions
                 // an owner meets, at the commit point (IEntityCommitGuard). Stateless. See PolicyCommitGuard.
                 services.AddSingleton<MeshWeaver.Mesh.IEntityCommitGuard, Security.PolicyCommitGuard>();
 
+                // An API token's principal is bound to the caller that writes it, at the commit point
+                // every routed write meets. See ApiTokenPrincipalBinding.
+                services.AddSingleton<MeshWeaver.Mesh.IEntityCommitGuard, Security.ApiTokenPrincipalCommitGuard>();
+                // An update never repoints a satellite's main node, at the commit point every routed write
+                // meets — the satellite rule's update half. See SatelliteMainNodeCommitGuard.
+                services.AddSingleton<MeshWeaver.Mesh.IEntityCommitGuard, Security.SatelliteMainNodeCommitGuard>();
                 // A scoped API token never rewrites a node into, out of, or as a token record — judged
                 // against the merged entity, so a retype INTO ApiToken is seen. See ApiTokenRecordCommitGuard.
                 services.AddSingleton<MeshWeaver.Mesh.IEntityCommitGuard, Security.ApiTokenRecordCommitGuard>();

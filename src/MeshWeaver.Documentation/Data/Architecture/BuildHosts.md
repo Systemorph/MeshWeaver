@@ -448,11 +448,22 @@ Per enabled channel (`buildHosts.latest`, `buildHosts.stable`):
   identity token restricted to the `build` container. The container's seccomp / AppArmor profiles
   can be stated (`buildHosts.sandbox.*`) for what `bwrap` needs on the pool's nodes — measured, not
   assumed;
-- a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` 0, `maxReplicaCount` per channel,
+- a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` the channel's declared floor
+  (default 0 — see "Declared host floor" below), `maxReplicaCount` per channel,
   ONE `metrics-api` trigger on `<apiUrl>/queue?channel=<c>` with `valueLocation: demand`
   (= claimable + running, so the metric never drops to zero while a host holds a run) and a
   scale-down stabilization window (`scaleDownStabilizationSeconds`, default 300) longer than a
   claim's round trip.
+
+### Declared host floor
+
+A channel's floor is DECLARED on the record, never derived (policy `declared-not-derived`):
+`BuildHostChannel.MinReplicas` (default 0, scale to zero) renders as the channel's `minReplicas`,
+which the chart writes as the ScaledObject's `minReplicaCount`; `MaxReplicas` stays the one
+declaration of capacity and the admission cap. A floor of one keeps a host warm, so an admitted run
+is claimed without first waiting for a node and a pod to start. The chart refuses a floor below 0
+or above the channel's `maxReplicas`. A floor is paid for around the clock, so it is a record
+change the owner approves like any other, and the record says why it holds the value it does.
 
 **A host holds no publication credential, no registry token and no bake share.** The gate refuses
 `buildHosts.pluginsPullSecret` and `buildHosts.bakeShares`; `imagePullSecret` is the kubelet's image
@@ -726,6 +737,43 @@ fixes can merge while the host closes its gaps one by one. That is a third execu
 - **Leaving it.** A repository leaves `hostForced` when its stages claim equivalence (it then routes
   as plain `host`, and the host becomes its verdict), or when the owner reverses the decision.
 
+### Per-stage equivalence — one proven stage at a time (policy `per-stage-ci-equivalence`)
+
+`ciEquivalent` is all-or-nothing per repository. Per-stage equivalence moves ONE stage of a host-forced
+repository off Actions once that stage's own parity is proven, while the other stages stay in shadow:
+
+- **Where it is declared.** `equivalentStages` in core main's `.github/build-routing.json`, the same
+  trunk-only file as `hostForced`, so no pull request routes its own stage. One object per repository:
+  `{"<stage>": {"comparable": N, "disagreements": 0, "report": "<the measurement>"}}`. The evidence comes
+  from MeshWeaver.Plugins `scripts/build-parity-report.py`. It is declared, never derived: the executor
+  reads the declaration and measures nothing.
+- **The bar.** At least 20 comparable pull requests, where both the host and Actions reached a verdict,
+  and zero disagreements. `build-executor.py --check-routing` refuses an entry below the bar in core CI,
+  and the executor refuses it again at run time: the stage stays in shadow and the run says why.
+- **Fail-fast order.** A declared stage is honoured only when every stage declared BEFORE it in the
+  repository's `.github/build-stages.json` is honoured too. The host runs stages fail-fast, so a later
+  stage behind a shadow one could read `not run` and turn its required context red for a reason it
+  never checked.
+- **Only on a run the host holds.** A stage moves only when this run's `build-request` was accepted and
+  its signature verified. Otherwise every stage stays on Actions for that run, so a context never waits
+  on a run the host never received.
+- **What it answers.** The run-level `executor` stays `host-forced`, so every lane that reads it is
+  unchanged. A new output, `stage-executors`, is JSON with one entry per declared stage: `host` (its
+  follow job carries the verdict and its Actions legs skip) or `host-forced` (shadow). A consumer reads
+  `fromJSON(stage-executors)['<stage>'] || executor`, so an empty `{}` is today's behaviour for every
+  stage. The host's own `build/<stage>` check runs stay `neutral` on a shadow run. They are never
+  required: the follow job is what carries the verdict.
+- **Required contexts stay guarded.** Per stage, the context-owning job keeps its name and runs
+  `if: !cancelled()`. With `host` it asserts a FOLLOWED success, and the stage's Actions legs must have
+  skipped. With anything else it judges the Actions legs. It is never skipped: this is the shim route of
+  [Renaming a Required Check](../RenamingARequiredCheck). The caller wires this, for example
+  MeshWeaver.Plugins `ci.yml` and its `scripts/check-build-queue-admission.py`.
+- **Rollback.** Remove the stage's entry from `equivalentStages`. The next run's admission answers
+  `host-forced` for it, and its Actions legs carry the verdict again under the same context name.
+
+`build-executor.py --self-test` holds the bar, the order, the queued-and-verified requirement, trunk
+and route-only, with negative controls for each refusal. Every case runs on fakes, with no network.
+
 ### The host publication graph (module-pack on a host)
 
 A module repository's bundles reach the registry from a host run through three calls, and
@@ -904,7 +952,13 @@ would replace, and the claim is refused until that list is empty.
   the warm cache as a NuGet fallback folder ([NuGet Runtime Assets](../NuGetRuntimeAssets#offline-first-resolution)).
   The host reads it from the default branch's tip, never from a run's own tree, and runs it once per restore key to
   fill the shared NuGet cache (MeshWeaver.Deploy#68); `check-build-stages.py` validates its shape and, for core, reds
-  a restore that drifts from the build's solution and properties or drops the resolver fixtures.
+  a restore that drifts from the build's solution and properties or drops the resolver fixtures. `core-build-stages.py
+  --check` holds the fixture list to the code: a `#r "nuget:…"` in a sample's source or an executable doc fence
+  (`--render` / `--execute`) whose id and exact version the fixture project does not list — or that names no exact
+  version — is red, because the host would download it on every run without naming it. Measured on build-latest
+  (2026-10-30): host-forced shadow runs of core warmed core's restore key from the default branch's tip (`warm NuGet
+  cache: filled … 3 package(s) promoted`, then `holds the default branch's restore`) and their `build` stage reported
+  no `MWPREP001` — nothing restored per run — so `prepared packages` is no longer owed.
 - **Remove an `owes` entry only in the change that pays it.** The claim then follows mechanically.
 
 **Core's stages serve a DEPLOYMENT today, and are declared for its pull requests.** Core declares
@@ -933,8 +987,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
   reds any drift. The runner also refuses a `--total` the image was not packed for.
 - **No `ciEquivalent` while core owes.** `--check` holds the declaration to the one rule above; the
-  generator's `OWES` list is the debt — `Consolidate test results` (the build API does not yet serve a
-  receipt's bytes, which the host-results job fetches), the prepared package closure, the browser and font set, the
+  generator's `OWES` list is the debt — `Consolidate test results` (the host-results fetch is built on both
+  ends but has never run, since it runs only on the plain `host` route), the prepared package closure, the browser and font set, the
   prepared-mesh rule, and a green probe that agrees with Actions. (The legs that read the build's artifacts —
   platform-compat and licence-gate — are paid: the host build hands their inputs back, below.)
 - **The shards FAN OUT on one host (`"parallel": true`).** The runner (MeshWeaver.Deploy `build-run.py`)
@@ -1038,11 +1092,13 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   job's shape (`test/**/*.trx`, `test/test-results.log`, `collected-logs/**`), one path with two
   contents, a missing `test/test-results.log` or one with no `[CI] <project> exit=<n>` marker, a
   refused fetch, a body whose size or sha256 differs from its receipt (TRUNCATED or padded), and a
-  written tree that is not exactly the receipts' set. 🚨 **Owed outside core:** the build API
-  (MeshWeaver.Plugins `BuildHostEndpoints`) serves the receipts but not yet the object route in step 2,
-  so on the host route `host-results` is RED with a 404 naming it until that lands — and the
-  `Consolidate test results` owes entry is paid only when collect-results consolidates results
-  fetched this way.
+  written tree that is not exactly the receipts' set. The object route in step 2 is served by
+  MeshWeaver.Plugins `BuildHostEndpoints` (since MeshWeaver.Plugins#4526) and is live on the control
+  instance: measured 2026-10-30, a tokenless `GET …/artifacts/<sha256>?channel=latest` answers 401
+  naming the OIDC token, while a path one segment longer answers 404. 🚨 **Still owed:** a fetch
+  that has actually run. `host-results` runs only on the plain `host` route, never in host-forced
+  shadow, so the `Consolidate test results` owes entry is paid only when collect-results
+  consolidates results fetched this way on a host run.
 - **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
   `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
