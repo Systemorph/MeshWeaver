@@ -140,6 +140,9 @@ public static class PackageDependencyFloorGate
                 .FirstOrDefault(u => string.Equals(u.Dependent, candidate.Id, StringComparison.Ordinal))
             is { } floor
             ? new UnmetPackageDependency(floor.Requirement, floor.Dependency, floor.Module, floor.LoadedVersion)
+            {
+                Landed = true,
+            }
             : null;
     }
 
@@ -224,6 +227,10 @@ public static class PackageDependencyFloorGate
         if (unmet.Unjudged is { Length: > 0 } why)
             return $"held: {version} — {HoldMarker}{unmet.Requirement} could not be judged: {why}; "
                 + "updates once the module readings answer and every requirement is met";
+        if (unmet.Landed)
+            return $"held: {version} — {HoldMarker}{unmet.Requirement} is not met by the landed module set: "
+                + $"'{unmet.Module}' (package '{unmet.Dependency}') is landed at {unmet.LoadedVersion}; "
+                + $"updates once a satisfying '{unmet.Dependency}' build is landed";
         return $"held: {version} — {HoldMarker}{unmet.Requirement} is not met: this instance runs "
             + $"'{unmet.Module}' (package '{unmet.Dependency}') at {unmet.LoadedVersion}; updates once a "
             + $"satisfying '{unmet.Dependency}' is loaded";
@@ -380,6 +387,14 @@ public sealed record UnmetPackageDependency(
     /// unmet one does (MeshWeaver#6192): an unread dependency is never read as a met one.
     /// </summary>
     public string? Unjudged { get; init; }
+
+    /// <summary>
+    /// True when the verdict came from the LANDED activation entry (what the module-set proposal
+    /// judges), not from what this process loaded: <see cref="LoadedVersion"/> is then the LANDED
+    /// version, and the remedy is to land a satisfying build — a satisfying one may already be
+    /// loaded (an image copy), which is exactly the case this reading exists for (MeshWeaver#6192).
+    /// </summary>
+    public bool Landed { get; init; }
 
     /// <summary>The verdict for a candidate whose requirements could not be judged (pure).</summary>
     /// <param name="candidate">The candidate.</param>

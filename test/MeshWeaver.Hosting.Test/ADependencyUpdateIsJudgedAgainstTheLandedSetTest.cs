@@ -133,8 +133,13 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
         unmet!.Requirement.Should().Be(Requirement);
         unmet.Module.Should().Be(AiModule);
         unmet.LoadedVersion.Should().Be("1.42.3");
-        PackageDependencyFloorGate.IsDependencyHold(PackageDependencyFloorGate.HeldSentence(Chat180, unmet))
+        var sentence = PackageDependencyFloorGate.HeldSentence(Chat180, unmet);
+        PackageDependencyFloorGate.IsDependencyHold(sentence)
             .Should().BeTrue("the hold is recorded as a dependency hold, so a later met pass clears it");
+        sentence.Should().Contain("is landed at 1.42.3").And.Contain("build is landed",
+            "the remedy is to LAND a satisfying build — a satisfying one is already loaded here");
+        sentence.Should().NotContain("this instance runs",
+            "the landed verdict must not claim the process runs the version it merely has landed");
 
         // ── negative control: a satisfying AI lands, and the same candidate is admitted ─────────
         await LandAi("1.43.4", ct);
@@ -252,6 +257,32 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
 
         registry.Serve("Chat", "1.8.0", "MeshWeaver.Blazor.Chat");
         (await Adopt(Chat180, ct)).Should().NotBeNull("listing and bundle agree: the adopt is reached");
+
+        // The labels are compared as VersionMislabel compares them: case-insensitively.
+        registry.Serve("Chat", "1.8.0-rc.1", "MeshWeaver.Blazor.Chat");
+        (await Adopt(Chat180 with { Version = "1.8.0-RC.1", ReleasedVersion = "1.8.0-RC.1" }, ct))
+            .Should().NotBeNull("a label differing only in casing is the same version");
+    }
+
+    /// <summary>
+    /// The guards run only for a plan that LANDS (review on #7736): a module with nothing to land
+    /// — here the registry serves no bundle for it — is answered as decided even with an unread
+    /// listing, which the guard would have declined. An unchanged module pays no guard reads.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task APlanThatDoesNotLand_RunsNoGuard()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        registry.Serve("SomethingElse", "1.0.0", "MeshWeaver.SomethingElse");
+
+        var outcome = await RegistryUpdateReconciler.AdoptChecked(Mesh,
+                new PluginBundleClient(Mesh, FakeRegistry.Url, "mwi_test"),
+                "Chat", "MeshWeaver.Blazor.Chat", $"{PackageInstaller.InstalledPartition}/Chat",
+                policyDecline: null, served: null, logger: null)
+            .Should().Within(TestTimeouts.Convergence).Emit("the checked adopt answers once", ct);
+        outcome.Should().NotBeNull("a non-landing plan is answered as decided, unguarded");
+        outcome!.Verdict!.Action.Should().NotBe(ModuleUpdateAction.Land);
+        registry.Downloads.Should().Be(0);
     }
 
     /// <summary>The checked adopt, through a fresh bundle client (a fresh index snapshot).</summary>

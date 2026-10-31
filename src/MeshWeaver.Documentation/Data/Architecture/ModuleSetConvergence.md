@@ -397,10 +397,18 @@ landed reading that answers nothing, or faults, HOLDS the update: the record's `
 the requirement "could not be judged" and why, and the first pass whose readings answer decides
 again. Not changed: a host with no module host at all, a candidate that declares nothing, a
 dependency with no loaded and no landed module here, and a fresh install. The registry MODULE lane
-(`RegistryUpdateReconciler.AdoptOne`) now asks the same question before it lands a dependent's
-module, through the policy-decline seam (`DependencyDecline`). It had landed Chat's module 1.8.2 at
-08:22Z beside AI 1.42.3 while Chat's content update was held for that same requirement. A
-broadcast whose package listing cannot be read declines rather than landing unjudged. Pinned by
+(`RegistryUpdateReconciler.AdoptChecked`) now plans each adopt first (`PluginBundleClient.PlanModuleAdoption`,
+no transfer). Only a plan that LANDS is guarded: a newer version, a first landing, a repair, a
+rebuild or a fallback recovery. The guard is the same dependency verdict plus a binding of the
+judged listing to the exact planned bundle, by version, compared case-insensitively. A declined
+landing downloads nothing; it does not ride the adopt's policy seam, which several of those paths
+bypass. An unchanged module pays no guard reads. The lane had landed Chat's module 1.8.2 at 08:22Z
+beside AI 1.42.3 while Chat's content update was held for that same requirement. A broadcast whose
+package listing cannot be read declines rather than landing unjudged. The landed reading is taken
+WHOLE (`ModuleLandingService.GetCheckedActivation`): a corrupt record that drops the dependency
+holds, as the proposal refuses it. A hold decided on the landed entry says so ("is landed at …;
+updates once a satisfying build is landed"), since a satisfying build may already be loaded.
+Pinned by
 `ADependencyUpdateIsJudgedAgainstTheLandedSetTest`. Which of the two readings let the 03:16 install
 through, an empty or faulted loaded reading or an image copy reading newer than the landed
 entry, was not read from that replica's logs; the change closes both.
