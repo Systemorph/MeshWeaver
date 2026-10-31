@@ -448,8 +448,10 @@ refresh_verdict() {
     printf '%s' " The volume carries NO retention.json, which the refresh writes at the end of every tick it completes — it has never completed one on this share."
     return 0
   fi
-  written="$(sed -n 's/.*"written-at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" 2>/dev/null | sed -n 1p || true)"
-  body="$(tr -s ' \n\t' ' ' < "$file" 2>/dev/null | head -c 2000 || true)"
+  # One sed (first match, then quit) and head BEFORE tr: no pipe stage can be cut short, so
+  # nothing here needs its status or its stderr swallowed — a read that fails says so in the log.
+  written="$(sed -n '/"written-at"/{s/.*"written-at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;q;}' "$file")"
+  body="$(head -c 2000 "$file" | tr -s ' \n\t' ' ')"
   at="$(epoch_of "${written:-}")"
   if [ -z "$at" ]; then
     printf '%s' " The refresh's last verdict ($file) carries no readable written-at ('${written:-}'): $body"
