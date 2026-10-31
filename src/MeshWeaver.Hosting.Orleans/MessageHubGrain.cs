@@ -10,7 +10,9 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Hosting.Persistence.Query;
+using System.Reactive.Disposables;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Orleans.Streams;
 
@@ -57,6 +59,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     // behaviour (raw rejection) rather than failing activation.
     private readonly GrainActivationFailureRegistry? activationFailures =
         meshHub.ServiceProvider.GetService<GrainActivationFailureRegistry>();
+
+    // The fault-injection harness's hold on the hub build (#7470). Never registered in production,
+    // where it is null and the build runs exactly as it always did — see IHubBuildSeam.
+    private readonly IHubBuildSeam? buildSeam = meshHub.ServiceProvider.GetService<IHubBuildSeam>();
 
     /// <summary>
     /// Hub-ready signal — a <see cref="ReplaySubject{T}"/>(buffer=1) wrapped in
@@ -438,16 +444,20 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         _startActivation = () =>
             _activationSubscription = Observable.Using(
                     () => HoldActivation("hub build", LogLevel.Debug),
-                    _ => BuildActivationChain(
-                        sourceStream,
-                        addressPath,
-                        FirstNodeResolutionTimeout,
-                        node =>
-                        {
-                            logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
-                                streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
-                            return ResolveHubConfigurationObservable(node);
-                        }))
+                    _ =>
+                    {
+                        var build = BuildActivationChain(
+                            sourceStream,
+                            addressPath,
+                            FirstNodeResolutionTimeout,
+                            node =>
+                            {
+                                logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
+                                    streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
+                                return ResolveHubConfigurationObservable(node);
+                            });
+                        return buildSeam is null ? build : buildSeam.Build(streamId, build);
+                    })
                 .Subscribe(
                     node => CompleteActivation(streamId, address, grainScheduler, node),
                     ex =>
@@ -1327,10 +1337,26 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         //    (RoutingServiceBase: Mesh.Post(new DeliveryFailure(delivery){ ErrorType =
         //    Unavailable }, o => o.ResponseFor(delivery))). Answer-once holds: the ack carries no
         //    Failed state, so RoutingGrain never NACKs a second time.
+        //
+        // 🚨 …AND A PARKED DELIVERY IS ANSWERED THE MOMENT ITS HOST BEGINS TO LEAVE (#7470). The
+        // intake gate above refuses what arrives AFTER ApplicationStopping; a delivery accepted just
+        // BEFORE it was parked on the build and, when the build finished, posted to a hub whose every
+        // answer the leaving router then refused. Its sender waited out its whole budget — 330
+        // SubscribeRequests from one cache hub at once on the roll measured on #7470. So the park
+        // races the host's stop (HubReadyUnlessTheHostLeaves): whichever comes first decides, and a
+        // stop that comes first settles the delivery as the transient ShuttingDown refusal the intake
+        // gate would have given it. NackParkedDelivery stamps that refusal so the leaving router lets
+        // it out (OrleansRoutingService.LeavingHostRefusalProperty) — the one answer that must still
+        // leave a stopping host, because it is what sends the sender to the next activation.
         var settlement = new DeliverySettlement();
-        HubReady.Take(1).Subscribe(
+        HubReadyUnlessTheHostLeaves().Subscribe(
             hub =>
             {
+                if (hub is null)
+                {
+                    Settle(LeavingHostRefusal(delivery));
+                    return;
+                }
                 // 🚨 THE ACKNOWLEDGEMENT CARRIES THE VERDICT, NOT THE BODY — issue #3045. Orleans
                 // deep-copies a grain call's RESULT with the same JsonCodec as its arguments, so
                 // returning the delivery made every payload cross the boundary TWICE. The caller
@@ -1374,9 +1400,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 $"Hub disposed before delivery for {this.GetPrimaryKeyString()}.",
                 ErrorType.ShuttingDown)));
 
-        return Task.FromResult(settlement.TryParkWithoutVerdict(out var synchronousVerdict)
-            ? Acknowledge(delivery).Submitted()
-            : synchronousVerdict);
+        if (!settlement.TryParkWithoutVerdict(out var synchronousVerdict))
+            return Task.FromResult(synchronousVerdict);
+        buildSeam?.Parked(this.GetPrimaryKeyString(), delivery);
+        return Task.FromResult(Acknowledge(delivery).Submitted());
 
         // Runs once, on whichever thread HubReady answers on: inside the Subscribe above (the hub is
         // built — the verdict rides the acknowledgement) or later, off the activation chain (the
@@ -1491,8 +1518,48 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         using (delivery.AccessContext is null ? access?.ImpersonateAsSystem() : null)
             meshHub.Post(
                 new DeliveryFailure(delivery) { ErrorType = errorType, Message = failureMessage },
-                o => o.ResponseFor(delivery));
+                // 🚨 A ShuttingDown NACK from a LEAVING host is the one answer its router still lets
+                // out (#7470): without the stamp it is refused at the very gate it reports on, and the
+                // sender of a parked delivery is never told. See LeavingHostRefusalProperty.
+                o => errorType == ErrorType.ShuttingDown && meshHub.IsLeaving()
+                    ? o.ResponseFor(delivery).WithProperty(OrleansRoutingService.LeavingHostRefusalProperty, true)
+                    : o.ResponseFor(delivery));
     }
+
+    /// <summary>
+    /// <see cref="HubReady"/>'s first notification — or <c>null</c> when this activation's host begins
+    /// to leave first (#7470). A built hub replays synchronously and so always wins when it exists;
+    /// an unbuilt one loses to the stop, and the parked delivery is refused instead of being handed
+    /// to a hub whose answers can no longer leave the process.
+    /// </summary>
+    private IObservable<IMessageHub?> HubReadyUnlessTheHostLeaves()
+    {
+        var ready = HubReady.Take(1).Select(hub => (IMessageHub?)hub);
+        // The steady state — the hub is built — needs no race: the replay answers synchronously, so
+        // the hot path takes no stop registration per delivery.
+        return _hub is not null
+            ? ready
+            : ready.Amb(HostLeaving().Select(_ => (IMessageHub?)null));
+    }
+
+    /// <summary>
+    /// One notification when the hosting process begins to stop (<see cref="IHostApplicationLifetime.ApplicationStopping"/>,
+    /// the signal <see cref="HubLeavingExtensions.IsLeaving"/> and the router's stop gate read), at
+    /// once when it already has; never on a host with no application lifetime.
+    /// </summary>
+    private IObservable<Unit> HostLeaving()
+        => Observable.Create<Unit>(observer =>
+        {
+            var stopping = meshHub.ServiceProvider.GetService<IHostApplicationLifetime>()?.ApplicationStopping
+                           ?? CancellationToken.None;
+            if (!stopping.CanBeCanceled)
+                return Disposable.Empty;
+            return stopping.Register(() =>
+            {
+                observer.OnNext(Unit.Default);
+                observer.OnCompleted();
+            });
+        });
 
     /// <summary>
     /// The delivery as an ACKNOWLEDGEMENT — state, id, sender, target, access context and every
@@ -1653,6 +1720,21 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// <returns>The failed acknowledgement.</returns>
     private IMessageDelivery RefuseBecauseTheHostIsLeaving(IMessageDelivery delivery)
     {
+        var refusal = LeavingHostRefusal(delivery);
+        HandOffTheAddress();
+        return refusal;
+    }
+
+    /// <summary>
+    /// The <see cref="ErrorType.ShuttingDown"/> verdict for a delivery this activation cannot answer
+    /// because its host is leaving — the refusal itself, without the hand-off, so it can be reached
+    /// from off the grain turn (a parked delivery settled by the host's stop, #7470). The hand-off
+    /// follows from the sender's re-ask, which reaches the intake gate on a grain turn.
+    /// </summary>
+    /// <param name="delivery">The delivery being refused.</param>
+    /// <returns>The failed acknowledgement.</returns>
+    private IMessageDelivery LeavingHostRefusal(IMessageDelivery delivery)
+    {
         var grainId = this.GetPrimaryKeyString();
         if (Interlocked.Exchange(ref _leavingReported, 1) == 0)
             logger.LogInformation(
@@ -1660,7 +1742,6 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 + "process — refusing new deliveries as ShuttingDown and handing the address off "
                 + "(first refused: delivery {DeliveryId} from {Sender})",
                 grainId, delivery.Id, delivery.Sender);
-        HandOffTheAddress();
         return Acknowledge(delivery).Failed(
             ShutdownNack.RejectingNow(
                 grainId,

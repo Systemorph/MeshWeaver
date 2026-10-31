@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
@@ -50,6 +50,8 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
     // OrleansCrossSiloStreamProbeTest.cs:53.
     private readonly TaskCompletionSource<DeliveryFailure> nack =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<IMessageDelivery> nackDelivery =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IHostApplicationLifetime lifetime;
 
     public OrleansRoutingShutdownClassificationTest(ITestOutputHelper output) : base(output)
@@ -63,7 +65,15 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
         // The hub sits AT the sender address, so the DeliveryFailure the router posts back to
         // delivery.Sender lands on this handler — the real NACK, not a stand-in.
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(SenderAddress, conf => conf
-            .WithHandler<DeliveryFailure>((_, d) => { nack.TrySetResult(d.Message); return d.Processed(); })
+            .WithHandler<DeliveryFailure>((_, d) =>
+            {
+                nack.TrySetResult(d.Message);
+                // Only a leaving host's refusal: the router's ordinary local-sender NACK in these
+                // cases is addressed elsewhere and must not be mistaken for the conversion.
+                if (d.Properties.ContainsKey(OrleansRoutingService.LeavingHostRefusalProperty))
+                    nackDelivery.TrySetResult(d);
+                return d.Processed();
+            })
             .WithPostingIdentity(PostingIdentity.System)));
     }
 
@@ -128,5 +138,68 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
         // the probe that proves placement was reached.
         await Assert.ThrowsAsync<NullReferenceException>(
             () => routing.DeliverMessage(NewDelivery()).FirstAsync().Await());
+    }
+
+    /// <summary>
+    /// #7470: a LEAVING HOST'S REFUSAL is the one delivery the stop gate lets through — it is what
+    /// sends a remote sender to the next activation. Off a silo (no membership to read) nothing says
+    /// placement cannot work, so it must REACH grain placement, observable as the null probe's throw.
+    /// The guard above still holds for everything else; this is the counterpart that proves the
+    /// exemption is real rather than a stamp the gate never reads.
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_ALeavingHostRefusal_StillReachesGrainPlacement()
+    {
+        var routing = CreateRouter();
+        lifetime.StopApplication();
+
+        var refusal = NewDelivery().WithProperty(OrleansRoutingService.LeavingHostRefusalProperty, true);
+
+        await Assert.ThrowsAsync<NullReferenceException>(
+            () => routing.DeliverMessage(refusal).FirstAsync().Await());
+    }
+
+    /// <summary>
+    /// #7470: a REPLY a stopping host can no longer deliver — a SubscribeAck, a response to a request
+    /// accepted just before the stop — is turned into the refusal it CAN deliver: a ShuttingDown
+    /// <see cref="DeliveryFailure"/> to the reply's TARGET (the requester), correlated to the
+    /// requester's own request id and stamped so the gate lets it out. Here the requester is the real
+    /// hub at <c>SenderAddress</c>, so the failure asserted is the one the router actually posted.
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_AnUndeliverableReply_AnswersItsRequesterShuttingDown()
+    {
+        var routing = CreateRouter();
+        lifetime.StopApplication();
+
+        var reply = new MessageDelivery<string>(TargetAddress, SenderAddress, "ack", JsonSerializerOptions.Default)
+            .WithProperty(PostOptions.RequestId, "the-requesters-request");
+
+        await routing.DeliverMessage(reply).FirstAsync().Await();
+
+        var refused = await nackDelivery.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var failure = Assert.IsType<DeliveryFailure>(refused.Message);
+        Assert.Equal(ErrorType.ShuttingDown, failure.ErrorType);
+        Assert.Equal("the-requesters-request", refused.Properties[PostOptions.RequestId]?.ToString());
+        Assert.True(refused.Properties.ContainsKey(OrleansRoutingService.LeavingHostRefusalProperty));
+    }
+
+    /// <summary>
+    /// The control for the conversion above: a delivery that is NOT a reply (no request id) gets no
+    /// such refusal — its local sender is NACKed exactly as before, and nothing is posted to its target.
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_ADeliveryThatIsNotAReply_IsNotConverted()
+    {
+        var routing = CreateRouter();
+        lifetime.StopApplication();
+
+        // Addressed TO the hub, from elsewhere, with no request id: a conversion would land on the hub.
+        var notAReply = new MessageDelivery<string>(TargetAddress, SenderAddress, "event", JsonSerializerOptions.Default);
+
+        var result = await routing.DeliverMessage(notAReply).FirstAsync().Await();
+
+        Assert.Equal(MessageDeliveryState.Failed, result.State);
+        await Assert.ThrowsAsync<TimeoutException>(() => nackDelivery.Task.WaitAsync(TimeSpan.FromSeconds(2)));
     }
 }
