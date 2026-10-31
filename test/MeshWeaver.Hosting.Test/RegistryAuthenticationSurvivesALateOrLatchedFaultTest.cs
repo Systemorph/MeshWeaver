@@ -142,10 +142,12 @@ public class RegistryHoldSurvivesALateTerminalTest(ITestOutputHelper output) : H
 {
     private const string Path = "acme/MeshWeaverInstance/prod";
 
-    /// <summary>A mirror that records its observers and never detaches them, like a terminal
-    /// already queued on a pool when the subscription is disposed.</summary>
+    /// <summary>A hydrated mirror: answers every subscriber at once with its current frame (the
+    /// entry's replay), records its observers and never detaches them, like a terminal already queued
+    /// on a pool when the subscription is disposed.</summary>
     private sealed class LateMirror : IObservable<MeshNode>
     {
+        private static readonly MeshNode Frame = MeshNode.FromPath(Path);
         private ImmutableList<IObserver<MeshNode>> observers = ImmutableList<IObserver<MeshNode>>.Empty;
         private int live;
 
@@ -155,7 +157,9 @@ public class RegistryHoldSurvivesALateTerminalTest(ITestOutputHelper output) : H
         {
             ImmutableInterlocked.Update(ref observers, list => list.Add(observer));
             Interlocked.Increment(ref live);
-            return Disposable.Create(() => Interlocked.Decrement(ref live));
+            var subscription = Disposable.Create(() => Interlocked.Decrement(ref live));
+            observer.OnNext(Frame);
+            return subscription;
         }
 
         public void FaultLate(Exception error)
@@ -223,5 +227,41 @@ public class RegistryHoldSurvivesALateTerminalTest(ITestOutputHelper output) : H
         authenticator.HeldPaths.Should().Contain(Path, "B, the later renewal, still holds the path");
         replacement.Live.Should().Be(1, "B's subscription on the replacement mirror was not disposed by A's late publication");
         old.Live.Should().Be(0, "A, superseded, disposed its own subscription instead of publishing");
+    }
+
+    /// <summary>
+    /// Overlapping renewals ordered by CALL instead of by attachment (review of #7729): renewal A starts
+    /// first but pauses before it attaches; renewal B starts later, attaches to the OLD mirror and
+    /// publishes; the old mirror is evicted and A attaches to the replacement. A is on the healthy
+    /// mirror and must win — ordering by call discarded it in favour of B, and B's late terminal then
+    /// left the path unheld. The pause is the hook before the subscription, which runs B inside it.
+    /// </summary>
+    [Fact]
+    public void ARenewalThatAttachesLast_WinsEvenIfItStartedFirst()
+    {
+        var old = new LateMirror();
+        var replacement = new LateMirror();
+        var served = new Queue<LateMirror>(new[] { old, replacement });
+        var paused = 0;
+        InstanceRegistryAuthenticator? authenticator = null;
+        authenticator = new InstanceRegistryAuthenticator(GetHost(), NullLogger<InstanceRegistryAuthenticator>.Instance)
+        {
+            HoldOverride = _ => served.Dequeue(),
+            // A is paused before attaching; B attaches to the old mirror and publishes inside A's window.
+            BeforeSubscribe = path =>
+            {
+                if (Interlocked.Exchange(ref paused, 1) == 0)
+                    authenticator!.Hold(path);
+            },
+        };
+        using var _ = authenticator;
+
+        authenticator.Hold(Path);
+        // B's mirror was the old one: its fault is delivered now.
+        old.FaultLate(new IOException("owner unreachable"));
+
+        authenticator.HeldPaths.Should().Contain(Path, "A, which attached to the replacement last, holds the path");
+        replacement.Live.Should().Be(1, "A's subscription on the replacement mirror survived B's earlier publication");
+        old.Live.Should().Be(0, "B, on the old mirror, was replaced and disposed");
     }
 }

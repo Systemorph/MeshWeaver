@@ -65,13 +65,25 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     private long holdSequence;
     private int disposed;
 
-    /// <summary>One hold: its subscription, and the order in which it was STARTED — the order in
-    /// which it reached the cache, which is what decides whether it can be on an older mirror than a
-    /// hold already published.</summary>
-    private sealed class HoldSlot(long sequence)
+    /// <summary>One hold: its subscription, and the order in which its mirror delivered its FIRST
+    /// frame — the moment the cache entry it attached to answered, which is what decides whether it
+    /// can be on an older mirror than a hold already published (see <see cref="Publish"/>).</summary>
+    private sealed class HoldSlot
     {
-        public long Sequence { get; } = sequence;
+        private long sequence;
+
         public SingleAssignmentDisposable Subscription { get; } = new();
+
+        /// <summary>The first-frame order, or 0 before the first frame.</summary>
+        public long Sequence => Interlocked.Read(ref sequence);
+
+        /// <summary>Stamps the first-frame order; false when a frame was already stamped.</summary>
+        public bool TryStamp(Func<long> next)
+        {
+            if (Interlocked.Read(ref sequence) != 0)
+                return false;
+            return Interlocked.CompareExchange(ref sequence, next(), 0) == 0;
+        }
     }
 
     /// <summary>Retry-After (seconds) an endpoint advertises when resolution was UNAVAILABLE.
@@ -767,19 +779,22 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     {
         if (Volatile.Read(ref disposed) != 0)
             return;
+        BeforeSubscribe?.Invoke(path);
         var source = HoldOverride is { } test
             ? test(path)
             : hub.ServiceProvider.GetService<AccessService>()
                 .RunAsSystem(() => (IObservable<MeshNode>)hub.GetMeshNodeStream(path));
-        // The sequence is taken immediately before the subscription reaches the cache: a hold that
-        // started LATER attached to the same or a NEWER mirror (the cache only ever replaces an entry
-        // it has evicted), so a higher sequence is never the staler hold.
-        var slot = new HoldSlot(Interlocked.Increment(ref holdSequence));
+        var slot = new HoldSlot();
         // Assigned AFTER Subscribe returns: a mirror that terminates synchronously releases the slot
         // first, and assigning to a disposed SingleAssignmentDisposable disposes the subscription on
         // the spot — so a terminated hold never lingers.
         slot.Subscription.Disposable = source.Subscribe(
-            _ => { },
+            _ =>
+            {
+                // The hold is PUBLISHED on its mirror's first frame, never at subscribe: see Publish.
+                if (slot.TryStamp(() => Interlocked.Increment(ref holdSequence)))
+                    Publish(path, slot);
+            },
             ex =>
             {
                 logger.LogDebug(ex,
@@ -788,19 +803,30 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                 Release(path, slot);
             },
             () => Release(path, slot));
-        BeforePublish?.Invoke(path);
+    }
 
-        // 🚨 RENEW, never skip — and never let an OLDER renewal win. This request's hold replaces the
-        // slot the path has only when it STARTED later than that slot, and the replaced one is disposed
-        // only after this one is subscribed, so the entry never drops to zero subscribers.
-        //   • Skipping when a slot existed lost the hold when that slot's mirror had already faulted
-        //     but its terminal had not been delivered: the request read a fresh entry, the late
-        //     terminal removed the old slot, and the fresh entry was left unheld for the idle sweep.
-        //   • Replacing unconditionally lost it the other way: a renewal that subscribed to the OLD
-        //     mirror and paused before publishing overwrote (and disposed) a later renewal on the
-        //     replacement, and its own terminal then left the path unheld.
-        // A superseded renewal disposes itself; a late terminal releases only its own slot
-        // (pair-exact). The renewal is an in-memory attach to a live cache entry, not a read.
+    /// <summary>
+    /// 🚨 Installs <paramref name="slot"/> as the hold for <paramref name="path"/> — RENEW, never skip,
+    /// and never let a hold on an OLDER mirror win.
+    ///
+    /// <para>Ordered by the moment each hold's mirror delivered its FIRST frame, stamped when it
+    /// arrives. That is the attachment, not the call: a hold that reached a live entry is answered from
+    /// its replay at once, a hold that reached a replacement entry is answered when that entry hydrates
+    /// — after the old one was evicted — and a hold whose entry faulted before answering is never
+    /// stamped and never published. So the later stamp is the newer mirror, whatever order the calls
+    /// started in and wherever they paused. Three shapes this closes, each pinned in
+    /// <c>RegistryHoldSurvivesALateTerminalTest</c>: skipping because a slot existed (a late terminal
+    /// then removed it and left the replacement unheld); replacing unconditionally (an older renewal
+    /// paused before publishing disposed a newer one); and ordering by call (a renewal that started
+    /// first but attached last was discarded in favour of one on the old mirror).</para>
+    ///
+    /// <para>The replaced slot is disposed only after this one is installed, so the entry never drops to
+    /// zero subscribers; a superseded hold disposes itself; a late terminal releases only its own slot
+    /// (pair-exact). A renewal is an in-memory attach to a live cache entry, not a mesh read.</para>
+    /// </summary>
+    private void Publish(string path, HoldSlot slot)
+    {
+        BeforePublish?.Invoke(path);
         while (true)
         {
             if (holds.TryGetValue(path, out var current))
@@ -826,13 +852,17 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
             Release(path, slot);
     }
 
+    /// <summary>Runs before a hold resolves and subscribes to its mirror. Test seam: it lets an
+    /// overlapping renewal attach and publish before this one has attached.</summary>
+    internal Action<string>? BeforeSubscribe { get; init; }
+
     /// <summary>
     /// The stream a hold subscribes to, injectable so the renewal can be pinned against a mirror
     /// whose terminal arrives late. Production holds the owner's mirror in the process-wide cache.
     /// </summary>
     internal Func<string, IObservable<MeshNode>>? HoldOverride { get; init; }
 
-    /// <summary>Runs between a hold's subscription and its publication. Test seam: it lets an
+    /// <summary>Runs between a hold's first frame and its publication. Test seam: it lets an
     /// overlapping renewal finish while this one is paused before publishing.</summary>
     internal Action<string>? BeforePublish { get; init; }
 
