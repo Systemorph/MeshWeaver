@@ -18,6 +18,8 @@ namespace MeshWeaver.Mesh.Threading;
 public sealed class IoPoolRegistry : IDisposable
 {
     private readonly ConcurrentDictionary<string, IoPool> _pools = new(StringComparer.Ordinal);
+    // Serial write lanes (SerialWriteLane) by name — an instance field, so they die with the mesh.
+    private readonly ConcurrentDictionary<string, SerialWriteLane> _lanes = new(StringComparer.Ordinal);
     private readonly IoPoolOptions _options;
     private readonly ILogger<IoPoolRegistry>? _logger;
     private int _disposing;
@@ -121,6 +123,55 @@ public sealed class IoPoolRegistry : IDisposable
         pool.Dispose();
         return pool;
     });
+
+    /// <summary>
+    /// Gets (creating on first use) the <see cref="SerialWriteLane"/> named <paramref name="name"/>,
+    /// whose writes take slots of <paramref name="budget"/>. The registry owns it for the life of
+    /// the mesh and reports it in <see cref="SerialLaneSnapshot"/>, which is what lets a delete
+    /// queued in it earn queue credit (MeshWeaver#7464). Every caller asking for one name gets the
+    /// same lane; the budget of the first caller is the one it keeps.
+    /// </summary>
+    /// <param name="name">The lane's name, e.g. <c>pg:Postgres:{schema}</c>.</param>
+    /// <param name="budget">The bounded pool the lane's writes take slots of.</param>
+    /// <returns>The lane.</returns>
+    public SerialWriteLane GetSerialLane(string name, IIoPool budget)
+    {
+        // 🚨 Never repopulate a closed registry (the same two checks as Get): a lane added after
+        // Dispose() cleared _lanes would be disposed by nobody. A refused caller gets a DISPOSED
+        // lane, which answers every write with an ObjectDisposedException rather than running it.
+        if (Volatile.Read(ref _disposing) != 0)
+            return RefusedLane(name, budget);
+
+        // A lane that loses the GetOrAdd race holds no thread and nothing queued; it is disposed.
+        SerialWriteLane? candidate = null;
+        var lane = _lanes.GetOrAdd(name, n => candidate = new SerialWriteLane(n, budget, _logger));
+        if (candidate is not null && !ReferenceEquals(lane, candidate))
+            candidate.Dispose();
+
+        // Re-check: disposal may have begun between the check above and the add, after its
+        // snapshot of _lanes. Pull the lane back out and refuse.
+        if (Volatile.Read(ref _disposing) != 0 && _lanes.TryRemove(name, out var raced))
+        {
+            raced.Dispose();
+            return RefusedLane(name, budget);
+        }
+
+        return lane;
+    }
+
+    private SerialWriteLane RefusedLane(string name, IIoPool budget)
+    {
+        var refused = new SerialWriteLane(name, budget, _logger);
+        refused.Dispose();
+        return refused;
+    }
+
+    /// <summary>
+    /// A reading of every serial write lane that EXISTS right now, creating none — the lanes'
+    /// counterpart of <see cref="Snapshot"/>, read by a delete's queue credit.
+    /// </summary>
+    public IReadOnlyList<SerialWriteLaneReading> SerialLaneSnapshot() =>
+        _lanes.Values.Select(lane => lane.Read()).ToArray();
 
     /// <summary>
     /// Total operations currently executing across every pool. Zero means no
@@ -240,6 +291,26 @@ public sealed class IoPoolRegistry : IDisposable
         var leaked = 0;
         var residuals = new List<PoolResidual>();
         var cancelled = new List<PoolResidual>();
+
+        // 🚨 THE LANES FIRST, while the budget pools still admit (MeshWeaver#7464). A serial lane
+        // has only its head admitted to a pool; draining the pool first would refuse every write
+        // queued behind it instead of giving that backlog the drain's grace. Each lane closes to new
+        // writes and runs what it already holds, under the same stall bound as a pool drain. A lane
+        // that stalls is REPORTED with what it still held — those writes are refused when the pools
+        // close below, and a report that said nothing about them would read as a clean drain.
+        foreach (var lane in _lanes.Values)
+        {
+            if (lane.DrainQueued(_options.DrainGrace))
+                continue;
+            var reading = lane.Read();
+            var held = reading.InFlight + reading.Waiting;
+            cancelled.Add(new PoolResidual("lane:" + lane.Name, held));
+            _logger?.LogWarning(
+                "IoPoolDrain: write lane '{Lane}' made no progress within the {Grace} drain grace with "
+                + "{Held} write(s) still held — they are refused when the pools close. Find why the lane "
+                + "stalled; do not widen the grace.", lane.Name, _options.DrainGrace, held);
+        }
+
         foreach (var kvp in _pools)
         {
             // Read the sites BEFORE the drain returns nothing to name: Drain() joins, so by the
@@ -382,6 +453,13 @@ public sealed class IoPoolRegistry : IDisposable
     {
         // Idempotent, and only the first caller reports.
         if (Interlocked.CompareExchange(ref _disposing, 1, 0) != 0) return;
+
+        // The serial lanes hold no thread; their in-flight writes are leaves of the budget pools
+        // drained below. Disposing a lane answers every write that has not started with an
+        // ObjectDisposedException at its turn, so no caller is left without a verdict.
+        foreach (var lane in _lanes.Values)
+            lane.Dispose();
+        _lanes.Clear();
 
         // 🚨 NON-BLOCKING. Each pool.Dispose() cancels its leaves and completes its own Disposed
         // when the last one unwinds — nothing here waits. A blocking join belongs nowhere near a
