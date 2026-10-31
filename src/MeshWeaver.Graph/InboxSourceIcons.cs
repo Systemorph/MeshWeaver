@@ -69,6 +69,23 @@ public static class InboxSourceIcons
             : Fallback;
 
     /// <summary>
+    /// The symbol a CATEGORY shows in the inbox's chrome (the Kind filter): a monochrome Fluent glyph, always — the
+    /// table's own for the category (<c>Conversations</c> → a chat bubble, <c>Mail</c> → an envelope), else the first
+    /// Fluent glyph among its sources', else <see cref="Fallback"/>. 🚨 Never a brand mark: a category spans several
+    /// channels (Conversations is Teams, WhatsApp and iMessage), and a full-colour logo sticks out among the
+    /// theme-tinted glyphs beside it (maintainer, 2026-10-30). A brand mark identifies a SOURCE — the per-item column.
+    /// Pure.
+    /// </summary>
+    /// <param name="category">The category id.</param>
+    /// <param name="sourceIcons">The resolved symbols of the category's sources, in order.</param>
+    public static string CategoryIcon(string? category, IEnumerable<string?> sourceIcons)
+        => category is { Length: > 0 } && Known.TryGetValue(category, out var own) && IsGlyph(own) ? own
+            : sourceIcons.FirstOrDefault(IsGlyph) ?? Fallback;
+
+    /// <summary>Whether <paramref name="icon"/> is a monochrome Fluent glyph — the only kind the inbox's chrome shows. Pure.</summary>
+    public static bool IsGlyph(string? icon) => Icon.Parse(icon) is { Provider: Icon.FluentProvider };
+
+    /// <summary>
     /// The symbol as a text prefix: its glyph when it IS a glyph (an emoji a provider declared), else empty
     /// — an SVG or a Fluent name must never be spliced into a label.
     /// </summary>

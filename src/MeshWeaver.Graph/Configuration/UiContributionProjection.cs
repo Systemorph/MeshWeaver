@@ -213,6 +213,39 @@ internal static class UiContributionProjection
     }
 
     /// <summary>
+    /// Projects the catalog's <see cref="UiContribution.InboxContext"/> entries into the areas the unified inbox of the
+    /// user at <paramref name="userPath"/> embeds above its list, in <see cref="UiContribution.Order"/>: the closed
+    /// node-shape gates against the user's PATH (no node is read first), and the partition rule of every embedding
+    /// contribution (<see cref="IsInContributorsPartition"/>). A null address means the user node's own hub. Pure.
+    /// </summary>
+    /// <param name="contributions">The catalog snapshot.</param>
+    /// <param name="userPath">The inbox's user node.</param>
+    /// <param name="isAdmin">Whether the viewer is a platform admin.</param>
+    /// <param name="viewerId">The viewer's id, for the viewer-home gate.</param>
+    public static IReadOnlyList<(string Id, string? Address, string Area, int Order)> ProjectInboxAreas(
+        IReadOnlyList<(MeshNode Node, UiContribution Content)> contributions,
+        string userPath,
+        bool isAdmin,
+        string? viewerId)
+    {
+        var areas = new List<(string Id, string? Address, string Area, int Order)>();
+        foreach (var (node, contribution) in contributions)
+        {
+            if (contribution.Context != UiContribution.InboxContext)
+                continue;
+            if (contribution.Area is not { Length: > 0 } area)
+                continue;
+            if (!PassesNodeGates(contribution.Gates, userPath, null, isAdmin, viewerId))
+                continue;
+            var address = contribution.Address is { Length: > 0 } declared ? declared.Trim('/') : null;
+            if (address is not null && !IsInContributorsPartition(address, node.Path))
+                continue;
+            areas.Add((node.Id is { Length: > 0 } id ? id : area, address, area, contribution.Order));
+        }
+        return [.. areas.OrderBy(a => a.Order).ThenBy(a => a.Id, StringComparer.Ordinal)];
+    }
+
+    /// <summary>
     /// Projects the catalog's <see cref="UiContribution.ProfileContext"/> entries into profile-page
     /// sections for the user node at <paramref name="userPath"/>. Same gates as every other
     /// projection (the closed node-shape vocabulary against the USER node; the permission floor of
