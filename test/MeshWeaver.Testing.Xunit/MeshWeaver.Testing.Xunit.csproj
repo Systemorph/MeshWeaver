@@ -10,6 +10,9 @@
     <!-- The custom-test-framework hook lives here. Already pinned and already referenced by
          MeshWeaver.Fixture and MeshWeaver.Hosting.Orleans.TestBase — no new dependency. -->
     <PackageReference Include="xunit.v3.extensibility.core" />
+    <!-- TimeoutWitness: the runtime's own dump writer over its diagnostic port, the facility
+         IoPoolSiloTeardown already uses (#7277). Pinned centrally. -->
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
   </ItemGroup>
   <ItemGroup>
     <!-- TestCollectionScope.Begin is internal on purpose: only the assembly runner opens a scope in
