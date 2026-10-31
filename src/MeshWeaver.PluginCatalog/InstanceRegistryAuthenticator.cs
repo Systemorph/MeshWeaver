@@ -62,6 +62,9 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     // cache's idle sweep never releases it between two polls. Instance state on a mesh-scoped
     // singleton (NoStaticState); a slot is removed pair-exact when its mirror terminates.
     private readonly ConcurrentDictionary<string, HoldSlot> holds = new(StringComparer.Ordinal);
+    // Holds subscribed but not yet published (no first frame yet) — OWNED here too, so a Dispose
+    // releases them and nothing a hold opens is ever out of reach.
+    private readonly ConcurrentDictionary<HoldSlot, string> pending = new();
     private long holdSequence;
     private int disposed;
 
@@ -752,15 +755,20 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     }
 
     /// <summary>
-    /// The owner's mirror for <paramref name="path"/>, with a standing hold on it (see
-    /// <see cref="Hold"/>). Only ever called once the listing has shown the node exists, so nothing
-    /// is held for a path that is not there.
+    /// The owner's mirror for <paramref name="path"/>; once THIS read has its frame, a standing hold
+    /// is taken on it (see <see cref="Hold"/>). Only ever called once the listing has shown the node
+    /// exists, so nothing is held for a path that is not there.
+    ///
+    /// <para>🚨 Held AFTER the read answered, never before: the hold then attaches to an entry that
+    /// has just answered, so its replay publishes it at once, and a request whose read times out (a
+    /// cold entry that never hydrates, the 503 path) takes NO hold — retries against an owner that
+    /// does not answer cannot pile up one pending subscription each.</para>
     /// </summary>
-    private IObservable<MeshNode> Held(string path)
-    {
-        Hold(path);
-        return hub.GetMeshNodeStream(path);
-    }
+    private IObservable<MeshNode> Held(string path) =>
+        ((IObservable<MeshNode>)hub.GetMeshNodeStream(path))
+            .Where(node => node is not null)
+            .Take(1)
+            .Do(_ => Hold(path));
 
     /// <summary>
     /// 🚨 Keeps the mirror of <paramref name="path"/> live in the process-wide cache
@@ -785,6 +793,7 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
             : hub.ServiceProvider.GetService<AccessService>()
                 .RunAsSystem(() => (IObservable<MeshNode>)hub.GetMeshNodeStream(path));
         var slot = new HoldSlot();
+        pending[slot] = path;
         // Assigned AFTER Subscribe returns: a mirror that terminates synchronously releases the slot
         // first, and assigning to a disposed SingleAssignmentDisposable disposes the subscription on
         // the spot — so a terminated hold never lingers.
@@ -793,7 +802,10 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
             {
                 // The hold is PUBLISHED on its mirror's first frame, never at subscribe: see Publish.
                 if (slot.TryStamp(() => Interlocked.Increment(ref holdSequence)))
+                {
+                    pending.TryRemove(slot, out string? _);
                     Publish(path, slot);
+                }
             },
             ex =>
             {
@@ -803,6 +815,9 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                 Release(path, slot);
             },
             () => Release(path, slot));
+        // A Dispose that ran while this hold was subscribing missed it.
+        if (Volatile.Read(ref disposed) != 0)
+            Release(path, slot);
     }
 
     /// <summary>
@@ -871,11 +886,15 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     private void Release(string path, HoldSlot slot)
     {
         holds.TryRemove(new KeyValuePair<string, HoldSlot>(path, slot));
+        pending.TryRemove(slot, out _);
         slot.Subscription.Dispose();
     }
 
     /// <summary>The paths whose mirrors this authenticator currently holds. Test seam.</summary>
     internal IReadOnlyCollection<string> HeldPaths => holds.Keys.ToArray();
+
+    /// <summary>How many holds are subscribed but not yet published. Test seam.</summary>
+    internal int PendingHolds => pending.Count;
 
     /// <summary>Releases every held mirror. Called by the container when the mesh is disposed.</summary>
     public void Dispose()
@@ -883,6 +902,8 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
         foreach (var (path, slot) in holds)
+            Release(path, slot);
+        foreach (var (slot, path) in pending)
             Release(path, slot);
     }
 

@@ -145,7 +145,7 @@ public class RegistryHoldSurvivesALateTerminalTest(ITestOutputHelper output) : H
     /// <summary>A hydrated mirror: answers every subscriber at once with its current frame (the
     /// entry's replay), records its observers and never detaches them, like a terminal already queued
     /// on a pool when the subscription is disposed.</summary>
-    private sealed class LateMirror : IObservable<MeshNode>
+    private sealed class LateMirror(bool answers = true) : IObservable<MeshNode>
     {
         private static readonly MeshNode Frame = MeshNode.FromPath(Path);
         private ImmutableList<IObserver<MeshNode>> observers = ImmutableList<IObserver<MeshNode>>.Empty;
@@ -158,7 +158,8 @@ public class RegistryHoldSurvivesALateTerminalTest(ITestOutputHelper output) : H
             ImmutableInterlocked.Update(ref observers, list => list.Add(observer));
             Interlocked.Increment(ref live);
             var subscription = Disposable.Create(() => Interlocked.Decrement(ref live));
-            observer.OnNext(Frame);
+            if (answers)
+                observer.OnNext(Frame);
             return subscription;
         }
 
@@ -227,6 +228,34 @@ public class RegistryHoldSurvivesALateTerminalTest(ITestOutputHelper output) : H
         authenticator.HeldPaths.Should().Contain(Path, "B, the later renewal, still holds the path");
         replacement.Live.Should().Be(1, "B's subscription on the replacement mirror was not disposed by A's late publication");
         old.Live.Should().Be(0, "A, superseded, disposed its own subscription instead of publishing");
+    }
+
+    /// <summary>
+    /// A hold whose mirror has not answered yet (review of #7729) is OWNED: disposing the authenticator
+    /// before any frame arrives releases it. Before, a pending hold was absent from the published map,
+    /// so Dispose could not reach it and it stayed attached for as long as its mirror lived.
+    /// </summary>
+    [Fact]
+    public void DisposingBeforeAnyFrame_ReleasesThePendingHolds()
+    {
+        var first = new LateMirror(answers: false);
+        var second = new LateMirror(answers: false);
+        var served = new Queue<LateMirror>(new[] { first, second });
+        var authenticator = new InstanceRegistryAuthenticator(GetHost(), NullLogger<InstanceRegistryAuthenticator>.Instance)
+        {
+            HoldOverride = _ => served.Dequeue(),
+        };
+
+        authenticator.Hold(Path);
+        authenticator.Hold(Path);
+        authenticator.PendingHolds.Should().Be(2, "neither mirror has answered, so neither hold is published");
+        authenticator.HeldPaths.Should().BeEmpty("nothing is published before a first frame");
+
+        authenticator.Dispose();
+
+        first.Live.Should().Be(0, "a pending hold is owned and released by Dispose");
+        second.Live.Should().Be(0, "…every one of them");
+        authenticator.PendingHolds.Should().Be(0);
     }
 
     /// <summary>

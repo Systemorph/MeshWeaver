@@ -294,15 +294,18 @@ Tests:
 MeshWeaver.Plugins#4472 moved the index's install records and partition registry onto mesh-scoped
 live listings (`PluginBundleIndexSources`), so index assembly opens no mesh query per poll. The
 consumer side still logged three `plugin-registry-standard` attempts with `Result: '503'` after that
-build was running: two at ~25.6 s and one at **10.09 s**. Neither shape is index assembly. Both are
-the auth filter every registry route passes first, which still paid a mesh read per request in two
-places:
+build was running: two at ~25.6 s and one at **10.09 s**. The consumer log does not name the route,
+so which request each one was is NOT established — index assembly, another route, or a cold replica
+after a pod roll all remain possible. What the timings FIT is the auth filter every registry route
+passes first, which was found to still pay a mesh read per request in two places. Those two costs are
+real and are fixed whatever the three 503s turn out to have been:
 
 - **The instance and grant mirrors were idle-released between polls.** `InstanceRegistryAuthenticator`
   reads each leg as a `Take(1)` off the process-wide `IMeshNodeStreamCache`, which releases a read entry
   with no live subscriber after `ReadStreamIdleExpiration` (ten minutes). A consumer's safety-net poll
   comes every thirty minutes, so every poll found both mirrors cold and opened a fresh owner
-  subscription under the ten-second budget. That is the 10.09 s shape. The authenticator now HOLDS one
+  subscription under the ten-second budget. That fits the 10.09 s shape (as would a first request on a
+  freshly rolled replica, which this change does not avoid). The authenticator now HOLDS one
   subscription on each mirror it has found present, so the cache never releases it. The hold ends when
   the node is deleted (the mirror completes), when the mirror faults (the next request re-holds it), or
   when the mesh disposes the service. It is bounded by the registered instances, never by presented keys:
