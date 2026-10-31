@@ -165,13 +165,21 @@ warm lookup emits synchronously without asking the edge.
   - It subscribes to both streams remotely.
   - It disposes the owner while a type listing is still being read.
 
-**Still synchronous, and known.** The editor form's field descriptions
-(`EditorExtensions.MapToSkinnedControl`) still call `Summary` directly. They are built into the skin
-of a synchronous public `Edit` API, and binding them needs the client renderer to bind a skin's
-`Description`, which is a change in the client repository as well. A read there loads a cold
-assembly once per mesh. `NodeTypeDataModelAreas.SnapshotModel` also generates the content type's
-schema synchronously, but only after the probe's schema stream has emitted from the edge, so the
-documentation files it needs are already in memory.
+- **Editor form fields.** The `Edit` macro (`EditorExtensions.MapToSkinnedControl`) describes a
+  field without a declared `[Description]` by its property's summary, and asks only `TrySummary`
+  while the form is built. A summary already in memory is written into the field's `PropertySkin`
+  as text, as before. A cold one makes the skin's `Description` a data-bound pointer into the area's
+  `/data` (one key per documented member, `xmlDoc:{documentation id}`): rendering the field seeds
+  it empty and feeds `hub.ObserveXmlDocsSummary(property)` into it, so the form renders at once and
+  the line binds once the edge has read the file. Both clients already bind a skin `Description`
+  (Blazor `PropertyView` through `DataBind`, React `PropertySkin` through `useResolve`), so no client
+  change is needed. `XmlDocsInEditFormTest` (Layout.Test) holds the edge, checks that the served
+  form's description is a pointer and no snapshot was loaded, then releases it and reads the summary
+  through the client's binding; its control shows a warm mesh still gets the text itself.
+
+`NodeTypeDataModelAreas.SnapshotModel` generates the content type's schema synchronously, but only
+after the probe's schema stream has emitted from the edge, so the documentation files it needs are
+already in memory.
 
 **Rendering** matches what the platform has always shown (Namotion's formatting-free mode):
 `<see>`/`<seealso>` render as their text, else the `langword`, else the cref's last name segment
