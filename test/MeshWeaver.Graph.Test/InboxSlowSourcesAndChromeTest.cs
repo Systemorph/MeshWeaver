@@ -178,4 +178,20 @@ public class InboxSlowSourcesAndChromeTest
         UiContributionProjection.FilterInboxAreas(projected, Permission.Read | Permission.Sync).Select(a => a.Area).Should().Equal(["R", "S"]);
         UiContributionProjection.FilterInboxAreas(projected, Permission.None).Should().BeEmpty("never less than Read");
     }
+
+    [Fact]
+    public void ATickedTag_StaysTicked_WhileASourceStandsIn_AndIsDroppedOnceEverySourceAnswered()
+    {
+        var urgent = InboxRows.TagKey("urgent");
+        var reply = InboxRows.TagKey("reply");
+        // The viewer ticked #urgent, whose rows sit only in a source that has not answered this read.
+        var shown = InboxLayoutArea.TagItems([(urgent, "urgent", 2), (reply, "reply", 1)], "Important", [urgent]);
+        var counts = new[] { (reply, "reply", 1) };
+
+        InboxLayoutArea.TagItems(counts, "Important", [urgent], held: shown)
+            .Where(item => item.Checked).Select(item => item.Key).Should().Equal([urgent],
+                "while a source stands in, the rows are incomplete: dropping the box would untick it and widen the filter");
+        InboxLayoutArea.TagItems(counts, "Important", [urgent], held: null)
+            .Select(item => item.Key).Should().Equal([reply], "once every source answered, a tag no row carries is gone");
+    }
 }

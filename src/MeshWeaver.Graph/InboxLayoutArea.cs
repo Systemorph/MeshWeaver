@@ -563,15 +563,28 @@ public static class InboxLayoutArea
             c => c.Label + (counts.TryGetValue(c.Key, out var n) && (n.Unread > 0 ? n.Unread : n.Total) is > 0 and var shown ? $"  {shown}" : string.Empty),
             StringComparer.Ordinal);
 
-    /// <summary>The tag checkboxes: Important first, then each tag by use with its count; the ones in <paramref name="ticked"/> are ticked. Pure.</summary>
+    /// <summary>
+    /// The tag checkboxes: Important first, then each tag by use with its count; the ones in <paramref name="ticked"/> are
+    /// ticked. 🚨 While the rows are INCOMPLETE (a source still stands in, <see cref="FanIn"/>), a ticked box whose tag
+    /// is absent from them is kept from <paramref name="held"/>, ticked: its tag may sit only in the source that has not
+    /// answered, and dropping it would untick it — silently widening the filter — by the time that source answers. Pure.
+    /// </summary>
+    /// <param name="counts">Each tag in the rows, with its count.</param>
+    /// <param name="importantLabel">The Important box's label.</param>
+    /// <param name="ticked">The keys the viewer ticked.</param>
+    /// <param name="held">The boxes shown before, whose ticked ones are kept while the rows are incomplete; null once every source has answered.</param>
     internal static ImmutableList<InboxTagItem> TagItems(IEnumerable<(string Key, string Tag, int Count)> counts,
-        string importantLabel, ImmutableHashSet<string> ticked)
-        => [.. counts.Select(c => new InboxTagItem
+        string importantLabel, ImmutableHashSet<string> ticked, IReadOnlyList<InboxTagItem>? held = null)
+    {
+        var items = counts.Select(c => new InboxTagItem
         {
             Key = c.Key,
             Label = (string.Equals(c.Key, InboxRows.ImportantKey, StringComparison.Ordinal) ? $"⭐ {importantLabel}" : "#" + c.Tag) + $"  {c.Count}",
             Checked = ticked.Contains(c.Key),
-        })];
+        }).ToImmutableList();
+        var present = items.Select(item => item.Key).ToImmutableHashSet(StringComparer.Ordinal);
+        return items.AddRange((held ?? []).Where(item => item.Checked && ticked.Contains(item.Key) && !present.Contains(item.Key)));
+    }
 
     /// <summary>The data id of the Approve / Reject style: empty while they apply, hidden otherwise.</summary>
     public const string DecideStyleId = "inboxDecideStyle";
@@ -968,7 +981,8 @@ public static class InboxLayoutArea
                     return Observable.Return((ImmutableList<InboxRow>.Empty, (string?)labels[section.Source], 0));
                 });
 
-        IObservable<ImmutableList<InboxRow>> Merged(string term) => FanIn(
+        // The merged rows, and whether any source still stands in (so they are incomplete).
+        IObservable<(ImmutableList<InboxRow> Rows, bool Incomplete)> Merged(string term) => FanIn(
                 sections.Select(section => (labels[section.Source], Leg(section, term))), legBound)
             .Do(legs =>
             {
@@ -979,8 +993,8 @@ public static class InboxLayoutArea
                     ? host.Localize("inbox.capped")
                     : string.Empty);
             })
-            .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)))
-            .Do(merged => host.UpdateData(KindLabelsId, KindLabels(categories, InboxRows.CategoryCounts(merged))));
+            .Select(legs => (Rows: InboxRows.Merge(legs.Select(leg => leg.Rows)), Incomplete: legs.Any(leg => leg.Slow is not null)))
+            .Do(merged => host.UpdateData(KindLabelsId, KindLabels(categories, InboxRows.CategoryCounts(merged.Rows))));
 
         // The date bounds (before:/after:) are applied to the rows by InboxRows.Apply; only the
         // remaining text goes to the sources.
@@ -995,8 +1009,9 @@ public static class InboxLayoutArea
             .CombineLatest(rereads ?? Observable.Return(0L), (term, _) => term)
             .Select(Merged)
             .Switch()
-            .CombineLatest(filter, tagItems, preferences, (rows, viewFilter, items, stored) =>
+            .CombineLatest(filter, tagItems, preferences, (merged, viewFilter, items, stored) =>
             {
+                var rows = merged.Rows;
                 // The view's filter (search, Only) with the person's persisted choices.
                 var asked = WithPreferences(viewFilter, stored ?? expected);
                 if (stored is not null)
@@ -1005,7 +1020,8 @@ public static class InboxLayoutArea
                 host.UpdateData(StateStylesId, StateStyles(sections, asked.Kinds));
                 // The tag checkboxes follow the rows; a box the viewer ticked stays ticked while its tag exists.
                 var ticked = items.Where(item => item.Checked).Select(item => item.Key).ToImmutableHashSet(StringComparer.Ordinal);
-                var wanted = TagItems(InboxRows.TagCounts(rows), importantLabel, ticked);
+                // While a source still stands in, a ticked tag absent from the rows may be that source's: it stays ticked.
+                var wanted = TagItems(InboxRows.TagCounts(rows), importantLabel, ticked, merged.Incomplete ? items : null);
                 if (!wanted.SequenceEqual(items))
                     host.UpdateData(TagItemsId, wanted);
                 asked = asked with { TagKeys = [.. wanted.Where(item => item.Checked).Select(item => item.Key)] };

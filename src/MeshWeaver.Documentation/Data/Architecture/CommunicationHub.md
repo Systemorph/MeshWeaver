@@ -733,7 +733,11 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
   are combined with one bound per leg on its FIRST answer (`InboxLayoutArea.FanIn`, `LegAnswerWait` =
   10 s): a leg still silent then stands in as an empty answer, the other sources are listed, and a
   notice names it — `inbox.slow`, *"Did not answer yet, so the list shows the other sources: Gmail"*. Its
-  own answer replaces the stand-in whenever it arrives. Before the bound, `CombineLatest` waited for every
+  own answer replaces the stand-in when it arrives while the query is still open — but the query's own stall
+  terminal (`MeshOperationOptions.QueryInitialBudget`) ends a provider that stays silent past it: the leg then
+  fails, its source moves to the "could not be read" notice above, and it is read again only when the search
+  changes or the page is reopened. While a source stands in, a tag the viewer ticked stays ticked even when
+  no listed row carries it — it may be the silent source's. Before the bound, `CombineLatest` waited for every
   leg, so one silent provider kept the whole list spinning.
 - **The handler builds its write INSIDE the call.** `Update` captures the caller's identity when it
   is constructed, and the inbox opens the clicker's scope only around the call. A write deferred to
