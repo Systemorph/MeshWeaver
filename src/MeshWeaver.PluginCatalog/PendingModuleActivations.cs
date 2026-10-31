@@ -782,7 +782,8 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// How many times this instance has actually read the activation state off the volume — the
     /// sidecar, every <c>activation.d/*.json</c>, the set index, and one existence probe per landed
     /// DLL. A measurement for the tests that pin <see cref="Read()"/>'s cost: it climbs by one per
-    /// CHANGE of the on-disk state, never per call.
+    /// CHANGE of the on-disk state, never per call — except while the last reading FAULTED, which is
+    /// never reused, so each refresh takes it again (MeshWeaver#7690).
     /// </summary>
     public int DiskReads => Volatile.Read(ref diskReads);
 
@@ -828,7 +829,15 @@ public sealed class PendingModuleActivations(string moduleRoot)
         ImmutableList<string> SetNotes,
         Func<ModuleActivationEntry, bool> LandedDllExists,
         ImmutableList<string> Corruptions,
-        Func<string, bool> ModuleFileResolves);
+        Func<string, bool> ModuleFileResolves,
+        int SetFaults = 0)
+    {
+        /// <summary>True when nothing in this reading faulted — the only reading the fingerprint
+        /// may stand in for (MeshWeaver#7690). A set record that could not be read is a fault
+        /// (<see cref="SetFaults"/>); a duplicate-proposal NOTICE in <see cref="SetNotes"/> is a
+        /// decided outcome and is not.</summary>
+        public bool IsWhole => OpenFailure is null && Corrupt is null && Corruptions.IsEmpty && SetFaults == 0;
+    }
 
     /// <summary>
     /// What the three directories every activation writer renames into currently LIST (MeshWeaver#6829):
@@ -933,7 +942,14 @@ public sealed class PendingModuleActivations(string moduleRoot)
         // directory): it observes the token before each listing, so a cancelled refresh starts none.
         var fingerprint = ListingFingerprint(ModuleRootPath, token);
         var current = snapshot;
-        if (current is not null && fingerprint is not null
+        // 🚨 Only a WHOLE reading is reused (MeshWeaver#7690). A record that could not be read —
+        // an SMB sharing violation, a throttled or timed-out request — changes nothing the
+        // fingerprint lists, so a faulted reading kept behind it went on reporting the module as
+        // unreadable until something unrelated landed, and "the next read that sees its records
+        // whole restores it" was false for every consumer of this snapshot. A faulted reading is
+        // therefore taken again on the next refresh; the cost is a walk per refresh while the
+        // volume keeps faulting, off the probe path on IoPool (see Refresh).
+        if (current is not null && fingerprint is not null && current.IsWhole
             && string.Equals(current.Fingerprint, fingerprint, StringComparison.Ordinal))
             return current;
 
@@ -971,8 +987,16 @@ public sealed class PendingModuleActivations(string moduleRoot)
         // drain that has already waited out the first must not be made to wait out this one too.
         token.ThrowIfCancellationRequested();
         var setNotes = ImmutableList.CreateBuilder<string>();
+        // The loud channel is counted apart from the notices (MeshWeaver#7690, review of #7733): an
+        // unreadable proposal or adoption record makes this reading not whole, while a
+        // duplicate-proposal notice does not. Both still reach SetNotes, as they always did.
+        var setFaults = 0;
         var sets = openFailure is null && corrupt is null
-            ? ModuleSetStore.ReadObservingToken(ModuleRootPath, setNotes.Add, setNotes.Add, token)
+            ? ModuleSetStore.ReadObservingToken(ModuleRootPath, fault =>
+            {
+                setFaults++;
+                setNotes.Add(fault);
+            }, setNotes.Add, token)
             : ModuleSetIndex.Empty;
         // One existence probe per landed DLL for the life of this snapshot: the three projection
         // passes below ask about the same entries, and the answer cannot change while the
@@ -1011,7 +1035,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
                 entry, e => new Lazy<bool>(() => File.Exists(Mesh.MeshBuilder.ResolveModulePath(e)))).Value;
         var fresh = new DiskSnapshot(
             fingerprint, activation, corrupt, openFailure, sets, setNotes.ToImmutable(), LandedDllExists,
-            corruptions.ToImmutable(), ModuleFileResolves);
+            corruptions.ToImmutable(), ModuleFileResolves, setFaults);
         snapshot = fresh;
         return fresh;
     }
