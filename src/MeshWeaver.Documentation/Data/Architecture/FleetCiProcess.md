@@ -118,9 +118,11 @@ the ticks after it may all be failing before they write — and it is evidence o
 it records a refusal NAMING the set. Read the refusal by those two things:
 
 - **"THE REFRESH HAS NOT COMPLETED A TICK FOR Ns"** — the file is older than the Job's 2400 s
-  deadline plus one period. The refresh is not declining the set: its pod is not created, not
+  deadline plus one period, so no LATER tick has completed: the refresh's pod is not created, not
   scheduled, or fails before the end of its first rule (a credential, the resolver, the share, the
-  namespace quota). That is a cluster-side failure, and every satellite goes red on it at once —
+  namespace quota). Any refusal that last verdict recorded for the set still stands and is printed
+  after it ("It DECLINED this set: …") — staleness says nothing has run since, not that the set was
+  never declined. That is a cluster-side failure, and every satellite goes red on it at once —
   measured 2026-10-31, when set `3.1.12262` never reached the volume and the satellites' gate
   shards timed out with nothing in any log naming why. Neither a re-run nor a digest bump helps.
 - **"The refresh last COMPLETED a tick Ns ago"** — a recent completion only. Followed by **"It

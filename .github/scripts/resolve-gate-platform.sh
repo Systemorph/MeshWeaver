@@ -249,6 +249,10 @@ if [ "${1:-}" = "--self-test" ]; then
   grep -q 'HAS NOT COMPLETED A TICK' <<<"$o" || fail "a STALE retention.json must be read as a refresh that stopped completing ticks (got: $o)"
   grep -q "written at $stale_at" <<<"$o" || fail "the stale reading must name when the last verdict was written (got: $o)"
   grep -q 'last COMPLETED a tick' <<<"$o" && fail "a stale verdict must not read as a recent completion (got: $o)"
+  #   STALE, with a refusal NAMING this set: staleness does not erase the recorded decline.
+  o="$(verdict_for "{\"written-at\": \"$stale_at\", \"space\": {\"refusals\": [{\"rule\": \"current\", \"set\": \"3.0.0-ci.8547\", \"reason\": \"stale but recorded\"}]}}")"
+  grep -q 'HAS NOT COMPLETED A TICK' <<<"$o" || fail "a stale verdict with a refusal must still read as stale (got: $o)"
+  grep -q 'DECLINED this set.*stale but recorded' <<<"$o" || fail "a stale verdict's refusal for this set must still be shown as the decline (got: $o)"
   #   FRESH, with a refusal NAMING this set: a recent completion and a decline — and never a claim of
   #   current health.
   o="$(verdict_for "{\"written-at\": \"$fresh_at\", \"space\": {\"free-bytes\": 1073741824, \"total-bytes\": 68719476736, \"floor-bytes\": 4294967296, \"refusals\": [{\"rule\": \"current\", \"set\": \"3.0.0-ci.8547\", \"reason\": \"share full\"}]}}")"
@@ -515,7 +519,7 @@ elif age > int(stale):
     out.append(f"🚨 THE REFRESH HAS NOT COMPLETED A TICK FOR {age}s: its last verdict ({path}) was written at {written}. "
                "Its pod is not being created, not being scheduled, or fails before writing (a registry/GitHub credential, "
                "the resolver, the share, the namespace quota) — a cluster-side failure: read the CronJob's Jobs, pods and "
-               "events in namespace ci-platform.")
+               "events in namespace ci-platform. What that last verdict recorded still stands, and follows.")
 else:
     out.append(f"The refresh last COMPLETED a tick {age}s ago (its verdict, {path}, was written at {written}). That says "
                "nothing about the ticks since, which may be failing before they write.")
