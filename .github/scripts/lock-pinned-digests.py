@@ -558,6 +558,9 @@ def withheld_identifiers(axis2: list[OverlayScan]) -> tuple[set[str], list[str]]
     # `memexcloud` installation. `build_instances` matches the record stem exactly, so this does.
     fleet_ids: set[tuple[str, str]] = set()
     withheld: set[str] = set()
+    # (repository, file) for every file whose contents are NOT the fleet's: a non-fleet record, and
+    # (below) an overlay with no positive fleet association.
+    not_fleet_files: set[tuple[str, str]] = set()
     for scan in axis2:
         withheld |= set(scan.withheld_paths)
         for path, is_fleet, identifiers in scan.records:
@@ -565,6 +568,7 @@ def withheld_identifiers(axis2: list[OverlayScan]) -> tuple[set[str], list[str]]
                 fleet_ids.add((scan.gh_repo, path.rsplit("/", 1)[-1].removesuffix(".json")))
             else:
                 withheld |= identifiers
+                not_fleet_files.add((scan.gh_repo, path))
     for scan in axis2:
         repo_ids = {ident for repo, ident in fleet_ids if repo == scan.gh_repo}
 
@@ -583,11 +587,32 @@ def withheld_identifiers(axis2: list[OverlayScan]) -> tuple[set[str], list[str]]
             if not overlay_is_fleet(overlay, declared_in(overlay), scan.fleet_config_paths,
                                     repo_ids):
                 withheld.add(overlay)
+                not_fleet_files.add((scan.gh_repo, overlay))
+    # 🚨 THE REGISTRIES THOSE FILES PIN IN (#7724 review): a customer's own registry is named after
+    # the customer, and the report prints every foreign host — loudest when it is UNDECLARED, which
+    # is exactly a customer's registry nobody has filed. A host withheld here is one ONLY files that
+    # are not the fleet's reference; a host a fleet file also pins is the fleet's, and stays.
+    fleet_hosts = {host for scan in axis2 for host, _repo, _tag, where in scan.foreign
+                   if (scan.gh_repo, where) not in not_fleet_files}
+    for scan in axis2:
+        for host, _repo, _tag, where in scan.foreign:
+            if (scan.gh_repo, where) in not_fleet_files and host not in fleet_hosts:
+                withheld |= _identity_values(host)
+    problems: list[str] = []
     short = [value for value in withheld if len(value) < WITHHELD_MIN_LENGTH]
-    problems = ([f"{len(short)} identifier(s) of a deployment that is not the fleet's own are "
-                 f"shorter than {WITHHELD_MIN_LENGTH} characters, so this lane cannot withhold "
-                 "them from its public log without shredding every line. The values are not "
-                 "printed; find them with `--root` on a private checkout."] if short else [])
+    if short:
+        problems.append(f"{len(short)} identifier(s) of a deployment that is not the fleet's own "
+                        f"are shorter than {WITHHELD_MIN_LENGTH} characters, so this lane cannot "
+                        "withhold them from its public log without shredding every line. The "
+                        "values are not printed; find them with `--root` on a private checkout.")
+    # 🚨 A LINE BREAK INSIDE AN IDENTIFIER (#7724 review): `PublicLog` replaces within one line, so
+    # a value printed across two lines matches on neither. A git path may carry one; refused.
+    broken = [value for value in withheld if len(value.splitlines()) > 1 or value != value.strip("\r\n")]
+    if broken:
+        problems.append(f"{len(broken)} identifier(s) of a deployment that is not the fleet's own "
+                        "contain a line break, so the public-log filter, which replaces within one "
+                        "line, cannot withhold them. The values are not printed; find them with "
+                        "`--root` on a private checkout.")
     return {value for value in withheld if len(value) >= WITHHELD_MIN_LENGTH}, problems
 
 
@@ -9285,6 +9310,65 @@ env:
           "ARM 42g: a non-fleet record's parent directory reached the public log")
     check("deployments/aks/memex/values.memex.public.yaml" in _nested_public,
           "ARM 42g (negative control): the fleet's own overlay path was withheld")
+
+    # ── ARM 42h: a registry only non-fleet files pin in is withheld (#7724 review) ──────────────
+    # The report prints every foreign host, and an UNDECLARED one loudest — a customer's own
+    # registry, named after the customer, is exactly the host nobody has declared.
+    _foreign_record = json.dumps({
+        "id": "prod", "nodeType": "Hosting/Deployment",
+        "content": {"owner": "Contoso Holdings",
+                    "operator": {"image": "fabrikam.azurecr.io/operator:3.0.0"}}})
+    with tempfile.TemporaryDirectory() as _tmp:
+        _files = {"mesh/Deployments/prod.json": _foreign_record,
+                  "mesh/Deployments/memex.json": _fleet_record,
+                  "deployments/aks/memex/values.memex.public.yaml": FIXTURE_OVERLAY_INSTANCE}
+        for _rel, _body in _files.items():
+            (Path(_tmp) / _rel).parent.mkdir(parents=True, exist_ok=True)
+            (Path(_tmp) / _rel).write_text(_body, encoding="utf-8")
+        _foreign_scan = scan_overlays_local(_tmp, "Systemorph/Memex", REGISTRY_DEFAULT)
+    plan, _, _ = _drive(clean1, [_foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), apply=False)
+
+    def _render_foreign(log) -> str:
+        with contextlib.redirect_stdout(log):
+            report(plan, clean1, [_foreign_scan], REGISTRY_DEFAULT, _inventory(),
+                   apply=False, release_enabled=False, root=HERE_ROOT)
+            for _blocker in plan.blockers:
+                print(f"::error::{_blocker}")
+        log.flush()
+        return (log._stream if isinstance(log, PublicLog) else log).getvalue()
+
+    check("fabrikam.azurecr.io" in _render_foreign(io.StringIO()),
+          "ARM 42h (falsification): unfiltered, the non-fleet record's registry never reached the "
+          "report, so the arm below would pass about nothing")
+    _foreign_withheld, _foreign_problems = withheld_identifiers([_foreign_scan])
+    _foreign_store = Withheld()
+    _foreign_store.add(_foreign_withheld)
+    _foreign_public = _render_foreign(PublicLog(io.StringIO(), _foreign_store))
+    check("fabrikam" not in _foreign_public.lower(),
+          "ARM 42h: a registry only a non-fleet record pins in reached the public log")
+    check("deployments/aks/memex/values.memex.public.yaml" in _foreign_public,
+          "ARM 42h (negative control): the fleet's own overlay path was withheld")
+    # A host a FLEET file also pins is the fleet's, and stays printed.
+    _shared = OverlayScan(gh_repo="Systemorph/Memex",
+                          records=[("mesh/Deployments/prod.json", False, frozenset()),
+                                   ("mesh/Deployments/memex.json", True, frozenset())],
+                          foreign=[("cr.meshweaver.cloud", "x", "1", "mesh/Deployments/prod.json"),
+                                   ("cr.meshweaver.cloud", "x", "1", "mesh/Deployments/memex.json")])
+    check("cr.meshweaver.cloud" not in withheld_identifiers([_shared])[0],
+          "ARM 42h (control): a registry the fleet's own record also pins in was withheld")
+
+    # ── ARM 42i: an identifier with a line break is RED, not printed across two lines ───────────
+    # (#7724 review) `PublicLog` replaces within one line; a git path may carry a newline.
+    _newline = OverlayScan(gh_repo="Systemorph/Memex",
+                           overlay_paths=["deployments/aks/fabrikam\nproduction/values.yaml"])
+    check(any("line break" in problem for problem in withheld_identifiers([_newline])[1]),
+          "ARM 42i: a withheld path carrying a line break was accepted, and the filter cannot "
+          "replace a value printed across two lines")
+    _plain = OverlayScan(gh_repo="Systemorph/Memex",
+                         overlay_paths=["deployments/aks/fabrikam/values.yaml"])
+    check(not withheld_identifiers([_plain])[1],
+          "ARM 42i (control): a withheld path with no line break was refused")
 
     # ── ARM 29: the harness drives the SAME path as run(), or it guards nothing ─────────────────
     # A self-test whose subject moved and whose roots did not keeps passing about code that is no
