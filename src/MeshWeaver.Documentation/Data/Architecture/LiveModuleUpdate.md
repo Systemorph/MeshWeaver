@@ -273,6 +273,85 @@ monolith mesh, the framework's own `RecycleCascade` seam as the instrument):
   generation, and is reported `Failed` itself. With the fault left to escape, both modules are reported
   `Failed` and the probe is never recycled.
 
+### A hub with a step in flight is recycled when the step ends (MeshWeaver#7324)
+
+**The wave never tears a hub down in the middle of a step it owns.** A step is any work a hub's
+activation runs under `hub.BeginAsyncOperation()`, for example each step of a module reload request
+(`ModuleReloadExecutor`) or an agent round. That call marks the hub's ONE in-flight marker,
+`HubStepsInFlight`. Every hub carries one, created with the hub, on every host: in-process the mark
+is the whole hold, and on Orleans the call also keeps the grain alive. The call marks the hub AND
+every ancestor up its parent chain, so a step held on a hosted child (a thread's execution hub, a
+layout area) defers its per-node owner, which is the hub the wave targets. The mark is released by the
+scope's `Dispose`, which the step holds in an `Observable.Using` or a `using`, so a faulted step
+releases it as well.
+
+The wave reads the marker per address:
+
+- **Idle:** the hub's `DisposeRequest` is posted at once, as before.
+- **Step in flight:** the hub is DEFERRED. The wave subscribes to `HubStepsInFlight.Idle()` and posts
+  the same request (same `Reason`, plus "deferred until its in-flight step ended", and the same
+  `CascadedFrom`) when the step ends. There is no poll and no clock.
+
+**The wave does not wait for a deferred hub, and does not retire under it.** It answers once the
+OTHER hubs are dead. The outcome counts the deferred ones (`ModuleSwapOutcome.Deferred`) and names
+them in its reason. The old generations are retired only after EVERY hub of the wave, deferred ones
+included, has shut down, because a step's hold is not a module-context lease and the deferred hub
+still runs the old generation's code and services. That retire belongs to the updater and has no
+bound. A step that never ends keeps its hub, and the old generation, for exactly as long as it runs.
+
+**One deferral per activation.** A second wave that meets an activation already deferred adds its
+reason to that deferral, and the ONE request carries every reason. Two requests would be two
+address-targeted disposals, and the second would reach the activation the first made room for.
+
+**A hub that starts to shut down for another reason gets nothing.** The deferral ends at the first
+instant of the shutdown (`IMessageHub.ShuttingDown`, which replays). That is before the teardown
+disposes the step and fires the idle signal, so no request is posted. A request posted then would
+reach the address's next activation, which already binds the current generation. Disposing the
+updater cancels every pending deferral and every pending retire.
+
+**The request names its activation.** The deferred `DisposeRequest` carries
+`ForActivation` (the hub instance's activation token). If the activation is replaced after the post
+and before delivery, the successor ignores the request instead of being torn down by it. The
+issuing hub is resolved when the step ends, never captured when the swap began, because that
+off-router hub can be recycled on its own while a step runs. Every captured activation of a deferred
+address joins the retire, and a finished retire leaves the updater, so a process-lifetime updater
+does not accumulate one entry per deferred swap.
+
+**A step that starts just as the deferred recycle is posted** can still be torn down by it. That is the
+ordinary case every step is built for: steps are idempotent and resume on the next activation. What
+the deferral removes is the wave landing in the MIDDLE of a long step, every time.
+
+**Why.** It was measured on memex on 2026-10-31. The all-modules reload
+`Admin/_ModuleReload/auto-644261f5d8f67ec6` started Landing at 08:34:45Z and started it again at
+08:36:41Z. The executor's teardown warning, read through a governed `Logs` action
+(`Ops/Actions/c04-7324-memex-reload-1031`), named the restarter: *routed DisposeRequest; why:
+ModuleLiveUpdate: … 19 modules swapped live … — self-update: a landed module generation is pending
+activation*. The swap had recycled every per-node hub, because the swapped generations reached them
+all, and that included the reload request's own hub. The hold on that step deferred only idle
+retirement. The next activation re-ran the landing, about 12 minutes for every module. The swap
+activated modules this reload's own landing had landed, so the reload's work set off the wave that
+dropped it. That is the shape behind a request re-entering Landing over and over.
+
+**Test.** `ASwapWaveDefersAHubWithAStepInFlightTest` (`MeshWeaver.Compiler.Pipeline.Test`, a running
+monolith mesh, real Roslyn-emitted modules). A module whose next generation reaches every per-node
+hub is swapped while one probe hub holds a step:
+
+- The swap answers `Live` with the held hub still `Started` and not disposing, and with
+  `Deferred == 1`.
+- When the step ends, the held hub is recycled with the wave's own reason.
+- The idle probe in the same wave is the negative control: it is recycled by the time the swap
+  answers.
+- The old generation is not retired while the held hub runs, and is retired once it is gone.
+- Two swaps during one held step post ONE deferred recycle, carrying both waves' reasons.
+- A held hub torn down by an unrelated recycle, whose teardown releases the step, gets no deferred
+  recycle at all.
+- A step held on a hosted child defers its per-node owner.
+- A request for another activation is ignored on delivery; the one for this activation recycles it.
+- An issuing hub recycled during the step does not strand the deferred recycle.
+
+Red before the fix: the swap answered only after every hub of its wave was dead, the held one
+included.
+
 Against the pre-fix updater (one swap per module, no `CascadedFrom`), the first and third cases are red.
 
 **Not established.** `ModuleReloadExecutor.SwapThenReport` still asks `IModuleLiveActivation.Swap` once
