@@ -69,9 +69,14 @@ the proof of the bug, not the fix.
 ## Configuration and its blind spot
 
 xUnit v3 config (`test/xunit.runner.json`): `parallelizeAssembly: false`,
-`parallelizeTestCollections: false`, `maxParallelThreads: 1`, `methodTimeout: 30000` (30 s).
+`parallelizeTestCollections: false`, `maxParallelThreads: 1`, `methodTimeout: 316000`.
 
-🚨 **`methodTimeout` only bounds time spent INSIDE a test method.** A wedge in fixture construction,
+🚨 **xunit.v3 ignores `methodTimeout`.** The bound is applied by the execution host
+(`MeshWeaver.Testing.Xunit.BoundedTestFramework`, declared for every test assembly by
+`test/Directory.Build.props`): a test that outlives it fails by name and leaves a dump of the stuck
+thread (`TEST_TIMEOUT` in the phase trace). WritingTests.md → "The per-test bound".
+
+🚨 **The bound only covers time spent INSIDE a test method.** A wedge in fixture construction,
 class init, or teardown is outside it and runs unbounded — on 2026-08-04 an orphaned local run sat
 at a pegged core for 25+ minutes and, together with a leaking e2e container, drove the colima VM to
 128 MB free / load average 195, OOM-killing unrelated containers.
