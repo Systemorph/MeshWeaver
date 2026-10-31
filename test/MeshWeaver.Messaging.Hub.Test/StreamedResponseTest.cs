@@ -24,11 +24,19 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
 
     private record CountPart(int Index);
 
+    /// <summary>Answers with the identity the request ARRIVED with.</summary>
+    private record WhoAsks : IRequest<CountDone>;
+
     private record CountDone(string Mode);
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) =>
         configuration
-            .WithTypes(typeof(CountRequest), typeof(PacedRequest), typeof(CountPart), typeof(CountDone))
+            .WithTypes(typeof(CountRequest), typeof(PacedRequest), typeof(WhoAsks), typeof(CountPart), typeof(CountDone))
+            .WithHandler<WhoAsks>((hub, request) =>
+            {
+                hub.PostFinalResponse(request, new CountDone(request.AccessContext?.ObjectId ?? "(none)"), 0);
+                return request.Processed();
+            })
             .WithHandler<PacedRequest>((hub, request) =>
             {
                 var ask = request.Message;
@@ -72,7 +80,7 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         base.ConfigureClient(configuration)
-            .WithTypes(typeof(CountRequest), typeof(PacedRequest), typeof(CountPart), typeof(CountDone));
+            .WithTypes(typeof(CountRequest), typeof(PacedRequest), typeof(WhoAsks), typeof(CountPart), typeof(CountDone));
 
     [Fact]
     public async Task Parts_arrive_in_order_then_the_reply_then_completion()
@@ -277,6 +285,33 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
 
             access.Context?.ObjectId.Should().Be("user-b", "the builder's identity must not leak onto the subscriber's flow");
             (await all.ToList().Should().Within(10.Seconds()).Emit()).Should().HaveCount(4);
+        }
+        finally
+        {
+            access.SetContext(before);
+        }
+    }
+
+    /// <summary>
+    /// A stream built WITHOUT an identity and subscribed under a privileged one posts without it — it never
+    /// borrows the subscriber's identity (the request must fail closed, as an eager Observe post would).
+    /// </summary>
+    [Fact]
+    public async Task A_stream_built_without_an_identity_never_posts_as_its_subscriber()
+    {
+        var client = GetClient();
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+        var before = access.Context;
+        try
+        {
+            access.SetContext(null);
+            var stream = client.ObserveStreamed(new WhoAsks(), o => o.WithTarget(CreateHostAddress()));
+            access.SetContext(new AccessContext { ObjectId = "privileged-b", Name = "privileged-b" });
+
+            var reply = await stream.Should().Within(10.Seconds()).Emit();
+
+            ((CountDone)reply.Message).Mode.Should().NotBe("privileged-b", "the subscriber's identity must not ride a stream built without one");
+            access.Context?.ObjectId.Should().Be("privileged-b", "the subscriber's own identity is restored");
         }
         finally
         {

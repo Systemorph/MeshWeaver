@@ -1484,9 +1484,10 @@ public sealed class MessageHub : IMessageHub
                 // Subscribe to both halves BEFORE the post: a synchronously answered part or reply
                 // must find its observer.
                 var ordered = InSequence(parts, subject).Subscribe(observer);
+                // The BUILDER's identity is the post's — a null capture included: a stream built without an
+                // identity must not borrow the subscriber's (it then fails closed, as Observe's eager post does).
                 var subscriberCtx = accessService.Context;
-                if (capturedCtx is not null)
-                    accessService.SetContext(capturedCtx);
+                accessService.SetContext(capturedCtx);
                 try
                 {
                     Post(r, opts => options(opts).WithMessageId(messageId).AcceptingProgress().AcceptingResponseParts());
@@ -1498,8 +1499,7 @@ public sealed class MessageHub : IMessageHub
                 }
                 finally
                 {
-                    if (capturedCtx is not null)
-                        accessService.SetContext(subscriberCtx);
+                    accessService.SetContext(subscriberCtx);
                 }
                 return ordered;
             });
