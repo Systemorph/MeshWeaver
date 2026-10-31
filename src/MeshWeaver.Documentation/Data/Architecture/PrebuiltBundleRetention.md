@@ -494,9 +494,18 @@ therefore carries a negative claim: `-1` at generation `0`, and `-(generation + 
 second write, after its claim has landed, and a claimant never writes it.
 
 A replica decides "held by another" on its own mirror of the lease, and then writes nothing. A mirror
-that trails the owner can therefore skip a pass the lease would have allowed, and a skipped pass's log
-line can name the replica that held the previous claim. Both are safe: a claim counts as held only
-once the owner has committed it, and the next tick asks again.
+that trails the owner can therefore skip a pass the lease would have allowed. That is safe: a claim
+counts as held only once the owner has committed it, and the next tick asks again.
+
+🚨 **`Replica` and `TakenAt` belong to the last STAMPED claim, never necessarily to the current one
+(#7459).** A take writes the claim and its generation only, and the stamp follows as a second write, so
+for a moment the lease carries the new claim beside the previous holder's name and time. A version
+history therefore shows a take and its stamp as two versions at the SAME generation: the first with the
+previous holder's `Replica`/`TakenAt`, the second with the same claim plus `StampedFlag` (the claims
+differ by exactly `2^28`) and the new holder's name. That is one take, not two. The skip line names a
+holder's replica only once its claim is stamped (`HolderReplica`), and otherwise says the holder has not
+stamped yet: it used to print the previous holder's name, and a live reading of that line named a
+replica that had released 24 minutes earlier.
 
 | Pinned by | What it fails on |
 |---|---|

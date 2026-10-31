@@ -362,4 +362,44 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
         outcome.Error.Should().BeOfType<OperationCanceledException>(
             "never an ordinary fault, which would release the lease").Which.InnerException.Should().BeSameAs(fault);
     }
+
+    /// <summary>
+    /// #7459, the live reading: a take and its stamp are two versions at ONE generation. Between them the
+    /// lease carries the new claim beside the PREVIOUS holder's <c>Replica</c>, and the skip line named that
+    /// replica as the holder. Built from the same pure transitions the lease writes (release, take, stamp).
+    /// </summary>
+    [Fact]
+    public void ATakeNotYetStamped_NamesNoReplica_NotThePreviousHolder()
+    {
+        var takenAt = new DateTimeOffset(2026, 10, 31, 3, 58, 13, TimeSpan.Zero);
+        var until = takenAt + PrebuiltBundleRetentionLease.HoldFor(TimeSpan.FromDays(1));
+        var previousClaim = PrebuiltBundleRetentionLease.ClaimFor(takenAt.AddMinutes(-25), 4711);
+        var previousHolder = new PrebuiltBundleRetentionLeaseState(
+            previousClaim | PrebuiltBundleRetentionLease.StampedFlag, "replica-previous", takenAt.AddMinutes(-25))
+        { Generation = 49 };
+        var released = PrebuiltBundleRetentionLease.Released(previousHolder);
+
+        var claim = PrebuiltBundleRetentionLease.ClaimFor(until, 179190359);
+        var taken = PrebuiltBundleRetentionLease.Taken(released, claim);
+        var stamped = taken with { Claim = claim | PrebuiltBundleRetentionLease.StampedFlag, Replica = "replica-new", TakenAt = takenAt };
+
+        // The two versions of one take: same generation, claims exactly one StampedFlag apart.
+        taken.Generation.Should().Be(50);
+        stamped.Generation.Should().Be(taken.Generation);
+        (stamped.Claim - taken.Claim).Should().Be(PrebuiltBundleRetentionLease.StampedFlag);
+        taken.Replica.Should().Be("replica-previous", "a take writes only the claim and its generation");
+
+        var beforeStamp = PrebuiltBundleRetentionLease.DescribeHolder(taken);
+        taken.HolderReplica.Should().BeNull();
+        beforeStamp.Should().NotContain("replica-previous", "the previous holder released; it does not hold this claim")
+            .And.Contain("pass 179190359")
+            .And.Contain("not stamped");
+
+        stamped.HolderReplica.Should().Be("replica-new");
+        PrebuiltBundleRetentionLease.DescribeHolder(stamped).Should().Contain("pass 179190359 on replica-new");
+
+        // Negative control: a released lease keeps its last Replica but names no holder replica.
+        released.Replica.Should().Be("replica-previous");
+        released.HolderReplica.Should().BeNull();
+    }
 }
