@@ -3,6 +3,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -49,6 +50,8 @@ public sealed class ASwapWaveDefersAHubWithAStepInFlightTest : MonolithMeshTestB
 
     private ModuleLiveUpdater Updater => Mesh.ServiceProvider.GetRequiredService<ModuleLiveUpdater>();
 
+    private CollectibleContextUnloads Unloads => Mesh.ServiceProvider.GetRequiredService<CollectibleContextUnloads>();
+
     /// <summary>
     /// The wave defers the held hub: the swap answers Live while that hub is still running its step
     /// and is not disposing. When the step ends, the SAME wave recycles it, with the wave's own
@@ -64,6 +67,8 @@ public sealed class ASwapWaveDefersAHubWithAStepInFlightTest : MonolithMeshTestB
         var ct = TestContext.Current.CancellationToken;
         var held = await Live(HeldPath, ct);
         var idle = await Live(IdlePath, ct);
+
+        var retirements = Unloads.Retirements;
 
         // The step: the very hold ModuleReloadExecutor's step takes (StepHold → BeginAsyncOperation).
         var step = held.BeginAsyncOperation();
@@ -85,6 +90,9 @@ public sealed class ASwapWaveDefersAHubWithAStepInFlightTest : MonolithMeshTestB
                 + $"Torn down by: {(held as MessageHub)?.DisposalAttribution}. Outcome: {outcome.Reason}");
             held.RunLevel.Should().Be(MessageHubRunLevel.Started);
             outcome.Deferred.Should().Be(1, "exactly the held hub was deferred: " + outcome.Reason);
+            Unloads.Retirements.Should().Be(retirements,
+                "the held hub still runs the old generation, and its step holds no module lease — the old "
+                + "generation must not be retired under it (#7727 review). Outcome: " + outcome.Reason);
         }
         finally
         {
@@ -97,6 +105,113 @@ public sealed class ASwapWaveDefersAHubWithAStepInFlightTest : MonolithMeshTestB
         held.IsDisposing.Should().BeTrue("the held hub is recycled once its step ended");
         ((held as MessageHub)?.DisposalAttribution ?? "").Should().Contain("ModuleLiveUpdate",
             "the deferred recycle is the wave's own request, carrying its reason");
+
+        // …and only now, with every hub of the wave gone, is the old generation retired.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Unloads.Retirements)
+            .Where(r => r > retirements)
+            .FirstAsync()
+            .Timeout(Budget).Await(ct);
+    }
+
+    /// <summary>
+    /// Two swaps during ONE held step are ONE deferred recycle of that activation, carrying both
+    /// waves' reasons (#7727 review). Two would be two address-targeted disposals, and the second
+    /// would reach the activation the first made room for. The posts happen synchronously when the
+    /// step ends, so they are all recorded by the time <c>Dispose</c> returns.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TwoSwapsDuringOneHeldStep_AreOneDeferredRecycle()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var held = await Live(HeldPath, ct);
+        var issued = new System.Collections.Concurrent.ConcurrentQueue<(string Path, string Reason)>();
+        using var recorder = Updater.DeferredRecyclesIssued.Subscribe(issued.Enqueue);
+
+        var step = held.BeginAsyncOperation();
+        try
+        {
+            var first = await Updater.Swap(Write("g2", Source(reachesEveryHub: true)), "test: the FIRST wave")
+                .Timeout(Budget).Await(ct);
+            var second = await Updater.Swap(Write("g3", Source(reachesEveryHub: true)), "test: the SECOND wave")
+                .Timeout(Budget).Await(ct);
+            first.Kind.Should().Be(ModuleSwapKind.Live, first.Reason);
+            second.Kind.Should().Be(ModuleSwapKind.Live, second.Reason);
+            held.IsDisposing.Should().BeFalse("both waves defer the held hub: " + second.Reason);
+        }
+        finally
+        {
+            step.Dispose();
+        }
+
+        var posts = issued.Where(i => string.Equals(i.Path, HeldPath, StringComparison.OrdinalIgnoreCase)).ToList();
+        posts.Should().HaveCount(1,
+            "one activation, one deferred recycle — however many waves deferred it. Posted: "
+            + string.Join(" || ", posts.Select(p => p.Reason)));
+        posts[0].Reason.Should().Contain("the FIRST wave");
+        posts[0].Reason.Should().Contain("the SECOND wave");
+        await held.RunLevelChanged.LastOrDefaultAsync().Timeout(Budget).Await(ct);
+    }
+
+    /// <summary>
+    /// A held hub that is torn down for ANOTHER reason first gets no deferred recycle at all (#7727
+    /// review). The teardown itself releases the step (it is registered for disposal, as the reload
+    /// executor's step pipeline is), and that release fires the idle signal. Cancelling on the hub's
+    /// DEATH would come too late, and a request posted then would reach the address's next activation.
+    /// The deferral ends at the FIRST instant of the shutdown instead.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AHeldHubTornDownOtherwise_GetsNoDeferredRecycle()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var held = await Live(HeldPath, ct);
+        var issued = new System.Collections.Concurrent.ConcurrentQueue<(string Path, string Reason)>();
+        using var recorder = Updater.DeferredRecyclesIssued.Subscribe(issued.Enqueue);
+
+        // The teardown releases the step, exactly as it ends the executor's step pipeline.
+        held.RegisterForDisposal(held.BeginAsyncOperation());
+        var outcome = await Updater.Swap(Write("g2", Source(reachesEveryHub: true)), "test: a wave, then an unrelated recycle")
+            .Timeout(Budget).Await(ct);
+        outcome.Deferred.Should().Be(1, outcome.Reason);
+
+        Mesh.NodeOperationIssuingHub().Post(new DisposeRequest { Reason = "test: an unrelated recycle" },
+            o => o.WithTarget(new Address(HeldPath)));
+        await held.RunLevelChanged.LastOrDefaultAsync().Timeout(Budget).Await(ct);
+
+        ((held as MessageHub)?.DisposalAttribution ?? "").Should().Contain("an unrelated recycle");
+        issued.Where(i => string.Equals(i.Path, HeldPath, StringComparison.OrdinalIgnoreCase)).Should().BeEmpty(
+            "the hub was already going down when its step was released — a deferred request posted then "
+            + "would tear down the NEXT activation at that address");
+    }
+
+    /// <summary>
+    /// A step held on a hosted CHILD of the per-node hub defers the per-node hub (#7727 review): the
+    /// wave reads the owner's marker, and recycling the owner would tear the child down mid-step.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AStepHeldOnAHostedChild_DefersItsOwner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var held = await Live(HeldPath, ct);
+        var child = held.GetHostedHub(new Address("step-child", Guid.NewGuid().ToString("N")), c => c, HostedHubCreation.Always)
+                    ?? throw new InvalidOperationException("HostedHubCreation.Always always yields a hub");
+
+        var step = child.BeginAsyncOperation();
+        try
+        {
+            var outcome = await Updater.Swap(Write("g2", Source(reachesEveryHub: true)), "test: a wave during a child's step")
+                .Timeout(Budget).Await(ct);
+            outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
+            held.IsDisposing.Should().BeFalse(
+                "the owner of a child with a step in flight is deferred, never recycled under the child: "
+                + $"{(held as MessageHub)?.DisposalAttribution}. Outcome: {outcome.Reason}");
+            outcome.Deferred.Should().Be(1, outcome.Reason);
+        }
+        finally
+        {
+            step.Dispose();
+        }
+        await held.RunLevelChanged.LastOrDefaultAsync().Timeout(Budget).Await(ct);
     }
 
     /// <summary>Activates the node at <paramref name="path"/> and returns its live hub.</summary>

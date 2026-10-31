@@ -11,6 +11,11 @@ namespace MeshWeaver.Messaging;
 /// created with the hub and living in its property bag, so it is the hub's own instance state. It
 /// is never static and never shared between hubs.
 ///
+/// <para><b>The owner sees its children's steps.</b> <see cref="MessageHubExtensions.BeginAsyncOperation"/>
+/// marks the hub it is called on AND every ancestor up the parent chain, so a step held on a hosted
+/// child (a thread's execution hub, a layout area) counts on its per-node owner, which is the hub a
+/// recycle targets.</para>
+///
 /// <para><b>Host-independent.</b> A step enters it through
 /// <see cref="MessageHubExtensions.BeginAsyncOperation"/>. That is the same call on every host. On
 /// Orleans it also pins the grain against idle collection; in-process there is no grain to pin, and

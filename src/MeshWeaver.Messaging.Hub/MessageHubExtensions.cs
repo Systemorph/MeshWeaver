@@ -279,8 +279,11 @@ public static class MessageHubExtensions
     /// Starts a step of work this hub's activation owns, and holds it until the returned scope is
     /// disposed. Dispose the scope in the step's finally (<c>Observable.Using</c> or <c>using</c>),
     /// so a faulted step releases it too.
-    /// <para>On EVERY host it marks the hub's <see cref="HubStepsInFlight"/>, so a recycle that must
-    /// not drop the step (a module swap's recycle wave) waits for it to end (#7324). On Orleans it
+    /// <para>On EVERY host it marks the <see cref="HubStepsInFlight"/> of the hub AND of every
+    /// ancestor up its parent chain, so a recycle that must not drop the step (a module swap's recycle
+    /// wave) waits for it to end (#7324). A step held on a hosted CHILD (a thread's execution hub, a
+    /// layout area) therefore keeps its owning per-node activation from being recycled under it: the
+    /// wave reads the owner's marker, and tearing the owner down tears the child down too. On Orleans it
     /// also keeps the grain alive (GrainLongRunningOperationCallback: RegisterGrainTimer plus
     /// DelayDeactivation). In-process there is no grain to keep alive, and the marker is the
     /// whole hold.</para>
@@ -289,7 +292,7 @@ public static class MessageHubExtensions
     /// <returns>The step's hold. Disposing it more than once releases it once.</returns>
     public static IDisposable BeginAsyncOperation(this IMessageHub hub)
     {
-        var step = hub.Get<HubStepsInFlight>()?.Begin() ?? Disposable.Empty;
+        var step = MarkStepOnChain(hub);
         // Walk parent chain to find the grain-level callback
         var current = hub;
         while (current != null)
@@ -321,6 +324,23 @@ public static class MessageHubExtensions
         // (no grain to delay-deactivate), so no grain hold is the correct shape. The step's
         // in-flight mark is all that is left (#7324).
         return step;
+    }
+
+    /// <summary>Marks one step in flight on <paramref name="hub"/> and on every ancestor up its parent
+    /// chain; the returned scope releases every mark exactly once.</summary>
+    private static IDisposable MarkStepOnChain(IMessageHub hub)
+    {
+        var marks = new CompositeDisposable();
+        var current = hub;
+        while (current != null)
+        {
+            if (current.Get<HubStepsInFlight>() is { } steps)
+                marks.Add(steps.Begin());
+            var parent = current.Configuration.ParentHub;
+            if (parent == current) break;
+            current = parent;
+        }
+        return marks;
     }
 
     /// <summary>
