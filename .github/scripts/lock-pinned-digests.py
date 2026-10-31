@@ -127,6 +127,7 @@ import re
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -426,6 +427,192 @@ def extract_record_pins(text: str, registry: str) -> tuple[list[tuple[str, str]]
     return [(path, tag.strip())], []
 
 
+# ── A CLIENT'S DEPLOYMENT RECORD NEVER REACHES THE PUBLIC LOG (Plugins#4364) ─────────────────────
+#
+# 🚨 THIS REPOSITORY'S ACTIONS LOGS ARE PUBLIC, AND THIS LANE READS THE FLEET'S DEPLOYMENT RECORDS.
+# #7599 withheld a private repository's NAME and the private roster's identifiers and prose. It did
+# not reach a CUSTOMER portal that is a record in the fleet's OWN deployments repository rather than
+# in a client estate: its record path (`…/Deployments/<id>.json`), its overlay path
+# (`…/<id>/values.<id>.public.yaml`), its installation id and its host were printed in clear on every
+# nightly run — and a customer portal's deployment id is the customer's name. The first apply run
+# on #7599's code still carried one customer's id on five lines and a second customer's on one.
+#
+# So the record is classified AT THE DOOR it is read through, by what it says about itself: its
+# `owner`. A record is the fleet's own only when its owner is one of `FLEET_RECORD_OWNERS`. Anything
+# else — another owner, NO owner, an owner that is not a string, a record that does not parse — is
+# NOT the fleet's, and every identifier it carries is WITHHELD: replaced in the script's own output
+# before a byte reaches the runner (`PublicLog`). It is an allowlist, so it fails CLOSED: a record
+# nobody classified is withheld, never printed. Withholding is not masking — `::add-mask::` is an
+# exact, case-sensitive match the runner applies only to LATER lines, and this issue's own history
+# is two rounds of a value slipping past one.
+#
+# Add an owner here only when it IS the fleet's operator. A client's name never belongs here.
+FLEET_RECORD_OWNERS = frozenset({"Systemorph"})
+# The content fields that are, by construction, an installation's identity. On every record in the
+# fleet each is the id or is derived from it (`host` = `<id>.<zone>`, `keyVaultSecretPrefix` =
+# `<id>-`, `configPath` = `deployments/aks/<id>`), so the list fails safe: a field that repeats the
+# id is withheld twice, never printed once.
+RECORD_IDENTITY_FIELDS = ("host", "namespace", "helmRelease", "database", "keyVaultSecretPrefix",
+                          "announcementKeySecret", "configPath", "owner", "name", "displayName")
+# A withheld value is replaced case-insensitively wherever it appears, so a one- or two-character
+# one would shred digests and words alike. A shorter identifier is a RED (`withheld_identifiers`),
+# never a value quietly left in clear.
+WITHHELD_MIN_LENGTH = 3
+
+
+def _identity_values(value) -> set[str]:
+    """The printable spellings of one identity value: as written, its path leaf, its first DNS
+    label, and each without hyphens — `memex-cloud` is spelled `memexcloud` in its overlay's name."""
+    if not isinstance(value, str):
+        return set()
+    value = value.strip().strip("/").rstrip("-")
+    if not value:
+        return set()
+    spellings = {value, value.rsplit("/", 1)[-1], value.split(".", 1)[0]}
+    spellings |= {spelling.replace("-", "") for spelling in spellings}
+    return {spelling for spelling in spellings if spelling}
+
+
+def record_identity(text: str, path: str) -> tuple[bool, frozenset[str]]:
+    """(is the fleet's own, identifiers) for ONE deployment record. Pure.
+
+    Fails CLOSED: a record that does not parse, whose root or content is not an object, or whose
+    `owner` is absent or not in `FLEET_RECORD_OWNERS` is NOT the fleet's — and its file stem is
+    always an identifier, because the path is what the report prints."""
+    identifiers = _identity_values(path.rsplit("/", 1)[-1].removesuffix(".json"))
+    try:
+        doc = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return False, frozenset(identifiers)
+    if not isinstance(doc, dict):
+        return False, frozenset(identifiers)
+    identifiers |= _identity_values(doc.get("id")) | _identity_values(doc.get("name"))
+    content = doc.get("content", doc)
+    if not isinstance(content, dict):
+        return False, frozenset(identifiers)
+    for key in RECORD_IDENTITY_FIELDS:
+        identifiers |= _identity_values(content.get(key))
+    owner = content.get("owner")
+    is_fleet = isinstance(owner, str) and owner.strip() in FLEET_RECORD_OWNERS
+    return is_fleet, frozenset(identifiers)
+
+
+def withheld_identifiers(axis2: list[OverlayScan]) -> tuple[set[str], list[str]]:
+    """(every identifier the public log must not carry, problems). Pure.
+
+    Two sources, and the second is the fail-closed half: (1) every identifier of a record that is
+    not the fleet's own; (2) every installation an OVERLAY declares whose id no fleet-owned record
+    names, with its ingress host — an overlay carries no owner, so an installation nobody recorded
+    as the fleet's is not printed on the strength of having no record at all.
+
+    A value a fleet record ALSO carries is still withheld: a client record sharing a word with a
+    fleet record costs the fleet's line its clarity, never the client its name."""
+    fleet_ids: set[str] = set()
+    withheld: set[str] = set()
+    for scan in axis2:
+        for path, is_fleet, identifiers in scan.records:
+            if is_fleet:
+                fleet_ids |= _identity_values(path.rsplit("/", 1)[-1].removesuffix(".json"))
+            else:
+                withheld |= identifiers
+    for scan in axis2:
+        for ident, host, _where in scan.instances:
+            if ident not in fleet_ids:
+                withheld |= _identity_values(ident) | _identity_values(host)
+    short = [value for value in withheld if len(value) < WITHHELD_MIN_LENGTH]
+    problems = ([f"{len(short)} identifier(s) of a deployment that is not the fleet's own are "
+                 f"shorter than {WITHHELD_MIN_LENGTH} characters, so this lane cannot withhold "
+                 "them from its public log without shredding every line. The values are not "
+                 "printed; find them with `--root` on a private checkout."] if short else [])
+    return {value for value in withheld if len(value) >= WITHHELD_MIN_LENGTH}, problems
+
+
+class Withheld:
+    """The values no public line may carry, shared by every `PublicLog` of one run."""
+
+    def __init__(self) -> None:
+        self._values: frozenset[str] = frozenset()
+        self._pattern: re.Pattern[str] | None = None
+
+    def add(self, values) -> None:
+        self._values = self._values | frozenset(value for value in values if value)
+        ordered = sorted(self._values, key=lambda value: (-len(value), value))
+        self._pattern = (re.compile("|".join(re.escape(value) for value in ordered), re.IGNORECASE)
+                         if ordered else None)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def redact(self, text: str) -> str:
+        return self._pattern.sub("***", text) if self._pattern else text
+
+
+class PublicLog(io.TextIOBase):
+    """A text stream that REPLACES every withheld value before a byte reaches the stream under it.
+
+    Installed over stdout and stderr by `main()` for a real run. Whole lines are written: a partial
+    write is held until its newline (or a flush), because `print(a, b)` writes its pieces
+    separately and a value split across two writes would pass a per-write replacement.
+    Case-insensitive, longest value first. Locked: the pool's workers print progress."""
+
+    def __init__(self, stream, withheld: Withheld) -> None:
+        super().__init__()
+        self._stream = stream
+        self.withheld = withheld
+        self._pending = ""
+        self._lock = threading.Lock()
+
+    def writable(self) -> bool:
+        return True
+
+    @property
+    def encoding(self):
+        return getattr(self._stream, "encoding", "utf-8")
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            self._pending += text
+            *lines, self._pending = self._pending.split("\n")
+            for line in lines:
+                self._stream.write(self.withheld.redact(line) + "\n")
+            if lines:
+                self._stream.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        with self._lock:
+            if self._pending:
+                self._stream.write(self.withheld.redact(self._pending))
+                self._pending = ""
+            self._stream.flush()
+
+
+def install_public_log() -> Withheld:
+    """Wrap stdout and stderr in `PublicLog`s sharing one withheld set, and return that set."""
+    withheld = Withheld()
+    sys.stdout = PublicLog(sys.stdout, withheld)
+    sys.stderr = PublicLog(sys.stderr, withheld)
+    return withheld
+
+
+def withhold_from_public_log(values: set[str]) -> None:
+    """Add `values` to the run's withheld set. Values to withhold with NO `PublicLog` installed
+    would be printed, so that is a RED naming no value — never a silent pass-through."""
+    if not values:
+        return
+    if not isinstance(sys.stdout, PublicLog):
+        raise SystemExit("::error::identifiers of a deployment that is not the fleet's own must be "
+                         "withheld from this public log, and no PublicLog is installed. Run the "
+                         "lane through main().")
+    sys.stdout.withheld.add(values)
+
+
+def public_text(text: str) -> str:
+    """`text` as the public log would carry it — for a writer that bypasses stdout (the step
+    summary is as public as the log)."""
+    return sys.stdout.withheld.redact(text) if isinstance(sys.stdout, PublicLog) else text
+
+
 def extract_foreign_pins(text: str, registry: str) -> list[tuple[str, str, str]]:
     """(registry host, repo, tag) for every image reference in a registry this lane does NOT lock.
 
@@ -633,6 +820,10 @@ class OverlayScan:
     # AXIS 3 can leave it out of the installation's running PORTAL set — the overlay half of the
     # same rule `record_portals` states for the record.
     overlay_operators: list[tuple[str, str]] = field(default_factory=list)
+    # (record path, is the fleet's own, identifiers) — one per `Hosting/Deployment`-shaped record,
+    # classified at the door it is read through (`record_identity`). A record that is NOT the
+    # fleet's has every identifier withheld from the public log (Plugins#4364).
+    records: list[tuple[str, bool, frozenset[str]]] = field(default_factory=list)
     unreadable: str | None = None
 
 
@@ -684,6 +875,7 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
         pins, floating = extract_overlay_pins(text, registry)
         # The record's SPLIT pin, on top of whatever the `repo:tag` rules found in the same text.
         if is_deployment_record_path(path):
+            scan.records.append((path, *record_identity(text, path)))
             record_pins, record_floating = extract_record_pins(text, registry)
             pins = pins + record_pins
             floating = floating + record_floating
@@ -727,6 +919,7 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
         text = path.read_text(encoding="utf-8", errors="replace")
         pins, floating = extract_overlay_pins(text, registry)
         if is_deployment_record_path(rel):
+            scan.records.append((rel, *record_identity(text, rel)))
             record_pins, record_floating = extract_record_pins(text, registry)
             pins = pins + record_pins
             floating = floating + record_floating
@@ -2439,7 +2632,7 @@ def emit(text: str) -> None:
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
-            handle.write(text + "\n")
+            handle.write(public_text(text) + "\n")
 
 
 def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
@@ -2975,7 +3168,21 @@ def scan_fleet(repos: list[str], registry_name: str, local_root: str | None
         return consistency.scan_remote(gh_repo), scan_overlays_remote(gh_repo, registry_name)
 
     scans = pmap(one, repos, label="repositories scanned")
-    return [axis1 for axis1, _ in scans], [axis2 for _, axis2 in scans]
+    axis2 = [axis2 for _, axis2 in scans]
+    # 🚨 BEFORE ANYTHING THE SCAN READ IS PRINTED (Plugins#4364). Up to here the run has printed
+    # counts only; from here on every line may name a record, an overlay or an installation.
+    withheld, problems = withheld_identifiers(axis2)
+    withhold_from_public_log(withheld)
+    records = [record for scan in axis2 for record in scan.records]
+    not_fleet = sum(1 for _path, is_fleet, _ids in records if not is_fleet)
+    print(f"deployment records: {len(records)} read, {not_fleet} not the fleet's own "
+          f"(owner not in {sorted(FLEET_RECORD_OWNERS)}); {len(withheld)} identifier(s) of "
+          "installations that are not the fleet's are withheld from this public log as `***`")
+    if problems:
+        for problem in problems:
+            print(f"::error::{problem}")
+        raise SystemExit(1)
+    return [axis1 for axis1, _ in scans], axis2
 
 
 
@@ -8696,6 +8903,110 @@ env:
     check(declared_drift_problems({"steps": 0, "purges": []}, _rec, "t")[0],
           "ARM 41b: a live task with no step was excused")
 
+    # ── ARM 42: a customer's deployment never reaches the public log (Plugins#4364) ─────────────
+    # 🚨 The shape the first apply run on #7599's code still leaked: a customer portal recorded in
+    # the fleet's OWN deployments repository — its record path, its overlay path, its installation
+    # id and host printed in clear. Driven through the REAL door (`scan_overlays_local`), the REAL
+    # decision path (`_drive`) and the REAL `report()`, and read back through the filter `main()`
+    # installs. The fixture customer is neutral; the real one is never named in this repository.
+    _client_record = json.dumps({
+        "id": "fabrikam", "name": "Fabrikam", "nodeType": "Hosting/Deployment",
+        "content": {"host": "fabrikam.example.cloud", "namespace": "fabrikam",
+                    "helmRelease": "fabrikam", "keyVaultSecretPrefix": "fabrikam-",
+                    "owner": "Fabrikam Holdings", "configPath": "deployments/aks/fabrikam",
+                    "imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
+                    "pinnedImageTag": "3.0.0-ci.7926",
+                    "operator": {"image": "meshweaver.azurecr.io/hosting-operator:main"}}})
+    _fleet_record = (_client_record.replace("fabrikam", "memex").replace("Fabrikam Holdings", "Systemorph")
+                     .replace('"name": "Fabrikam"', '"name": "Memex"'))
+    _client_overlay = (FIXTURE_OVERLAY_INSTANCE
+                       .replace('Hosting__Deployment: "memex"', 'Hosting__Deployment: "fabrikam"')
+                       .replace("memex.example.cloud", "fabrikam.example.cloud"))
+    _client_values = ("fabrikam", "fabrikam.example.cloud", "Fabrikam Holdings")
+    with tempfile.TemporaryDirectory() as _tmp:
+        _files = {"mesh/Deployments/fabrikam.json": _client_record,
+                  "mesh/Deployments/memex.json": _fleet_record,
+                  "deployments/aks/fabrikam/values.fabrikam.public.yaml": _client_overlay,
+                  "deployments/aks/memex/values.memex.public.yaml": FIXTURE_OVERLAY_INSTANCE}
+        for _rel, _body in _files.items():
+            (Path(_tmp) / _rel).parent.mkdir(parents=True, exist_ok=True)
+            (Path(_tmp) / _rel).write_text(_body, encoding="utf-8")
+        _client_scan = scan_overlays_local(_tmp, "Systemorph/Memex", REGISTRY_DEFAULT)
+    _withheld, _problems = withheld_identifiers([_client_scan])
+    check(not _problems, f"ARM 42: a clean fixture produced withholding problems: {_problems}")
+    check(all(value in _withheld for value in _client_values),
+          f"ARM 42: a customer record's identifiers were not all withheld: "
+          f"{sorted(set(_client_values) - _withheld)}")
+    check(not {"memex", "memex.example.cloud"} & _withheld,
+          f"ARM 42 (control): the fleet's OWN record was withheld, so the classifier is not "
+          f"reading the owner: {sorted(_withheld)}")
+    plan, _, _ = _drive(clean1, [_client_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), apply=False)
+
+    def _render(log) -> str:
+        with contextlib.redirect_stdout(log):
+            report(plan, clean1, [_client_scan], REGISTRY_DEFAULT, _inventory(),
+                   apply=False, release_enabled=False, root=HERE_ROOT)
+            for _blocker in plan.blockers:
+                print(f"::error::{_blocker}")
+        log.flush()
+        return (log._stream if isinstance(log, PublicLog) else log).getvalue()
+
+    # The falsification first: unfiltered, the fixture DOES reach the log — so a clean read below
+    # is the filter's doing, not a report that happened never to print the customer.
+    _raw = _render(io.StringIO())
+    check("fabrikam" in _raw.lower(),
+          "ARM 42 (falsification): the unfiltered report never printed the customer's id, so the "
+          "arm below would pass about nothing")
+    _store = Withheld()
+    _store.add(_withheld)
+    _public = _render(PublicLog(io.StringIO(), _store))
+    _leaked = sorted(value for value in _client_values if value.lower() in _public.lower())
+    check(not _leaked,
+          f"ARM 42: the public log carries {len(_leaked)} identifier(s) of a customer's deployment "
+          "(values withheld from this message too)")
+    check("deployments/aks/memex/values.memex.public.yaml" in _public and "***" in _public,
+          "ARM 42 (negative control): the fleet's own overlay path is no longer printed, or nothing "
+          "was replaced — a filter that blanks everything would pass the arm above")
+    # The filter holds a value split across writes, and is case-insensitive.
+    _store_split = Withheld()
+    _store_split.add({"fabrikam"})
+    _split = PublicLog(io.StringIO(), _store_split)
+    _split.write("pinned by FAB")
+    _split.write("rikam/values.yaml\n")
+    _split.write("tail Fabrikam")
+    _split.flush()
+    check(_split._stream.getvalue() == "pinned by ***/values.yaml\ntail ***",
+          f"ARM 42: a value split across two writes, or in another case, passed the filter: "
+          f"{_split._stream.getvalue()!r}")
+    # Fail CLOSED on every record that does not say it is the fleet's.
+    for _label, _text in (("no owner", json.dumps({"id": "contoso", "content": {}})),
+                          ("another owner", json.dumps({"content": {"owner": "Contoso"}})),
+                          ("a non-string owner", json.dumps({"content": {"owner": ["Systemorph"]}})),
+                          ("unparseable", "{not json")):
+        _is_fleet, _ids = record_identity(_text, "mesh/Deployments/contoso.json")
+        check(not _is_fleet and "contoso" in _ids,
+              f"ARM 42: a record with {_label} was read as the fleet's own, or its id is not withheld")
+    _is_fleet, _ = record_identity(_fleet_record, "mesh/Deployments/memex.json")
+    check(_is_fleet, "ARM 42 (control): a record owned by the fleet was not read as the fleet's")
+    # An overlay naming an installation NO fleet record names is withheld too.
+    _orphan = _scan2("Systemorph/Memex", _client_overlay, "deployments/aks/fabrikam/values.yaml")
+    _orphan_withheld, _ = withheld_identifiers([_orphan])
+    check({"fabrikam", "fabrikam.example.cloud"} <= _orphan_withheld,
+          "ARM 42: an installation with no record at all was printed on the strength of having none")
+    # A value too short to withhold is a RED, never left in clear.
+    _short = OverlayScan(gh_repo="Systemorph/Memex",
+                         records=[("mesh/Deployments/ab.json", False, frozenset({"ab"}))])
+    check(withheld_identifiers([_short])[1],
+          "ARM 42: a two-character customer identifier was neither withheld nor refused")
+    # And values to withhold with no filter installed is a RED, not a pass-through.
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            withhold_from_public_log({"fabrikam"})
+        check(False, "ARM 42: identifiers were accepted for withholding with no PublicLog installed")
+    except SystemExit:
+        pass
+
     # ── ARM 29: the harness drives the SAME path as run(), or it guards nothing ─────────────────
     # A self-test whose subject moved and whose roots did not keeps passing about code that is no
     # longer what runs. Compare the calls, mechanically.
@@ -8758,7 +9069,7 @@ env:
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
           "write that exits 0 without taking and one whose read-back cannot answer are both RED "
-          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to. WHAT THIS FLEET PUBLISHES TO IT (#4323, the THIRD question about the same unit): the push targets are DERIVED from the publishing lanes — every `--tag` and every mirror-image-to-registry.sh destination, shell continuations joined, with the two readers falsified SEPARATELY because disabling the mirror call loses a whole registry while disabling the join loses one repository — a `third-party` host this fleet pushes to with no `publishes` block is RED (that is the defect, and it validated green for a day), an undeclared push target is RED, the declared repositories are held to the derived set in BOTH directions, `operator-retained` is the only rule a publication may claim and may enumerate no deleters and authorize no cleanup, a `fleet-unlockable` host is NOT made to declare the same fact twice, a renamed lane REDS rather than deriving nothing — and the two arms that stop the block being prose: an overlay pinning one of OUR published repositories is RED while the bootstrap image on the SAME host is not, and the report never prints our own images under 'declared NOT ours to retain'. WHICH REPOSITORY DECLARES IT (#3438, the identity): an installation is `owner/name:id`, so TWO deployments repositories may each declare a `memex` and both are built, probed at their own hosts and protected against their own repository's pins — while ONE repository declaring an id in two overlays is still ambiguous and still RED, and two installations of the same id can never be LABELLED the same way. The roster resolves against that identity: an entry naming its `repo` reaches only that repository's installation, an unqualified entry for an id two repositories declare is RED rather than applied to either, and an `id` carrying a `:` or a `repo` that is not an `owner/name` is refused before it can exempt nobody while reading as a declaration. AND THE HALF THAT STOPS THE QUALIFICATION BECOMING AN EXEMPTION: every repository whose tree carries deployment overlay FILES must be named in the `repositories` table — an undeclared one is RED on the real decision path, a stale name is RED, a repository whose tree could NOT be read is skipped there and still reds the run, and the control (a fully declared fleet) passes — while the STALE direction, which needs the WHOLE fleet as its denominator, is asserted only over a full discovery, so a `--repos` / `--root` scan neither reds on a record that is right nor stays silent about not having asked. Two roster entries that RESOLVE to one installation are RED rather than applied in key order with the loser invisible, and a DECLARED repository whose tree could not be read does not also produce the contradictory stale line. OUT OF ESTATE: our images in a registry outside this fleet's reach are declared rather than described falsely — the rule PRINTS on every run, may enumerate no deleters, must name its `estate` and must carry `cleanupAuthorized: false`, and it is REFUSED for any host this fleet's own publishing lanes push to and refused outright where that derivation cannot be trusted, which is what keeps it from being a trapdoor out of `nothing-deletes` — and the report calls its references a LIST rather than \"a protected set a cleanup must KEEP\", which would contradict the declaration printed beside it. NAME PROTECTION (#3438, Memex#219): with NO lock written and every subject 400 days old, the committed record reaches no release channel, no arming marker and no official version on any repository it names, still reaches every per-build identity shape past 30 days and none under it — the pre-#3438 `.*` filters proven to reach them as the negative control — the record check reds on such a filter, the purge model SEARCHES the tag half the way acr-cli does, and a declared drift may narrow a TAG half but never move a REPOSITORY.")
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to. WHAT THIS FLEET PUBLISHES TO IT (#4323, the THIRD question about the same unit): the push targets are DERIVED from the publishing lanes — every `--tag` and every mirror-image-to-registry.sh destination, shell continuations joined, with the two readers falsified SEPARATELY because disabling the mirror call loses a whole registry while disabling the join loses one repository — a `third-party` host this fleet pushes to with no `publishes` block is RED (that is the defect, and it validated green for a day), an undeclared push target is RED, the declared repositories are held to the derived set in BOTH directions, `operator-retained` is the only rule a publication may claim and may enumerate no deleters and authorize no cleanup, a `fleet-unlockable` host is NOT made to declare the same fact twice, a renamed lane REDS rather than deriving nothing — and the two arms that stop the block being prose: an overlay pinning one of OUR published repositories is RED while the bootstrap image on the SAME host is not, and the report never prints our own images under 'declared NOT ours to retain'. WHICH REPOSITORY DECLARES IT (#3438, the identity): an installation is `owner/name:id`, so TWO deployments repositories may each declare a `memex` and both are built, probed at their own hosts and protected against their own repository's pins — while ONE repository declaring an id in two overlays is still ambiguous and still RED, and two installations of the same id can never be LABELLED the same way. The roster resolves against that identity: an entry naming its `repo` reaches only that repository's installation, an unqualified entry for an id two repositories declare is RED rather than applied to either, and an `id` carrying a `:` or a `repo` that is not an `owner/name` is refused before it can exempt nobody while reading as a declaration. AND THE HALF THAT STOPS THE QUALIFICATION BECOMING AN EXEMPTION: every repository whose tree carries deployment overlay FILES must be named in the `repositories` table — an undeclared one is RED on the real decision path, a stale name is RED, a repository whose tree could NOT be read is skipped there and still reds the run, and the control (a fully declared fleet) passes — while the STALE direction, which needs the WHOLE fleet as its denominator, is asserted only over a full discovery, so a `--repos` / `--root` scan neither reds on a record that is right nor stays silent about not having asked. Two roster entries that RESOLVE to one installation are RED rather than applied in key order with the loser invisible, and a DECLARED repository whose tree could not be read does not also produce the contradictory stale line. OUT OF ESTATE: our images in a registry outside this fleet's reach are declared rather than described falsely — the rule PRINTS on every run, may enumerate no deleters, must name its `estate` and must carry `cleanupAuthorized: false`, and it is REFUSED for any host this fleet's own publishing lanes push to and refused outright where that derivation cannot be trusted, which is what keeps it from being a trapdoor out of `nothing-deletes` — and the report calls its references a LIST rather than \"a protected set a cleanup must KEEP\", which would contradict the declaration printed beside it. NAME PROTECTION (#3438, Memex#219): with NO lock written and every subject 400 days old, the committed record reaches no release channel, no arming marker and no official version on any repository it names, still reaches every per-build identity shape past 30 days and none under it — the pre-#3438 `.*` filters proven to reach them as the negative control — the record check reds on such a filter, the purge model SEARCHES the tag half the way acr-cli does, and a declared drift may narrow a TAG half but never move a REPOSITORY. THE PUBLIC LOG (Plugins#4364): a deployment record that is not the fleet's own — another owner, no owner, an unparseable one — has every identifier withheld from the real report through the filter main() installs, an installation no fleet record names is withheld with its host, a split or differently-cased write does not pass, a too-short identifier is RED, and the fleet's own paths are still printed.")
     return 0
 
 
@@ -8815,6 +9126,10 @@ def main() -> int:
         repos = (consistency.discover_repos() if args.discover
                  else [r.strip() for r in args.repos.split(",") if r.strip()])
 
+    # 🚨 Every line from here on goes through the public-log filter (Plugins#4364): a customer
+    # deployment's identifiers are withheld the moment the scan has read them, in this process's
+    # own output, before the runner sees a byte.
+    install_public_log()
     masked = mask_private_roster()
     if masked:
         print(f"private roster: {len(masked)} identifier(s) registered as log masks")
