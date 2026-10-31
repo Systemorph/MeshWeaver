@@ -838,8 +838,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         var meshHub = serviceProvider.GetService<IMessageHub>();
         if (meshHub is null || reply.Target is null)
             return;
+        // The ADDRESS, never its string form: the banner's subject must be the owner's host-independent
+        // path. A hosted address renders as "path~host", which IsAnsweredByOwner reads as a different
+        // owner, so the subscriber would charge this refusal to the wrong budget.
         var message = ShutdownNack.RejectingNow(
-            reply.Sender?.ToString() ?? address.ToString(),
+            (object?)reply.Sender ?? address,
             "its host is stopping",
             $"cannot deliver its reply {reply.Id} to {reply.Target}");
         OrleansRouteTrace.Write($"OrleansRoutingService.Deliver REPLY_REFUSED addr={address} id={reply.Id} requestId={requestId}");

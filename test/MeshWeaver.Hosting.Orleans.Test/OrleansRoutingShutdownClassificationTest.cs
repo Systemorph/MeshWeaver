@@ -244,4 +244,28 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
         Assert.Equal(MessageDeliveryState.Forwarded, result.State);
         Assert.True(asked >= 2, $"the verdict must be re-read before the RPC (asked {asked} time(s))");
     }
+
+    /// <summary>
+    /// Review of #7734: the refusal's banner names the REPLYING owner by its host-independent path, so
+    /// a requester recognises it as that owner's shutdown (<c>ShutdownNack.IsAnsweredByOwner</c>) even
+    /// when the owner is a hosted hub, whose string form carries a <c>~host</c> suffix.
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_TheReplyRefusalNamesItsHostedOwnerByPath()
+    {
+        var routing = CreateRouter();
+        lifetime.StopApplication();
+
+        var hostedOwner = new Address("acme", "Doc") { Host = new Address("mesh", "test") };
+        Assert.NotEqual(hostedOwner.Path, hostedOwner.ToString());
+        var reply = new MessageDelivery<string>(hostedOwner, SenderAddress, "ack", JsonSerializerOptions.Default)
+            .WithProperty(PostOptions.RequestId, "the-requesters-request");
+
+        await routing.DeliverMessage(reply).FirstAsync().Await();
+
+        var refused = await nackDelivery.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var failure = Assert.IsType<DeliveryFailure>(refused.Message);
+        Assert.True(ShutdownNack.IsAnsweredByOwner(failure.Message, new Address("acme", "Doc")),
+            $"the requester must read this as its owner's shutdown — got: {failure.Message}");
+    }
 }
