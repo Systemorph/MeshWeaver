@@ -131,7 +131,7 @@ import threading
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -710,6 +710,30 @@ def withhold_from_public_log(values: set[str]) -> None:
     sys.stdout.withheld.add(values)
 
 
+def _without_path(text: str, path: str) -> str:
+    """`text` with every spelling of `path` a URL or an error can carry replaced — raw, encoded
+    (`/` kept or not) and decoded — longest first, so no spelling survives inside another."""
+    spellings = {path, quote(path, safe="/"), quote(path, safe=""), unquote(path)}
+    for spelling in sorted(spellings, key=len, reverse=True):
+        text = text.replace(spelling, "<this file>")
+    return text
+
+
+def public_diagnostic(text: str, limit: int, path: str | None = None) -> str:
+    """A raw diagnostic (`gh`/`az` stderr or stdout) CUT to `limit` — but only after everything the
+    public log withholds is gone (#7724 review). A cut first can stop INSIDE a withheld value, and
+    the prefix it leaves matches nothing the filter knows. Normalized whitespace; both the raw and
+    the URL-DECODED spelling are filtered, and `path` (a file the scan could not read, before the
+    withheld set exists) is removed in every spelling. Pure, apart from reading that set."""
+    text = " ".join(text.split())
+    if path:
+        text = _without_path(text, path)
+    text = unquote(public_text(text))
+    if path:
+        text = _without_path(text, path)
+    return public_text(text)[:limit]
+
+
 def public_text(text: str) -> str:
     """`text` as the public log would carry it — for a writer that bypasses stdout (the step
     summary is as public as the log)."""
@@ -975,9 +999,10 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
             withhold_unread_file(scan, path)
             # 🚨 The path leaves the error BEFORE it is cut (#7724 review): `gh` quotes the URL, and
             # a cut through the path leaves a fragment the whole-path value no longer matches.
-            # DECODED first (#7724 review): `gh` may quote the URL percent-encoded, and an encoded
-            # path matches neither this replacement nor the whole-path log filter.
-            detail = unquote(err.strip()).replace(path, "<this file>")[:200]
+            # EVERY spelling of the path, raw, encoded and decoded, leaves the error BEFORE it is
+            # cut (#7724 review): `gh` may quote the URL percent-encoded, and a path may carry a
+            # literal `%` that decoding turns into something else.
+            detail = public_diagnostic(err, 200, path=path)
             scan.unreadable = f"could not read {path}: {detail}"
             return scan
         try:
@@ -1149,7 +1174,7 @@ class Registry:
              "--name", acr_repo, "-o", "json"]
         )
         if rc != 0:
-            return None, " ".join(err.split())[:300]
+            return None, public_diagnostic(err, 300)
         try:
             raw_list = json.loads(out)
         except json.JSONDecodeError as exc:
@@ -1173,7 +1198,7 @@ class Registry:
     def repositories(self) -> tuple[list[str] | None, str]:
         rc, out, err = consistency.az(["acr", "repository", "list", "--name", self.name, "-o", "json"])
         if rc != 0:
-            return None, " ".join(err.split())[:300]
+            return None, public_diagnostic(err, 300)
         try:
             return json.loads(out), ""
         except json.JSONDecodeError as exc:
@@ -1192,13 +1217,13 @@ class Registry:
         if rc == 0 and out.strip().startswith("sha256:"):
             result: tuple[str | None, str] = (out.strip(), "")
         elif rc == 0:
-            result = (None, f"INDETERMINATE: az answered 0 but no digest: {out.strip()[:120]!r}")
+            result = (None, f"INDETERMINATE: az answered 0 but no digest: {public_diagnostic(out, 120)!r}")
         else:
             blob = err.lower()
             if any(marker in blob for marker in consistency.ABSENT_MARKERS):
                 result = (None, "absent")
             else:
-                result = (None, "INDETERMINATE: " + " ".join(err.split())[:300])
+                result = (None, "INDETERMINATE: " + public_diagnostic(err, 300))
         self._tag_cache[key] = result
         return result
 
@@ -1209,7 +1234,7 @@ class Registry:
              "--name", f"{acr_repo}@{digest}", "-o", "json"]
         )
         if rc != 0:
-            return None, " ".join(err.split())[:300]
+            return None, public_diagnostic(err, 300)
         try:
             document = json.loads(out)
         except json.JSONDecodeError as exc:
@@ -1237,11 +1262,11 @@ class Registry:
              "--query", "changeableAttributes.deleteEnabled", "-o", "tsv"]
         )
         if rc != 0:
-            return None, "INDETERMINATE: " + " ".join(err.split())[:300]
+            return None, "INDETERMINATE: " + public_diagnostic(err, 300)
         answer = out.strip().lower()
         if answer in ("true", "false"):
             return answer == "true", ""
-        return None, f"INDETERMINATE: az answered 0 but not a boolean: {out.strip()[:120]!r}"
+        return None, f"INDETERMINATE: az answered 0 but not a boolean: {public_diagnostic(out, 120)!r}"
 
     def tags(self, acr_repo: str) -> tuple[list["Tag"] | None, str]:
         """Every TAG of one repository, with its OWN lock attributes.
@@ -1271,7 +1296,7 @@ class Registry:
              "--repository", acr_repo, "--detail", "-o", "json"]
         )
         if rc != 0:
-            result: tuple[list[Tag] | None, str] = (None, " ".join(err.split())[:300])
+            result: tuple[list[Tag] | None, str] = (None, public_diagnostic(err, 300))
         else:
             try:
                 raw_list = json.loads(out)
@@ -1312,11 +1337,11 @@ class Registry:
              "--query", "changeableAttributes.deleteEnabled", "-o", "tsv"]
         )
         if rc != 0:
-            return None, "INDETERMINATE: " + " ".join(err.split())[:300]
+            return None, "INDETERMINATE: " + public_diagnostic(err, 300)
         answer = out.strip().lower()
         if answer in ("true", "false"):
             return answer == "true", ""
-        return None, f"INDETERMINATE: az answered 0 but not a boolean: {out.strip()[:120]!r}"
+        return None, f"INDETERMINATE: az answered 0 but not a boolean: {public_diagnostic(out, 120)!r}"
 
     # -- the two writes -------------------------------------------------------------------------
 
@@ -1330,7 +1355,7 @@ class Registry:
              "--delete-enabled", "true" if enabled else "false",
              "-o", "none"]
         )
-        return (rc == 0, " ".join(err.split())[:300])
+        return (rc == 0, public_diagnostic(err, 300))
 
     def set_delete_enabled(self, acr_repo: str, digest: str, enabled: bool) -> tuple[bool, str]:
         rc, _, err = consistency.az(
@@ -1339,7 +1364,7 @@ class Registry:
              "--delete-enabled", "true" if enabled else "false",
              "-o", "none"]
         )
-        return (rc == 0, " ".join(err.split())[:300])
+        return (rc == 0, public_diagnostic(err, 300))
 
 
 @dataclass
@@ -9167,6 +9192,11 @@ env:
          "deployments/aks/fabrikam prod/values.yaml",
          lambda endpoint: (1, "", "HTTP 502: Bad Gateway (https://api.github.com/"
                                   + endpoint.replace(" ", "%20") + ")")),
+        # A LITERAL `%20` in the file name, quoted as-is: decoding turns it into a space that the
+        # literal path no longer matches (#7724 review).
+        ("an overlay with a LITERAL-PERCENT path whose read FAILED",
+         "deployments/aks/fabrikam%20prod/values.yaml",
+         lambda endpoint: (1, "", f"HTTP 502: Bad Gateway (https://api.github.com/{endpoint})")),
     )
     _saved_gh = consistency.gh_api
     _saved_summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -9426,6 +9456,50 @@ env:
           "ARM 42j: an image repository only a non-fleet record references reached the public log")
     check("memex-portal-ai" in _repo_public,
           "ARM 42j (negative control): an image the fleet's own files also pin was withheld")
+
+    # ── ARM 42k: a registry diagnostic is filtered BEFORE it is cut (#7724 review) ──────────────
+    # `az` stderr is cut to 300 characters; a cut inside a long customer-only repository name left
+    # a prefix the withheld value no longer matched — in the log AND the step summary.
+    _long_repo = "fabrikam-customer-portal-image"
+    _registry_store = Withheld()
+    _registry_store.add({_long_repo})
+    _saved_az = consistency.az
+    _saved_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    try:
+        # `_cut_at` is where the repository name STARTS, so the 300-character cut lands inside it.
+        _url = " https://meshweaver.azurecr.io/acr/v1/"
+        for _cut_at in (280, 285, 290, 295):
+            _az_error = ("ERROR: " + "x" * (_cut_at - 7 - len(_url)) + _url
+                         + _long_repo + "/_tags 404")
+            check(_az_error.index(_long_repo) == _cut_at and _cut_at < 300 < _cut_at + len(_long_repo),
+                  f"ARM 42k: the fixture's repository name does not straddle the cut at {_cut_at}")
+            consistency.az = lambda _args, _e=_az_error: (1, "", _e)
+            with tempfile.TemporaryDirectory() as _summary_dir:
+                _summary = Path(_summary_dir) / "summary.md"
+                os.environ["GITHUB_STEP_SUMMARY"] = str(_summary)
+                _registry_log = PublicLog(io.StringIO(), _registry_store)
+                with contextlib.redirect_stdout(_registry_log):
+                    _probe = Registry(REGISTRY_DEFAULT)
+                    for _read in (_probe.manifests, _probe._list_tags):
+                        _, _message = _read(_long_repo)
+                        emit(f"  A3 UNREADABLE — {_message}")
+                _registry_log.flush()
+                _registry_public = _registry_log._stream.getvalue()
+                _registry_summary = _summary.read_text(encoding="utf-8")
+            check("fabrikam" not in _registry_public.lower(),
+                  f"ARM 42k: a registry error cut at {_cut_at} left a customer repository's "
+                  "prefix in the public log")
+            check("fabrikam" not in _registry_summary.lower(),
+                  f"ARM 42k: a registry error cut at {_cut_at} left a customer repository's "
+                  "prefix in the step summary")
+            check("meshweaver.azurecr.io" in _registry_public or "x" * 50 in _registry_public,
+                  "ARM 42k (negative control): the registry diagnostic was blanked entirely")
+    finally:
+        consistency.az = _saved_az
+        if _saved_summary is None:
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        else:
+            os.environ["GITHUB_STEP_SUMMARY"] = _saved_summary
 
     # ── ARM 29: the harness drives the SAME path as run(), or it guards nothing ─────────────────
     # A self-test whose subject moved and whose roots did not keeps passing about code that is no

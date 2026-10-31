@@ -959,8 +959,9 @@ things the fleet lanes read are private, and neither may reach that log in plain
   withheld as its exact string, never by its last segment, which is often a shared word. One
   that a fleet file also pins stays printed. One cost follows: a host pinned only by a chart repository's overlays prints as `***`
   too. An identifier containing a line break makes the run red, because the filter replaces values
-  within one line. A failed read's `gh` error is URL-decoded and has the path taken out before it
-  is cut, because a cut through
+  within one line. Every raw `gh`/`az` diagnostic goes through `public_diagnostic` before it is
+  cut. It is filtered in its raw and its URL-decoded spelling, and a failed read's path is removed
+  in every spelling: raw, encoded, decoded and literal `%`. Only then is it cut, because a cut through
   a long path leaves a fragment the whole-path value no longer matches. A record or overlay the scan could not read cannot
   say whose it is, so it is withheld as well: a record by its stem, an overlay by its whole path. Withheld means *not printed*, not masked. `main()` wraps stdout and stderr
   in `PublicLog`, which replaces each withheld value with `***` case-insensitively, a whole line
