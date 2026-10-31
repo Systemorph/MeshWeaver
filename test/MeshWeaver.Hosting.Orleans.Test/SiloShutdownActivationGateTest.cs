@@ -265,13 +265,16 @@ public class SiloShutdownActivationGateTest : TestBase
     public async Task AReplyRefusedAfterTheGate_AnswersItsRequesterShuttingDown()
     {
         var requesterAddress = new Address("portal", "silo-shutdown-requester");
-        var refusal = new TaskCompletionSource<IMessageDelivery>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var refusal = new System.Reactive.Subjects.AsyncSubject<IMessageDelivery>();
         var meshHub = ServiceProvider.GetRequiredService<IMessageHub>();
         meshHub.GetHostedHub(requesterAddress, conf => conf
                 .WithHandler<DeliveryFailure>((_, d) =>
                 {
                     if (d.Properties.ContainsKey(OrleansRoutingService.LeavingHostRefusalProperty))
-                        refusal.TrySetResult(d);
+                    {
+                        refusal.OnNext(d);
+                        refusal.OnCompleted();
+                    }
                     return d.Processed();
                 }), HostedHubCreation.Always)
             .Should().NotBeNull("the requester hub must exist to hear its refusal");
@@ -287,7 +290,9 @@ public class SiloShutdownActivationGateTest : TestBase
         lifetime.StopApplication();
         await ((ILifecycleObserver)readiness).OnStart(CancellationToken.None);
 
-        var refused = await refusal.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var refused = await refusal.Should().Within(TimeSpan.FromSeconds(30)).Emit(
+            "the requester of a reply refused after the gate is answered with a stamped ShuttingDown refusal",
+            TestContext.Current.CancellationToken);
         var failure = refused.Message.Should().BeOfType<DeliveryFailure>().Subject;
         failure.ErrorType.Should().Be(ErrorType.ShuttingDown);
         refused.Properties[PostOptions.RequestId]?.ToString().Should().Be("the-requesters-request");

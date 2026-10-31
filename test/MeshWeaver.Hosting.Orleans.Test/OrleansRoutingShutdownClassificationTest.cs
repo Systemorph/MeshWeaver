@@ -50,8 +50,9 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
     // OrleansCrossSiloStreamProbeTest.cs:53.
     private readonly TaskCompletionSource<DeliveryFailure> nack =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly TaskCompletionSource<IMessageDelivery> nackDelivery =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    // The leaving host's refusals the hub received — an AsyncSubject the handler completes, awaited
+    // through the reactive assertions (never a TaskCompletionSource: a hand-woven gate).
+    private readonly System.Reactive.Subjects.AsyncSubject<IMessageDelivery> refusals = new();
     private readonly IHostApplicationLifetime lifetime;
 
     public OrleansRoutingShutdownClassificationTest(ITestOutputHelper output) : base(output)
@@ -71,7 +72,10 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
                 // Only a leaving host's refusal: the router's ordinary local-sender NACK in these
                 // cases is addressed elsewhere and must not be mistaken for the conversion.
                 if (d.Properties.ContainsKey(OrleansRoutingService.LeavingHostRefusalProperty))
-                    nackDelivery.TrySetResult(d);
+                {
+                    refusals.OnNext(d);
+                    refusals.OnCompleted();
+                }
                 return d.Processed();
             })
             .WithPostingIdentity(PostingIdentity.System)));
@@ -177,7 +181,8 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
 
         await routing.DeliverMessage(reply).FirstAsync().Await();
 
-        var refused = await nackDelivery.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var refused = await refusals.Should().Within(TimeSpan.FromSeconds(10)).Emit(
+            "the requester is answered with a stamped ShuttingDown refusal", TestContext.Current.CancellationToken);
         var failure = Assert.IsType<DeliveryFailure>(refused.Message);
         Assert.Equal(ErrorType.ShuttingDown, failure.ErrorType);
         Assert.Equal("the-requesters-request", refused.Properties[PostOptions.RequestId]?.ToString());
@@ -200,7 +205,8 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
         var result = await routing.DeliverMessage(notAReply).FirstAsync().Await();
 
         Assert.Equal(MessageDeliveryState.Failed, result.State);
-        await Assert.ThrowsAsync<TimeoutException>(() => nackDelivery.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        await refusals.Should().NotEmit(TimeSpan.FromSeconds(2), "nothing is converted into a leaving host's refusal",
+            TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -221,7 +227,8 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
 
         await routing.DeliverMessage(verdict).FirstAsync().Await();
 
-        await Assert.ThrowsAsync<TimeoutException>(() => nackDelivery.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        await refusals.Should().NotEmit(TimeSpan.FromSeconds(2), "nothing is converted into a leaving host's refusal",
+            TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -263,7 +270,8 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
 
         await routing.DeliverMessage(reply).FirstAsync().Await();
 
-        var refused = await nackDelivery.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var refused = await refusals.Should().Within(TimeSpan.FromSeconds(10)).Emit(
+            "the requester is answered with a stamped ShuttingDown refusal", TestContext.Current.CancellationToken);
         var failure = Assert.IsType<DeliveryFailure>(refused.Message);
         Assert.True(ShutdownNack.IsAnsweredByOwner(failure.Message, new Address("acme", "Doc")),
             $"the requester must read this as its owner's shutdown — got: {failure.Message}");
