@@ -38,6 +38,21 @@ public record MeshNodeCardControl(
     /// </summary>
     public object? DescriptionBinding { get; init; }
 
+    /// <summary>
+    /// An area the card's OWN node hub renders BENEATH the card (e.g. an install or purchase button).
+    /// The card itself paints at once from <see cref="Title"/>, <see cref="Description"/> and
+    /// <see cref="ImageUrl"/>; only this area waits for the node's hub. Unlike <see cref="ItemArea"/>,
+    /// which hands the whole card to the hub, so nothing shows until the hub answers. Ignored when
+    /// <see cref="ItemArea"/> is set.
+    /// </summary>
+    public string? ActionArea { get; init; }
+
+    /// <summary>Returns a copy that renders <paramref name="area"/> from the node's own hub beneath
+    /// the card. See <see cref="ActionArea"/>.</summary>
+    /// <param name="area">The area name on the node's hub.</param>
+    /// <returns>A new instance with the updated <see cref="ActionArea"/>.</returns>
+    public MeshNodeCardControl WithActionArea(string area) => this with { ActionArea = area };
+
     /// <summary>Returns a copy whose title is <paramref name="title"/> — a literal or a pointer the
     /// renderer follows. See <see cref="TitleBinding"/>.</summary>
     /// <param name="title">The title, or a pointer to it.</param>
