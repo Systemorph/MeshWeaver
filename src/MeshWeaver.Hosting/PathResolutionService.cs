@@ -663,16 +663,51 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// memoizes). One live prefix query, first emission only — see the inline
     /// notes below.
     /// </summary>
+    /// <summary>
+    /// The prefix-set query a resolution issues — <c>path:"a/b/c"|"a/b"|"a"</c>, deepest first —
+    /// or <c>null</c> when no prefix can be written as a query literal.
+    ///
+    /// <para>Each prefix is QUOTED so segments containing SPACES survive the query parser: an
+    /// unquoted value ends at the first whitespace (the parser's "space = AND" rule), which once
+    /// truncated <c>AgenticPension/Data Analytics/…</c> to <c>AgenticPension/Data</c>. Quoting plus
+    /// the parser's quoted <c>|</c>-alternation keeps every prefix whole.</para>
+    ///
+    /// <para>🚨 <b>The quoting goes through <see cref="QueryParser.QuoteLiteral"/>, never a bare
+    /// <c>"\"" + prefix + "\""</c></b> (#7754). A path is whatever a URL carried, and a URL can carry
+    /// a double quote: a request for <c>/"_content/…/PortalLayoutBase.razor.js"</c> (a string literal
+    /// lifted out of page source, quotes and all) reached the catch-all page and was wrapped into
+    /// <c>path:""_content/…""|…|""_content"</c>. That text parses to NO path and no anchor, so the
+    /// Postgres planner could not pin it and served it as a <c>UNION ALL</c> over every partition
+    /// schema — one anonymous request, the whole-database lock shape. <c>QuoteLiteral</c> switches to
+    /// single quotes for a prefix that holds a double quote, so the query stays the anchored
+    /// prefix set it was meant to be. A prefix holding BOTH quote characters has no literal in a
+    /// language without escapes; it is left out (no node can be named by it in a query either), and
+    /// when that leaves nothing the caller resolves to nothing without querying.</para>
+    /// </summary>
+    /// <param name="segments">The path's segments.</param>
+    /// <returns>The query text, or <c>null</c> when no prefix is writable.</returns>
+    internal static string? PrefixQuery(string[] segments)
+    {
+        var literals = Enumerable.Range(1, segments.Length)
+            .Select(depth => string.Join("/", segments.Take(depth)))
+            .Where(prefix => !(prefix.Contains('"') && prefix.Contains('\'')))
+            .Select(QueryParser.QuoteLiteral)
+            .Reverse()
+            .ToList();
+        return literals.Count == 0 ? null : $"path:{string.Join("|", literals)}";
+    }
+
     private IObservable<AddressResolution?> ResolveSegmentsCore(string[] segments)
     {
-        // Quote each prefix so segments containing SPACES survive the query parser.
-        // Unquoted values terminate at the first whitespace (the parser's "space = AND"
-        // rule), which silently truncated paths like `AgenticPension/Data Analytics/…`
-        // to `AgenticPension/Data` → "No matching address found". Quoting + the parser's
-        // quoted `|`-alternation (QueryParser.ParseFieldValue) keeps the full path intact.
-        var pathList = string.Join("|", Enumerable.Range(1, segments.Length)
-            .Select(depth => "\"" + string.Join("/", segments.Take(depth)) + "\"")
-            .Reverse());
+        var prefixQuery = PrefixQuery(segments);
+        if (prefixQuery is null)
+        {
+            _logger?.LogInformation(
+                "PathResolution: no prefix of '{Path}' can be written as a query literal (each carries "
+                + "both quote characters) — resolving it to nothing instead of issuing a query",
+                string.Join("/", segments));
+            return Observable.Return<AddressResolution?>(null);
+        }
         // 🚨 Path resolution MUST bypass access control. Mapping a URL path to
         // an address is ROUTING, not data access. If the user lacks Read on the
         // target, they should see "Access denied" at content-load time (the
@@ -693,7 +728,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
         // caller can't construct a "system" query without also having
         // AccessService access. PathResolutionService is framework-internal,
         // so the trust boundary holds.
-        var request = MeshQueryRequest.FromQuery($"path:{pathList}") with
+        var request = MeshQueryRequest.FromQuery(prefixQuery) with
         {
             UserId = WellKnownUsers.System,
         };
