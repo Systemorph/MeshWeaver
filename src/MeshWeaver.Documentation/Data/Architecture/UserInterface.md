@@ -141,6 +141,32 @@ After the initial load, only *changes* travel over the wire. MeshWeaver uses **J
 
 A counter incrementing once sends a single-operation patch rather than re-sending the entire control tree. This keeps real-time dashboards snappy even under heavy update rates.
 
+### When a first frame is slow
+
+Every area open on the owner hub passes three points before the subscriber can see the area:
+
+1. **Base frame.** The host sets an empty store with the "Building layout…" progress marker. The subscriber gets this almost at once.
+2. **Compose.** The area's view function produces its first control. A view that combines several streams produces it only when every stream it combines has answered.
+3. **Delivery.** The owner hub's update queue applies the store update that carries that control, and the patch goes to the subscriber.
+
+`LayoutAreaHost` times all three, once per open, and writes a single line when the requested area first appears in its store:
+
+```text
+FIRST FULL FRAME of layout area 'InstallCta' on Northwind after 1012 ms:
+base frame at 31 ms, first control composed at 990 ms, then the owner's update queue applied it
+(slow-first-frame threshold 1000 ms; -1 = hop not passed)
+```
+
+- **Level.** The line is `Debug` by default, so a healthy open writes nothing to Loki. It is `Information` only when the first full frame took longer than `Layout:SlowFirstFrameThreshold`, a `TimeSpan` that defaults to one second. A shelf of N cards opens 2N areas, so logging every open at `Information` would cost Loki on every page view, while the slow open is the anomaly an operator needs to see.
+- **Cost.** One latch and three timestamps per host, read where the host already passes. No timer, no subscription, and no second line for later updates of the same area.
+- **Reading it.**
+  - A large gap between the base frame and "composed" means the view's own inputs are slow.
+  - A large gap between "composed" and the total means the owner's update queue is busy.
+  - Whatever the subscriber measured beyond the total is transport.
+  - An area composed inside its own update reports compose and delivery as one moment.
+
+The code is `FirstFrameTiming` (MeshWeaver.Layout). Systemorph/MeshWeaver.Plugins#4399, a Store row that arrived about a second after its base frame on production and in no test rig, is the reason it exists.
+
 ---
 
 ## Handling User Interactions
