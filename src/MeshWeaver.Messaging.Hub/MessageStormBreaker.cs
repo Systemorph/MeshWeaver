@@ -343,7 +343,15 @@ public sealed class MessageStormBreaker
     /// a rate bucket drift apart.
     /// </remarks>
     private static string? ResolvePayloadKey(IMessageDelivery delivery, object message)
-        => DeliveryIdentity.Read(delivery, message);
+        // A response PART is about ONE request: its bucket is that request, so several streams answered
+        // at once between the same two hubs (a device streaming several completions to one caller) are
+        // counted apart rather than as one storm. One stream above the threshold is still a storm — a
+        // producer batches its parts (Doc/Architecture/StreamedResponses).
+        => delivery.Properties.ContainsKey(PostOptions.ResponsePart)
+           && delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
+           && requestId?.ToString() is { Length: > 0 } id
+            ? "part:" + id
+            : DeliveryIdentity.Read(delivery, message);
 
     /// <summary>
     /// TryGetValue + TryAdd rather than <c>GetOrAdd</c>: the live-key count must only be
