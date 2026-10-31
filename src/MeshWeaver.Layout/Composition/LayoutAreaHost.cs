@@ -1938,6 +1938,10 @@ public record LayoutAreaHost : IDisposable
             return;
 
         var errorControl = CreateRenderErrorControl(ex);
+        // The error frame IS the area's first visible control when it lands before any content, so
+        // it is timed like one: composed now, delivered once the update has committed.
+        if (string.Equals(area, resolvedArea, StringComparison.Ordinal))
+            firstFrame.MarkComposed();
 
         Stream.Update(current =>
         {
@@ -1950,7 +1954,7 @@ public record LayoutAreaHost : IDisposable
             if (Stream.HubIfHeld() is not { } errorHub)
                 return null;
             return new ChangeItem<EntityStore>(store, Stream.StreamId, errorHub.Version);
-        }, updateEx => logger.LogWarning(updateEx, "Cannot surface render error for {Area}", area));
+        }, updateEx => logger.LogWarning(updateEx, "Cannot surface render error for {Area}", area), ReportFirstFullFrame);
     }
 
     /// <summary>

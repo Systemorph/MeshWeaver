@@ -27,6 +27,8 @@ public class SlowFirstFrameIsLoggedOnceTest : HubTestBase
 {
     private const string SlowArea = "SlowFirstFrame";
     private const string FastArea = "FastFirstFrame";
+    private const string FailingArea = "FailingFirstFrame";
+    private const string FailureText = "first-frame-failure-4399";
 
     /// <summary>How long the slow view takes to produce its first control — the slow generator IS the subject.
     /// Well past the DEFAULT threshold (<see cref="FirstFrameTiming.DefaultThreshold"/>, no key configured).</summary>
@@ -61,7 +63,17 @@ public class SlowFirstFrameIsLoggedOnceTest : HubTestBase
                 .WithView(SlowArea, (_, _) => Observable.Timer(SlowCompose)
                     .Select(_ => (UiControl?)Controls.Markdown("slow-1"))
                     .Concat(Observable.Return<UiControl?>(Controls.Markdown("slow-2"))))
-                .WithView(FastArea, Controls.Markdown("fast")));
+                .WithView(FastArea, Controls.Markdown("fast"))
+                // A data feed faults while the view's first control is still pending: the error frame,
+                // published through the error path's own update, is the first thing the reader sees.
+                .WithView(FailingArea, (host, _) =>
+                {
+                    // The production shape: the fault arrives AFTER the subscription is live, on
+                    // another thread (FailFeed → SurfaceRenderError), not during Subscribe.
+                    host.SubscribeToDataStream("feed", Observable.Timer(TimeSpan.FromMilliseconds(50))
+                        .SelectMany(_ => Observable.Throw<int>(new InvalidOperationException(FailureText))));
+                    return Observable.Never<UiControl?>();
+                }));
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -138,6 +150,22 @@ public class SlowFirstFrameIsLoggedOnceTest : HubTestBase
         lines.Should().ContainSingle("the fast open is still reported, once, at Debug");
         lines.Single().Level.Should().Be(LogLevel.Debug,
             "a healthy open writes nothing at Information, so it costs Loki nothing");
+    }
+
+    /// <summary>
+    /// A data feed that faults while the view's first control is still pending: the error frame is
+    /// published through the error path's own update (<c>SurfaceRenderError</c>), and it is that open's
+    /// first full frame — reported once, with the compose hop.
+    /// </summary>
+    [HubFact]
+    public async Task AnErrorFrame_IsTheFirstFullFrame_AndIsReportedOnce()
+    {
+        var stream = await Render(FailingArea, FailureText);
+        var (_, message) = await FirstFrameLine(FailingArea);
+        await Settle(stream);
+
+        FirstFrameLines(FailingArea).Should().ContainSingle("the error frame is reported once, as the first full frame");
+        message.Should().NotContain("composed at -1 ms", "the error control is the composed first control");
     }
 
     /// <summary>Captures every record into the owning test's instance queue.</summary>
