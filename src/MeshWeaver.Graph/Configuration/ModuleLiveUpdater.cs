@@ -529,11 +529,11 @@ public sealed class ModuleLiveUpdater : IDisposable
                       + string.Join("; ", plans.Select(p => $"{p.Name} swapped live to {p.Plan.To}"))
                       + $" — {reason}";
         var origin = WaveOrigin + string.Join(",", plans.Select(p => p.Name));
-        // ONE request per ADDRESS (#6800 review). Each plan's HubsToRecycle takes its own snapshot of
-        // the live registry, so a hub an unrelated recycle replaced between two snapshots appears as
-        // two activations of one path. Every captured hub is still waited for below; but a second
-        // address-targeted request would reach whatever activation lives there when it is delivered
-        // — the successor — and tear it down, which is the double recycle this wave exists to avoid.
+        // Each plan's HubsToRecycle takes its own snapshot of the live registry, so a hub an unrelated
+        // recycle replaced between two snapshots appears as two activations of one path (#6800 review).
+        // An address-targeted request reaches whatever activation lives there when it is DELIVERED, so
+        // an unnamed second request would tear down the successor. Every request below therefore names
+        // its activation (ForActivation), and a request that reaches another activation is ignored.
         //
         // 🚨 A hub with a STEP IN FLIGHT is DEFERRED, never torn down under its step (#7324). Its
         // DisposeRequest is posted the moment the step ends (HubStepsInFlight.Idle), and the wave
@@ -541,28 +541,31 @@ public sealed class ModuleLiveUpdater : IDisposable
         // mid-Landing by a swap of the very modules that landing had landed, so the next activation
         // ran the landing again (about 12 minutes for every module, measured on memex 2026-10-31),
         // and a wave per landing kept the request re-entering Landing.
+        // 🚨 Each CAPTURED ACTIVATION is accounted for on its own (#7727 review): two snapshots can hold
+        // a predecessor and its successor at one address, and each needs its own decision. Every
+        // request names the ONE activation it is for (DisposeRequest.ForActivation, a unique identity),
+        // so a request that reaches a different activation is ignored there. That is what makes one
+        // request per ACTIVATION safe where #6800 had to settle for one per address.
         var deferred = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
         var deferredHubs = ImmutableList<IMessageHub>.Empty;
-        foreach (var group in hubs.GroupBy(ActivationRecycle.PathOf, StringComparer.OrdinalIgnoreCase))
+        var waited = ImmutableList<IMessageHub>.Empty;
+        foreach (var hub in hubs)
         {
-            // An activation an EARLIER wave already deferred is coalesced into that one deferral
-            // (#7727 review): one request per activation, carrying every wave's reason.
-            var pending = group.FirstOrDefault(h => deferrals.ContainsKey(h));
-            var held = pending ?? group.FirstOrDefault(h => h.Get<HubStepsInFlight>() is { Count: > 0 });
-            if (held is null)
+            var path = ActivationRecycle.PathOf(hub);
+            // An activation an EARLIER wave already deferred is coalesced into that one deferral: one
+            // request per activation, carrying every wave's reason.
+            if (deferrals.ContainsKey(hub) || hub.Get<HubStepsInFlight>() is { Count: > 0 })
             {
-                issuing.Post(new DisposeRequest { Reason = because, CascadedFrom = origin },
-                    o => o.WithTarget(new Address(group.Key)));
+                deferred = deferred.Add(path);
+                deferredHubs = deferredHubs.Add(hub);
+                RecycleWhenItsStepEnds(hub, path, because, origin);
                 continue;
             }
-            deferred = deferred.Add(group.Key);
-            // EVERY captured activation of the address joins the retire (#7727 review): one that an
-            // unrelated recycle is already tearing down still runs the old generation until it is dead.
-            deferredHubs = deferredHubs.AddRange(group);
-            RecycleWhenItsStepEnds(held, group.Key, because, origin);
+            waited = waited.Add(hub);
+            issuing.Post(new DisposeRequest { Reason = because, CascadedFrom = origin, ForActivation = HubActivationId.Of(hub) },
+                o => o.WithTarget(new Address(path)));
         }
 
-        var waited = hubs.Where(h => !deferred.Contains(ActivationRecycle.PathOf(h))).ToImmutableList();
         var dead = DeadAll(waited);
 
         var live =plans.Select((p, i) =>
@@ -604,7 +607,10 @@ public sealed class ModuleLiveUpdater : IDisposable
             // accumulate one entry per deferred swap (#7727 review); still cancelled by Dispose.
             var retire = new SingleAssignmentDisposable();
             background.Add(retire);
-            retire.Disposable = DeadAll(waited.AddRange(deferredHubs.Distinct(ReferenceEqualityComparer.Instance).Cast<IMessageHub>()))
+            // Joined on each hub's COMPLETED teardown (DisposalCompleted, which replays and FAULTS when
+            // the teardown failed), never on its Dead run level (#7727 review): a failed teardown
+            // faults the join and the old generation stays loaded.
+            retire.Disposable = TornDownAll(waited.AddRange(deferredHubs))
                 .SelectMany(_ => Retire())
                 .Finally(() => background.Remove(retire))
                 .Subscribe(
@@ -647,6 +653,16 @@ public sealed class ModuleLiveUpdater : IDisposable
                 .LastOrDefaultAsync()
                 .Select(_ => Unit.Default);
 
+    /// <summary>Emits once, when every hub in <paramref name="hubs"/> has COMPLETED its teardown;
+    /// faults when any teardown faulted.</summary>
+    private static IObservable<Unit> TornDownAll(ImmutableList<IMessageHub> hubs) =>
+        hubs.Count == 0
+            ? Observable.Return(Unit.Default)
+            : hubs.Select(h => h.DisposalCompleted.LastOrDefaultAsync())
+                .Merge()
+                .LastOrDefaultAsync()
+                .Select(_ => Unit.Default);
+
     /// <summary>One activation's pending deferred recycle: every wave's reason that joined it, and
     /// whether its request has been posted. Mutated only through Interlocked / ImmutableInterlocked.</summary>
     private sealed class Deferral(string origin)
@@ -675,8 +691,10 @@ public sealed class ModuleLiveUpdater : IDisposable
     /// teardown disposes the step and fires <see cref="HubStepsInFlight.Idle"/>, so nothing is posted:
     /// a request posted then would reach the address's NEXT activation, which already binds the
     /// current generation (#6800). The request also names the activation it is for
-    /// (<see cref="DisposeRequest.ForActivation"/>), so one that is replaced AFTER the post and before
-    /// delivery ignores it too. Disposing this updater cancels every pending deferral.</para>
+    /// (<see cref="DisposeRequest.ForActivation"/>, a unique <see cref="HubActivationId"/>), so one
+    /// replaced AFTER the post and before delivery ignores it too. The activation posts the request
+    /// to itself (<see cref="HubSelfRecycleExtensions.PostSelfRecycleAfterAcceptedWork"/>), so no
+    /// issuing hub has to be alive when the step ends. Disposing this updater cancels every pending deferral.</para>
     /// </summary>
     private void RecycleWhenItsStepEnds(IMessageHub held, string path, string because, string origin)
     {
@@ -702,14 +720,15 @@ public sealed class ModuleLiveUpdater : IDisposable
                     {
                         Reason = string.Join(" | ", reasons) + " (deferred until its in-flight step ended)",
                         CascadedFrom = deferral.Origin,
-                        // For THIS activation only: if it is replaced before delivery, the request is
-                        // ignored there instead of tearing down the successor (#7727 review).
-                        ForActivation = ShutdownNack.ActivationToken(held),
+                        // For THIS activation only: a different one at the address ignores it.
+                        ForActivation = HubActivationId.Of(held),
                     };
-                    // The issuing hub is resolved NOW, when the step ended — never captured when the
-                    // swap began: that off-router hub can be recycled independently while a step runs,
-                    // and a post through the retired one would be refused (#7727 review).
-                    meshHub.NodeOperationIssuingHub().Post(request, o => o.WithTarget(new Address(path)));
+                    // 🚨 The activation recycles ITSELF (#7727 review): the sanctioned self-recycle
+                    // posts the request to its own address as an ordinary turn. No issuing hub is
+                    // involved, so none can be recycled, quiescing or refusing intake when the step
+                    // ends. If the activation is already going down, the turn posts nothing: the
+                    // teardown under way is the recycle.
+                    held.PostSelfRecycleAfterAcceptedWork(request, logger);
                     deferredRecycles.OnNext((path, request.Reason));
                 },
                 ex => logger?.LogWarning(ex,

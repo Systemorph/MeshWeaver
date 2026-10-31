@@ -348,8 +348,8 @@ public record DisposeRequest
     public string? CascadedFrom { get; init; }
 
     /// <summary>
-    /// The ONE activation this request is for, as <see cref="ShutdownNack.ActivationToken"/> of the
-    /// hub instance, or <c>null</c> for whatever activation lives at the address on delivery (every
+    /// The ONE activation this request is for, as that hub instance's unique activation identity
+    /// (<c>HubActivationId</c>; never an object hash, which can collide), or <c>null</c> for whatever activation lives at the address on delivery (every
     /// ordinary recycle).
     ///
     /// <para>Set by a poster whose request may be DELIVERED long after it decided which activation

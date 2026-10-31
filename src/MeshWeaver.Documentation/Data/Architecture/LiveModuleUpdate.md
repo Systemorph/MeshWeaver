@@ -309,13 +309,22 @@ disposes the step and fires the idle signal, so no request is posted. A request 
 reach the address's next activation, which already binds the current generation. Disposing the
 updater cancels every pending deferral and every pending retire.
 
-**The request names its activation.** The deferred `DisposeRequest` carries
-`ForActivation` (the hub instance's activation token). If the activation is replaced after the post
-and before delivery, the successor ignores the request instead of being torn down by it. The
-issuing hub is resolved when the step ends, never captured when the swap began, because that
-off-router hub can be recycled on its own while a step runs. Every captured activation of a deferred
-address joins the retire, and a finished retire leaves the updater, so a process-lifetime updater
-does not accumulate one entry per deferred swap.
+**Every request names its activation.** Each `DisposeRequest` of the wave carries `ForActivation`,
+the hub instance's unique `HubActivationId` (never an object hash, which can collide). A request
+that reaches a different activation, because the one it was for was replaced before delivery, is
+ignored there instead of tearing down the successor. That also lets the wave account for each
+captured activation on its own: two snapshots can hold a predecessor and its successor at one
+address, and each gets its own request or its own deferral.
+
+**The held activation recycles itself.** When its step ends it posts the request to its own
+address through the sanctioned self-recycle (`PostSelfRecycleAfterAcceptedWork`), so no issuing hub
+has to be alive, or still accepting intake, at that moment. If the activation is already going
+down, it posts nothing.
+
+**The deferred retire joins completed teardowns.** It waits for every captured hub's
+`DisposalCompleted`, which replays and faults when a teardown failed. A failed teardown keeps the
+old generation loaded. A finished retire leaves the updater, so a process-lifetime updater does not
+accumulate one entry per deferred swap.
 
 **A step that starts just as the deferred recycle is posted** can still be torn down by it. That is the
 ordinary case every step is built for: steps are idempotent and resume on the next activation. What
@@ -347,6 +356,8 @@ hub is swapped while one probe hub holds a step:
   recycle at all.
 - A step held on a hosted child defers its per-node owner.
 - A request for another activation is ignored on delivery; the one for this activation recycles it.
+- A request naming only the object hash is not for this activation.
+- A step that ends while the issuing hub is quiescing still recycles the held hub.
 - An issuing hub recycled during the step does not strand the deferred recycle.
 
 Red before the fix: the swap answered only after every hub of its wave was dead, the held one

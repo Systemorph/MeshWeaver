@@ -137,7 +137,7 @@ public sealed class ASwapWaveDefersAHubWithAStepInFlightTest : MonolithMeshTestB
 
         issuing.Post(new DisposeRequest { Reason = "test: for ANOTHER activation", ForActivation = "NOTTHIS0" },
             o => o.WithTarget(new Address(IdlePath)));
-        issuing.Post(new DisposeRequest { Reason = "test: for THIS activation", ForActivation = ShutdownNack.ActivationToken(hub) },
+        issuing.Post(new DisposeRequest { Reason = "test: for THIS activation", ForActivation = HubActivationId.Of(hub) },
             o => o.WithTarget(new Address(IdlePath)));
 
         await hub.RunLevelChanged.LastOrDefaultAsync().Timeout(Budget).Await(ct);
@@ -145,6 +145,55 @@ public sealed class ASwapWaveDefersAHubWithAStepInFlightTest : MonolithMeshTestB
         attribution.Should().Contain("for THIS activation");
         attribution.Should().NotContain("for ANOTHER activation",
             "a request for a different activation is stale at this one and must be ignored");
+    }
+
+    /// <summary>
+    /// An activation's identity is NOT its object hash (#7727 review): two hub instances can share
+    /// <see cref="ShutdownNack.ActivationToken"/>, so a request carrying that token must not count as
+    /// "for this activation". A request naming the hash is ignored; the plain recycle that follows it
+    /// to the same address, in order, is what tears the hub down.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ARequestNamingTheObjectHash_IsNotForThisActivation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hub = await Live(IdlePath, ct);
+        var issuing = Mesh.NodeOperationIssuingHub();
+
+        issuing.Post(new DisposeRequest { Reason = "test: names only the object hash", ForActivation = ShutdownNack.ActivationToken(hub) },
+            o => o.WithTarget(new Address(IdlePath)));
+        issuing.Post(new DisposeRequest { Reason = "test: a plain recycle" },
+            o => o.WithTarget(new Address(IdlePath)));
+
+        await hub.RunLevelChanged.LastOrDefaultAsync().Timeout(Budget).Await(ct);
+        var attribution = (hub as MessageHub)?.DisposalAttribution ?? "";
+        attribution.Should().Contain("a plain recycle");
+        attribution.Should().NotContain("names only the object hash",
+            "an object hash is not an activation identity — it can collide across hub instances");
+    }
+
+    /// <summary>
+    /// The step ends while the off-router issuing hub is still QUIESCING (#7727 review): it is still
+    /// what the mesh hands out, but it refuses new intake. The deferred recycle must not depend on it:
+    /// the held hub is still recycled.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task TheStepEndingWhileTheIssuerQuiesces_StillRecyclesTheHeldHub()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var held = await Live(HeldPath, ct);
+
+        var step = held.BeginAsyncOperation();
+        var outcome = await Updater.Swap(Write("g2", Source(reachesEveryHub: true)), "test: the issuer quiesces as the step ends")
+            .Timeout(Budget).Await(ct);
+        outcome.Deferred.Should().Be(1, outcome.Reason);
+
+        var issuer = Mesh.NodeOperationIssuingHub();
+        issuer.Dispose();          // starts the issuer's teardown; it is quiescing, not yet gone
+        step.Dispose();            // the step ends INSIDE that window
+
+        await held.RunLevelChanged.LastOrDefaultAsync().Timeout(Budget).Await(ct);
+        ((held as MessageHub)?.DisposalAttribution ?? "").Should().Contain("ModuleLiveUpdate");
     }
 
     /// <summary>
