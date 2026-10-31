@@ -83,6 +83,23 @@ public static class XmlDocsExtensions
         => (typeDefinition is TypeDefinition definition ? definition.DisplayMetadata.Docs : hub.XmlDocs())
             .WhenLoaded(members, hub.BlockingReadScheduler());
 
+    /// <summary>
+    /// Runs <paramref name="work"/> — a computation that reads XML-doc summaries of members nobody can
+    /// name in advance, such as a JSON schema walking a type's whole property graph — on the mesh's
+    /// blocking-read edge, never on the subscribing hub's turn. With no edge registered (a hub without
+    /// I/O pools) the work is hopped onto the task pool, as <see cref="XmlDocsReader.WhenLoaded"/> does.
+    /// </summary>
+    /// <typeparam name="T">The result type.</typeparam>
+    /// <param name="hub">Any hub of the mesh.</param>
+    /// <param name="work">The work; observes the cancellation token before it starts.</param>
+    /// <returns>The result, emitted once; cold.</returns>
+    public static IObservable<T> OnXmlDocsReadEdge<T>(this IMessageHub hub, Func<CancellationToken, T> work)
+        => hub.BlockingReadScheduler() is { } io
+            ? io.InvokeBlocking(work)
+            : System.Reactive.Linq.Observable.SubscribeOn(
+                System.Reactive.Linq.Observable.Defer(() => System.Reactive.Linq.Observable.Return(work(CancellationToken.None))),
+                System.Reactive.Concurrency.TaskPoolScheduler.Default);
+
     // Optional on purpose: a bare messaging-only hub registers no I/O pools, and the reader then hops
     // the read onto the task pool itself rather than reading on the caller's thread.
     private static IBlockingReadScheduler? BlockingReadScheduler(this IMessageHub hub)
