@@ -344,6 +344,33 @@ unknown member at that same nesting level. Without that distinction, the first c
 roll after strict import refused five valid deployment files
 ([Memex #601](https://github.com/Systemorph/Memex/issues/601)).
 
+#### A compiled NodeType's abstract member imports verbatim
+
+Strictness is about **lossy** reads, never about content this process merely cannot type
+([#6639](https://github.com/Systemorph/MeshWeaver/issues/6639)). A runtime-compiled NodeType's
+content type reaches the importing hub through the mesh content-type map, because a compiled type is
+never adopted into a long-lived hub's type registry. So when that content has a member declared as
+an abstract base (`SectionCover Cover`), the subtype its `$type` names cannot be resolved there,
+and the serializer cannot instantiate the member. A forced update once refused a whole Space over
+fourteen valid section files for exactly this reason.
+
+That failure is not lossy, so it no longer refuses. The content stays as its raw JSON and is
+imported byte for byte, `$type` and every member included. The rule lives in one place,
+`JsonElementNormalizer.KeepsRawJson`, shared by the object converter and the content-type recovery:
+
+- a `JsonException` (an authored member this image would DROP) still refuses the snapshot;
+- a `NotSupportedException` (a type this process cannot instantiate) keeps the raw JSON.
+
+`ReadOnlyCollectionConverter<T>` follows the same rule for an abstract-typed collection. It reports
+an uninstantiable element as a `NotSupportedException`; it used to rethrow it as an
+`InvalidOperationException`, which read as a lossy bind.
+
+The imported node is stored correctly, but it is untyped on a hub other than its NodeType's own.
+Binding compiled subtypes to their CLR types on the importing hub is a separate design question, not
+part of this rule. `CompiledAbstractMemberImportsTest` loads its types from a collectible copy of the
+test assembly, which is the state a compiled NodeType leaves a mesh hub in, and measures the member,
+the unknown-`$type` and the collection shapes.
+
 #### A retired `MeshNode` field is a build error, not a tolerated field
 
 Strict reading cannot tell a member `MeshNode` **no longer has** from one an older image does not
