@@ -51,19 +51,40 @@ caused it.
 
 ## The fix and its proof
 
-`HubStreamProviderFactory` carries the `{address}/{collection}` hops a resolution has asked. A
-`Hub` answer is resolved on the same chain, and an answer that repeats a hop errors on that hop.
-`HubCollectionCycleTest` pins both directions, and each test is the other's control:
+`HubStreamProviderFactory` carries the hops a resolution has asked, each as an (address,
+collection) pair. A `Hub` answer is resolved on the same chain, and an answer that repeats a hop
+errors on that hop. The two fields are compared exactly as the mesh compares them: `Address`
+equality, and ordinal collection names, because the content service's lookup is case-sensitive.
+A single `{address}/{collection}` string would refuse two legitimate chains. One is `Exports` →
+`exports` on the same node. The other is a slash-qualified collection name, where `host/1` +
+`folder/exports` and `host/1/folder` + `exports` would print alike.
 
-- a self-referential inherited `Hub` config errors with the chain `[host/inherited, host/inherited]`;
-- a `Hub` config the host serves from its own FileSystem collection still resolves.
+`HubCollectionCycleTest` pins the refusal and two controls, and each test guards the others:
+
+- a self-referential inherited `Hub` config errors with the chain
+  `[host/1 [inherited], host/1 [inherited]]`;
+- a `Hub` config the host serves from its own FileSystem collection still resolves;
+- a `Hub` config named `Served` that redirects to `served` on the same host still resolves.
+
+## What the dump proves
+
+A governed `AnalyzeDump` of the 2026-10-30 dsfp6 dump ties the overflow to this factory.
+`dumpheap -stat` held about 2.42 million instances of each of these types:
+
+- `HubStreamProviderFactory+<>c__DisplayClass3_0`, the closure of the `SelectMany` selector in
+  `Create`;
+- `SelectMany<IMessageDelivery<GetDataResponse>, IStreamProvider>+ObservableSelector+_` and its
+  `InnerObserver`;
+- the matching `Func<…>`, `GetDataRequest` and `ContentCollectionReference`.
+
+Those type arguments and that closure class belong only to `HubStreamProviderFactory.Create`. The
+stack frames print generic arguments as `__Canon`, so they could not name the factory; the heap
+statistics do.
 
 ## Not established
 
-- The live config on the pod at the time, because the node has since gone. The link from the
-  2026-10-30 dump to this loop rests on the shape of the dump (one `SelectMany` inner observer
-  repeated 130,840 times, entered from a hub response callback) and on its timing: a
-  `GetDataRequest(collection/exports)` was refused by a quiescing owner 55 ms before the overflow.
-  Generic arguments print as `__Canon`, so the frames do not name the factory.
+- Which config made `exports` on that node resolve back to itself. The node has since gone. The
+  test reproduces one route, an inherited parent `Hub` config like the one a `/content` page
+  registers.
 - Whether any other reactive loop in the platform recurses through `SelectMany` in the same way.
   A static rule for it does not exist yet.

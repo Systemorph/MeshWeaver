@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -31,6 +32,9 @@ public class HubCollectionCycleTest(ITestOutputHelper output) : HubTestBase(outp
 {
     private const string Served = "served";
     private const string Inherited = "inherited";
+    // Collection names are case-SENSITIVE: "Served" is a different collection from "served", here a
+    // Hub config on the host that redirects to it.
+    private const string ServedRedirect = "Served";
 
     private readonly string _servedPath = Path.Combine(AppContext.BaseDirectory, "Files", "HubCollectionCycle");
 
@@ -44,7 +48,14 @@ public class HubCollectionCycleTest(ITestOutputHelper output) : HubTestBase(outp
         Directory.CreateDirectory(_servedPath);
         return base.ConfigureHost(configuration)
             .AddContentCollections()
-            .AddFileSystemContentCollection(Served, _ => _servedPath);
+            .AddFileSystemContentCollection(Served, _ => _servedPath)
+            .AddContentCollection(_ => new ContentCollectionConfig
+            {
+                Name = ServedRedirect,
+                SourceType = HubStreamProviderFactory.SourceType,
+                Address = CreateHostAddress(),
+                Settings = new Dictionary<string, string> { ["CollectionName"] = Served }
+            });
     }
 
     /// <inheritdoc />
@@ -90,7 +101,7 @@ public class HubCollectionCycleTest(ITestOutputHelper output) : HubTestBase(outp
         Output.WriteLine(error?.Message ?? "<no error>");
         provider.Should().BeNull();
         var cycle = error.Should().BeOfType<HubCollectionCycleException>().Subject;
-        var hop = $"{host.Address}/{Inherited}";
+        var hop = HubCollectionCycleException.Describe(host.Address, Inherited);
         cycle.Chain.Should().Equal(hop, hop);
     }
 
@@ -111,6 +122,32 @@ public class HubCollectionCycleTest(ITestOutputHelper output) : HubTestBase(outp
             .Emit("a one-hop Hub resolution to a collection the host declares is not a cycle",
                 TestContext.Current.CancellationToken);
 
+        error.Should().BeNull();
+        provider.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// Control: two hops on the SAME node that differ only in the case of the collection name are two
+    /// different collections (the content service's lookup is ordinal), so a redirect from one to the
+    /// other is not a cycle and resolves.
+    /// </summary>
+    [Fact]
+    public async Task A_redirect_to_a_collection_differing_only_in_case_is_not_a_cycle()
+    {
+        var host = GetHost();
+        var client = GetClient();
+
+        var (provider, error) = await Verdict(HubFactory(client).Create(new ContentCollectionConfig
+            {
+                Name = ServedRedirect,
+                SourceType = HubStreamProviderFactory.SourceType,
+                Address = host.Address
+            }))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("'Served' on the host is a Hub config naming 'served' on the same host — a different collection",
+                TestContext.Current.CancellationToken);
+
+        Output.WriteLine(error?.Message ?? "<no error>");
         error.Should().BeNull();
         provider.Should().NotBeNull();
     }
