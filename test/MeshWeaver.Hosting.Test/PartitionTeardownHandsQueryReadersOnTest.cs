@@ -85,17 +85,44 @@ public class PartitionTeardownHandsQueryReadersOnTest(ITestOutputHelper output) 
         // below met "MeshNodeStreamCache query '…' has released the shared connection".
         cache.InvalidatePartition(partition);
 
-        var afterTeardown = await recorded.Skip(1).FirstAsync().Should().Within(TestTimeouts.Convergence).Emit(
-            "the attached reader must hear from the fresh chain — or, before the fix, its terminal", cancellationToken: ct);
+        // 🚨 Identified by DATA, never by position: `recorded` replays the whole history, so "the
+        // next notification" could be a pre-teardown snapshot (review on #7726). A node written AFTER
+        // the teardown can only reach this reader through a live chain — the released one's upstream
+        // is unsubscribed — so seeing it proves the hand-over, and a terminal ends the wait instead.
+        Access.SetCircuitContext(TestUsers.Admin);
+        var written = $"{TestPartition}/handover-{Guid.NewGuid().ToString("N")[..8]}";
+        await NodeFactory.CreateNode(MeshNode.FromPath(written) with
+        {
+            Name = written, NodeType = "Markdown", State = MeshNodeState.Active,
+        }).Should().Within(TestTimeouts.Convergence).Emit("the admin may create a Markdown node", cancellationToken: ct);
+
+        var afterTeardown = await recorded
+            .Where(n => n.Kind != NotificationKind.OnNext || n.Value.Any(node => node.Path == written))
+            .FirstAsync().Should().Within(TestTimeouts.Convergence).Emit(
+                "the attached reader must see the node written after the teardown — or, before the fix, "
+                + "its terminal", cancellationToken: ct);
         afterTeardown.Kind.Should().Be(NotificationKind.OnNext,
             $"an attached reader of a superseded chain is handed to the fresh chain, not ended with "
             + $"'the owner is disposed' — the cache is alive. Got: {afterTeardown.Exception}");
 
-        var late = await held.Materialize().FirstAsync().Should().Within(TestTimeouts.Convergence).Emit(
-            "a reader subscribing through a handle obtained before the teardown must terminate or answer", cancellationToken: ct);
+        var late = await held.Materialize()
+            .Where(n => n.Kind != NotificationKind.OnNext || n.Value.Any(node => node.Path == written))
+            .FirstAsync().Should().Within(TestTimeouts.Convergence).Emit(
+                "a reader subscribing through a handle obtained before the teardown must answer from "
+                + "the live chain, or terminate", cancellationToken: ct);
         late.Kind.Should().Be(NotificationKind.OnNext,
             $"a new subscriber through an old handle must get a LIVE entry and a value, never the "
             + $"released corpse. Got: {late.Exception}");
+
+        // Nothing in the attached reader's whole history may be a terminal: a hand-over that faulted
+        // AFTER delivering the post-teardown value would still be the #7720 shape.
+        // A ReplaySubject replays its whole history synchronously inside Subscribe, so this reads
+        // every notification recorded so far with no wait and no timer.
+        Notification<IEnumerable<MeshNode>>? terminal = null;
+        using (recorded.Where(n => n.Kind != NotificationKind.OnNext).Subscribe(n => terminal = n))
+        { }
+        terminal.Should().BeNull(
+            "the attached reader stays live across the teardown — no error, no completion");
         cache.QueryConnectionsReleased.Should().BeFalse("the cache itself was never disposed");
     }
 
