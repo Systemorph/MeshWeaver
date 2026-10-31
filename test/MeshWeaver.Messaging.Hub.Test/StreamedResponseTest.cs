@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -20,7 +21,7 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
     private record CountRequest(int Parts, bool Reversed = false, bool GoSilent = false, bool OverCount = false, string? RawCount = null, string? RawSequence = null) : IRequest<CountDone>;
 
     /// <summary>Parts paced in time: part i is sent at <c>Offsets[i]</c> ms, the reply at <c>ReplyAt</c> ms.</summary>
-    private record PacedRequest(int[] Offsets, int ReplyAt) : IRequest<CountDone>;
+    private record PacedRequest(ImmutableArray<int> Offsets, int ReplyAt) : IRequest<CountDone>;
 
     private record CountPart(int Index);
 
