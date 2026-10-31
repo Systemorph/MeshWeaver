@@ -155,6 +155,13 @@ public static class IoPoolNames
     /// Prefix for per-Postgres-storage-<b>provider</b> pools (<c>pg:{providerName}</c>). Capped at
     /// ONE in-flight WRITE. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
     ///
+    /// <para>The partitioned backend files its node writes on one such lane PER SCHEMA,
+    /// <c>pg:{providerName}:{schema}</c> — still capped at one, so writes to one partition stay
+    /// ordered — and bounds their total with <see cref="PostgresWriteBudgetPrefix"/>
+    /// (MeshWeaver#7464). The process-wide-serializer reading below describes the shape before that
+    /// split; it still holds for the stores that keep the provider-wide name (the event log, the
+    /// instance store).</para>
+    ///
     /// <para>🚨 <b>The cap is half a CONNECTION BUDGET, not a mirror of one connection</b>
     /// (measured 2026-09-15 while re-checking issue #1198's third item). This comment used to say
     /// "the gate IS the connection… the single Npgsql connection that adapter holds
@@ -191,6 +198,26 @@ public static class IoPoolNames
     /// settle.</para>
     /// </summary>
     public const string PostgresAdapterPrefix = "pg:";
+
+    /// <summary>
+    /// Prefix for the per-Postgres-provider WRITE BUDGET (<c>pg-write:{providerName}</c>): the
+    /// TOTAL number of write transactions the provider runs at once across all of its per-schema
+    /// write lanes. Cap from <see cref="IoPoolOptions.PostgresWrite"/>.
+    ///
+    /// <para><b>Why it exists (MeshWeaver#7464).</b> The partitioned backend used to file every
+    /// write of the process on ONE cap-1 <c>pg:{provider}</c> lane, so a write that waited on a
+    /// database-wide lock (the grant-rule membership lock that a partition-root, grant-rule or
+    /// membership row takes, or the global permission-rebuild lock) held back every other write of
+    /// the silo, in every partition, until their verdicts expired. Each schema now has its own cap-1
+    /// lane (<c>pg:{provider}:{schema}</c>, which this prefix's sibling <see cref="PostgresAdapterPrefix"/>
+    /// already caps at one), and a write takes a slot of this budget INSIDE its lane. Different
+    /// schemas therefore run in parallel, but never more of them than the budget, so the shared
+    /// connection pool is not exhausted by lanes that are waiting on a lock.</para>
+    ///
+    /// <para>🚨 Distinct from <see cref="PostgresAdapterPrefix"/> on purpose: <c>"pg-write:"</c>
+    /// does not start with <c>"pg:"</c>, so it never falls into the cap-1 rule.</para>
+    /// </summary>
+    public const string PostgresWriteBudgetPrefix = "pg-write:";
 
     /// <summary>
     /// Prefix for the per-Postgres-storage-adapter <b>read</b> pool (<c>pg-read:{adapterName}</c>).
@@ -404,6 +431,17 @@ public sealed record IoPoolOptions
     public int PostgresRead { get; init; } = 16;
 
     /// <summary>
+    /// Concurrent WRITE transactions per Postgres storage provider, across all of its per-schema
+    /// write lanes (the <c>pg-write:{provider}</c> pool — see
+    /// <see cref="IoPoolNames.PostgresWriteBudgetPrefix"/>). With <see cref="PostgresRead"/> it is
+    /// the provider's connection budget: 16 reads + 16 writes = 32, under the portal's shared
+    /// data source's <c>MaxPoolSize</c> of 50, leaving headroom for the change listener, the event
+    /// log and provisioning. Each schema's own lane stays at one, so writes to ONE partition remain
+    /// ordered.
+    /// </summary>
+    public int PostgresWrite { get; init; } = 16;
+
+    /// <summary>
     /// Concurrent READS per Snowflake storage adapter (the <c>sf-read:{adapter}</c> pool).
     /// Same rationale as <see cref="PostgresRead"/>: bound the synced-query read fan-out
     /// below the driver's session pool so reads can't starve writes.
@@ -419,6 +457,9 @@ public sealed record IoPoolOptions
         // shared connection pool so reads can't starve writes — checked BEFORE the cap-1
         // write prefix because "pg-read:" also starts with "pg".
         name.StartsWith(IoPoolNames.PostgresReadAdapterPrefix, StringComparison.Ordinal) ? PostgresRead :
+        // The provider-wide write BUDGET across its per-schema lanes (MeshWeaver#7464). Not a
+        // prefix of "pg:", so the order against it does not matter; kept beside pg-read for reading.
+        name.StartsWith(IoPoolNames.PostgresWriteBudgetPrefix, StringComparison.Ordinal) ? PostgresWrite :
         // Per-PG-provider WRITE pools (pg:{provider}) take one slot: half the connection BUDGET
         // (16 reads + 1 write, under the shared data source's MaxPoolSize=50) — NOT a mirror of a
         // dedicated single connection, which the partitioned backend has not had since the
