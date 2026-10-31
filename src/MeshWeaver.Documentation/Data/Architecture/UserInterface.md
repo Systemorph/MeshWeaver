@@ -146,8 +146,8 @@ A counter incrementing once sends a single-operation patch rather than re-sendin
 Every area open on the owner hub passes three points before the subscriber can see the area:
 
 1. **Base frame.** The host sets an empty store with the "Building layout…" progress marker. The subscriber gets this almost at once.
-2. **Compose.** The area's view function produces its first control. A view that combines several streams produces it only when every stream it combines has answered.
-3. **Delivery.** The owner hub's update queue applies the store update that carries that control, and the patch goes to the subscriber.
+2. **Compose.** The host has a rendered store carrying a control for the requested area. This interval covers more than the view's inputs: scheduling the render subscription off the hub's turn, the view function and every stream it combines, rendering the control tree, and any other renderers of the same area.
+3. **Delivery.** The owner hub's update queue applies that store update and the stream publishes it (`SetCurrent` compares and emits it to subscribers). Then the patch travels to the subscriber.
 
 `LayoutAreaHost` times all three, once per open, and writes a single line when the requested area first appears in its store:
 
@@ -160,10 +160,10 @@ base frame at 31 ms, first control composed at 990 ms, then the owner's update q
 - **Level.** The line is `Debug` by default, so a healthy open writes nothing to Loki. It is `Information` only when the first full frame took longer than `Layout:SlowFirstFrameThreshold`, a `TimeSpan` that defaults to one second. A shelf of N cards opens 2N areas, so logging every open at `Information` would cost Loki on every page view, while the slow open is the anomaly an operator needs to see.
 - **Cost.** One latch and three timestamps per host, read where the host already passes. No timer, no subscription, and no second line for later updates of the same area.
 - **Reading it.**
-  - A large gap between the base frame and "composed" means the view's own inputs are slow.
-  - A large gap between "composed" and the total means the owner's update queue is busy.
+  - A large gap between the base frame and "composed" is time spent producing the rendered store: the view's inputs, or the scheduling and rendering around them. Narrow it further by timing the view's inputs directly; the line alone does not say which.
+  - A large gap between "composed" and the total means the owner's update queue or the publication is slow. The delivery mark is taken once the update has committed, so a failed update never reports.
   - Whatever the subscriber measured beyond the total is transport.
-  - An area composed inside its own update reports compose and delivery as one moment.
+  - An area composed inside its own update (`UpdateArea`) marks compose inside the update and delivery once it committed, so the two are close together.
 
 The code is `FirstFrameTiming` (MeshWeaver.Layout). Systemorph/MeshWeaver.Plugins#4399, a Store row that arrived about a second after its base frame on production and in no test rig, is the reason it exists.
 

@@ -609,13 +609,12 @@ public record LayoutAreaHost : IDisposable
             // write would be refused and never tightens a render that would still have landed.
             if (Stream.HubIfHeld() is not { } renderHub)
                 return null;
-            ReportFirstFullFrame(resultStore);
             return new ChangeItem<EntityStore>(resultStore, Stream.StreamId, renderHub.Version);
             // resolvedArea, not Reference.Area — the latter is null for a default-area
             // subscription, so this line said "(null)" for exactly the renders #1182 was
             // about. The render-FAILURE paths were fixed there; these two remaining
             // diagnostics still carried the same null.
-        }, ex => logger.LogWarning(ex, "Cannot apply render for {Area}", resolvedArea));
+        }, ex => logger.LogWarning(ex, "Cannot apply render for {Area}", resolvedArea), ReportFirstFullFrame);
     }
 
     /// <summary>Whether <paramref name="store"/> holds a control for the area this host renders.</summary>
@@ -625,14 +624,15 @@ public record LayoutAreaHost : IDisposable
         && control is not null;
 
     /// <summary>
-    /// Writes the first-full-frame line (<see cref="FirstFrameTiming"/>) the first time a store this
-    /// host is about to publish carries the requested area. Called inside the stream's update, so the
-    /// delivery mark is the moment the owner's queue applies it. One latch: every later update is a
-    /// single volatile read.
+    /// Writes the first-full-frame line (<see cref="FirstFrameTiming"/>) the first time the stream's
+    /// COMMITTED store carries the requested area. Passed to <c>Stream.Update</c> as its applied
+    /// callback, which runs in the same turn right after <c>SetCurrent</c> compared and published the
+    /// change — so the delivery mark includes publication, and an update that failed (or was refused)
+    /// never consumes the latch. One latch: every later update is a single volatile read.
     /// </summary>
-    private void ReportFirstFullFrame(EntityStore store)
+    private void ReportFirstFullFrame()
     {
-        if (firstFrame.Reported || !CarriesRequestedArea(store))
+        if (firstFrame.Reported || !CarriesRequestedArea(Stream.Current?.Value))
             return;
         firstFrame.ReportDelivered(logger, slowFirstFrameThreshold, Hub.Address, resolvedArea);
     }
@@ -1242,10 +1242,9 @@ public record LayoutAreaHost : IDisposable
         {
             var changes = DisposeChildAreas(store ?? new EntityStore(), context);
             var updates = RenderArea(context, view, changes.Store);
-            // This path composes INSIDE the update, so compose and delivery are the same instant.
+            // This path composes INSIDE the update: compose is marked here, delivery once it committed.
             if (CarriesRequestedArea(updates.Store))
                 firstFrame.MarkComposed();
-            ReportFirstFullFrame(updates.Store);
             return Stream.ApplyChanges(
                 new(
                     updates.Store,
@@ -1253,7 +1252,7 @@ public record LayoutAreaHost : IDisposable
                 Stream.StreamId
                     )
             );
-        }, ex => logger.LogWarning(ex, "Cannot update {Area}", context.Area));
+        }, ex => logger.LogWarning(ex, "Cannot update {Area}", context.Area), ReportFirstFullFrame);
     }
 
     /// <summary>
