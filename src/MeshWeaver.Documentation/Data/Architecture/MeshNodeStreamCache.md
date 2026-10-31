@@ -524,6 +524,42 @@ them to finish, and then disposes the cache hub. A read that a hub registered fo
 released by that hub's ShutDown while the cache is still alive. A read that no hub owns is still
 ended with the `ObjectDisposedException`, and so is a read issued after the cache is gone.
 
+### A partition teardown hands its query readers ON — it does not end them (#7719, #7720)
+
+The synced-query side has a third forced teardown: `InvalidatePartition`, run by every partition
+teardown (a package uninstall included), drops and releases each query anchored to the partition —
+`$security-access:{partition}` and `$security-policy:{partition}` among them. Until #7719 the chain
+it released was the very observable `GetQuery` had handed out, so every reader still on it was ended
+by `AutoConnectOwnedBy` with `ObjectDisposedException` — *"the owner is disposed"* — although the
+cache was alive. That covered both the readers attached at that moment and any reader subscribing
+later through a reference composed earlier: the permission fold resolves its queries when it is
+composed, not when it is subscribed.
+
+Measured on a production portal: a viewer confirmed the uninstall of the package whose partition
+they had open. The `[PartitionTeardown]` line came first, and within one second three things
+failed on the same pod. The page's render failed with that exception naming
+`$security-access:{partition}`. A one-shot Read check answered *undetermined, refused*. The page's
+standing read follow treats a faulted verdict as a refusal (`AdmitEachRevision`), so it ended the
+layout stream with *"Access denied … lacks Read permission"* on every area element. #7720 is that
+last symptom, and it has the same root as #7719.
+
+So `GetQuery` now hands out a **handle** (`QueryChain.Handle` / `FollowQuery`), never the chain.
+The handle resolves the registry's CURRENT chain for its (id, query set) on every subscription. When
+`EvictQueryId` **supersedes** a chain, the handle moves its attached readers to a fresh chain,
+synchronously and *before* the old chain's connection is released, so the release terminal reaches
+nobody. A reader therefore sees the partition's state after the teardown, which is the honest
+answer, instead of a disposal that never happened. The generations are a lazily enumerated
+`Concat`, so a reader that crosses several teardowns does not nest a subscription per crossing.
+
+What did NOT change: a chain that **faulted** still delivers its real error to the readers attached
+to it (#1316). A chain dropped as **unanswered** (#4557) keeps its live readers, because it is not
+released. The cache's own **disposal** still ends every reader with `ObjectDisposedException`
+(#5135), because a disposed cache has no next chain. And a still-registered entry is shared by every
+caller, never duplicated. Pinned by `PartitionTeardownHandsQueryReadersOnTest`. On the pre-fix code
+the attached reader and the live permission fold both fail with the production exception. The test
+also asserts that a late subscriber through an old handle gets a value. The shared-entry arm is the
+negative control.
+
 ## A delete tombstone is superseded at the recreate's commit — before `Created` is published
 
 The one read failure a reader is *designed not to retry* is the delete tombstone's verdict: `No node found at '…' — the node was deleted, so this address will not reactivate`. A hub that is going down because its node was **deleted** NACKs an abandoned delivery with that authoritative `NotFound` (instead of the transient `ShuttingDown` a recycling hub answers), and the classifier here turns it into a definitive absence — the stream terminates, the negative entry is recorded, and by contract the caller stops. The verdict is read off `RecentlyDeletedRegistry` (`IAddressTombstones`), which the **delete marks synchronously** before its response returns.
