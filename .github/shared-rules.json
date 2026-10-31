@@ -317,7 +317,14 @@
       "id": "file-it-and-move-on",
       "hub": "Systemorph/MeshWeaver",
       "required-in": [
-        "Systemorph/MeshWeaver"
+        "Systemorph/MeshWeaver",
+        "Systemorph/MeshWeaver.Plugins",
+        "Systemorph/MeshWeaver.Education",
+        "Systemorph/MeshWeaver.SocialMedia",
+        "Systemorph/MeshWeaver.Manufacturing",
+        "Systemorph/Memex",
+        "Systemorph/CreditReRate",
+        "Systemorph/DecisionModels"
       ],
       "slots": [],
       "why": [
@@ -353,16 +360,19 @@
         "(2) the six spokes copy the hub's text; (3) required-in widened back to all seven. The window",
         "between (1) and (3) is the one moment this block is compared nowhere; close it the same day.",
         "",
-        "🚧 TEXT CHANGE IN FLIGHT (#7327) — step 1 of 3. The block named the operated instance's",
-        "hostname beside 'the control instance'; the spokes' own AGENTS.md forbid operated-instance",
-        "listings and want role names, and the automatic review flagged it on three spoke pull requests.",
-        "The hub now names the role and the MCP server only, and required-in is narrowed to the hub.",
-        "Step 2: Plugins, Education, Memex, CreditReRate and DecisionModels copy the hub text. Step 3:",
-        "widen required-in back to those five and delete this paragraph.",
+        "TEXT CHANGE (#7327). The block named the operated instance's hostname beside 'the control",
+        "instance'; the spokes' own AGENTS.md forbid operated-instance listings and want role names, and",
+        "the automatic review flagged it on three spoke pull requests. The hub now names the role and the",
+        "MCP server only. Landed in the same three steps: (1) core#7624, hub text + required-in narrowed;",
+        "(2) Plugins#4703, Education#426, SocialMedia#260, Manufacturing#142, Memex#902, CreditReRate#3,",
+        "DecisionModels#3; (3) this widening, which names exactly the spokes the live sweep measured as",
+        "matching the hub.",
         "",
-        "Step 2 of that text change was still owed on 2026-10-17 — all six spokes carried the old",
-        "text — and lands with the baseline rollout (Plugins#3831, Education#398, Memex#769 merged;",
-        "Reinsurance#265, SocialMedia#249, Manufacturing#134 open); required-in names the merged ones."
+        "🚧 ONE SPOKE STILL OWED (#7327): Reinsurance's copy (Reinsurance#277) has not merged, so",
+        "required-in leaves Reinsurance out — naming it now turns its gate red on every pull request,",
+        "including #277 itself (measured: the widened sweep reads 'Systemorph/MeshWeaver.Reinsurance:",
+        "DRIFTED from the hub' and nothing else). Once #277 merges, add Reinsurance here and delete this",
+        "paragraph."
       ]
     },
     {
