@@ -403,7 +403,12 @@ public sealed record UnmetPackageDependency(
     {
         ArgumentNullException.ThrowIfNull(candidate);
         return new UnmetPackageDependency(
-            string.Join(", ", candidate.Requires.Select(r => r.Trim())),
+            // Null and blank entries are skipped exactly as the judged path skips them
+            // (PackageRequirement.DependencyId): this value is built eagerly as Evaluate's
+            // DefaultIfEmpty fallback, so it must never throw (review on #7736).
+            string.Join(", ", candidate.Requires
+                .Where(r => !string.IsNullOrWhiteSpace(r))
+                .Select(r => r.Trim())),
             Dependency: "",
             Module: "",
             LoadedVersion: "")

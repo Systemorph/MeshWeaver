@@ -186,6 +186,11 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
         loaded.Answer(Ai, AiModule, "1.43.4");
         (await Judge(Chat180, ct)).Should().BeNull("the loaded AI satisfies the floor and nothing is landed");
 
+        // A requires array with a null or blank entry is judged as the gate always judged it — the
+        // entry is skipped — and never prevents a verdict (review on #7736).
+        (await Judge(Chat180 with { Requires = [null!, "  ", Requirement] }, ct)).Should().BeNull(
+            "null and blank requirement entries are skipped, and the real one is met");
+
         loaded.Answer("SomeOtherPackage", "MeshWeaver.Other", "0.0.1", replace: true);
         (await Judge(Chat180, ct)).Should().BeNull(
             "a dependency with no module loaded or landed here is not judged — absent is not 'unmet'");
