@@ -7,7 +7,9 @@
 # (`https://nuget.pkg.github.com/Systemorph/index.json`) and nowhere else. Library publishing was
 # retired, so no feed carried those ids and a generated portal could not restore. This lane packs,
 # for every SEALED platform set (`3.1.<run>`), exactly what a generated template restores — the ids
-# it pins plus their ProjectReference closure — and pushes them to that feed.
+# it pins plus their ProjectReference closure — and pushes them to that feed. It covers BOTH template
+# shapes (headless, and --with-gui) and the `dotnet new` template package itself, at the set's
+# version, and it ends by installing that template from the feed and restoring it (MeshWeaver#7660).
 #
 # 🚨 PRIVATE, ALWAYS. The only push source is the org's GitHub Packages feed; `template-feed.py
 # push-guard` refuses nuget.org (a nupkg there can never be recalled) and anything else. A new
@@ -214,16 +216,25 @@ jobs:
       - name: "The derivation can say no (self-test)"
         run: python3 "$FEED_TOOL" --self-test
 
-      - name: Generate the template at this set's version
+      # 🚨 BOTH shapes. The headless default is what the template PACKAGE ships; `--with-gui` pins
+      # more ids (the private GUI's). The plan publishes the union, so neither shape pins an id the
+      # feed lacks (MeshWeaver#7660). The GUI shape's output stays on this runner: it is planned and
+      # restored, never published.
+      - name: Generate the template at this set's version (both shapes)
         run: |
           set -euo pipefail
           dotnet run plugins-repo/tools/generate-memex-template.cs -- \
             "$VERSION" plugins-repo "$RUNNER_TEMP/template" --core "$GITHUB_WORKSPACE"
+          dotnet run plugins-repo/tools/generate-memex-template.cs -- \
+            "$VERSION" plugins-repo "$RUNNER_TEMP/template-gui" --core "$GITHUB_WORKSPACE" --with-gui
 
       - name: Derive the package list from the template
         run: |
           set -euo pipefail
-          python3 "$FEED_TOOL" plan --template "$RUNNER_TEMP/template" \
+          # --template-package: the dotnet-new template package itself, at the set's version, so a
+          # template installed from the feed pins exactly this set.
+          python3 "$FEED_TOOL" plan --template "$RUNNER_TEMP/template" --template "$RUNNER_TEMP/template-gui" \
+            --template-package plugins-repo/tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj \
             --core "$GITHUB_WORKSPACE" --plugins plugins-repo --version "$VERSION" --out "$RUNNER_TEMP/plan.json"
           python3 "$FEED_TOOL" slnx --plan "$RUNNER_TEMP/plan.json" --line platform --out pack-platform.slnx
           python3 "$FEED_TOOL" slnx --plan "$RUNNER_TEMP/plan.json" --line own --out pack-own.slnx
@@ -251,6 +262,7 @@ jobs:
           done
 
       - name: Push to the private org feed (skip versions already there)
+        id: push
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -269,6 +281,7 @@ jobs:
       # default; this reads it back rather than trusting the default, and is RED if any package is
       # not private or cannot be read.
       - name: Every published package is private
+        if: ${{ !cancelled() && steps.push.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -282,6 +295,73 @@ jobs:
           done
           [ "$bad" = 0 ] || exit 1
           echo "every published package is private"
+
+      # 🚨 THE LANE'S OWN PROOF. Packing and pushing say nothing about whether a user can restore:
+      # a source the generated nuget.config maps but no machine has (NU1301), a pin the feed does
+      # not hold, a dependency outside the plan — each is invisible until a restore. So the lane
+      # does what a user does: installs the template PACKAGE from the feed at this set's version,
+      # instantiates it under a name other than Memex, and restores it against the feed alone, with an EMPTY
+      # package cache; then restores the GUI shape the same way. Its credential is this job's own
+      # token, the one the user's PAT stands in for. Runs whatever the visibility check said, so a
+      # red names every defect at once.
+      - name: A template installed from the feed restores and builds against the feed
+        if: ${{ !cancelled() && steps.push.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then echo "dry run: nothing was published, so there is nothing to restore from"; exit 0; fi
+          export NUGET_PACKAGES="$RUNNER_TEMP/restore-cache"
+          export DOTNET_CLI_HOME="$RUNNER_TEMP/dotnet-home"
+          export NuGetPackageSourceCredentials_github="Username=github-actions;Password=$GH_TOKEN"
+          # Two SIBLING directories: the install's nuget.config must not sit above the portal, or
+          # NuGet would merge it into the portal's restore and hide what the template's own says.
+          install="$RUNNER_TEMP/probe-install"; portal="$RUNNER_TEMP/probe-portal"
+          mkdir -p "$install" "$NUGET_PACKAGES" "$DOTNET_CLI_HOME"
+          # The install reads nuget.config from its working directory: the org feed, credentialed
+          # by the variable above, and nothing else.
+          printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<configuration><packageSources><clear />' \
+            "<add key=\"github\" value=\"$FEED\" protocolVersion=\"3\" />" \
+            '</packageSources></configuration>' > "$install/nuget.config"
+          (cd "$install" && dotnet new install "MeshWeaver.MemexTemplate::$VERSION")
+          # -n Zephyr, deliberately NOT the template's own name: `-n` must rename only the solution
+          # and the host projects, never a package id or a package API (`MeshWeaver.Aspire.Hosting.Memex`,
+          # `AddMemex`). Under the old `sourceName: Memex` a renamed instance asked for
+          # MeshWeaver.Aspire.Hosting.<Name> (NU1101), so only a foreign name proves it.
+          # --skipRestore: the restore below is the verdict, run once and explicitly.
+          dotnet new meshweaver-memex -n Zephyr -o "$portal" --skipRestore
+          slnx="$portal/Zephyr.slnx"
+          [ -f "$slnx" ] || { echo "::error::the template installed from the feed produced no Zephyr.slnx — -n did not rename the solution"; exit 1; }
+          # The instance must pin EXACTLY what the template generated for this set pins — every
+          # MeshWeaver id at the same version (own-line ids at their own) — not merely mention
+          # $VERSION once while other pins still name an older set that also sits on the feed.
+          python3 - "$RUNNER_TEMP/template/Directory.Packages.props" "$portal/Directory.Packages.props" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          def pins(p):
+              return {e.get("Include"): e.get("Version") for e in ET.parse(p).getroot().iter()
+                      if e.tag.split("}")[-1] == "PackageVersion" and (e.get("Include") or "").startswith("MeshWeaver.")}
+          want, got = pins(sys.argv[1]), pins(sys.argv[2])
+          if not want:
+              sys.exit("::error::the generated template pins no MeshWeaver package — nothing to compare")
+          diff = sorted(set(want.items()) ^ set(got.items()))
+          if diff:
+              print("::error::the template installed from the feed does not pin the set it was published with:")
+              for pid, ver in diff:
+                  print(f"  {pid} {ver} ({'expected' if want.get(pid) == ver else 'installed'})")
+              sys.exit(1)
+          print(f"the installed template pins the same {len(want)} MeshWeaver packages as the set's generated template")
+          PY
+          dotnet restore "$slnx" --nologo
+          # A template that restores but does not COMPILE is just as unusable: an <Import> of a file
+          # the generator never copied (MSB4019) or a linked source still pointing at the source
+          # tree's layout (CS2001) passes every restore. Build what the user would build.
+          dotnet build "$slnx" --no-restore --nologo
+          # Its OWN empty cache: NuGet takes an already-cached package without consulting the
+          # source mapping, so a shared cache would let the GUI shape pass on the headless restore's
+          # downloads while a fresh GUI consumer fails.
+          mkdir -p "$RUNNER_TEMP/restore-cache-gui"
+          NUGET_PACKAGES="$RUNNER_TEMP/restore-cache-gui" dotnet restore "$RUNNER_TEMP/template-gui/Memex.slnx" --nologo
+          echo "a template installed from the feed at $VERSION restores and builds against the feed, and the GUI shape restores"
 
   verdict:
     name: "Template feed verdict"
