@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Immutable;
 using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Reactive.Linq;
 using System.Text;
 using System.Threading;
@@ -53,6 +56,7 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
         Path.Combine(Path.GetTempPath(), "mw-6192-" + Guid.NewGuid().ToString("N")[..8]);
 
     private readonly SwitchableLoadedModules loaded = new();
+    private readonly FakeRegistry registry = new();
     private ModuleLandingService? landing;
 
     /// <inheritdoc />
@@ -63,7 +67,8 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
                 .AddSingleton(new PluginCatalogOptions { InstallPreInstalledPackages = false })
                 // Registered AFTER the catalog's own, so these are the instances resolved.
                 .AddSingleton(_ => landing ??= new ModuleLandingService(baseDirectory: moduleRoot))
-                .AddSingleton<ILoadedPackageModules>(loaded));
+                .AddSingleton<ILoadedPackageModules>(loaded)
+                .AddSingleton<IHttpClientFactory>(new FakeFactory(registry)));
 
     private ModuleLandingService Landing => Mesh.ServiceProvider.GetRequiredService<ModuleLandingService>();
 
@@ -182,6 +187,82 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
     }
 
     /// <summary>
+    /// A landing record the read cannot take whole DROPS its module from the plain activation read
+    /// — and a dropped dependency would read as "not judged". The proposal refuses that partial
+    /// read, so the gate holds on it too (review on #7736): with the loaded reading saying the
+    /// floor is met, a corrupt AI record still holds Chat.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ACorruptLandingRecord_HoldsTheUpdate_AsTheProposalRefusesIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await LandAi("1.42.3", ct);
+        loaded.Answer(Ai, AiModule, "1.43.4");
+
+        var records = Directory.GetFiles(moduleRoot, "*", SearchOption.AllDirectories)
+            .Where(f => f.Contains(ModuleActivationSidecar.EntriesDirectoryName, StringComparison.Ordinal)
+                        && f.Contains(Path.DirectorySeparatorChar + AiModule + Path.DirectorySeparatorChar,
+                            StringComparison.Ordinal))
+            .ToImmutableList();
+        records.Should().NotBeEmpty("precondition: the landing wrote AI's record log");
+        foreach (var record in records)
+            File.WriteAllText(record, "{ this is not a landing record");
+
+        var unmet = await Judge(Chat180, ct);
+        unmet.Should().NotBeNull("a read that dropped the dependency is never 'not judged'");
+        PackageDependencyFloorGate.HeldSentence(Chat180, unmet!).Should().Contain("could not be judged");
+    }
+
+    /// <summary>
+    /// The module lane's decline SHORT-CIRCUITS the adopt: on a FIRST landing (no Chat module landed
+    /// here) the adopt's own policy seam is exempt, so passing the decline through it would still
+    /// land. With the floor unmet nothing reaches the registry beyond its index; with it met the
+    /// adopt is reached (the negative control).
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnUnmetFloor_NeverReachesTheAdopt_EvenOnAFirstLanding()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await LandAi("1.42.3", ct);
+        loaded.Answer(Ai, AiModule, "1.42.3");
+        registry.Serve("Chat", "1.8.0", "MeshWeaver.Blazor.Chat");
+
+        (await Adopt(Chat180, ct)).Should().BeNull("the floor declines before the adopt is asked");
+        registry.Downloads.Should().Be(0, "nothing was fetched for a module its dependency does not satisfy");
+
+        await LandAi("1.43.4", ct);
+        loaded.Answer(Ai, AiModule, "1.43.4");
+        (await Adopt(Chat180, ct)).Should().NotBeNull("the negative control: a met floor reaches the adopt");
+    }
+
+    /// <summary>
+    /// The judged requirements are bound to the EXACT bundle the adopt takes: listing 1.8.0's floor
+    /// (met) is no licence for bundle 1.8.2, whose own floor was never read. A matching version is
+    /// the negative control.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task TheJudgedListing_MustBeTheBundleTheAdoptTakes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        loaded.Answer(Ai, AiModule, "1.43.4");
+        registry.Serve("Chat", "1.8.2", "MeshWeaver.Blazor.Chat");
+
+        (await Adopt(Chat180, ct)).Should().BeNull("the bundle is not the version whose requirements were judged");
+        registry.Downloads.Should().Be(0);
+
+        registry.Serve("Chat", "1.8.0", "MeshWeaver.Blazor.Chat");
+        (await Adopt(Chat180, ct)).Should().NotBeNull("listing and bundle agree: the adopt is reached");
+    }
+
+    /// <summary>The checked adopt, through a fresh bundle client (a fresh index snapshot).</summary>
+    private Task<ModuleAdoptOutcome?> Adopt(PackageManifest served, CancellationToken ct) =>
+        RegistryUpdateReconciler.AdoptChecked(Mesh,
+                new PluginBundleClient(Mesh, FakeRegistry.Url, "mwi_test"),
+                served.Id, served.Module!, $"{PackageInstaller.InstalledPartition}/{served.Id}",
+                policyDecline: null, served, logger: null)
+            .Should().Within(TestTimeouts.Convergence).Emit("the checked adopt answers once", ct);
+
+    /// <summary>
     /// The registry MODULE lane asks the same question before it lands a dependent's module: on
     /// memex.systemorph.com Chat's module 1.8.2 landed at 08:22Z beside AI 1.42.3 while Chat's
     /// content update was held. A served listing whose requirement the landed set does not meet is
@@ -222,6 +303,38 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
         {
             // A temp directory no later run reads; a locked file only leaves litter.
         }
+    }
+
+    /// <summary>The registry's bundle routes: an index naming one module bundle, and a download
+    /// route that only counts (and 404s) — what is under test is whether it is ASKED.</summary>
+    private sealed class FakeRegistry : HttpMessageHandler
+    {
+        public const string Url = "https://registry.test";
+        private string index = "{\"bundles\":[]}";
+        private int downloads;
+
+        public int Downloads => Volatile.Read(ref downloads);
+
+        public void Serve(string plugin, string version, string module) =>
+            index = "{\"bundles\":[{\"plugin\":\"" + plugin + "\",\"version\":\"" + version
+                + "\",\"url\":\"" + Url + PluginBundleClient.RoutePrefix + "/" + plugin
+                + ".zip\",\"module\":\"" + module + "\"}]}";
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/index.json", StringComparison.Ordinal))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(index, Encoding.UTF8, "application/json"),
+                });
+            Interlocked.Increment(ref downloads);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
+    }
+
+    private sealed class FakeFactory(HttpMessageHandler handler) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
 
     /// <summary>The loaded-module reading, set by the test: an answer, no answer, or a fault.</summary>

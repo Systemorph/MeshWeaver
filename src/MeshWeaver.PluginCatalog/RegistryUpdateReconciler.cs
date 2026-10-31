@@ -1439,14 +1439,9 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         // content repo — exactly the dependency the policy rules out. The CONTENT half of a
         // sync-owned partition still has one writer, its sync (PackageUpdateReconciler); only the
         // code no longer waits for it.
-        // 🚨 …and the dependency floor (MeshWeaver#6192): a dependent's module never lands beside a
-        // dependency that does not satisfy what the served version requires — the same verdict the
-        // content half and the module-set proposal reach. It rides the policy-decline seam, so a
-        // declined module is reported and left as it is, exactly like a None policy.
-        DependencyDecline(hub, served, logger)
-            .SelectMany(dependencyDecline => bundles
-            .AdoptModuleOutcome(packageId, moduleName, recordPath, unattended: true,
-                policyDecline: PolicyDecline(record) ?? dependencyDecline))
+        // 🚨 …and the dependency floor (MeshWeaver#6192), decided BEFORE the adopt and never
+        // through its policy seam: see AdoptChecked.
+        AdoptChecked(hub, bundles, packageId, moduleName, recordPath, PolicyDecline(record), served, logger)
             // 🚨 A HANG is worse than a failure here: the packages run as one sequential Concat,
             // so a single adopt that never answers (a wedged record read, a download that stalls)
             // silently starves EVERY package after it — on memex.systemorph.com the Northwind
@@ -1454,7 +1449,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             // (Plugins#959). A bounded wait turns the hang into the loud, caught failure below and
             // the chain proceeds.
             .Timeout(PerPackageAdoptBudget)
-            .Select(outcome => outcome.FilesLanded > 0
+            .Select(outcome => outcome is { FilesLanded: > 0 }
                 ? new LandedModule(moduleName, outcome.LandedVersion ?? outcome.ServedVersion ?? "")
                 : null)
             .Catch((Exception ex) =>
@@ -1468,6 +1463,86 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     packageId, registryName, ex.Message);
                 return Observable.Return<LandedModule?>(null);
             });
+
+    /// <summary>
+    /// 🚨 MeshWeaver#6192 — the unattended module adopt, with the dependency floor decided FIRST:
+    /// a non-null <see cref="DependencyDecline"/> or <see cref="BundleBindingDecline"/> returns
+    /// null WITHOUT calling <see cref="PluginBundleClient.AdoptModuleOutcome"/>, so nothing is
+    /// downloaded or landed. It is deliberately NOT passed as the adopt's policy decline:
+    /// <see cref="ModuleUpdateDecision"/> exempts a first landing, a missing-bytes repair, a
+    /// same-version rebuild and a fallback recovery from that seam (review on #7736), and none of
+    /// those may land a dependent its dependency does not satisfy.
+    /// </summary>
+    /// <param name="hub">The mesh hub.</param>
+    /// <param name="bundles">The pass's bundle client (its index is the one the adopt reads).</param>
+    /// <param name="packageId">The package id.</param>
+    /// <param name="moduleName">The module's entry-assembly name.</param>
+    /// <param name="recordPath">The install record's path.</param>
+    /// <param name="policyDecline">The package's own update policy's decline, or null.</param>
+    /// <param name="served">The registry's listing of the package, or null when unread.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>Cold; the adopt's outcome, or null when the floor declined before it.</returns>
+    internal static IObservable<ModuleAdoptOutcome?> AdoptChecked(
+        IMessageHub hub, PluginBundleClient bundles, string packageId, string moduleName, string recordPath,
+        string? policyDecline, PackageManifest? served, ILogger? logger)
+        => DependencyDecline(hub, served, logger)
+            .SelectMany(declined => declined is not null
+                ? Observable.Return<string?>(declined)
+                : BundleBindingDecline(bundles, packageId, served!))
+            .SelectMany(declined =>
+            {
+                if (declined is null)
+                    return bundles.AdoptModuleOutcome(packageId, moduleName, recordPath, unattended: true,
+                            policyDecline: policyDecline)
+                        .Select(outcome => (ModuleAdoptOutcome?)outcome);
+                logger?.LogInformation(
+                    "[RegistryUpdate] module '{Module}' of {Id} is NOT adopted on this pass: {Reason}",
+                    moduleName, packageId, declined);
+                return Observable.Return<ModuleAdoptOutcome?>(null);
+            });
+
+    /// <summary>
+    /// 🚨 Binds the requirements <see cref="DependencyDecline"/> judged to the EXACT bundle the
+    /// adopt would take (review on #7736): the listing and the bundle index advance independently,
+    /// so requirements read off listing N must not authorise bundle N+1, whose floor may be higher.
+    /// The bundle is read off the SAME index snapshot the adopt reads
+    /// (<see cref="PluginBundleClient.PassIndex"/>), and its version must equal the listed version.
+    /// A listing that declares no requirement binds nothing (there is nothing to authorise); a
+    /// mismatch, an unreadable index, or a listing with no version DECLINES — the next pass, whose
+    /// listing names the bundle's version, judges it.
+    /// </summary>
+    /// <param name="bundles">The pass's bundle client.</param>
+    /// <param name="packageId">The package id.</param>
+    /// <param name="served">The listing whose requirements were judged.</param>
+    /// <returns>Cold; emits exactly once — the decline, or null.</returns>
+    internal static IObservable<string?> BundleBindingDecline(
+        PluginBundleClient bundles, string packageId, PackageManifest served)
+    {
+        if (served.Requires.IsEmpty)
+            return Observable.Return<string?>(null);
+        var listed = (served.ReleasedVersion ?? served.Version)?.Trim();
+        if (string.IsNullOrEmpty(listed))
+            return Observable.Return<string?>(
+                "the listing names no version, so the requirements it declares cannot be bound to the "
+                + "bundle the registry serves (MeshWeaver#6192)");
+        return bundles.PassIndex()
+            .Take(1)
+            .Select(index => index.Bundles?.FirstOrDefault(b =>
+                    string.Equals(b.Plugin, packageId, StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(b.Module)) is not { } bundle
+                // No module bundle: the adopt lands nothing either; nothing to bind.
+                ? null
+                : string.Equals(bundle.Version?.Trim(), listed, StringComparison.Ordinal)
+                    ? null
+                    : $"the registry serves module bundle {bundle.Version} while its listing (whose "
+                      + $"requirements were judged) is {listed}; the requirements of one are never a "
+                      + "licence for the other (MeshWeaver#6192)")
+            .DefaultIfEmpty("the registry's bundle index answered nothing, so the bundle could not be "
+                            + "bound to the judged listing (MeshWeaver#6192)")
+            .Catch((Exception ex) => Observable.Return<string?>(
+                $"the registry's bundle index could not be read ({ex.Message}), so the bundle could not "
+                + "be bound to the judged listing (MeshWeaver#6192)"));
+    }
 
     /// <summary>
     /// 🚨 MeshWeaver#6192 — the module lane's half of the dependency floor: why a dependent's

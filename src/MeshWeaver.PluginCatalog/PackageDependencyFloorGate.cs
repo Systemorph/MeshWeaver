@@ -184,7 +184,10 @@ public static class PackageDependencyFloorGate
                     "the loaded-module reading answered nothing"));
         var againstLanded = landing is null
             ? Observable.Return<UnmetPackageDependency?>(null)
-            : landing.GetActivation()
+            // The CHECKED read: a record the read could not take whole drops its module from the
+            // list, and a dropped dependency would read as "not judged" — the proposal refuses
+            // that same partial read, so the gate holds on it (review on #7736).
+            : landing.GetCheckedActivation()
                 .Take(1)
                 .SelectMany(activation => ModuleDependencyFloor.ReadInstalled(hub)
                     .Take(1)
