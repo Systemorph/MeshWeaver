@@ -546,15 +546,9 @@ internal static class PermissionEvaluator
     public static IObservable<bool> ObserveRestrictingPolicyBetween(
         IMessageHub hub, string ancestorPath, string descendantPath)
     {
-        var ancestor = ToMeshPath(ancestorPath).Trim('/');
-        var descendant = ToMeshPath(descendantPath).Trim('/');
-        if (descendant.Length == 0
-            || !(ancestor.Length == 0 || descendant.StartsWith(ancestor + "/", StringComparison.Ordinal)))
+        if (ScopesBetween(ancestorPath, descendantPath) is not { } scopes)
             return Observable.Return(false);
-
-        var between = GetScopeHierarchy(descendant)
-            .Where(scope => scope.Length > ancestor.Length)
-            .ToImmutableList();
+        var (descendant, between) = scopes;
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var staticPolicies = CollectStaticPolicies(hub);
         return ObserveScopePolicies(hub, cache, descendant, staticPolicies)
@@ -567,6 +561,108 @@ internal static class PermissionEvaluator
                        && (policy.BreaksInheritance || policy.GetPermissionCap() != (Permission)~0);
             }))
             .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// 🛡️ The assignment twin of <see cref="ObserveRestrictingPolicyBetween"/>: whether a role is
+    /// DENIED to <paramref name="userId"/> — directly or through any group they belong to,
+    /// transitively — on a scope strictly beneath <paramref name="ancestorPath"/> and at or above
+    /// <paramref name="descendantPath"/>, where it removes a role the subject HOLDS at that scope
+    /// (granted at or above it, by an assignment or a declared GrantRule). Such a denial subtracts
+    /// that role from everything the descendant inherits, so a delegation that decides the
+    /// descendant by the ancestor's permissions alone would never see it; a denial of a role the
+    /// subject does not hold there removes nothing and does not count
+    /// (<see cref="RemovesAHeldRole"/>). Reads the same assignment, rule-grant, policy and membership legs, and the
+    /// same subject expansion, as the fold, so the two never disagree about which denial applies —
+    /// including the fold's <see cref="WellKnownUsers.Public"/> leg: for a signed-in caller (neither
+    /// Anonymous nor Public) a role denied to Public, or to a group Public belongs to, counts too.
+    /// </summary>
+    /// <param name="hub">The hub whose assignments are read (the mesh hub).</param>
+    /// <param name="ancestorPath">The path whose permissions are delegated to.</param>
+    /// <param name="descendantPath">The path the decision is about.</param>
+    /// <param name="userId">The identity the decision is for.</param>
+    /// <returns>Live: true while such a denial exists; false when the descendant is not strictly
+    /// beneath the ancestor.</returns>
+    public static IObservable<bool> ObserveDeniedRoleBetween(
+        IMessageHub hub, string ancestorPath, string descendantPath, string userId)
+    {
+        if (string.IsNullOrEmpty(userId) || ScopesBetween(ancestorPath, descendantPath) is not { } scopes)
+            return Observable.Return(false);
+        var (descendant, between) = scopes;
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var options = hub.JsonSerializerOptions;
+        var staticNodes = CollectStaticAccessAssignments(hub);
+        var staticPolicies = CollectStaticPolicies(hub);
+        return Observable.CombineLatest(
+                ObserveEffectiveAssignments(hub, cache, descendant, staticNodes),
+                ObserveAllMembershipNodes(cache, options),
+                ObserveRuleGrants(cache, options, descendant),
+                ObserveScopePolicies(hub, cache, descendant, staticPolicies),
+                (nodes, memberships, ruleGrants, runtimePolicies) =>
+                {
+                    bool DeniedBetween(string subject)
+                    {
+                        var subjects = ResolveUserGroups(subject, memberships, options).Add(subject);
+                        var (granted, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, options);
+                        granted = AddRuleGrants(granted, subjects, ruleGrants);
+                        return RemovesAHeldRole(
+                            granted, denied, descendant, between, subject, staticPolicies, runtimePolicies);
+                    }
+                    // The fold ORs a signed-in caller's own roles with the Public leg, and a denial to
+                    // Public narrows that leg at the descendant — so it is an intervening denial for the
+                    // caller too. A true only asks for the landing check, which folds the descendant
+                    // exactly.
+                    return DeniedBetween(userId)
+                           || (userId != WellKnownUsers.Anonymous && userId != WellKnownUsers.Public
+                               && DeniedBetween(WellKnownUsers.Public));
+                })
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// Whether the denials on <paramref name="between"/> change the roles the subject holds at
+    /// <paramref name="nodePath"/>. Decided by the fold's OWN role computation,
+    /// <see cref="ComputeRoleState"/>, run twice over the same live grants and policies — once with
+    /// every denial, once without those on the scopes in between — so it cannot drift from what the
+    /// fold does: an inheritance break anywhere on the path (above the main node included) clears
+    /// what it clears, a grant deeper than a denial re-grants, and the self-scope Admin is added
+    /// where the fold adds it. A denial that removes nothing must not force the landing check: that
+    /// check folds the landing alone and would lose the surfaces the main node carries without any
+    /// role (a type gate's public cover), refusing a satellite the denial never touched (review of
+    /// #7723).
+    /// </summary>
+    private static bool RemovesAHeldRole(
+        ImmutableDictionary<string, ImmutableHashSet<string>> granted,
+        ImmutableDictionary<string, ImmutableHashSet<string>> denied,
+        string nodePath, ImmutableList<string> between, string subject,
+        IReadOnlyDictionary<string, PartitionAccessPolicy> staticPolicies,
+        ImmutableDictionary<string, PartitionAccessPolicy> runtimePolicies)
+    {
+        var withEveryDenial = ComputeRoleState(
+            granted, nodePath, subject, null, null, staticPolicies, denied, runtimePolicies).RoleIds;
+        var withoutTheDenialsBetween = ComputeRoleState(
+            granted, nodePath, subject, null, null, staticPolicies, denied.RemoveRange(between), runtimePolicies).RoleIds;
+        return !withEveryDenial.SetEquals(withoutTheDenialsBetween);
+    }
+
+    /// <summary>
+    /// The scopes strictly beneath <paramref name="ancestorPath"/> and at or above
+    /// <paramref name="descendantPath"/>, with the normalised descendant; null when the descendant
+    /// is not strictly beneath the ancestor. Both paths are normalised with the fold's own segment
+    /// rules (<see cref="GetScopeHierarchy"/> drops empty segments), so a doubled or edge '/' in
+    /// either spelling cannot make the ancestry test disagree with the scopes the fold reads.
+    /// </summary>
+    private static (string Descendant, ImmutableList<string> Between)? ScopesBetween(
+        string ancestorPath, string descendantPath)
+    {
+        var ancestor = NormalizeScope(ancestorPath);
+        var descendant = NormalizeScope(descendantPath);
+        if (descendant.Length == 0
+            || !(ancestor.Length == 0 || descendant.StartsWith(ancestor + "/", StringComparison.Ordinal)))
+            return null;
+        return (descendant, GetScopeHierarchy(descendant)
+            .Where(scope => scope.Length > ancestor.Length)
+            .ToImmutableList());
     }
 
     public static IObservable<PartitionAccessPolicy?> GetPolicy(IMessageHub hub, string targetNamespace)
@@ -1244,6 +1340,14 @@ internal static class PermissionEvaluator
         => string.IsNullOrEmpty(pathOrReference)
             ? string.Empty
             : QueryParser.StripReferencePrefix(pathOrReference);
+
+    /// <summary>
+    /// A path or reference as the scope the fold reads for it: the reference prefix stripped and
+    /// the segments joined exactly as <see cref="GetScopeHierarchy"/> splits them (empty segments
+    /// dropped), so <c>A//B/</c>, <c>/A/B</c> and <c>@/A/B</c> all name <c>A/B</c>.
+    /// </summary>
+    private static string NormalizeScope(string? pathOrReference)
+        => string.Join("/", ToMeshPath(pathOrReference).Split('/', StringSplitOptions.RemoveEmptyEntries));
 
     private static string GetPartition(string? pathOrScope)
     {
