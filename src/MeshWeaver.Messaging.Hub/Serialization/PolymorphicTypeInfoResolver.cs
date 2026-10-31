@@ -232,10 +232,51 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
     /// discovered subtype never displaces it (STJ would also refuse a duplicate for the WHOLE base,
     /// losing every subtype instead of one).</para>
     /// </summary>
+    /// <summary>
+    /// The <see cref="JsonDerivedTypeAttribute"/>s of a base that carries NO
+    /// <see cref="JsonPolymorphicAttribute"/>. System.Text.Json honours those on their own, so the
+    /// default resolver already maps each such subtype under its declared discriminator — and the
+    /// options this resolver assigns REPLACE that mapping. Before same-build discovery, a compiled
+    /// base with only these attributes found no subtypes here and kept STJ's mapping; discovery would
+    /// otherwise replace an alias like <c>"cover-alias"</c> with the subtype's short name, so stored
+    /// JSON stopped binding and writes changed discriminator. They are therefore carried over first,
+    /// exactly as declared (a string, an integer, or none), and discovery never displaces them. Nothing
+    /// is registered: the base is collectible. (A base WITH <see cref="JsonPolymorphicAttribute"/> is
+    /// handled by <see cref="ComputeDerivedTypes"/> already.)
+    /// </summary>
+    private static void AddAttributeOnlyDerivedTypes(Type baseType, List<JsonDerivedType> derivedTypes)
+    {
+        if (baseType.IsDefined(typeof(JsonPolymorphicAttribute), inherit: false))
+            return;
+        foreach (var attr in baseType.GetCustomAttributes(typeof(JsonDerivedTypeAttribute), false)
+                     .Cast<JsonDerivedTypeAttribute>())
+        {
+            if (attr.DerivedType == baseType || !IsValidDerivedTypeForBase(baseType, attr.DerivedType))
+                continue;
+            var present = false;
+            for (var i = 0; i < derivedTypes.Count; i++)
+            {
+                if (derivedTypes[i].DerivedType != attr.DerivedType)
+                    continue;
+                present = true;
+                break;
+            }
+            if (present)
+                continue;
+            derivedTypes.Add(attr.TypeDiscriminator switch
+            {
+                string name => new JsonDerivedType(attr.DerivedType, name),
+                int id => new JsonDerivedType(attr.DerivedType, id),
+                _ => new JsonDerivedType(attr.DerivedType),
+            });
+        }
+    }
+
     private void AddSameBuildSubtypes(Type baseType, List<JsonDerivedType> derivedTypes)
     {
         if (baseType.IsSealed)
             return;
+        AddAttributeOnlyDerivedTypes(baseType, derivedTypes);
         var taken = new HashSet<string>(StringComparer.Ordinal);
         foreach (var existing in derivedTypes)
             if (existing.TypeDiscriminator is string name)

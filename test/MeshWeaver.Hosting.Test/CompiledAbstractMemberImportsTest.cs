@@ -40,6 +40,17 @@ public record CompiledNonProportionalCover(string Currency, decimal Retention, d
 public record CompiledProportionalCover(string Currency, decimal Share)
     : CompiledSectionCover(Currency);
 
+/// <summary>Content whose abstract member's base maps a subtype by <c>[JsonDerivedType]</c> ALONE
+/// (no <c>[JsonPolymorphic]</c>) under an alias, which STJ honours on its own.</summary>
+public record CompiledAliasedContent(string Name, CompiledAliasedBase Item);
+
+/// <summary>The attribute-only base: its subtype's wire name is the alias, not its short name.</summary>
+[System.Text.Json.Serialization.JsonDerivedType(typeof(CompiledAliasedItem), "item-alias")]
+public abstract record CompiledAliasedBase(string Code);
+
+/// <summary>The aliased subtype.</summary>
+public record CompiledAliasedItem(string Code, int Rank) : CompiledAliasedBase(Code);
+
 /// <summary>Content whose abstract-typed member is a READ-ONLY COLLECTION — the shape the mesh's
 /// <c>ReadOnlyCollectionConverter</c> reads element by element — of a base this reader has NO
 /// subtype for: its only subtypes share one contested name, so neither is added.</summary>
@@ -289,6 +300,37 @@ public class CompiledAbstractMemberImportsTest(ITestOutputHelper output) : Monol
                 "the authored bytes are stored verbatim");
 
             await CommitAcknowledged(space, ct);
+        }
+        finally
+        {
+            alc.Unload();
+        }
+    }
+
+    /// <summary>A compiled base that maps its subtype by <c>[JsonDerivedType]</c> alone keeps that
+    /// declared alias: same-build discovery must not replace STJ's attribute mapping with the
+    /// subtype's short name, or stored JSON stops binding and writes change discriminator.</summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AnAttributeOnlyAlias_OnACompiledBase_StillBindsAndIsWritten()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var compiledNodeType = await DeclaredNodeType(ct);
+        var alc = LoadCompiledCopy(compiledNodeType, out var compiledSection);
+        try
+        {
+            var aliased = compiledSection.Assembly
+                .GetType(typeof(CompiledAliasedContent).FullName!, throwOnError: true)!;
+            aliased.Assembly.IsCollectible.Should().BeTrue();
+            var json = """{"name":"A","item":{"$type":"item-alias","code":"X","rank":4}}""";
+
+            var typed = JsonSerializer.Deserialize(json, aliased, Mesh.JsonSerializerOptions);
+            var item = aliased.GetProperty(nameof(CompiledAliasedContent.Item))!.GetValue(typed);
+            item!.GetType().Name.Should().Be(nameof(CompiledAliasedItem),
+                "the base declares 'item-alias' for this subtype, and STJ honours that attribute alone");
+
+            using var written = JsonDocument.Parse(JsonSerializer.Serialize(typed, aliased, Mesh.JsonSerializerOptions));
+            written.RootElement.GetProperty("item").GetProperty("$type").GetString().Should().Be("item-alias",
+                "a write keeps the declared discriminator, not the subtype's short name");
         }
         finally
         {
