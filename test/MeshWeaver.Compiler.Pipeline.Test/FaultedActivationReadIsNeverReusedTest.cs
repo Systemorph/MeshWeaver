@@ -96,7 +96,7 @@ public class FaultedActivationReadIsNeverReusedTest : IDisposable
         using (new FileStream(setRecord, FileMode.Open, FileAccess.Read, FileShare.None))
         {
             // The precondition: the set store itself reports this record as unreadable right now.
-            var faults = new List<string>();
+            var faults = ImmutableList.CreateBuilder<string>();
             ModuleSetStore.Read(root, faults.Add, onNotice: null);
             Assert.NotEmpty(faults);
             reader.Read(NothingLoaded);
@@ -131,7 +131,7 @@ public class FaultedActivationReadIsNeverReusedTest : IDisposable
     [Fact]
     public void ARefusedRecordRead_NamesTheStepThePathAndTheErrorNumber()
     {
-        var reasons = new List<string>();
+        var reasons = ImmutableList.CreateBuilder<string>();
         using (new FileStream(recordPath, FileMode.Open, FileAccess.Read, FileShare.None))
             ModuleActivationSidecar.Read(root, reasons.Add);
 
