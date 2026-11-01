@@ -457,6 +457,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `SignInSpec` | `GoogleClientId` | Google client id — empty turns the scheme off | Google-Client-ID — leer schaltet das Schema ab |
 | `SignInSpec` | `LinkedInClientId` | LinkedIn client id — empty turns the scheme off | LinkedIn-Client-ID — leer schaltet das Schema ab |
 | `SignInSpec` | `AppleClientId` | Apple client id | Apple-Client-ID |
+| `SignInSpec` | `SharedThrowawayApp` | Microsoft client id is the fleet's shared throwaway-instance app (Provision adds this host's redirect URI, Teardown removes it) | Microsoft-Client-ID ist die gemeinsame App der Flotte für Wegwerf-Instanzen (die Bereitstellung fügt die Weiterleitungs-URI dieses Hosts hinzu, der Abbau entfernt sie) |
 | `StepUpSpec` | `Enabled` | Require step-up on every approval | Step-up bei jeder Genehmigung verlangen |
 | `StepUpSpec` | `EntraAuthenticationContext` | Entra authentication context id (c1–c99) | Entra-Authentifizierungskontext-ID (c1–c99) |
 | `StepUpSpec` | `EntraTenantId` | Entra step-up tenant id — blank means the sign-in tenant | Entra-Step-up-Mandanten-ID — leer heißt der Anmelde-Mandant |
