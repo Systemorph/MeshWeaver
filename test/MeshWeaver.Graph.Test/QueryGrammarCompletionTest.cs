@@ -366,6 +366,7 @@ public class QueryGrammarCompletionTest
     [InlineData("content.cedent:\"ha^")]
     [InlineData("content.cedent:h*a^")]
     [InlineData("content.isOpen:t^")]
+    [InlineData("content.inception:2026^")]
     public void TheContainsFilterIsNotOfferedForAnEmptyQuotedSyntacticOrNonTextValue(string text)
     {
         var facts = new QueryCompletionFacts
@@ -376,32 +377,77 @@ public class QueryGrammarCompletionTest
         QueryGrammarCompleter.Complete(At(text), facts).Should().NotContain(i => i.DescriptionKey == QueryGrammar.ContainsKey);
     }
 
+    [Fact]
+    public void NoContainsFilterIsOfferedWhileThePropertyIsUnknown()
+        => QueryGrammarCompleter.Complete(At("content.isOpen:t^"), QueryCompletionFacts.None)
+            .Should().BeEmpty("the schema read may still be pending, and the property may turn out to be a boolean");
+
+    [Fact]
+    public void APrefixMatchOutranksAWordPartMatchHoweverFarDownItIsListed()
+    {
+        var facts = new QueryCompletionFacts
+        {
+            ContentProperties = ContentSchemaFacts.Parse(SubmissionSchema),
+            ReferenceValues =
+            [
+                new QueryNodeFact("Asia/Cedent/Shanghai", "Shanghai Re"),
+                .. Enumerable.Range(0, 150).Select(i => new QueryNodeFact($"Other/Filler{i}", $"Filler {i}")),
+                new QueryNodeFact("Asia/Cedent/Reliance", "Reliance"),
+            ],
+        };
+
+        var references = QueryGrammarCompleter.Complete(At("content.cedent:re^"), facts, 50)
+            .Where(i => i.Kind == CompletionKind.Reference).Select(i => i.Label).ToArray();
+
+        references[0].Should().Be("Reliance",
+            "a name that starts with 're' beats one where 're' starts a later word, whatever the list position");
+        references.Should().Contain("Shanghai Re");
+    }
+
     // ------------------------------------------------------------------ dates
 
     private static readonly System.DateOnly Today = new(2026, 11, 1);
 
+    private static readonly string[] DateKeys =
+    [
+        "query.completion.date.after", "query.completion.date.before",
+        "query.completion.date.onOrAfter", "query.completion.date.onOrBefore",
+    ];
+
+    [Fact]
+    public void ADateFieldOffersTheDayComparisonsAgainstToday()
+    {
+        var facts = new QueryCompletionFacts { ContentProperties = ContentSchemaFacts.Parse(DatesSchema), Today = Today };
+
+        var items = QueryGrammarCompleter.Complete(At("content.inception:^"), facts);
+
+        items.Select(i => i.InsertText).Should().Equal(">2026-11-01", "<2026-11-01", ">=2026-11-01", "<=2026-11-01");
+        items.Select(i => i.DescriptionKey).Should().Equal(DateKeys);
+        new QueryParser().Parse("content.inception:" + items[2].InsertText).Filter.Should().BeOfType<QueryComparison>()
+            .Which.Condition.Operator.Should().Be(QueryOperator.GreaterOrEqual);
+    }
+
     [Theory]
     [InlineData("content.followUpDue:^")]
-    [InlineData("content.inception:^")]
     [InlineData("lastModified:^")]
     [InlineData("createdDate:^")]
-    public void ADateFieldOffersTheComparisonsAgainstToday(string text)
+    public void ATimestampFieldBoundsTodayByCalendarDays(string text)
     {
         var facts = new QueryCompletionFacts { ContentProperties = ContentSchemaFacts.Parse(DatesSchema), Today = Today };
 
         var items = QueryGrammarCompleter.Complete(At(text), facts);
 
-        items.Select(i => i.InsertText).Should().Equal(">2026-11-01", "<2026-11-01", ">=2026-11-01", "<=2026-11-01");
-        items.Select(i => i.DescriptionKey).Should().Equal(
-            "query.completion.date.after", "query.completion.date.before",
-            "query.completion.date.onOrAfter", "query.completion.date.onOrBefore");
-        new QueryParser().Parse(text.Replace("^", "") + items[2].InsertText).Filter.Should().BeOfType<QueryComparison>()
-            .Which.Condition.Operator.Should().Be(QueryOperator.GreaterOrEqual);
+        items.Select(i => i.InsertText).Should().Equal(
+            new[] { ">=2026-11-02", "<2026-11-01", ">=2026-11-01", "<2026-11-02" },
+            "a bare date is MIDNIGHT of a timestamp: 'after today' starts tomorrow and 'today or earlier' includes noon today");
+        items.Select(i => i.DescriptionKey).Should().Equal(DateKeys);
     }
 
     [Theory]
-    [InlineData("content.followUpDue:>^", new[] { "2026-11-01", "=2026-11-01" })]
-    [InlineData("content.followUpDue:<=^", new[] { "2026-11-01" })]
+    [InlineData("content.inception:>^", new[] { "2026-11-01", "=2026-11-01" })]
+    [InlineData("content.inception:<=^", new[] { "2026-11-01" })]
+    [InlineData("content.followUpDue:>^", new[] { "=2026-11-02", "=2026-11-01" })]
+    [InlineData("content.followUpDue:<^", new[] { "2026-11-01", "2026-11-02" })]
     public void AfterATypedOperatorTheDateCompletesThatOperator(string text, string[] expected)
     {
         var facts = new QueryCompletionFacts { ContentProperties = ContentSchemaFacts.Parse(DatesSchema), Today = Today };
@@ -430,7 +476,7 @@ public class QueryGrammarCompletionTest
     // ------------------------------------------------------------------ reference legs
 
     [Fact]
-    public void EveryNonTemplateReferenceLegIsReadFilteredByNameAndById()
+    public void EveryNonTemplateReferenceLegIsReadFilteredByNameAndByPath()
     {
         var prop = new ContentPropertyFact("cedent", "string", [], null,
         [
@@ -441,9 +487,12 @@ public class QueryGrammarCompletionTest
 
         var reads = QueryCompleter.ReferenceLegReads(prop, "ha");
 
-        reads.Should().HaveCount(4, "two non-template legs, each read by name and by id; the template leg needs a record");
+        reads.Should().HaveCount(4, "two non-template legs, each read by name and by full path; the template leg needs a record");
         reads.Should().Contain(r => r.StartsWith("namespace:ReinsuranceDemo ") && r.Contains("name:*ha*"));
-        reads.Should().Contain(r => r.StartsWith("namespace:ReinsuranceDemo ") && r.Contains("id:*ha*"));
+        reads.Should().Contain(r => r.StartsWith("namespace:ReinsuranceDemo ") && r.Contains("mainNode:*ha*"));
+        foreach (var read in reads)
+            new QueryParser().Parse(read).Path.Should().Be(read.Split(' ')[0]["namespace:".Length..],
+                "the path filter narrows the leg; it never re-anchors it");
         reads.Should().NotContain(r => r.Contains('{'));
     }
 

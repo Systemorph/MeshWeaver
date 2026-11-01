@@ -35,9 +35,10 @@ already had keeps working beside them.
 | `content.due^` | a type with `dueDate`, `followUpDue`, `overdue` | `dueDate:` (prefix), then `followUpDue:` (a camelCase word part), then `overdue:` (anywhere in the name) |
 | `content.cedent:hai^` | `nodeType:Underwriting/Submission` | `*hai*` (*contains the typed text*, first), then `Shanghai Re` — a member of the SECOND reference leg, matched in the middle of its name |
 | `content.cedent:star^` | `nodeType:Underwriting/Submission` | `*star*`, then `Lone Star Mutual` (`LoneStarMutual/Profile`) — in a partition no leg names, found among the catalog's own hits |
-| `content.followUpDue:^` | a type whose `followUpDue` is `date-time` | `>2026-11-01` *after*, `<2026-11-01` *before*, `>=2026-11-01` *on or after*, `<=2026-11-01` *on or before* — today's date |
-| `content.followUpDue:>^` | the same | `2026-11-01` (*after*) and `=2026-11-01` (completing `>=`, *on or after*) |
-| `lastModified:^` | — | the same four comparisons; `createdDate:` too |
+| `content.inception:^` | a type whose `inception` is a `date` | `>2026-11-01` *after today*, `<2026-11-01` *before today*, `>=2026-11-01` *today or later*, `<=2026-11-01` *today or earlier* |
+| `content.inception:>^` | the same | `2026-11-01` (*after today*) and `=2026-11-01` (completing `>=`, *today or later*) |
+| `content.followUpDue:^` | a type whose `followUpDue` is a `date-time` | `>=2026-11-02` *after today*, `<2026-11-01` *before today*, `>=2026-11-01` *today or later*, `<2026-11-02` *today or earlier* — a timestamp is bounded by calendar days |
+| `lastModified:^` | — | the same four timestamp comparisons; `createdDate:` too |
 | `quarterly rev^` | `namespace:acme` | nodes named `quarterly rev…`, then the semantic hits of `namespace:acme quarterly rev` |
 
 Accepting a node suggestion inserts `path:<its path>`, which narrows the result list to exactly that
@@ -63,13 +64,22 @@ is the language's contract. Typing a plain value of a text property offers, firs
 contains filter `*typed*` (*contains the typed text*): `content.cedent:*ha*` is a `Like` glob every
 executor evaluates as contains — the in-memory `QueryEvaluator` (`QueryWildcard.IsLikeMatch`),
 PostgreSQL and Snowflake (`ILIKE '%ha%'`), Cosmos (`CONTAINS(…, true)`). It is not offered for an
-empty, quoted or operator-prefixed value, for a value carrying query syntax, or for an enum, boolean,
-number or date property.
+empty, quoted or operator-prefixed value, for a value carrying query syntax, for an enum, boolean,
+number or date property, or for a property the schema has not (yet) described — while the schema
+read is pending the completer cannot tell a text property from a boolean.
 
-**Dates complete as comparisons.** A date-valued field — a content property whose schema `format` is
-`date` or `date-time`, or a node field in `QueryGrammar.DateFields` (`lastModified`, `createdDate`) —
-with nothing typed yet, or only an operator, offers `>`, `<`, `>=`, `<=` against today's date as an
-ISO literal (the completer's `TimeProvider`, UTC). There is no relative-date syntax (`today`, `-7d`):
+Within one match tier the list position breaks ties, capped below the next tier, so a prefix match
+always outranks a word-part or infix match however many reference legs were merged before it.
+
+**Dates complete as comparisons against today, as a calendar day.** A date-valued field — a content
+property whose schema `format` is `date` or `date-time`, or a node field in `QueryGrammar.DateFields`
+(`lastModified`, `createdDate`) — with nothing typed yet, or only an operator, offers *after today*,
+*before today*, *today or later*, *today or earlier*, written as ISO literals (the completer's
+`TimeProvider`; days are UTC days). A `date` field compares days: `>D`, `<D`, `>=D`, `<=D`. A
+timestamp compares instants and a bare date is its MIDNIGHT, so the day is bounded by the next one:
+`>=D+1`, `<D`, `>=D`, `<D+1` — otherwise *today or earlier* (`<=D`) would exclude a value at noon
+today and *after today* (`>D`) would include it. After a typed operator, the comparisons that begin
+with it complete the rest. There is no relative-date syntax (`today`, `-7d`):
 the parser compares literals, and adding one is a separate language decision. Executors differ on
 the comparison itself (measured 2026-11-01 in MeshWeaver.Plugins): the in-memory evaluator parses
 both sides as dates, PostgreSQL casts a content field to `timestamptz`, Cosmos compares the ISO
@@ -143,7 +153,9 @@ A reference's members come from two kinds of source, merged by path as they answ
   `[MeshNode("namespace:Reinsurance scope:descendants nodeType:Reinsurance/Cedent", "namespace:ReinsuranceDemo scope:descendants nodeType:Reinsurance/Cedent")]`
   — so every leg is read, not the first (`QueryCompleter.ReferenceLegReads`). Each runs bounded
   (`limit:50`), filtered by what was typed on the member's name (`name:*ha*`) and, in a second read,
-  on its id (`id:*ha*`), declared `partitions:all` when it anchors nothing, under the viewer's
+  on its whole path (`mainNode:*ha*` — a main node's `mainNode` IS its path, so a parent segment
+  matches too, the store applies it before the limit, and unlike `path:*ha*` it filters instead of
+  re-anchoring the leg), declared `partitions:all` when it anchors nothing, under the viewer's
   identity. A template query (`{node.X}`) needs the record being edited, which a search box does not
   have, so it is skipped.
 - **The catalog's own hits.** The members a book actually references often live in partitions no leg

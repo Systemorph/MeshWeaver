@@ -250,7 +250,7 @@ public static class QueryGrammarCompleter
         if (field.Equals(QueryGrammar.Sort, StringComparison.OrdinalIgnoreCase))
             return SortValues(token, facts);
         if (QueryGrammar.IsDateField(field))
-            return Dates(token, facts);
+            return Dates(token, facts, timestamp: true);
         if (field.Equals(QueryGrammar.NodeType, StringComparison.OrdinalIgnoreCase))
             return Nodes(token, facts.NodeTypes, NodeTypeCategory, CompletionKind.Class);
         if (QueryGrammar.TakesPath(field))
@@ -329,9 +329,16 @@ public static class QueryGrammarCompleter
             if (m < 0) continue;
             yield return new QueryCompletionItem(n.Path, ValueText(n.Path, token.Quoted), kind, category,
                 Description: n.Name is { Length: > 0 } name && !name.Equals(n.Path, StringComparison.Ordinal) ? name : null,
-                Path: n.Path, Icon: n.Icon, Rank: GrammarRank + 100 * m - i);
+                Path: n.Path, Icon: n.Icon, Rank: GrammarRank + 100 * m - TieBreak(i));
         }
     }
+
+    /// <summary>
+    /// The position tie-breaker within ONE match tier: a list position never reaches the next tier's
+    /// 100-step, so a prefix match always outranks a word-part or infix match however far down its
+    /// source listed it.
+    /// </summary>
+    private static int TieBreak(int position) => Math.Min(position, 99);
 
     private static IEnumerable<QueryCompletionItem> ContentProperties(
         string prefix, QueryCompletionFacts facts, string insertPrefix, int baseRank)
@@ -347,7 +354,7 @@ public static class QueryGrammarCompleter
             if (m < 0) continue;
             var text = insertPrefix + p.Name + ":";
             yield return new QueryCompletionItem(text, text, CompletionKind.Property, ContentCategory,
-                Description: Describe(p), Rank: baseRank + 100 * m - i);
+                Description: Describe(p), Rank: baseRank + 100 * m - TieBreak(i));
         }
     }
 
@@ -355,12 +362,12 @@ public static class QueryGrammarCompleter
     {
         var prop = facts.ContentProperties.FirstOrDefault(p =>
             p.Name.Equals(token.Field, StringComparison.OrdinalIgnoreCase));
-        // No schema read for the property: nothing is known of its values, but the contains filter is
-        // still a well-formed query over whatever it holds.
+        // Nothing is known of an unread property — and while the schema read is pending the facts are
+        // empty too, so offering anything here would offer `*t*` for a boolean that has not loaded yet.
         if (prop is null)
-            return Contains(token, null);
+            return [];
         if (IsDate(prop))
-            return Dates(token, facts);
+            return Dates(token, facts, timestamp: prop.Format == "date-time");
         if (prop.EnumValues.Count > 0)
             return Fixed(token, prop.EnumValues.Select(v => new QueryGrammarWord(v, "query.completion.enumMember")).ToArray());
         if (prop.IsBoolean)
@@ -378,11 +385,11 @@ public static class QueryGrammarCompleter
     /// without changing what <c>field:value</c> means. Offered only for a text value typed bare (no
     /// operator, no quote, no query syntax).
     /// </summary>
-    private static IEnumerable<QueryCompletionItem> Contains(QueryCaretToken token, ContentPropertyFact? prop)
+    private static IEnumerable<QueryCompletionItem> Contains(QueryCaretToken token, ContentPropertyFact prop)
     {
         var p = token.Prefix;
         if (p.Length == 0 || token.Quoted || token.Operator.Length > 0
-            || prop is { IsBoolean: true } or { IsNumber: true } or { EnumValues.Count: > 0 }
+            || prop.IsBoolean || prop.IsNumber || prop.EnumValues.Count > 0
             || !p.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/'))
             yield break;
         var text = QueryWildcard.Wildcard + p + QueryWildcard.Wildcard;
@@ -406,7 +413,7 @@ public static class QueryGrammarCompleter
             var named = n.Name is { Length: > 0 } name && !name.Equals(n.Path, StringComparison.Ordinal);
             yield return new QueryCompletionItem(named ? n.Name! : n.Path, ValueText(n.Path, token.Quoted),
                 CompletionKind.Reference, NodeCategory, Description: named ? n.Path : null,
-                Path: n.Path, Icon: n.Icon, Rank: GrammarRank + 100 * m - i);
+                Path: n.Path, Icon: n.Icon, Rank: GrammarRank + 100 * m - TieBreak(i));
         }
     }
 
@@ -414,26 +421,36 @@ public static class QueryGrammarCompleter
         => prop.Format is "date" or "date-time";
 
     /// <summary>
-    /// A date value with nothing typed yet (or only an operator): the ordered comparisons against today's
-    /// date as an ISO literal — <c>&gt;2026-11-01</c> after, <c>&lt;</c> before, <c>&gt;=</c> on or after,
-    /// <c>&lt;=</c> on or before. After a typed <c>&gt;</c> / <c>&lt;</c> the date is offered for that
-    /// operator and for its <c>=</c> extension; after <c>&gt;=</c> / <c>&lt;=</c>, for that operator alone.
-    /// No relative-date syntax: the parser compares literals.
+    /// A date value with nothing typed yet (or only an operator): the comparisons against TODAY, as a
+    /// calendar day, written with ISO literals — after today, before today, today or later, today or
+    /// earlier. A <c>date</c> field compares days, so they are <c>&gt;D</c>, <c>&lt;D</c>, <c>&gt;=D</c>,
+    /// <c>&lt;=D</c>. A timestamp (<c>date-time</c>, <see cref="QueryGrammar.DateFields"/>) compares
+    /// instants and a bare date is its MIDNIGHT, so the whole day is bounded by the next one:
+    /// <c>&gt;=D+1</c>, <c>&lt;D</c>, <c>&gt;=D</c>, <c>&lt;D+1</c> — otherwise "today or earlier" would
+    /// exclude a value at noon today and "after today" would include it. After a typed operator the
+    /// comparisons that begin with it complete the rest. No relative-date syntax: the parser compares
+    /// literals. Days are UTC days.
     /// </summary>
-    private static IEnumerable<QueryCompletionItem> Dates(QueryCaretToken token, QueryCompletionFacts facts)
+    private static IEnumerable<QueryCompletionItem> Dates(QueryCaretToken token, QueryCompletionFacts facts, bool timestamp)
     {
         if (token.Prefix.Length > 0 || token.Quoted)
             yield break;
-        var date = (facts.Today ?? DateOnly.FromDateTime(DateTime.UtcNow))
-            .ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        var today = facts.Today ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        var tomorrow = today.AddDays(1);
         var order = 0;
         foreach (var c in QueryGrammar.DateComparisons)
         {
             order++;
-            if (!c.Name.StartsWith(token.Operator, StringComparison.Ordinal))
+            var (op, day) = (c.Name, timestamp) switch
+            {
+                (">", true) => (">=", tomorrow),
+                ("<=", true) => ("<", tomorrow),
+                var (name, _) => (name, today),
+            };
+            var text = op + day.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+            if (!text.StartsWith(token.Operator, StringComparison.Ordinal))
                 continue;
-            var insert = c.Name[token.Operator.Length..] + date;
-            yield return new QueryCompletionItem(c.Name + date, insert, CompletionKind.Operator, ValueCategory,
+            yield return new QueryCompletionItem(text, text[token.Operator.Length..], CompletionKind.Operator, ValueCategory,
                 c.DescriptionKey, Rank: GrammarRank + 300 - order);
         }
     }

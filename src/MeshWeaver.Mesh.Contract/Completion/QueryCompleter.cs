@@ -263,8 +263,8 @@ public sealed class QueryCompleter
     /// <list type="bullet">
     /// <item><description><b>Every reference leg.</b> A property declares one anchored query per partition
     /// (<c>[MeshNode("namespace:A …", "namespace:B …")]</c>), so EVERY non-template leg is read — not
-    /// the first — each filtered by what was typed on the member's name and on its id (both a contains
-    /// match), bounded by <see cref="ValueReadLimit"/>.</description></item>
+    /// the first — each filtered by what was typed on the member's name and on its full path (both a
+    /// contains match, applied by the store), bounded by <see cref="ValueReadLimit"/>.</description></item>
     /// <item><description><b>The catalog's own hits.</b> The members a book actually references often live
     /// in partitions no leg names (one top-level partition per company). The hidden query defines the
     /// catalog's result set, so its hits are read (<see cref="HitScanLimit"/>), the distinct values they
@@ -293,7 +293,8 @@ public sealed class QueryCompleter
     /// <summary>
     /// The member reads of a reference property: every non-template leg (a <c>{node.X}</c> template needs
     /// the record being edited — a search box has none), declared mesh-wide when the leg anchors nothing,
-    /// once filtered by name and once by id when something plain was typed, else unfiltered.
+    /// once filtered by name and once by full path (<c>mainNode:*typed*</c>) when something plain was
+    /// typed, else unfiltered.
     /// </summary>
     /// <param name="prop">The reference property.</param>
     /// <param name="prefix">What was typed of the value.</param>
@@ -303,7 +304,10 @@ public sealed class QueryCompleter
         var parser = new QueryParser();
         var filters = prefix.Contains('/') || NameFilter(prefix).Length == 0
             ? new[] { "" }
-            : new[] { NameFilter(prefix), $" id:*{prefix}*" };
+            // `mainNode` IS the path of a main node (every reference member is one), so a Like on it is a
+            // contains match over the WHOLE path — a parent segment included — applied by the store
+            // before the leg's limit, and, unlike `path:*x*`, it is a filter, never an anchor.
+            : new[] { NameFilter(prefix), $" mainNode:*{prefix}*" };
         return prop.ReferenceQueries
             .Where(q => !q.Contains('{'))
             .Distinct(StringComparer.Ordinal)

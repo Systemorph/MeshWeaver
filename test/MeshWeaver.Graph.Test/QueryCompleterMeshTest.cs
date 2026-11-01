@@ -162,6 +162,15 @@ public class QueryCompleterMeshTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task AReferenceMemberMatchesOnAParentSegmentOfItsPath()
+    {
+        var result = await Complete("content.cedent:legone^", TestContext.Current.CancellationToken);
+
+        result.Items.Should().Contain(i => i.InsertText == $"{LegOne}/AHC",
+            "only a PARENT segment of the member's path contains what was typed; the store applies the match before the leg's limit");
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task AReferenceValueOutsideEveryLegComesFromTheCatalogsOwnHits()
     {
         var result = await Complete("content.cedent:star^", TestContext.Current.CancellationToken);
