@@ -55,12 +55,16 @@ public sealed class InstanceKeyExchangeHealthCheck(IServiceProvider services) : 
 
         var counts = $"{reading.Total} instance-key resolution(s) since {reading.Since:O}: "
             + $"{reading.Resolved} resolved, {reading.Refused} refused, {reading.Unavailable} unavailable"
-            + (reading.LastResolvedAt is { } resolvedAt ? $"; last resolved {resolvedAt:O}" : "; none resolved");
+            + (reading.LastResolvedAt is { } resolvedAt ? $"; last resolved {resolvedAt:O}" : "; none resolved")
+            + (reading.LastRefusedAt is { } refusedAt ? $"; last refused {refusedAt:O}" : "");
 
         if (reading.Unavailable == 0)
             return HealthCheckResult.Healthy(counts);
 
-        var lastUnavailable = $"last unavailable {reading.LastUnavailableAt:O} ({reading.LastUnavailableReason})";
+        // The time only, never the reason: it names node paths and read failures, and /health is
+        // unauthenticated. The reason is in this replica's log, at Warning, at that time.
+        var lastUnavailable = $"last unavailable {reading.LastUnavailableAt:O} "
+            + "(the read path reached no verdict; the reason is in this replica's log)";
         if (reading.LatestUnavailable && reading.LatestAt is { } latestAt && now - latestAt < CurrentFor)
             return HealthCheckResult.Degraded(
                 "the NEWEST instance-key resolution reached no verdict, so callers of the key exchange are being "

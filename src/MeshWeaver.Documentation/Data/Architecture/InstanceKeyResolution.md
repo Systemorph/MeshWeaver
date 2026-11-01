@@ -137,7 +137,13 @@ or with a short-lived token, is not a key resolution and is not counted. The cou
 | no key presented yet | Healthy, "nothing measured yet" |
 | no unavailable answer | Healthy, with the counts |
 | the NEWEST resolution was unavailable, less than ten minutes ago | **Degraded**: callers are being told to retry right now |
-| an unavailable answer, followed by a resolved or refused one, or ten minutes of no traffic | Healthy, with the counts and the last unavailable reason |
+| an unavailable answer, followed by a resolved or refused one, or ten minutes of no traffic | Healthy, with the counts and the time of the last unavailable answer |
+
+`/health` is unauthenticated, so the line carries counts and times only. Why a resolution reached no
+verdict names node paths and read failures; the tally does not keep it, and the authenticator logs it
+at Warning where it happens. Each count's newest time is stamped after the tally's current reading is
+read, on every compare-and-exchange attempt, so a concurrent writer can never publish an older time
+over a newer one.
 
 It is never Unhealthy and does not belong on readiness. An unavailable resolution is a slow or faulted
 mesh read that the sibling replicas share, so taking this replica out of the Service fixes nothing.

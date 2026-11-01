@@ -107,7 +107,8 @@ public class InstanceKeyExchangeHealthLineTest(ITestOutputHelper output) : HubTe
         reading.Unavailable.Should().Be(1);
         reading.Refused.Should().Be(0);
         reading.LatestUnavailable.Should().BeTrue();
-        reading.LastUnavailableReason.Should().Contain("reached no verdict");
+        (reading.LastUnavailableAt > reading.LastResolvedAt).Should().BeTrue("the stall answered after the resolution");
+        reading.LastUnavailableAt.Should().Be(reading.LatestAt);
 
         var verdict = InstanceKeyExchangeHealthCheck.Evaluate(reading, scheduler.Now);
         verdict.Status.Should().Be(HealthStatus.Degraded,
@@ -145,6 +146,9 @@ public class InstanceKeyExchangeHealthLineTest(ITestOutputHelper output) : HubTe
         var reading = arrangement.Authenticator.Outcomes.Snapshot;
         reading.Refused.Should().Be(1);
         reading.Unavailable.Should().Be(0);
+        reading.LastRefusedAt.Should().NotBeNull("a refusal carries its time like the other two outcomes");
+        reading.LastRefusedAt.Should().Be(reading.LatestAt);
+        reading.LastResolvedAt.Should().BeNull();
         InstanceKeyExchangeHealthCheck.Evaluate(reading, scheduler.Now).Status.Should().Be(HealthStatus.Healthy,
             "a refused key is a verdict the read path reached, not an exchange that cannot answer");
     }
@@ -178,5 +182,64 @@ public class InstanceKeyExchangeHealthLineTest(ITestOutputHelper output) : HubTe
         reading.Total.Should().Be(0);
         InstanceKeyExchangeHealthCheck.Evaluate(reading, scheduler.Now).Description
             .Should().Contain("nothing measured yet");
+    }
+
+    [Fact]
+    public void TheLine_NamesNoNodePathAndNoReadFailure()
+    {
+        // /health is unauthenticated. The unavailable reason the authenticator produces names the
+        // index path (with the key's hash prefix); the line must carry counts and times only.
+        var scheduler = new TestScheduler();
+        var arrangement = Arrange(scheduler);
+
+        var outcome = ResolveOnce(arrangement, scheduler, Legs.Stall);
+        outcome.UnavailableReason.Should().Contain(MeshWeaverInstanceNodeType.IndexNamespace,
+            "control: the reason the caller-side log gets DOES carry the path, so its absence below is meaningful");
+
+        var degraded = InstanceKeyExchangeHealthCheck.Evaluate(arrangement.Authenticator.Outcomes.Snapshot, scheduler.Now);
+        degraded.Status.Should().Be(HealthStatus.Degraded);
+        degraded.Description.Should().NotContain(MeshWeaverInstanceNodeType.IndexNamespace)
+            .And.NotContain(outcome.UnavailableReason!);
+
+        ResolveOnce(arrangement, scheduler, Legs.Answer);
+        var healthy = InstanceKeyExchangeHealthCheck.Evaluate(arrangement.Authenticator.Outcomes.Snapshot, scheduler.Now);
+        healthy.Status.Should().Be(HealthStatus.Healthy);
+        healthy.Description.Should().Contain("last unavailable")
+            .And.NotContain(MeshWeaverInstanceNodeType.IndexNamespace)
+            .And.NotContain(InstancePath)
+            .And.NotContain(outcome.UnavailableReason!);
+    }
+
+    [Fact]
+    public void AWriterThatSampledEarlier_NeverPublishesAnOlderTimeOverANewerOne()
+    {
+        // Deterministic interleaving: while writer A is between reading the tally and publishing,
+        // writer B records a resolution at a LATER time. A must not then publish its outcome as the
+        // newest at an older time.
+        var t0 = new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero);
+        var ticks = 0;
+        InstanceKeyResolutionTally? tally = null;
+        var interleaved = false;
+        DateTimeOffset Clock()
+        {
+            var now = t0.AddSeconds(ticks++);
+            if (tally is not null && !interleaved)
+            {
+                interleaved = true;
+                tally.Record(InstanceAuthResult.Resolved(null)); // writer B, at a later tick
+            }
+            return now;
+        }
+        tally = new InstanceKeyResolutionTally(Clock);
+
+        tally.Record(InstanceAuthResult.Unavailable("the read path reached no verdict")); // writer A
+
+        var reading = tally.Snapshot;
+        reading.Refused.Should().Be(1);
+        reading.Unavailable.Should().Be(1);
+        reading.LatestUnavailable.Should().BeTrue("A published last");
+        (reading.LatestAt >= reading.LastRefusedAt).Should().BeTrue(
+            $"the newest outcome's time ({reading.LatestAt:O}) is never older than an outcome published before it ({reading.LastRefusedAt:O})");
+        reading.LastUnavailableAt.Should().Be(reading.LatestAt);
     }
 }

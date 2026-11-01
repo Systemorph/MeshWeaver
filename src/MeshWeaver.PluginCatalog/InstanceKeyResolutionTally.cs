@@ -35,13 +35,16 @@ public sealed class InstanceKeyResolutionTally(Func<DateTimeOffset> clock)
 
     /// <summary>Records the outcome of one instance-key resolution.</summary>
     /// <param name="outcome">What the resolution answered.</param>
+    /// <remarks>The clock is read AFTER the current reading on every attempt, so the timestamp a
+    /// successful compare-and-exchange publishes is never older than the one it replaces: a writer
+    /// that sampled its time before a concurrent writer published must lose the exchange and
+    /// sample again.</remarks>
     public void Record(InstanceAuthResult outcome)
     {
-        var at = clock();
         while (true)
         {
             var before = Volatile.Read(ref current);
-            var after = before.With(outcome, at);
+            var after = before.With(outcome, clock());
             if (ReferenceEquals(Interlocked.CompareExchange(ref current, after, before), before))
                 return;
         }
@@ -54,8 +57,11 @@ public sealed class InstanceKeyResolutionTally(Func<DateTimeOffset> clock)
 /// <param name="Refused">Resolutions that ended in a definitive negative.</param>
 /// <param name="Unavailable">Resolutions that reached no verdict.</param>
 /// <param name="LastResolvedAt">When the newest resolution that found the instance answered.</param>
-/// <param name="LastUnavailableAt">When the newest unavailable resolution answered.</param>
-/// <param name="LastUnavailableReason">Why the newest unavailable resolution reached no verdict.</param>
+/// <param name="LastRefusedAt">When the newest definitive negative answered.</param>
+/// <param name="LastUnavailableAt">When the newest unavailable resolution answered. Why it reached no
+/// verdict is deliberately NOT kept here: the reason names node paths and read failures, and this
+/// reading is printed on the unauthenticated <c>/health</c>. The authenticator logs the reason at
+/// Warning where it happens.</param>
 /// <param name="LatestUnavailable">True when the newest resolution of any kind reached no verdict.</param>
 /// <param name="LatestAt">When the newest resolution of any kind answered.</param>
 public sealed record InstanceKeyResolutionSnapshot(
@@ -64,8 +70,8 @@ public sealed record InstanceKeyResolutionSnapshot(
     long Refused,
     long Unavailable,
     DateTimeOffset? LastResolvedAt,
+    DateTimeOffset? LastRefusedAt,
     DateTimeOffset? LastUnavailableAt,
-    string? LastUnavailableReason,
     bool LatestUnavailable,
     DateTimeOffset? LatestAt)
 {
@@ -84,10 +90,9 @@ public sealed record InstanceKeyResolutionSnapshot(
         outcome.IsUnavailable
             ? this with
             {
-                Unavailable = Unavailable + 1, LastUnavailableAt = at,
-                LastUnavailableReason = outcome.UnavailableReason, LatestUnavailable = true, LatestAt = at,
+                Unavailable = Unavailable + 1, LastUnavailableAt = at, LatestUnavailable = true, LatestAt = at,
             }
             : outcome.Instance is not null || outcome.Build is not null
                 ? this with { Resolved = Resolved + 1, LastResolvedAt = at, LatestUnavailable = false, LatestAt = at }
-                : this with { Refused = Refused + 1, LatestUnavailable = false, LatestAt = at };
+                : this with { Refused = Refused + 1, LastRefusedAt = at, LatestUnavailable = false, LatestAt = at };
 }
