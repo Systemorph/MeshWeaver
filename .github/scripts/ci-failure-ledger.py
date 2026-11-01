@@ -138,6 +138,34 @@ FAILED_CONCLUSIONS = ("failure", "timed_out")
 NEVER_STARTED_NOTE = ("never started — no step ran, which is a refused job (an org Actions budget) or "
                       "a workflow the runner could not resolve; the job's annotation says which")
 
+# ── the ARTIFACT-STORE MISS ledger (`--artifact-misses`) ──────────────────────────────────────
+#
+# ci-run-artifacts.py classifies an exact-name download that finds nothing after its one re-read as
+# NOT MEASURED (infra): the producer had succeeded, so the miss says something about the shared
+# store and nothing about the diff (ReadingCiSignals → "An artifact-store miss is NOT MEASURED").
+# Those misses used to be routed to a HAND-MAINTAINED tracking issue (MeshWeaver#7656) that a person
+# had to remember to comment on, so a miss nobody copied there was a miss nobody counted. They now
+# go onto a ledger of their own, kept by this script under every rule above: the repository's main
+# build lane (label `ci-main-red`) runs this mode after its own ledger, a red run whose red jobs
+# PRINTED the miss appends a dated entry (filing, or reopening inside the window), and the next
+# green `main` closes it. The ledger KEY is its own label + exact title + the ownership mark, never
+# `ci-main-red`'s, so the two stories never share an issue and neither can close the other.
+#
+# The miss is recognised by the line ci-run-artifacts.py EMITS (`::error title=…::ci-run-artifacts:
+# NOT MEASURED — artifact store miss (infra) — …`), which the job log carries as `##[error]…` — the
+# same signature retry-known-transients.py matches, never the echoed source (`::error title=` inside
+# an escape-coloured `run:` echo). test_ci_run_artifacts.py proves the emitter and this pattern agree.
+MISS_LABEL = "ci-artifact-store-miss"
+MISS_TITLE = "ci-artifact-store-miss: an artifact-store miss — NOT MEASURED (infra)"
+MISS_SEVERITY = "sev:M"          # infra, tracked and visible; a person raises it if it threatens production
+MISS_LINE = re.compile(r"##\[error\]ci-run-artifacts: NOT MEASURED — artifact store miss \(infra\)")
+JOB_LOG_LINE = re.compile(r"^\ufeff?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ", re.MULTILINE)  # as retry-known-transients.py
+MAX_LOG_BYTES = 16 * 1024 * 1024  # over the cap is RED — a match over part of a log is a false "no miss"
+LABEL_DESCRIPTIONS = {
+    MISS_LABEL: "a CI job could not read an artifact its producer published — NOT MEASURED (infra), the miss ledger",
+}
+DEFAULT_LABEL_DESCRIPTION = "main is red — the CI ledger every red run on main appends to (not CD's ci-failure)"
+
 
 class Red(Exception):
     """Something this lane needs could not be established. Never downgraded to 'nothing to do'."""
@@ -433,6 +461,21 @@ def ledger_entry(run: Run, now: datetime, previous_body: str = "") -> str:
 
 def new_body(repo: str, reopen_window_days: int, title: str = DEFAULT_TITLE) -> str:
     # A lane with its own label (a scheduled lane, #7416) is not "main is red": say which lane.
+    if title == MISS_TITLE:
+        return "\n".join([
+            f"A CI job of **{repo}** could not read an artifact its producer had published — **NOT MEASURED "
+            f"(infra)**, never a code finding (Doc/Architecture/ReadingCiSignals → \"An artifact-store miss is NOT "
+            f"MEASURED\"). This issue is the ledger: every red run on `main` with such a miss appends a dated entry "
+            f"below, and the next green `main` closes it. A miss within {reopen_window_days} days of the close "
+            f"REOPENS this issue rather than filing a second one.",
+            "",
+            "Each failed job links to its log; the miss line names what the store held for that name (nothing, "
+            "an upload in flight, a later attempt only, expired, no manifest, or readable now).",
+            "",
+            LEDGER_MARK,
+            "",
+            "## Ledger",
+        ])
     subject = (f"`main` of **{repo}** is red. This issue is the ledger: every red run on `main` appends a dated "
                if title == DEFAULT_TITLE else
                f"**{title}** — a lane of **{repo}** is red. This issue is the ledger: every red run of the lane "
@@ -567,11 +610,20 @@ def _wait_budget_seconds() -> int:
     return (int(raw) if raw.isdigit() else DEFAULT_API_WAIT_MINUTES) * 60
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is surfaced as the HTTPError it is, never followed (see `GitHub.job_log`)."""
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 class GitHub:
-    def __init__(self, repo: str, token: str, *, urlopen=None, sleep=time.sleep, clock=time.time,
-                 wait_budget_seconds: int | None = None):
+    def __init__(self, repo: str, token: str, *, urlopen=None, api_open_no_redirect=None, sleep=time.sleep,
+                 clock=time.time, wait_budget_seconds: int | None = None):
         self.repo, self.token = repo, token
         self._urlopen = urlopen or urllib.request.urlopen
+        # The job-log GET must SEE the 302 to storage rather than follow it with the bearer attached,
+        # so it goes through an opener that does not follow redirects (injectable for the self-test).
+        self._open_no_redirect = api_open_no_redirect or urllib.request.build_opener(_NoRedirect()).open
         self._sleep, self._clock = sleep, clock
         # ONE budget for the whole script, never one per call: N reads cannot add up to N waits.
         budget = _wait_budget_seconds() if wait_budget_seconds is None else wait_budget_seconds
@@ -637,7 +689,7 @@ class GitHub:
     def ensure_label(self, label: str) -> None:
         status, _ = self.call("POST", "labels", body={
             "name": label, "color": "B60205",
-            "description": "main is red — the CI ledger every red run on main appends to (not CD's ci-failure)"}, ok=(201, 422))
+            "description": LABEL_DESCRIPTIONS.get(label, DEFAULT_LABEL_DESCRIPTION)}, ok=(201, 422))
         # 422 = already exists, which is the idempotent path; 201 = created now.
         _ = status
 
@@ -700,7 +752,7 @@ class GitHub:
         found: list[dict] = []
         for page in range(1, 11):
             _, data = self.call("GET", f"actions/runs/{run_id}/jobs", {"per_page": 100, "page": page})
-            jobs = (data or {}).get("jobs", [])
+            jobs = jobs_of_listing(data, run_id, page)
             for j in jobs:
                 if j.get("conclusion") not in FAILED_CONCLUSIONS:
                     continue
@@ -730,7 +782,7 @@ class GitHub:
         found: list[dict] = []
         for page in range(1, 11):
             _, data = self.call("GET", f"actions/runs/{run_id}/jobs", {"per_page": 100, "page": page})
-            jobs = (data or {}).get("jobs", [])
+            jobs = jobs_of_listing(data, run_id, page)
             for j in jobs:
                 if j.get("conclusion") not in LISTED_CONCLUSIONS:
                     continue
@@ -745,6 +797,80 @@ class GitHub:
             if len(jobs) < 100:
                 break
         return tuple(found)
+
+    def red_jobs_of_run(self, run_id: str) -> tuple[dict, ...]:
+        """The raw `actions/runs/{id}/jobs` items that concluded failure/timed_out/cancelled."""
+        found: list[dict] = []
+        for page in range(1, 11):
+            _, data = self.call("GET", f"actions/runs/{run_id}/jobs", {"per_page": 100, "page": page})
+            jobs = jobs_of_listing(data, run_id, page)
+            found.extend(j for j in jobs if j.get("conclusion") in LISTED_CONCLUSIONS)
+            if len(jobs) < 100:
+                break
+        return tuple(found)
+
+    def job_log(self, job_id: int) -> str | None:
+        """One job's log text, or None when GitHub holds no log for it (404/410: a runner that died
+        before uploading one). Needs `actions: read`, which this lane already demands.
+
+        The API answers 302 to signed blob storage; the redirect is followed WITHOUT the token (a
+        bearer must never travel to another origin), which is why the API leg uses an opener that does
+        not follow redirects itself. A rate limit, 5xx or dropped connection on the API leg is retried
+        under the SAME script-wide wait budget and `outage_wait` policy as every other read (`call`),
+        and a wait the budget cannot cover is an ApiOutage naming the reset. Anything else that is not
+        a log is RED or an ApiOutage, never "no miss"."""
+        path = f"actions/jobs/{job_id}/logs"
+        attempt = 0
+        while True:
+            req = urllib.request.Request(f"{API}/repos/{self.repo}/{path}", headers={
+                "Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "ci-failure-ledger"})
+            headers = None
+            try:
+                with self._open_no_redirect(req, timeout=60) as resp:
+                    data = resp.read(MAX_LOG_BYTES + 1)
+                break
+            except urllib.error.HTTPError as e:
+                if e.code in (404, 410):
+                    return None
+                location = e.headers.get("Location") if e.code in (301, 302, 303, 307, 308) else None
+                if location:
+                    data = self._download_log(job_id, path, location)
+                    break
+                headers = e.headers
+                try:
+                    status, text = e.code, e.read().decode(errors="replace")
+                    kind = classify_answer(status, headers, text)
+                except (TimeoutError, OSError) as unread:
+                    status, text, kind = e.code, f"(error body unreadable: {type(unread).__name__})", "transient"
+                if kind == "refused":
+                    raise Red(f"GET {path} answered HTTP {status}: {text[:200]}") from e
+                reason = f"HTTP {status} rate limit" if kind == "rate-limited" else f"HTTP {status}"
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                reason = f"could not read the log ({getattr(e, 'reason', e)})"
+            delay, reset_epoch = outage_wait(attempt, headers, self._clock())
+            if self._clock() + delay > self._deadline:
+                # A wait the budget cannot cover is not slept at all: say when to re-run instead.
+                raise ApiOutage("GET", path, reason, reset_epoch)
+            print(f"GitHub API {reason} on GET {path}; retrying in {delay}s "
+                  f"(wait budget {int(self._deadline - self._clock())}s left)", file=sys.stderr)
+            self._sleep(delay)
+            attempt += 1
+        if len(data) > MAX_LOG_BYTES:
+            raise Red(f"the log of job {job_id} is over {MAX_LOG_BYTES} bytes — refusing a truncated read, "
+                      "which could only produce a false 'no miss'")
+        return checked_job_log(job_id, data)
+
+    def _download_log(self, job_id: int, path: str, location: str) -> bytes:
+        """The storage leg: the signed URL, fetched WITHOUT the token."""
+        try:
+            with self._urlopen(urllib.request.Request(location, headers={"User-Agent": "ci-failure-ledger"}),
+                               timeout=60) as resp:
+                return resp.read(MAX_LOG_BYTES + 1)
+        except urllib.error.HTTPError as e:
+            raise Red(f"the log of job {job_id} could not be downloaded from storage: HTTP {e.code}") from e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise ApiOutage("GET", path, f"could not read the log from storage ({getattr(e, 'reason', e)})") from e
 
 
 # ── apply the verdict ─────────────────────────────────────────────────────────────────────────
@@ -867,6 +993,95 @@ def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
     return issue, event_body("ci-failure", run, issue)
 
 
+def jobs_of_listing(data, run_id, page: int) -> list[dict]:
+    """The `jobs` list of one `actions/runs/{id}/jobs` page. Pure. Anything that is not an object
+    carrying a `jobs` LIST (an empty body, JSON `null`, `{}`) is RED: defaulting it to no jobs would
+    read every log of nothing and answer "no red job" / "no store miss". A real `{"jobs": []}` stays."""
+    if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
+        raise Red(f"GET actions/runs/{run_id}/jobs (page {page}) answered no `jobs` list "
+                  f"({type(data).__name__}: {str(data)[:120]!r}) — the run's jobs cannot be read")
+    return data["jobs"]
+
+
+def checked_job_log(job_id, data: bytes) -> str:
+    """One downloaded job log, decoded STRICTLY and proven to be a log. Pure. An undecodable, empty or
+    non-log body (no timestamped line) is RED — matching it would be a false "no store miss". The same
+    rule as retry-known-transients.py's `read_job_log`."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise Red(f"the log of job {job_id} is not UTF-8 ({e}) — not a job log") from e
+    if not text.strip():
+        raise Red(f"the log of job {job_id} came back EMPTY — not a job log")
+    if not JOB_LOG_LINE.search(text):
+        raise Red(f"the {len(data)}-byte body for job {job_id} carries no timestamped log line — not a job log")
+    return text
+
+
+def printed_a_store_miss(log: str) -> bool:
+    """True when a job log carries the miss ci-run-artifacts.py EMITS. Pure."""
+    return any(MISS_LINE.search(line) for line in log.splitlines())
+
+
+def store_miss_jobs(gh, run_id: str) -> tuple[tuple[dict, ...], tuple[str, ...]]:
+    """(the run's red jobs that printed the miss, as ledger jobs; the red jobs GitHub holds no log for).
+
+    A log that cannot be read is RED (or an ApiOutage), never "this job did not miss" — the same rule
+    as retry-known-transients.py's #4534 guard. A job with NO log held (a runner that died before
+    uploading one) cannot have its miss read; it is NAMED, never silently counted as clean."""
+    misses: list[dict] = []
+    no_log: list[str] = []
+    for job in gh.red_jobs_of_run(run_id):
+        log = gh.job_log(job["id"])
+        if log is None:
+            no_log.append(str(job.get("name", "?")))
+        elif printed_a_store_miss(log):
+            misses.append(failed_job_entry(job))
+    return tuple(misses), tuple(no_log)
+
+
+def artifact_miss_ledger(gh, a, now: datetime) -> tuple[Verdict, Issue | None]:
+    """The `--artifact-misses` mode over an argparse namespace (repo, outcome, run_id, run_url, sha,
+    trigger, label, reopen_window_days). Returns the verdict it applied. Never POSTs an event: the main
+    build ledger already told triage about this run."""
+    if a.label != DEFAULT_LABEL:
+        print(f"the artifact-store miss ledger rides only on a repository's MAIN BUILD ledger (label "
+              f"`{DEFAULT_LABEL}`); this call reports the `{a.label}` lane — nothing read, nothing written")
+        return Verdict("noop", None, "not the main build lane"), None
+    if a.outcome == "failure":
+        misses, no_log = store_miss_jobs(gh, a.run_id)
+        for name in no_log:
+            print(f"::warning title=ci-failure-ledger::job {name!r} is red and GitHub holds NO log for it — "
+                  "whether it missed an artifact is NOT MEASURED (its annotation names why it has no log)")
+        if not misses:
+            print(f"no red job of run {a.run_id} printed `ci-run-artifacts: NOT MEASURED — artifact store miss "
+                  f"(infra)` ({len(no_log)} without a log, named above) — this red is about something else and "
+                  "says nothing about the store, so the miss ledger is left as it is")
+            return Verdict("noop", None, "no store miss in this red"), None
+        print(f"{len(misses)} red job(s) printed the store miss: " + ", ".join(j["name"] for j in misses))
+        run = Run(a.repo, "failure", str(a.run_id), a.run_url, a.sha, a.trigger, misses, "")
+    else:
+        run = Run(a.repo, "success", str(a.run_id), a.run_url, a.sha, a.trigger, (), "")
+    matching, foreign = owned_issues(gh, MISS_LABEL, MISS_TITLE)
+    for f in foreign:
+        print(f"leaving #{f.number} alone ({f.state}, {f.title!r}): it carries `{MISS_LABEL}` but this ledger did "
+              f"not open it, so this mechanism will not touch it")
+    matching, folded = fold_duplicates(gh, matching, MISS_TITLE, MISS_LABEL)
+    for n in folded:
+        print(f"FOLDED  #{n} — a second open miss ledger; its entries now sit in the oldest open one")
+    verdict = decide(run.outcome, matching, now, a.reopen_window_days)
+    if verdict.action == "close":
+        verdict = Verdict("close", verdict.issue, "main is green again — every artifact it asked for was read; closing the miss ledger")
+    elif verdict.action == "noop":
+        verdict = Verdict("noop", None, "main is green and no miss ledger is open — nothing changed")
+    print(f"{verdict.action.upper():7} {verdict.reason} (label `{MISS_LABEL}`, title {MISS_TITLE!r}, "
+          f"{len(matching)} owned issue(s), {len(foreign)} foreign)")
+    issue, _ = apply(gh, run, verdict, MISS_TITLE, MISS_LABEL, now, a.reopen_window_days, MISS_SEVERITY)
+    if issue is not None:
+        print(f"issue #{issue.number} {issue.state}: {issue.html_url}")
+    return verdict, issue
+
+
 def _emit_outputs(path: str | None, **kv) -> None:
     if not path:
         return
@@ -899,10 +1114,35 @@ def main(argv: list[str]) -> int:
                     help="print (and write to GITHUB_OUTPUT as `failed-jobs`) the run's failed jobs WITH their "
                          "error-annotation cause signatures, for a caller to pass as the lane's `failed-jobs` "
                          "input. Runs in the CALLER's job, which grants `actions: read` + `checks: read`.")
+    ap.add_argument("--artifact-misses", action="store_true",
+                    help="keep the artifact-store MISS ledger (label `ci-artifact-store-miss`) for this run "
+                         "instead of the main one: a red run whose red jobs printed the miss appends, a green "
+                         "one closes. Acts only for the main build lane's label; posts no event.")
     a = ap.parse_args(argv)
 
     if a.self_test:
         return self_test()
+    if a.artifact_misses:
+        try:
+            token = env("GH_TOKEN") or env("GITHUB_TOKEN") or ""
+            if not token:
+                raise Red("no GH_TOKEN — refusing to report 'no miss' on no access")
+            for name, value in (("repo", a.repo), ("outcome", a.outcome), ("run-id", a.run_id),
+                                ("run-url", a.run_url), ("sha", a.sha), ("trigger", a.trigger)):
+                if not value:
+                    raise Red(f"--{name} is empty — the lane's inputs are incomplete")
+            if a.outcome not in ("failure", "success"):
+                raise Red(f"outcome must be `failure` or `success`, got {a.outcome!r}")
+            verdict, issue = artifact_miss_ledger(GitHub(a.repo, token), a, datetime.now(timezone.utc))
+            _emit_outputs(env("GITHUB_OUTPUT"), **{"miss-action": verdict.action,
+                                                   "miss-issue-url": issue.html_url if issue else ""})
+            return 0
+        except ApiOutage as e:
+            print(f"::error title=NO VERDICT — GitHub API::{e.sentence()}", file=sys.stderr)
+            return API_OUTAGE_EXIT
+        except Red as e:
+            print(f"::error title=ci-failure-ledger (artifact-store misses)::{e}", file=sys.stderr)
+            return 1
     if a.list_failed_jobs is not None:
         try:
             token = env("GH_TOKEN") or env("GITHUB_TOKEN") or ""
@@ -1048,6 +1288,18 @@ class _Fake:
     def failed_jobs_of_run(self, run_id):
         # The SAME transcription the real client uses, so the self-test proves the rule that runs.
         return tuple(failed_job_entry(j) for j in self.run_jobs if j.get("conclusion") in FAILED_CONCLUSIONS)
+
+    def red_jobs_of_run(self, run_id):
+        self.reads = getattr(self, "reads", 0) + 1
+        return tuple(j for j in self.run_jobs if j.get("conclusion") in LISTED_CONCLUSIONS)
+
+    def job_log(self, job_id):
+        # `logs` maps a job id to its text, to None (GitHub holds no log), or to an exception to raise.
+        self.reads = getattr(self, "reads", 0) + 1
+        value = getattr(self, "logs", {}).get(job_id)
+        if isinstance(value, Exception):
+            raise value
+        return value
 
 
 def self_test() -> int:
@@ -1572,13 +1824,200 @@ def self_test() -> int:
         os.environ.clear()
         os.environ.update(real_env)
 
+    # ── the artifact-store MISS ledger (`--artifact-misses`, MeshWeaver#7656 retired onto it) ──
+    import types
+    emitted = ("2026-11-01T10:00:00.0000000Z ##[error]ci-run-artifacts: NOT MEASURED — artifact store miss (infra) — "
+               "no artifact matches this repository, run, attempt and name after one re-read — the store holds NOTHING")
+    echoed = ("2026-11-01T10:00:00.0000000Z \x1b[36;1m  print(f\"::error title={MISS_TITLE}::ci-run-artifacts: "
+              "NOT MEASURED — artifact store miss (infra) — {ex}\")\x1b[0m")
+    check("the miss is recognised on the line ci-run-artifacts.py EMITS", printed_a_store_miss(emitted))
+    check("…and never on the echoed source or another red", not printed_a_store_miss(echoed + "\n2026-11-01T10:00:01Z ##[error]CS1061 boom"))
+
+    def miss_args(outcome, label=DEFAULT_LABEL):
+        return types.SimpleNamespace(repo="o/r", outcome=outcome, run_id="777",
+                                     run_url="https://github.com/o/r/actions/runs/777", sha="def456",
+                                     trigger="push", label=label, reopen_window_days=7)
+
+    def red_job(i, name):
+        return {"id": i, "name": name, "html_url": f"https://github.com/o/r/actions/runs/777/job/{i}",
+                "conclusion": "failure", "steps": [{"name": "Download build", "conclusion": "failure"}]}
+
+    main_red = Issue(90, title, "open", new_body("o/r", 7), "https://github.com/o/r/issues/90", (label,), None, BOT_LOGIN, BOT_TYPE)
+    hand_tracker = Issue(91, "CI artifact-store misses: NOT MEASURED (infra) tracking", "open", "hand-written",
+                         "https://github.com/o/r/issues/91", (MISS_LABEL, "sev:M"), None, "someone", "User")
+    gm = _Fake([main_red, hand_tracker], run_jobs=[red_job(1, "Portal hosts (leg 0)"), red_job(2, "Compile"),
+                                                   red_job(3, "Runner died")])
+    gm.logs = {1: emitted, 2: "2026-11-01T10:00:01.0000000Z ##[error]CS1061 boom", 3: None}
+    v, iss = artifact_miss_ledger(gm, miss_args("failure"), now)
+    miss_issues = [i for i in gm.issues.values() if i.title == MISS_TITLE]
+    check("a red whose job printed the miss FILES the miss ledger under its own label and title",
+          v.action == "create" and iss is not None and len(miss_issues) == 1 and MISS_LABEL in miss_issues[0].labels)
+    check("the miss ledger lists ONLY the job that missed — not the compile red, not the job with no log",
+          iss is not None and "Portal hosts (leg 0)" in iss.body and "Compile" not in iss.body.split("## Ledger")[1]
+          and "Runner died" not in iss.body)
+    check("🏷️ the miss ledger is stamped bug + sev:M (infra, never a release gate by itself)",
+          iss is not None and all(t in gm.issues[iss.number].labels for t in taxonomy(MISS_SEVERITY)))
+    check("the miss ledger's body says NOT MEASURED (infra) and carries the ownership mark",
+          iss is not None and "NOT MEASURED" in iss.body and LEDGER_MARK in iss.body and "POSTed" not in iss.body)
+    check("the main build ledger and the hand-written tracker are left exactly as found",
+          gm.issues[90].body == main_red.body and gm.issues[91].state == "open" and gm.issues[91].body == "hand-written"
+          and not any(n in (90, 91) for n, _ in gm.comments))
+    v2, iss2 = artifact_miss_ledger(gm, miss_args("failure"), now)
+    check("a second miss APPENDS to the open miss ledger, never a second one",
+          v2.action == "append" and len([i for i in gm.issues.values() if i.title == MISS_TITLE]) == 1
+          and iss2 is not None and iss2.body.count("\n" + ENTRY_HEAD) == 2)
+    v3, _ = artifact_miss_ledger(gm, miss_args("success"), now)
+    check("a green main CLOSES the miss ledger with `green again`",
+          v3.action == "close" and gm.issues[iss.number].state == "closed"
+          and any(n == iss.number and c.startswith("green again:") for n, c in gm.comments))
+    v4, _ = artifact_miss_ledger(gm, miss_args("success"), now)
+    check("green with no open miss ledger is a no-op", v4.action == "noop")
+
+    other = _Fake(run_jobs=[red_job(2, "Compile")])
+    other.logs = {2: "2026-11-01T10:00:01.0000000Z ##[error]CS1061 boom"}
+    vo, _ = artifact_miss_ledger(other, miss_args("failure"), now)
+    check("a red for another reason leaves the miss ledger alone (no write, no issue)",
+          vo.action == "noop" and other.writes == 0 and not other.issues)
+
+    lane = _Fake(run_jobs=[red_job(1, "x")])
+    lane.logs = {1: emitted}
+    vl, _ = artifact_miss_ledger(lane, miss_args("failure", label="ci-lock-pinned-digests-red"), now)
+    check("another lane's ledger call reads nothing and writes nothing for the miss ledger",
+          vl.action == "noop" and lane.writes == 0 and getattr(lane, "reads", 0) == 0)
+
+    def refused(fn, *args):
+        try:
+            fn(*args)
+        except Red:
+            return True
+        return False
+
+    check("a jobs page that is empty, null or `{}` is RED, never 'no red job' (no logs read over nothing)",
+          all(refused(jobs_of_listing, d, "777", 1) for d in (None, "", {}, {"jobs": None}, [], {"total_count": 0})))
+    check("…while a genuine `{\"jobs\": []}` is an empty list, and a real page passes through",
+          jobs_of_listing({"jobs": []}, "777", 1) == [] and jobs_of_listing({"jobs": [{"id": 1}]}, "777", 1) == [{"id": 1}])
+    check("a log body that is empty, blank, non-UTF-8 or carries no timestamped line is RED, never 'no miss'",
+          all(refused(checked_job_log, 5, b) for b in (b"", b"  \n", b"\xff\xfe\x00garbage", b"<html>Gateway</html>")))
+    check("…while a real log (BOM included) decodes and still shows its miss",
+          printed_a_store_miss(checked_job_log(5, ("\ufeff" + emitted).encode("utf-8"))))
+
+    blind = _Fake(run_jobs=[red_job(1, "x")])
+    blind.logs = {1: Red("GET actions/jobs/1/logs answered HTTP 500")}
+    try:
+        artifact_miss_ledger(blind, miss_args("failure"), now)
+        check("an unreadable log is RED, never 'no miss'", False, "returned")
+    except Red:
+        check("an unreadable log is RED, never 'no miss'", blind.writes == 0)
+
+    # The REAL `GitHub.job_log` transport, driven offline (the cases above replace it with `_Fake`):
+    # the API leg goes through the no-redirect opener, the storage leg through `urlopen`.
+    class _Body:
+        def __init__(self, data: bytes):
+            self.data = data
+
+        def read(self, n=-1):
+            return self.data if n is None or n < 0 else self.data[:n]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def log_err(code, text="", **hdrs):
+        h = email.message.Message()
+        for k, v in hdrs.items():
+            h[k.replace("_", "-")] = str(v)
+        return urllib.error.HTTPError("https://api.github.com/x", code, "x", h, io.BytesIO(text.encode()))
+
+    class _LogTransport:
+        """Scripted answers for the API leg and the storage leg; records each request and sleep."""
+        def __init__(self, api, storage=()):
+            self.api, self.storage, self.slept, self.now = list(api), list(storage), [], 1_000_000.0
+            self.api_reqs, self.storage_reqs = [], []
+
+        def _next(self, queue, reqs, req):
+            reqs.append(req)
+            a = queue.pop(0)
+            if isinstance(a, BaseException):
+                raise a
+            return a
+
+        def api_open(self, req, timeout=None):
+            return self._next(self.api, self.api_reqs, req)
+
+        def urlopen(self, req, timeout=None):
+            return self._next(self.storage, self.storage_reqs, req)
+
+        def sleep(self, seconds):
+            self.slept.append(seconds)
+            self.now += seconds
+
+        def clock(self):
+            return self.now
+
+    def log_client(t, budget=300):
+        return GitHub("o/r", "t", urlopen=t.urlopen, api_open_no_redirect=t.api_open, sleep=t.sleep,
+                      clock=t.clock, wait_budget_seconds=budget)
+
+    real_log = emitted.encode("utf-8")
+    signed = "https://results-receiver.example/blob?sig=x"
+
+    tr = _LogTransport([log_err(302, Location=signed)], [_Body(real_log)])
+    got = log_client(tr).job_log(9)
+    check("job_log follows the 302 to storage WITHOUT the token, and reads the log",
+          got is not None and printed_a_store_miss(got)
+          and tr.api_reqs[0].get_header("Authorization") == "Bearer t"
+          and tr.storage_reqs[0].full_url == signed and not tr.storage_reqs[0].has_header("Authorization"),
+          f"{len(tr.api_reqs)} api / {len(tr.storage_reqs)} storage requests")
+
+    for code in (404, 410):
+        tn = _LogTransport([log_err(code)])
+        check(f"job_log answers None for HTTP {code} (no log held), reading no storage",
+              log_client(tn).job_log(9) is None and not tn.storage_reqs)
+
+    t5 = _LogTransport([log_err(502, "bad gateway"), log_err(302, Location=signed)], [_Body(real_log)])
+    check("a 5xx on the log GET is retried under the shared budget, then the log is read",
+          printed_a_store_miss(log_client(t5).job_log(9) or "") and len(t5.api_reqs) == 2 and len(t5.slept) == 1,
+          f"{len(t5.api_reqs)} api requests, slept {t5.slept}")
+
+    t5b = _LogTransport([log_err(502, "bad gateway")])
+    try:
+        log_client(t5b, budget=0).job_log(9)
+        check("a 5xx past the budget is an ApiOutage", False, "returned")
+    except ApiOutage:
+        check("…NEGATIVE CONTROL: a 5xx the budget cannot cover is an ApiOutage at once, nothing slept",
+              t5b.slept == [] and len(t5b.api_reqs) == 1)
+
+    tr8 = _LogTransport([log_err(403, rate_body, x_ratelimit_remaining=0, x_ratelimit_reset=1_003_600)])
+    try:
+        log_client(tr8).job_log(9)
+        check("a rate limit on the log GET beyond the budget is an ApiOutage", False, "returned")
+    except ApiOutage as e:
+        check("a rate limit on the log GET beyond the budget is NO VERDICT naming the reset",
+              "rate-limited until" in e.sentence() and tr8.slept == [], e.sentence())
+
+    tr9 = _LogTransport([log_err(403, '{"message":"Resource not accessible by integration"}',
+                                 x_ratelimit_remaining=4000)])
+    try:
+        log_client(tr9).job_log(9)
+        check("a permission 403 on the log GET is Red", False, "returned")
+    except Red:
+        check("a permission 403 on the log GET is Red, unretried", len(tr9.api_reqs) == 1 and tr9.slept == [])
+
+    tbig = _LogTransport([log_err(302, Location=signed)], [_Body(b"x" * (MAX_LOG_BYTES + 1))])
+    check("a log over the size cap is RED, never matched in part", refused(log_client(tbig).job_log, 9))
+
+    tsto = _LogTransport([log_err(302, Location=signed)], [log_err(403, "AuthenticationFailed")])
+    check("a storage refusal is RED", refused(log_client(tsto).job_log, 9))
+
     if fails:
         print("::error title=ci-failure-ledger self-test::" + "; ".join(fails), file=sys.stderr)
         return 1
     print("✓ ci-failure-ledger self-test: create / append / reopen-recent / create-after-old / close-with-comment / "
           "noop-when-green / refuse-malformed / cd-ci-failure-untouched / unmarked-ci-main-red-untouched / human-authored-is-foreign / "
           "never-labelled-ci-failure / inbox-url-validated / bounded-ledger / jobs-listed / never-started-said / duplicate-folded / "
-          "cause-same-or-changed / api-outage-is-no-verdict — every rule fires and stays silent as designed")
+          "cause-same-or-changed / api-outage-is-no-verdict / artifact-store-miss-ledger — every rule fires and stays silent as designed")
     return 0
 
 

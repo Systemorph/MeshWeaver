@@ -119,7 +119,8 @@ JOB_LOG_LINE = re.compile(r"^﻿?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ", re
 #     "could not reach the source" code; a package that does not EXIST is NU1101/NU1102, and a
 #     private feed refusing a credential names another host — neither matches.
 #   NOT MEASURED — artifact store miss — ci-run-artifacts.py's exact-name miss AFTER its one re-read
-#     (MeshWeaver#7656). The job measured nothing about the diff; its producer had succeeded (a
+#     (a red `main` run carrying it is filed on the `ci-artifact-store-miss` ledger by
+#     ci-failure-ledger.py --artifact-misses). The job measured nothing about the diff; its producer had succeeded (a
 #     consumer whose producer FAILED reports that red once instead, and the failed producer vetoes
 #     the retry on its own log). Matched on the EMITTED annotation title, never the echoed source.
 SIGNATURES = re.compile(
