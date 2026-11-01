@@ -48,6 +48,20 @@ its whole validation set, and it is deliberately built so that "the validation d
                 Doc/Architecture/BuildHosts §5 — and every other shape of that graph is refused.
   lane-key      The lane key a pack call stamps on its evidence, for a host's modules stage to stamp
                 its publication records with.
+  plan          THE PUBLICATION PLAN, decided ONCE in the pack call's `select` (MeshWeaver.Plugins#4478,
+                slice 3): for every SELECTED module, does this run owe its hand-over, and if not, why
+                (the caller's `publish-withhold`, a reuse of an earlier publication, the ledger). It is
+                the pack leg's own `need_publish` predicate, restated over the inputs `select` already
+                holds, so a build host — which sees none of them — never decides it.
+  apply-plan    The host half (build-host-publication.yml, `executor: host`): a build host packs the
+                WHOLE catalog on a trunk run and offers every bundle (`owed: true`). The plan sets the
+                records the selection does not name aside BY NAME, and marks each module the plan does
+                not owe as not owed, with the plan's reason — exactly the records the pack legs would
+                have staged. It only ever takes a hand-over AWAY: a module the host did not offer, or a
+                plan that owes a REUSED bundle (whose bytes the host never had), is refused.
+                `publish --plan` then cross-checks every staged record's `owed` against the plan — on
+                Actions too, so the restated predicate is proven on every Actions trunk run before a
+                host ever depends on it.
   superseded    NEWEST WINS, PER MODULE, under staged publishing (`publish-newest-only` on the
                 publication lane). Right before the hand-over, for every staged record that owes one:
                 does a NEWER trunk commit reach the module's dependency network? It asks the same
@@ -74,6 +88,10 @@ USAGE
   module-publication.py publish --check-only --staged DIR --lane L --declared @modules.json \\
         --selected "MeshWeaver.AI"        # build-host-publication.yml: the publisher's checks, no POST
   module-publication.py lane-key --lane-id catalog --modules @modules.json
+  module-publication.py plan --lane L --modules @selection.json --publish true --withhold "Hosting AI" \\
+        --ledger off --out plan.json          # the pack lane's `select`
+  module-publication.py apply-plan --staged DIR --lane L --plan @plan.json --aside DIR2
+  module-publication.py publish … --plan @plan.json      # every record's `owed` must equal the plan's
   module-publication.py superseded --staged DIR --lane L --declared @modules.json --root CALLER \\
         --mine SHA --tip SHA --changed-list a,b --scope-script node-repo-scope.py --out superseded.json
   module-publication.py publish … --superseded @superseded.json   # stands those modules down
@@ -637,6 +655,16 @@ def check_callers(root: Path) -> int:
                 if _needs_output(hw.get(key), output) != pack_id:
                     problems.append(f"{wf.name}: `{hid}` must pass `{key}` as needs.{pack_id}.outputs."
                                     f"{output} — the SAME call whose lane it stages — got {hw.get(key)!r}.")
+            # 🧾 The publication plan (Plugins#4478 slice 3): a host offers its WHOLE catalog, and only the
+            # pack call's plan says which of it this run publishes and owes. Optional here (the lane
+            # refuses a host fetch without it, at run time), but when passed it must be the SAME call's.
+            if "plan" in hw:
+                if _needs_output(hw.get("plan"), "publication-plan") != pack_id:
+                    problems.append(f"{wf.name}: `{hid}` must pass `plan` as needs.{pack_id}.outputs."
+                                    f"publication-plan — the SAME call whose lane it stages — got {hw.get('plan')!r}.")
+            else:
+                print(f"  NOTE: {wf.name}#{hid} passes no `plan`: a run whose `{pack_id}` resolves to `executor: host` "
+                      "is refused by the lane (the host's catalog-wide offer cannot be reconciled without it).")
             problems.extend(_needs_problems(wf.name, hid, hj, ("executor", "if")))
             if _executor(hw) != _executor(pw):
                 problems.append(
@@ -711,6 +739,16 @@ def check_callers(root: Path) -> int:
                     problems.append(f"{wf.name}: `{pid}` must pass `{key}` as "
                                     f"needs.{src}.outputs.{output} — the SAME call whose lane it "
                                     f"publishes — got {w.get(key)!r}.")
+            # The plan, when wired, comes through the same call as the lane: the host call's `plan`
+            # output, or the pack call's own `publication-plan`. A host call that carries one hands it on.
+            plan_output = "plan" if src in hosts else "publication-plan"
+            if "plan" in w and _needs_output(w.get("plan"), plan_output) != src:
+                problems.append(f"{wf.name}: `{pid}` must pass `plan` as needs.{src}.outputs.{plan_output} — "
+                                f"the SAME call whose lane it publishes — got {w.get('plan')!r}.")
+            if src in hosts and "plan" in (hosts[src].get("with") or {}) and "plan" not in w:
+                problems.append(f"{wf.name}: `{src}` applies the publication plan but `{pid}` does not pass it on "
+                                f"(plan: ${{{{ needs.{src}.outputs.plan }}}}) — the publisher would hold no record "
+                                "to it.")
             need = pj.get("needs") or []
             need = [need] if isinstance(need, str) else need
             if src not in need:
@@ -902,6 +940,23 @@ def publish(a: argparse.Namespace) -> int:
         problems.append(f"staged record for `{m}` is not in this call's declared matrix — set aside, "
                         "never published.")
     mine = {m: r for m, r in records.items() if m not in foreign and m not in unexpected}
+
+    # THE PLAN (`select`'s restatement of the leg's `need_publish`): every staged record's `owed` must be
+    # the plan's, and the plan must name exactly the selection. On Actions this proves the restated
+    # predicate against the leg that staged; on a host run, that apply-plan left nothing owed the plan
+    # does not owe. Two computations of one predicate that disagree refuse the whole set.
+    plan_raw = getattr(a, "plan", "") or ""
+    if plan_raw:
+        plan = _load_plan(plan_raw, lane)
+        if set(plan) != set(selected):
+            problems.append(f"the publication plan names {sorted(plan)} but the selection is {sorted(selected)} — "
+                            "both are read off the same `select`, so they disagree only when one is stale.")
+        for m, rec in sorted(mine.items()):
+            if m in plan and isinstance(rec.get("owed"), bool) and rec["owed"] != bool(plan[m].get("owed")):
+                problems.append(f"`{m}`'s staged record says owed={rec['owed']} but the publication plan says "
+                                f"owed={bool(plan[m].get('owed'))} ({plan[m].get('reason') or 'owed'}) — the leg and "
+                                "`select` computed one predicate two ways and disagree; refusing rather than "
+                                "trusting either.")
 
     for m in selected:
         if m not in mine:
@@ -1209,6 +1264,153 @@ def superseded(a: argparse.Namespace) -> int:
     Path(a.out).write_text(json.dumps({"lane": lane, "mine": a.mine, "tip": a.tip, "superseded": decided},
                                       indent=2), encoding="utf-8")
     print(f"superseded: {len(decided)} of {len(owed)} owed module(s) stand down for trunk tip {a.tip}")
+    return 0
+
+
+# ══════════════════════════════════ plan / apply-plan ══════════════════════════════════
+#: The two "no hand-over owed" reasons node-repo-module-pack.yml's `Stage the bundle for the publication
+#: lane` step writes, verbatim (its `reason=` lines), so a record the plan marks not-owed reads exactly
+#: like one a pack leg staged. `holder` is `, holder <name>` or empty.
+WITHHELD_REASON = ("no hand-over owed: the caller withholds package '{package}' from this run's publication "
+                   "(publish-withhold) — the registry does NOT serve this key yet; a later run of the caller "
+                   "hands it over")
+LEDGER_REASON = "no hand-over owed: the module build ledger already serves this key (decision '{decision}'{holder})"
+
+
+def _absent(value) -> bool:
+    """The leg's `[ "$X" != "null" ] && [ -n "$X" ]` test, inverted: null, absent and "" are absent."""
+    return value is None or value == "" or value == "null"
+
+
+def publication_plan(lane: str, selection: list, publish: bool, withhold: str, ledger: str) -> dict:
+    """The pack leg's `Ledger — every entry's plan` predicate, per SELECTED module, as data.
+
+    Mirrors node-repo-module-pack.yml step for step (decision=build, need_publish=$PUBLISH; a `reuse`
+    annotation → decision reuse, nothing owed; ledger `required` with a ledger answer → its decision,
+    and on `reuse` its needPublish; then a withheld package owes nothing whatever the ledger said), so
+    `publish --plan` holds the two to each other on every Actions run.
+    """
+    held = {w for w in re.split(r"[\s,]+", withhold or "") if w}
+    modules: dict[str, dict] = {}
+    for entry in selection:
+        if not isinstance(entry, dict) or not entry.get("module") or not entry.get("package"):
+            die(_inert(f"plan: selection entry {entry!r} names no module/package — the plan cannot say what it owes."))
+        m, package = entry["module"], entry["package"]
+        if m in modules:
+            die(_inert(f"plan: the selection lists `{m}` twice."))
+        decision, key, holder, owed = "build", "", "", bool(publish)
+        reuse, led = entry.get("reuse"), entry.get("ledger")
+        if not _absent(reuse):
+            decision, owed = "reuse", False
+            holder = str(reuse.get("source") or "") if isinstance(reuse, dict) else ""
+        elif ledger == "required" and isinstance(led, dict):
+            decision = str(led.get("decision") or "build")
+            key = str(led.get("key") or "")
+            if decision == "reuse":
+                owed = bool(led.get("needPublish"))
+                holder = str(led.get("holder") or "")
+        withheld = bool(publish) and package in held
+        if withheld:
+            owed = False
+        if owed:
+            reason = ""
+        elif withheld:
+            reason = WITHHELD_REASON.format(package=package)
+        else:
+            reason = LEDGER_REASON.format(decision=decision, holder=f", holder {holder}" if holder else "")
+        modules[m] = {"package": package, "owed": owed, "reason": reason, "decision": decision,
+                      "key": key, "holder": holder, "withheld": withheld}
+    return {"lane": lane, "publish": bool(publish), "modules": modules}
+
+
+def _load_plan(raw: str, lane: str) -> dict[str, dict]:
+    try:
+        doc = load_json_arg(raw)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        die(f"--plan {raw!r} is not readable JSON ({exc}) — refusing to guess what this run owes.")
+    if not isinstance(doc, dict) or not isinstance(doc.get("modules"), dict) or doc.get("lane") != lane:
+        got = doc.get("lane") if isinstance(doc, dict) else None
+        die(_inert(f"--plan is not a publication plan for lane `{lane}` (got lane {got!r}) — refusing to "
+                   "guess what this run owes."))
+    return doc["modules"]
+
+
+def _set_aside(path: Path, staged: Path, aside: Path, name: str) -> None:
+    dest = aside / path.parent.relative_to(staged)
+    dest.mkdir(parents=True, exist_ok=True)
+    path.parent.joinpath(name).rename(dest / name)
+
+
+def apply_plan(staged: Path, lane: str, plan_raw: str, aside: Path) -> int:
+    """Turn a build host's catalog-wide offer into exactly the records the pack legs would have staged.
+
+    Runs AFTER `partition` (another lane's records are already aside) and BEFORE the publisher's own
+    check, over records of THIS lane only. A record the plan does not name is set aside by name with
+    its bundle; a record the plan does not owe becomes `owed: false` with the plan's reason and loses
+    its bytes (a pack leg stages none for it); a record the plan owes keeps its bytes and takes the
+    plan's ledger key. Nothing here can create a hand-over: a plan owing a module the host did not
+    offer, or owing a REUSED bundle, is refused. Unreadable or lane-less records are left for the
+    check, which refuses them by name — this step never hides one.
+    """
+    lane = (lane or "").strip()
+    if not lane:
+        die("apply-plan: the lane key is empty — the records cannot be told apart from a sibling call's.")
+    plan = _load_plan(plan_raw, lane)
+    if not staged.is_dir():
+        print(f"apply-plan: `{staged}` does not exist — nothing fetched; the publisher's check decides "
+              "whether an owed module is missing.")
+        return 0
+    problems: list[str] = []
+    kept: set[Path] = set()
+    unselected: list[tuple[Path, dict]] = []
+    for path in sorted(staged.rglob("*.publication.json")):
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — unreadable stays; the check refuses it by name
+            continue
+        if not isinstance(rec, dict) or rec.get("lane") != lane or not isinstance(rec.get("module"), str):
+            continue
+        m = rec["module"]
+        bundle = str((rec.get("bundle") or {}).get("name") or "")
+        entry = plan.get(m)
+        if entry is None:
+            unselected.append((path, rec))
+            continue
+        if entry.get("owed"):
+            if entry.get("decision") == "reuse":
+                problems.append(f"the plan owes `{m}` from a REUSED build (holder {entry.get('holder') or '?'}): "
+                                "those are another run's recorded bytes, which a build host never had — refusing "
+                                "rather than handing over different bytes under the same version.")
+            elif rec.get("owed") is not True:
+                problems.append(f"the plan owes `{m}`, but the host's record does not offer it (owed "
+                                f"{rec.get('owed')!r}) — a host offers every bundle it packed, so this record "
+                                "is not one a host wrote.")
+            else:
+                rec["ledger"] = {"key": entry.get("key") or "", "decision": entry.get("decision") or "build"}
+                path.write_text(json.dumps(rec, indent=2), encoding="utf-8")
+                if bundle:
+                    kept.add((path.parent / bundle).resolve())
+            continue
+        rec["owed"], rec["reason"] = False, str(entry.get("reason") or "")
+        rec["ledger"] = {"key": entry.get("key") or "", "decision": entry.get("decision") or "build"}
+        path.write_text(json.dumps(rec, indent=2), encoding="utf-8")
+        if bundle and (path.parent / bundle).is_file():
+            _set_aside(path, staged, aside, bundle)
+        print(_inert(f"  not owed: `{m}` — {rec['reason']}"))
+    for path, rec in unselected:
+        _set_aside(path, staged, aside, path.name)
+        bundle = str((rec.get("bundle") or {}).get("name") or "")
+        if bundle and (path.parent / bundle).is_file() and (path.parent / bundle).resolve() not in kept:
+            _set_aside(path, staged, aside, bundle)
+        print(_inert(f"  set aside: `{rec['module']}` — packed by the host (the whole catalog), NOT in the pack "
+                     "call's selection; this run does not publish it"))
+    if problems:
+        for p in problems:
+            print(f"::error title=Publication plan::{_inert(p)}", file=sys.stderr)
+        return 1
+    print(f"apply-plan: {len(unselected)} unselected record(s) set aside; the rest answer lane `{lane}`'s plan.")
     return 0
 
 
@@ -1589,6 +1791,33 @@ jobs:
               and "needs.host-publication.outputs.lane" in hosted and "executor:" in hosted, hosted)
         rc, out = callers(hosted)
         check("H7: pack (executor host) → build-host-publication → publisher passes", rc == 0, out)
+        check("H7: a host graph with NO plan is named (the lane refuses a host fetch without it)",
+              rc == 0 and "passes no `plan`" in out, out)
+        # 🧾 Plugins#4478 slice 3: the plan rides the same calls as the lane.
+        planned = hosted.replace(
+            "      declared: ${{ needs.modules.outputs.declared }}\n      artifact-store:",
+            "      declared: ${{ needs.modules.outputs.declared }}\n"
+            "      plan: ${{ needs.modules.outputs.publication-plan }}\n      artifact-store:", 1).replace(
+            "      modules: ${{ needs.host-publication.outputs.declared }}\n",
+            "      modules: ${{ needs.host-publication.outputs.declared }}\n"
+            "      plan: ${{ needs.host-publication.outputs.plan }}\n", 1)
+        check("the planned fixture carries the plan on both calls (a control on the fixture)",
+              planned.count("publication-plan") == 1 and "outputs.plan }}" in planned, planned)
+        rc, out = callers(planned)
+        check("H7 plan: pack → build-host-publication (plan) → publisher (plan) passes",
+              rc == 0 and "passes no `plan`" not in out, out)
+        rc, out = callers(planned.replace("needs.modules.outputs.publication-plan", "needs.validate.outputs.publication-plan"))
+        check("MUTATION H7 plan: a host-publication plan from another call is caught", rc == 1 and "`plan`" in out, out)
+        rc, out = callers(planned.replace("      plan: ${{ needs.host-publication.outputs.plan }}\n", ""))
+        check("MUTATION H7 plan: a publisher that drops the plan the host call applies is caught",
+              rc == 1 and "does not pass it on" in out, out)
+        rc, out = callers(planned.replace("needs.host-publication.outputs.plan", "needs.modules.outputs.publication-plan"))
+        check("MUTATION H7 plan: a publisher reading the plan around the host call is caught",
+              rc == 1 and "needs.host-publication.outputs.plan" in out, out)
+        rc, out = callers(wired.replace("      modules: ${{ needs.modules.outputs.declared }}\n",
+                                        "      modules: ${{ needs.modules.outputs.declared }}\n"
+                                        "      plan: ${{ needs.modules.outputs.publication-plan }}\n", 1))
+        check("plan: an Actions-only publisher reading the pack call's own publication-plan passes", rc == 0, out)
         literal_host = hosted.replace("${{ needs.validate.outputs.executor || 'actions' }}", "host")
         rc, out = callers(literal_host)
         check("H7: …and with a literal `executor: host` on both calls", rc == 0, out)
@@ -1792,7 +2021,8 @@ jobs:
             base = dict(staged=str(root / "staged"), lane="L1",
                         declared=json.dumps([{"module": "MeshWeaver.AI"}, {"module": "MeshWeaver.Mcp"}]),
                         selected="MeshWeaver.AI", registry="https://registry.invalid",
-                        source="Plugins", ledger="off", ledger_script="", dry_run=True, check_only=False)
+                        source="Plugins", ledger="off", ledger_script="", dry_run=True, check_only=False,
+                        plan="")
             base.update(kw)
             return argparse.Namespace(**base)
 
@@ -1993,6 +2223,104 @@ jobs:
         check("superseded: a scope script that FAILS is RED, never 'nothing newer'",
               rc == 1 and "MeshWeaver.Boom" in out, out)
 
+        # ── THE PUBLICATION PLAN (Plugins#4478 slice 3): decided once in `select`, applied to a host's offer ──
+        print("== plan / apply-plan / publish --plan")
+        sel3 = [{"module": "MeshWeaver.AI", "package": "AI"},
+                {"module": "MeshWeaver.Mcp", "package": "Mcp", "reuse": {"runId": 7, "name": "b", "source": "run 7"}},
+                {"module": "MeshWeaver.Maps", "package": "Maps"}]
+        pl = publication_plan("L1", sel3, True, "Maps, Other", "off")["modules"]
+        check("plan: a plain selected module owes its hand-over, with no reason",
+              pl["MeshWeaver.AI"]["owed"] is True and pl["MeshWeaver.AI"]["reason"] == "", str(pl))
+        check("plan: a REUSED module owes nothing and says the ledger/holder reason the leg writes",
+              pl["MeshWeaver.Mcp"]["owed"] is False and pl["MeshWeaver.Mcp"]["decision"] == "reuse"
+              and pl["MeshWeaver.Mcp"]["reason"] == LEDGER_REASON.format(decision="reuse", holder=", holder run 7"),
+              str(pl))
+        check("plan: a WITHHELD package owes nothing and says so (comma/space separated list)",
+              pl["MeshWeaver.Maps"]["owed"] is False and pl["MeshWeaver.Maps"]["withheld"] is True
+              and pl["MeshWeaver.Maps"]["reason"] == WITHHELD_REASON.format(package="Maps"), str(pl))
+        off = publication_plan("L1", sel3, False, "Maps", "off")["modules"]
+        check("plan: a NON-publishing run owes nothing and withholds nothing (the leg tests withhold only when publishing)",
+              not any(e["owed"] for e in off.values()) and not any(e["withheld"] for e in off.values()), str(off))
+        led = [{"module": "MeshWeaver.AI", "package": "AI",
+                "ledger": {"decision": "reuse", "key": "k1", "needPublish": True, "holder": "h"}},
+               {"module": "MeshWeaver.Maps", "package": "Maps", "ledger": {"decision": "reuse", "key": "k2"}}]
+        lp = publication_plan("L1", led, True, "", "required")["modules"]
+        check("plan: ledger `required` + reuse follows the ledger's needPublish (true owes, absent does not)",
+              lp["MeshWeaver.AI"]["owed"] is True and lp["MeshWeaver.AI"]["key"] == "k1"
+              and lp["MeshWeaver.Maps"]["owed"] is False, str(lp))
+        lo = publication_plan("L1", led, True, "", "off")["modules"]
+        check("plan NEGATIVE CONTROL: the same ledger answers are IGNORED with the ledger off (the leg ignores them)",
+              all(e["owed"] and e["decision"] == "build" for e in lo.values()), str(lo))
+        rc, out = run(publication_plan, "L1", [{"module": "X"}], True, "", "off")
+        check("plan: an entry with no package is RED", rc == 1, out)
+
+        # The host's offer: the WHOLE catalog, every record owed:true. The plan narrows it to the selection.
+        host = root / "host"
+        for m in ("MeshWeaver.AI", "MeshWeaver.Mcp", "MeshWeaver.Maps", "MeshWeaver.Graph"):
+            stage("host", m)
+        plan_doc = publication_plan("L1", sel3, True, "Maps", "off")
+        (root / "plan.json").write_text(json.dumps(plan_doc), encoding="utf-8")
+        decl4 = json.dumps([{"module": m} for m in ("MeshWeaver.AI", "MeshWeaver.Mcp", "MeshWeaver.Maps", "MeshWeaver.Graph")])
+        sel3_names = "MeshWeaver.AI MeshWeaver.Mcp MeshWeaver.Maps"
+        rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(host), declared=decl4, selected=sel3_names))
+        check("apply-plan (control): WITHOUT it the host's unselected record refuses the publisher's check",
+              rc == 1 and "MeshWeaver.Graph" in out and "selection does not name it" in out, out)
+        rc, out = run(apply_plan, host, "L1", f"@{root / 'plan.json'}", root / "host-aside")
+        check("apply-plan: the unselected record and its bundle are set aside BY NAME",
+              rc == 0 and "MeshWeaver.Graph" in out
+              and (root / "host-aside" / "MeshWeaver.Graph.publication.json").is_file()
+              and (root / "host-aside" / "MeshWeaver.Graph.module.nupkg").is_file()
+              and not (host / "MeshWeaver.Graph.publication.json").exists(), out)
+        mcp = json.loads((host / "MeshWeaver.Mcp.publication.json").read_text())
+        check("apply-plan: a not-owed module becomes the record a pack leg stages — owed false, the plan's reason, no bytes",
+              mcp["owed"] is False and mcp["reason"] == plan_doc["modules"]["MeshWeaver.Mcp"]["reason"]
+              and mcp["ledger"]["decision"] == "reuse" and not (host / "MeshWeaver.Mcp.module.nupkg").exists(), str(mcp))
+        rc, out = run(publish, args(staged=str(host), declared=decl4, selected=sel3_names, plan=f"@{root / 'plan.json'}"))
+        check("apply-plan → publish --plan: ONLY the owed module is handed over",
+              rc == 0 and "-> MeshWeaver.AI@" in out and "-> MeshWeaver.Mcp@" not in out
+              and "-> MeshWeaver.Maps@" not in out, out)
+
+        # publish --plan on the ACTIONS shape: the leg staged the records; the plan must agree with each.
+        act = root / "actions"
+        stage("actions", "MeshWeaver.AI")
+        stage("actions", "MeshWeaver.Mcp", owed=False)
+        stage("actions", "MeshWeaver.Maps", owed=False)
+        rc, out = run(publish, args(staged=str(act), declared=decl4, selected=sel3_names, plan=f"@{root / 'plan.json'}"))
+        check("publish --plan: an Actions-staged set that agrees with the plan publishes", rc == 0 and "-> MeshWeaver.AI@" in out, out)
+        stage("actions-drift", "MeshWeaver.AI")
+        stage("actions-drift", "MeshWeaver.Mcp")       # the leg owed it; the plan says reuse
+        stage("actions-drift", "MeshWeaver.Maps", owed=False)
+        rc, out = run(publish, args(staged=str(root / "actions-drift"), declared=decl4, selected=sel3_names,
+                                    plan=f"@{root / 'plan.json'}"))
+        check("publish --plan: a record whose owed DISAGREES with the plan refuses the whole set",
+              rc == 1 and "MeshWeaver.Mcp" in out and "two ways" in out and "->" not in out, out)
+        rc, out = run(publish, args(staged=str(root / "actions-drift"), declared=decl4, selected=sel3_names))
+        check("publish NEGATIVE CONTROL: without --plan the same drift publishes (the plan is what catches it)",
+              rc == 0 and "-> MeshWeaver.Mcp@" in out, out)
+        rc, out = run(publish, args(staged=str(act), declared=decl4, selected="MeshWeaver.AI MeshWeaver.Mcp",
+                                    plan=f"@{root / 'plan.json'}"))
+        check("publish --plan: a plan that names a different set than the selection refuses",
+              rc == 1 and "publication plan names" in out, out)
+        (root / "plan-l2.json").write_text(json.dumps({**plan_doc, "lane": "L2"}), encoding="utf-8")
+        rc, out = run(publish, args(staged=str(act), declared=decl4, selected=sel3_names, plan=f"@{root / 'plan-l2.json'}"))
+        check("publish --plan: a plan for ANOTHER lane refuses", rc == 1, out)
+
+        # apply-plan refusals: it may only ever take a hand-over AWAY.
+        stage("host-reuse", "MeshWeaver.AI")
+        (root / "plan-reuse.json").write_text(json.dumps(publication_plan("L1", led[:1], True, "", "required")), encoding="utf-8")
+        rc, out = run(apply_plan, root / "host-reuse", "L1", f"@{root / 'plan-reuse.json'}", root / "hr-aside")
+        check("apply-plan: a plan owing a REUSED (ledger) bundle is RED — the host never had those bytes",
+              rc == 1 and "REUSED" in out, out)
+        stage("host-unoffered", "MeshWeaver.AI", owed=False)
+        rc, out = run(apply_plan, root / "host-unoffered", "L1", f"@{root / 'plan.json'}", root / "hu-aside")
+        check("apply-plan: a plan owing a module the host's record does not offer is RED", rc == 1 and "does not offer" in out, out)
+        stage("host-l2", "MeshWeaver.Graph", lane="L2")
+        rc, out = run(apply_plan, root / "host-l2", "L1", f"@{root / 'plan.json'}", root / "hl2-aside")
+        check("apply-plan: another lane's record is NOT its business (left for partition and the check)",
+              rc == 0 and (root / "host-l2" / "MeshWeaver.Graph.publication.json").is_file(), out)
+        rc, out = run(apply_plan, root / "host", "L2", f"@{root / 'plan.json'}", root / "x-aside")
+        check("apply-plan: a plan for another lane is RED", rc == 1, out)
+
         rc, out = run(partition, root / "never-fetched", "L1", root / "x-aside")
         check("H7 partition: a directory that was never fetched is nothing to set aside", rc == 0, out)
         rc, out = run(partition, mixed, "", root / "x-aside")
@@ -2021,7 +2349,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", nargs="?",
                    choices=("verdict", "check-caller", "check-callers", "publish", "lane-key", "partition",
-                            "superseded"))
+                            "superseded", "plan", "apply-plan"))
     p.add_argument("--root", default="")
     p.add_argument("--verdicts", default="")
     p.add_argument("--required", default="")
@@ -2052,7 +2380,10 @@ def main() -> int:
     p.add_argument("--module-libraries-project", dest="module_libraries_project", default="")
     p.add_argument("--build-extensions-project", dest="build_extensions_project", default="")
     p.add_argument("--msbuild-evaluation", dest="msbuild_evaluation", action="append", default=[])
-    p.add_argument("--out", default="", help="superseded: where the decision is written")
+    p.add_argument("--out", default="", help="superseded / plan: where the decision is written")
+    p.add_argument("--plan", default="", help="apply-plan / publish: a `plan` result (@file)")
+    p.add_argument("--publish", default="", help="plan: the pack call's `publish` input (true|false)")
+    p.add_argument("--withhold", default="", help="plan: the pack call's `publish-withhold` input, verbatim")
     p.add_argument("--self-test", dest="self_test", action="store_true")
     a = p.parse_args()
     if a.self_test:
@@ -2079,6 +2410,28 @@ def main() -> int:
         raw = Path(a.modules[1:]).read_text(encoding="utf-8") if a.modules.startswith("@") else a.modules
         print(lane_key(a.lane_id, raw))
         return 0
+    if a.command == "plan":
+        if a.publish not in ("true", "false") or not a.out:
+            p.error("plan needs --publish true|false and --out")
+        raw = Path(a.modules[1:]).read_text(encoding="utf-8") if a.modules.startswith("@") else a.modules
+        try:
+            selection = json.loads(raw) if raw.strip() else []
+        except ValueError as exc:
+            die(f"plan: the selection is not JSON ({exc}) — refusing to guess what this run owes.")
+        if not isinstance(selection, list):
+            die("plan: the selection is not a JSON list of matrix entries.")
+        doc = publication_plan(a.lane, selection, a.publish == "true", a.withhold, a.ledger)
+        Path(a.out).write_text(json.dumps(doc, indent=2), encoding="utf-8")
+        owed = sorted(m for m, e in doc["modules"].items() if e["owed"])
+        print(f"plan for lane `{a.lane}`: {len(doc['modules'])} selected, {len(owed)} owe a hand-over")
+        for m, e in sorted(doc["modules"].items()):
+            if not e["owed"]:
+                print(_inert(f"  -- {m}: {e['reason']}"))
+        return 0
+    if a.command == "apply-plan":
+        if not a.staged or not a.aside or not a.plan:
+            p.error("apply-plan needs --staged, --plan and --aside")
+        return apply_plan(Path(a.staged), a.lane, a.plan, Path(a.aside))
     if a.command == "superseded":
         if not a.staged:
             p.error("superseded needs --staged")
