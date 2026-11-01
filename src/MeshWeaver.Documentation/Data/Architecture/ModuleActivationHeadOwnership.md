@@ -172,6 +172,21 @@ The current image takes no exclusive lock on any activation record. Writers publ
 rename ([Atomic File Publication](../AtomicFilePublication)), and readers open with
 `FileShare.ReadWrite | FileShare.Delete`.
 
+**What the recurrences established (#7690, #7797).** Three occurrences on memex-cloud, all errno 11 at
+OPEN where the step was recorded:
+
+| Reading | What it shows |
+|---|---|
+| The 2026-11-01 15:08:42Z fault ran on a deployment with ONE image (`3.1.12317`, every pod started around 12:08Z); the next roll was requested at 15:09:34Z, after the fault, and its first new pod started 15:15:25Z | The **mixed-image** reading is refuted for this burst: no replica ran an image without `NoReplaceMove`. |
+| Each burst fell inside a landing wave: two modules' records at one instant (2026-10-30), and the roll at 15:09:34Z was triggered by a module-set proposal (`ModuleSetProposed`) | The fault correlates with **publication IO**, not with any one record. |
+| Every line came from the `ModuleLandingService` logger, on pods hours old | These were **runtime** reads (`GetActivation`, re-derived every 30 s), never the boot read, which reports through stderr as `[ModuleActivation]`. Each fired once and was healed by the next derivation. |
+| No current writer opens a record with `FileShare.None`, `File.Copy`, `File.Open(path, mode[, access])` or a copy fallback, in core or in the plugins repository | No portal pod is a candidate holder of an exclusive `flock`. |
+
+What remains is a transient SMB status mapped to `EAGAIN` during the IO burst of a landing wave, or a
+process outside the portal holding a node-local exclusive lock. The logs cannot tell these apart: the
+node's kernel and SMB-client logs are not collected. The fail-closed drop is the designed answer to
+either, and it held: the next whole read restored the module each time.
+
 ### 🚨 What an image that predates the records sees when the two disagree
 
 It reads `<Name>.json` alone, and that file is **last-writer-wins, as it always was** — no ordering

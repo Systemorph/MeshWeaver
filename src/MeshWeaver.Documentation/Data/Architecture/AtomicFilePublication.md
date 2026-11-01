@@ -130,7 +130,11 @@ file cannot reach.
   the decision, and they are never replaced.
 - **A mixed-image window.** A replica still running an image that predates this change publishes
   records with the old call, so the copy fallback is reachable from that pod until the roll
-  completes.
+  completes. 🚨 This is NOT the explanation for every "being used by another process" on a record:
+  the same fault recurred on a single-image deployment whose every image already carried
+  `NoReplaceMove` (#7797), so it is not evidence of a mixed-image window by itself. See
+  [Module Activation Head Ownership](../ModuleActivationHeadOwnership) → "What 'being used by another
+  process' means here".
 - **A full volume.** A staged file can still be short if the share has no space;
   `AtomicFileWrite.WriteDurably` measures that before it publishes (see `ShortWriteException`), and
   the record writers inherit the same failure as a refused publication rather than a torn one.
