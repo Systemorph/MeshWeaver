@@ -110,6 +110,9 @@ STATUS_FUNCS = ("always", "cancelled", "failure", "success")
 #: refuses, BY NAME, every DIRECT need that did not report `success` — a skipped or cancelled direct
 #: dependency reds the hand-over exactly as before. `always()`, a bare `!cancelled()`, `success() ||
 #: failure()` and every other status-function shape stay refused.
+#: The prefix is matched in its CANONICAL lowercase spelling only. GitHub reads `!CANCELLED()` as
+#: `!cancelled()`, but a non-canonical spelling is not accepted as the prefix: it falls through to the
+#: case-insensitive status-function scan and is REFUSED, so no casing variant can pass as looser.
 SKIP_TOLERANT_PREFIX = "!cancelled() && !failure() && "
 _SKIP_TOLERANT_RE = re.compile(
     r"!\s*cancelled\s*\(\s*\)\s*&&\s*!\s*failure\s*\(\s*\)\s*&&\s*(?P<rest>.+)", re.S)
@@ -258,10 +261,17 @@ def _descendants(graph: dict[str, set[str]], start: str) -> set[str]:
 
 
 def _status_function_in(expr) -> str | None:
+    """The first status function `expr` calls, matched CASE-INSENSITIVELY, else None.
+
+    GitHub's expression function names are case-insensitive (`SUCCESS()` is `success()`), so a
+    case-sensitive scan would let an upper- or mixed-case status function through every check that
+    reads this answer — at both call sites in `_gate_condition`, an extra `SUCCESS()` after the
+    accepted prefix would restore the ancestor-skip that silently suppresses publication.
+    """
     if not isinstance(expr, str):
         return None
     for fn in STATUS_FUNCS:
-        if re.search(rf"\b{fn}\s*\(", expr):
+        if re.search(rf"\b{fn}\s*\(", expr, re.IGNORECASE):
             return fn
     return None
 
@@ -1348,7 +1358,18 @@ jobs:
                 (f"${{{{ !cancelled() && !failure() && {ev} && !cancelled() }}}}", "again"),
                 (f"${{{{ !cancelled() && !failure() && {ev} || github.event_name == 'schedule' }}}}", "top-level `||`"),
                 (f"${{{{ !cancelled() && !failure() && ({ev}) || (github.event_name == 'schedule') }}}}", "top-level `||`"),
-                (f"${{{{ !cancelled() && !failure() && {ev} || always() }}}}", "top-level `||`")):
+                (f"${{{{ !cancelled() && !failure() && {ev} || always() }}}}", "top-level `||`"),
+                # Function names are case-insensitive in GitHub expressions: an upper- or mixed-case
+                # status function is the same function and must be refused exactly like lowercase.
+                ("${{ ALWAYS() }}", "status function"),
+                (f"${{{{ Success() && {ev} }}}}", "status function"),
+                (f"${{{{ !cancelled() && !failure() && SUCCESS() && {ev} }}}}", "again"),
+                (f"${{{{ !cancelled() && !failure() && {ev} && !Cancelled() }}}}", "again"),
+                (f"${{{{ !cancelled() && !failure() && ({ev} || aLwAyS()) }}}}", "again"),
+                # A non-canonical spelling of the PREFIX is not the prefix: it is refused, never read
+                # as the accepted shape (and never as a looser one).
+                (f"${{{{ !CANCELLED() && !FAILURE() && {ev} }}}}", "status function"),
+                (f"${{{{ !Cancelled() && !failure() && {ev} }}}}", "status function")):
             rc, out = caller(good_caller.replace(f"if: {ev}", f"if: {expr}"))
             check(f"MUTATION: `if: {expr}` on the publisher is caught", rc == 1 and why in out, out)
         # Negative control on the precedence scan: a `||` inside a string literal is not top-level.
