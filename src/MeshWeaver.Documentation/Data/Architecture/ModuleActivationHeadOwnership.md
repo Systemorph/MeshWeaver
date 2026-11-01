@@ -172,6 +172,21 @@ The current image takes no exclusive lock on any activation record. Writers publ
 rename ([Atomic File Publication](../AtomicFilePublication)), and readers open with
 `FileShare.ReadWrite | FileShare.Delete`.
 
+**What the recurrences established (#7690, #7797).** Three occurrences on memex-cloud, all errno 11 at
+OPEN where the step was recorded:
+
+| Reading | What it shows |
+|---|---|
+| The 2026-11-01 15:08:42Z fault ran on a deployment with ONE image (`3.1.12317`, every pod started around 12:08Z); the next roll was requested at 15:09:34Z, after the fault, and its first new pod started 15:15:25Z | The **mixed-image** reading is refuted for this burst: no replica ran an image without `NoReplaceMove`. |
+| Two modules' records failed at one instant (2026-10-30), and a module-set proposal (`ModuleSetProposed`) triggered the roll at 15:09:34Z | **Hypothesis, not established:** the fault may coincide with publication IO. Simultaneous read failures do not show a concurrent writer, and `ModuleSetProposed` is announced after a wave completes, so no landing timestamp at the fault instant was read. |
+| Every line came from the `ModuleLandingService` logger, on pods hours old | These were **runtime** reads, never the boot read, which reports through stderr as `[ModuleActivation]`. `GetActivation` reads once per subscription; `GetServedActivation` re-derives on demand when a later request finds its serving snapshot older than its 30 s freshness bound, so there is no fixed timer. Each fault fired once and the next on-demand derivation saw the record whole. |
+| No current writer opens a record with `FileShare.None`, `File.Copy`, `File.Open(path, mode[, access])` or a copy fallback, in core or in the plugins repository | No portal pod is a candidate holder of an exclusive `flock`. |
+
+What remains is a transient SMB status mapped to `EAGAIN` (possibly, unproven, during the IO of a landing wave), or a
+process outside the portal holding a node-local exclusive lock. The logs cannot tell these apart: the
+node's kernel and SMB-client logs are not collected. The fail-closed drop is the designed answer to
+either, and it held: the next whole read restored the module each time.
+
 ### 🚨 What an image that predates the records sees when the two disagree
 
 It reads `<Name>.json` alone, and that file is **last-writer-wins, as it always was** — no ordering

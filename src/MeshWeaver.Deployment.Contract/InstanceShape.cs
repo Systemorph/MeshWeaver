@@ -62,6 +62,20 @@ public sealed record RegistrySpec
     [Description("ServiceAccount the registry pods run as")]
     public string? ServiceAccount { get; init; }
 
+    /// <summary>
+    /// The client id of the registry's OWN workload identity — the one user-assigned identity that
+    /// holds blob WRITE on <see cref="StorageAccountName"/>/<see cref="StorageContainer"/> and
+    /// nothing else (Systemorph/Memex#922). When stated, the chart creates a DEDICATED
+    /// ServiceAccount for the registry pods, annotated with this client id, so the registry no
+    /// longer writes its blobs as the namespace's shared portal identity; <see cref="ServiceAccount"/>
+    /// then names that dedicated account (blank → <c>memex-registry-sa</c>) and may not be the
+    /// portal's own <c>memex-portal-sa</c>. Blank → the registry runs as <see cref="ServiceAccount"/>,
+    /// an account the portal chart owns, exactly as before this field existed. An identifier, never
+    /// a credential.
+    /// </summary>
+    [Description("Client id of the registry's own workload identity (blob write on its container only) — blank means the portal's")]
+    public string? WorkloadIdentityClientId { get; init; }
+
     /// <summary>The Key Vault objects the registry reads — the TLS pair, the token-signing key, the HTTP secret. Names only.</summary>
     [Description("Key Vault objects (names only)")]
     public RegistryKeyVaultSpec? KeyVault { get; init; }
@@ -912,6 +926,21 @@ public sealed record SignInSpec
     /// <summary>Apple sign-in client id.</summary>
     [Description("Apple client id")]
     public string? AppleClientId { get; init; }
+
+    /// <summary>
+    /// True when <see cref="MicrosoftClientId"/> names the fleet's SHARED sign-in app for throwaway
+    /// and test instances rather than an app registered for this instance alone. The control
+    /// instance's governed Provision then ADDS this host's redirect URI
+    /// (<c>https://{host}/signin-microsoft</c>) to that app and its Teardown REMOVES it, together
+    /// with the client credential the Provision added under the deployment's id — through the
+    /// operator identity, which owns the app, never by hand. Renders no portal key: the portal signs
+    /// in through <see cref="MicrosoftClientId"/> exactly as for its own app. Entra has no wildcard
+    /// web redirect URI, so a per-instance add and remove is the only shape; the app's redirect-URI
+    /// limit bounds how many such instances may exist at once. Manual: MeshWeaver.Plugins
+    /// <c>Hosting/SharedTestSignInApp</c>.
+    /// </summary>
+    [Description("Microsoft client id is the fleet's shared throwaway-instance app (Provision adds this host's redirect URI, Teardown removes it)")]
+    public bool SharedThrowawayApp { get; init; }
 }
 
 /// <summary>

@@ -372,6 +372,30 @@ public class AppDirectoryPureTest
         rows[0].ContentAs<App>(Options)!.Source.Should().Be(AppSources.Directory);
     }
 
+    /// <summary>
+    /// <c>adminOnly: true</c> makes the tile a GLOBAL ADMIN's only, like Administration (Feedback's
+    /// review app): an admin sees it, everyone else does not, and only a literal <c>true</c> opts in.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"app":true,"adminOnly":true}""", true)]
+    [InlineData("""{"app":true,"adminOnly":false}""", false)]
+    [InlineData("""{"app":true,"adminOnly":"true"}""", false)]
+    [InlineData("""{"app":true}""", false)]
+    public void AnAppRoot_ReadsAdminOnly_AsALiteralTrue(string json, bool expected)
+        => AppDirectory.ReadRoot(Root("Feedback", json), Options)!.AdminOnly.Should().Be(expected);
+
+    [Fact]
+    public void AnAdminOnlyApp_IsATileForAGlobalAdmin_AndForNobodyElse()
+    {
+        var feedback = AppDirectory.ReadRoot(Root("Feedback", """{"app":true,"adminOnly":true}"""), Options)!;
+        var crm = AppDirectory.ReadRoot(Root("Crm", """{"app":true}"""), Options)!;
+
+        AppDirectory.Compose("alice", [feedback, crm], isGlobalAdmin: false)
+            .Select(e => e.Id).Should().Contain("Crm").And.NotContain("Feedback");
+        AppDirectory.Compose("bob", [feedback, crm], isGlobalAdmin: true)
+            .Select(e => e.Id).Should().Contain("Crm").And.Contain("Feedback");
+    }
+
     /// <summary>A package declares <c>launcherGroup: ""</c> to sit TOP-LEVEL (the Inbox's shape) and
     /// <c>launcherGroupOrder</c> to sort its group; both are read off the root content, shape-tolerantly.</summary>
     [Fact]

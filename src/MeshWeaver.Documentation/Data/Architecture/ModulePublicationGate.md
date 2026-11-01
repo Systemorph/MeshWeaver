@@ -100,9 +100,25 @@ out the caller's own repository at the commit being published, finds the job tha
 `github.workflow_ref`) and asserts its shape:
 
 * every `required-jobs` entry exists and is a transitive `needs:` ancestor;
-* the `if:` carries **no status function** — `always()`, `!cancelled()`, `success() || failure()`
-  each re-open the door the verdict closes, and a publishing job runs under GitHub's default
-  all-needs-succeeded rule or not at all. Gating the EVENT (trunk-only) is what an `if:` is for;
+* the `if:` gates the EVENT and carries **no status function but one exact prefix** (policy
+  `publisher-tolerates-upstream-skips`). Either the job runs under GitHub's default rule, or its
+  `if:` is exactly `!cancelled() && !failure() && <event condition>`. The prefix exists because the
+  default rule is TRANSITIVE: it skips a job when ANY ancestor was skipped, not only a direct need
+  (actions/runner#2205), so a caller whose graph skips jobs by design upstream (a scoped leg, a wait
+  with nothing to wait for) would skip its publisher on every normal run and hand the registry
+  nothing while every check stays green. The prefix runs the job over upstream SKIPS and nothing
+  else: `!failure()` holds it back when any ancestor failed, `!cancelled()` when the run was
+  cancelled, and the verdict (§1) still refuses, by name, every DIRECT need that did not report
+  `success`. So a skipped or cancelled direct dependency is still red, never a silent pass, and the
+  jobs a publisher names in `needs:` are the ones whose `success` it relies on: a direct need that
+  itself tolerates a failed ancestor (its own status function) vouches for that ancestor. Refused:
+  `always()`, a bare `!cancelled()`, `!failure()` alone, the two terms reordered, a status function
+  again after the prefix, and an event condition with a top-level `||` that is not parenthesised
+  (`&&` binds tighter, so `!cancelled() && !failure() && a || b` would run on `b` after a failure).
+  `check-callers` additionally requires the event condition, prefix removed, to equal the pack
+  call's `publish:` condition, on the publisher and on its `build-host-publication.yml` call alike.
+  A host-publication call that runs over a SKIPPED pack call is red on its own (its `lane` input
+  is empty), so the prefix does not let a host graph publish without its pack call either;
 * `verdicts` is the literal `${{ toJSON(needs) }}` — a curated object literal would let the caller
   answer the verdict question with a value it chose;
 * no `continue-on-error`;
@@ -144,7 +160,9 @@ publication. Two things run in core CI instead, self-test first:
 
 * `module-publication.py --self-test` — the refusals above, each shown to fire on its defect and
   stay silent on its fix, including the two mutations #3878 names: a required dependency removed
-  from the caller's `needs:`, and a status function added to the publishing job's `if:`.
+  from the caller's `needs:`, and a status function added to the publishing job's `if:`. The one
+  accepted prefix is proven the same way: it passes, and every looser or reordered spelling, a
+  mismatched or unparenthesised event condition, and a status function after it are each refused.
 * `test-module-publication.py` — the harness EXTRACTS the lane's real steps by `id:` (never a copy;
   a step it cannot find fails the harness) and executes them against a stub registry that RECORDS
   every request. Both directions are asserted: a green validation set delivers the exact staged
@@ -164,6 +182,7 @@ POST moved into a new job, `publish-modules`, which calls this lane:
 | `needs:` / `required-jobs` | `platform-ref preflight validate validate-name-shim repo-gates compile-check test-repos tests-ratchet portal-hosts-gate modules-floor gates-executed` | the gate set `publish-bake` already honours, plus the jobs this call reads outputs from, the legacy-name shim of `validate` and the skip detector — one verdict for both publishers of the run |
 | `unrelated-jobs` | `supersede`, `test-drift`, `rn-app`, `e2e-static`, `memex-template`, `tag-modules`, `publish-bake`, each with its reason | none of them validates bytes that reach a module bundle |
 | `lane` / `selected` / `modules` | `needs.modules-floor.outputs.lane` / `.selected` / `.declared` | one pack call, one publication; `declared` is the matrix that call was given |
+| `platform-ref` | `needs.platform-ref.outputs.sha` | the platform the bundles were built against, read only for the MSBuild files of the newest-only evaluation. The lane's SCRIPTS come from the commit that defines the lane (`job.workflow_sha`), never from this pin: the resolved platform trails core's `main`, and scripts older than the workflow calling them refused their own caller (Plugins#4478) |
 | `permissions` | `contents: read` | exactly what the lane's one job demands |
 | `publish-token` | `secrets.REGISTRY_PUBLISH_TOKEN` | the SAME secret `modules-floor` used to hold — no new credential, scope or permission |
 

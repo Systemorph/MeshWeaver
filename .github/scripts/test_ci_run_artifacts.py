@@ -7,6 +7,7 @@ import io
 import json
 import multiprocessing
 from pathlib import Path
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -16,6 +17,13 @@ SPEC = importlib.util.spec_from_file_location(
     "ci_run_artifacts", Path(__file__).with_name("ci-run-artifacts.py"))
 ART = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ART)
+LEDGER_SPEC = importlib.util.spec_from_file_location(
+    "ci_failure_ledger", Path(__file__).with_name("ci-failure-ledger.py"))
+LEDGER = importlib.util.module_from_spec(LEDGER_SPEC)
+# Registered BEFORE it executes: its dataclasses resolve postponed (`from __future__`) annotations
+# through sys.modules, and an unregistered module raises AttributeError on Python 3.12/3.14.
+sys.modules[LEDGER_SPEC.name] = LEDGER
+LEDGER_SPEC.loader.exec_module(LEDGER)
 
 
 def contend_for_attempt(folder, connection):
@@ -380,12 +388,15 @@ class ArtifactTests(unittest.TestCase):
             (client or self.art).download(self.root / "out", name=name)
         return str(caught.exception)
 
-    def test_a_miss_is_a_store_miss_naming_the_tracking_issue(self):
+    def test_a_miss_is_a_store_miss_naming_the_ledger(self):
         message = self.miss("absent")
         self.assertIsInstance(ART.StoreMiss("x"), ART.Red)   # still red to every existing caller
         self.assertIn("holds NOTHING under this name", message)
         self.assertIn("INFRA, not a code finding", message)
-        self.assertIn(ART.MISS_TRACKING_ISSUE, message)
+        self.assertIn(ART.MISS_LEDGER, message)
+        self.assertNotIn("/issues/", message)                 # no hand-maintained tracker any more
+        # The ledger the message names is the one ci-failure-ledger.py files on.
+        self.assertEqual(LEDGER.MISS_LABEL, ART.MISS_LEDGER_LABEL)
 
     def test_a_miss_names_a_later_attempt_as_the_wrong_attempt(self):
         self.publish(client=self.client(attempt=2))
@@ -433,6 +444,11 @@ class ArtifactTests(unittest.TestCase):
             self.assertEqual(1, ART.main(args))
         self.assertIn(f"::error title={ART.MISS_TITLE}::", err.getvalue())
         self.assertIn("(infra)", err.getvalue())
+        # The runner renders `::error title=T::msg` as `##[error]msg` in the job log; the miss ledger
+        # (ci-failure-ledger.py --artifact-misses) recognises a miss by exactly that rendered line.
+        rendered = "2026-11-01T10:00:00.0000000Z ##[error]" + err.getvalue().split("::", 2)[2]
+        self.assertTrue(LEDGER.printed_a_store_miss(rendered), rendered[:200])
+        self.assertFalse(LEDGER.printed_a_store_miss(err.getvalue()))  # the raw workflow command is not the log line
 
 
 if __name__ == "__main__":

@@ -37,7 +37,11 @@ name: node-repo module publish
 #     empty needs context is a refusal too: a publication that waited for nothing is the defect.
 #   * The caller's own workflow file is read at the caller's commit and its graph is checked —
 #     the publishing job must transitively `needs:` every job it declares required, must carry no
-#     status function in its `if:` (`always()`/`!cancelled()` re-open the door the verdict closes),
+#     status function in its `if:` (`always()`/`!cancelled()` re-open the door the verdict closes)
+#     except EXACTLY the prefix `!cancelled() && !failure() && ` before the event condition (policy
+#     publisher-tolerates-upstream-skips: GitHub's default rule skips a job over ANY skipped ancestor,
+#     actions/runner#2205, so by-design upstream skips would publish nothing behind green checks;
+#     the verdict above still refuses every DIRECT need that did not report `success`),
 #     and must account for every OTHER job in the workflow: upstream, downstream, or named in
 #     `unrelated-jobs` with a reason. That is the half the runtime verdict cannot see — a
 #     dependency dropped from `needs:` AND from `required-jobs` is invisible at run time.
@@ -50,8 +54,11 @@ name: node-repo module publish
 #
 # ─────────────────────────── Caller contract ───────────────────────────
 #   publish-modules:
-#     # Trunk-only, exactly like the pack call's `publish:` input — and NO status function: this
-#     # job must run under GitHub's default rule (every `needs:` succeeded) or not at all.
+#     # Trunk-only, exactly like the pack call's `publish:` input. No status function — except that
+#     # a caller with by-design upstream skips may write EXACTLY
+#     #   if: ${{ !cancelled() && !failure() && (<the pack call's publish: condition>) }}
+#     # so a skipped ANCESTOR does not skip this job (actions/runner#2205); the verdict still refuses
+#     # every direct need that did not report `success`, and check-callers refuses any other shape.
 #     if: >
 #       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
 #       github.event_name == 'repository_dispatch' || github.event_name == 'schedule'
@@ -158,8 +165,21 @@ on:
           record from a call this publication does not speak for.
         required: true
         type: string
+      plan:
+        description: >-
+          The pack call's publication plan (`needs.<pack call>.outputs.publication-plan`, or through a
+          build-host-publication.yml call, its `plan` output). Non-empty: every staged record's `owed`
+          must equal the plan's, and the plan must name exactly the selection — the pack leg and the
+          pack call's `select` compute one predicate two ways, and a disagreement refuses the whole
+          publication (MeshWeaver.Plugins#4478). Empty: no cross-check (the behaviour before it).
+        required: false
+        type: string
+        default: ''
       platform-ref:
-        description: The Systemorph/MeshWeaver commit this lane's scripts are fetched at (a pin, not a branch).
+        description: >-
+          The Systemorph/MeshWeaver commit the bundles were built against (a pin, not a branch) — the
+          platform MSBuild files the newest-only evaluation reads. This lane's SCRIPTS come from the
+          commit that defines it (job.workflow_sha), never from this pin, which trails core's main.
         required: true
         type: string
       registry-url:
@@ -245,23 +265,46 @@ jobs:
           store: ${{ inputs.artifact-store || 'gha' }}
           expected-store-id: ${{ inputs.artifact-store-id }}
           require-expected-store-id: 'true'
-      - name: Check out Systemorph/MeshWeaver at the pinned ref
+      # 🚨 THE LANE'S SCRIPTS COME FROM THE LANE'S OWN COMMIT, never from `platform-ref` (Plugins#4478).
+      # `platform-ref` is the released platform the modules were BUILT against, which trails core's
+      # `main` by hours or days, while a caller loads this lane at `@main`. Scripts fetched at the
+      # platform pin are then OLDER than the workflow calling them: measured while wiring Plugins'
+      # staged publisher, the resolved set 3.1.12258 (10287813e) predates both #7774 (`superseded`,
+      # which the newest-only step below calls) and #7777 (the publisher prefix `check-caller`
+      # accepts), so the first trunk run would refuse its own caller and publish nothing. The pack
+      # lane solved the same split with `build-logic-ref` and the loaded workflow SHA; this lane takes
+      # the loaded SHA. `platform-ref` keeps its one remaining meaning: the MSBuild files the
+      # newest-only evaluation reads, i.e. the platform the bundles were built against.
+      # `toJSON(job)` because actionlint 1.7.x rejects the job.workflow_* members as direct properties.
+      - name: Resolve the exact reusable workflow that defines this job
+        id: workflow
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          sha="$(jq -r '.workflow_sha // empty' <<< "$JOB_CONTEXT")"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is absent or invalid ('$sha') — this lane's scripts are fetched at the commit that defines it, and an unreadable one must not fall back to an older platform pin"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out Systemorph/MeshWeaver at this lane's own commit
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
+          ref: ${{ steps.workflow.outputs.sha }}
           path: meshweaver
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Assert the tools this lane needs
         env:
-          PLATFORM_REF: ${{ inputs.platform-ref }}
+          LANE_SHA: ${{ steps.workflow.outputs.sha }}
         run: |
           set -euo pipefail
           python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
           head -c 400 meshweaver/.github/scripts/module-publication.py | grep -q "module-publication" \
-            || { echo "::error::meshweaver/.github/scripts/module-publication.py at ${PLATFORM_REF} does not look like the publisher"; exit 1; }
+            || { echo "::error::meshweaver/.github/scripts/module-publication.py at ${LANE_SHA} does not look like the publisher"; exit 1; }
+          got="$(git -C meshweaver rev-parse HEAD)"
+          [ "$got" = "$LANE_SHA" ] \
+            || { echo "::error::the scripts checkout resolved ${got}, not this lane's own commit ${LANE_SHA}"; exit 1; }
 
       # 🚨 THE GATE ITSELF IS PROVEN BEFORE IT JUDGES ANYTHING. An unproven gate is no gate: every
       # refusal below must be shown to FIRE on its defect and stay SILENT on its fix before its
@@ -413,6 +456,7 @@ jobs:
           REGISTRY_SOURCE: ${{ inputs.registry-source }}
           LEDGER: ${{ inputs.ledger }}
           NEWEST_ONLY: ${{ inputs.publish-newest-only }}
+          PLAN: ${{ inputs.plan }}
         run: |
           set -euo pipefail
           case "$LEDGER" in
@@ -429,6 +473,12 @@ jobs:
             false) ;;
             *) echo "::error::inputs.publish-newest-only reads '$NEWEST_ONLY', neither true nor false."; exit 1 ;;
           esac
+          # The publication plan, when the caller wires it: every record's `owed` is held to it.
+          plan=()
+          if [ -n "$(printf '%s' "${PLAN:-}" | tr -d '[:space:]')" ]; then
+            printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+            plan=(--plan "@$RUNNER_TEMP/plan.json")
+          fi
           printf '%s' "$DECLARED" > "$RUNNER_TEMP/declared.json"
           python3 meshweaver/.github/scripts/module-publication.py publish \
             --staged "$RUNNER_TEMP/staged" \
@@ -439,4 +489,4 @@ jobs:
             --source "$REGISTRY_SOURCE" \
             --ledger "$LEDGER" \
             --ledger-script meshweaver/.github/scripts/module-build-ledger.py \
-            ${superseded[@]+"${superseded[@]}"}
+            ${superseded[@]+"${superseded[@]}"} ${plan[@]+"${plan[@]}"}

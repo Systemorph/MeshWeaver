@@ -234,10 +234,27 @@ in three steps:
    - expired: the retention prune;
    - no manifest;
    - readable now: a stale view;
-3. it fails with `NOT MEASURED — artifact store miss (infra)` and the
-   [tracking issue](https://github.com/Systemorph/MeshWeaver/issues/7656). The job stays red, so a miss
-   is never a pass. The retry steward treats that line as a named transient and re-runs the run once.
-   A miss behind a failed producer never retries, because the failed producer vetoes it.
+3. it fails with `NOT MEASURED — artifact store miss (infra)`. The job stays red, so a miss is never
+   a pass. The retry steward treats that line as a named transient and re-runs the run once. A miss
+   behind a failed producer never retries, because the failed producer vetoes it.
+
+Nobody files a miss by hand. The automatic failure ledger keeps them, the same mechanism that keeps a
+red `main` and a red scheduled lane (`ci-failure-ledger.py`, run by the reusable
+`node-repo-ci-failure.yml` lane). After the main build ledger, the lane runs the script's
+`--artifact-misses` mode, which keeps ONE issue per repository under its own key: the label
+`ci-artifact-store-miss`, its exact title and the ledger's ownership mark.
+
+- A red `main` run where a red job **printed** the miss line appends a dated entry. The entry names
+  the jobs that missed, and each one links to its log, where the miss line says what the store held.
+  The first such run files the issue. A run within seven days of a close reopens it.
+- A red `main` run for any other reason leaves the miss ledger alone. A compile error says nothing
+  about the store.
+- A green `main` run closes it with `green again: <run>`.
+
+The ledger is a `sev:M` bug: infra that is tracked and visible, never a release gate by itself. The
+script reads the red jobs' logs. A log it cannot read is red, never "no miss". A red job with no log
+held (a runner that died before uploading one) is named as not measured. A miss on a pull request is
+retried and is not filed. The ledger counts misses on `main`.
 
 ## A scheduled red is red in an empty room
 

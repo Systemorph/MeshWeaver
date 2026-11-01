@@ -603,6 +603,14 @@ keeps the supersede model in the next section.
    pack call that asks for `publish-newest-only` while its publisher does not, or a publisher asking
    the scope without the pack call's shelf, is refused before merge by `module-publication.py
    check-callers`.
+   **A staged publisher survives by-design upstream skips.** GitHub's default job condition is
+   transitive (actions/runner#2205): one skipped ancestor anywhere — a scoped leg, a wait with
+   nothing to wait for — skips the publisher, and the run publishes nothing behind green checks. So
+   the publisher and its `build-host-publication.yml` call may open their `if:` with exactly
+   `!cancelled() && !failure() && ` followed by the pack call's `publish:` condition (policy
+   `publisher-tolerates-upstream-skips`); the publish lane still refuses, by name, every direct need
+   that did not report `success`. Any other status function is refused before merge.
+   [Module Publication Gate](../ModulePublicationGate) → "The caller's graph".
    **A caller may withhold packages (`publish-withhold`).** A caller whose publication is decided per
    package passes the names of the packages this run must not hand over. Their modules are still
    built, inspected and tested, and their bundle artifacts still reach the caller's gates; only the
