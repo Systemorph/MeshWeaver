@@ -369,10 +369,12 @@
         "matching the hub.",
         "",
         "🚧 ONE SPOKE STILL OWED (#7327): Reinsurance's copy (Reinsurance#277) has not merged, so",
-        "required-in leaves Reinsurance out — naming it now turns its gate red on every pull request,",
-        "including #277 itself (measured: the widened sweep reads 'Systemorph/MeshWeaver.Reinsurance:",
-        "DRIFTED from the hub' and nothing else). Once #277 merges, add Reinsurance here and delete this",
-        "paragraph."
+        "required-in leaves Reinsurance out. The gate is core's (dotnet-test.yml job shared-rules on",
+        "every core pull request and push, and the daily shared-rules.yml sweep), and it reads",
+        "Reinsurance's DEFAULT branch — so naming it now turns CORE's required check red on every core",
+        "pull request until #277 merges, while #277 itself is never judged by it (measured: the widened",
+        "sweep reads 'Systemorph/MeshWeaver.Reinsurance: DRIFTED from the hub' and nothing else). Once",
+        "#277 merges, add Reinsurance here in a core pull request and delete this paragraph."
       ]
     },
     {
