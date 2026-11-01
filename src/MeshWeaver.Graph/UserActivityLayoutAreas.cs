@@ -340,8 +340,9 @@ public static class UserActivityLayoutAreas
         if (HomeCardsViewer(host.ViewerContext, ownerId) is not { } viewerId)
             return Observable.Return<UiControl?>(Controls.Stack);
         // The node-shape gates need the home's SHAPE, not its data: this region is registered on User hubs
-        // only, so the node is the User-typed partition root at this path — a fact of registration, not a
-        // read. Deciding it statically means the cards never wait on the user node (templates first).
+        // only, so the node TYPE and PATH are facts of registration, not a read. Deciding them statically means
+        // the cards never wait on the user node (templates first); the one gate that needs node DATA — the
+        // sync state behind SyncedOnly — is narrowed away by ProjectHomeAreas, never guessed.
         var homeShape = HomeShape(userPath);
         // The admin verdict and the permission floor read the viewer's ACTUAL identity; the viewer-home gate
         // gets the CONFIRMED home PATH — the owner check above may have matched a UPN/GUID sign-in through its

@@ -171,7 +171,9 @@ public record UiContribution
     /// to put ONE timely prompt on the start page (the Learning app's "build your learning path") without the home
     /// naming the package. Same rules as <see cref="InboxContext"/>: the partition rule of every embedding context,
     /// the closed node-shape gates against the user node (a shape gate narrows while the node is unknown), and the
-    /// viewer's live permission floor of Read on it. The contributed area decides for itself whether it has anything
+    /// viewer's live permission floor of Read on it — except that a <c>SyncedOnly</c> entry never shows here (the
+    /// home's sync state is node data the start page does not wait for, so the lane narrows rather than guesses).
+    /// The contributed area decides for itself whether it has anything
     /// to say: rendering an empty control leaves no gap, so a card that is not timely simply shows nothing.
     /// </summary>
     public const string HomeContext = "Home";

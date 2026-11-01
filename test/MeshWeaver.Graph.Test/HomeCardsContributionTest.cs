@@ -58,6 +58,10 @@ public class HomeCardsContributionTest
         UiContributionProjection.FilterInboxAreas(projected, Permission.Read).Select(a => a.Area).Should().Equal(["R"],
             "an entry demanding Sync is hidden from a viewer without it, and the home is a partition root");
         UiContributionProjection.FilterInboxAreas(projected, Permission.None).Should().BeEmpty("never less than Read");
+        UiContributionProjection.ProjectHomeAreas(
+                [C("Edu/HomeCards/Synced", new UiContribution { Context = UiContribution.HomeContext, Area = "Y", Gates = new UiContributionGates { SyncedOnly = true } })],
+                "jroe", UserActivityLayoutAreas.HomeShape("jroe"), isAdmin: false, viewerId: "jroe")
+            .Should().BeEmpty("a SyncedOnly entry never shows on the start page: its sync state is data the cards do not wait for, so the lane narrows");
         UiContributionProjection.ProjectHomeAreas(contributions, "jroe", userNode: null, isAdmin: false, viewerId: "jroe")
             .Select(a => a.Area).Should().NotContain("H", "a gate that needs the node's shape narrows while the node is unknown");
     }

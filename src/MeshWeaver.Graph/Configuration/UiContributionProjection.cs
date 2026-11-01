@@ -253,7 +253,11 @@ internal static class UiContributionProjection
         MeshNode? userNode,
         bool isAdmin,
         string? viewerId)
-        => ProjectUserHomeAreas(UiContribution.HomeContext, contributions, userPath, userNode, isAdmin, viewerId);
+        // 🚨 A SyncedOnly entry never shows on the start page. The home's sync state is DATA (the user node's
+        // SyncBehavior) that the start page does not wait for — the cards are a template — so the lane
+        // narrows instead of guessing: a gate it cannot decide hides the entry, never widens it.
+        => ProjectUserHomeAreas(UiContribution.HomeContext,
+            [.. contributions.Where(c => c.Content.Gates?.SyncedOnly != true)], userPath, userNode, isAdmin, viewerId);
 
     /// <summary>The shared projection of an EMBEDDING context anchored on a user node (Inbox, Home). Pure.</summary>
     private static IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> ProjectUserHomeAreas(
