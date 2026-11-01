@@ -1,9 +1,14 @@
 #pragma warning disable CS1591
 
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
+using MeshWeaver.Testing.Xunit;
 using Xunit;
+using Xunit.v3;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -344,4 +349,216 @@ public class TestTimeoutsTest
             + "anonymously — the attribute kills the method before the wait reports.");
 #endif
     }
+    /// <summary>
+    /// 🚨 THE BOUND IS REAL, not a config literal (MeshWeaver.Plugins#4424). xunit.v3 has no
+    /// <c>methodTimeout</c> setting and dropped the key silently, so every plain <c>[Fact]</c> ran
+    /// unbounded and the guard above checked a number nothing read. The execution host
+    /// (<see cref="MethodBound"/>) now applies it. Here, in THIS run, a plain <c>[Fact]</c> carries
+    /// the configured bound as its timeout (it was 0 before).
+    /// </summary>
+    [Fact]
+    public void APlainFactRunsUnderTheConfiguredBound()
+    {
+        var test = TestContext.Current.Test as IXunitTest;
+        Assert.NotNull(test);
+        var configured = MethodBound.Resolve(test.TestCase.TestMethod.TestClass.TestCollection.TestAssembly);
+        Assert.True(configured >= TestTimeouts.DefaultOuterBoundMilliseconds,
+            $"the bound resolved to {configured} ms, below the default outer bound: the config this run reads lost its methodTimeout");
+        Assert.Equal(configured, test.Timeout);
+    }
+
+    private const int ProbeBoundMilliseconds = 1500;
+
+    /// <summary>
+    /// 🚨 THE BOUND, MEASURED END TO END. This assembly is run again as a child process with a 1.5 s
+    /// bound (<see cref="MethodBound.EnvironmentOverride"/>), only the explicit cases of
+    /// <see cref="MethodBoundProbe"/>:
+    /// <list type="bullet">
+    ///   <item>a plain <c>[Fact]</c> that AWAITS past the bound fails BY NAME at the bound. Before the
+    ///         host applied the bound it passed, two minutes later (the failing-first case);</item>
+    ///   <item>a plain <c>[Fact]</c> that HOLDS ITS THREAD synchronously (the #4424 shape) fails at
+    ///         the bound too, and leaves a dump and a <c>TEST_TIMEOUT</c> trace line naming it, because
+    ///         a timeout can abandon that thread but not unblock it;</item>
+    ///   <item>a fast test PASSES: the negative control, the bound fails only what outlives it.</item>
+    /// </list>
+    /// The child must end long before the two minutes the stuck probes ask for.
+    /// </summary>
+    [Fact]
+    public void ATestThatOutlivesTheBound_FailsByNameAtTheBound_AndLeavesADump()
+    {
+        var run = RunProbes(typeof(MethodBoundProbe));
+        var stdout = run.Stdout;
+        var transcript = run.Transcript;
+
+        Assert.True(run.Exited, $"the probe run was still going after {run.Elapsed.TotalSeconds:F0} s: the stuck probes were NOT ended at the {ProbeBoundMilliseconds} ms bound.\n{transcript}");
+        Assert.NotEqual(0, run.ExitCode);
+        foreach (var stuck in new[] { nameof(MethodBoundProbe.AwaitsPastTheBound), nameof(MethodBoundProbe.HoldsItsThreadSynchronously) })
+            Assert.True(stdout.Contains($"{nameof(MethodBoundProbe)}.{stuck} [FAIL]", StringComparison.Ordinal),
+                $"{stuck} must fail BY NAME at the bound.\n{transcript}");
+        Assert.True(stdout.Split($"Test execution timed out after {ProbeBoundMilliseconds} milliseconds").Length - 1 == 2,
+            $"both stuck probes must fail with xunit's timeout at {ProbeBoundMilliseconds} ms.\n{transcript}");
+        Assert.False(stdout.Contains($"{nameof(MethodBoundProbe.ReturnsAtOnce)} [FAIL]", StringComparison.Ordinal),
+            $"the fast probe must pass.\n{transcript}");
+        Assert.True(stdout.Contains("Total: 3, Errors: 0, Failed: 2", StringComparison.Ordinal), transcript);
+
+        var lines = run.TimeoutLines();
+        Assert.True(lines.Length == 2, $"expected two {TimeoutWitness.Phase} lines.\n{string.Join('\n', lines)}\n{transcript}");
+        Assert.Contains(lines, l => l.Contains(
+            $"[{nameof(MethodBoundProbe)}] {TimeoutWitness.Phase} {nameof(MethodBoundProbe.HoldsItsThreadSynchronously)} bound={ProbeBoundMilliseconds}ms dump={run.Dumps.FullName}",
+            StringComparison.Ordinal));
+        var dumpLines = File.ReadAllLines(run.Trace)
+            .Where(l => l.Contains($"] {TimeoutWitness.DumpPhase} ", StringComparison.Ordinal)).ToArray();
+        Assert.True(dumpLines.Length == 2 && dumpLines.All(l => l.Contains($" dump={run.Dumps.FullName}", StringComparison.Ordinal)),
+            $"each timed-out probe must report its dump as written on a {TimeoutWitness.DumpPhase} line.\n{string.Join('\n', dumpLines)}\n{transcript}");
+        var written = run.Dumps.GetFiles("test-timeout-*.dmp");
+        Assert.True(written.Length == 2 && written.All(f => f.Length > 0),
+            $"each timed-out probe must leave a non-empty dump in {run.Dumps.FullName}; found {written.Length}.\n{string.Join('\n', lines)}");
+
+        run.Scratch.Delete(recursive: true);
+    }
+
+    /// <summary>
+    /// 🚨 THE BOUND REACHES EVERY CASE SHAPE, AND A DECLARED TIMEOUT IS KEPT. The same child run over
+    /// <see cref="MethodBoundCaseShapeProbe"/>:
+    /// <list type="bullet">
+    ///   <item>a PRE-ENUMERATED theory row (<c>[InlineData]</c>) that awaits past the bound fails at the
+    ///         bound, while its fast sibling row passes (each row keeps its own verdict);</item>
+    ///   <item>a DELAY-ENUMERATED theory row (<c>DisableDiscoveryEnumeration</c>, built at run time from
+    ///         the one case <see cref="MethodBound"/> bounded) fails at the bound, its fast row passes;</item>
+    ///   <item>a <c>[Fact(Timeout = …)]</c> keeps ITS timeout, longer than the bound: it fails at its own
+    ///         value, and the <see cref="TimeoutWitness"/> line reports that value, not the assembly bound.</item>
+    /// </list>
+    /// </summary>
+    [Fact]
+    public void EveryCaseShapeIsBounded_AndADeclaredTimeoutIsKept()
+    {
+        var run = RunProbes(typeof(MethodBoundCaseShapeProbe));
+        var stdout = run.Stdout;
+        var transcript = run.Transcript;
+        var failing = stdout.Split('\n').Where(l => l.Contains("[FAIL]", StringComparison.Ordinal)).ToArray();
+
+        Assert.True(run.Exited, $"the probe run was still going after {run.Elapsed.TotalSeconds:F0} s: a probe was NOT ended at its timeout.\n{transcript}");
+        Assert.True(stdout.Contains("Total: 5, Errors: 0, Failed: 3", StringComparison.Ordinal), transcript);
+        foreach (var row in new[] { nameof(MethodBoundCaseShapeProbe.PreEnumeratedRow), nameof(MethodBoundCaseShapeProbe.DelayEnumeratedRow) })
+            Assert.True(failing.Count(l => l.Contains($"{nameof(MethodBoundCaseShapeProbe)}.{row}(", StringComparison.Ordinal)) == 1,
+                $"exactly the slow {row} row must fail BY NAME.\n{transcript}");
+        Assert.True(failing.Count(l => l.Contains($"{nameof(MethodBoundCaseShapeProbe)}.{nameof(MethodBoundCaseShapeProbe.DeclaresItsOwnTimeout)} [FAIL]", StringComparison.Ordinal)) == 1,
+            $"the probe with its own timeout must fail BY NAME.\n{transcript}");
+        Assert.True(stdout.Split($"Test execution timed out after {ProbeBoundMilliseconds} milliseconds").Length - 1 == 2,
+            $"both slow theory rows must fail at the {ProbeBoundMilliseconds} ms bound.\n{transcript}");
+        Assert.True(stdout.Split($"Test execution timed out after {OwnTimeoutMilliseconds} milliseconds").Length - 1 == 1,
+            $"the declared {OwnTimeoutMilliseconds} ms timeout must be kept, not replaced by the bound.\n{transcript}");
+
+        var lines = run.TimeoutLines();
+        Assert.True(lines.Length == 3, $"expected three {TimeoutWitness.Phase} lines.\n{string.Join('\n', lines)}\n{transcript}");
+        Assert.Contains(lines, l => l.Contains(
+            $"[{nameof(MethodBoundCaseShapeProbe)}] {TimeoutWitness.Phase} {nameof(MethodBoundCaseShapeProbe.DeclaresItsOwnTimeout)} bound={OwnTimeoutMilliseconds}ms ",
+            StringComparison.Ordinal));
+        Assert.True(lines.Count(l => l.Contains($" bound={ProbeBoundMilliseconds}ms ", StringComparison.Ordinal)) == 2,
+            $"the two theory rows must be reported at the {ProbeBoundMilliseconds} ms bound.\n{string.Join('\n', lines)}");
+
+        run.Scratch.Delete(recursive: true);
+    }
+
+    /// <summary>The declared timeout of <see cref="MethodBoundCaseShapeProbe.DeclaresItsOwnTimeout"/>, above the probe bound.</summary>
+    public const int OwnTimeoutMilliseconds = 4000;
+
+    private sealed record ProbeRun(bool Exited, int ExitCode, TimeSpan Elapsed, string Stdout, string Transcript,
+        DirectoryInfo Scratch, DirectoryInfo Dumps, string Trace)
+    {
+        public string[] TimeoutLines()
+        {
+            Assert.True(File.Exists(Trace), $"no {TimeoutWitness.Phase} trace at {Trace}.\n{Transcript}");
+            return File.ReadAllLines(Trace).Where(l => l.Contains($" {TimeoutWitness.Phase} ", StringComparison.Ordinal)).ToArray();
+        }
+    }
+
+    /// <summary>
+    /// Runs this assembly again as a child process, only the explicit cases of <paramref name="probes"/>,
+    /// under the <see cref="ProbeBoundMilliseconds"/> bound, with its own dump directory and trace.
+    /// </summary>
+    private static ProbeRun RunProbes(Type probes)
+    {
+        var self = typeof(TestTimeoutsTest).Assembly.Location;
+        var scratch = Directory.CreateTempSubdirectory("mw-bound-");
+        var dumps = Directory.CreateDirectory(Path.Combine(scratch.FullName, "dumps"));
+        var trace = Path.Combine(scratch.FullName, "trace.log");
+        var psi = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(self)!,
+        };
+        foreach (var arg in new[] { self, "-class", probes.FullName!, "-explicit", "only", "-noColor" })
+            psi.ArgumentList.Add(arg);
+        psi.Environment[MethodBound.EnvironmentOverride] = ProbeBoundMilliseconds.ToString(CultureInfo.InvariantCulture);
+        psi.Environment[TimeoutWitness.DumpDirectoryOverride] = dumps.FullName;
+        psi.Environment[TimeoutWitness.TraceOverride] = trace;
+
+        var output = new ConcurrentQueue<string>();
+        var errors = new ConcurrentQueue<string>();
+        using var child = new Process { StartInfo = psi };
+        child.OutputDataReceived += (_, e) => { if (e.Data is not null) output.Enqueue(e.Data); };
+        child.ErrorDataReceived += (_, e) => { if (e.Data is not null) errors.Enqueue(e.Data); };
+        var clock = Stopwatch.StartNew();
+        child.Start();
+        child.BeginOutputReadLine();
+        child.BeginErrorReadLine();
+        // Far below the probes' two minutes: a child still running here waited them out, i.e. no bound.
+        var exited = child.WaitForExit(TimeSpan.FromSeconds(60));
+        if (!exited)
+            child.Kill(entireProcessTree: true); // this test's own child, ended so it does not outlive the verdict
+        child.WaitForExit(); // drains the redirected streams
+        var stdout = string.Join('\n', output);
+        return new ProbeRun(exited, child.ExitCode, clock.Elapsed, stdout,
+            $"stdout:\n{stdout}\nstderr:\n{string.Join('\n', errors)}", scratch, dumps, trace);
+    }
+}
+
+/// <summary>
+/// The cases <see cref="TestTimeoutsTest.ATestThatOutlivesTheBound_FailsByNameAtTheBound_AndLeavesADump"/>
+/// runs in a child process. EXPLICIT, so an ordinary run (CI's included) never executes them.
+/// </summary>
+public class MethodBoundProbe
+{
+    /// <summary>Awaits two minutes, far past the probe bound, ignoring the test's token.</summary>
+    [Fact(Explicit = true)]
+    public async Task AwaitsPastTheBound() => await Task.Delay(TimeSpan.FromMinutes(2), CancellationToken.None);
+
+    /// <summary>Holds its thread for two minutes inside a synchronous call: the #4424 shape.</summary>
+    [Fact(Explicit = true)]
+    public void HoldsItsThreadSynchronously() => Thread.Sleep(TimeSpan.FromMinutes(2));
+
+    /// <summary>The negative control.</summary>
+    [Fact(Explicit = true)]
+    public void ReturnsAtOnce() => Assert.Equal(2, 1 + 1);
+}
+
+/// <summary>
+/// The cases <see cref="TestTimeoutsTest.EveryCaseShapeIsBounded_AndADeclaredTimeoutIsKept"/> runs in a
+/// child process: both theory shapes, and a test with its own timeout. EXPLICIT, so an ordinary run
+/// never executes them.
+/// </summary>
+public class MethodBoundCaseShapeProbe
+{
+    /// <summary>The rows of <see cref="DelayEnumeratedRow"/>: 0 returns at once, 120 awaits two minutes.</summary>
+    public static TheoryData<int> Seconds => new(0, 120);
+
+    /// <summary>A pre-enumerated theory: one case per <c>[InlineData]</c> row.</summary>
+    /// <param name="seconds">How long the row awaits.</param>
+    [Theory(Explicit = true)]
+    [InlineData(0)]
+    [InlineData(120)]
+    public async Task PreEnumeratedRow(int seconds) => await Task.Delay(TimeSpan.FromSeconds(seconds), CancellationToken.None);
+
+    /// <summary>A delay-enumerated theory: ONE case, whose rows xunit builds only when it runs.</summary>
+    /// <param name="seconds">How long the row awaits.</param>
+    [Theory(Explicit = true, DisableDiscoveryEnumeration = true)]
+    [MemberData(nameof(Seconds))]
+    public async Task DelayEnumeratedRow(int seconds) => await Task.Delay(TimeSpan.FromSeconds(seconds), CancellationToken.None);
+
+    /// <summary>Declares a timeout longer than the probe bound, and awaits past it.</summary>
+    [Fact(Explicit = true, Timeout = TestTimeoutsTest.OwnTimeoutMilliseconds)]
+    public async Task DeclaresItsOwnTimeout() => await Task.Delay(TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
 }
