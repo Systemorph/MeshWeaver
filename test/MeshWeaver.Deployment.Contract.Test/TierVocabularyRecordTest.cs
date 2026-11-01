@@ -90,6 +90,12 @@ public class TierVocabularyRecordTest
         Assert.Equal(
             [new KeyValuePair<string, string>("chat", "m/light"), new KeyValuePair<string, string>("coding", "m/coding")],
             tiers.Declared());
+
+        // A STORED blank alias still renders its raw rank key, so the removal sweep must see it.
+        var blankAlias = new ModelTiers { Chat = "m/chat", Light = "" };
+        Assert.Equal(["light"], blankAlias.LegacyAliasesInUse());
+        Assert.Equal("", DeploymentPortalConfig.PortalConfig(
+            new DeploymentContent { Ai = new AiProviders { Tiers = blankAlias with { Chat = null } } }, PortalConfigOptions.Helm)["ModelTier__Light"]);
     }
 
     [Fact]
