@@ -743,12 +743,34 @@ public static class DeploymentRecordExtensions
     public static AiProviders AzureAis(this AiProviders a, IEnumerable<string> models, string? endpoint = null, int? order = null, bool? enabled = null) =>
         a with { AzureAis = Provider(a.AzureAis, models, endpoint, order, enabled) };
 
-    /// <summary>Which model serves each tier.</summary>
-    public static AiProviders Tiers(this AiProviders a, string? heavy = null, string? standard = null, string? light = null, string? utility = null)
+    /// <summary>
+    /// Which model serves each tier, by the instance's tier-node names (Plugins#4862) — a tier left
+    /// null keeps what the record already names.
+    /// </summary>
+    public static AiProviders TierModels(this AiProviders a, string? chat = null, string? reasoning = null, string? coding = null, string? utility = null, string? review = null)
     {
         var t = a.Tiers ?? new ModelTiers();
-        return a with { Tiers = t with { Heavy = heavy ?? t.Heavy, Standard = standard ?? t.Standard, Light = light ?? t.Light, Utility = utility ?? t.Utility } };
+        return a with
+        {
+            Tiers = t with
+            {
+                Chat = chat ?? t.Chat,
+                Reasoning = reasoning ?? t.Reasoning,
+                Coding = coding ?? t.Coding,
+                Utility = utility ?? t.Utility,
+                Review = review ?? t.Review,
+            },
+        };
     }
+
+    /// <summary>
+    /// 🕰️ LEGACY rank names, for one release: <paramref name="heavy"/> is <c>coding</c>,
+    /// <paramref name="standard"/> is <c>reasoning</c>, <paramref name="light"/> is <c>chat</c>. Writes the
+    /// tier-node fields, so a record built this way already speaks the one vocabulary. Use
+    /// <see cref="TierModels"/>.
+    /// </summary>
+    public static AiProviders Tiers(this AiProviders a, string? heavy = null, string? standard = null, string? light = null, string? utility = null) =>
+        a.TierModels(chat: light, reasoning: standard, coding: heavy, utility: utility);
 
     private static ModelProvider Provider(ModelProvider? current, IEnumerable<string> models, string? endpoint, int? order, bool? enabled)
     {

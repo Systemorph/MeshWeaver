@@ -182,7 +182,7 @@ public class RendererParityTest
             {
                 var ai = a.OpenRouter(["anthropic/claude-sonnet-4"]).OpenRouterEU(["z-ai/glm-5.3"], endpoint: "https://eu.openrouter.ai/api/v1")
                     .Anthropic(["claude-sonnet-4"], enabled: true).AzureFoundry(["gpt-5"], enabled: true).AzureAis(["deepseek"])
-                    .RequiredDataResidency("Eu").Tiers("heavy", "standard", "light", "utility");
+                    .RequiredDataResidency("Eu").TierModels("chat", "reasoning", "coding", "utility", "review");
                 return ai with
                 {
                     Anthropic = ai.Anthropic! with { DataResidency = "Eu", DataRetention = "ZDR" },
