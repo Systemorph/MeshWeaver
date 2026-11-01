@@ -17,6 +17,8 @@ governed, approved mutation of the shared registry. This self-test is the run no
     the apply's own re-verify reads back what the apply wrote.
 
 Scenarios: a task that carries a timer gets it UPDATED; a task that carries none gets one ADDED;
+a timer already at the recorded schedule is LEFT ALONE (ACR refuses an update to the same schedule:
+`DuplicateTimerTriggersNotSupported`, Memex run 41303901662);
 the apply ends green and names the now-stale `recordAheadOfRegistry` as the next step, while a
 stand-alone `verify` still reds on it; and the fake really refuses `task update --schedule`
 (the instrument can fail).
@@ -106,6 +108,11 @@ elif key == ("acr", "task", "timer", "update"):
     t = next((t for t in task["timers"] if t["name"] == opts["--timer-name"]), None)
     if t is None:
         print(f"ERROR: timer '{opts['--timer-name']}' does not exist", file=sys.stderr); sys.exit(1)
+    # The registry refuses a timer whose schedule another trigger — or THIS one — already carries
+    # (measured: Memex run 41303901662, an update naming the trigger's own unchanged schedule).
+    if any(x["schedule"] == opts.get("--schedule") for x in task["timers"]):
+        print("ERROR: (DuplicateTimerTriggersNotSupported) Cannot create multiple timer triggers "
+              f"with the same schedule: '{opts['--schedule']}'.", file=sys.stderr); sys.exit(1)
     t["schedule"] = opts["--schedule"]
 elif key == ("acr", "task", "timer", "add"):
     if any(t["name"] == opts["--timer-name"] for t in task["timers"]):
@@ -116,7 +123,7 @@ with open(STATE, "w") as f:
 '''
 
 
-def setup(root: Path, with_timer: dict[str, bool]) -> dict:
+def setup(root: Path, with_timer: dict[str, bool], live_schedule: dict[str, str] | None = None) -> dict:
     bindir = root / "bin"
     bindir.mkdir()
     az = bindir / "az"
@@ -124,7 +131,8 @@ def setup(root: Path, with_timer: dict[str, bool]) -> dict:
     az.chmod(0o755)
     stale = base64.b64encode(b"version: v1.1.0\nsteps:\n  - cmd: acr purge --filter 'x:.*' --ago 7d --keep 10 --untagged\n").decode()
     state = {"tasks": {t: {"encoded": stale, "status": "Disabled",
-                           "timers": [{"name": "t1", "schedule": "0 1 * * *"}] if with_timer[t] else []}
+                           "timers": [{"name": "t1", "schedule": (live_schedule or {}).get(t, "0 1 * * *")}]
+                                     if with_timer[t] else []}
                        for t in TASKS}}
     (root / "state.json").write_text(json.dumps(state))
     env = dict(os.environ)
@@ -179,6 +187,29 @@ def main() -> int:
                     failures.append("a stand-alone verify after apply no longer reds on the stale "
                                     "recordAheadOfRegistry declaration")
 
+    # 5. Both timers already at the recorded schedule — the registry's real state. The apply must
+    #    leave them alone (an update to the same schedule is refused by ACR) and end green.
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        env = setup(root, {k: True for k in TASKS},
+                    live_schedule={k: want[k]["schedule"] for k in TASKS})
+        r = run(env, "apply")
+        logf = root / "state.json.log"
+        log = logf.read_text() if logf.is_file() else ""
+        if r.returncode != 0:
+            failures.append(f"apply with the timers already at the recorded schedule exited "
+                            f"{r.returncode}:\n{(r.stdout + r.stderr)[-1500:]}")
+        if '"timer", "update"' in log or '"timer", "add"' in log:
+            failures.append("apply wrote a timer whose schedule was already the recorded one")
+        # …and the fake really refuses that no-op update (the instrument can fail).
+        n = subprocess.run(["az", "acr", "task", "timer", "update", "--registry", "meshweaver",
+                            "--name", TASKS[0], "--timer-name", "t1", "--schedule",
+                            want[TASKS[0]]["schedule"], "-o", "none"],
+                           env=env, capture_output=True, text=True)
+        if n.returncode == 0 or "DuplicateTimerTriggersNotSupported" not in n.stderr:
+            failures.append("the fake az accepted a timer update to the trigger's own schedule — it "
+                            "would not catch the defect scenario 5 exists for")
+
     # 4. The instrument can fail: the fake refuses `task update --schedule` as the real CLI does.
     with tempfile.TemporaryDirectory() as t:
         env = setup(Path(t), {k: True for k in TASKS})
@@ -194,8 +225,9 @@ def main() -> int:
         for f in failures:
             print(f"  ✗ {f}")
         return 1
-    print("acr-retention apply self-test: 4 scenarios held (timer updated, timer added, apply green "
-          "naming the stale declaration while verify still reds on it, the fake refuses --schedule)")
+    print("acr-retention apply self-test: 5 scenarios held (timer updated, timer added, apply green "
+          "naming the stale declaration while verify still reds on it, a timer already at the "
+          "recorded schedule left alone, the fake refuses --schedule and a same-schedule update)")
     return 0
 
 
