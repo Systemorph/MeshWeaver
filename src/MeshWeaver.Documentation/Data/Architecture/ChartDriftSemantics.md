@@ -362,7 +362,13 @@ compared.
 
 ## What this report does NOT prove
 
-🚨 **The left-hand side is not the chart a deploy renders.** The comparison renders
+**In record mode (`chart_drift_render=record`, MeshWeaver#5844) the caveat below no longer applies.**
+In that mode the left-hand side IS the deploy's render: the chart, the record's render (the same file
+`hosting-deploy` installs), the values half's declared shape, and `hosting-deploy`'s own `--set` flags.
+The rest of this section describes the **legacy overlay mode** (`chart_drift_render=overlay`), and
+it holds only for a run that printed that mode.
+
+🚨 **In overlay mode the left-hand side is not the chart a deploy renders.** The comparison renders
 `deploy/helm/values.yaml + deployments/aks/<ns>/values.<release>.public.yaml`. The retired
 `helm-release.yml` (mode `deploy`) rendered `<the Key Vault capture> + <that same committed overlay>`, where the capture
 is a `helm get values` of the live release — the whole user-supplied values document, `config:`
@@ -379,7 +385,7 @@ So the finding "the pod runs one value and the ConfigMap holds another" is a sta
 live objects, and no values-layer question can touch it. On the 2026-09-03 run that is 38 of the 76
 findings, of which the 8 disagreeing ones are the whole of the live-wrong list.
 
-For the rest, the doubt is checkable per finding: look the key up in the overlay before acting on a
+For the rest, in overlay mode, the doubt is checkable per finding: look the key up in the overlay before acting on a
 `CLUSTER-ONLY` or a `DIFFERS`. A key with **no chart key at all** is also immune — nothing can render
 it whatever the capture says. The durable fix is that the capture carries
 **no `config:` section at all** — the overlay is already generated from the `Hosting/Deployment`
@@ -413,7 +419,8 @@ An `Audit` has two read-only steps, and they answer different questions:
 
 `hosting-chart-drift` is a thin operator verb over this repository's drift scripts: it finds them at
 the operator pin (the lane's MeshWeaver checkout, `deploy/aks/scripts`; the operator image carries
-them at `/opt/hosting/drift`), reads the overlay and the records from the estate checkout, and
+them at `/opt/hosting/drift`), reads the records from the estate checkout and the record's render from
+the Audit's signed bundle (or, in legacy overlay mode, the committed overlay), and
 compares **in-cluster** (`--via kubectl` with the lane's job-scoped kubeconfig). Its contract is the
 audit's: **drift is a finding** — exit 0 with `::hosting:: chart_drift_verdict=drift`,
 `chart_drift_divergences=N`, `chart_drift_compared=M` — and **a comparison that could not be made is
@@ -431,8 +438,15 @@ as `DIFFERS`/`CHART-ONLY`. That was measured on four instances, and no Reconcile
 The fix shares ONE render path rather than copying it. The per-instance flags are composed in the
 operator's `_release_sets.sh`, which both `hosting-deploy` and `hosting-chart-drift` source. The
 record's render reaches the Audit the same way it reaches a Reconcile: the control plane renders it
-for the plan, and it arrives in the Audit's signed bundle. With that in place, **a finding means "a
-Reconcile would change this"**. Each run states which desired side it compared
+for the plan, and it arrives in the Audit's signed bundle. With that in place, **a finding is a real
+difference between what a Reconcile installs and what the cluster runs**, and never an artefact of
+comparing against an input no deploy reads. Whether the next Reconcile REMOVES that difference still
+depends on the finding's class, as described above:
+- a `PENDING DELETION` and a rendered inline env entry are reset by the upgrade;
+- a never-owned `CLUSTER-ONLY` key and a `SHADOWS` entry survive every upgrade and need explicit
+  retirement first.
+
+Each run states which desired side it compared
 (`chart_drift_render=record|overlay`). `overlay` is the legacy fallback, used only for a bundle-less
 Audit from an older control plane.
 
