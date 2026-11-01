@@ -69,9 +69,31 @@ public static class QueryGrammar
         new("id", K + "field.id"),
         new("category", K + "field.category"),
         new("lastModified", K + "field.lastModified"),
+        new("createdDate", K + "field.createdDate"),
         new("createdBy", K + "field.createdBy"),
         new("lastModifiedBy", K + "field.lastModifiedBy"),
     ];
+
+    /// <summary>
+    /// The <see cref="NodeFields"/> that hold a point in time — their values complete as an ordered
+    /// comparison against a date (<c>lastModified:&gt;=2026-11-01</c>).
+    /// </summary>
+    public static readonly IReadOnlyList<string> DateFields = ["lastModified", "createdDate"];
+
+    /// <summary>
+    /// The ordered comparisons a date value completes with, in the order they are offered: the operator
+    /// as typed and the localization key of its meaning (<c>&gt;</c> = after).
+    /// </summary>
+    public static readonly IReadOnlyList<QueryGrammarWord> DateComparisons =
+    [
+        new(">", K + "date.after"),
+        new("<", K + "date.before"),
+        new(">=", K + "date.onOrAfter"),
+        new("<=", K + "date.onOrBefore"),
+    ];
+
+    /// <summary>Localization key of the literal contains filter (<c>content.x:*typed*</c>).</summary>
+    public const string ContainsKey = K + "contains";
 
     /// <summary>The <c>scope:</c> values the parser maps (canonical spellings only, no aliases).</summary>
     public static readonly IReadOnlyList<QueryGrammarWord> ScopeValues =
@@ -140,6 +162,12 @@ public static class QueryGrammar
         new("content", K + "select.content"),
         new("lastModified", K + "field.lastModified"),
     ];
+
+    /// <summary>True when <paramref name="field"/> is a node field that holds a point in time (<see cref="DateFields"/>).</summary>
+    /// <param name="field">The field as typed.</param>
+    /// <returns>Whether its values are dates.</returns>
+    public static bool IsDateField(string field)
+        => DateFields.Contains(field, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Qualifiers whose value is a node path (completed from the mesh, not from a fixed list).</summary>
     public static bool TakesPath(string field)

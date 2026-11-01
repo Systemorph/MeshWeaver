@@ -31,11 +31,50 @@ already had keeps working beside them.
 | `content.st^` | `nodeType:Crm/Opportunity` | `state:` — shown with its members and its description |
 | `content.state:^` | `nodeType:Crm/Opportunity` | `Open`, `Won`, `Lost`, `OnHold` (the C# enum's members) |
 | `content.offering:^` | `nodeType:Crm/Opportunity` | the member nodes of `[MeshNode("nodeType:Crm/Offering")]` |
+| `date^` | a type with date properties | `createdDate:`, then `content.<x>:` for every property whose name contains `date` or that holds a date (`format: date` / `date-time`) |
+| `content.due^` | a type with `dueDate`, `followUpDue`, `overdue` | `dueDate:` (prefix), then `followUpDue:` (a camelCase word part), then `overdue:` (anywhere in the name) |
+| `content.cedent:hai^` | `nodeType:Underwriting/Submission` | `*hai*` (*contains the typed text*, first), then `Shanghai Re` — a member of the SECOND reference leg, matched in the middle of its name |
+| `content.cedent:star^` | `nodeType:Underwriting/Submission` | `*star*`, then `Lone Star Mutual` (`LoneStarMutual/Profile`) — in a partition no leg names, found among the catalog's own hits |
+| `content.followUpDue:^` | a type whose `followUpDue` is `date-time` | `>2026-11-01` *after*, `<2026-11-01` *before*, `>=2026-11-01` *on or after*, `<=2026-11-01` *on or before* — today's date |
+| `content.followUpDue:>^` | the same | `2026-11-01` (*after*) and `=2026-11-01` (completing `>=`, *on or after*) |
+| `lastModified:^` | — | the same four comparisons; `createdDate:` too |
 | `quarterly rev^` | `namespace:acme` | nodes named `quarterly rev…`, then the semantic hits of `namespace:acme quarterly rev` |
 
 Accepting a node suggestion inserts `path:<its path>`, which narrows the result list to exactly that
 node. A value with a space or query syntax in it is inserted as a quoted literal (`"Hosting Plus"`),
 never as two terms.
+
+### Contains, never only a prefix
+
+**Field names match by contains** (`QueryGrammarCompleter.FieldMatch`), case-insensitively, ranked:
+a prefix first (`last` → `lastModified`), then the start of a camelCase word part or a dotted/dashed
+segment (`date` → `createdDate`, `time` → `creationTime`), then anywhere in the name (`due` →
+`overdue`). That covers the qualifiers, the node fields `QueryGrammar.NodeFields` lists, `sort:`
+fields and the content properties of the NodeType in context; a content property that holds a date
+is also found by `date` / `time` whatever it is called. Fixed qualifier VALUES (`scope:an` →
+`ancestors`) keep the stricter prefix-or-segment rule (`Match`), where a mid-word hit is noise.
+
+**Reference values match by contains on the referenced node's name OR its path**
+(`QueryGrammarCompleter.NodeMatch`), labelled with the node's name; accepting one inserts the stored
+value — the path — quoted per the literal rules.
+
+**The contains QUERY is a suggestion, not a new meaning.** `field:value` stays an EXACT match — that
+is the language's contract. Typing a plain value of a text property offers, first, the literal
+contains filter `*typed*` (*contains the typed text*): `content.cedent:*ha*` is a `Like` glob every
+executor evaluates as contains — the in-memory `QueryEvaluator` (`QueryWildcard.IsLikeMatch`),
+PostgreSQL and Snowflake (`ILIKE '%ha%'`), Cosmos (`CONTAINS(…, true)`). It is not offered for an
+empty, quoted or operator-prefixed value, for a value carrying query syntax, or for an enum, boolean,
+number or date property.
+
+**Dates complete as comparisons.** A date-valued field — a content property whose schema `format` is
+`date` or `date-time`, or a node field in `QueryGrammar.DateFields` (`lastModified`, `createdDate`) —
+with nothing typed yet, or only an operator, offers `>`, `<`, `>=`, `<=` against today's date as an
+ISO literal (the completer's `TimeProvider`, UTC). There is no relative-date syntax (`today`, `-7d`):
+the parser compares literals, and adding one is a separate language decision. Executors differ on
+the comparison itself (measured 2026-11-01 in MeshWeaver.Plugins): the in-memory evaluator parses
+both sides as dates, PostgreSQL casts a content field to `timestamptz`, Cosmos compares the ISO
+strings — and Snowflake casts a content field to a NUMBER (`TRY_CAST(… AS NUMBER)`), so a date
+comparison on `content.x` matches nothing there until that generator learns dates.
 
 ---
 
@@ -98,9 +137,22 @@ Two schema facts make this possible:
 "offering": { "type": ["string","null"], "x-meshNode": ["nodeType:Crm/Offering"] }
 ```
 
-A reference query is run bounded (`limit:50`, a `name:` filter on what was typed), declared
-`partitions:all` when it anchors nothing, and under the viewer's identity. A template query
-(`{node.X}`) needs the record being edited, which a search box does not have, so it is skipped.
+A reference's members come from two kinds of source, merged by path as they answer:
+
+- **Every reference leg.** A property declares one anchored query per partition —
+  `[MeshNode("namespace:Reinsurance scope:descendants nodeType:Reinsurance/Cedent", "namespace:ReinsuranceDemo scope:descendants nodeType:Reinsurance/Cedent")]`
+  — so every leg is read, not the first (`QueryCompleter.ReferenceLegReads`). Each runs bounded
+  (`limit:50`), filtered by what was typed on the member's name (`name:*ha*`) and, in a second read,
+  on its id (`id:*ha*`), declared `partitions:all` when it anchors nothing, under the viewer's
+  identity. A template query (`{node.X}`) needs the record being edited, which a search box does not
+  have, so it is skipped.
+- **The catalog's own hits.** The members a book actually references often live in partitions no leg
+  names — production keeps one top-level partition per company, a cedent at `LoneStarMutual/Profile`.
+  The hidden query defines the catalog's result set, so each hidden sub-query is run (its
+  `sort:`/`limit:`/`select:` replaced, narrowed to hits that carry the property — `content.cedent:*` —
+  with the content selected, at most `HitScanLimit` = 200 hits), the distinct values those hits carry
+  are collected (at most 50), and the ones that are node paths are resolved to their nodes in one
+  `path:a|b|…` read for the label. A value that resolves to nothing is offered as stored.
 
 ---
 

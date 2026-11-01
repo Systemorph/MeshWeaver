@@ -63,6 +63,12 @@ public sealed class QueryCompleter
     /// <summary>Shortest free-text word that triggers node and semantic suggestions.</summary>
     public const int MinFreeTextLength = 3;
 
+    /// <summary>
+    /// How many of the catalog's own hits (the hidden query) are read for the values a reference property
+    /// actually carries. Distinct values are capped at <see cref="ValueReadLimit"/> after that.
+    /// </summary>
+    public const int HitScanLimit = 200;
+
     private const string RowSelect = "select:path,name,nodeType,icon";
 
     private readonly IMeshService mesh;
@@ -93,7 +99,9 @@ public sealed class QueryCompleter
             return Observable.Return(new QueryCompletionResult(token.ReplaceStart, token.ReplaceEnd, []));
 
         var contextTypes = ContextNodeTypes(request.HiddenQuery, request.Text);
-        var facts = FactsFor(token, contextTypes, request).StartWith(QueryCompletionFacts.None);
+        var today = DateOnly.FromDateTime(Clock().GetUtcNow().UtcDateTime);
+        var facts = FactsFor(token, contextTypes, request).StartWith(QueryCompletionFacts.None)
+            .Select(f => f with { Today = today });
         var nodes = FreeTextNodes(token, request).StartWith(Array.Empty<QueryCompletionItem>());
 
         return facts.CombineLatest(nodes, (f, n) => Merge(token, f, n, request.Limit))
@@ -175,7 +183,7 @@ public sealed class QueryCompleter
                     var withProps = new QueryCompletionFacts { ContentProperties = props };
                     if (prop is not { ReferenceQueries.Count: > 0 })
                         return Observable.Return(withProps);
-                    return Bounded(ReferenceMembers(prop, token.Prefix), "reference members")
+                    return ReferenceValues(prop, token.Prefix, request)
                         .Select(members => withProps with { ReferenceValues = members })
                         .StartWith(withProps);
                 });
@@ -250,17 +258,156 @@ public sealed class QueryCompleter
         return Rows($"{query} {RowSelect}", ValueReadLimit);
     }
 
-    private IObservable<IReadOnlyList<QueryNodeFact>> ReferenceMembers(ContentPropertyFact prop, string prefix)
+    /// <summary>
+    /// The values a reference property can take, from two kinds of source merged as they answer:
+    /// <list type="bullet">
+    /// <item><description><b>Every reference leg.</b> A property declares one anchored query per partition
+    /// (<c>[MeshNode("namespace:A …", "namespace:B …")]</c>), so EVERY non-template leg is read — not
+    /// the first — each filtered by what was typed on the member's name and on its id (both a contains
+    /// match), bounded by <see cref="ValueReadLimit"/>.</description></item>
+    /// <item><description><b>The catalog's own hits.</b> The members a book actually references often live
+    /// in partitions no leg names (one top-level partition per company). The hidden query defines the
+    /// catalog's result set, so its hits are read (<see cref="HitScanLimit"/>), the distinct values they
+    /// carry for the property collected, and each value that is a node path resolved to its node for the
+    /// label.</description></item>
+    /// </list>
+    /// Every read is capped at <see cref="ValueReadLimit"/>; the result is de-duplicated by path, and the grammar then
+    /// filters it by contains on name or path (<see cref="QueryGrammarCompleter.NodeMatch"/>). Each source
+    /// is bounded, so the stream completes.
+    /// </summary>
+    private IObservable<IReadOnlyList<QueryNodeFact>> ReferenceValues(
+        ContentPropertyFact prop, string prefix, QueryCompletionRequest request)
     {
-        // Template queries (`{node.X}`) need the record being edited — a search box has none.
-        var query = prop.ReferenceQueries.FirstOrDefault(q => !q.Contains('{'));
-        if (query is null)
-            return Observable.Return<IReadOnlyList<QueryNodeFact>>([]);
-        var parsed = new QueryParser().Parse(query);
-        var anchor = parsed.IsSufficientlySpecified() ? "" : " partitions:all";
-        var filter = prefix.Contains('/') ? "" : NameFilter(prefix);
-        return Rows($"{query}{anchor}{filter} {RowSelect}", ValueReadLimit);
+        var sources = ReferenceLegReads(prop, prefix)
+            .Select(q => Bounded(Rows(q, ValueReadLimit), "reference members"))
+            // Each read inside is bounded on its own (hits, then names), so the chain completes.
+            .Append(Guarded(CarriedValues(prop.Name, request.HiddenQuery), "values the catalog's hits carry"))
+            .ToArray();
+        return sources.Merge()
+            .Scan((IReadOnlyList<QueryNodeFact>)[], (acc, next) => acc.Concat(next)
+                .GroupBy(n => n.Path, StringComparer.Ordinal)
+                .Select(g => g.FirstOrDefault(n => n.Name is { Length: > 0 }) ?? g.First())
+                .ToArray());
     }
+
+    /// <summary>
+    /// The member reads of a reference property: every non-template leg (a <c>{node.X}</c> template needs
+    /// the record being edited — a search box has none), declared mesh-wide when the leg anchors nothing,
+    /// once filtered by name and once by id when something plain was typed, else unfiltered.
+    /// </summary>
+    /// <param name="prop">The reference property.</param>
+    /// <param name="prefix">What was typed of the value.</param>
+    /// <returns>The query strings to run.</returns>
+    public static IReadOnlyList<string> ReferenceLegReads(ContentPropertyFact prop, string prefix)
+    {
+        var parser = new QueryParser();
+        var filters = prefix.Contains('/') || NameFilter(prefix).Length == 0
+            ? new[] { "" }
+            : new[] { NameFilter(prefix), $" id:*{prefix}*" };
+        return prop.ReferenceQueries
+            .Where(q => !q.Contains('{'))
+            .Distinct(StringComparer.Ordinal)
+            .SelectMany(q =>
+            {
+                var anchor = parser.Parse(q).IsSufficientlySpecified() ? "" : " partitions:all";
+                return filters.Select(f => $"{q}{anchor}{f} {RowSelect}");
+            })
+            .ToArray();
+    }
+
+    /// <summary>
+    /// The distinct values the catalog's own hits carry for <paramref name="property"/>: each hidden
+    /// sub-query is run bounded (its <c>sort:</c>/<c>limit:</c>/<c>select:</c> replaced, the hits narrowed
+    /// to those that HAVE a value, the content selected), the values read shape-tolerantly, and the ones
+    /// that are node paths resolved to their nodes in ONE read so the suggestion is labelled with the
+    /// node's name. A value that resolves to nothing is still offered, labelled as stored.
+    /// </summary>
+    private IObservable<IReadOnlyList<QueryNodeFact>> CarriedValues(string property, string? hiddenQuery)
+    {
+        var lines = (hiddenQuery ?? "")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length == 0)
+            return Observable.Return<IReadOnlyList<QueryNodeFact>>([]);
+
+        var parser = new QueryParser();
+        var hits = lines.Select(line =>
+        {
+            var query = line;
+            foreach (var q in new[] { "sort", "limit", "select" })
+                query = parser.RemoveQualifier(query, q);
+            query = $"{query} {QueryCaret.ContentPrefix}{property}:{QueryWildcard.Wildcard}".Trim();
+            var anchor = parser.Parse(query).IsSufficientlySpecified() ? "" : " partitions:all";
+            return Bounded(Nodes($"{query}{anchor} select:path,content", HitScanLimit), "catalog hits");
+        });
+
+        return hits.Merge()
+            .Aggregate(new List<string>(), (acc, nodes) =>
+            {
+                foreach (var node in nodes)
+                    acc.AddRange(ValuesOf(node.Content, property));
+                return acc;
+            })
+            .Select(all => all.Distinct(StringComparer.Ordinal).Take(ValueReadLimit).ToArray())
+            .SelectMany(values =>
+            {
+                var raw = (IReadOnlyList<QueryNodeFact>)values.Select(v => new QueryNodeFact(v, null)).ToArray();
+                var paths = values.Where(IsPlainPath).ToArray();
+                if (paths.Length == 0)
+                    return Observable.Return(raw);
+                return Bounded(Rows($"{QueryGrammar.Path}:{string.Join('|', paths)} {RowSelect}", paths.Length), "carried value names")
+                    .DefaultIfEmpty([])
+                    .Select(resolved =>
+                    {
+                        var byPath = resolved.GroupBy(n => n.Path, StringComparer.Ordinal)
+                            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+                        return (IReadOnlyList<QueryNodeFact>)raw
+                            .Select(v => byPath.TryGetValue(v.Path, out var n) ? n : v)
+                            .ToArray();
+                    });
+            });
+    }
+
+    /// <summary>
+    /// The string values <paramref name="content"/> holds at <paramref name="property"/> (a dotted path,
+    /// matched case-insensitively): a string, or the strings of an array. Shape-tolerant — typed content
+    /// and a <see cref="System.Text.Json.JsonElement"/> are read alike, and anything else yields nothing.
+    /// </summary>
+    /// <param name="content">A node's content.</param>
+    /// <param name="property">The content property, without the <c>content.</c> prefix.</param>
+    /// <returns>The values; empty when the content does not carry the property.</returns>
+    private IEnumerable<string> ValuesOf(object? content, string property)
+    {
+        if (content is null)
+            return [];
+        // A content that cannot be serialized faults this source, which Guarded reports and drops.
+        var element = content as System.Text.Json.JsonElement?
+                      ?? System.Text.Json.JsonSerializer.SerializeToElement(content, content.GetType(), hub.JsonSerializerOptions);
+        foreach (var segment in property.Split('.'))
+        {
+            if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return [];
+            var found = element.EnumerateObject()
+                .FirstOrDefault(p => p.Name.Equals(segment, StringComparison.OrdinalIgnoreCase));
+            if (found.Value.ValueKind == System.Text.Json.JsonValueKind.Undefined)
+                return [];
+            element = found.Value;
+        }
+        return element.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.String when element.GetString() is { Length: > 0 } v => [v],
+            System.Text.Json.JsonValueKind.Array => element.EnumerateArray()
+                .Where(e => e.ValueKind == System.Text.Json.JsonValueKind.String)
+                .Select(e => e.GetString()!)
+                .Where(v => v.Length > 0)
+                .ToArray(),
+            _ => [],
+        };
+    }
+
+    /// <summary>A value that can be written bare in a <c>path:a|b</c> alternation.</summary>
+    private static bool IsPlainPath(string value)
+        => value.Length > 0 && value[0] != '@'
+           && value.All(c => !char.IsWhiteSpace(c) && c is not ('|' or '*' or '(' or ')' or '"' or '\'' or ':'));
 
     private IObservable<IReadOnlyList<QueryNodeFact>> Paths(string prefix, string? contextPath)
     {
@@ -336,17 +483,27 @@ public sealed class QueryCompleter
     // ---------------------------------------------------------------- plumbing
 
     private IObservable<IReadOnlyList<QueryNodeFact>> Rows(string query, int limit)
-        => Observable.Defer(() => mesh.Query<MeshNode>(new MeshQueryRequest { Query = query, Limit = limit }))
-            .Take(1)
-            .Select(change => (IReadOnlyList<QueryNodeFact>)change.Items
-                .Where(n => !string.IsNullOrEmpty(n.Path))
-                .Take(limit)
+        => Nodes(query, limit)
+            .Select(nodes => (IReadOnlyList<QueryNodeFact>)nodes
                 .Select(n => new QueryNodeFact(n.Path!, n.Name, n.NodeType, n.Icon))
                 .ToArray());
 
+    private IObservable<IReadOnlyList<MeshNode>> Nodes(string query, int limit)
+        => Observable.Defer(() => mesh.Query<MeshNode>(new MeshQueryRequest { Query = query, Limit = limit }))
+            .Take(1)
+            .Select(change => (IReadOnlyList<MeshNode>)change.Items
+                .Where(n => !string.IsNullOrEmpty(n.Path))
+                .Take(limit)
+                .ToArray());
+
+    private TimeProvider Clock()
+        => hub.ServiceProvider.GetService(typeof(TimeProvider)) as TimeProvider ?? TimeProvider.System;
+
     private IObservable<T> Bounded<T>(IObservable<T> source, string what)
+        => Guarded(source.Timeout(SourceBudget), what);
+
+    private IObservable<T> Guarded<T>(IObservable<T> source, string what)
         => source
-            .Timeout(SourceBudget)
             .Catch<T, Exception>(ex =>
             {
                 // Best-effort by design: a source that fails or overruns contributes NOTHING to this one

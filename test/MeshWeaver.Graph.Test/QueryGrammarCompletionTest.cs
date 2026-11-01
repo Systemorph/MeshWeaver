@@ -248,12 +248,203 @@ public class QueryGrammarCompletionTest
                 QueryGrammarCompleter.ContentCategory, QueryGrammarCompleter.NodeTypeCategory,
                 QueryGrammarCompleter.NodeCategory, QueryGrammarCompleter.SemanticCategory,
                 "query.completion.content", "query.completion.enumMember", "query.completion.boolean",
+                QueryGrammar.ContainsKey,
             ])
+            .Concat(QueryGrammar.DateComparisons.Select(c => c.DescriptionKey))
             .Distinct()
             .ToArray();
 
         keys.Should().OnlyContain(k => MeshWeaver.Messaging.LocalizationCatalog.ContainsKey(k),
             "every word the completer shows is described in the viewer's language — a missing key renders the raw key");
+    }
+
+    // ------------------------------------------------------------------ contains: field names
+
+    [Fact]
+    public void ABareWordFindsEveryFieldWhoseNameContainsIt()
+    {
+        var facts = new QueryCompletionFacts { ContentProperties = ContentSchemaFacts.Parse(DatesSchema) };
+
+        var labels = Labels("date^", facts);
+
+        labels.Should().Contain("createdDate:", "a node field is found by a camelCase word part of its name");
+        labels.Should().Contain(["content.dueDate:", "content.inception:", "content.lastActivityAt:", "content.statusChangedAt:"],
+            "a content property is found by its name, and a date-valued one also by the kind of value it holds");
+        labels.Should().NotContain("content.title:");
+    }
+
+    [Fact]
+    public void AWordPartOfACamelCaseNameFindsTheField()
+    {
+        var facts = new QueryCompletionFacts { ContentProperties = ContentSchemaFacts.Parse(DatesSchema) };
+
+        Labels("content.due^", facts).Should().Contain("followUpDue:");
+        Labels("content.time^", facts).Should().Contain("creationTime:");
+        Labels("time^", facts).Should().Contain("content.creationTime:");
+    }
+
+    [Fact]
+    public void APrefixMatchRanksAboveAWordPartAboveAnInfix()
+        => Labels("content.due^", new QueryCompletionFacts { ContentProperties = ContentSchemaFacts.Parse(DatesSchema) })
+            .Should().Equal(new[] { "dueDate:", "followUpDue:", "overdue:" },
+                "a name that starts with the word beats one where it starts a word part, which beats one that merely contains it");
+
+    [Theory]
+    [InlineData("date", "createdDate", 2)]
+    [InlineData("time", "creationTime", 2)]
+    [InlineData("last", "lastModified", 3)]
+    [InlineData("due", "overdue", 1)]
+    [InlineData("zz", "lastModified", -1)]
+    public void FieldMatchIsAContainsMatchRankedByWhereItHits(string typed, string field, int expected)
+        => QueryGrammarCompleter.FieldMatch(typed, field).Should().Be(expected);
+
+    [Fact]
+    public void AQualifierValueStaysAPrefixOrSegmentMatch()
+        => ShouldBeSet(Labels("scope:an^"), ["ancestors", "ancestorsAndSelf"]);
+
+    // ------------------------------------------------------------------ contains: reference values
+
+    [Fact]
+    public void AReferenceValueIsMatchedByContainsOnItsNameAndLabelledWithIt()
+    {
+        var facts = new QueryCompletionFacts
+        {
+            ContentProperties = ContentSchemaFacts.Parse(SubmissionSchema),
+            ReferenceValues =
+            [
+                new QueryNodeFact("Reinsurance/Cedent/Shanghai", "Shanghai Re"),
+                new QueryNodeFact("Reinsurance/Cedent/Acme", "Acme Mutual"),
+            ],
+        };
+
+        var items = QueryGrammarCompleter.Complete(At("content.cedent:hai^"), facts);
+
+        var references = items.Where(i => i.Kind == CompletionKind.Reference).ToArray();
+        references.Select(i => (i.Label, i.InsertText)).Should().Equal(new[] { ("Shanghai Re", "Reinsurance/Cedent/Shanghai") },
+            "a match in the middle of the name counts; the label is the name, the insert the stored path");
+    }
+
+    [Fact]
+    public void AReferenceValueIsMatchedByContainsOnItsPath()
+    {
+        var facts = new QueryCompletionFacts
+        {
+            ContentProperties = ContentSchemaFacts.Parse(SubmissionSchema),
+            ReferenceValues =
+            [
+                new QueryNodeFact("LoneStarMutual/Profile", "Lone Star Mutual"),
+                new QueryNodeFact("Reinsurance/Cedent/Acme", "Acme Mutual"),
+            ],
+        };
+
+        QueryGrammarCompleter.Complete(At("content.cedent:starmut^"), facts)
+            .Where(i => i.Kind == CompletionKind.Reference)
+            .Select(i => i.InsertText)
+            .Should().Equal(new[] { "LoneStarMutual/Profile" }, "the path contains what was typed even though the name (with spaces) does not");
+    }
+
+    [Fact]
+    public void ATypedValueOffersTheLiteralContainsFilterFirst()
+    {
+        var facts = new QueryCompletionFacts
+        {
+            ContentProperties = ContentSchemaFacts.Parse(SubmissionSchema),
+            ReferenceValues = [new QueryNodeFact("Reinsurance/Cedent/Shanghai", "Shanghai Re")],
+        };
+
+        var items = QueryGrammarCompleter.Complete(At("content.cedent:ha^"), facts);
+
+        items[0].InsertText.Should().Be("*ha*");
+        items[0].DescriptionKey.Should().Be(QueryGrammar.ContainsKey);
+        var parsed = new QueryParser().Parse("content.cedent:" + items[0].InsertText);
+        parsed.Filter.Should().BeOfType<QueryComparison>()
+            .Which.Condition.Operator.Should().Be(QueryOperator.Like, "*x* is the language's contains spelling");
+    }
+
+    [Theory]
+    [InlineData("content.cedent:^")]
+    [InlineData("content.cedent:\"ha^")]
+    [InlineData("content.cedent:h*a^")]
+    [InlineData("content.isOpen:t^")]
+    public void TheContainsFilterIsNotOfferedForAnEmptyQuotedSyntacticOrNonTextValue(string text)
+    {
+        var facts = new QueryCompletionFacts
+        {
+            ContentProperties = [.. ContentSchemaFacts.Parse(SubmissionSchema), .. ContentSchemaFacts.Parse(OpportunitySchema)],
+        };
+
+        QueryGrammarCompleter.Complete(At(text), facts).Should().NotContain(i => i.DescriptionKey == QueryGrammar.ContainsKey);
+    }
+
+    // ------------------------------------------------------------------ dates
+
+    private static readonly System.DateOnly Today = new(2026, 11, 1);
+
+    [Theory]
+    [InlineData("content.followUpDue:^")]
+    [InlineData("content.inception:^")]
+    [InlineData("lastModified:^")]
+    [InlineData("createdDate:^")]
+    public void ADateFieldOffersTheComparisonsAgainstToday(string text)
+    {
+        var facts = new QueryCompletionFacts { ContentProperties = ContentSchemaFacts.Parse(DatesSchema), Today = Today };
+
+        var items = QueryGrammarCompleter.Complete(At(text), facts);
+
+        items.Select(i => i.InsertText).Should().Equal(">2026-11-01", "<2026-11-01", ">=2026-11-01", "<=2026-11-01");
+        items.Select(i => i.DescriptionKey).Should().Equal(
+            "query.completion.date.after", "query.completion.date.before",
+            "query.completion.date.onOrAfter", "query.completion.date.onOrBefore");
+        new QueryParser().Parse(text.Replace("^", "") + items[2].InsertText).Filter.Should().BeOfType<QueryComparison>()
+            .Which.Condition.Operator.Should().Be(QueryOperator.GreaterOrEqual);
+    }
+
+    [Theory]
+    [InlineData("content.followUpDue:>^", new[] { "2026-11-01", "=2026-11-01" })]
+    [InlineData("content.followUpDue:<=^", new[] { "2026-11-01" })]
+    public void AfterATypedOperatorTheDateCompletesThatOperator(string text, string[] expected)
+    {
+        var facts = new QueryCompletionFacts { ContentProperties = ContentSchemaFacts.Parse(DatesSchema), Today = Today };
+
+        QueryGrammarCompleter.Complete(At(text), facts).Select(i => i.InsertText).Should().Equal(expected);
+    }
+
+    [Fact]
+    public void ATypedOperatorIsCarriedByTheCaretToken()
+    {
+        var token = At("content.followUpDue:>=^");
+
+        token.Operator.Should().Be(">=");
+        token.Prefix.Should().BeEmpty();
+        token.ReplaceStart.Should().Be("content.followUpDue:>=".Length, "the operator stays; only the value is replaced");
+    }
+
+    [Fact]
+    public void ADateWithSomethingTypedOffersNoComparison()
+    {
+        var facts = new QueryCompletionFacts { ContentProperties = ContentSchemaFacts.Parse(DatesSchema), Today = Today };
+
+        Labels("content.followUpDue:2026^", facts).Should().BeEmpty();
+    }
+
+    // ------------------------------------------------------------------ reference legs
+
+    [Fact]
+    public void EveryNonTemplateReferenceLegIsReadFilteredByNameAndById()
+    {
+        var prop = new ContentPropertyFact("cedent", "string", [], null,
+        [
+            "namespace:Reinsurance scope:descendants nodeType:Reinsurance/Cedent",
+            "namespace:ReinsuranceDemo scope:descendants nodeType:Reinsurance/Cedent",
+            "namespace:{node.namespace} nodeType:Reinsurance/Cedent",
+        ]);
+
+        var reads = QueryCompleter.ReferenceLegReads(prop, "ha");
+
+        reads.Should().HaveCount(4, "two non-template legs, each read by name and by id; the template leg needs a record");
+        reads.Should().Contain(r => r.StartsWith("namespace:ReinsuranceDemo ") && r.Contains("name:*ha*"));
+        reads.Should().Contain(r => r.StartsWith("namespace:ReinsuranceDemo ") && r.Contains("id:*ha*"));
+        reads.Should().NotContain(r => r.Contains('{'));
     }
 
     // ------------------------------------------------------------------ schema reading
@@ -296,6 +487,33 @@ public class QueryGrammarCompletionTest
         QueryCompleter.SemanticQuery(new QueryCompletionRequest("laptop pri", 10))
             .Should().Contain("partitions:all", "an unanchored query would be refused, not answered");
     }
+
+    /// <summary>A content type with date-valued and camelCase properties.</summary>
+    private const string DatesSchema = """
+        {
+          "properties": {
+            "title": { "type": "string" },
+            "dueDate": { "type": "string", "format": "date" },
+            "followUpDue": { "type": ["string","null"], "format": "date-time" },
+            "overdue": { "type": "boolean" },
+            "inception": { "type": "string", "format": "date" },
+            "lastActivityAt": { "type": ["string","null"], "format": "date-time" },
+            "statusChangedAt": { "type": ["string","null"], "format": "date-time" },
+            "creationTime": { "type": "integer" }
+          }
+        }
+        """;
+
+    /// <summary>A submission: a cedent reference declared per partition.</summary>
+    private const string SubmissionSchema = """
+        {
+          "properties": {
+            "cedent": { "type": ["string","null"], "x-meshNode": [
+              "namespace:Reinsurance scope:descendants nodeType:Reinsurance/Cedent",
+              "namespace:ReinsuranceDemo scope:descendants nodeType:Reinsurance/Cedent"] }
+          }
+        }
+        """;
 
     /// <summary>The shape <c>@Crm/Opportunity/schema/</c> answers: polymorphic anyOf, nullable type arrays.</summary>
     private const string OpportunitySchema = """
