@@ -55,6 +55,28 @@ public class CuspPaletteTest
         Assert.Throws<FormatException>(() => OklchColor.FromHex("not a colour"));
     }
 
+    [Theory]
+    [InlineData("##123456")]
+    [InlineData("# 12345")]
+    [InlineData("#12 345")]
+    [InlineData("#+12345")]
+    [InlineData("#")]
+    public void FromHex_RejectsMalformedInput(string hex) =>
+        Assert.Throws<FormatException>(() => OklchColor.FromHex(hex));
+
+    [Fact]
+    public void FromHex_TrimsOuterWhitespaceOnly() =>
+        Assert.Equal("#123456", OklchColor.FromHex("  #123456 ").ToHex());
+
+    [Fact]
+    public void Categorical_SharedLightness_IsNotSharedContrast()
+    {
+        // The documented caveat, measured: the same lightness gives different WCAG ratios against
+        // one text colour, which is why a text-carrying fill goes through EnsureContrast.
+        var ratios = CuspPalette.Categorical(8).Select(c => c.ContrastRatio(White)).ToArray();
+        Assert.True(ratios.Max() - ratios.Min() > 0.1, string.Join(", ", ratios));
+    }
+
     [Fact]
     public void ToCss_IsCultureInvariant()
     {

@@ -32,8 +32,10 @@ The guarantees, each pinned by `CuspPaletteTest`:
 - **Every colour is inside sRGB.** The curve stays inside the triangle, and the final chroma is
   clamped to the exact gamut boundary.
 - **Ramps are strictly monotone in lightness**, so neighbouring steps never swap brightness.
-- **Categorical colours share one lightness.** No series shouts louder than another, and a text
-  colour that is legible on one of them is legible on all.
+- **Categorical colours share one lightness**, so no series shouts louder than another. That is
+  perceived lightness, not WCAG contrast: relative luminance still differs by hue, so a text colour
+  that passes on one entry can fail on another. A fill that carries text goes through
+  `EnsureContrast`, the way the icon backplates do.
 
 ## The API
 

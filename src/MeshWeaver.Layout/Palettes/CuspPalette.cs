@@ -209,8 +209,11 @@ public static class CuspPalette
 
     /// <summary>
     /// A categorical palette: <paramref name="count"/> distinct hues at ONE lightness, each with the
-    /// chroma its own cusp curve gives it there — so no series shouts louder than another, and
-    /// text of one colour reads the same on all of them.
+    /// chroma its own cusp curve gives it there — so no series shouts louder than another. Shared
+    /// OKLab lightness is NOT shared WCAG contrast: relative luminance still differs by hue, so a
+    /// text colour that passes on one entry can fail on another. Check
+    /// <see cref="OklchColor.ContrastRatio"/> or apply <see cref="EnsureContrast"/> to each fill
+    /// that carries text.
     /// </summary>
     /// <param name="count">Number of colours.</param>
     /// <param name="lightness">OKLab lightness shared by every colour.</param>
