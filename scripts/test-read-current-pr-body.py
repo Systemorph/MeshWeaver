@@ -150,6 +150,92 @@ class FakeApi:
                               sleep=self.sleep, clock=self.clock)
 
 
+class Download(io.BytesIO):
+    """A 200 artifact body; `headers` carries its Content-Length (may advertise more than sent)."""
+
+    def __init__(self, data, content_length=None):
+        super().__init__(data)
+        self.headers = email.message.Message()
+        self.headers["Content-Length"] = str(len(data) if content_length is None else content_length)
+
+
+class DownloadApi(FakeApi):
+    def urlopen(self, request, timeout):
+        self.calls += 1
+        answer = self.answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    def download(self, dest, budget=240):
+        return reader.api_get("repos/o/r/actions/artifacts/1/zip", token="t",
+                              base_url="https://api.example", budget_seconds=budget,
+                              urlopen=self.urlopen, sleep=self.sleep, clock=self.clock, dest=dest)
+
+
+class DownloadTest(unittest.TestCase):
+    """`dest`: a short body is a transport failure; a local storage failure is never one."""
+
+    def test_complete_body_is_written(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / "a.zip"
+            api = DownloadApi(Download(b"PK" * 1000))
+            self.assertIsNone(api.download(dest))
+            self.assertEqual((dest.read_bytes(), api.calls), (b"PK" * 1000, 1))
+
+    def test_early_eof_short_of_content_length_is_retried_then_no_verdict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / "a.zip"
+            # The connection closed after 10 of 2000 advertised bytes: read() returns b"" at EOF.
+            api = DownloadApi(Download(b"PK" * 5, content_length=2000), Download(b"PK" * 1000))
+            self.assertIsNone(api.download(dest))
+            self.assertEqual((dest.read_bytes(), api.calls), (b"PK" * 1000, 2))
+            always = DownloadApi(*[Download(b"PK", content_length=2000) for _ in range(50)])
+            with self.assertRaises(reader.ApiUnavailable) as caught:
+                always.download(dest, budget=30)
+            self.assertIn("transport failure: IncompleteRead", caught.exception.sentence())
+
+    def test_body_without_content_length_is_accepted_as_sent(self):
+        # Negative control: with nothing advertised there is nothing to be short of.
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / "a.zip"
+            body = Download(b"PK")
+            del body.headers["Content-Length"]
+            self.assertIsNone(DownloadApi(body).download(dest))
+            self.assertEqual(dest.read_bytes(), b"PK")
+
+    def test_local_write_failure_surfaces_at_once_never_as_github_unavailable(self):
+        real_open = open
+
+        def failing_open(path, mode="r", *args, **kwargs):
+            handle = real_open(path, mode, *args, **kwargs)
+            if "w" in mode and str(path).endswith("a.zip") and failing_open.armed:
+                def write(_):
+                    raise OSError(28, "No space left on device")
+                handle.write = write
+            failing_open.armed = True  # the up-front probe open succeeds; the streaming one fails
+            return handle
+        failing_open.armed = False
+
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / "a.zip"
+            api = DownloadApi(Download(b"PK" * 1000), Download(b"PK" * 1000))
+            with patch("builtins.open", failing_open):
+                with self.assertRaises(reader.DestinationError) as caught:
+                    api.download(dest)
+            self.assertEqual((api.calls, api.slept), (1, []))
+            self.assertIn("No space left on device", str(caught.exception))
+            self.assertNotIsInstance(caught.exception, OSError)
+
+    def test_unopenable_destination_surfaces_at_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / "missing-dir" / "a.zip"
+            api = DownloadApi(Download(b"PK"))
+            with self.assertRaises(reader.DestinationError):
+                api.download(dest)
+            self.assertEqual(api.calls, 0)
+
+
 RATE_LIMIT_BODY = '{"message":"API rate limit exceeded for installation ID 1."}'
 
 

@@ -19,8 +19,5 @@ request-review-on-change.yml  — the 15-minute tick re-judges open pull request
 review-answered.yml  — the 15-minute tick re-judges PENDING review verdicts (policy review-pending-while-answering); a missed tick leaves a verdict pending (still blocking, never green) on its PR, which names it
 stage-advance.yml  — the tick re-releases held PR heads whose review event was missed; a held head is visible on its PR as a pending stage
 
-# KNOWN DEBT — a scheduled red here still reaches nobody. Wire the ledger pair (#7416 follow-up).
-arm-credential.yml  — debt: asserts the arm credential every 6 h; a lapsed grant is red in an empty room
-dockerhub-mirror.yml  — debt: the nightly mirror's red is seen only when a PR run of this lane fails too
-prod-synthetic-probe.yml  — debt: the 15-minute prod probe has no ledger; its red is visible only on the Actions tab
-shared-rules.yml  — debt: the daily fleet-drift sweep's red is visible only on the Actions tab
+# There is no KNOWN DEBT section any more: the last four lanes that reported nowhere
+# (arm-credential, dockerhub-mirror, prod-synthetic-probe, shared-rules) carry the ledger pair.
