@@ -155,8 +155,8 @@ public static class CuspPalette
         ArgumentOutOfRangeException.ThrowIfNegative(count);
         if (count == 0)
             return [];
-        if (count == 1)
-            return [ColorAt((hueStart + hueEnd) / 2, LightnessAt(1), saturation)];
+        // count == 1 takes the general path: side = 0 skips the arm loop (and its division), and the
+        // odd-count centre is placed by the caller's brightness and contrast like any other centre.
 
         var c = Math.Clamp(contrast ?? DefaultContrast(count), 0, 1);
         var b = Math.Clamp(brightness, 0, 1);
@@ -210,26 +210,62 @@ public static class CuspPalette
     }
 
     /// <summary>
-    /// The darkest-necessary variant of <paramref name="color"/>'s hue that reaches
-    /// <paramref name="minContrast"/> against <paramref name="foreground"/> — lightness is walked
-    /// away from the foreground until the WCAG ratio holds. Used for plates that carry white or black
-    /// detail.
+    /// The variant of <paramref name="color"/>'s hue NEAREST in lightness that reaches
+    /// <paramref name="minContrast"/> against <paramref name="foreground"/>, judged on the 8-bit
+    /// colours actually drawn — the result is already quantized, so its <see cref="OklchColor.ToHex"/>
+    /// fill holds the ratio. Lightness is searched both ways, out to pure black and pure white, so a
+    /// solution is found whenever one exists; the darker one wins a tie. Used for plates that carry
+    /// white or black detail.
     /// </summary>
-    public static OklchColor EnsureContrast(OklchColor color, OklchColor foreground, double minContrast, double saturation = 0.9)
+    /// <returns><c>false</c> (and <c>default</c>) when no lightness of that hue reaches the ratio.</returns>
+    public static bool TryEnsureContrast(
+        OklchColor color,
+        OklchColor foreground,
+        double minContrast,
+        out OklchColor result,
+        double saturation = 0.9)
     {
-        if (color.ContrastRatio(foreground) >= minContrast)
-            return color;
-        var darker = foreground.L >= color.L;
-        var l = color.L;
-        for (var i = 0; i < 200 && l is > 0 and < 1; i++)
+        var fg = Quantize(foreground);
+        var start = Quantize(color);
+        if (start.ContrastRatio(fg) >= minContrast)
         {
-            l += darker ? -0.005 : 0.005;
-            var candidate = ColorAt(color.H, l, saturation);
-            if (candidate.ContrastRatio(foreground) >= minContrast)
-                return candidate;
+            result = start;
+            return true;
         }
-        return ColorAt(color.H, darker ? 0 : 1, saturation);
+
+        const double step = 0.0025;
+        var steps = (int)Math.Ceiling(1 / step);
+        for (var k = 1; k <= steps; k++)
+        {
+            foreach (var direction in (ReadOnlySpan<int>)[-1, 1])
+            {
+                // Clamped, so the walk reaches the endpoints themselves (L = 0 and L = 1).
+                var l = Math.Clamp(color.L + direction * k * step, 0, 1);
+                var candidate = Quantize(ColorAt(color.H, l, saturation));
+                if (candidate.ContrastRatio(fg) >= minContrast)
+                {
+                    result = candidate;
+                    return true;
+                }
+            }
+        }
+
+        result = default;
+        return false;
     }
+
+    /// <summary>
+    /// <see cref="TryEnsureContrast"/>, for a ratio the caller knows is reachable.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No lightness of the hue reaches <paramref name="minContrast"/>.</exception>
+    public static OklchColor EnsureContrast(OklchColor color, OklchColor foreground, double minContrast, double saturation = 0.9) =>
+        TryEnsureContrast(color, foreground, minContrast, out var result, saturation)
+            ? result
+            : throw new InvalidOperationException(
+                $"No lightness of hue {color.H:0.#} reaches {minContrast}:1 against {foreground.ToHex()}.");
+
+    /// <summary>The colour exactly as it is drawn: rounded through its 8-bit <c>#rrggbb</c> form.</summary>
+    public static OklchColor Quantize(OklchColor color) => OklchColor.FromHex(color.ToHex());
 
     /// <summary>Hex strings of <paramref name="colors"/> — the form chart series and SVG fills take.</summary>
     public static string[] ToHex(this IEnumerable<OklchColor> colors) => colors.Select(c => c.ToHex()).ToArray();

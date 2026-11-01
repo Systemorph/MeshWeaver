@@ -166,9 +166,61 @@ public class CuspPaletteTest
             var light = CuspPalette.ColorAt(h, 0.8, 0.9);
             var plate = CuspPalette.EnsureContrast(light, White, 4.5);
             Assert.True(plate.ContrastRatio(White) >= 4.5, $"h={h}");
+            // The result is 8-bit quantized, which moves the hue by a fraction of a degree.
             if (plate.C > 0.02)
-                Assert.Equal(h, plate.H, 6);
+            {
+                var drift = Math.Abs(((plate.H - h) % 360 + 540) % 360 - 180);
+                Assert.True(drift <= 2, $"h={h}: hue drifted to {plate.H}");
+            }
         }
+    }
+
+    [Fact]
+    public void Diverging_OfOne_HonoursBrightnessAndContrast()
+    {
+        // Review on #7796: the old single-colour branch always returned white.
+        var dark = CuspPalette.Diverging(1, 25, 255, brightness: 0, contrast: 0);
+        Near(0, dark[0].L, 1e-9);
+        var light = CuspPalette.Diverging(1, 25, 255, brightness: 1, contrast: 0);
+        Assert.True(light[0].L > 0.99);
+    }
+
+    [Fact]
+    public void EnsureContrast_SearchesTowardsTheSideThatCanReachTheRatio()
+    {
+        // Review on #7796: a neutral L 0.5 on a neutral L 0.55 foreground cannot reach 4.5:1 towards
+        // black (max ≈ 4.33) but can towards white (≈ 4.85) — lightness alone picked the wrong side.
+        var fg = new OklchColor(0.55, 0, 0);
+        var result = CuspPalette.EnsureContrast(new OklchColor(0.5, 0, 0), fg, 4.5, saturation: 0);
+        Assert.True(result.ContrastRatio(CuspPalette.Quantize(fg)) >= 4.5);
+        Assert.True(result.L > 0.55);
+    }
+
+    [Fact]
+    public void EnsureContrast_CanStartAtAnEndpoint_AndMovesOnlyAsFarAsNeeded()
+    {
+        // Review on #7796: white on white used to jump straight to black instead of a mid-grey.
+        var white = new OklchColor(1, 0, 0);
+        var result = CuspPalette.EnsureContrast(white, white, 4.5, saturation: 0);
+        Assert.True(result.ContrastRatio(CuspPalette.Quantize(white)) >= 4.5);
+        Assert.True(result.L > 0.4, $"moved further than needed: L={result.L}");
+    }
+
+    [Fact]
+    public void EnsureContrast_HoldsTheRatio_OnTheHexItReturns()
+    {
+        // Review on #7796: L 0.568 passed at 4.5016 in floating point but drew as #777777 (4.4781).
+        var result = CuspPalette.EnsureContrast(new OklchColor(0.798, 0, 0), White, 4.5, saturation: 0);
+        Assert.True(OklchColor.FromHex(result.ToHex()).ContrastRatio(White) >= 4.5, result.ToHex());
+        Assert.NotEqual("#777777", result.ToHex());
+    }
+
+    [Fact]
+    public void EnsureContrast_ReportsAnUnreachableRatio()
+    {
+        Assert.False(CuspPalette.TryEnsureContrast(new OklchColor(0.5, 0, 0), new OklchColor(0.5, 0, 0), 22, out _));
+        Assert.Throws<InvalidOperationException>(() =>
+            CuspPalette.EnsureContrast(new OklchColor(0.5, 0, 0), new OklchColor(0.5, 0, 0), 22));
     }
 
     [Fact]
