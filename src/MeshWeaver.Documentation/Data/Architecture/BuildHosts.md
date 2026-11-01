@@ -800,6 +800,7 @@ host-publication:        # the host graph's source for the publisher
     lane: ${{ needs.modules.outputs.lane }}
     selected: ${{ needs.modules.outputs.selected }}
     declared: ${{ needs.modules.outputs.declared }}
+    plan: ${{ needs.modules.outputs.publication-plan }}
     api-url: …
     artifact-store: …
     artifact-store-id: …
@@ -810,6 +811,7 @@ publish:                 # unchanged lane, reading THROUGH the host-publication 
     lane: ${{ needs.host-publication.outputs.lane }}
     selected: ${{ needs.host-publication.outputs.selected }}
     modules: ${{ needs.host-publication.outputs.declared }}
+    plan: ${{ needs.host-publication.outputs.plan }}
 ```
 
 - **`build-host-publication.yml` emits exactly the outputs the publisher reads from a pack call**
@@ -825,6 +827,25 @@ publish:                 # unchanged lane, reading THROUGH the host-publication 
   refuses it.
 - **The selection is the pack call's `select`, never the host's records.** A selection read off what
   the host staged would accept whatever the host staged.
+- **What a run OWES is the pack call's `select` too — the publication plan** (MeshWeaver.Plugins#4478,
+  slice 3). A build host packs the WHOLE catalog on a trunk run and offers every bundle (`owed: true`):
+  it holds none of the inputs that decide a publication — the publication baseline and carry that
+  narrow a trunk selection (a walk of GitHub run history the sandboxed host has no credential for),
+  the caller's `publish-withhold`, the reuse of an earlier publication's bytes, the ledger. They exist
+  only on Actions, and the host's build request is signed at admission, before any of them is
+  computed. So `select` writes them down ONCE as data (`module-publication.py plan`, the workflow
+  output `publication-plan`: per selected module, owed or not and why — the pack leg's own
+  `need_publish` predicate), and `build-host-publication.yml` applies it to the host's records
+  (`module-publication.py apply-plan`): a record the selection does not name is set aside by name
+  with its bundle, and a module the plan does not owe becomes `owed: false` with the plan's reason and
+  loses its bytes — exactly the records the pack legs stage on Actions. `apply-plan` can only take a
+  hand-over AWAY: a plan owing a module the host did not offer, or owing a REUSED build (another
+  run's recorded bytes, which no host ever had), is red. Then the publisher's `--plan` refuses any
+  staged record whose `owed` disagrees with the plan — on Actions as well, so the restated predicate
+  is proven against the leg on every Actions trunk run before a host relies on it. Mirroring the
+  selection on the host instead would compute one decision twice, from inputs the host cannot read;
+  sending them in the build request would hold every host dispatch behind the selection.
+  A host fetch under the host-graph contract with no plan is RED.
 - **`check-callers` refuses**: a host-capable staged pack call with no (or two) host-publication
   calls; a publisher reading such a call's lane directly; a host-publication call whose lane,
   selection or catalog does not come from one pack call, whose `executor` differs from that call's,
@@ -832,10 +853,14 @@ publish:                 # unchanged lane, reading THROUGH the host-publication 
   need the pack call; a host-publication call for a pack call that always runs on Actions or is not
   `staged`; a call whose `executor` expression reads a job (`needs.<job>`) its own `needs:` does not
   name — that context is EMPTY there, so the expression falls back to `actions` while a sibling call
-  spelling it identically resolves `host`; and a literal `executor: host` that publishes in-leg. An `executor` expression counts as
-  "may run on a host".
+  spelling it identically resolves `host`; a literal `executor: host` that publishes in-leg; and a
+  `plan` that is not the SAME call's (`needs.<pack>.outputs.publication-plan` on the host call,
+  `needs.<host call>.outputs.plan` on the publisher), or a publisher that drops the plan its host call
+  applies. A host call with no `plan` is named, not refused — the lane refuses its host fetch at run
+  time. An `executor` expression counts as "may run on a host".
 - **The host's modules stage owes the lane's format** (§2, step 7): a bundle and a
-  `<module>.publication.json` per selected module, stamped with the pack call's lane key —
+  `<module>.publication.json` per packed module (`owed: true` — the host offers, the plan decides),
+  stamped with the pack call's lane key —
   `module-publication.py lane-key --lane-id <lane-id> --modules <the call's modules input, verbatim>`,
   the same key the lane's `This call's lane key` step derives (`test-module-pack-host.py` runs that
   step's bash against it).
