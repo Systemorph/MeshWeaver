@@ -375,6 +375,38 @@ at ~10,000 ms and an unnamed one at ~1.4 ms became a single incident with a sing
 verified against one shape can leave another firing with the counter still climbing. Read the
 samples, not the total.
 
+## The 401 bundle misses were the consumer's expired token, not the auth check (#7790)
+
+After the registry's auth check was changed (#7729), the consumer's `/health` showed
+`bundle_adoption` misses of the form `FetchFailed (HTTP 401 from <registry>)`, and its boot
+install recorded DataModelling and Developer FAILED with `401 "A registered instance key is
+required"`. The first suspect was an intermittent check on the registry. The readings rule it out:
+
+- **The instance key was valid throughout.** The consumer's instance record on the registry kept
+  advancing `lastSeenAt`, which the registry stamps only after it authenticates that key.
+- **The refusals were the LATER requests of one pass, not a random share.** The consumer logged
+  `Registry file fetch for '<package>' failed (401)` for one package after another in a single
+  pass, alphabetically past a cut-off. The earlier packages of the same pass had been served.
+- **The registry logged no `UNAVAILABLE` and no disabled-instance line for them.** The only line
+  was `rejected … no valid instance key presented`, the definitive refusal. An expired sync
+  token is refused that way, and silently.
+
+**The mechanism.** Since #7312 a *configured* `mwi_` key is exchanged for a short-lived sync token,
+like a stored one. Every registry client of a pass (`RegistryPackageSource`, `PluginBundleClient`)
+was built ONCE from one resolved token string. A pass outlives a token easily: a boot reconcile or
+default install covers dozens of packages and bundle downloads. And a token taken from the
+resolver's cache may have only `RefreshMargin` (60 s) left. From the moment it expired, every
+remaining request of the pass presented a dead token and was refused.
+
+**The fix.** Both clients take a credential *source* (`RegistryTokenResolver.Credential(registry)`),
+read once per request. A request after expiry presents a freshly exchanged token. The
+string constructors remain for credentials that do not expire. Pinned by
+`ARegistryPassOutlivesItsExchangedTokenTest` (MeshWeaver.Hosting.Test), whose control shows the
+old shape refused 401 on the same request.
+
+The general lesson: **a credential with an expiry is a source, never a value.** Anything that
+outlives one request reads it per request.
+
 ## Related
 
 - [CQRS and Content Access](../CqrsAndContentAccess) — what `Query` is and is not for
