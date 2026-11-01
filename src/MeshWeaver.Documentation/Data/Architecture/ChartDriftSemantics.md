@@ -408,7 +408,7 @@ An `Audit` has two read-only steps, and they answer different questions:
 
 | step | compares | answers |
 |---|---|---|
-| `hosting-chart-drift --namespace <ns> --release <release>` | the chart as the estate's COMMITTED inputs render it (chart + `deployments/aks/<ns>/values.<release>.public.yaml` + the owning `mesh/Deployments` record), the live objects, and the release manifest | this page's classes: `COLLIDES`, `SHADOWS`, `OFF-RECORD`, `CLUSTER-ONLY` (with `PENDING DELETION`), `CHART-ONLY`, `DIFFERS` |
+| `hosting-chart-drift --namespace <ns> --release <release> --database <db> --values <record render>` | what a deploy of the record installs: the chart, the record's render (the same HelmValues file a Reconcile's `hosting-deploy` gets), the values half's declared shape, and `hosting-deploy`'s own `--set` flags. The comparison is against the live objects and the release manifest | this page's classes: `COLLIDES`, `SHADOWS`, `OFF-RECORD`, `CLUSTER-ONLY` (with `PENDING DELETION`), `CHART-ONLY`, `DIFFERS` |
 | `hosting-audit --namespace <ns> --release <release>` | the live namespace against the last-deployed manifest | what lives ONLY on the cluster (the `Hosting/ConfigAudit` report) |
 
 `hosting-chart-drift` is a thin operator verb over this repository's drift scripts: it finds them at
@@ -419,6 +419,22 @@ audit's: **drift is a finding** — exit 0 with `::hosting:: chart_drift_verdict
 `chart_drift_divergences=N`, `chart_drift_compared=M` — and **a comparison that could not be made is
 red with no verdict line**, never "no drift". The Hosting plugin records the verdict on the
 instance's audit, beside the live-only report.
+
+**The desired side is what a DEPLOY installs, never the committed overlay (MeshWeaver#5844).**
+The step used to render the estate's committed overlay. A deploy no longer reads that overlay: it
+installs the record's render plus its own per-instance `--set` flags, the most visible being
+`selfUpdate.azureClientId`, which the chart turns into the portal's inline `AZURE_CLIENT_ID`. So
+the audit reported values every deploy installs as `PENDING DELETION`: `AZURE_CLIENT_ID`, and
+`PluginCatalog__InstanceId`/`HomeUrl` from the record. It also reported stale overlay-only values
+as `DIFFERS`/`CHART-ONLY`. That was measured on four instances, and no Reconcile could clear them.
+
+The fix shares ONE render path rather than copying it. The per-instance flags are composed in the
+operator's `_release_sets.sh`, which both `hosting-deploy` and `hosting-chart-drift` source. The
+record's render reaches the Audit the same way it reaches a Reconcile: the control plane renders it
+for the plan, and it arrives in the Audit's signed bundle. With that in place, **a finding means "a
+Reconcile would change this"**. Each run states which desired side it compared
+(`chart_drift_render=record|overlay`). `overlay` is the legacy fallback, used only for a bundle-less
+Audit from an older control plane.
 
 **Why it moved.** Until Systemorph/Memex#647 the comparison ran from core's `chart-drift.yml` on a
 GitHub-hosted runner, reaching the private cluster through `az aks command invoke` — which needs the
