@@ -911,6 +911,12 @@ def publish(a: argparse.Namespace) -> int:
             "this publication (Plugins#1077). Refusing.")
     declared = {e["module"] for e in load_json_arg(a.declared)} if a.declared else set()
     selected = names(a.selected)
+    # THE PLAN is loaded and held to the selection FIRST, so the empty-selection path below cannot skip it.
+    plan_raw = getattr(a, "plan", "") or ""
+    pub_plan = _load_plan(plan_raw, lane) if plan_raw else None
+    if pub_plan is not None and set(pub_plan) != set(selected):
+        die(_inert(f"the publication plan names {sorted(pub_plan)} but the selection is {sorted(selected)} — both are "
+                   "read off the same `select`, so they disagree only when one is stale. Refusing the whole publication."))
     if not staged.is_dir():
         # 🚨 The ONE shape in which "nothing was staged" is not a finding, and it is positive
         # evidence rather than an absence: the pack call's OWN selection output says it chose zero
@@ -945,16 +951,19 @@ def publish(a: argparse.Namespace) -> int:
     # the plan's, and the plan must name exactly the selection. On Actions this proves the restated
     # predicate against the leg that staged; on a host run, that apply-plan left nothing owed the plan
     # does not owe. Two computations of one predicate that disagree refuse the whole set.
-    plan_raw = getattr(a, "plan", "") or ""
-    if plan_raw:
-        plan = _load_plan(plan_raw, lane)
-        if set(plan) != set(selected):
-            problems.append(f"the publication plan names {sorted(plan)} but the selection is {sorted(selected)} — "
-                            "both are read off the same `select`, so they disagree only when one is stale.")
+    if pub_plan is not None:
         for m, rec in sorted(mine.items()):
-            if m in plan and isinstance(rec.get("owed"), bool) and rec["owed"] != bool(plan[m].get("owed")):
+            if m not in pub_plan:
+                problems.append(f"staged record for `{m}` is not in the publication plan — the plan names exactly "
+                                "the selection, so this record was staged for a module this run did not select.")
+            elif not isinstance(rec.get("owed"), bool):
+                problems.append(f"staged record for `{m}` states owed={rec.get('owed')!r}, not a boolean — whether it "
+                                "owes a hand-over cannot be held to the plan.")
+            elif not isinstance(pub_plan[m].get("owed"), bool):
+                problems.append(f"the publication plan states owed={pub_plan[m].get('owed')!r} for `{m}`, not a boolean.")
+            elif rec["owed"] != pub_plan[m]["owed"]:
                 problems.append(f"`{m}`'s staged record says owed={rec['owed']} but the publication plan says "
-                                f"owed={bool(plan[m].get('owed'))} ({plan[m].get('reason') or 'owed'}) — the leg and "
+                                f"owed={pub_plan[m]['owed']} ({pub_plan[m].get('reason') or 'owed'}) — the leg and "
                                 "`select` computed one predicate two ways and disagree; refusing rather than "
                                 "trusting either.")
 
@@ -1290,7 +1299,9 @@ def publication_plan(lane: str, selection: list, publish: bool, withhold: str, l
     and on `reuse` its needPublish; then a withheld package owes nothing whatever the ledger said), so
     `publish --plan` holds the two to each other on every Actions run.
     """
-    held = {w for w in re.split(r"[\s,]+", withhold or "") if w}
+    # The leg's tokenizer EXACTLY (`tr ',' '\n' | tr ' ' '\n' | sed '/^$/d'`, then a whole-line match): comma,
+    # space and newline separate; a tab or a carriage return stays INSIDE a name, as it does there.
+    held = {w for w in re.split(r"[ ,\n]+", withhold or "") if w}
     modules: dict[str, dict] = {}
     for entry in selection:
         if not isinstance(entry, dict) or not entry.get("module") or not entry.get("package"):
@@ -2304,6 +2315,40 @@ jobs:
         (root / "plan-l2.json").write_text(json.dumps({**plan_doc, "lane": "L2"}), encoding="utf-8")
         rc, out = run(publish, args(staged=str(act), declared=decl4, selected=sel3_names, plan=f"@{root / 'plan-l2.json'}"))
         check("publish --plan: a plan for ANOTHER lane refuses", rc == 1, out)
+
+        # Review of #7801: an empty plan cannot let a record through, a non-boolean owed is refused, and the
+        # empty-selection early return cannot skip the plan.
+        (root / "plan-empty.json").write_text(json.dumps({"lane": "L1", "modules": {}}), encoding="utf-8")
+        rc, out = run(publish, args(staged=str(act), declared=decl4, selected="", plan=f"@{root / 'plan-empty.json'}"))
+        check("publish --plan: an EMPTY plan and selection do not publish a staged record (not in the plan)",
+              rc == 1 and "not in the publication plan" in out and "->" not in out, out)
+        (root / "plan-ai.json").write_text(json.dumps(publication_plan("L1", [{"module": "MeshWeaver.AI", "package": "AI"}],
+                                                                       True, "", "off")), encoding="utf-8")
+        for bad_owed in ("false", None):
+            d = stage(f"owed-{bad_owed}", "MeshWeaver.AI")
+            rec = json.loads((d / "MeshWeaver.AI.publication.json").read_text())
+            rec["owed"] = bad_owed
+            (d / "MeshWeaver.AI.publication.json").write_text(json.dumps(rec), encoding="utf-8")
+            rc, out = run(publish, args(staged=str(d), plan=f"@{root / 'plan-ai.json'}"))
+            check(f"publish --plan: a record stating owed={bad_owed!r} (not a boolean) refuses", rc == 1 and "not a boolean" in out, out)
+        rc, out = run(publish, args(staged=str(root / "never-staged"), selected="", plan=f"@{root / 'plan.json'}"))
+        check("publish --plan: the empty-selection early return cannot skip a plan that names modules",
+              rc == 1 and "publication plan names" in out, out)
+        rc, out = run(publish, args(staged=str(root / "never-staged"), selected="", plan=f"@{root / 'plan-l2.json'}"))
+        check("publish --plan: …nor a plan for another lane", rc == 1, out)
+        (root / "plan-bad.json").write_text("{not json", encoding="utf-8")
+        rc, out = run(publish, args(staged=str(root / "never-staged"), selected="", plan=f"@{root / 'plan-bad.json'}"))
+        check("publish --plan: …nor an unreadable plan", rc == 1, out)
+        rc, out = run(publish, args(staged=str(root / "never-staged"), selected="", plan=f"@{root / 'plan-empty.json'}"))
+        check("publish --plan: an empty plan for an empty selection is the one green 'nothing owed'", rc == 0 and "ZERO" in out, out)
+        tab = publication_plan("L1", [{"module": "MeshWeaver.AI", "package": "AI"}, {"module": "MeshWeaver.Maps", "package": "Maps"}],
+                               True, "AI\tMaps", "off")["modules"]
+        check("plan: the withhold list splits as the leg does — a TAB stays inside a name, so `AI\\tMaps` withholds neither",
+              tab["MeshWeaver.AI"]["owed"] and tab["MeshWeaver.Maps"]["owed"], str(tab))
+        nl = publication_plan("L1", [{"module": "MeshWeaver.AI", "package": "AI"}, {"module": "MeshWeaver.Maps", "package": "Maps"}],
+                              True, "AI\nMaps", "off")["modules"]
+        check("plan: …while a newline, a space and a comma separate (control)",
+              not nl["MeshWeaver.AI"]["owed"] and not nl["MeshWeaver.Maps"]["owed"], str(nl))
 
         # apply-plan refusals: it may only ever take a hand-over AWAY.
         stage("host-reuse", "MeshWeaver.AI")
