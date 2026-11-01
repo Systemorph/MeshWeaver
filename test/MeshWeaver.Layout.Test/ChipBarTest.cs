@@ -73,18 +73,18 @@ public class ChipBarTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
-    public void Tones_ResolveToTheirHues_AndAnUnknownToneClaimsNothing()
+    public void ATone_IsTheHueItself_SoAModulesOwnColourNeedsNoResolution()
     {
-        ThemePalette.HueOf(ChipTone.Info).Should().Be(ThemePalette.Blue);
-        ThemePalette.HueOf(ChipTone.Success).Should().Be(ThemePalette.Green);
-        ThemePalette.HueOf(ChipTone.Warning).Should().Be(ThemePalette.Amber);
-        ThemePalette.HueOf(ChipTone.Danger).Should().Be(ThemePalette.Red);
-        ThemePalette.HueOf(ChipTone.Neutral).Should().Be(ThemePalette.Slate);
-        ThemePalette.HueOf("ModuleOwnValue").Should().Be(ThemePalette.Slate);
-        ThemePalette.HueOf(null).Should().Be(ThemePalette.Slate);
+        ChipTone.Info.Should().Be(ThemePalette.Blue);
+        ChipTone.Success.Should().Be(ThemePalette.Green);
+        ChipTone.Warning.Should().Be(ThemePalette.Amber);
+        ChipTone.Danger.Should().Be(ThemePalette.Red);
+        ChipTone.Neutral.Should().Be(ThemePalette.Slate);
 
-        new Chip("x", Tone: ChipTone.Success).WithHue("#7c3aed").Style.Background
-            .Should().Be(ThemePalette.Fill("#7c3aed"), "an explicit hue overrides the tone");
+        new Chip("x", Tone: "#7c3aed").Style.Background
+            .Should().Be(ThemePalette.Fill("#7c3aed"), "a module's own hue is mixed into the theme like the platform's");
+        new Chip("x", Tone: "var(--accent-fill-rest)").Style.Text
+            .Should().Be(ThemePalette.Text("var(--accent-fill-rest)"));
     }
 
     [Fact]
@@ -107,15 +107,14 @@ public class ChipBarTest(ITestOutputHelper output) : HubTestBase(output)
 
         var neutral = new Chip("x").Style;
         neutral.Background.Should().Be(ThemePalette.Fill(ThemePalette.Slate, 20), "grey is mixed a little stronger");
-
-        new Chip("x").WithEmphasis("ModuleOwnEmphasis").Style.Should().Be(neutral, "an unknown emphasis draws as Normal");
+        new Chip("x").Style.Should().Be(ChipStyle.For(ChipTone.Neutral, ChipEmphasis.Normal), "Neutral and Normal are the defaults");
     }
 
     [Fact]
     public void EveryColourIsThemeAware()
     {
         string[] tones = [ChipTone.Neutral, ChipTone.Info, ChipTone.Success, ChipTone.Warning, ChipTone.Danger];
-        string[] emphases = [ChipEmphasis.Normal, ChipEmphasis.Strong, ChipEmphasis.Faint];
+        var emphases = Enum.GetValues<ChipEmphasis>();
         foreach (var tone in tones)
             foreach (var emphasis in emphases)
             {
@@ -168,6 +167,12 @@ public class ChipBarTest(ITestOutputHelper output) : HubTestBase(output)
         Ids(strip).Should().Equal("Field0", "Sep1", "Field1", "Sep2", "Field2");
         Ids(Controls.FieldStrip()).Should().BeEmpty();
         Ids(Controls.FieldStrip(("a", null))).Should().BeEmpty();
+
+        strip.Skin.Wrap.Should().Be(true, "the strip wraps BETWEEN fields");
+        var field = ChipBarLayout.Field("Premium", "CHF 1.2m");
+        field.Skin.Wrap.Should().Be(false, "a field never wraps, so its label stays with its value");
+        Ids(field).Should().Equal("Label", "Value");
+        Ids(ChipBarLayout.Field("", "Motor")).Should().Equal("Value");
     }
 
     private static string? Prop(JsonElement control, string name)

@@ -41,8 +41,7 @@ turns each chip into a navigating badge (`Chip.ToControl()`).
 public sealed record Chip(string Text, string? Href = null, string Tone = ChipTone.Neutral,
     string? Tooltip = null, string? Glyph = null)
 {
-    public string Emphasis { get; init; }   // ChipEmphasis.Normal by default
-    public string? Hue { get; init; }       // overrides the tone's hue
+    public ChipEmphasis Emphasis { get; init; }   // ChipEmphasis.Normal by default
 }
 ```
 
@@ -55,9 +54,8 @@ its style alone (`ChipStyle.Css`), and the badge itself draws transparent.
 
 | Piece | Values | What it does |
 |---|---|---|
-| `Tone` | `ChipTone.Neutral` · `Info` · `Success` · `Warning` · `Danger` | The hue: slate, blue, green, amber, red. An open vocabulary: a value the set does not name draws as `Neutral`, which claims nothing. |
-| `Hue` | any CSS colour | Your own state colour. It overrides the tone and is still mixed into the theme (see below). |
-| `Emphasis` | `ChipEmphasis.Normal` · `Strong` · `Faint` | `Strong` is the step that matters now: a 2px border and bold text. `Faint` is a step that claims nothing yet: dashed, barely tinted, in the hint colour whatever its tone. |
+| `Tone` | `ChipTone.Neutral` · `Info` · `Success` · `Warning` · `Danger`, or any CSS colour | The hue: slate, blue, green, amber, red. A tone IS a colour, so a module passes its own (`"#7c3aed"`, `"var(--accent-fill-rest)"`) in the same place. Nothing resolves a tone, so there is no unknown value and no silent fallback. Every tone is mixed into the theme (see below). |
+| `Emphasis` | `ChipEmphasis.Normal` · `Strong` · `Faint` (an enum: a closed set, never persisted) | `Strong` is the step that matters now: a 2px border and bold text. `Faint` is a step that claims nothing yet: dashed, barely tinted, in the hint colour whatever its tone. |
 | `Glyph` | `ChipGlyph.Done` ✓ · `Current` ● · `Planned` ○, or your own | Leads the label. |
 | `Tooltip` | text | The full label. A chip is capped at `ChipStyle.MaxWidth` (280px) and longer text ends in an ellipsis. |
 
@@ -75,7 +73,7 @@ Controls.Stack
     .WithView(Controls.ChipBar("Data migration:",
         [
             new Chip("Declined", "/Doc/GUI", ChipTone.Danger, Glyph: ChipGlyph.Done),
-            new Chip("Custom hue", "/Doc/GUI", Glyph: ChipGlyph.Done).WithHue("#7c3aed"),
+            new Chip("Own colour", "/Doc/GUI", "#7c3aed", Glyph: ChipGlyph.Done),
         ]))
 ```
 
@@ -107,9 +105,9 @@ Controls.Breadcrumb(("Docs", "/Doc"), ("GUI", "/Doc/GUI"), ("Chip bars", null))
 
 `Controls.FieldStrip(fields)` is a compact one-line "label value · label value" strip for a card
 body. A field with a blank value is skipped together with its label, so a card never shows
-"Broker: —". Each field is its own small row, so when the strip wraps, a label always stays with its
-value. It is built from `Label` controls: use it instead of a two-column markdown table or a
-hand-built HTML line.
+"Broker: —". Each field is its own small row that never wraps, and the strip wraps only between
+fields, so a label always stays with its value. It is built from `Label` controls: use it instead
+of a two-column markdown table or a hand-built HTML line.
 
 ```csharp --render FieldStripCard --show-code
 Controls.FieldStrip(("Premium", "CHF 1.2m"), ("Share", "15 %"), ("Broker", null), ("Expiry", "31 Dec 2027"))

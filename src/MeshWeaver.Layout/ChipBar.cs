@@ -3,44 +3,46 @@ using System.Collections.Immutable;
 namespace MeshWeaver.Layout;
 
 /// <summary>
-/// The colour a <see cref="Chip"/> means — an OPEN vocabulary of string constants (policy
-/// <c>open-vocabulary-string-constants</c>): a module may pass its own value, and a value this set
-/// does not name draws as <see cref="Neutral"/>, which claims nothing. For an exact hue of your own,
-/// set <see cref="Chip.Hue"/> instead.
+/// The named hues a <see cref="Chip"/> is drawn in. A tone IS a CSS colour — these are the platform's
+/// five, and a module passes its own hue (<c>"#7c3aed"</c>, <c>"var(--accent-fill-rest)"</c>) in the
+/// same place. Nothing resolves a tone, so there is no value it does not know and no fallback to take:
+/// what the chip says is whatever colour the caller chose, MIXED into the reader's theme
+/// (<see cref="ThemePalette"/>), never painted as is.
 /// </summary>
 public static class ChipTone
 {
-    /// <summary>No verdict — waiting, terminal, unknown. Slate.</summary>
-    public const string Neutral = nameof(Neutral);
+    /// <summary>No verdict — waiting, terminal, unknown. Slate; mixed a little stronger, so a grey chip still reads as a chip.</summary>
+    public const string Neutral = ThemePalette.Slate;
 
     /// <summary>Open, live, informational. Blue.</summary>
-    public const string Info = nameof(Info);
+    public const string Info = ThemePalette.Blue;
 
     /// <summary>Done, won, engaged, accepted. Green.</summary>
-    public const string Success = nameof(Success);
+    public const string Success = ThemePalette.Green;
 
     /// <summary>In progress, needs attention, prospecting. Amber.</summary>
-    public const string Warning = nameof(Warning);
+    public const string Warning = ThemePalette.Amber;
 
     /// <summary>Lost, declined, failed, blocked. Red.</summary>
-    public const string Danger = nameof(Danger);
+    public const string Danger = ThemePalette.Red;
 }
 
 /// <summary>
-/// How loudly a <see cref="Chip"/> speaks — an open vocabulary of string constants. An unknown value
-/// draws as <see cref="Normal"/>.
+/// How loudly a <see cref="Chip"/> speaks. A closed set, handled exhaustively by
+/// <see cref="ChipStyle.For"/> and never persisted or serialised (a chip renders to a badge whose
+/// style is already resolved), so it is an enum rather than an open vocabulary.
 /// </summary>
-public static class ChipEmphasis
+public enum ChipEmphasis
 {
     /// <summary>A plain chip: a 1px solid border in the tone's hue.</summary>
-    public const string Normal = nameof(Normal);
+    Normal,
 
     /// <summary>The chip that matters NOW (the current step): a 2px border and bold text.</summary>
-    public const string Strong = nameof(Strong);
+    Strong,
 
     /// <summary>A chip that claims nothing yet (a planned step): dashed, barely tinted, in the
     /// theme's hint colour whatever its tone.</summary>
-    public const string Faint = nameof(Faint);
+    Faint,
 }
 
 /// <summary>The status glyphs a step chip conventionally leads with.</summary>
@@ -80,33 +82,20 @@ public static class ThemePalette
     /// <summary>The theme's secondary text colour — captions, separators, hints.</summary>
     public const string Hint = "var(--neutral-foreground-hint,#64748b)";
 
-    /// <summary>The hue of <see cref="ChipTone.Neutral"/>.</summary>
+    /// <summary>Slate — <see cref="ChipTone.Neutral"/>.</summary>
     public const string Slate = "#94a3b8";
 
-    /// <summary>The hue of <see cref="ChipTone.Info"/>.</summary>
+    /// <summary>Blue — <see cref="ChipTone.Info"/>.</summary>
     public const string Blue = "#3b82f6";
 
-    /// <summary>The hue of <see cref="ChipTone.Success"/>.</summary>
+    /// <summary>Green — <see cref="ChipTone.Success"/>.</summary>
     public const string Green = "#16a34a";
 
-    /// <summary>The hue of <see cref="ChipTone.Warning"/>.</summary>
+    /// <summary>Amber — <see cref="ChipTone.Warning"/>.</summary>
     public const string Amber = "#f59e0b";
 
-    /// <summary>The hue of <see cref="ChipTone.Danger"/>.</summary>
+    /// <summary>Red — <see cref="ChipTone.Danger"/>.</summary>
     public const string Red = "#dc2626";
-
-    /// <summary>The hue of a tone; <see cref="Slate"/> for <see cref="ChipTone.Neutral"/> and for any
-    /// tone this palette does not name. Pure.</summary>
-    /// <param name="tone">One of <see cref="ChipTone"/>, or a module's own value.</param>
-    /// <returns>A CSS colour.</returns>
-    public static string HueOf(string? tone) => tone switch
-    {
-        ChipTone.Info => Blue,
-        ChipTone.Success => Green,
-        ChipTone.Warning => Amber,
-        ChipTone.Danger => Red,
-        _ => Slate,
-    };
 
     /// <summary>A CSS <c>color-mix()</c> of <paramref name="hue"/> into <paramref name="into"/>. Pure.</summary>
     /// <param name="hue">The colour to mix in.</param>
@@ -146,7 +135,7 @@ public static class ThemePalette
 
 /// <summary>
 /// The look of one chip, as data: the rendering rules of a <see cref="Chip"/>, resolved from its tone
-/// (or hue) and its emphasis. Every colour is a <see cref="ThemePalette"/> mix, so it follows the theme.
+/// and its emphasis. Every colour is a <see cref="ThemePalette"/> mix, so it follows the theme.
 /// </summary>
 /// <param name="Background">The fill.</param>
 /// <param name="Border">The border colour.</param>
@@ -161,23 +150,25 @@ public sealed record ChipStyle(string Background, string Border, string Text, in
     /// ellipsis and the tooltip carries all of it.</summary>
     public const int MaxWidth = 280;
 
-    /// <summary>The style of a chip of <paramref name="hue"/> at <paramref name="emphasis"/>.
-    /// <see cref="ChipEmphasis.Faint"/> ignores the hue; the neutral hue (<see cref="ThemePalette.Slate"/>)
-    /// is mixed a little stronger, so a grey chip still reads as a chip. Pure.</summary>
-    /// <param name="hue">A CSS colour — usually <see cref="ThemePalette.HueOf"/> of a tone.</param>
-    /// <param name="emphasis">One of <see cref="ChipEmphasis"/>.</param>
+    /// <summary>The style of a chip of <paramref name="tone"/> at <paramref name="emphasis"/>.
+    /// <see cref="ChipEmphasis.Faint"/> ignores the tone; <see cref="ChipTone.Neutral"/> is mixed a
+    /// little stronger, so a grey chip still reads as a chip. Pure.</summary>
+    /// <param name="tone">A CSS colour — one of <see cref="ChipTone"/>, or a module's own.</param>
+    /// <param name="emphasis">The emphasis.</param>
     /// <returns>The style.</returns>
-    public static ChipStyle For(string hue, string? emphasis)
+    public static ChipStyle For(string tone, ChipEmphasis emphasis) => emphasis switch
     {
-        if (emphasis == ChipEmphasis.Faint)
-            return new(ThemePalette.Fill(ThemePalette.Slate, 8), ThemePalette.Stroke(ThemePalette.Slate, 38),
-                ThemePalette.Hint, 1, Dashed: true, Bold: false);
-        var strong = emphasis == ChipEmphasis.Strong;
-        var width = strong ? 2 : 1;
-        return string.Equals(hue, ThemePalette.Slate, StringComparison.OrdinalIgnoreCase)
-            ? new(ThemePalette.Fill(hue, 20), ThemePalette.Stroke(hue, 55), ThemePalette.Text(hue, 22), width, false, strong)
-            : new(ThemePalette.Fill(hue), ThemePalette.Stroke(hue), ThemePalette.Text(hue), width, false, strong);
-    }
+        ChipEmphasis.Faint => new(ThemePalette.Fill(ThemePalette.Slate, 8), ThemePalette.Stroke(ThemePalette.Slate, 38),
+            ThemePalette.Hint, 1, Dashed: true, Bold: false),
+        ChipEmphasis.Strong => Solid(tone, 2, bold: true),
+        ChipEmphasis.Normal => Solid(tone, 1, bold: false),
+        _ => throw new ArgumentOutOfRangeException(nameof(emphasis), emphasis, "not a ChipEmphasis"),
+    };
+
+    private static ChipStyle Solid(string tone, int width, bool bold) =>
+        string.Equals(tone, ChipTone.Neutral, StringComparison.OrdinalIgnoreCase)
+            ? new(ThemePalette.Fill(tone, 20), ThemePalette.Stroke(tone, 55), ThemePalette.Text(tone, 22), width, false, bold)
+            : new(ThemePalette.Fill(tone), ThemePalette.Stroke(tone), ThemePalette.Text(tone), width, false, bold);
 
     /// <summary>The inline style the chip carries. A linked badge's ROOT is its anchor and the badge's
     /// style lands there, so the pill is sized by this style alone — every dimension a reader sees is
@@ -201,34 +192,25 @@ public sealed record ChipStyle(string Background, string Border, string Text, in
 /// </summary>
 /// <param name="Text">The visible label — free text the renderer encodes. User-facing: pass a localized string.</param>
 /// <param name="Href">Where the chip navigates (an absolute mesh path or an http(s) URL); a plain pill when null.</param>
-/// <param name="Tone">One of <see cref="ChipTone"/>, or a module's own value (drawn as neutral).</param>
+/// <param name="Tone">The hue — one of <see cref="ChipTone"/>, or any CSS colour of a module's own.</param>
 /// <param name="Tooltip">The hover text — typically the full label when <see cref="ChipStyle.MaxWidth"/> cuts it.</param>
 /// <param name="Glyph">A leading glyph (<see cref="ChipGlyph"/>), or null for none.</param>
 public sealed record Chip(
     string Text, string? Href = null, string Tone = ChipTone.Neutral, string? Tooltip = null, string? Glyph = null)
 {
-    /// <summary>One of <see cref="ChipEmphasis"/>; <see cref="ChipEmphasis.Normal"/> by default.</summary>
-    public string Emphasis { get; init; } = ChipEmphasis.Normal;
-
-    /// <summary>An exact CSS colour that overrides <see cref="Tone"/>'s hue — a module's own state
-    /// colour. It is MIXED into the theme's tokens, never painted as is.</summary>
-    public string? Hue { get; init; }
+    /// <summary>The emphasis; <see cref="ChipEmphasis.Normal"/> by default.</summary>
+    public ChipEmphasis Emphasis { get; init; } = ChipEmphasis.Normal;
 
     /// <summary>Returns a copy at <paramref name="emphasis"/>.</summary>
-    /// <param name="emphasis">One of <see cref="ChipEmphasis"/>.</param>
+    /// <param name="emphasis">The emphasis.</param>
     /// <returns>A new <see cref="Chip"/>.</returns>
-    public Chip WithEmphasis(string emphasis) => this with { Emphasis = emphasis };
-
-    /// <summary>Returns a copy drawn in <paramref name="hue"/>.</summary>
-    /// <param name="hue">A CSS colour.</param>
-    /// <returns>A new <see cref="Chip"/>.</returns>
-    public Chip WithHue(string hue) => this with { Hue = hue };
+    public Chip WithEmphasis(ChipEmphasis emphasis) => this with { Emphasis = emphasis };
 
     /// <summary>The text the chip shows: the glyph, a space and the text — or the text alone. Pure.</summary>
     public string Label => string.IsNullOrEmpty(Glyph) ? Text : $"{Glyph} {Text}";
 
     /// <summary>The resolved look. Pure.</summary>
-    public ChipStyle Style => ChipStyle.For(Hue ?? ThemePalette.HueOf(Tone), Emphasis);
+    public ChipStyle Style => ChipStyle.For(Tone, Emphasis);
 
     /// <summary>The chip as the platform's navigating badge. Pure.</summary>
     /// <returns>A <see cref="BadgeControl"/>.</returns>
@@ -394,13 +376,26 @@ public static class ChipBarLayout
                 continue;
             if (i > 0)
                 strip = strip.WithView(Controls.Label(FieldSeparator).WithStyle(FieldSeparatorStyle), $"Sep{i}");
-            var field = InlineRow(4);
-            if (!string.IsNullOrWhiteSpace(label))
-                field = field.WithView(Controls.Label(label).WithStyle(FieldLabelStyle), "Label");
-            strip = strip.WithView(field.WithView(Controls.Label(value).WithStyle(FieldValueStyle), "Value"), $"Field{i}");
+            strip = strip.WithView(Field(label, value), $"Field{i}");
             i++;
         }
         return strip;
+    }
+
+    /// <summary>
+    /// One field of a strip: a <c>Label</c> area (omitted when <paramref name="label"/> is blank) and a
+    /// <c>Value</c> area, sized to its content. 🚨 The field itself NEVER wraps — the strip wraps
+    /// BETWEEN fields — so a label cannot land on one line and its value on the next. Pure.
+    /// </summary>
+    /// <param name="label">The label, or blank for a value alone.</param>
+    /// <param name="value">The value.</param>
+    /// <returns>A horizontal, non-wrapping <see cref="StackControl"/>.</returns>
+    public static StackControl Field(string? label, string value)
+    {
+        var field = InlineRow(4).WithWrap(false);
+        if (!string.IsNullOrWhiteSpace(label))
+            field = field.WithView(Controls.Label(label).WithStyle(FieldLabelStyle), "Label");
+        return field.WithView(Controls.Label(value).WithStyle(FieldValueStyle), "Value");
     }
 
     /// <summary>
