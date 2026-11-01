@@ -45,6 +45,13 @@ public static class UserActivityLayoutAreas
     public const string ThreadsArea = "Threads";
     /// <summary>Area name for the catalog region embedded via <c>@@("area/Catalog")</c>.</summary>
     public const string CatalogArea = "Catalog";
+    /// <summary>
+    /// Area name for the start-page CARDS region embedded via <c>@@("area/HomeCards")</c>: the areas packages
+    /// contribute to the home (<see cref="UiContribution.HomeContext"/>), one under the other, in their order.
+    /// Renders nothing while none is declared or none has anything to say.
+    /// </summary>
+    public const string HomeCardsArea = "HomeCards";
+
     /// <summary>Area name for the chat composer region embedded via <c>@@("area/Composer")</c>.</summary>
     public const string ComposerArea = "Composer";
 
@@ -109,6 +116,7 @@ public static class UserActivityLayoutAreas
             .WithView(ThreadsArea, ThreadsAreaView)
             .WithView(CatalogArea, CatalogAreaView)
             .WithView(ComposerArea, ComposerAreaView)
+            .WithView(HomeCardsArea, HomeCardsAreaView)
             // "/{user}/Chat" (ChatArea) is a well-known URL (thread-catalog Create-New, chat menu
             // links, the Threads app tile). Since ChatNodeType was removed there is NO {user}/Chat
             // node any more: the URL resolves to prefix={user} + remainder="Chat", which AreaPage
@@ -302,12 +310,76 @@ public static class UserActivityLayoutAreas
         $$"""
         ### Welcome back, {{ownerName}}
 
+        @@("area/HomeCards")
+
         @@("area/Composer")
 
         @@("area/Catalog")
 
         _This home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
         """;
+
+    /// <summary>
+    /// The start-page cards (<see cref="HomeCardsArea"/>): every <see cref="UiContribution.HomeContext"/> entry this
+    /// viewer may see, live from the shared catalog — projected against the user node's shape and filtered by the
+    /// viewer's live permissions on it, the inbox lane's rule — each embedded through
+    /// <see cref="LayoutAreaControl"/> on its own address, so the contributing package renders its own card, in the
+    /// viewer's context, with its own checks. An empty stack while nothing is declared; a fault reaches the area's
+    /// error boundary, never an empty lane that hides it.
+    /// </summary>
+    internal static IObservable<UiControl?> HomeCardsAreaView(LayoutAreaHost host, RenderingContext _)
+    {
+        // A required Graph service: a missing registration is a configuration failure for the area's
+        // error boundary to name, never an empty lane indistinguishable from "nothing declared".
+        var catalog = host.Hub.ServiceProvider.GetRequiredService<UiContributionCatalog>();
+        var userPath = host.Hub.Address.ToString();
+        // Every gate is evaluated for the VIEWER captured on the render turn — the admin verdict, the
+        // permission floor and the viewer-home gate — and only the home's OWNER gets cards: the start
+        // page is personal, and the area is addressable directly by anyone who can read the user node.
+        var ownerId = OwnerIdOf(userPath);
+        if (HomeCardsViewer(host.ViewerContext, ownerId) is not { } viewerId)
+            return Observable.Return<UiControl?>(Controls.Stack);
+        // The node-shape gates need the home's SHAPE, not its data: this region is registered on User hubs
+        // only, so the node TYPE and PATH are facts of registration, not a read. Deciding them statically means
+        // the cards never wait on the user node (templates first); the one gate that needs node DATA — the
+        // sync state behind SyncedOnly — is narrowed away by ProjectHomeAreas, never guessed.
+        var homeShape = HomeShape(userPath);
+        // The admin verdict and the permission floor read the viewer's ACTUAL identity; the viewer-home gate
+        // gets the CONFIRMED home PATH — the owner check above may have matched a UPN/GUID sign-in through its
+        // e-mail alias, and a legacy `User/{id}` home's path is not the owner id either.
+        return catalog.Contributions
+            .CombineLatest(AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerId), host.Hub.GetEffectivePermissions(userPath, viewerId),
+                (contributions, isAdmin, permissions) => UiContributionProjection.FilterHomeAreas(
+                    UiContributionProjection.ProjectHomeAreas(contributions, userPath, homeShape, isAdmin, userPath), permissions))
+            .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal)
+            .Select(areas => (UiControl?)HomeCards(host.Hub.Address, areas));
+    }
+
+    /// <summary>The start page's node SHAPE for the gates: the User-typed partition root at
+    /// <paramref name="userPath"/> (the region is registered on User hubs only). Pure.</summary>
+    internal static MeshNode HomeShape(string userPath) =>
+        MeshNode.FromPath(userPath) with { NodeType = UserNodeType.NodeType };
+
+    /// <summary>The identity the start-page cards are evaluated for: the viewer's id when the viewer is a real
+    /// person who OWNS the home at <paramref name="ownerId"/>; null — no cards — for anyone else (another
+    /// signed-in person reading this home, an anonymous or virtual viewer, no viewer captured). Pure.</summary>
+    /// <param name="viewer">The viewer captured on the render turn.</param>
+    /// <param name="ownerId">The home's owner (the user partition).</param>
+    internal static string? HomeCardsViewer(AccessContext? viewer, string ownerId) =>
+        viewer is { IsVirtual: false, ObjectId: { Length: > 0 } id } && IsViewerOwner(viewer, ownerId) ? id : null;
+
+    /// <summary>The cards region for <paramref name="areas"/>: one embedded area per contribution, stacked. Pure.</summary>
+    /// <param name="userAddress">The user hub — the address of an entry that declares none.</param>
+    /// <param name="areas">The projected, permission-filtered entries, in order.</param>
+    internal static StackControl HomeCards(Address userAddress,
+        IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> areas)
+    {
+        var stack = Controls.Stack.WithVerticalGap(12).WithWidth("100%");
+        foreach (var entry in areas)
+            stack = stack.WithView(Controls.LayoutArea(entry.Address is null ? userAddress : new Address(entry.Address), entry.Area)
+                .WithShowProgress(false), "Card-" + entry.Id);
+        return stack;
+    }
 
     // ── Editable home: Edit (this page's Body) + Reset-to-default ─────────────────────────────────
 

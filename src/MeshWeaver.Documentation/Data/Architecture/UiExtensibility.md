@@ -245,6 +245,14 @@ itself, each link landing on an area that node does not serve (#6814). On the ho
 still narrowed by `RequiredPermission` against the viewer's permission on the HOST node and by the
 gates — an Administration section is hidden from a non-admin by `Gates.AdminOnly`, not by its host.
 
+**Start-page cards — `Home`.** A `UiContribution` with `Context: Home` embeds `Area` of `Address` (inside the
+contribution's own partition; unset ⇒ the person's own user node) as a card on the signed-in start page, through
+the `@@("area/HomeCards")` region the default welcome template places under its heading
+(`UserActivityLayoutAreas.HomeCardsArea`, `UiContributionProjection.ProjectHomeAreas`). It follows the inbox lane's
+rules: node-shape gates against the user node, the viewer's live Read floor on it, one slot per contribution path.
+The card decides for itself whether it is timely — an empty control leaves no gap — so a package can nudge ("you
+have not finished your learning path") without the home naming it. Tests: `HomeCardsContributionTest`.
+
 Global and per-node are **not one key**, deliberately. A single key would list every tab on both pages — the seven
 platform tabs seeded for the global page would appear on every node's settings page, which is a
 visible regression rather than a migration — and it would make the two surfaces impossible to gate
