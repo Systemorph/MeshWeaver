@@ -389,7 +389,10 @@ public class IoPoolSiloTeardownTest
         {
             await subscribed.Should().Within(Budget).Emit(
                 "precondition: the pooled subscription is live, so the cancel has a callback to run");
-            registry.TotalInFlight.Should().Be(0,
+            // `subscribed` fires INSIDE source.Subscribe, before the setup leaf's LeaveLeaf/ReleaseGate
+            // decrement the in-flight count — so the leaf is still counted at that instant. Wait for the
+            // setup leaf to finish rather than reading the count off the subscribe-entry signal.
+            SpinWait.SpinUntil(() => registry.TotalInFlight == 0, Budget).Should().BeTrue(
                 "precondition: the subscribe returned, so no LEAF is in flight — this is the Query=0 shape");
 
             await observer.OnStop(TestContext.Current.CancellationToken);
