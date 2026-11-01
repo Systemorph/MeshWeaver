@@ -572,13 +572,46 @@ public sealed class PluginBundleClient
             });
         }
 
-        var declineOnLane = Observable.Return<string?>(unattended ? policyDecline : null);
+        return PlanModuleAdoption(pluginId, moduleName, unattended, policyDecline, landing)
+            .SelectMany(plan => ExecuteModuleAdoption(plan, pluginId, moduleName, packagePath))
+            .Catch((Exception ex) =>
+            {
+                // A distribution hiccup must not fail the install/reconcile that asked — the module
+                // simply stays as it is until the next boot or a manual re-install.
+                // The cause rides IN the message: the attached exception lives on separate log
+                // lines that single-line pipelines (Loki greps) never pair with this one, and
+                // "landing failed" with no reason made a stuck production module a night-long
+                // dig (Plugins#959).
+                _logger?.LogWarning(ex,
+                    "Module '{Module}' of {Plugin}: landing failed — the module is unchanged. "
+                    + "Cause: {Cause}",
+                    moduleName, pluginId, ex.Message);
+                return Observable.Return(LandingFaultOutcome(_registryUrl, ex));
+            });
+    }
 
+    /// <summary>
+    /// What an adoption WOULD do, decided without downloading a byte (the half of
+    /// <see cref="AdoptModuleOutcome"/> before any transfer): the shared index read, the activation
+    /// read and <see cref="ModuleUpdateDecision"/>. A caller that must guard a LANDING — and only a
+    /// landing — reads <see cref="ModuleAdoptionPlan.Lands"/> and then calls
+    /// <see cref="ExecuteModuleAdoption"/> on the same plan, so the bundle it guarded is the bundle
+    /// that lands (MeshWeaver#6192, review on #7736). Faults propagate; the caller's catch decides.
+    /// </summary>
+    /// <param name="pluginId">The package id.</param>
+    /// <param name="moduleName">The module's entry-assembly name.</param>
+    /// <param name="unattended">True on the reconciler's background lane.</param>
+    /// <param name="policyDecline">On the unattended lane, why the package's own policy declines.</param>
+    /// <param name="landing">The landing service.</param>
+    internal IObservable<ModuleAdoptionPlan> PlanModuleAdoption(
+        string pluginId, string moduleName, bool unattended, string? policyDecline, ModuleLandingService landing)
+    {
+        var declineOnLane = Observable.Return<string?>(unattended ? policyDecline : null);
         return SharedIndex()
             .Take(1)
             .SelectMany(index => landing.GetActivation().Take(1)
                 .SelectMany(activation => declineOnLane
-                    .SelectMany(declined =>
+                    .Select(declined =>
                     {
                         var bundle = index.Bundles?.FirstOrDefault(b =>
                             string.Equals(b.Plugin, pluginId, StringComparison.OrdinalIgnoreCase)
@@ -626,48 +659,65 @@ public sealed class PluginBundleClient
                                 verdict.Action == ModuleUpdateAction.SkipUpToDate ? LogLevel.Debug : LogLevel.Information,
                                 "Module '{Module}' of {Plugin}: {Action} — {Reason}",
                                 moduleName, pluginId, verdict.Action, verdict.Reason);
-                            return Observable.Return(decided);
+                            return new ModuleAdoptionPlan(decided, null, index);
                         }
 
-                        _logger?.LogInformation(
-                            "Module '{Module}' of {Plugin}: {Reason}",
-                            moduleName, pluginId, verdict.Reason);
-                        var advertised = bundle!;
-                        return Download(pluginId, advertised, index)
-                            .SelectMany(result => result.Bytes is null
-                                ? Miss(pluginId, result.Kind, result.Reason)
-                                    .Select(_ => decided with
-                                    {
-                                        Failure = $"the bundle {advertised.Version} could not be fetched ({result.Kind})"
-                                                  + (string.IsNullOrWhiteSpace(result.Reason) ? "" : $": {result.Reason}"),
-                                        // A 503/429/timeout is a fault that clears on its own (Faulted,
-                                        // retried); a 404/403 or a refused artifact is decided (Failed).
-                                        Transient = result.Transient,
-                                    })
-                                : LandFromBundleOutcome(
-                                        pluginId, moduleName, packagePath, advertised.Version, result.Bytes,
-                                        advertised.FrameworkMvid)
-                                    .Select(landed => decided with
-                                    {
-                                        FilesLanded = landed.Count,
-                                        LandedVersion = landed.Count > 0 ? landed.Version : null,
-                                        Failure = landed.Refusal,
-                                    }));
-                    })))
-            .Catch((Exception ex) =>
-            {
-                // A distribution hiccup must not fail the install/reconcile that asked — the module
-                // simply stays as it is until the next boot or a manual re-install.
-                // The cause rides IN the message: the attached exception lives on separate log
-                // lines that single-line pipelines (Loki greps) never pair with this one, and
-                // "landing failed" with no reason made a stuck production module a night-long
-                // dig (Plugins#959).
-                _logger?.LogWarning(ex,
-                    "Module '{Module}' of {Plugin}: landing failed — the module is unchanged. "
-                    + "Cause: {Cause}",
-                    moduleName, pluginId, ex.Message);
-                return Observable.Return(LandingFaultOutcome(_registryUrl, ex));
-            });
+                        return new ModuleAdoptionPlan(decided, bundle, index);
+                    })));
+    }
+
+    /// <summary>
+    /// Carries out a <see cref="PlanModuleAdoption"/> plan: a plan that does not land is answered
+    /// as decided, with nothing fetched; a landing plan downloads exactly the planned bundle and
+    /// lands it. Faults propagate; <see cref="AdoptModuleOutcome"/> catches them.
+    /// </summary>
+    /// <param name="plan">The plan.</param>
+    /// <param name="pluginId">The package id.</param>
+    /// <param name="moduleName">The module's entry-assembly name.</param>
+    /// <param name="packagePath">The install record's mesh path, recorded on the activation entry.</param>
+    internal IObservable<ModuleAdoptOutcome> ExecuteModuleAdoption(
+        ModuleAdoptionPlan plan, string pluginId, string moduleName, string? packagePath)
+    {
+        if (!plan.Lands)
+            return Observable.Return(plan.Decided);
+        var decided = plan.Decided;
+        var bundle = plan.Bundle;
+        var index = plan.Index;
+        _logger?.LogInformation(
+            "Module '{Module}' of {Plugin}: {Reason}",
+            moduleName, pluginId, decided.Verdict?.Reason);
+        var advertised = bundle!;
+        return Download(pluginId, advertised, index)
+            .SelectMany(result => result.Bytes is null
+                ? Miss(pluginId, result.Kind, result.Reason)
+                    .Select(_ => decided with
+                    {
+                        Failure = $"the bundle {advertised.Version} could not be fetched ({result.Kind})"
+                                  + (string.IsNullOrWhiteSpace(result.Reason) ? "" : $": {result.Reason}"),
+                        // A 503/429/timeout is a fault that clears on its own (Faulted,
+                        // retried); a 404/403 or a refused artifact is decided (Failed).
+                        Transient = result.Transient,
+                    })
+                : LandFromBundleOutcome(
+                        pluginId, moduleName, packagePath, advertised.Version, result.Bytes,
+                        advertised.FrameworkMvid)
+                    .Select(landed => decided with
+                    {
+                        FilesLanded = landed.Count,
+                        LandedVersion = landed.Count > 0 ? landed.Version : null,
+                        Failure = landed.Refusal,
+                    }));
+    }
+
+    /// <summary>A planned adoption: what was decided, and — when it lands — the exact bundle and the
+    /// index snapshot it was read from.</summary>
+    /// <param name="Decided">The outcome as decided (no transfer yet).</param>
+    /// <param name="Bundle">The bundle a landing plan downloads; null when the plan does not land.</param>
+    /// <param name="Index">The index snapshot the plan was read from.</param>
+    internal sealed record ModuleAdoptionPlan(ModuleAdoptOutcome Decided, BundleRef? Bundle, BundleIndex Index)
+    {
+        /// <summary>Whether this plan LANDS a bundle (the only plan that transfers anything).</summary>
+        public bool Lands => Bundle is not null;
     }
 
     /// <summary>

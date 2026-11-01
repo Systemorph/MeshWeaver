@@ -909,6 +909,52 @@ anonymous kill.
 so a guard reading only the shared default would pass while an opted-in project stayed at 30 s — and
 fails if it finds none, rather than passing having checked nothing.
 
+## The per-test bound
+
+🚨 **xunit.v3 has no `methodTimeout` setting.** Its configuration reader (4.0.2) knows no such key and
+drops it without a word. Everything above about `methodTimeout` was therefore, for every plain `[Fact]`,
+a number nothing read: a test that never returned ran until the host's wall-clock cap killed the
+whole suite with no verdict. Measured with a probe whose config was proven to be read (a
+`methodDisplay` change took effect): a plain `[Fact]` awaiting 8 s passed under `"methodTimeout": 2000`,
+and a `[Fact(Timeout = 2000)]` control in the same run failed at 2 s. The incident it cost:
+MeshWeaver.Plugins#4424, `MeshWeaver.AI.Test` killed at 900 s with one test holding its thread for 14
+minutes.
+
+**The execution host makes it real.** `MeshWeaver.Testing.Xunit.BoundedTestFramework` (and
+`MeshTestFramework`, which derives from it) gives every test case that declares no timeout of its own
+the `methodTimeout` of the assembly's `xunit.runner.json`. From then on it is xunit's own timeout: the
+test **fails by name** at the bound (`Test execution timed out after N milliseconds`), its
+`TestContext.Current.CancellationToken` is cancelled, and the run continues. A test that declares
+`[Fact(Timeout = …)]` keeps its own. `MESHWEAVER_TEST_METHOD_TIMEOUT_MS` overrides the configured value
+for a local run without editing the tree.
+
+**A timeout abandons a stuck thread. It cannot unblock it.** A test held synchronously inside a call
+keeps that thread after it has been failed. So on every timeout, `TimeoutWitness` writes one minidump of
+the process (stacks and modules, no heap; at most three per process) while the thread is still in the
+frame. The dump goes to `MESHWEAVER_TEST_DUMP_DIR`, else the directory of `DOTNET_DbgMiniDumpName`
+(`/tmp/coredumps` on every CI test lane, which upload it with a red leg's evidence), else the temp
+directory. It also writes a `TEST_TIMEOUT` line naming the test, the bound and the dump to the phase
+trace and to standard error — BEFORE the failure is forwarded to the reporter and before the dump is
+taken, so a dump that stalls never hides the verdict. The dump runs on its own thread, bounded at 30 s,
+and its outcome (written, failed with the reason, or not finished in time) is a second line,
+`TEST_TIMEOUT_DUMP`. The witness is installed in every assembly, bounded or not: a declared
+`[Fact(Timeout = …)]` times out in an unbounded assembly too.
+
+**How every assembly gets it.** `test/Directory.Build.props` references the host and declares
+`[assembly: Xunit.TestFramework(typeof($(MeshWeaverTestFramework)))]`, which is `BoundedTestFramework`
+unless the project sets the property. Satellites get the same through the same props, which they import
+for their `*.Test` projects. A project that names a framework in source keeps it, and nothing is
+emitted. `none` opts out and leaves the project unbounded.
+
+**What it still does not bound:** fixture construction, class init and teardown are outside xunit's
+test timeout. A wedge there still runs to the host cap, where the bounded runner names the open phase.
+
+Pinned by `TestTimeoutsTest.ATestThatOutlivesTheBound_FailsByNameAtTheBound_AndLeavesADump`. It runs the
+test assembly again as a child process with a 1.5 s bound: an awaiting probe and a synchronously held
+probe both fail by name at the bound and leave a dump each, and a fast probe passes. With the bound
+disabled, the same test fails because the child is still running at 60 s. `APlainFactRunsUnderTheConfiguredBound`
+checks a plain `[Fact]` in the real run carries the configured bound.
+
 ## Intra-Project Parallelism — How a Project Opts In
 
 The suite runs single-threaded by default: `test/xunit.runner.json` sets `parallelizeTestCollections: false`, `maxParallelThreads: 1`. Parallel safety is a property of the tests, not of the runner, so a project opts in **individually** by shipping its own `xunit.runner.json` next to its `.csproj`:

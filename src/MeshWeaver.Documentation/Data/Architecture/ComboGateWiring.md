@@ -528,6 +528,16 @@ self-update is switched back on, the modules a candidate cannot serve are **name
 roll** rather than discovered at boot. It is an argument about *priority* — this is a latent gate, not a live incident, and it
 should be read that way when it is scheduled against work that is bleeding.
 
+**The lane's ledger says so in its severity.** A red verdict appends to one standing
+`ci-combo-unverified` issue (`combo-red`), and a run that really landed a verification closes it
+(`combo-green`). Both pass `severity: sev:M` to the shared reporter, because under policy
+`platform-rolls-independently-of-packages` an unverified or Red instance holds no roll — it is
+tracked and visible, never a release blocker by itself. The reporter's default is `sev:H` (a red
+`main` build), so a ledger job that omits the input would file a release blocker;
+`check-combo-verify.py` refuses that, and its `--self-test` proves the refusal (#4413). A red that
+names an instance's `401` is a provisioning step on that instance (the audience key and the
+`Admin/_BuildPrincipal` grant), not a code defect.
+
 ### 🚨 The instance roster IS derived — `vars.COMBO_VERIFY_INSTANCES` no longer exists
 
 #3842 rules out hand-maintained pins, and `vars.COMBO_VERIFY_INSTANCES` was one. The issue's own

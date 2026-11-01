@@ -14,27 +14,32 @@ namespace MeshWeaver.Testing.Xunit;
 ///
 /// <para><b>This is a host substitution, not a test vocabulary.</b> Discovery, <c>[Theory]</c> data
 /// enumeration (<c>[InlineData]</c>, <c>[MemberData]</c>, <c>TheoryData&lt;&gt;</c>), <c>Skip=</c>,
-/// traits, <c>[Collection]</c> grouping, <c>ITestOutputHelper</c>, timeouts, parallelism and
+/// traits, <c>[Collection]</c> grouping, <c>ITestOutputHelper</c>, parallelism and
 /// per-row pass/fail reporting all remain xunit's, untouched. Every one of the estate's 1,778
 /// <c>[InlineData]</c> and 404 <c>[Theory]</c> declarations keeps working with no edit, and each
 /// row keeps its own name and its own verdict — because xunit, not this code, is still the thing
 /// producing them.</para>
 ///
+/// <para>It derives from <see cref="BoundedTestFramework"/>, so a case with no timeout of its own gets
+/// the per-test bound here too (<see cref="MethodBound"/>).</para>
+///
 /// <para><b>Blast radius.</b> The attribute is assembly-wide, so an assembly that declares it sends
 /// every one of its cases through <see cref="MeshTestAssemblyRunner"/>. It is therefore adopted one
 /// assembly at a time, and an assembly that does not declare it is bit-for-bit unaffected.</para>
 /// </summary>
-public class MeshTestFramework : XunitTestFramework
+public class MeshTestFramework : BoundedTestFramework
 {
-    private readonly string? configFileName;
-
     /// <summary>Initializes the framework with xunit's default configuration discovery.</summary>
-    public MeshTestFramework() => configFileName = null;
+    public MeshTestFramework()
+    {
+    }
 
     /// <summary>Initializes the framework against a specific <c>xunit.runner.json</c>.</summary>
     /// <param name="configFileName">The configuration file xunit resolved for the assembly.</param>
     public MeshTestFramework(string? configFileName)
-        : base(configFileName!) => this.configFileName = configFileName;
+        : base(configFileName)
+    {
+    }
 
     /// <inheritdoc/>
     public override string TestFrameworkDisplayName =>
@@ -44,14 +49,13 @@ public class MeshTestFramework : XunitTestFramework
     protected override ITestFrameworkExecutor CreateExecutor(Assembly assembly)
     {
         ArgumentNullException.ThrowIfNull(assembly);
-        return new MeshTestFrameworkExecutor(
-            new XunitTestAssembly(assembly, configFileName, version: assembly.GetName().Version));
+        return new MeshTestFrameworkExecutor(CreateTestAssembly(assembly));
     }
 }
 
 /// <summary>
 /// Hands execution to <see cref="MeshTestAssemblyRunner"/> instead of xunit's stock assembly
-/// runner. Nothing else differs from <see cref="XunitTestFrameworkExecutor"/>.
+/// runner, with the same per-test bound and timeout witness as <see cref="BoundedTestFrameworkExecutor"/>.
 /// </summary>
 /// <param name="testAssembly">The assembly under test.</param>
 public class MeshTestFrameworkExecutor(IXunitTestAssembly testAssembly)
@@ -64,7 +68,9 @@ public class MeshTestFrameworkExecutor(IXunitTestAssembly testAssembly)
         ITestFrameworkExecutionOptions executionOptions,
         CancellationToken cancellationToken) =>
         await MeshTestAssemblyRunner.MeshInstance
-            .Run(TestAssembly, testCases, executionMessageSink, executionOptions, cancellationToken)
+            .Run(TestAssembly, testCases,
+                BoundedTestFrameworkExecutor.Bound(TestAssembly, testCases, executionMessageSink),
+                executionOptions, cancellationToken)
             .ConfigureAwait(false);
 }
 
