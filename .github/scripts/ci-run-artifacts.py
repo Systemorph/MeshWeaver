@@ -60,11 +60,18 @@ DIGEST_RE = re.compile(r"^[a-f0-9]{64}$")
 # (`needs:`), so a producer that SUCCEEDED has published — a miss then says something about the
 # shared store (a cifs client's cached view, a prune, another share behind the same mount path),
 # never about the diff. One mechanical re-read after this pause, then the miss is reported as
-# NOT MEASURED with what the store DID hold for that name, and filed on the tracking issue below.
+# NOT MEASURED with what the store DID hold for that name. Nobody files it by hand: the repository's
+# main-build ledger lane (node-repo-ci-failure.yml) runs `ci-failure-ledger.py --artifact-misses`,
+# which reads the red jobs' logs for the line `main` prints below and keeps ONE `ci-artifact-store-miss`
+# ledger issue — appended per red run, closed by the next green `main` (MISS_LEDGER names it).
 # A consumer whose producer FAILED must not get here at all: it reports the producer's red once
 # (ci-cascade-verdict.py) instead of downloading what was never written.
 MISS_RECHECK_SECONDS = 20
-MISS_TRACKING_ISSUE = "https://github.com/Systemorph/MeshWeaver/issues/7656"
+# The ledger KEY is ci-failure-ledger.py's MISS_LABEL + MISS_TITLE; test_ci_run_artifacts.py proves
+# the label named here and the line printed below are the ones that script files on and matches.
+MISS_LEDGER_LABEL = "ci-artifact-store-miss"
+MISS_LEDGER = (f"filed automatically on this repository's `{MISS_LEDGER_LABEL}` ledger issue by its main "
+               "build's ci-failure lane — nothing to copy anywhere by hand")
 MISS_TITLE = "NOT MEASURED — artifact store miss"
 
 
@@ -412,7 +419,7 @@ class Artifacts:
                     f"{self.what_the_store_holds(name)}. This runner's {self.store.spec} is "
                     f"{self.store.store_id()}, and the job that uploaded prints its own identity "
                     "beside its `store: wrote` line. INFRA, not a code finding: nothing in the diff "
-                    f"was measured by this job. Tracked on {MISS_TRACKING_ISSUE}")
+                    f"was measured by this job. A red `main` run carrying this miss is {MISS_LEDGER}")
         if not selected:
             if name:  # unreachable: an exact-name miss raised above
                 raise StoreMiss("no artifact matches this repository, run, attempt and name")
