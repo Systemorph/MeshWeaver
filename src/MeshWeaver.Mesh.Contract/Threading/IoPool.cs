@@ -51,6 +51,10 @@ public sealed class IoPool : IIoPool, IDisposable
     // finished. This is what Drain() joins on, in place of Thread.Join on a thread it used to mint,
     // and it is waited on WITH the drain budget, exactly like _blockingIdle.
     private readonly ManualResetEventSlim _cancelCompleted = new(initialState: false);
+    // The same fact as _cancelCompleted, as a plain flag a DIAGNOSTIC may read at any time — the
+    // event itself is disposed with the pool, and a residual report must never touch a disposed
+    // primitive (#7277). Written immediately before _cancelCompleted.Set().
+    private volatile bool _cancelReturned;
     private int _cancelRequested;
     private readonly Thread _canceller;
 
@@ -505,12 +509,47 @@ public sealed class IoPool : IIoPool, IDisposable
     /// and its subscribe takes no token, so "ignored its cancellation token" is not even the
     /// mechanism). Empty when none is in flight.
     /// </summary>
-    internal IReadOnlyList<IoPoolRegistry.SynchronousLeaf> PendingSynchronousLeaves =>
-        _inFlightLeaves
-            .Where(l => l.Value.Synchronous)
-            .OrderBy(l => l.Value.StartedAt)
-            .Select(l => new IoPoolRegistry.SynchronousLeaf(SiteOf(l.Value.Work), l.Value.ThreadId, l.Key))
-            .ToArray();
+    internal IReadOnlyList<IoPoolRegistry.SynchronousLeaf> PendingSynchronousLeaves
+    {
+        get
+        {
+            var leaves = _inFlightLeaves
+                .Where(l => l.Value.Synchronous)
+                .OrderBy(l => l.Value.StartedAt)
+                .Select(l => new IoPoolRegistry.SynchronousLeaf(SiteOf(l.Value.Work), l.Value.ThreadId, l.Key));
+            // 🚨 The canceller is synchronous work too: while it is inside _poolCts.Cancel() it holds
+            // the IoPool-cancel thread AND a gate region, so disposal cannot complete, and the frame it
+            // is parked in — some subscriber's teardown callback — sits on top of that thread's stack.
+            // Without this entry the only residual a parked cancel left on the Dispose path was
+            // `Query=0` with nothing to read (#7277, three occurrences on two instances).
+            return CancelStillRunning
+                ? leaves.Append(new IoPoolRegistry.SynchronousLeaf(
+                    CancellerSite, _canceller.ManagedThreadId, CancellerTicket)).ToArray()
+                : leaves.ToArray();
+        }
+    }
+
+    /// <summary>
+    /// The ticket <see cref="PendingSynchronousLeaves"/> gives the canceller. Leaf tickets start at
+    /// 1 (<see cref="EnterLeaf"/> pre-increments), so 0 is never a leaf's.
+    /// </summary>
+    private const long CancellerTicket = 0;
+
+    /// <summary>The site the canceller reports under in <see cref="PendingSynchronousLeaves"/>.</summary>
+    internal const string CancellerSite =
+        "IoPool-cancel (the pool token's cancel, running a subscriber's registered teardown callback)";
+
+    /// <summary>
+    /// Whether the pool token's cancel has been requested and has NOT returned yet — the canceller
+    /// is still running registered teardown callbacks. Readable at any time, after disposal too.
+    /// </summary>
+    private bool CancelStillRunning => Volatile.Read(ref _cancelRequested) == 1 && !_cancelReturned;
+
+    /// <summary>
+    /// How much work this pool has not let go of: leaves in flight, plus one for a cancel that has
+    /// not returned. The count a residual report prints, so a parked cancel is never a <c>0</c>.
+    /// </summary>
+    internal int UnreleasedWork => CurrentInFlight + (CancelStillRunning ? 1 : 0);
 
     /// <summary>
     /// Whether the leaf holding <paramref name="ticket"/> is still in flight. A synchronous leaf holds
@@ -518,7 +557,8 @@ public sealed class IoPool : IIoPool, IDisposable
     /// before and after the read is that leaf's (#7277).
     /// </summary>
     /// <param name="ticket">The leaf's ticket (<see cref="IoPoolRegistry.SynchronousLeaf.Ticket"/>).</param>
-    internal bool IsLeafInFlight(long ticket) => _inFlightLeaves.ContainsKey(ticket);
+    internal bool IsLeafInFlight(long ticket) =>
+        ticket == CancellerTicket ? CancelStillRunning : _inFlightLeaves.ContainsKey(ticket);
 
     /// <summary>Retires a leaf's ticket. Safe to call for an id that was never added.</summary>
     private void LeaveLeaf(long id) => _inFlightLeaves.TryRemove(id, out _);
@@ -555,10 +595,48 @@ public sealed class IoPool : IIoPool, IDisposable
             // The third residual Drain() can report is not a leaf and registers no site of its own:
             // a cancel that never returned. Label it, or the residual reads as an anonymous count —
             // the shape that misdirected #2598 (see Drain).
-            return _cancelJoinExpired
+            //
+            // 🚨 On EITHER path. Drain() sets _cancelJoinExpired when its own join on the cancel
+            // expires; Dispose() — the silo-teardown path — has no join of its own, so it never
+            // set it, and a parked cancel reached the silo's report as `Query=0` with no site
+            // (#7277). Reading whether the cancel is STILL running covers both.
+            var sites = _cancelJoinExpired || CancelStillRunning
                 ? leaves.Prepend(CancelJoinResidualSite).ToArray()
                 : leaves.ToArray();
+            if (sites.Length > 0)
+                return sites;
+            // Nothing named, yet a caller is asking after disposal began: say what disposal is still
+            // waiting for, so even this residual is never an anonymous `Query=0`.
+            return UnattributedDisposalResidual() is { } residual ? [residual] : [];
         }
+    }
+
+    /// <summary>
+    /// What disposal is still waiting for when no leaf is in flight and the cancel has returned — or
+    /// <c>null</c> when disposal has not begun or has nothing outstanding. The two remaining things
+    /// that hold <see cref="Disposed"/> back are an admission region still open (a caller admitted
+    /// to the gate that has not left it — a leaf queued on the gate holds one without having entered
+    /// the leaf ledger) and, once the resources are released, the blocking lane's threads still
+    /// leaving their loops (see <see cref="TryFinishDisposal"/>). Read-only counters, never a wait.
+    /// </summary>
+    private string? UnattributedDisposalResidual()
+    {
+        if (Volatile.Read(ref _disposing) == 0)
+            return null;
+        if (Volatile.Read(ref _disposalReported) == 0)
+        {
+            var regions = Volatile.Read(ref _gateUsers);
+            return regions <= 0
+                ? null
+                : $"IoPool: no leaf and no cancel is in flight, yet {regions.ToString(CultureInfo.InvariantCulture)} "
+                  + "admission region(s) are still open — a caller admitted to the gate has not left it (a leaf still "
+                  + "queued on the gate, or an entry path that holds a region without registering a leaf)";
+        }
+        var lanes = _blockingScheduler.LiveDrainLoops;
+        return lanes <= 0
+            ? null
+            : $"IoPool: every leaf and region is released, but {lanes.ToString(CultureInfo.InvariantCulture)} "
+              + "blocking lane thread(s) have not left their loops, so Disposed has not been published";
     }
 
     /// <summary>What a leaf's opener reads as when <see cref="CaptureLeafOpeners"/> is off.</summary>
@@ -577,13 +655,15 @@ public sealed class IoPool : IIoPool, IDisposable
     }
 
     /// <summary>
-    /// The site <see cref="PendingLeafSites"/> reports when <see cref="Drain"/>'s CANCEL join expired:
-    /// <c>_poolCts.Cancel()</c> did not return within the budget because a registered teardown
-    /// callback is parked. Every leaf names itself on entry; this residual is not a leaf, so it needs
-    /// a name of its own — <c>Query=1</c> with no site is exactly what it used to look like.
+    /// The site <see cref="PendingLeafSites"/> reports while the pool token's CANCEL has not returned:
+    /// <c>_poolCts.Cancel()</c> is still running because a registered teardown callback is parked —
+    /// whether <see cref="Drain"/>'s join on it expired or a caller of <see cref="Dispose"/> (the silo
+    /// teardown) gave up waiting. Every leaf names itself on entry; this residual is not a leaf, so it
+    /// needs a name of its own — <c>Query=1</c> (Drain) or <c>Query=0</c> (Dispose, #7277) with no
+    /// site is exactly what it used to look like.
     /// </summary>
     internal const string CancelJoinResidualSite =
-        "IoPool.Drain: the pool token's cancel did not return within the budget — a registered teardown "
+        "IoPool: the pool token's cancel had not returned when the join expired — a registered teardown "
         + "callback is parked (a subscriber's OnCompleted or unsubscribe waiting on a lock the callback "
         + "holds; see Doc/Architecture/ControlledIoPooling → 'A residual with NO site is the CANCEL join')";
 
@@ -1770,6 +1850,7 @@ public sealed class IoPool : IIoPool, IDisposable
                 // never observed. Nothing reads the region as proof the cancel has landed, so this
                 // is not the #4466 inversion: what a joiner waits on is still the LAST thing the
                 // fact it asserts publishes.
+                _cancelReturned = true;
                 _cancelCompleted.Set();
                 LeaveGateRegion();
             }
