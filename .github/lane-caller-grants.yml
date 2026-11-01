@@ -164,6 +164,19 @@ repos:
         lane: read-store-artifact.yml
         grants: {contents: read}
         pending: Systemorph/MeshWeaver.Plugins#4713 lands the caller (MeshWeaver.Plugins#4424)
+      # ── Staged module publishing (MeshWeaver.Plugins#4478 slice 2) — ARRIVING. `host-publication`
+      # stages a host-executed run's modules (the lane's `stage` job needs the run's OIDC token as the
+      # build API bearer); `publish-modules` hands the validated bundles to the registry.
+      - workflow: ci.yml
+        job: host-publication
+        lane: build-host-publication.yml
+        grants: {contents: read, id-token: write}
+        pending: Systemorph/MeshWeaver.Plugins#4842 lands the caller (MeshWeaver.Plugins#4478 slice 2)
+      - workflow: ci.yml
+        job: publish-modules
+        lane: node-repo-module-publish.yml
+        grants: {contents: read}
+        pending: Systemorph/MeshWeaver.Plugins#4842 lands the caller (MeshWeaver.Plugins#4478 slice 2)
 
   # ── MeshWeaver.Education ──────────────────────────────────────────────────────────────────────
   # The ONE satellite that still pins its lanes to a platform sha rather than `@main`, so a core
