@@ -109,7 +109,7 @@ contains, not on who owns it:
 | Class | Blocks required | Why |
 |---|---|---|
 | **Every repository** | `rest-not-graphql`, `conserve-work-products`, `file-it-and-move-on`, `merge-latest-before-push`, `link-pending-activity` | Process rules: how an agent works with GitHub, with its own findings, with its work products and with a person it needs a signature or an answer from. They read the same in a repository with no code at all. |
-| **Code or content that runs on a MeshWeaver 3 mesh** — core, MeshWeaver.Plugins, the node repos, Memex | the five above, plus `dispose-to-serve-new-state`, `never-hand-roll-ui`, `declared-not-derived` | Platform rules: their text names 3.x hubs and activations, platform controls and declared catalogues. |
+| **Code or content that runs on a MeshWeaver 3 mesh** — core, MeshWeaver.Plugins, the node repos, Memex | the five above, plus `dispose-to-serve-new-state`, `never-hand-roll-ui`, `declared-not-derived`, `finish-autonomously`, and `pr-lifecycle` (rolling out hub-first) | Platform rules: their text names 3.x hubs and activations, platform controls and declared catalogues. `pr-lifecycle` belongs here too: the review, arm and babysitter mechanisms it describes run on exactly these repositories' rulesets and the control instance. |
 | **No mesh code** — a tooling repository (DecisionModels), an archive (Product-Promotion), a standalone portal on an older major (CreditReRate, MeshWeaver 2.4) | the five process blocks only | The platform blocks would be *false* guidance there: the APIs and mechanisms they name do not exist in that code. |
 
 `worktree-per-change-set` is not part of the baseline: it stays `hub: peers` among the three node
