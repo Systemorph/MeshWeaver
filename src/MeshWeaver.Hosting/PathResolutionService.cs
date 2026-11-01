@@ -664,25 +664,30 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// notes below.
     /// </summary>
     /// <summary>
-    /// The prefix-set query a resolution issues — <c>path:"a/b/c"|"a/b"|"a"</c>, deepest first —
-    /// or <c>null</c> when no prefix can be written as a query literal.
+    /// The prefix-set query a resolution issues — <c>path:("a/b/c" OR "a/b" OR "a")</c>, deepest
+    /// first — or <c>null</c> when no prefix can be written as a query value.
     ///
     /// <para>Each prefix is QUOTED so segments containing SPACES survive the query parser: an
     /// unquoted value ends at the first whitespace (the parser's "space = AND" rule), which once
     /// truncated <c>AgenticPension/Data Analytics/…</c> to <c>AgenticPension/Data</c>. Quoting plus
-    /// the parser's quoted <c>|</c>-alternation keeps every prefix whole.</para>
+    /// the parser's <c>(… OR …)</c> list keeps every prefix whole. The list, not <c>|</c>-alternation:
+    /// a prefix with BOTH quote characters is written bare, and a bare value would swallow a following
+    /// <c>|"next"</c>, while list values end at whitespace.</para>
     ///
-    /// <para>🚨 <b>The quoting goes through <see cref="QueryParser.QuoteLiteral"/>, never a bare
+    /// <para>🚨 <b>The quoting goes through <see cref="QueryParser.TryPathLiteral"/>, never a bare
     /// <c>"\"" + prefix + "\""</c></b> (#7754). A path is whatever a URL carried, and a URL can carry
     /// a double quote: a request for <c>/"_content/…/PortalLayoutBase.razor.js"</c> (a string literal
     /// lifted out of page source, quotes and all) reached the catch-all page and was wrapped into
     /// <c>path:""_content/…""|…|""_content"</c>. That text parses to NO path and no anchor, so the
     /// Postgres planner could not pin it and served it as a <c>UNION ALL</c> over every partition
-    /// schema — one anonymous request, the whole-database lock shape. <c>QuoteLiteral</c> switches to
+    /// schema — one anonymous request, the whole-database lock shape. The literal switches to
     /// single quotes for a prefix that holds a double quote, so the query stays the anchored
-    /// prefix set it was meant to be. A prefix holding BOTH quote characters has no literal in a
-    /// language without escapes; it is left out (no node can be named by it in a query either), and
-    /// when that leaves nothing the caller resolves to nothing without querying.</para>
+    /// prefix set it was meant to be. A prefix holding BOTH quote characters has no quoted literal;
+    /// it is written bare (<c>acme/a"b/c'd</c> — a bare value reads a quote inside it as data), so a
+    /// node at that path still resolves to itself. Only a prefix NO value can hold (both quotes plus
+    /// whitespace, query syntax, a leading quote, or an <c>OR</c> head) is left out — no query can name
+    /// that node either — and when that leaves nothing the caller resolves to nothing without
+    /// querying.</para>
     /// </summary>
     /// <param name="segments">The path's segments.</param>
     /// <returns>The query text, or <c>null</c> when no prefix is writable.</returns>
@@ -690,11 +695,29 @@ internal class PathResolutionService : IPathResolver, IDisposable
     {
         var literals = Enumerable.Range(1, segments.Length)
             .Select(depth => string.Join("/", segments.Take(depth)))
-            .Where(prefix => !(prefix.Contains('"') && prefix.Contains('\'')))
-            .Select(QueryParser.QuoteLiteral)
+            .Select(PrefixListLiteral)
+            .OfType<string>()
             .Reverse()
             .ToList();
-        return literals.Count == 0 ? null : $"path:{string.Join("|", literals)}";
+        return literals.Count == 0 ? null : $"path:({string.Join(" OR ", literals)})";
+    }
+
+    /// <summary>
+    /// <paramref name="prefix"/> as one value of the prefix LIST, or <c>null</c> when no value can
+    /// hold it. <see cref="QueryParser.TryPathLiteral"/> writes it (quoted, or bare when it carries
+    /// both quote characters), and the value is kept only when it reads back as exactly the prefix
+    /// INSIDE a list — a bare value whose head is the separator <c>OR</c> (<c>OR'x"y</c>) reads as
+    /// the keyword plus a different, quoted value there.
+    /// </summary>
+    private static string? PrefixListLiteral(string prefix)
+    {
+        if (!QueryParser.TryPathLiteral(prefix, out var literal))
+            return null;
+        var parsed = new QueryParser().Parse($"path:({literal})");
+        return parsed.Path == prefix && parsed.Paths is null && parsed.Filter is null
+               && string.IsNullOrEmpty(parsed.TextSearch)
+            ? literal
+            : null;
     }
 
     private IObservable<AddressResolution?> ResolveSegmentsCore(string[] segments)
@@ -703,8 +726,8 @@ internal class PathResolutionService : IPathResolver, IDisposable
         if (prefixQuery is null)
         {
             _logger?.LogInformation(
-                "PathResolution: no prefix of '{Path}' can be written as a query literal (each carries "
-                + "both quote characters) — resolving it to nothing instead of issuing a query",
+                "PathResolution: no prefix of '{Path}' can be written as a query value (each carries "
+                + "both quote characters plus whitespace, query syntax or a leading quote) — resolving it to nothing instead of issuing a query",
                 string.Join("/", segments));
             return Observable.Return<AddressResolution?>(null);
         }

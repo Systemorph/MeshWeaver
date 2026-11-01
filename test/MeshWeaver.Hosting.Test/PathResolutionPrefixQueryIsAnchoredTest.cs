@@ -71,21 +71,50 @@ public class PathResolutionPrefixQueryIsAnchoredTest
             "the hand-quoted prefix set of a quote-bearing path named no partition — the shape #7754 reported");
     }
 
-    [Fact]
-    public void APrefixWithBothQuoteCharacters_IsLeftOut_AndTheRestStaysAnchored()
+    [Theory]
+    [InlineData("acme/a\"b/c'd")]
+    [InlineData("acme/it's-\"x\"/Notes")]
+    public void APrefixWithBothQuoteCharacters_ThatABareValueCanHold_IsKept(string path)
     {
-        // `acme` and `acme/a"b` are writable; `acme/a"b/c'd` holds both quote characters and has no
-        // literal in a query language without escapes.
-        var query = PathResolutionService.PrefixQuery(Segments("acme/a\"b/c'd"));
+        // `acme/a"b/c'd` has no QUOTED literal, but `QueryParser.PathLiteral` writes it bare and it
+        // reads back whole (PathLiteralReadsBackAsOnePathTest). Leaving it out excluded an existing
+        // node at that exact path, so resolution answered an ancestor plus a remainder.
+        var query = PathResolutionService.PrefixQuery(Segments(path));
 
         query.Should().NotBeNull();
         var parsed = Parser.Parse(query!);
         parsed.IsSufficientlySpecified().Should().BeTrue();
-        parsed.Paths.Should().Equal("acme/a\"b", "acme");
+        parsed.Paths.Should().Equal(Prefixes(path), "every prefix, the both-quotes one included");
+        parsed.Filter.Should().BeNull();
+        parsed.TextSearch.Should().BeNullOrEmpty();
     }
 
-    [Fact]
-    public void APathWhoseEveryPrefixHasBothQuoteCharacters_IssuesNoQuery()
-        => PathResolutionService.PrefixQuery(Segments("a'\"b/c")).Should().BeNull(
+    [Theory]
+    // Both quotes AND whitespace: no value can hold it.
+    [InlineData("acme/a\"b/c d'e", new[] { "acme/a\"b", "acme" })]
+    public void APrefixNoValueCanHold_IsLeftOut_AndTheRestStaysAnchored(string path, string[] expected)
+    {
+        var query = PathResolutionService.PrefixQuery(Segments(path));
+
+        query.Should().NotBeNull();
+        var parsed = Parser.Parse(query!);
+        parsed.IsSufficientlySpecified().Should().BeTrue();
+        if (expected.Length == 1)
+            parsed.Path.Should().Be(expected[0]);
+        else
+            parsed.Paths.Should().Equal(expected);
+        parsed.Filter.Should().BeNull();
+        parsed.TextSearch.Should().BeNullOrEmpty();
+    }
+
+    [Theory]
+    // A leading quote plus the other quote character: no quoted literal, and a bare value starting
+    // with a quote reads as a quoted one.
+    [InlineData("'a\"b/c")]
+    // Both quotes behind a list-separator head: bare inside the prefix list, `OR'x"y` would read as
+    // the keyword `OR` followed by the quoted value `x"y` — a different path.
+    [InlineData("OR'x\"y/z")]
+    public void APathWhoseEveryPrefixNoValueCanHold_IssuesNoQuery(string path)
+        => PathResolutionService.PrefixQuery(Segments(path)).Should().BeNull(
             "nothing can be written, so the resolver answers nothing instead of sending an unanchored query");
 }

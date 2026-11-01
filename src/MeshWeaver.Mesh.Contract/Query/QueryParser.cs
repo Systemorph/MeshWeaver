@@ -198,18 +198,41 @@ public partial class QueryParser
     public static string PathLiteral(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
+        if (TryPathLiteral(path, out var literal))
+            return literal;
+        throw new ArgumentException(
+            $"'{path}' contains both quote characters and whitespace, query syntax or a leading quote, so it cannot be written as one query value.",
+            nameof(path));
+    }
+
+    /// <summary>
+    /// <see cref="PathLiteral"/> without the refusal: <c>false</c> (and <paramref name="literal"/>
+    /// <c>null</c>) for a path no query value can hold — for a caller that leaves such a path out
+    /// rather than failing, such as the path resolver's prefix set (#7754).
+    /// </summary>
+    /// <param name="path">The node path.</param>
+    /// <param name="literal">The value to splice after <c>path:</c> or <c>namespace:</c>.</param>
+    /// <returns>Whether the path can be written as one query value.</returns>
+    public static bool TryPathLiteral(string path, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? literal)
+    {
+        ArgumentNullException.ThrowIfNull(path);
         if (!path.Contains('"') || !path.Contains('\''))
-            return QuoteLiteral(path);
+        {
+            literal = QuoteLiteral(path);
+            return true;
+        }
         // 🚨 The bare form is accepted only when it reads back as EXACTLY this one path: a bare value
         // still carries query syntax, so `a'b"c|other` would be two path alternatives and a `*`, `(`
         // or `)` a pattern or a group — a copy query aimed at a different set of nodes. Parse it
         // and demand one exact anchor equal to the input and nothing else.
         if (path.Length > 0 && path[0] is not ('"' or '\'') && !path.Any(char.IsWhiteSpace)
             && path.AsSpan().IndexOfAny(BareValueSyntax) < 0 && ReadsBackAsExactly(path))
-            return path;
-        throw new ArgumentException(
-            $"'{path}' contains both quote characters and whitespace, query syntax or a leading quote, so it cannot be written as one query value.",
-            nameof(path));
+        {
+            literal = path;
+            return true;
+        }
+        literal = null;
+        return false;
     }
 
     private const string BareValueSyntax = "|*()";
