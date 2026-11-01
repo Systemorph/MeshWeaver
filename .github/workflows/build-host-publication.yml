@@ -34,7 +34,10 @@ name: Build host — stage a host-executed run's modules for the publish lane
 #   modules:            # node-repo-module-pack.yml with publish-mode: staged and an `executor:`
 #   host-publication:
 #     needs: [modules, <every job the executor expression reads>]
-#     if: <the pack call's `publish:` condition, verbatim>
+#     if: <the pack call's `publish:` condition, verbatim — optionally behind EXACTLY the prefix
+#          `!cancelled() && !failure() && `, as its publisher may (policy
+#          publisher-tolerates-upstream-skips); a skipped pack call then leaves `lane` empty and
+#          this lane red, never a silent pass>
 #     uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main
 #     permissions: { contents: read, id-token: write }
 #     with:

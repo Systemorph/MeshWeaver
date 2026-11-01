@@ -28,7 +28,10 @@ its whole validation set, and it is deliberately built so that "the validation d
   check-caller  The caller's own workflow file, read at the caller's commit: the publishing job
                 must `needs:` (transitively) every job it declares required, must carry no status
                 function in its `if:` (`always()`/`!cancelled()` re-open the door the verdict
-                closes), must hand this lane the WHOLE needs context rather than a curated
+                closes) but EXACTLY the prefix `!cancelled() && !failure() && ` before the event
+                condition (policy publisher-tolerates-upstream-skips — the default rule skips the
+                job over ANY skipped ancestor, actions/runner#2205), must hand this lane the WHOLE
+                needs context rather than a curated
                 literal, and must account for every other job in the workflow — covered, or
                 declared unrelated with a reason. This is the half `verdict` cannot see: a
                 dependency dropped from `needs:` AND from `required-jobs` is invisible at runtime.
@@ -36,7 +39,9 @@ its whole validation set, and it is deliberately built so that "the validation d
                 (node-repo-validate.yml runs it on every satellite pull request), plus the wiring
                 one call cannot see: every `publish-mode: staged` pack call has exactly one
                 publisher reading its `lane`/`selected`/`declared` outputs, and that publisher runs
-                on exactly the events the pack call stages on. A staged pack call nobody publishes
+                on exactly the events the pack call stages on (the accepted status prefix removed
+                first, on the publisher and its build-host-publication call alike). A staged pack
+                call nobody publishes
                 would hand the registry NOTHING, silently — the FrameworkDeclined outage of #2088.
                 H7: a pack call that may run on a build host (`executor:` anything but `actions`)
                 is published THROUGH its one build-host-publication.yml call — the host graph,
@@ -94,6 +99,20 @@ GOOD = "success"
 #: `if: ${{ !cancelled() }}` on a publisher is the same defect as `continue-on-error` on a gate's
 #: input step: it makes "a dependency failed" indistinguishable from "everything was fine".
 STATUS_FUNCS = ("always", "cancelled", "failure", "success")
+#: THE ONE EXCEPTION, and only in exactly this spelling: a publishing job (and its
+#: build-host-publication call) may open its `if:` with `!cancelled() && !failure() && ` followed by
+#: the event condition. GitHub's DEFAULT rule is transitive — it skips a job when ANY ancestor was
+#: skipped, not only a direct need (actions/runner#2205) — so a caller whose graph carries by-design
+#: skips upstream (a scoped leg, a wait that had nothing to wait for) would skip its publisher on
+#: every normal run and publish NOTHING behind green checks (MeshWeaver.Plugins#4478). This prefix
+#: runs the job over upstream SKIPS and nothing else: `!failure()` still holds it back when any
+#: ancestor failed, `!cancelled()` when the run was cancelled, and the publish lane's verdict still
+#: refuses, BY NAME, every DIRECT need that did not report `success` — a skipped or cancelled direct
+#: dependency reds the hand-over exactly as before. `always()`, a bare `!cancelled()`, `success() ||
+#: failure()` and every other status-function shape stay refused.
+SKIP_TOLERANT_PREFIX = "!cancelled() && !failure() && "
+_SKIP_TOLERANT_RE = re.compile(
+    r"!\s*cancelled\s*\(\s*\)\s*&&\s*!\s*failure\s*\(\s*\)\s*&&\s*(?P<rest>.+)", re.S)
 #: The caller must hand over its WHOLE needs context, verbatim. A curated object literal would let
 #: the caller answer the verdict question with a value it chose rather than one GitHub computed.
 VERDICTS_EXPR = "${{ toJSON(needs) }}"
@@ -247,6 +266,107 @@ def _status_function_in(expr) -> str | None:
     return None
 
 
+def _outer_parens(text: str) -> str | None:
+    """The inside of `text` when ONE matching pair of parentheses encloses all of it, else None.
+
+    `(a) || (b)` is not enclosed — its first `(` closes before the end. Single-quoted literals (the
+    expression language's only string form, `''` escaping a quote) are skipped, so a parenthesis
+    inside a string does not count.
+    """
+    text = text.strip()
+    if not (text.startswith("(") and text.endswith(")")):
+        return None
+    depth, i, n = 0, 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "'":
+            i += 1
+            while i < n:
+                if text[i] == "'" and i + 1 < n and text[i + 1] == "'":
+                    i += 2
+                    continue
+                if text[i] == "'":
+                    break
+                i += 1
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0 and i != n - 1:
+                return None
+        i += 1
+    return text[1:-1].strip() if depth == 0 else None
+
+
+def _top_level_or(text: str) -> bool:
+    """True when `||` occurs outside every parenthesis and string literal in `text`."""
+    depth, i, n = 0, 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "'":
+            i += 1
+            while i < n:
+                if text[i] == "'" and i + 1 < n and text[i + 1] == "'":
+                    i += 2
+                    continue
+                if text[i] == "'":
+                    break
+                i += 1
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == "|" and text[i:i + 2] == "||" and depth == 0:
+            return True
+        i += 1
+    return False
+
+
+def _comparable(condition: str) -> str:
+    """A normalised condition with redundant ENCLOSING parentheses removed — `(a || b)` and
+    `a || b` are one condition. Nothing else is rewritten or evaluated."""
+    while (inner := _outer_parens(condition)) is not None:
+        condition = inner
+    return condition
+
+
+def _gate_condition(value) -> tuple[str, str | None]:
+    """A publishing job's `if:` → (its EVENT condition, comparable form; a problem, or None).
+
+    Accepted: no status function at all (GitHub's default rule), or EXACTLY
+    `SKIP_TOLERANT_PREFIX` + an event condition that itself carries no status function. A remainder
+    with a top-level `||` must be parenthesised: `&&` binds tighter, so
+    `!cancelled() && !failure() && a || b` runs on event `b` even after an ancestor FAILED.
+    """
+    text = _norm_condition(value)
+    m = _SKIP_TOLERANT_RE.fullmatch(text)
+    if not m:
+        fn = _status_function_in(text)
+        if fn:
+            return _comparable(text), (
+                f"uses the status function `{fn}()` outside the one accepted shape. A publishing job "
+                "runs under GitHub's default rule, or opens its `if:` with EXACTLY "
+                f"`{SKIP_TOLERANT_PREFIX.strip()}` followed by the event condition (which runs it over "
+                "upstream SKIPS and nothing else, while the publish lane's verdict still refuses every "
+                "direct need that did not succeed). `always()`, a bare `!cancelled()` and any other "
+                "status-function shape make the job run after a dependency FAILED or the run was "
+                "CANCELLED — exactly the door this lane exists to close")
+        return _comparable(text), None
+    rest = m.group("rest").strip()
+    if _outer_parens(rest) is None and _top_level_or(rest):
+        return _comparable(rest), (
+            f"opens with `{SKIP_TOLERANT_PREFIX.strip()}` but its event condition `{rest}` has a "
+            "top-level `||` outside parentheses. `&&` binds tighter than `||`, so the job would run on "
+            "that event even after an ancestor FAILED — wrap the event condition in parentheses")
+    cond = _comparable(rest)
+    fn = _status_function_in(cond)
+    if fn:
+        return cond, (
+            f"opens with `{SKIP_TOLERANT_PREFIX.strip()}` but its remainder `{rest}` uses the status "
+            f"function `{fn}()` again — after the prefix only the EVENT condition may follow")
+    return cond, None
+
+
 def check_caller(workflow: Path, uses_suffix: str, required_raw: str, unrelated_raw: str) -> int:
     try:
         import yaml
@@ -298,14 +418,9 @@ def check_caller(workflow: Path, uses_suffix: str, required_raw: str, unrelated_
         desc = _descendants(graph, pub)
         if not graph.get(pub):
             problems.append(f"`{pub}` has no `needs:` — it would publish the moment the run starts.")
-        fn = _status_function_in(job.get("if"))
-        if fn:
-            problems.append(
-                f"`{pub}`'s `if:` uses the status function `{fn}()`, which makes the job run even "
-                "when a dependency FAILED, was CANCELLED or was SKIPPED — exactly the door this "
-                "lane exists to close. A publishing job runs under GitHub's default rule (every "
-                "`needs:` succeeded) or not at all; its `if:` may gate the EVENT and nothing else "
-                f"(got: {job.get('if')!r}).")
+        _, gate_problem = _gate_condition(job.get("if"))
+        if gate_problem:
+            problems.append(f"`{pub}`'s `if:` {gate_problem} (got: {job.get('if')!r}).")
         if job.get("continue-on-error") in (True, "true"):
             problems.append(f"`{pub}` carries `continue-on-error` — a publication whose failure "
                             "does not red the run is a publication nobody is told about.")
@@ -531,11 +646,11 @@ def check_callers(root: Path) -> int:
             if pack_id not in hneed:
                 problems.append(f"{wf.name}: `{hid}` reads needs.{pack_id}.outputs but `{pack_id}` is not "
                                 "in its own `needs:` — that context resolves only for a job named there.")
-            fn = _status_function_in(hj.get("if"))
-            if fn:
-                problems.append(f"{wf.name}: `{hid}`'s `if:` uses the status function `{fn}()` — it "
-                                "would stage bytes after the pack call FAILED or was SKIPPED.")
-            stage_on, host_on = _norm_condition(pw.get("publish", False)), _norm_condition(hj.get("if"))
+            host_on, gate_problem = _gate_condition(hj.get("if"))
+            if gate_problem:
+                problems.append(f"{wf.name}: `{hid}`'s `if:` {gate_problem} — it would stage bytes after "
+                                "the pack call FAILED.")
+            stage_on = _comparable(_norm_condition(pw.get("publish", False)))
             if stage_on != host_on:
                 problems.append(
                     f"{wf.name}: `{pack_id}` stages on `{stage_on}` but `{hid}` runs on `{host_on}` — give "
@@ -632,7 +747,10 @@ def check_callers(root: Path) -> int:
                             f"{wf.name}: `{pid}` passes `{key}: {w.get(key) or ''!r}` but `{pack_id}` builds "
                             f"with {pw.get(key) or ''!r} — the newer-commit check must ask the scope about the "
                             "SAME inputs the bundles were built with.")
-            stage_on, publish_on = _norm_condition(pw.get("publish", False)), _norm_condition(pj.get("if"))
+            # Compared AFTER the one accepted status prefix is taken off (check_caller above refuses
+            # every other status-function shape): the remainder must be the pack call's condition.
+            stage_on = _comparable(_norm_condition(pw.get("publish", False)))
+            publish_on = _gate_condition(pj.get("if"))[0]
             if stage_on != publish_on:
                 problems.append(
                     f"{wf.name}: `{pack_id}` stages on `{stage_on}` but `{pid}` runs on `{publish_on}`. A "
@@ -1209,6 +1327,35 @@ jobs:
             rc, out = caller(good_caller.replace("if: github.event_name == 'push'", f"if: {expr}"))
             check(f"MUTATION: `if: {expr}` on the publisher is caught", rc == 1 and "status function" in out, out)
 
+        # THE ONE ACCEPTED STATUS SHAPE (MeshWeaver.Plugins#4478): the default rule is transitive and
+        # skips the publisher over any by-design upstream skip, so exactly `!cancelled() && !failure()
+        # && <event>` is accepted — and every looser or reordered spelling stays refused.
+        ev = "github.event_name == 'push'"
+        rc, out = caller(good_caller.replace(f"if: {ev}", f"if: ${{{{ !cancelled() && !failure() && {ev} }}}}"))
+        check("the skip-tolerant prefix `!cancelled() && !failure() && <event>` passes", rc == 0, out)
+        rc, out = caller(good_caller.replace(
+            f"if: {ev}", f"if: ${{{{ !cancelled() && !failure() && ({ev} || github.event_name == 'schedule') }}}}"))
+        check("…and with a parenthesised `||` event condition", rc == 0, out)
+        for expr, why in (
+                (f"${{{{ !cancelled() && {ev} }}}}", "status function"),
+                (f"${{{{ !failure() && {ev} }}}}", "status function"),
+                (f"${{{{ !failure() && !cancelled() && {ev} }}}}", "status function"),
+                (f"${{{{ always() && {ev} }}}}", "status function"),
+                (f"${{{{ !cancelled() || !failure() && {ev} }}}}", "status function"),
+                (f"${{{{ success() && !failure() && {ev} }}}}", "status function"),
+                ("${{ !cancelled() && !failure() }}", "status function"),
+                ("${{ !cancelled() && !failure() && always() }}", "again"),
+                (f"${{{{ !cancelled() && !failure() && {ev} && !cancelled() }}}}", "again"),
+                (f"${{{{ !cancelled() && !failure() && {ev} || github.event_name == 'schedule' }}}}", "top-level `||`"),
+                (f"${{{{ !cancelled() && !failure() && ({ev}) || (github.event_name == 'schedule') }}}}", "top-level `||`"),
+                (f"${{{{ !cancelled() && !failure() && {ev} || always() }}}}", "top-level `||`")):
+            rc, out = caller(good_caller.replace(f"if: {ev}", f"if: {expr}"))
+            check(f"MUTATION: `if: {expr}` on the publisher is caught", rc == 1 and why in out, out)
+        # Negative control on the precedence scan: a `||` inside a string literal is not top-level.
+        rc, out = caller(good_caller.replace(
+            f"if: {ev}", "if: ${{ !cancelled() && !failure() && github.event_name == 'a || b' }}"))
+        check("a `||` inside a string literal after the prefix is not read as top-level", rc == 0, out)
+
         # MUTATION 3 — the caller curates the verdicts instead of handing over the needs context.
         rc, out = caller(good_caller.replace("verdicts: ${{ toJSON(needs) }}",
                                              "verdicts: '{\"validate\":{\"result\":\"success\"}}'"))
@@ -1302,6 +1449,29 @@ jobs:
                                    "    if: ${{ !cancelled() }}\n"))
         check("MUTATION: a status function on the publisher's `if:` is caught pre-merge",
               rc == 1 and "status function" in out, out)
+        tolerant = wired.replace(
+            "    if: >\n      github.event_name == 'push' ||\n      github.event_name == 'schedule'\n    needs: [validate, modules, gate]\n",
+            "    if: >\n      !cancelled() && !failure() && (\n      github.event_name == 'push' ||\n"
+            "      github.event_name == 'schedule')\n    needs: [validate, modules, gate]\n", 1)
+        check("the skip-tolerant fixture really carries the prefix (a control on the fixture itself)",
+              tolerant != wired and "!cancelled() && !failure() && (" in tolerant, tolerant)
+        rc, out = callers(tolerant)
+        check("a publisher `!cancelled() && !failure() && (<the pack call's condition>)` passes pre-merge",
+              rc == 0, out)
+        rc, out = callers(tolerant.replace("      github.event_name == 'push' ||\n      github.event_name == 'schedule')\n",
+                                           "      github.event_name == 'push')\n", 1))
+        check("MUTATION: a skip-tolerant publisher whose event remainder is NOT the pack call's condition is caught",
+              rc == 1 and "stages on" in out, out)
+        rc, out = callers(tolerant.replace("!cancelled() && !failure() && (", "!cancelled() && (", 1))
+        check("MUTATION: a bare `!cancelled()` (no `!failure()`) on the publisher is caught pre-merge",
+              rc == 1 and "status function" in out, out)
+        rc, out = callers(tolerant.replace("!cancelled() && !failure() && (", "always() && (", 1))
+        check("MUTATION: `always() && <condition>` on the publisher is caught pre-merge",
+              rc == 1 and "status function" in out, out)
+        rc, out = callers(tolerant.replace("!cancelled() && !failure() && (\n", "!cancelled() && !failure() &&\n", 1)
+                          .replace("      github.event_name == 'schedule')\n", "      github.event_name == 'schedule'\n", 1))
+        check("MUTATION: an UNPARENTHESISED `||` remainder after the prefix is caught pre-merge",
+              rc == 1 and "top-level `||`" in out, out)
         rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: direct"))
         check("a publisher wired to a pack call that still POSTs in-leg is caught",
               rc == 1 and "not `staged`" in out, out)
@@ -1431,6 +1601,29 @@ jobs:
                                          "  host-publication:\n    if: ${{ always() }}\n", 1))
         check("MUTATION H7: a status function on build-host-publication's `if:` is caught",
               rc == 1 and "status function" in out, out)
+        host_tol = hosted.replace(
+            "  host-publication:\n    if: >\n      github.event_name == 'push' ||\n      github.event_name == 'schedule'\n",
+            "  host-publication:\n    if: >\n      !cancelled() && !failure() && (github.event_name == 'push' ||\n"
+            "      github.event_name == 'schedule')\n", 1).replace(
+            "  publish-modules:\n    if: >\n      github.event_name == 'push' ||\n      github.event_name == 'schedule'\n",
+            "  publish-modules:\n    if: >\n      !cancelled() && !failure() && (github.event_name == 'push' ||\n"
+            "      github.event_name == 'schedule')\n", 1)
+        check("the skip-tolerant host fixture carries the prefix on BOTH calls (a control on the fixture)",
+              host_tol.count("!cancelled() && !failure() && (") == 2, host_tol)
+        rc, out = callers(host_tol)
+        check("H7: build-host-publication and publisher both `!cancelled() && !failure() && (<condition>)` pass",
+              rc == 0, out)
+        rc, out = callers(host_tol.replace(
+            "  host-publication:\n    if: >\n      !cancelled() && !failure() && (github.event_name == 'push' ||\n"
+            "      github.event_name == 'schedule')\n",
+            "  host-publication:\n    if: >\n      !cancelled() && !failure() && (github.event_name == 'push')\n", 1))
+        check("MUTATION H7: a skip-tolerant build-host-publication with a mismatched remainder is caught",
+              rc == 1 and "host-publication call exactly" in out, out)
+        rc, out = callers(host_tol.replace(
+            "  host-publication:\n    if: >\n      !cancelled() && !failure() && (",
+            "  host-publication:\n    if: >\n      !cancelled() && (", 1))
+        check("MUTATION H7: a bare `!cancelled()` on build-host-publication is caught",
+              rc == 1 and "`host-publication`'s `if:`" in out and "status function" in out, out)
         rc, out = callers(hosted.replace("${{ needs.validate.outputs.executor || 'actions' }}", "actions"))
         check("MUTATION H7: a build-host-publication for a pack call that always runs on Actions is caught",
               rc == 1 and "always runs on" in out, out)
