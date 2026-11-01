@@ -42,6 +42,19 @@ On the opt-in, the order is the point. Stage 1 is the stage most likely to send 
 it runs before the stage that costs the most. A finding answered with a fix push makes a NEW head,
 and a new head restarts at stage 0 — the suites never ran on the head the review changed.
 
+## From open to production, in one list
+
+The stages above are the CI half of a longer path. The whole path — the automatic review, the
+answered threads, the fresh-merge suites, the control-plane arm, the PR babysitter, the merge,
+control-first delivery, the fleet arm and verification — is stated ONCE, as the shared rule block
+`pr-lifecycle` in core's `AGENTS.md` (section *GitHub PR Operations*). It rolls out hub-first
+([Shared Rule Blocks](../SharedRuleBlocks)): core carries it first, each repository in the register
+entry's scope (the repositories whose rulesets carry Copilot review and the review-on-change lane)
+then copies it byte-identical, and only once every copy has landed does the register require it there. Read that list for the
+order; read this page, [Review Findings Answered](../ReviewFindingsAnswered),
+[Merge Queue](../MergeQueue), [One Promotion Gate](../OnePromotionGate) and
+[Closing Keywords and Issue State](../ClosingKeywordsAndIssueState) for how each step works.
+
 ## A day in parallel, and why it was reverted
 
 On 2026-10-05 the suites briefly ran IN PARALLEL with the review (`suites-parallel-with-review`: the
@@ -417,10 +430,8 @@ that release.
 Under policy [`copilot-code-review`](../PolicyNotProse), `PrArming` is to take the same review as
 `arm_readiness`: a landed Copilot review of the pull request, on the current head or an earlier one
 (`copilot_review_of_pull_request`, policy `review-once-per-pull-request`) first, then a real
-`internal-review` run. **That port is owed** (Systemorph/MeshWeaver.Plugins#3088): until it is
-merged and deployed on the control instance, `PrArming` still requires an `internal-review` run, and
-with the internal reviewer retired it arms nothing, so a Copilot-reviewed head is not armed by the
-control plane yet.
+`internal-review` run. That port has landed (Systemorph/MeshWeaver.Plugins#3088), so the control
+plane arms a Copilot-reviewed head.
 
 ## Adoption, per repository
 

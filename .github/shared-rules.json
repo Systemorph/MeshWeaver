@@ -505,6 +505,37 @@
         "🚧 ADDITION IN FLIGHT — step 1 of 3 (this register's header): required-in names the hub only. Step 2: the",
         "spokes copy the hub text. Step 3: widen required-in to every registered repo and delete this paragraph."
       ]
+    },
+    {
+      "id": "pr-lifecycle",
+      "hub": "Systemorph/MeshWeaver",
+      "required-in": [
+        "Systemorph/MeshWeaver"
+      ],
+      "slots": [
+        "reference"
+      ],
+      "why": [
+        "The owner asked for ONE place that says how a pull request travels from open to merged, deployed and verified,",
+        "so every agent in every repository works the same process. Before this block the steps were scattered over",
+        "the GitHub PR Operations paragraphs, finish-autonomously, the review and arm-gate manuals and per-repo prose,",
+        "and each repository's agents assembled a different picture (who arms, what the babysitter does, when a",
+        "severity issue closes).",
+        "",
+        "A PROCESS block: the review, the answered-thread gate, the fresh-merge suites, the control-plane arm and the",
+        "babysitter are fleet-wide mechanisms, so the text is the same everywhere. Step 7 names both delivery shapes",
+        "(core seals a platform build, a node repository publishes its modules) so it reads true in each.",
+        "",
+        "One slot, `reference`: core links its doc pages by repository path; a spoke names the same pages in the form",
+        "that resolves there (`get Doc/Architecture/...`).",
+        "",
+        "Scope: the repositories whose rulesets carry Copilot review and the review-on-change lane — core, Plugins,",
+        "Education, Reinsurance, SocialMedia, Manufacturing, Memex. CreditReRate and DecisionModels are not in",
+        "that set and would read false guidance; they are left out until they are.",
+        "",
+        "🚧 ADDITION IN FLIGHT — step 1 of 3 (this register's header): required-in names the hub only. Step 2: the",
+        "spokes copy the hub text. Step 3: widen required-in to the scope above and delete this paragraph."
+      ]
     }
   ]
 }
