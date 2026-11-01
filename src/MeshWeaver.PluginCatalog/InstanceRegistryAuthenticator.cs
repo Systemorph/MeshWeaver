@@ -111,6 +111,17 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// </summary>
     internal IScheduler DeadlineScheduler { get; init; } = Scheduler.Default;
 
+    private InstanceKeyResolutionTally? outcomes;
+
+    /// <summary>
+    /// What every instance-key resolution on this replica answered: resolved, refused or
+    /// unavailable, with the time of the newest of each (MeshWeaver#7721). Read by
+    /// <see cref="InstanceKeyExchangeHealthCheck"/>. Timestamps come from
+    /// <see cref="DeadlineScheduler"/>, so a test on virtual time reads virtual timestamps.
+    /// </summary>
+    public InstanceKeyResolutionTally Outcomes =>
+        LazyInitializer.EnsureInitialized(ref outcomes, () => new InstanceKeyResolutionTally(() => DeadlineScheduler.Now));
+
     /// <summary>
     /// Retained for source compatibility with callers compiled outside this repository (in-mesh
     /// control planes cannot be swept from here). Since #3119 there is NO verdict to forget: every
@@ -180,7 +191,10 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                 logger.LogWarning(ex, "Instance key resolution UNAVAILABLE for hash prefix {Prefix} "
                     + "— reporting retryable, NOT 'unknown key'", InstanceKeys.HashPrefix(hash));
                 return Observable.Return(InstanceAuthResult.Unavailable(ex.Message));
-            });
+            })
+            // Counted AFTER the catch, so a faulted read is counted as what the caller is told
+            // (unavailable), and once per answer the caller receives.
+            .Do(Outcomes.Record);
     }
 
     /// <summary>
