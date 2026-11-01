@@ -66,6 +66,33 @@ closes on **post-roll production verification**, never on a merge — policy
 [`severity-closes-on-verification`](/Doc/Architecture/PolicyNotProse). `sev:M`, `sev:L`, `chore`, `enhancement` and
 `documentation` issues carry no such obligation and close on a merge as they always did.
 
+**When the production event cannot be provoked.** Some fixes are exercised only by an event nobody
+can produce on demand: it needs a second identity, a race, a natural event such as a CI backlog or a
+cancelled bake, or a test that would destroy data. Waiting for that event would keep the issue open
+indefinitely on a fix that is in fact deployed, so the policy closes such an issue on three pieces
+of evidence together:
+
+1. **the fix is merged**;
+2. **a merged regression test fails without the fix** — the deterministic stand-in for the event
+   that cannot be provoked, so it must be shown red on the unfixed code, not merely green on the
+   fixed one;
+3. **the fix is running on the affected instance(s)** — the running image or build read off the
+   instance, never inferred from a green CD run.
+
+The close is by hand, after (3), with a closing comment that names all three — the merge, the test,
+and the instance with what it runs — and says *reopen if it recurs*. A recurrence is then the
+production verification arriving late, and it reopens the issue rather than filing a new one.
+
+**When the only remaining step is the owner's hand action.** An issue whose fix is complete except
+for a step only the owner can take (a click, a grant, a provisioning act) closes with that step
+recorded on the owner's checklist, and reopens if the step reveals a defect. The open step lives on
+the checklist; it does not hold a release-blocking count open on work an agent can no longer move.
+
+Neither route lets a merge close the issue — the running fix in (3) and the checklist entry both
+come after the merge — so the gate below is unchanged by them. A later pull request whose body
+closes such an issue after the evidence exists declares it with `Verified-closing:` like any other
+verified close, naming the three pieces of evidence as its reason.
+
 🚨 **A duplicate is not an exception, it is a different close.** A closing keyword closes an issue
 as *completed*. An issue that is a duplicate, superseded or not-planned wants that state reason
 instead — so it gets `Refs #N` in the body and a close by hand, with the comment that says where

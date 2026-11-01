@@ -87,6 +87,15 @@ the seven gated repositories — 14 gates — so a release proposal cannot reach
 open. The pattern it uses is the long-running check (`get Governance/Skill/long-running-check`); see
 [Release Process](../ReleaseProcess) for what a release then is.
 
+What takes an issue OUT of that count is equally a rule, because a close is what turns the gate
+green: a `sev:B` / `sev:H` issue closes on **post-roll production verification**, never on the merge
+that lands its fix — policy [`severity-closes-on-verification`](../PolicyNotProse). Where the event
+that would exercise the fix cannot be provoked, it closes on the fix merged, a merged regression test
+that fails without it, and the fix running on the affected instance(s), named together in the
+closing comment with *reopen if it recurs*; and an issue waiting only on the owner's hand action
+closes with that step on the owner's checklist. The routes and the gate that refuses a merge-close
+are in [Closing Keywords and Issue State](../ClosingKeywordsAndIssueState).
+
 ### Two rules that keep the gate honest
 
 **1. A blocking severity is never assigned by guess — and never REMOVED to clear the gate.** If you
