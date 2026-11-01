@@ -327,6 +327,32 @@ name (`content.targetPartition` — `PackageAnchor` already reads it); `GitHubSy
 at `{space}/_GitSync`, so a repo → spaces index written on config save removes the per-webhook
 fan-out.
 
+## A URL with a quote in it (#7754)
+
+An anchored query can still reach the planner unanchored when the TEXT it is written in does not
+parse the way it was meant. The path resolver asks one prefix-set query per uncached path
+(then `path:"a/b/c"|"a/b"|"a"`) and used to write each quote by hand. A request for
+`/"_content/MeshWeaver.Blazor.Portal/Layout/PortalLayoutBase.razor.js"` — a string literal lifted
+out of page source, quotes and all — misses the static-asset exclusion (it does not start with
+`/_content`), lands on the catch-all page, and became `path:""_content/…""|…|""_content"`. That
+parses to no path at all, so the planner served it as a UNION over every partition schema and
+reported it as `[FanOut] UNANCHORED`: an anonymous request bought a whole-database fan-out.
+
+The resolver now writes each prefix with `QueryParser.TryPathLiteral` (single quotes for a value
+that holds a double quote, bare for one that holds both quote characters) into a
+`path:("a/b/c" OR "a/b" OR "a")` list, and keeps a value only when it reads back as exactly that
+prefix inside the list. A prefix with both quote characters such as `acme/a"b/c'd` still resolves
+to its own node; only a prefix no value can hold (both quotes plus whitespace, query syntax or a
+leading quote) is left out, and a path where every prefix is like that resolves to nothing without
+querying. The rule for every caller that splices a
+value into query text is the same: never hand-quote — use `QueryParser.QuoteLiteral` or
+`QueryParser.PathLiteral`. Pinned by `PathResolutionPrefixQueryIsAnchoredTest` (Hosting.Test), whose
+negative control parses the old hand-quoted text and finds it unanchored.
+
+The incident's first shape, a bare `scope:descendants <term>` from the global search bar's
+plain-text submit, was declared `partitions:all` in MeshWeaver.Plugins (#5508) and has not been seen
+since its image left the portal.
+
 ## The elimination plan
 
 ### 1. The bell: deliver notifications to the RECIPIENT's partition
