@@ -336,13 +336,17 @@ public static class UserActivityLayoutAreas
         // Every gate is evaluated for the VIEWER captured on the render turn — the admin verdict, the
         // permission floor and the viewer-home gate — and only the home's OWNER gets cards: the start
         // page is personal, and the area is addressable directly by anyone who can read the user node.
-        if (HomeCardsViewer(host.ViewerContext, OwnerIdOf(userPath)) is not { } viewerId)
+        var ownerId = OwnerIdOf(userPath);
+        if (HomeCardsViewer(host.ViewerContext, ownerId) is not { } viewerId)
             return Observable.Return<UiControl?>(Controls.Stack);
         var userNode = host.Workspace.GetMeshNodeStream().Select(node => (MeshNode?)node).StartWith((MeshNode?)null);
+        // The admin verdict and the permission floor read the viewer's ACTUAL identity; the viewer-home gate
+        // gets the CONFIRMED home (the owner check above may have matched a UPN/GUID sign-in through its
+        // e-mail alias, so the raw viewer id need not equal the home path).
         return catalog.Contributions
             .CombineLatest(userNode, AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerId), host.Hub.GetEffectivePermissions(userPath, viewerId),
                 (contributions, node, isAdmin, permissions) => UiContributionProjection.FilterInboxAreas(
-                    UiContributionProjection.ProjectHomeAreas(contributions, userPath, node, isAdmin, viewerId), permissions))
+                    UiContributionProjection.ProjectHomeAreas(contributions, userPath, node, isAdmin, ownerId), permissions))
             .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal)
             .Select(areas => (UiControl?)HomeCards(host.Hub.Address, areas));
     }

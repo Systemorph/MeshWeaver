@@ -74,6 +74,18 @@ public class HomeCardsContributionTest
         UserActivityLayoutAreas.HomeCardsViewer(new AccessContext { ObjectId = "jroe", Name = "Jane Roe", IsVirtual = true }, "jroe")
             .Should().BeNull("a virtual viewer gets none");
         UserActivityLayoutAreas.HomeCardsViewer(null, "jroe").Should().BeNull("no viewer captured, no cards");
+
+        // The viewer-home gate is decided on the CONFIRMED home, so an entry excluded from the viewer's own
+        // home stays excluded whatever identity form the viewer signed in with.
+        var excluded = new[]
+        {
+            C("Edu/HomeCards/NotOnOwnHome", new UiContribution
+            {
+                Context = UiContribution.HomeContext, Area = "A", Gates = new UiContributionGates { ExcludeViewerHome = true },
+            }),
+        };
+        UiContributionProjection.ProjectHomeAreas(excluded, "jroe", UserHome, isAdmin: false, viewerId: "jroe")
+            .Should().BeEmpty("ExcludeViewerHome holds on the confirmed home");
     }
 
     [Fact]
