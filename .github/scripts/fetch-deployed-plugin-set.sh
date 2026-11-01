@@ -46,6 +46,27 @@ api() {
   python3 "$api_helper" "$1" || rc=$?
   return "$rc"
 }
+# download_artifact <name> <dir> — the artifact <name> of the CHOSEN run, unpacked into <dir>, through
+# the same classifier (MeshWeaver#7448). This was `gh run download … || "if gh printed a rate limit
+# above, this is NO VERDICT"`: a sentence that asked the reader to classify the outage the script had
+# not. Now a rate limit / 5xx / dropped connection past the budget exits 3 naming the reset, and a 404
+# (the artifact expired between the listing and the download) is a plain red, never NO VERDICT.
+download_artifact() {
+  local name="$1" dir="$2" id rc=0 zip
+  id=$(jq -r --arg n "$name" '[.artifacts[] | select(.expired == false and .name == $n) | .id] | first // empty' <<<"$chosen_arts")
+  [ -n "$id" ] || { echo "::error::run $chosen advertises $name but its listing carries no id for it — no verdict." >&2; exit 1; }
+  zip="$(mktemp "${TMPDIR:-/tmp}/deployed-set.XXXXXX")"
+  python3 "$api_helper" "repos/$repo/actions/artifacts/$id/zip" --download "$zip" || rc=$?
+  case "$rc" in
+    0) ;;
+    4) rm -f "$zip"; echo "::error::run $chosen advertised $name (artifact $id) but GitHub answered 404 for its download — it expired or was deleted after the listing; no verdict over a set that cannot be read." >&2; exit 1 ;;
+    *) rm -f "$zip"; stop_unless_absent "$rc" "downloading $name (artifact $id) of run $chosen" ;;
+  esac
+  mkdir -p "$dir"
+  python3 -m zipfile -e "$zip" "$dir" \
+    || { rm -f "$zip"; echo "::error::the $name artifact of run $chosen downloaded but is not a readable zip — no verdict." >&2; exit 1; }
+  rm -f "$zip"
+}
 # stop_unless_absent <rc> <what> — return 0 for a 404 (skip it), otherwise end the script red.
 stop_unless_absent() {
   case "$1" in
@@ -85,6 +106,7 @@ if [ -z "$runs" ]; then
 fi
 
 chosen=""
+chosen_arts=""
 chosen_sha=""
 for run in $runs; do
   # The artifact must come from main-cd (any other workflow uploading the same name is not a set).
@@ -104,20 +126,18 @@ for run in $runs; do
   [ "$complete" -eq 1 ] || continue
   jobs=$(api "repos/$repo/actions/runs/$run/jobs?per_page=100") || { stop_unless_absent $? "listing the jobs of run $run"; continue; }
   promoted=$(jq -r '[.jobs[] | select(.name | startswith("Promote:")) | .conclusion] | first // empty' <<<"$jobs")
-  if [ "$promoted" = "success" ]; then chosen="$run"; chosen_sha=$(jq -r '.head_sha' <<<"$run_json"); break; fi
+  if [ "$promoted" = "success" ]; then chosen="$run"; chosen_arts="$arts"; chosen_sha=$(jq -r '.head_sha' <<<"$run_json"); break; fi
 done
 
 [ -n "$chosen" ] || { echo "::error::no COMPLETED main-cd run on main that still holds an unexpired $full_set artifact (or, before the first one exists, all four legacy module-bundle-* artifacts) also PROMOTED its set — the deployed plugin set is not available, so no compatibility verdict can be given. A green main-cd run re-publishes it (published-modules reads the sealed plugins publication); do NOT waive this check."; exit 1; }
 
 if [ "$shape" = "full" ]; then
-  gh run download "$chosen" -R "$repo" -n "$full_set" -D "$out" \
-    || { echo "::error::run $chosen advertises $full_set but it could not be downloaded — if gh printed a rate limit above, this is NO VERDICT: re-run after the reset"; exit 1; }
+  download_artifact "$full_set" "$out"
   # 🚨 Every module the publication's index lists must be on the ladder (#7409) — or RED.
   python3 "$coverage_check" --index "$out/$full_set.index" --bundles-dir "$out"
 else
   for m in "${legacy_modules[@]}"; do
-    gh run download "$chosen" -R "$repo" -n "module-bundle-$m" -D "$out/$m" \
-      || { echo "::error::run $chosen advertises module-bundle-$m but it could not be downloaded — if gh printed a rate limit above, this is NO VERDICT: re-run after the reset"; exit 1; }
+    download_artifact "module-bundle-$m" "$out/$m"
   done
   n=$(find "$out" -name '*.module.nupkg' | wc -l | tr -d ' ')
   [ "$n" -eq "${#legacy_modules[@]}" ] || { echo "::error::expected ${#legacy_modules[@]} module bundles from run $chosen, found $n"; exit 1; }
