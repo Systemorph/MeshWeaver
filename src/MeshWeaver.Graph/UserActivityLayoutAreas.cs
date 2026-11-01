@@ -341,12 +341,12 @@ public static class UserActivityLayoutAreas
             return Observable.Return<UiControl?>(Controls.Stack);
         var userNode = host.Workspace.GetMeshNodeStream().Select(node => (MeshNode?)node).StartWith((MeshNode?)null);
         // The admin verdict and the permission floor read the viewer's ACTUAL identity; the viewer-home gate
-        // gets the CONFIRMED home (the owner check above may have matched a UPN/GUID sign-in through its
-        // e-mail alias, so the raw viewer id need not equal the home path).
+        // gets the CONFIRMED home PATH — the owner check above may have matched a UPN/GUID sign-in through its
+        // e-mail alias, and a legacy `User/{id}` home's path is not the owner id either.
         return catalog.Contributions
             .CombineLatest(userNode, AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerId), host.Hub.GetEffectivePermissions(userPath, viewerId),
                 (contributions, node, isAdmin, permissions) => UiContributionProjection.FilterInboxAreas(
-                    UiContributionProjection.ProjectHomeAreas(contributions, userPath, node, isAdmin, ownerId), permissions))
+                    UiContributionProjection.ProjectHomeAreas(contributions, userPath, node, isAdmin, userPath), permissions))
             .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal)
             .Select(areas => (UiControl?)HomeCards(host.Hub.Address, areas));
     }

@@ -86,6 +86,9 @@ public class HomeCardsContributionTest
         };
         UiContributionProjection.ProjectHomeAreas(excluded, "jroe", UserHome, isAdmin: false, viewerId: "jroe")
             .Should().BeEmpty("ExcludeViewerHome holds on the confirmed home");
+        var legacyHome = MeshNode.FromPath("User/jroe") with { NodeType = UserNodeType.NodeType };
+        UiContributionProjection.ProjectHomeAreas(excluded, "User/jroe", legacyHome, isAdmin: false, viewerId: "User/jroe")
+            .Should().BeEmpty("a legacy User/{id} home: the region passes the confirmed home PATH, so the gate holds there too");
     }
 
     [Fact]
