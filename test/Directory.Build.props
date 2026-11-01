@@ -125,6 +125,51 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     </ItemGroup>
+
+  <!-- ================= The per-test bound: every test assembly runs on a bounded host =================
+
+       🚨 xunit.v3 has NO `methodTimeout` setting. Its config reader (4.0.2) knows no such key and
+       drops it silently, so a test that declares no [Fact(Timeout = …)] ran UNBOUNDED, and one that
+       never returned killed its whole suite at the host's wall-clock cap with no verdict
+       (MeshWeaver.Plugins#4424: MeshWeaver.AI.Test, 14 minutes held by one test).
+
+       The `methodTimeout` in xunit.runner.json is made real by the execution host instead:
+       MeshWeaver.Testing.Xunit.BoundedTestFramework gives every case with no timeout of its own that
+       bound, so xunit fails it BY NAME at the bound, and a TimeoutWitness writes one dump of the process
+       (the stuck thread's frame) into the CI dump directory. See Doc/Architecture/WritingTests,
+       "The per-test bound".
+
+       How an assembly gets it: this file references the host and declares
+       [assembly: Xunit.TestFramework(typeof($(MeshWeaverTestFramework)))] for every test project
+       (BoundedTestFramework unless the project sets the property, e.g. to MeshTestFramework, which
+       carries the same bound). Satellites get it the same way, since they import this file for their
+       *.Test projects. A project that already names a framework IN SOURCE keeps its own and nothing is
+       emitted (the target below reads the sources), so adopting this needs no satellite edit.
+       `none` opts out entirely, which leaves the project UNBOUNDED: do not. -->
+  <PropertyGroup>
+    <MeshWeaverTestFramework Condition="'$(MeshWeaverTestFramework)' == ''">MeshWeaver.Testing.Xunit.BoundedTestFramework</MeshWeaverTestFramework>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(MeshWeaverTestSupportLibrary)' != 'true' AND '$(MeshWeaverTestFramework)' != 'none'">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)MeshWeaver.Testing.Xunit\MeshWeaver.Testing.Xunit.csproj"
+                      Condition="'$(MSBuildProjectName)' != 'MeshWeaver.Testing.Xunit'" />
+    <AssemblyAttribute Include="Xunit.TestFrameworkAttribute">
+      <_Parameter1>$(MeshWeaverTestFramework)</_Parameter1>
+      <_Parameter1_TypeName>System.Type</_Parameter1_TypeName>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <!-- A framework declared in source wins: emitting a second [assembly: TestFramework] is CS0579.
+       Only a line that IS the attribute counts (a doc comment quoting it does not). The pattern
+       writes the opening parenthesis as [(] so it never reads as an unbalanced one. -->
+  <Target Name="MeshWeaverKeepSourceDeclaredTestFramework" BeforeTargets="GetAssemblyAttributes"
+          Condition="'$(MeshWeaverTestSupportLibrary)' != 'true' AND '$(MeshWeaverTestFramework)' != 'none'">
+    <ItemGroup>
+      <_MwCompileSource Include="@(Compile)" Condition="Exists('%(FullPath)')">
+        <DeclaresTestFramework>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '(?m)^\s*\[\s*assembly\s*:\s*(global::)?(Xunit\.)?TestFramework(Attribute)?\s*[(]'))</DeclaresTestFramework>
+      </_MwCompileSource>
+      <_MwSourceDeclaredTestFramework Include="@(_MwCompileSource)" Condition="'%(DeclaresTestFramework)' == 'True'" />
+      <AssemblyAttribute Remove="Xunit.TestFrameworkAttribute" Condition="'@(_MwSourceDeclaredTestFramework)' != ''" />
+    </ItemGroup>
+  </Target>
   <!-- xunit.runner.json — the shared single-threaded default, UNLESS a project ships its own
        next to its .csproj.
 
@@ -225,10 +270,10 @@
 
          * parallelizeTestCollections becomes TRUE and maxParallelThreads becomes the core count,
            on suites that are single-threaded precisely because parts of them are not parallel-safe;
-         * methodTimeout (30 s) disappears entirely.
+         * methodTimeout (the per-test bound the execution host reads from that file) disappears entirely.
 
        The second one is why this guard belongs to the hang investigation (#2865). With
-       methodTimeout in force a wedged test is killed at 30 s and its transcript is WRITTEN — the
+       methodTimeout in force a wedged test is failed at the bound and its transcript is WRITTEN — the
        "strictly better witness" #2865 identifies. Without it, nothing bounds the test, the shard
        runs to its wall-clock cap, the host is killed (exit=124 / HOST_CRASHED) and the in-flight
        test's transcript is DESTROYED — which is the structural obstacle that issue records as the
