@@ -51,11 +51,31 @@ public static class CuspPalette
     /// <param name="lightness">OKLab lightness in [0, 1].</param>
     /// <param name="saturation">0 (grey) to 1 (through the cusp).</param>
     public static OklchColor ColorAt(double hue, double lightness, double saturation = DefaultSaturation)
+        => Curve.Of(hue).At(lightness, saturation);
+
+    /// <summary>
+    /// One hue's curve with its cusp found ONCE, so an operation that samples many lightnesses of a
+    /// fixed hue (a ramp, a contrast walk) pays the cusp search once rather than per sample. It lives
+    /// for one call — nothing is cached between operations.
+    /// </summary>
+    private readonly record struct Curve(double H, double CuspL, double CuspC)
     {
-        var h = OklchColor.Normalize(hue);
+        public static Curve Of(double hue)
+        {
+            var h = OklchColor.Normalize(hue);
+            var (l, c) = OklabGamut.Cusp(h);
+            return new Curve(h, l, c);
+        }
+
+        public OklchColor At(double lightness, double saturation) => Sample(this, lightness, saturation);
+    }
+
+    private static OklchColor Sample(Curve curve, double lightness, double saturation)
+    {
+        var h = curve.H;
         var s = Math.Clamp(saturation, 0, 1);
         var l = Math.Clamp(lightness, 0, 1);
-        var cusp = OklabGamut.Cusp(h);
+        var cusp = (L: curve.CuspL, C: curve.CuspC);
 
         // p0 = (0, 0), p1 = cusp, p2 = (1, 0) in (L, C).
         var q0L = s * cusp.L;
@@ -102,11 +122,12 @@ public static class CuspPalette
         ArgumentOutOfRangeException.ThrowIfNegative(count);
         var c = Math.Clamp(contrast ?? DefaultContrast(count), 0, 1);
         var b = Math.Clamp(brightness, 0, 1);
+        var curve = Curve.Of(hue);
         var builder = ImmutableArray.CreateBuilder<OklchColor>(count);
         for (var i = 0; i < count; i++)
         {
             var t = count <= 1 ? 0.5 : (double)i / (count - 1);
-            builder.Add(ColorAt(hue, LightnessAt((1 - c) * b + t * c), saturation));
+            builder.Add(curve.At(LightnessAt((1 - c) * b + t * c), saturation));
         }
         return builder.MoveToImmutable();
     }
@@ -130,11 +151,12 @@ public static class CuspPalette
         // Map the lightness ends into the paper's x domain so the steps keep its perceptual spacing.
         var x0 = XForLightness(Math.Min(minLightness, maxLightness));
         var x1 = XForLightness(Math.Max(minLightness, maxLightness));
+        var curve = Curve.Of(hue);
         var builder = ImmutableArray.CreateBuilder<OklchColor>(count);
         for (var i = 0; i < count; i++)
         {
             var t = count <= 1 ? 0.5 : (double)i / (count - 1);
-            builder.Add(ColorAt(hue, LightnessAt(x0 + t * (x1 - x0)), saturation));
+            builder.Add(curve.At(LightnessAt(x0 + t * (x1 - x0)), saturation));
         }
         return builder.MoveToImmutable();
     }
@@ -161,14 +183,16 @@ public static class CuspPalette
         var c = Math.Clamp(contrast ?? DefaultContrast(count), 0, 1);
         var b = Math.Clamp(brightness, 0, 1);
         var side = count / 2;
+        var start = Curve.Of(hueStart);
+        var end = Curve.Of(hueEnd);
         var left = new OklchColor[side];
         var right = new OklchColor[side];
         for (var i = 0; i < side; i++)
         {
             var t = 2.0 * i / (count - 1);
             var l = LightnessAt((1 - c) * b + t * c);
-            left[i] = ColorAt(hueStart, l, saturation);
-            right[i] = ColorAt(hueEnd, l, saturation);
+            left[i] = start.At(l, saturation);
+            right[i] = end.At(l, saturation);
         }
 
         var builder = ImmutableArray.CreateBuilder<OklchColor>(count);
@@ -176,7 +200,7 @@ public static class CuspPalette
         if (count % 2 == 1)
         {
             var l = LightnessAt((1 - c) * b + c);
-            builder.Add(Mix(ColorAt(hueStart, l, saturation), ColorAt(hueEnd, l, saturation)));
+            builder.Add(Mix(start.At(l, saturation), end.At(l, saturation)));
         }
         for (var i = side - 1; i >= 0; i--)
             builder.Add(right[i]);
@@ -234,6 +258,7 @@ public static class CuspPalette
         }
 
         const double step = 0.0025;
+        var curve = Curve.Of(color.H);
         var steps = (int)Math.Ceiling(1 / step);
         for (var k = 1; k <= steps; k++)
         {
@@ -241,7 +266,7 @@ public static class CuspPalette
             {
                 // Clamped, so the walk reaches the endpoints themselves (L = 0 and L = 1).
                 var l = Math.Clamp(color.L + direction * k * step, 0, 1);
-                var candidate = Quantize(ColorAt(color.H, l, saturation));
+                var candidate = Quantize(curve.At(l, saturation));
                 if (candidate.ContrastRatio(fg) >= minContrast)
                 {
                     result = candidate;
