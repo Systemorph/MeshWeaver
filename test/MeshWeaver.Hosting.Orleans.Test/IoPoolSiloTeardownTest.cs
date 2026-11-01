@@ -352,6 +352,79 @@ public class IoPoolSiloTeardownTest
     }
 
     /// <summary>
+    /// 🚨 #7277, the <c>Query=0</c> shape: the silo stop's <c>Dispose()</c> hands the pool token's
+    /// cancel to the pool's canceller thread, and that cancel runs every pooled subscription's
+    /// downstream teardown inline. One teardown callback that parks keeps the cancel from returning,
+    /// so disposal never completes — while no LEAF is in flight. Before this fix the expiry then read
+    /// <c>Did NOT report: Query=0.</c>, naming nothing (three production occurrences): the cancel's
+    /// label was set only by <c>Drain()</c>'s own join, which the Dispose path never runs. The report
+    /// must name the parked cancel AND carry the canceller thread's stack, whose top is the parked frame.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task WhenTheJoinExpiresOverAParkedCancel_TheReportNamesTheCancelAndTheFrameItIsParkedIn()
+    {
+        var registry = new IoPoolRegistry(new IoPoolOptions { SiloJoinBudget = TimeSpan.FromMilliseconds(300) });
+        var services = new ServiceCollection();
+        services.AddSingleton(registry);
+        await using var provider = services.BuildServiceProvider();
+        var logger = new CapturingLogger();
+        var observer = (ILifecycleObserver)new IoPoolSiloTeardown(provider, logger);
+        await observer.OnStart(TestContext.Current.CancellationToken);
+
+        // A live pooled subscription whose subscribe RETURNS (so no leaf is in flight) and whose
+        // OnCompleted — run by the pool's cancel — parks. `subscribed` travels leaf → test; `release`
+        // travels test → the deliberately parked callback, written in the finally.
+        var subscribed = new AsyncSubject<Unit>();
+        var release = 0;
+        using var subscription = registry.Get(IoPoolNames.Query)
+            .SubscribeThroughPool(Observable.Create<int>(_ =>
+            {
+                subscribed.OnNext(Unit.Default);
+                subscribed.OnCompleted();
+                return Disposable.Empty;
+            }))
+            .Subscribe(_ => { }, _ => { }, () => ParkedInsideATeardownCallback(() => Volatile.Read(ref release) == 1));
+
+        try
+        {
+            await subscribed.Should().Within(Budget).Emit(
+                "precondition: the pooled subscription is live, so the cancel has a callback to run");
+            registry.TotalInFlight.Should().Be(0,
+                "precondition: the subscribe returned, so no LEAF is in flight — this is the Query=0 shape");
+
+            await observer.OnStop(TestContext.Current.CancellationToken);
+
+            var expiry = logger.Entries.Should().ContainSingle(
+                    e => e.Level == LogLevel.Error && e.Message.Contains("did not finish within", StringComparison.Ordinal),
+                    "the parked cancel holds disposal back, so the join expires")
+                .Subject.Message;
+            expiry.Should().NotContain($"{IoPoolNames.Query}=0.",
+                "the production line named nothing: a residual must never read as an anonymous zero")
+                .And.Contain($"{IoPoolNames.Query}=1 [",
+                    "the parked cancel is one unit of work the pool has not let go of, and it is named")
+                .And.Contain("cancel had not returned",
+                    "the name says the pool token's cancel is still running a teardown callback");
+
+            logger.Entries.Should().ContainSingle(
+                    e => e.Level == LogLevel.Warning && e.Message.Contains("still holds managed thread", StringComparison.Ordinal),
+                    "the canceller's thread is read like any synchronous leaf's")
+                .Subject.Message.Should().Contain("IoPool-cancel")
+                .And.Contain(nameof(ParkedInsideATeardownCallback),
+                    "the top of the canceller's stack is the callback it is parked in — the frame to fix")
+                .And.NotContain("could not be read");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+    }
+
+    /// <summary>The teardown frame the report must name. Not inlined, so it is a frame of its own.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ParkedInsideATeardownCallback(Func<bool> released) =>
+        SpinWait.SpinUntil(released, Budget);
+
+    /// <summary>
     /// 🚨 A leaf that RETURNS between the expiry's snapshot and the dump hands its thread back, and the
     /// stack read from that thread is then whatever it ran next (review of #7584). The thread id cannot
     /// tell the two apart; the leaf's ticket can. Here the leaf is released the moment the expiry is
