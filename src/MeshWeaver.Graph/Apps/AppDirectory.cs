@@ -80,6 +80,15 @@ public sealed record AppRoot(
     /// <summary>The content's <c>launcherGroupOrder</c> — see <see cref="App.GroupOrder"/>; 0 = none.</summary>
     public int LauncherGroupOrder { get; init; }
 
+    /// <summary>
+    /// The content's <c>adminOnly</c>: the tile is shown to a GLOBAL ADMIN only, like the
+    /// Administration built-in. A launcher-visibility switch and nothing else — it grants no read,
+    /// takes none away, and leaves the package's skills, agents and node types working for every
+    /// viewer (Feedback: everyone still files through <c>/feedback</c>, only the review app is an
+    /// admin tile). Only a literal <c>true</c> opts in.
+    /// </summary>
+    public bool AdminOnly { get; init; }
+
     /// <summary>Where the tile opens: the entry point, else the root.</summary>
     public string OpenPath => string.IsNullOrWhiteSpace(EntryPoint) ? Path : EntryPoint!.Trim('/');
 
@@ -491,7 +500,8 @@ public sealed class AppDirectory
 
     /// <summary>
     /// The viewer's list from the visible roots and the admin flag: Settings, Inbox, and — for a
-    /// global admin — Administration, then the apps by name. A root that IS a built-in's target
+    /// global admin — Administration, then the apps by name (an <see cref="AppRoot.AdminOnly"/>
+    /// app for a global admin only). A root that IS a built-in's target
     /// (the <c>Admin</c> root) never appears twice. Pure.
     /// </summary>
     public static ImmutableList<AppDirectoryEntry> Compose(
@@ -501,6 +511,7 @@ public sealed class AppDirectory
         var builtInIds = builtIns.Select(b => b.Id).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
         var apps = visibleRoots
             .Where(r => !builtInIds.Contains(r.Path))
+            .Where(r => isGlobalAdmin || !r.AdminOnly)
             .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(r => r.Path, StringComparer.OrdinalIgnoreCase)
             .Select(r => new AppDirectoryEntry(
@@ -581,6 +592,7 @@ public sealed class AppDirectory
             && o.TryGetInt32(out var parsedOrder)
             ? parsedOrder
             : 0;
+        var adminOnly = Property(content, "adminOnly") is { ValueKind: JsonValueKind.True };
         return new AppRoot(
             node.Path,
             string.IsNullOrWhiteSpace(node.Name) ? node.Path : node.Name!,
@@ -592,6 +604,7 @@ public sealed class AppDirectory
             HostedIn = string.IsNullOrWhiteSpace(hostedIn) ? null : hostedIn.Trim(),
             LauncherGroup = launcherGroup,
             LauncherGroupOrder = groupOrder,
+            AdminOnly = adminOnly,
         };
     }
 
