@@ -47,8 +47,10 @@ and a new head restarts at stage 0 — the suites never ran on the head the revi
 The stages above are the CI half of a longer path. The whole path — the automatic review, the
 answered threads, the fresh-merge suites, the control-plane arm, the PR babysitter, the merge,
 control-first delivery, the fleet arm and verification — is stated ONCE, as the shared rule block
-`pr-lifecycle` in core's `AGENTS.md` (section *GitHub PR Operations*), and every repository of the
-fleet carries it byte-identical ([Shared Rule Blocks](../SharedRuleBlocks)). Read that list for the
+`pr-lifecycle` in core's `AGENTS.md` (section *GitHub PR Operations*). It rolls out hub-first
+([Shared Rule Blocks](../SharedRuleBlocks)): core carries it first, each repository in the register
+entry's scope (the repositories whose rulesets carry Copilot review and the review-on-change lane)
+then copies it byte-identical, and only once every copy has landed does the register require it there. Read that list for the
 order; read this page, [Review Findings Answered](../ReviewFindingsAnswered),
 [Merge Queue](../MergeQueue), [One Promotion Gate](../OnePromotionGate) and
 [Closing Keywords and Issue State](../ClosingKeywordsAndIssueState) for how each step works.
