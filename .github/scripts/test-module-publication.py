@@ -211,7 +211,7 @@ def main() -> int:  # noqa: C901
                 "LANE": LANE, "SELECTED": "MeshWeaver.AI",
                 "DECLARED": json.dumps(MODULES),
                 "REGISTRY": registry.url, "REGISTRY_SOURCE": "Plugins",
-                "LEDGER": "off", "MW_PUBLISH_TOKEN": "tok_test",
+                "LEDGER": "off", "MW_PUBLISH_TOKEN": "tok_test", "NEWEST_ONLY": "false",
             }
 
             def do_publish(**over):
@@ -305,6 +305,27 @@ def main() -> int:  # noqa: C901
             check("none of those reached the registry", len(registry.requests) == before,
                   f"{len(registry.requests) - before} extra request(s)")
 
+            print("\n== publish-newest-only: the hand-over reads the newer-commit decision, and never runs without it")
+            before = len(registry.requests)
+            sup = ws / "_temp" / "superseded.json"
+            sup.unlink(missing_ok=True)
+            r = do_publish(NEWEST_ONLY="true")
+            check("newest-only ON with NO decision written is RED (the check never ran)",
+                  r.returncode == 1 and "no newer-commit decision" in (r.stdout + r.stderr), r.stdout + r.stderr)
+            r = do_publish(NEWEST_ONLY="")
+            check("an unreadable newest-only flag is RED", r.returncode == 1, r.stdout + r.stderr)
+            check("…neither reached the registry", len(registry.requests) == before)
+            sup.write_text(json.dumps({"lane": LANE, "superseded": {"MeshWeaver.AI": "trunk tip reaches it"}}))
+            r = do_publish(NEWEST_ONLY="true")
+            check("a module the newer trunk tip reaches is STOOD DOWN — green, and the registry hears nothing",
+                  r.returncode == 0 and "STOOD DOWN" in r.stdout and len(registry.requests) == before,
+                  r.stdout + r.stderr)
+            sup.write_text(json.dumps({"lane": LANE, "superseded": {}}))
+            r = do_publish(NEWEST_ONLY="true")
+            check("NEGATIVE CONTROL: nothing newer reaches it — it IS handed over",
+                  r.returncode == 0 and len(registry.requests) == before + 1, r.stdout + r.stderr)
+            sup.unlink()
+
             print("\n== A registry refusal is a RED, and is not recorded as published")
             refusing = Registry(status=409)
             try:
@@ -344,6 +365,125 @@ def main() -> int:  # noqa: C901
                   r.stdout + r.stderr)
         finally:
             registry.close()
+
+    print("\n== publish-newest-only: the REAL `newer` step, over a scratch trunk and the real scope script")
+    newer_body = extract_step(PUBLISH_WORKFLOW, "newer")
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+
+        def git(*a, cwd):
+            return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+        src = td / "trunk"
+        src.mkdir()
+        git("init", "-q", "-b", "main", cwd=src)
+        git("config", "user.email", "ci@example.com", cwd=src)
+        git("config", "user.name", "ci", cwd=src)
+        (src / "src" / "MeshWeaver.AI").mkdir(parents=True)
+        (src / "src" / "MeshWeaver.AI" / "MeshWeaver.AI.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk" />\n')
+        (src / "src" / "MeshWeaver.AI" / "X.cs").write_text("class X {}\n")
+        git("add", "-A", cwd=src)
+        git("commit", "-qm", "this run", cwd=src)
+        mine = git("rev-parse", "HEAD", cwd=src)
+        ws = workspace(td)
+        git("clone", "-q", f"file://{src}", "newest", cwd=ws)
+        temp = ws / "_temp"
+        (temp / "staged").mkdir(parents=True)
+        (temp / "staged" / "MeshWeaver.AI.publication.json").write_text(json.dumps(
+            {"lane": LANE, "module": "MeshWeaver.AI", "owed": True}))
+        env = {"LANE": LANE, "DECLARED": json.dumps(MODULES), "TRUNK": "main",
+               "SHELF_PROJECT": "", "EXTENSIONS_PROJECT": "", "GITHUB_WORKSPACE": str(ws)}
+
+        def decided() -> dict:
+            return json.loads((temp / "superseded.json").read_text())["superseded"]
+
+        r = run_step(newer_body, env, ws)
+        check("NEGATIVE CONTROL: this run IS the trunk tip — the step stands nothing down",
+              r.returncode == 0 and decided() == {}, r.stdout + r.stderr)
+        (src / "src" / "MeshWeaver.AI" / "X.cs").write_text("class X { int y; }\n")
+        git("commit", "-qam", "a newer merge", cwd=src)
+        r = run_step(newer_body, env, ws)
+        check("a newer trunk commit reaching the module stands it down (the step fetched the tip itself)",
+              r.returncode == 0 and set(decided()) == {"MeshWeaver.AI"}
+              and git("rev-parse", "HEAD", cwd=ws / "newest") == mine, r.stdout + r.stderr)
+        r = run_step(newer_body, dict(env, TRUNK=""), ws)
+        check("no default branch on the event is RED ('cannot tell' never publishes)", r.returncode == 1,
+              r.stdout + r.stderr)
+
+    # The MSBuild arm of the same step: a NAMED shelf project and a non-empty diff, so the step
+    # evaluates BOTH trees with the real `dotnet msbuild` (this lane has an SDK, like
+    # test-build-extension-reading.py) and the scope takes their union. The trunk is the scope
+    # script's own fixture repository (its selector stubs answer a NARROWED scope), plus a real shelf
+    # whose Compile glob reaches `src/Acme.Other/Lib/*.cs` — a project the graph knows and no module
+    # reaches. So only the evaluations can say a newer commit touching that file reaches the modules.
+    print("\n== publish-newest-only: the `newer` step's MSBuild arm (a named shelf, both trees evaluated)")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("node_repo_scope", ROOT / ".github/scripts/node-repo-scope.py")
+    scope_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scope_mod)
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+
+        def git(*a, cwd):
+            return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+        src = td / "trunk"
+        src.mkdir()
+        scope_mod._fixture(src)
+        shelf = "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"
+        (src / shelf).parent.mkdir(parents=True, exist_ok=True)
+        (src / shelf).write_text('<Project Sdk="Microsoft.NET.Sdk">\n'
+                                 '  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>\n'
+                                 '  <ItemGroup><Compile Include="../Acme.Other/Lib/*.cs" /></ItemGroup>\n'
+                                 '</Project>\n')
+        (src / "src/Acme.Other/Lib").mkdir(parents=True, exist_ok=True)
+        (src / "src/Acme.Other/Lib/Old.cs").write_text("class Old {}\n")
+        git("init", "-q", "-b", "main", cwd=src)
+        git("config", "user.email", "ci@example.com", cwd=src)
+        git("config", "user.name", "ci", cwd=src)
+        git("add", "-A", cwd=src)
+        git("commit", "-qm", "this run", cwd=src)
+        mine = git("rev-parse", "HEAD", cwd=src)
+        ws = workspace(td)
+        git("clone", "-q", f"file://{src}", "newest", cwd=ws)
+        temp = ws / "_temp"
+        (temp / "staged").mkdir(parents=True)
+        for entry in scope_mod._MATRIX:
+            (temp / "staged" / f"{entry['module']}.publication.json").write_text(json.dumps(
+                {"lane": LANE, "module": entry["module"], "owed": True}))
+        every = {e["module"] for e in scope_mod._MATRIX}
+        env = {"LANE": LANE, "DECLARED": json.dumps(scope_mod._MATRIX), "TRUNK": "main",
+               "SHELF_PROJECT": shelf, "EXTENSIONS_PROJECT": "", "GITHUB_WORKSPACE": str(ws)}
+
+        def decided() -> dict:
+            return json.loads((temp / "superseded.json").read_text())["superseded"]
+
+        def tip(change) -> None:
+            git("reset", "-q", "--hard", mine, cwd=src)
+            change()
+            git("add", "-A", cwd=src)
+            git("commit", "-qm", "a newer merge", cwd=src)
+            for f in ("superseded.json", "msbuild-evaluation.json", "msbuild-evaluation-tip.json"):
+                (temp / f).unlink(missing_ok=True)
+
+        tip(lambda: (src / "src/Acme.Other/Lib/Old.cs").unlink())
+        r = run_step(newer_body, env, ws)
+        out = r.stdout + r.stderr
+        check("the tip DELETES a shelf input (only THIS tree's evaluation lists it) — every module stands down",
+              r.returncode == 0 and set(decided()) == every, out)
+        check("…and both trees were evaluated", (temp / "msbuild-evaluation.json").is_file()
+              and (temp / "msbuild-evaluation-tip.json").is_file(), out)
+        r = run_step(newer_body, dict(env, SHELF_PROJECT=""), ws)
+        check("NEGATIVE CONTROL: the same deletion with NO shelf named reaches nothing — the evaluations decided it",
+              r.returncode == 0 and decided() == {}, r.stdout + r.stderr)
+        tip(lambda: (src / "src/Acme.Other/Lib/New.cs").write_text("class New {}\n"))
+        r = run_step(newer_body, env, ws)
+        check("the tip ADDS a shelf input — every module stands down",
+              r.returncode == 0 and set(decided()) == every, r.stdout + r.stderr)
+        tip(lambda: (src / "src/Acme.Beta/T.cs").write_text("class T {}\n"))
+        r = run_step(newer_body, env, ws)
+        check("NEGATIVE CONTROL: a shelf named but untouched narrows to the module the tip reaches",
+              r.returncode == 0 and set(decided()) == {"Acme.Beta"}, r.stdout + r.stderr)
 
     print("\n== node-repo-module-pack.yml stages instead of publishing under `publish-mode: staged`")
     import yaml

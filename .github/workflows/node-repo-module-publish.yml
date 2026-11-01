@@ -65,6 +65,11 @@ name: node-repo module publish
 #       selected: ${{ needs.modules-floor.outputs.selected }}
 #       modules:  ${{ needs.modules-floor.outputs.declared }}   # the pack call's own catalog, never a copy
 #       platform-ref: ${{ needs.platform-ref.outputs.sha }}
+#       # A caller whose trunk runs can overlap (never-cancelled pushes beside a release lane) keeps
+#       # NEWEST WINS, PER MODULE here — the pack lane's in-leg check runs in `direct` mode only:
+#       publish-newest-only: true
+#       module-libraries-project: <the pack call's, verbatim>
+#       build-extensions-project: <the pack call's, verbatim>
 #     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
 #
 # One call per pack call: the lane, the selection and the declared matrix all belong to ONE call
@@ -178,6 +183,33 @@ on:
         required: false
         type: string
         default: off
+      publish-newest-only:
+        description: >
+          NEWEST WINS, PER MODULE, under staged publishing. The pack lane's `publish-newest-only`
+          runs in `direct` mode only — seconds before its own POST. Under `staged` the POST is
+          here, at the END of the run, so two overlapping trunk runs (a main push and the release
+          lane) would publish in FINISHING order and the registry keeps whichever arrives last.
+          With this on, right before the hand-over every owed staged module is asked the same
+          question the pack lane asks (node-repo-scope.py --publication-reach over the trunk tip's
+          diff): a module a newer trunk commit reaches is NOT handed over — that commit's own run
+          publishes a tree containing this one. A trunk that cannot be read, or a scope that cannot
+          answer, is RED. Pass the pack call's `module-libraries-project` and
+          `build-extensions-project` with it (module-publication.py check-callers holds that, and
+          refuses the flag when the pack call packs a `content-ref` or `content-repository`: the
+          check compares THIS run's commit with THIS repository's trunk).
+        required: false
+        type: boolean
+        default: false
+      module-libraries-project:
+        description: With `publish-newest-only`, the pack call's `module-libraries-project`, verbatim.
+        required: false
+        type: string
+        default: ''
+      build-extensions-project:
+        description: With `publish-newest-only`, the pack call's `build-extensions-project`, verbatim.
+        required: false
+        type: string
+        default: ''
     secrets:
       publish-token:
         description: >
@@ -195,6 +227,11 @@ jobs:
     # A LITERAL, never an input: the fleet cap is 45 minutes for every job in every workflow
     # (check-workflow-timeouts.py). This lane downloads a few megabytes and POSTs them.
     timeout-minutes: 20
+    env:
+      # `publish-newest-only` installs an SDK, and the self-hosted runner is non-root: setup-dotnet
+      # cannot write /usr/share/dotnet there (same posture as node-repo-module-pack.yml's `select`).
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      DOTNET_INSTALL_DIR: ${{ (vars.MW_RUNNER || 'ubuntu-latest') != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
     # 🚨 NO `if:` HERE, deliberately. The caller's job carries the trunk-only condition; this job
     # must run whenever that one does, so that a caller who weakened its own gate is CAUGHT by the
     # verdict step rather than quietly skipped past it.
@@ -286,6 +323,81 @@ jobs:
           pattern: module-publication-${{ inputs.lane }}-*
           path: ${{ runner.temp }}/staged
 
+      # ─────────────── 3b. NEWEST WINS, PER MODULE (`publish-newest-only`) ───────────────
+      # The pack lane's in-leg check, moved to where a staged hand-over happens: right before it.
+      # Same instrument (node-repo-scope.py --publication-reach over the trunk tip's diff, with this
+      # run's AND the tip's MSBuild evaluation of the shelf / build extension — a file the tip deleted
+      # is listed only by this tree, one it added only by the tip's), same safety argument (a module
+      # the tip reaches is in that commit's own run's selection), same posture: "cannot tell" is RED.
+      - name: Check out the caller for the newer-commit check
+        if: inputs.publish-newest-only
+        uses: actions/checkout@v7
+        with:
+          path: newest
+          fetch-depth: 1
+      - uses: actions/setup-dotnet@v6
+        if: inputs.publish-newest-only && (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('newest/global.json') != ''
+        with:
+          global-json-file: newest/global.json
+      - uses: actions/setup-dotnet@v6
+        if: inputs.publish-newest-only && (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('newest/global.json') == ''
+        with:
+          dotnet-version: "10.0.x"
+      - name: Check out the platform's MSBuild files for the evaluation
+        if: inputs.publish-newest-only && (inputs.build-extensions-project != '' || inputs.module-libraries-project != '')
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: .msbuild-eval-platform
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            **/*.props
+            **/*.targets
+            **/*.csproj
+      - name: A newer trunk commit reaches a staged module? (publish-newest-only)
+        id: newer
+        if: inputs.publish-newest-only
+        env:
+          LANE: ${{ inputs.lane }}
+          DECLARED: ${{ inputs.modules }}
+          TRUNK: ${{ github.event.repository.default_branch }}
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
+          EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+        run: |
+          set -euo pipefail
+          [ -n "${TRUNK:-}" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
+          git -C newest fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
+          mine="$(git -C newest rev-parse HEAD)"
+          tip="$(git -C newest rev-parse "refs/remotes/origin/$TRUNK")"
+          changed=""
+          if [ "$tip" != "$mine" ]; then
+            # Two trees, no history needed: both commits are present in this shallow clone.
+            changed="$(git -C newest diff --no-renames --name-only "$mine" "$tip" | paste -sd, -)"
+          fi
+          scope=()
+          projects=()
+          [ -z "${SHELF_PROJECT:-}" ] || { scope+=(--module-libraries-project "$SHELF_PROJECT"); projects+=(--project "$SHELF_PROJECT"); }
+          [ -z "${EXTENSIONS_PROJECT:-}" ] || { scope+=(--build-extensions-project "$EXTENSIONS_PROJECT"); projects+=(--project "$EXTENSIONS_PROJECT"); }
+          if [ "${#projects[@]}" -gt 0 ] && [ -n "$changed" ]; then
+            platform=(--property "MeshWeaverRoot=$GITHUB_WORKSPACE/.msbuild-eval-platform")
+            sdk="$(cd newest && dotnet --version)"
+            python3 meshweaver/.github/scripts/msbuild-evaluate.py --root newest "${projects[@]}" \
+              --out "$RUNNER_TEMP/msbuild-evaluation.json" "${platform[@]}"
+            git -C newest worktree add --detach "$RUNNER_TEMP/msbuild-tip-tree" "$tip"
+            python3 meshweaver/.github/scripts/msbuild-evaluate.py --root "$RUNNER_TEMP/msbuild-tip-tree" \
+              "${projects[@]}" --skip-missing --pin-sdk "$sdk" \
+              --out "$RUNNER_TEMP/msbuild-evaluation-tip.json" "${platform[@]}"
+            git -C newest worktree remove --force "$RUNNER_TEMP/msbuild-tip-tree"
+            scope+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation.json" --msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation-tip.json")
+          fi
+          printf '%s' "$DECLARED" > "$RUNNER_TEMP/declared-newer.json"
+          python3 meshweaver/.github/scripts/module-publication.py superseded \
+            --staged "$RUNNER_TEMP/staged" --lane "$LANE" --declared "@$RUNNER_TEMP/declared-newer.json" \
+            --root newest --mine "$mine" --tip "$tip" --changed-list "$changed" \
+            --scope-script meshweaver/.github/scripts/node-repo-scope.py ${scope[@]+"${scope[@]}"} \
+            --out "$RUNNER_TEMP/superseded.json"
+
       # ─────────────── 4. THE HAND-OVER ───────────────
       - name: Hand the validated bundles to the registry
         id: publish
@@ -300,11 +412,22 @@ jobs:
           REGISTRY: ${{ inputs.registry-url }}
           REGISTRY_SOURCE: ${{ inputs.registry-source }}
           LEDGER: ${{ inputs.ledger }}
+          NEWEST_ONLY: ${{ inputs.publish-newest-only }}
         run: |
           set -euo pipefail
           case "$LEDGER" in
             off|required) ;;
             *) echo "::error::inputs.ledger is '$LEDGER'. The only values are 'off' (the default) and 'required'."; exit 1 ;;
+          esac
+          # publish-newest-only: the decision the step above wrote. Its absence with the flag on is RED —
+          # "the check never ran" must not publish like "nothing newer".
+          superseded=()
+          case "$NEWEST_ONLY" in
+            true)
+              [ -s "$RUNNER_TEMP/superseded.json" ] || { echo "::error::publish-newest-only is on but no newer-commit decision was written ($RUNNER_TEMP/superseded.json) — refusing to publish modules a newer trunk commit may reach."; exit 1; }
+              superseded=(--superseded "@$RUNNER_TEMP/superseded.json") ;;
+            false) ;;
+            *) echo "::error::inputs.publish-newest-only reads '$NEWEST_ONLY', neither true nor false."; exit 1 ;;
           esac
           printf '%s' "$DECLARED" > "$RUNNER_TEMP/declared.json"
           python3 meshweaver/.github/scripts/module-publication.py publish \
@@ -315,4 +438,5 @@ jobs:
             --registry "$REGISTRY" \
             --source "$REGISTRY_SOURCE" \
             --ledger "$LEDGER" \
-            --ledger-script meshweaver/.github/scripts/module-build-ledger.py
+            --ledger-script meshweaver/.github/scripts/module-build-ledger.py \
+            ${superseded[@]+"${superseded[@]}"}
