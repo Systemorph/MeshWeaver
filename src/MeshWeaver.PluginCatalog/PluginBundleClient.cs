@@ -106,15 +106,14 @@ public sealed class PluginBundleClient
     /// <c>Authorization: Bearer</c>. The bundle routes fail closed, so an empty token gets 401.
     /// 🚨 A FIXED credential: use it only for one that does not expire. An exchanged sync token
     /// expires, and a client holding one is refused 401 on every later request (MeshWeaver#7790) —
-    /// pass the credential SOURCE instead
-    /// (<see cref="PluginBundleClient(IMessageHub, string, IObservable{string})"/>).</param>
+    /// pass the credential SOURCE instead (<see cref="WithCredential"/>).</param>
     public PluginBundleClient(IMessageHub hub, string registryUrl, string? token = null)
         : this(hub, registryUrl, Observable.Return(token ?? ""))
     {
     }
 
     /// <summary>
-    /// Creates the client over a credential SOURCE that is read once PER REQUEST — the index read,
+    /// A client over a credential SOURCE that is read once PER REQUEST — the index read,
     /// each HTTP bundle download, and each OCI artifact pull.
     ///
     /// <para>🚨 MeshWeaver#7790: a bundle client lives as long as the pass that built it (a boot
@@ -127,11 +126,18 @@ public sealed class PluginBundleClient
     /// <param name="registryUrl">Registry instance base URL; a trailing slash is trimmed.</param>
     /// <param name="credential">COLD; subscribed once per request, and its first value is presented
     /// as <c>Authorization: Bearer</c>. Empty → unauthenticated (the bundle routes answer 401).</param>
-    public PluginBundleClient(IMessageHub hub, string registryUrl, IObservable<string> credential)
+    /// <returns>The client.</returns>
+    /// <remarks>A named factory, never a competing constructor: a second public constructor whose
+    /// third parameter is a reference type would make the existing
+    /// <c>new PluginBundleClient(hub, url, null)</c> ambiguous (CS0121).</remarks>
+    public static PluginBundleClient WithCredential(IMessageHub hub, string registryUrl, IObservable<string> credential) =>
+        new(hub, registryUrl, credential ?? throw new ArgumentNullException(nameof(credential)));
+
+    private PluginBundleClient(IMessageHub hub, string registryUrl, IObservable<string> credential)
     {
         _hub = hub;
         _registryUrl = (registryUrl ?? "").TrimEnd('/');
-        _credential = (credential ?? throw new ArgumentNullException(nameof(credential)))
+        _credential = credential
             .Take(1)
             .Select(token => (token ?? "").Trim());
         _httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
@@ -248,11 +254,14 @@ public sealed class PluginBundleClient
     /// </summary>
     internal IObservable<BundleIndex> PassIndex() => SharedIndex();
 
-    // The credential is read BEFORE the slot: the caller that creates the promise presents a live
-    // token, and a caller answered from the replay sends nothing, so its token is never used.
+    // A held promise is answered from its replay with NO credential read — nothing is sent, so
+    // nothing needs one. Only a miss resolves a credential (read live, per #7790) and creates the
+    // promise; concurrent misses still share one run through the slot.
     private IObservable<BundleIndex> SharedIndex() =>
-        _credential.SelectMany(token =>
-            _index.GetOrCreate(() => _httpPool.Run(ct => ReadIndex(token, ct))));
+        Observable.Defer(() => _index.TryGet(out var held)
+            ? held
+            : _credential.SelectMany(token =>
+                _index.GetOrCreate(() => _httpPool.Run(ct => ReadIndex(token, ct)))));
 
     private async Task<BundleIndex> ReadIndex(string token, CancellationToken ct)
     {

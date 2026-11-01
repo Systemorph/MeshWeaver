@@ -130,7 +130,7 @@ public sealed class RegistryShippedBuildSource : IShippedBuildSource
                 }
                 return registries
                     .Select(registry => Observable.Defer(() => tokens.ResolveToken(registry).Take(1)
-                        .SelectMany(token => new PluginBundleClient(hub, registry.Url, tokens.Credential(registry))
+                        .SelectMany(token => PluginBundleClient.WithCredential(hub, registry.Url, tokens.Credential(registry))
                             .FetchShippedBuilds(packageId))))
                     .Concat()
                     .Where(builds => builds.Count > 0)

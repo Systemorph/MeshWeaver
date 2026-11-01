@@ -13,6 +13,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -68,7 +69,7 @@ public class ARegistryPassOutlivesItsExchangedTokenTest(ITestOutputHelper output
     public async Task AFileFetchAfterTheTokenExpired_PresentsAFreshToken()
     {
         var ct = TestContext.Current.CancellationToken;
-        var source = new RegistryPackageSource(Mesh, FakeRegistry.Url, Resolver.Credential(Reference));
+        var source = RegistryPackageSource.WithCredential(Mesh, FakeRegistry.Url, Resolver.Credential(Reference));
 
         var first = await source.FetchPackage(DataModelling, "HEAD", null)
             .Should().Within(TestTimeouts.Convergence).Emit("the first fetch of the pass is served", ct);
@@ -92,7 +93,7 @@ public class ARegistryPassOutlivesItsExchangedTokenTest(ITestOutputHelper output
     public async Task ABundleDownloadAfterTheTokenExpired_PresentsAFreshToken()
     {
         var ct = TestContext.Current.CancellationToken;
-        var bundles = new PluginBundleClient(Mesh, FakeRegistry.Url, Resolver.Credential(Reference));
+        var bundles = PluginBundleClient.WithCredential(Mesh, FakeRegistry.Url, Resolver.Credential(Reference));
 
         var first = await bundles.DownloadOverHttp("Cursor", "1.0.0")
             .Should().Within(TestTimeouts.Convergence).Emit("the first download answers", ct);
@@ -105,6 +106,42 @@ public class ARegistryPassOutlivesItsExchangedTokenTest(ITestOutputHelper output
         second.Kind.Should().Be(BundleAdoptionKind.Adopted,
             $"a download after the token expired presents a fresh one (got: {second.Reason})");
         registry.Refusals.Should().Be(0);
+    }
+
+    /// <summary>
+    /// SHOULD-FAIL-IF: <see cref="RegistryTokenResolver.Credential"/> resolves the token when it is
+    /// CALLED rather than per subscription. With a WARM cache that shape captures the cached token
+    /// at construction and replays it after it expired. Here the token is long-lived, the cache is
+    /// primed before the client exists, and a controlled clock is moved past the token's expiry: the
+    /// same client must then present a newly exchanged token.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AWarmCachedToken_IsReplacedOnceTheClockPassesItsExpiry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var clock = new ManualClock(DateTimeOffset.Parse("2026-11-01T12:00:00Z"));
+        var resolver = new RegistryTokenResolver(Mesh,
+            Mesh.ServiceProvider.GetRequiredService<ILogger<RegistryTokenResolver>>()) { Clock = clock };
+        registry.Lifetime = TimeSpan.FromMinutes(15);
+
+        var primed = await resolver.ResolveToken(Reference).Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit("the cache is primed", ct);
+        var source = RegistryPackageSource.WithCredential(Mesh, FakeRegistry.Url, resolver.Credential(Reference));
+
+        (await source.FetchPackage(DataModelling, "HEAD", null)
+                .Should().Within(TestTimeouts.Convergence).Emit("served on the cached token", ct))
+            .Files.Should().ContainSingle();
+        registry.Exchanges.Should().Be(1, $"the warm cache answered with {primed} and nothing was exchanged again");
+
+        clock.Advance(registry.Lifetime + TimeSpan.FromSeconds(1));
+        registry.ExpireIssuedTokens();
+
+        (await source.FetchPackage(Developer, "HEAD", null)
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit("the same client presents a freshly exchanged token after the cached one expired", ct))
+            .Files.Should().ContainSingle();
+        registry.Exchanges.Should().Be(2, "the expired cached token was replaced by a new exchange");
+        registry.Refusals.Should().Be(0, "the expired cached token was never presented");
     }
 
     /// <summary>
@@ -144,9 +181,10 @@ public class ARegistryPassOutlivesItsExchangedTokenTest(ITestOutputHelper output
     /// <summary>
     /// The registry: <c>/api/instances/token</c> exchanges the instance key for an opaque token; the
     /// file and bundle routes serve a LIVE token and refuse anything else with the registry's own
-    /// 401 body. Each token is issued with <see cref="RegistryTokenResolver.RefreshMargin"/> of
-    /// life — a token already inside its refresh margin, as one taken from the cache late in its
-    /// life is — so the resolver re-exchanges on every resolve and the test needs no clock.
+    /// 401 body. By default each token is issued with <see cref="RegistryTokenResolver.RefreshMargin"/>
+    /// of life — a token already inside its refresh margin, as one taken from the cache late in its
+    /// life is — so the resolver re-exchanges on every resolve; the warm-cache test sets a long
+    /// <see cref="Lifetime"/> and moves its own clock instead.
     /// </summary>
     private sealed class FakeRegistry : HttpMessageHandler
     {
@@ -160,6 +198,9 @@ public class ARegistryPassOutlivesItsExchangedTokenTest(ITestOutputHelper output
         public int Exchanges => Volatile.Read(ref exchanges);
 
         public int Refusals => Volatile.Read(ref refusals);
+
+        /// <summary>The <c>expires_in</c> each issued token carries.</summary>
+        public TimeSpan Lifetime { get; set; } = RegistryTokenResolver.RefreshMargin;
 
         /// <summary>Every token issued so far stops verifying — what its <c>exp</c> does.</summary>
         public void ExpireIssuedTokens() => ImmutableInterlocked.Update(ref live, _ => ImmutableHashSet<string>.Empty);
@@ -177,7 +218,7 @@ public class ARegistryPassOutlivesItsExchangedTokenTest(ITestOutputHelper output
                 ImmutableInterlocked.Update(ref live, set => set.Add(token));
                 var body = JsonSerializer.Serialize(
                     new SyncTokenPayloads.Response(token, "Bearer",
-                        (int)RegistryTokenResolver.RefreshMargin.TotalSeconds, []),
+                        (int)Lifetime.TotalSeconds, []),
                     SyncTokenPayloads.Json);
                 return Task.FromResult(Json(body));
             }
@@ -209,6 +250,16 @@ public class ARegistryPassOutlivesItsExchangedTokenTest(ITestOutputHelper output
                 "{\"error\":\"A registered instance key is required (Authorization: Bearer mwi_…).\"}",
                 Encoding.UTF8, "application/json"),
         };
+    }
+
+    /// <summary>A clock the test moves; nothing else reads it.</summary>
+    private sealed class ManualClock(DateTimeOffset start) : TimeProvider
+    {
+        private long ticks = start.UtcTicks;
+
+        public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
+
+        public void Advance(TimeSpan by) => Interlocked.Add(ref ticks, by.Ticks);
     }
 
     private sealed class FakeFactory(HttpMessageHandler handler) : IHttpClientFactory

@@ -468,8 +468,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 // ONE bundle client for the pass, shared by the source (a content apply lands its
                 // module inside InstallOrUpdate) and the module pass below — so the promise-cached
                 // bundle index is read once per registry per boot.
-                var bundles = new PluginBundleClient(hub, registry.Url, tokenResolver.Credential(registry));
-                var source = new RegistryPackageSource(hub, registry.Url, tokenResolver.Credential(registry)) { Bundles = bundles };
+                var bundles = PluginBundleClient.WithCredential(hub, registry.Url, tokenResolver.Credential(registry));
+                var source = RegistryPackageSource.WithCredential(hub, registry.Url, tokenResolver.Credential(registry), bundles);
                 return source.ListPackages(gitRef)
                     // 🚨 The ONE attempt the design allots must actually get a fair chance (#1500).
                     //
@@ -753,8 +753,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .Take(1)
             .SelectMany(token =>
             {
-                var bundles = new PluginBundleClient(hub, registry.Url, tokenResolver.Credential(registry));
-                var source = new RegistryPackageSource(hub, registry.Url, tokenResolver.Credential(registry)) { Bundles = bundles };
+                var bundles = PluginBundleClient.WithCredential(hub, registry.Url, tokenResolver.Credential(registry));
+                var source = RegistryPackageSource.WithCredential(hub, registry.Url, tokenResolver.Credential(registry), bundles);
                 return source.ListPackages(gitRef)
                     .Take(1)
                     .SelectMany(packages => wasPending
@@ -822,8 +822,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .Take(1)
             .SelectMany(token =>
             {
-                var bundles = new PluginBundleClient(hub, registry.Url, tokenResolver.Credential(registry));
-                var source = new RegistryPackageSource(hub, registry.Url, tokenResolver.Credential(registry)) { Bundles = bundles };
+                var bundles = PluginBundleClient.WithCredential(hub, registry.Url, tokenResolver.Credential(registry));
+                var source = RegistryPackageSource.WithCredential(hub, registry.Url, tokenResolver.Credential(registry), bundles);
                 return OnLane(() => ReconcileFromFeed(
                     registry, name, readRef, source, bundles, packages, RegistryReconcileEntry.ViaFeedRead));
             })
@@ -1240,7 +1240,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .Take(1)
             .SelectMany(token =>
             {
-                var bundles = new PluginBundleClient(hub, registry.Url, tokenResolver.Credential(registry));
+                var bundles = PluginBundleClient.WithCredential(hub, registry.Url, tokenResolver.Credential(registry));
                 return storage.Read(recordPath, hub.JsonSerializerOptions)
                     .Take(1)
                     .SelectMany(record =>
@@ -1267,7 +1267,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                         // up-to-date or held module costs no catalog request. A listing that cannot
                         // be read yields null, which DECLINES (DependencyDecline); the next pass
                         // reads it again.
-                        var source = new RegistryPackageSource(hub, registry.Url, tokenResolver.Credential(registry)) { Bundles = bundles };
+                        var source = RegistryPackageSource.WithCredential(hub, registry.Url, tokenResolver.Credential(registry), bundles);
                         IObservable<PackageManifest?> Listing() => source.ListPackages(EffectiveRef(registry.Ref))
                             .Take(1)
                             .Select(packages => packages.FirstOrDefault(p =>
@@ -1302,7 +1302,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         return tokenResolver.ResolveToken(registry)
             .Take(1)
             .SelectMany(token => heldBundles.Run(
-                hub, new PluginBundleClient(hub, registry.Url, tokenResolver.Credential(registry)), registry.Url, name, [packageId], logger))
+                hub, PluginBundleClient.WithCredential(hub, registry.Url, tokenResolver.Credential(registry)), registry.Url, name, [packageId], logger))
             .Select(_ => Unit.Default)
             .LastOrDefaultAsync()
             .Catch((Exception ex) =>
@@ -1349,7 +1349,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
 
         IObservable<ModuleAdoptOutcome> Ask(PluginRegistryReference registry) =>
             Observable.Defer(() => tokenResolver.ResolveToken(registry).Take(1)
-                    .SelectMany(token => new PluginBundleClient(hub, registry.Url, tokenResolver.Credential(registry))
+                    .SelectMany(token => PluginBundleClient.WithCredential(hub, registry.Url, tokenResolver.Credential(registry))
                         .AdoptModuleOutcome(packageId, moduleName, recordPath, unattended: false))
                     .Timeout(PerPackageAdoptBudget))
                 // Per registry, INSIDE the Concat: one registry's failure must not leave the next untried.

@@ -49,15 +49,14 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
     /// <para>🚨 A FIXED credential: use it only for one that does not expire (a durable
     /// <c>mwi_</c> key, a test token). An exchanged sync token expires, and a source holding one
     /// refuses every request after that with the registry's definitive 401 (MeshWeaver#7790) —
-    /// pass the credential SOURCE instead
-    /// (<see cref="RegistryPackageSource(IMessageHub, string, IObservable{string})"/>).</para></summary>
+    /// pass the credential SOURCE instead (<see cref="WithCredential"/>).</para></summary>
     public RegistryPackageSource(IMessageHub hub, string registryUrl, string? token = null)
         : this(hub, registryUrl, Observable.Return(token ?? ""))
     {
     }
 
     /// <summary>
-    /// Creates the source over a credential SOURCE that is read once PER REQUEST.
+    /// A source over a credential SOURCE that is read once PER REQUEST.
     ///
     /// <para>🚨 MeshWeaver#7790: the credential a registry is read with is usually a short-lived
     /// exchanged token (<see cref="RegistryTokenResolver.Credential"/>), while a source lives as long
@@ -70,11 +69,21 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
     /// <param name="registryUrl">The registry instance base URL; a trailing slash is trimmed.</param>
     /// <param name="credential">COLD; subscribed once per request, and its first value is presented
     /// as <c>Authorization: Bearer</c>. Empty → unauthenticated.</param>
-    public RegistryPackageSource(IMessageHub hub, string registryUrl, IObservable<string> credential)
+    /// <param name="bundles">The prebuilt-bundle client for the same registry (<see cref="Bundles"/>),
+    /// or null.</param>
+    /// <returns>The source.</returns>
+    /// <remarks>A named factory, never a competing constructor: a second public constructor whose
+    /// third parameter is a reference type would make the existing
+    /// <c>new RegistryPackageSource(hub, url, null)</c> ambiguous (CS0121).</remarks>
+    public static RegistryPackageSource WithCredential(
+        IMessageHub hub, string registryUrl, IObservable<string> credential, PluginBundleClient? bundles = null) =>
+        new(hub, registryUrl, credential ?? throw new ArgumentNullException(nameof(credential))) { Bundles = bundles };
+
+    private RegistryPackageSource(IMessageHub hub, string registryUrl, IObservable<string> credential)
     {
         _hub = hub;
         _registryUrl = (registryUrl ?? "").TrimEnd('/');
-        _credential = (credential ?? throw new ArgumentNullException(nameof(credential)))
+        _credential = credential
             .Take(1)
             .Select(token => (token ?? "").Trim());
         _httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
