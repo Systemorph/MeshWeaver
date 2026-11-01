@@ -249,6 +249,46 @@ public static class Controls
     /// <returns>A new <see cref="BadgeControl"/>.</returns>
     public static BadgeControl Badge(object data) => new(data);
 
+    /// <summary>
+    /// A horizontal, wrapping bar of navigating chips separated by →, optionally led by a
+    /// <paramref name="prefix"/> breadcrumb — a journey, a pipeline, a workflow's steps. Each chip is a
+    /// badge with <c>Href</c> (<see cref="Chip.ToControl"/>), never a button; colours are theme-aware
+    /// mixes (<see cref="ThemePalette"/>). Pure composition over Stack, Badge and Label.
+    /// </summary>
+    /// <param name="chips">The chips, in order; null or empty draws an empty bar.</param>
+    /// <param name="prefix">An optional breadcrumb before the first chip; skipped when it has no visible segment.</param>
+    /// <returns>A <see cref="StackControl"/>.</returns>
+    public static StackControl ChipBar(IEnumerable<Chip>? chips, Breadcrumb? prefix = null) =>
+        ChipBarLayout.Bar(chips, prefix);
+
+    /// <summary>A chip bar led by a plain caption ("Platform rollout:") instead of a breadcrumb —
+    /// one group of chips among several on a page.</summary>
+    /// <param name="caption">The caption. User-facing: pass a localized string.</param>
+    /// <param name="chips">The chips, in order.</param>
+    /// <returns>A <see cref="StackControl"/>.</returns>
+    public static StackControl ChipBar(string caption, IEnumerable<Chip>? chips) =>
+        ChipBarLayout.CaptionedBar(caption, chips);
+
+    /// <summary>
+    /// A small uppercase trail of linked segments separated by › — a page's way back up, or a chip
+    /// bar's lead. Linked segments are navigating badges in the hint colour; an unlinked segment (the
+    /// current page) is a label in the foreground colour; blank segments are skipped.
+    /// </summary>
+    /// <param name="segments">(label, href) pairs, outermost first; a null href is an unlinked segment.
+    /// User-facing: pass localized labels.</param>
+    /// <returns>A <see cref="StackControl"/>.</returns>
+    public static StackControl Breadcrumb(params (string Label, string? Href)[] segments) =>
+        global::MeshWeaver.Layout.Breadcrumb.Of(segments).ToControl();
+
+    /// <summary>
+    /// A compact one-line "label value · label value" strip for a card body. Fields with a blank value
+    /// are skipped; built from Label controls — no markdown table, no markup.
+    /// </summary>
+    /// <param name="fields">(label, value) pairs, in order. User-facing: pass localized labels.</param>
+    /// <returns>A <see cref="StackControl"/>.</returns>
+    public static StackControl FieldStrip(params (string Label, string? Value)[] fields) =>
+        ChipBarLayout.Strip(fields);
+
 
     /// <summary>Creates a checkbox input control bound to <paramref name="isChecked"/>.</summary>
     /// <param name="isChecked">The bound boolean value or data-binding expression controlling checked state.</param>
