@@ -182,6 +182,7 @@ POST moved into a new job, `publish-modules`, which calls this lane:
 | `needs:` / `required-jobs` | `platform-ref preflight validate validate-name-shim repo-gates compile-check test-repos tests-ratchet portal-hosts-gate modules-floor gates-executed` | the gate set `publish-bake` already honours, plus the jobs this call reads outputs from, the legacy-name shim of `validate` and the skip detector — one verdict for both publishers of the run |
 | `unrelated-jobs` | `supersede`, `test-drift`, `rn-app`, `e2e-static`, `memex-template`, `tag-modules`, `publish-bake`, each with its reason | none of them validates bytes that reach a module bundle |
 | `lane` / `selected` / `modules` | `needs.modules-floor.outputs.lane` / `.selected` / `.declared` | one pack call, one publication; `declared` is the matrix that call was given |
+| `platform-ref` | `needs.platform-ref.outputs.sha` | the platform the bundles were built against, read only for the MSBuild files of the newest-only evaluation. The lane's SCRIPTS come from the commit that defines the lane (`job.workflow_sha`), never from this pin: the resolved platform trails core's `main`, and scripts older than the workflow calling them refused their own caller (Plugins#4478) |
 | `permissions` | `contents: read` | exactly what the lane's one job demands |
 | `publish-token` | `secrets.REGISTRY_PUBLISH_TOKEN` | the SAME secret `modules-floor` used to hold — no new credential, scope or permission |
 
