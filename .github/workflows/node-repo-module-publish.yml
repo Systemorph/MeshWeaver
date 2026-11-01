@@ -37,7 +37,11 @@ name: node-repo module publish
 #     empty needs context is a refusal too: a publication that waited for nothing is the defect.
 #   * The caller's own workflow file is read at the caller's commit and its graph is checked —
 #     the publishing job must transitively `needs:` every job it declares required, must carry no
-#     status function in its `if:` (`always()`/`!cancelled()` re-open the door the verdict closes),
+#     status function in its `if:` (`always()`/`!cancelled()` re-open the door the verdict closes)
+#     except EXACTLY the prefix `!cancelled() && !failure() && ` before the event condition (policy
+#     publisher-tolerates-upstream-skips: GitHub's default rule skips a job over ANY skipped ancestor,
+#     actions/runner#2205, so by-design upstream skips would publish nothing behind green checks;
+#     the verdict above still refuses every DIRECT need that did not report `success`),
 #     and must account for every OTHER job in the workflow: upstream, downstream, or named in
 #     `unrelated-jobs` with a reason. That is the half the runtime verdict cannot see — a
 #     dependency dropped from `needs:` AND from `required-jobs` is invisible at run time.
@@ -50,8 +54,11 @@ name: node-repo module publish
 #
 # ─────────────────────────── Caller contract ───────────────────────────
 #   publish-modules:
-#     # Trunk-only, exactly like the pack call's `publish:` input — and NO status function: this
-#     # job must run under GitHub's default rule (every `needs:` succeeded) or not at all.
+#     # Trunk-only, exactly like the pack call's `publish:` input. No status function — except that
+#     # a caller with by-design upstream skips may write EXACTLY
+#     #   if: ${{ !cancelled() && !failure() && (<the pack call's publish: condition>) }}
+#     # so a skipped ANCESTOR does not skip this job (actions/runner#2205); the verdict still refuses
+#     # every direct need that did not report `success`, and check-callers refuses any other shape.
 #     if: >
 #       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
 #       github.event_name == 'repository_dispatch' || github.event_name == 'schedule'
