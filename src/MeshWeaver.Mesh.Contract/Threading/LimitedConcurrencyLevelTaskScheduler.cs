@@ -168,16 +168,12 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
 
     /// <summary>
     /// Live drain loops: in the dedicated mode the lane threads alive (parked ones included); in the
-    /// borrowing mode the loops in flight.
+    /// borrowing mode the loops in flight. A LOCK-FREE snapshot of the one counter: its readers are
+    /// gauges and the teardown residual report, which runs synchronously after a join expired and must
+    /// never be the reason a teardown blocks (the contract on <c>IoPoolRegistry.UnreportedResiduals</c>).
+    /// Writers still change it under <c>_tasks</c>; a single int read needs no lock to be untorn.
     /// </summary>
-    internal int LiveDrainLoops
-    {
-        get
-        {
-            lock (_tasks)
-                return _delegatesQueuedOrRunning;
-        }
-    }
+    internal int LiveDrainLoops => Volatile.Read(ref _delegatesQueuedOrRunning);
 
     /// <summary>Lane threads currently parked waiting for work (dedicated mode; always 0 otherwise).</summary>
     internal int ParkedLaneThreads
