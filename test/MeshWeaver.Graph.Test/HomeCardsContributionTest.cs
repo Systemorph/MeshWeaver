@@ -63,6 +63,20 @@ public class HomeCardsContributionTest
     }
 
     [Fact]
+    public void TheCards_AreEvaluatedForTheViewer_AndOnlyTheOwnerGetsThem()
+    {
+        // The owner and the viewer are different identities: the gates (admin verdict, permission floor,
+        // viewer-home) must answer for the VIEWER, and the start page is the owner's alone.
+        UserActivityLayoutAreas.HomeCardsViewer(new AccessContext { ObjectId = "jroe", Name = "Jane Roe" }, "jroe")
+            .Should().Be("jroe", "the owner viewing their own home is evaluated as themselves");
+        UserActivityLayoutAreas.HomeCardsViewer(new AccessContext { ObjectId = "mmuster", Name = "Max Muster" }, "jroe")
+            .Should().BeNull("another person reading this home (even an admin) gets no cards, and never the owner's");
+        UserActivityLayoutAreas.HomeCardsViewer(new AccessContext { ObjectId = "jroe", Name = "Jane Roe", IsVirtual = true }, "jroe")
+            .Should().BeNull("a virtual viewer gets none");
+        UserActivityLayoutAreas.HomeCardsViewer(null, "jroe").Should().BeNull("no viewer captured, no cards");
+    }
+
+    [Fact]
     public void TheHomeCardsRegion_EmbedsEachCardOnItsOwnAddress_AndTheWelcomeTemplateCarriesIt()
     {
         var cards = UserActivityLayoutAreas.HomeCards(new Address("jroe"),

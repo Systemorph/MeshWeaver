@@ -329,18 +329,31 @@ public static class UserActivityLayoutAreas
     /// </summary>
     internal static IObservable<UiControl?> HomeCardsAreaView(LayoutAreaHost host, RenderingContext _)
     {
-        if (host.Hub.ServiceProvider.GetService<UiContributionCatalog>() is not { } catalog)
-            return Observable.Return<UiControl?>(Controls.Stack);
+        // A required Graph service: a missing registration is a configuration failure for the area's
+        // error boundary to name, never an empty lane indistinguishable from "nothing declared".
+        var catalog = host.Hub.ServiceProvider.GetRequiredService<UiContributionCatalog>();
         var userPath = host.Hub.Address.ToString();
-        var owner = OwnerIdOf(userPath);
+        // Every gate is evaluated for the VIEWER captured on the render turn — the admin verdict, the
+        // permission floor and the viewer-home gate — and only the home's OWNER gets cards: the start
+        // page is personal, and the area is addressable directly by anyone who can read the user node.
+        if (HomeCardsViewer(host.ViewerContext, OwnerIdOf(userPath)) is not { } viewerId)
+            return Observable.Return<UiControl?>(Controls.Stack);
         var userNode = host.Workspace.GetMeshNodeStream().Select(node => (MeshNode?)node).StartWith((MeshNode?)null);
         return catalog.Contributions
-            .CombineLatest(userNode, AdminAppNodeType.LiveAdminVerdict(host.Hub, owner), host.Hub.GetEffectivePermissions(userPath),
+            .CombineLatest(userNode, AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerId), host.Hub.GetEffectivePermissions(userPath, viewerId),
                 (contributions, node, isAdmin, permissions) => UiContributionProjection.FilterInboxAreas(
-                    UiContributionProjection.ProjectHomeAreas(contributions, userPath, node, isAdmin, owner), permissions))
+                    UiContributionProjection.ProjectHomeAreas(contributions, userPath, node, isAdmin, viewerId), permissions))
             .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal)
             .Select(areas => (UiControl?)HomeCards(host.Hub.Address, areas));
     }
+
+    /// <summary>The identity the start-page cards are evaluated for: the viewer's id when the viewer is a real
+    /// person who OWNS the home at <paramref name="ownerId"/>; null — no cards — for anyone else (another
+    /// signed-in person reading this home, an anonymous or virtual viewer, no viewer captured). Pure.</summary>
+    /// <param name="viewer">The viewer captured on the render turn.</param>
+    /// <param name="ownerId">The home's owner (the user partition).</param>
+    internal static string? HomeCardsViewer(AccessContext? viewer, string ownerId) =>
+        viewer is { IsVirtual: false, ObjectId: { Length: > 0 } id } && IsViewerOwner(viewer, ownerId) ? id : null;
 
     /// <summary>The cards region for <paramref name="areas"/>: one embedded area per contribution, stacked. Pure.</summary>
     /// <param name="userAddress">The user hub — the address of an entry that declares none.</param>
