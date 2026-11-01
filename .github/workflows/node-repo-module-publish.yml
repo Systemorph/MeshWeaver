@@ -194,7 +194,9 @@ on:
           diff): a module a newer trunk commit reaches is NOT handed over — that commit's own run
           publishes a tree containing this one. A trunk that cannot be read, or a scope that cannot
           answer, is RED. Pass the pack call's `module-libraries-project` and
-          `build-extensions-project` with it (module-publication.py check-callers holds that).
+          `build-extensions-project` with it (module-publication.py check-callers holds that, and
+          refuses the flag when the pack call packs a `content-ref` or `content-repository`: the
+          check compares THIS run's commit with THIS repository's trunk).
         required: false
         type: boolean
         default: false
@@ -225,6 +227,11 @@ jobs:
     # A LITERAL, never an input: the fleet cap is 45 minutes for every job in every workflow
     # (check-workflow-timeouts.py). This lane downloads a few megabytes and POSTs them.
     timeout-minutes: 20
+    env:
+      # `publish-newest-only` installs an SDK, and the self-hosted runner is non-root: setup-dotnet
+      # cannot write /usr/share/dotnet there (same posture as node-repo-module-pack.yml's `select`).
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      DOTNET_INSTALL_DIR: ${{ (vars.MW_RUNNER || 'ubuntu-latest') != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
     # 🚨 NO `if:` HERE, deliberately. The caller's job carries the trunk-only condition; this job
     # must run whenever that one does, so that a caller who weakened its own gate is CAUGHT by the
     # verdict step rather than quietly skipped past it.

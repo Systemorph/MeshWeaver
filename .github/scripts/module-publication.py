@@ -613,6 +613,19 @@ def check_callers(root: Path) -> int:
                     "`publish-newest-only: true`, or two overlapping trunk runs publish in FINISHING order "
                     "and the registry keeps whichever arrives last.")
             if pub_newest in (True, "true"):
+                # The publisher compares the trunk tip with the CALLER's event commit — the commit the
+                # bundles were packed from only when the pack call packs its own checkout. A
+                # `content-ref` (an older commit, a tag) or a `content-repository` (another trunk)
+                # makes that comparison about the wrong tree: an older commit's bytes would read as
+                # "this run IS the tip" and publish. The pack lane's direct-mode check refuses the
+                # same foreign repository; here both overrides are refused, in any spelling.
+                for key in ("content-repository", "content-ref"):
+                    if str(pw.get(key) or "").strip():
+                        problems.append(
+                            f"{wf.name}: `{pid}` passes `publish-newest-only: true` but `{pack_id}` packs "
+                            f"`{key}: {pw.get(key)!r}` — the newer-commit check reads THIS run's commit "
+                            "against THIS repository's trunk, so it cannot judge content packed from "
+                            "another commit or repository. Turn one of the two off.")
                 for key in ("module-libraries-project", "build-extensions-project"):
                     if str(w.get(key) or "") != str(pw.get(key) or ""):
                         problems.append(
@@ -1323,6 +1336,11 @@ jobs:
                                          "      platform-ref: abc\n      publish-newest-only: ${{ vars.X }}\n"))
         check("MUTATION newest-only: an EXPRESSION for the flag is caught (this check could not read it)",
               rc == 1 and "literal true or false" in out, out)
+        for key, val in (("content-ref", "${{ inputs.ref }}"), ("content-repository", "Systemorph/Other")):
+            rc, out = callers(newest.replace("      publish-mode: staged\n",
+                                             f"      publish-mode: staged\n      {key}: {val}\n"))
+            check(f"MUTATION newest-only: a pack call with `{key}` (content not from this run's commit) is caught",
+                  rc == 1 and key in out and "Turn one of the two off" in out, out)
         rc, out = callers(wired.replace("required-jobs: validate modules gate",
                                         "required-jobs: ${{ vars.REQUIRED }}"))
         check("a `required-jobs` passed as an expression is caught (the static half could not read it)",
