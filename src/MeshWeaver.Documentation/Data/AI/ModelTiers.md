@@ -159,6 +159,12 @@ Why draw the line there: open weights are cheap and fast, and — the point that
 
 On a laptop the same four tiers point at a local qwen instead of OpenRouter — same labels, a different provider node per mesh.
 
+## One vocabulary: the record names the tier NODES
+
+A deployment record's `ai.tiers` uses the same names as the tier nodes — `chat`, `reasoning`, `coding`, `utility`, `review` — and each renders as `AI__Tiers__{tier id}` (`AI:Tiers:coding` to the portal). That key is the record's **seed** for the tier node of that id: it is matched by the node's id or any of its aliases, read at resolution time, and never written onto the node, so the record stays the declaration and the node's own `model` stays the instance's choice (within the ceiling, under policy `model-settings-seed-and-ceiling`). It answers at the same rung as the deprecated keys below, ahead of them.
+
+The rank names `heavy` (→ `coding`), `standard` (→ `reasoning`) and `light` (→ `chat`) are accepted in `ai.tiers` as **aliases for one release**: a record that still carries them keeps its mapping, and the tier's own name wins where both are set. For the same release the renderer still emits the `ModelTier__*` keys from the same values, so an image that predates `AI:Tiers` keeps its seed. The deployment record page names a record that still uses an alias. The aliases and the bridge keys are removed after a sweep of in-mesh content and satellite records (Systemorph/MeshWeaver.Plugins#4882).
+
 ## Migrating off the `ModelTier:*` config
 
 The old keys — `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, `ModelTier__Utility` — are **still read**, so a deployment that sets them does not lose its mapping on upgrade. They map onto the tiers by rank, carried by each tier's aliases:
