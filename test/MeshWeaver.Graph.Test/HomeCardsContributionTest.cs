@@ -103,7 +103,8 @@ public class HomeCardsContributionTest
         embedded.Select(e => (e.Address.ToString(), e.Reference.Area)).Should().Equal([("Edu/Courses", "LearningPathNudge"), ("jroe", "Own")],
             "each card renders on its contributor's address; one that names none renders on the user's own hub");
         UserActivityLayoutAreas.HomeCards(new Address("jroe"), []).Areas.Should().BeEmpty("nothing declared, nothing shown — no gap");
-        UserActivityLayoutAreas.HomeShape("jroe").Should().Match<MeshNode>(n => n.NodeType == UserNodeType.NodeType && n.Path == "jroe",
+        var shape = UserActivityLayoutAreas.HomeShape("jroe");
+        (shape.NodeType, shape.Path).Should().Be((UserNodeType.NodeType, "jroe"),
             "the gates read the home's shape from registration (a User partition root), never by waiting on the user node");
 
         var md = UserActivityLayoutAreas.UserWelcomeMarkdown("Roland");
