@@ -62,6 +62,20 @@ public sealed record RegistrySpec
     [Description("ServiceAccount the registry pods run as")]
     public string? ServiceAccount { get; init; }
 
+    /// <summary>
+    /// The client id of the registry's OWN workload identity — the one user-assigned identity that
+    /// holds blob WRITE on <see cref="StorageAccountName"/>/<see cref="StorageContainer"/> and
+    /// nothing else (Systemorph/Memex#922). When stated, the chart creates a DEDICATED
+    /// ServiceAccount for the registry pods, annotated with this client id, so the registry no
+    /// longer writes its blobs as the namespace's shared portal identity; <see cref="ServiceAccount"/>
+    /// then names that dedicated account (blank → <c>memex-registry-sa</c>) and may not be the
+    /// portal's own <c>memex-portal-sa</c>. Blank → the registry runs as <see cref="ServiceAccount"/>,
+    /// an account the portal chart owns, exactly as before this field existed. An identifier, never
+    /// a credential.
+    /// </summary>
+    [Description("Client id of the registry's own workload identity (blob write on its container only) — blank means the portal's")]
+    public string? WorkloadIdentityClientId { get; init; }
+
     /// <summary>The Key Vault objects the registry reads — the TLS pair, the token-signing key, the HTTP secret. Names only.</summary>
     [Description("Key Vault objects (names only)")]
     public RegistryKeyVaultSpec? KeyVault { get; init; }

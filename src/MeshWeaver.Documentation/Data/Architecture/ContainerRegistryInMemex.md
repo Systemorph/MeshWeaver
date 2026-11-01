@@ -151,6 +151,18 @@ notification bearer are Key Vault objects, mounted through one SecretProviderCla
 pods. Values: `registry.*` in `deploy/helm/values.yaml`; a complete example the chart gate renders
 on every pull request: `deploy/helm/values.registry.example.yaml`.
 
+**Whose identity writes the blobs.** The storage driver authenticates as whatever workload identity
+the registry pods' ServiceAccount is federated to. By default that account is the portal's own
+`memex-portal-sa`, so the registry writes as the namespace's PORTAL identity — and in an estate where
+every portal namespace federates to one shared identity, every portal pod can then write the registry
+store. The record's `registry.workloadIdentityClientId` gives the registry its own identity instead:
+the chart creates a dedicated ServiceAccount (`registry.serviceAccount`, `memex-registry-sa` when the
+record names none), annotated with that client id and with no Kubernetes token mounted, and both
+registry pods run as it. That identity needs Storage Blob Data Contributor on the registry's container
+and nothing else. A record that states no client id renders exactly what it rendered before. The
+estate's sequence (identity and grant first, then the record, then retiring the portal identity's blob
+write) is Systemorph/Memex#922.
+
 **🚨 The floor is distribution ≥ 3.1.0.** `credentials.type: default_credentials` reaches
 `DefaultAzureCredential` — the workload identity — only from 3.1.0 on; 3.0.0 dispatches it to the
 shared-key client and signs every storage request with an empty account key, whatever identity the

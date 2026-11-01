@@ -73,6 +73,11 @@ name: Node repo ci-failure ledger (reusable)
 # inbox's answer is judged the same three-way way (`"signature":"verified"` passes; `not-required`
 # is a broken pair and fails; no verdict at all is a receiver that has not rolled #3312 and warns).
 #
+# AND, for the main build ledger (label `ci-main-red`) only, the ARTIFACT-STORE MISS ledger
+# (`ci-failure-ledger.py --artifact-misses`, label `ci-artifact-store-miss`): a red run whose red jobs
+# printed `NOT MEASURED — artifact store miss (infra)` appends to it, a green one closes it. No event;
+# see its step at the end of this file.
+#
 # 🚨 THE ISSUE WRITES USE THE CALLER'S `secrets.GITHUB_TOKEN`, NEVER A GITHUB APP TOKEN. The
 # `meshweaver-cloud` installation holds contents/metadata/pull_requests and nothing else (measured
 # 2026-09-07, `GET /orgs/Systemorph/installations`), so an App-token issue write would 403 on an
@@ -84,8 +89,9 @@ name: Node repo ci-failure ledger (reusable)
 #
 # 🚨 NO SKIP-TRAPDOOR, in either direction. No `continue-on-error` anywhere; no `if:` that asks
 # whether a secret or variable is set. The preflight ASSERTS every input the caller is expected to
-# provision and fails RED naming what and where; the only step-level `if:` below is on the ledger's
-# own decision (`post`), which is run state the step above printed, never an input. And the caller
+# provision and fails RED naming what and where; the step-level `if:`s below are on the ledger's
+# own decision (`post`), which is run state the step above printed, and `!cancelled()` on the miss
+# ledger (it runs after a red step too) — never an input. And the caller
 # wires BOTH outcomes — a failure-only reporter never clears a stale alert, and an alert that is no
 # longer true is how the next real one gets skimmed past.
 #
@@ -268,7 +274,8 @@ jobs:
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
-      # No `if:` on any step here except the ledger's own `post` decision. The assertions below
+      # No `if:` on any step here except the ledger's own `post` decision and the miss ledger's
+      # `!cancelled()`. The assertions below
       # ASSERT and fail; they never choose whether to run. A step asking "is the secret set?" and
       # skipping would render exactly like a green that had nothing to report.
       - name: Every input the caller must provision, or a red run naming what and where
@@ -338,6 +345,7 @@ jobs:
       # (create / append / reopen-recent / close / noop / refuse-malformed) must be shown to fire on
       # its case before its verdict on the real repository means anything.
       - name: "The ledger can say no (self-test)"
+        id: selftest
         run: python3 "$RUNNER_TEMP/ci-failure-ledger.py" --self-test
 
       # Before the ledger writes and before anything is signed: the URL the HMAC would travel to is
@@ -457,3 +465,31 @@ jobs:
               exit 1
               ;;
           esac
+
+      # 🗂️ THE ARTIFACT-STORE MISS LEDGER (MeshWeaver#7656 retired onto it). A job that downloads a
+      # named artifact its producer published and finds nothing after one re-read prints
+      # `ci-run-artifacts: NOT MEASURED — artifact store miss (infra)` (ReadingCiSignals → "An
+      # artifact-store miss is NOT MEASURED"). Those misses used to be copied by hand onto a standing
+      # tracker; here they land on a ledger the same script keeps, under its OWN key (label
+      # `ci-artifact-store-miss` + its exact title + the ownership mark, never `ci-main-red`'s): a red
+      # run whose red jobs PRINTED the miss appends a dated entry (filing or reopening it), a red for
+      # any other reason leaves it alone, and a green `main` closes it. It reads the red jobs' LOGS
+      # (`actions: read`, already demanded above) and an unreadable log is RED, never "no miss". It acts
+      # only for the main build ledger (label `ci-main-red`) — another lane's call says so and reads
+      # nothing — and posts no event: the step above already told triage about this run.
+      # `!cancelled()` and no input test: it runs after a red main ledger step or a failed event
+      # delivery too, so a miss is never lost because the other ledger could not be written. Its one
+      # PREREQUISITE is the self-test: a ledger whose rules were just shown NOT to hold must never
+      # create, append to or close a real issue, so a failed (or never-run) self-test masks it.
+      - name: Open, append to, or close the artifact-store miss ledger (NOT MEASURED, infra)
+        if: ${{ !cancelled() && steps.selftest.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          LEDGER_OUTCOME: ${{ inputs.outcome }}
+          LEDGER_RUN_ID: ${{ inputs.run }}
+          LEDGER_RUN_URL: ${{ inputs.run-url }}
+          LEDGER_SHA: ${{ inputs.sha }}
+          LEDGER_TRIGGER: ${{ inputs.event }}
+          LEDGER_LABEL: ${{ inputs.label }}
+          MW_API_OUTAGE_WAIT_MINUTES: "5"
+        run: python3 "$RUNNER_TEMP/ci-failure-ledger.py" --artifact-misses
