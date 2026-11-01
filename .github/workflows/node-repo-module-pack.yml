@@ -502,6 +502,10 @@ on:
           containing this one — a module never goes backwards and never waits for an unrelated one.
           `direct` mode only; refuses a `content-repository` (it reads THIS repository's trunk). Off
           by default: a caller whose trunk runs supersede each other gets its ordering from that.
+          Under `publish-mode: staged` the same check runs in the publisher, right before its
+          hand-over: pass `publish-newest-only: true` (and this call's `module-libraries-project` /
+          `build-extensions-project`) to node-repo-module-publish.yml — module-publication.py
+          check-callers refuses a staged call that asks for it here while its publisher does not.
         type: boolean
         required: false
         default: false

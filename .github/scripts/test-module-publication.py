@@ -211,7 +211,7 @@ def main() -> int:  # noqa: C901
                 "LANE": LANE, "SELECTED": "MeshWeaver.AI",
                 "DECLARED": json.dumps(MODULES),
                 "REGISTRY": registry.url, "REGISTRY_SOURCE": "Plugins",
-                "LEDGER": "off", "MW_PUBLISH_TOKEN": "tok_test",
+                "LEDGER": "off", "MW_PUBLISH_TOKEN": "tok_test", "NEWEST_ONLY": "false",
             }
 
             def do_publish(**over):
@@ -305,6 +305,27 @@ def main() -> int:  # noqa: C901
             check("none of those reached the registry", len(registry.requests) == before,
                   f"{len(registry.requests) - before} extra request(s)")
 
+            print("\n== publish-newest-only: the hand-over reads the newer-commit decision, and never runs without it")
+            before = len(registry.requests)
+            sup = ws / "_temp" / "superseded.json"
+            sup.unlink(missing_ok=True)
+            r = do_publish(NEWEST_ONLY="true")
+            check("newest-only ON with NO decision written is RED (the check never ran)",
+                  r.returncode == 1 and "no newer-commit decision" in (r.stdout + r.stderr), r.stdout + r.stderr)
+            r = do_publish(NEWEST_ONLY="")
+            check("an unreadable newest-only flag is RED", r.returncode == 1, r.stdout + r.stderr)
+            check("…neither reached the registry", len(registry.requests) == before)
+            sup.write_text(json.dumps({"lane": LANE, "superseded": {"MeshWeaver.AI": "trunk tip reaches it"}}))
+            r = do_publish(NEWEST_ONLY="true")
+            check("a module the newer trunk tip reaches is STOOD DOWN — green, and the registry hears nothing",
+                  r.returncode == 0 and "STOOD DOWN" in r.stdout and len(registry.requests) == before,
+                  r.stdout + r.stderr)
+            sup.write_text(json.dumps({"lane": LANE, "superseded": {}}))
+            r = do_publish(NEWEST_ONLY="true")
+            check("NEGATIVE CONTROL: nothing newer reaches it — it IS handed over",
+                  r.returncode == 0 and len(registry.requests) == before + 1, r.stdout + r.stderr)
+            sup.unlink()
+
             print("\n== A registry refusal is a RED, and is not recorded as published")
             refusing = Registry(status=409)
             try:
@@ -344,6 +365,50 @@ def main() -> int:  # noqa: C901
                   r.stdout + r.stderr)
         finally:
             registry.close()
+
+    print("\n== publish-newest-only: the REAL `newer` step, over a scratch trunk and the real scope script")
+    newer_body = extract_step(PUBLISH_WORKFLOW, "newer")
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+
+        def git(*a, cwd):
+            return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+        src = td / "trunk"
+        src.mkdir()
+        git("init", "-q", "-b", "main", cwd=src)
+        git("config", "user.email", "ci@example.com", cwd=src)
+        git("config", "user.name", "ci", cwd=src)
+        (src / "src" / "MeshWeaver.AI").mkdir(parents=True)
+        (src / "src" / "MeshWeaver.AI" / "MeshWeaver.AI.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk" />\n')
+        (src / "src" / "MeshWeaver.AI" / "X.cs").write_text("class X {}\n")
+        git("add", "-A", cwd=src)
+        git("commit", "-qm", "this run", cwd=src)
+        mine = git("rev-parse", "HEAD", cwd=src)
+        ws = workspace(td)
+        git("clone", "-q", f"file://{src}", "newest", cwd=ws)
+        temp = ws / "_temp"
+        (temp / "staged").mkdir(parents=True)
+        (temp / "staged" / "MeshWeaver.AI.publication.json").write_text(json.dumps(
+            {"lane": LANE, "module": "MeshWeaver.AI", "owed": True}))
+        env = {"LANE": LANE, "DECLARED": json.dumps(MODULES), "TRUNK": "main",
+               "SHELF_PROJECT": "", "EXTENSIONS_PROJECT": "", "GITHUB_WORKSPACE": str(ws)}
+
+        def decided() -> dict:
+            return json.loads((temp / "superseded.json").read_text())["superseded"]
+
+        r = run_step(newer_body, env, ws)
+        check("NEGATIVE CONTROL: this run IS the trunk tip — the step stands nothing down",
+              r.returncode == 0 and decided() == {}, r.stdout + r.stderr)
+        (src / "src" / "MeshWeaver.AI" / "X.cs").write_text("class X { int y; }\n")
+        git("commit", "-qam", "a newer merge", cwd=src)
+        r = run_step(newer_body, env, ws)
+        check("a newer trunk commit reaching the module stands it down (the step fetched the tip itself)",
+              r.returncode == 0 and set(decided()) == {"MeshWeaver.AI"}
+              and git("rev-parse", "HEAD", cwd=ws / "newest") == mine, r.stdout + r.stderr)
+        r = run_step(newer_body, dict(env, TRUNK=""), ws)
+        check("no default branch on the event is RED ('cannot tell' never publishes)", r.returncode == 1,
+              r.stdout + r.stderr)
 
     print("\n== node-repo-module-pack.yml stages instead of publishing under `publish-mode: staged`")
     import yaml
