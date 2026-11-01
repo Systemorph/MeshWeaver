@@ -591,6 +591,18 @@ keeps the supersede model in the next section.
    `publication: superseded`, naming the tip): that commit's own never-cancelled run builds the
    module from a tree that contains this one. A module never goes backwards and never waits for an
    unrelated module.
+   **Under staged publishing the check moves with the POST.** With `publish-mode: staged` (one
+   verdict per run, MeshWeaver#3878) the pack leg posts nothing, so its in-leg check never runs and
+   the hand-over happens at the END of the run, in `node-repo-module-publish.yml`. That lane takes
+   `publish-newest-only` (plus the pack call's `module-libraries-project` and
+   `build-extensions-project`) and asks the same question right before its own hand-over:
+   `module-publication.py superseded` runs node-repo-scope.py `--publication-reach` over the trunk
+   tip's diff for every OWED staged record, with this run's and the tip's MSBuild evaluation of the
+   shelf and extension, and `publish --superseded` stands the reached modules down by name. A trunk
+   that cannot be read, a scope that fails, or a decision that was never written is RED. A staged
+   pack call that asks for `publish-newest-only` while its publisher does not, or a publisher asking
+   the scope without the pack call's shelf, is refused before merge by `module-publication.py
+   check-callers`.
    **A caller may withhold packages (`publish-withhold`).** A caller whose publication is decided per
    package passes the names of the packages this run must not hand over. Their modules are still
    built, inspected and tested, and their bundle artifacts still reach the caller's gates; only the

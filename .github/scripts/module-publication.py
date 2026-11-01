@@ -43,6 +43,14 @@ its whole validation set, and it is deliberately built so that "the validation d
                 Doc/Architecture/BuildHosts §5 — and every other shape of that graph is refused.
   lane-key      The lane key a pack call stamps on its evidence, for a host's modules stage to stamp
                 its publication records with.
+  superseded    NEWEST WINS, PER MODULE, under staged publishing (`publish-newest-only` on the
+                publication lane). Right before the hand-over, for every staged record that owes one:
+                does a NEWER trunk commit reach the module's dependency network? It asks the same
+                scope script the pack lane's in-leg check asks (node-repo-scope.py --for modules
+                --publication-reach over the trunk tip's diff), and writes the modules to stand down.
+                A staged hand-over runs at the END of a run, so two overlapping trunk runs (a main
+                push and the release lane) would otherwise publish in finishing order, and the
+                registry keeps whatever arrives LAST. "Cannot tell" is RED, never "nothing newer".
   publish       The staged evidence is matched against the selection before ONE byte is POSTed:
                 exactly one publication record per selected module, stamped with THIS call's lane,
                 naming the bytes by sha256 and the framework identity read back off those bytes.
@@ -61,6 +69,9 @@ USAGE
   module-publication.py publish --check-only --staged DIR --lane L --declared @modules.json \\
         --selected "MeshWeaver.AI"        # build-host-publication.yml: the publisher's checks, no POST
   module-publication.py lane-key --lane-id catalog --modules @modules.json
+  module-publication.py superseded --staged DIR --lane L --declared @modules.json --root CALLER \\
+        --mine SHA --tip SHA --changed-list a,b --scope-script node-repo-scope.py --out superseded.json
+  module-publication.py publish … --superseded @superseded.json   # stands those modules down
   module-publication.py --self-test
 """
 from __future__ import annotations
@@ -586,6 +597,41 @@ def check_callers(root: Path) -> int:
                 problems.append(f"{wf.name}: `{pid}` publishes `{pack_id}`, whose publish-mode is "
                                 f"`{mode}`, not `staged` — that call POSTs in-leg itself and stages "
                                 "nothing, so this lane would refuse on an empty staged set.")
+            # NEWEST WINS under staged: the pack lane runs its in-leg newer-commit check in `direct`
+            # mode ONLY, so a staged call's `publish-newest-only: true` buys nothing unless its
+            # PUBLISHER carries it — and asks the scope with the SAME shelf and build extension, or a
+            # newer commit that edits only those would not stand an older module down.
+            pack_newest, pub_newest = pw.get("publish-newest-only"), w.get("publish-newest-only")
+            for who, val in ((pack_id, pack_newest), (pid, pub_newest)):
+                if val not in (None, True, False, "true", "false"):
+                    problems.append(f"{wf.name}: `{who}` passes `publish-newest-only: {val!r}` — it must be "
+                                    "the literal true or false, so this check reads what the lanes will do.")
+            if mode == "staged" and pack_newest in (True, "true") and pub_newest not in (True, "true"):
+                problems.append(
+                    f"{wf.name}: `{pack_id}` asks for `publish-newest-only` but stages (publish-mode: staged), "
+                    f"where the pack lane does not run that check — its publisher `{pid}` must pass "
+                    "`publish-newest-only: true`, or two overlapping trunk runs publish in FINISHING order "
+                    "and the registry keeps whichever arrives last.")
+            if pub_newest in (True, "true"):
+                # The publisher compares the trunk tip with the CALLER's event commit — the commit the
+                # bundles were packed from only when the pack call packs its own checkout. A
+                # `content-ref` (an older commit, a tag) or a `content-repository` (another trunk)
+                # makes that comparison about the wrong tree: an older commit's bytes would read as
+                # "this run IS the tip" and publish. The pack lane's direct-mode check refuses the
+                # same foreign repository; here both overrides are refused, in any spelling.
+                for key in ("content-repository", "content-ref"):
+                    if str(pw.get(key) or "").strip():
+                        problems.append(
+                            f"{wf.name}: `{pid}` passes `publish-newest-only: true` but `{pack_id}` packs "
+                            f"`{key}: {pw.get(key)!r}` — the newer-commit check reads THIS run's commit "
+                            "against THIS repository's trunk, so it cannot judge content packed from "
+                            "another commit or repository. Turn one of the two off.")
+                for key in ("module-libraries-project", "build-extensions-project"):
+                    if str(w.get(key) or "") != str(pw.get(key) or ""):
+                        problems.append(
+                            f"{wf.name}: `{pid}` passes `{key}: {w.get(key) or ''!r}` but `{pack_id}` builds "
+                            f"with {pw.get(key) or ''!r} — the newer-commit check must ask the scope about the "
+                            "SAME inputs the bundles were built with.")
             stage_on, publish_on = _norm_condition(pw.get("publish", False)), _norm_condition(pj.get("if"))
             if stage_on != publish_on:
                 problems.append(
@@ -796,6 +842,32 @@ def publish(a: argparse.Namespace) -> int:
                      "path": path, "identity": identity, "sha256": got,
                      "ledgerKey": (rec.get("ledger") or {}).get("key") or ""})
 
+    # NEWEST WINS (publish-newest-only): `superseded` decided, over THESE records, which owed modules a
+    # newer trunk commit reaches. Each must be one this call was about to hand over — a name the plan
+    # does not hold means the two steps read different evidence, and that refuses the whole set.
+    stood_down: dict[str, str] = {}
+    sup_raw = getattr(a, "superseded", "") or ""
+    if sup_raw:
+        try:
+            doc = load_json_arg(sup_raw)
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            die(f"--superseded {sup_raw!r} is not readable JSON ({exc}) — 'cannot tell' never publishes.")
+        named = (doc or {}).get("superseded") if isinstance(doc, dict) else None
+        if not isinstance(named, dict) or (doc.get("lane") != lane):
+            die(f"--superseded is not a `superseded` result for lane `{lane}` (got lane "
+                f"{(doc or {}).get('lane') if isinstance(doc, dict) else None!r}) — refusing to guess which "
+                "modules a newer trunk commit reaches.")
+        planned = {i["module"] for i in plan}
+        for m, why in sorted(named.items()):
+            if m not in planned:
+                problems.append(f"the newer-commit check stood `{m}` down, but this call does not hand "
+                                f"`{m}` over — the two steps read different staged evidence.")
+            else:
+                stood_down[m] = str(why)
+        plan = [i for i in plan if i["module"] not in stood_down]
+
     if problems:
         for p in problems:
             print(f"::error title=Publication refused::{_inert(p)}", file=sys.stderr)
@@ -812,14 +884,21 @@ def publish(a: argparse.Namespace) -> int:
               f"({len(selected)} selected), {len(plan)} owe a hand-over — nothing was POSTed.")
         return 0
 
+    for m, why in sorted(stood_down.items()):
+        print(_inert(f"  -- {m}@{mine[m]['version']}: STOOD DOWN for a newer trunk commit — {why}"))
+    stood_lines = ([f"- `{m}@{mine[m]['version']}` stood down for a newer trunk commit: {why}"
+                    for m, why in sorted(stood_down.items())])
+
     if not plan:
         print("nothing owes a hand-over in this call: "
-              f"{len(mine)} staged record(s), {len(selected)} selected, 0 to publish.")
+              f"{len(mine)} staged record(s), {len(selected)} selected, {len(stood_down)} stood down "
+              "for a newer trunk commit, 0 to publish.")
         summarise(["### Module publication", "",
-                   f"{len(mine)} staged record(s) accounted for; **none owed a hand-over**.", ""]
+                   f"{len(mine)} staged record(s) accounted for; **nothing handed over**.", ""]
+                  + stood_lines
                   + ([f"- `{m}@{rec.get('version', '?')}`: {rec.get('reason') or 'no reason recorded'}"
-                      for m, rec in sorted(mine.items())]
-                     or ["The selection was empty."]))
+                      for m, rec in sorted(mine.items()) if m not in stood_down]
+                     or ([] if stood_lines else ["The selection was empty."])))
         return 0
 
     token = os.environ.get(PUBLISH_TOKEN_ENV, "")
@@ -869,6 +948,7 @@ def publish(a: argparse.Namespace) -> int:
              f"Source `{a.source}` → {a.registry}", ""]
     lines += [f"- `{i['module']}@{i['version']}` — sha256 `{i['sha256'][:16]}…`, framework "
               f"`{i['identity']}`" for i in published]
+    lines += stood_lines
     if failed:
         lines += ["", "**Refused by the registry:**", ""] + [f"- {f}" for f in failed]
     summarise(lines)
@@ -921,6 +1001,86 @@ def partition(staged: Path, lane: str, aside: Path) -> int:
         print(_inert(f"  set aside: `{rec.get('module') or rel}` is stamped lane `{rec.get('lane')}` — "
                      f"another pack call's record, never published by lane `{lane}`"))
     print(f"partition: {len(foreign)} record(s) of another lane set aside; the rest is lane `{lane}`'s to check.")
+    return 0
+
+
+# ══════════════════════════════════ superseded ══════════════════════════════════
+SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def superseded(a: argparse.Namespace) -> int:
+    """Which owed, staged modules does a NEWER trunk commit reach? (`publish-newest-only`, staged arm)
+
+    The in-leg check of node-repo-module-pack.yml (`direct` mode) runs seconds before its own POST.
+    Under `staged` the POST moves to the END of the run, so the check moves with it: it runs in the
+    publication lane, right before the hand-over, over the records that lane is about to publish.
+    The question and its instrument are unchanged — the trunk tip's diff against this run's commit,
+    asked of node-repo-scope.py `--for modules --publication-reach` for each module's own matrix
+    entry — and so is the safety argument: a module the tip reaches is in that commit's own run's
+    selection (the tip's diff is part of every scope it computes), and that run publishes a tree
+    containing this one. Every uncertainty is RED: "cannot tell" must never publish as "nothing newer".
+    """
+    lane = (a.lane or "").strip()
+    if not lane:
+        die("superseded: the lane key is empty — the records this check reads could not be told apart "
+            "from a sibling call's.")
+    for flag, value in (("--mine", a.mine), ("--tip", a.tip)):
+        if not SHA.match(value or ""):
+            die(f"superseded: {flag} is {value!r}, not a full commit sha — the trunk tip cannot be "
+                "compared with this run's commit, and 'cannot tell' never publishes.")
+    if not a.out:
+        die("superseded: --out is required — the hand-over reads the decision from that file.")
+    declared = {e["module"]: e for e in load_json_arg(a.declared)} if a.declared else {}
+    staged = Path(a.staged)
+    records, _ = _read_records(staged) if staged.is_dir() else ({}, [])
+    owed = sorted(m for m, r in records.items() if r.get("lane") == lane and r.get("owed") and m in declared)
+    changed = [c for c in (a.changed_list or "").split(",") if c]
+    decided: dict[str, str] = {}
+    if a.tip == a.mine:
+        print(f"this run's commit {a.mine} IS the trunk tip — nothing newer; {len(owed)} owed module(s) publish")
+    elif not changed:
+        print(f"the trunk moved to {a.tip}, but its tree equals this run's — nothing newer reaches any of "
+              f"the {len(owed)} owed module(s)")
+    else:
+        if not a.scope_script or not Path(a.scope_script).is_file():
+            die(f"superseded: the scope script {a.scope_script!r} is not a file — the newer commit's reach "
+                "cannot be asked, and 'cannot tell' never publishes.")
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="mw-newer-") as td:
+            for m in owed:
+                entry = Path(td) / f"{m}.json"
+                entry.write_text(json.dumps([declared[m]]), encoding="utf-8")
+                argv = [sys.executable, a.scope_script, "--for", "modules", "--root", a.root or ".",
+                        "--modules", f"@{entry}", "--event", "pull_request", "--publication-reach"]
+                if a.module_libraries_project:
+                    argv += ["--module-libraries-project", a.module_libraries_project]
+                if a.build_extensions_project:
+                    argv += ["--build-extensions-project", a.build_extensions_project]
+                for ev in a.msbuild_evaluation or []:
+                    argv += ["--msbuild-evaluation", ev]
+                argv += ["--changed-list", ",".join(changed)]
+                env = {**os.environ, "GITHUB_OUTPUT": str(Path(td) / f"{m}.out"), "GITHUB_STEP_SUMMARY": os.devnull}
+                proc = subprocess.run(argv, capture_output=True, text=True, env=env, check=False)
+                if proc.returncode != 0:
+                    sys.stderr.write(proc.stderr[-4000:])
+                    die(_inert(f"superseded: the scope script failed for `{m}` (exit {proc.returncode}) — "
+                               "whether the trunk tip reaches it cannot be told, and 'cannot tell' never publishes."))
+                try:
+                    answer = json.loads(proc.stdout)
+                    count = int(answer["count"])
+                except Exception as exc:  # noqa: BLE001 — an unreadable answer is RED, never "zero"
+                    die(_inert(f"superseded: the scope script's answer for `{m}` is not readable ({exc}) — "
+                               "'cannot tell' never publishes."))
+                if count:
+                    decided[m] = (f"trunk tip {a.tip} reaches its dependency network "
+                                  f"({answer.get('reason') or 'no reason given'}); that commit's own run publishes it")
+                    print("::notice title=Stood down for a newer commit::"
+                          + _inert(f"{m} is NOT published from {a.mine} — {decided[m]}"))
+                else:
+                    print(_inert(f"the trunk moved to {a.tip}, but nothing it changed reaches {m} — publishing"))
+    Path(a.out).write_text(json.dumps({"lane": lane, "mine": a.mine, "tip": a.tip, "superseded": decided},
+                                      indent=2), encoding="utf-8")
+    print(f"superseded: {len(decided)} of {len(owed)} owed module(s) stand down for trunk tip {a.tip}")
     return 0
 
 
@@ -1151,6 +1311,36 @@ jobs:
         rc, out = callers(wired.replace("${{ needs.modules.outputs.lane }}", "catalog"))
         check("a publisher whose `lane` is a literal rather than the call's lane output is caught",
               rc == 1 and "lane output" in out, out)
+
+        # NEWEST WINS under staged: the pack lane's in-leg check is `direct`-only, so the flag must
+        # travel to the publisher, with the same shelf and build extension the bundles were built with.
+        newest = (wired.replace("      publish-mode: staged\n",
+                                "      publish-mode: staged\n      publish-newest-only: true\n"
+                                "      module-libraries-project: src/Shelf/Shelf.csproj\n")
+                  .replace("      platform-ref: abc\n",
+                           "      platform-ref: abc\n      publish-newest-only: true\n"
+                           "      module-libraries-project: src/Shelf/Shelf.csproj\n"))
+        rc, out = callers(newest)
+        check("newest-only: a staged pack call whose publisher carries the flag and the same shelf passes",
+              rc == 0, out)
+        rc, out = callers(newest.replace("      platform-ref: abc\n      publish-newest-only: true\n",
+                                         "      platform-ref: abc\n"))
+        check("MUTATION newest-only: a staged pack call asking for it, its publisher NOT carrying it, is caught",
+              rc == 1 and "FINISHING order" in out, out)
+        rc, out = callers(newest.replace("      platform-ref: abc\n      publish-newest-only: true\n"
+                                         "      module-libraries-project: src/Shelf/Shelf.csproj\n",
+                                         "      platform-ref: abc\n      publish-newest-only: true\n"))
+        check("MUTATION newest-only: a publisher asking the scope WITHOUT the pack call's shelf is caught",
+              rc == 1 and "module-libraries-project" in out and "SAME inputs" in out, out)
+        rc, out = callers(newest.replace("      platform-ref: abc\n      publish-newest-only: true\n",
+                                         "      platform-ref: abc\n      publish-newest-only: ${{ vars.X }}\n"))
+        check("MUTATION newest-only: an EXPRESSION for the flag is caught (this check could not read it)",
+              rc == 1 and "literal true or false" in out, out)
+        for key, val in (("content-ref", "${{ inputs.ref }}"), ("content-repository", "Systemorph/Other")):
+            rc, out = callers(newest.replace("      publish-mode: staged\n",
+                                             f"      publish-mode: staged\n      {key}: {val}\n"))
+            check(f"MUTATION newest-only: a pack call with `{key}` (content not from this run's commit) is caught",
+                  rc == 1 and key in out and "Turn one of the two off" in out, out)
         rc, out = callers(wired.replace("required-jobs: validate modules gate",
                                         "required-jobs: ${{ vars.REQUIRED }}"))
         check("a `required-jobs` passed as an expression is caught (the static half could not read it)",
@@ -1512,6 +1702,83 @@ jobs:
         check("NEGATIVE CONTROL: the hostile text WOULD be a command if printed raw",
               bool(commands_in(evil)))
 
+        # NEWEST WINS under staged — `superseded` asks the scope per OWED record; publish stands those down.
+        stage("newer", "MeshWeaver.AI")
+        stage("newer", "MeshWeaver.Mcp")
+        stage("newer", "MeshWeaver.Maps", owed=False)
+        newer_dir = root / "newer"
+        decl3 = json.dumps([{"module": "MeshWeaver.AI"}, {"module": "MeshWeaver.Mcp"}, {"module": "MeshWeaver.Maps"}])
+        scope = root / "fake-scope.py"
+        asked = root / "scope-asked.txt"
+        # A stand-in for node-repo-scope.py that answers "reached" for MeshWeaver.AI only and logs what it
+        # was asked, so the cases read the REAL argv this command builds.
+        scope.write_text(
+            "import json,sys\n"
+            f"open({str(asked)!r},'a').write(' '.join(sys.argv[1:])+'\\n')\n"
+            "m=json.load(open(sys.argv[sys.argv.index('--modules')+1][1:]))[0]['module']\n"
+            "if m=='MeshWeaver.Boom': sys.exit(3)\n"
+            "print(json.dumps({'count': 1 if m=='MeshWeaver.AI' else 0, 'reason': 'src/MeshWeaver.AI/X.cs'}))\n",
+            encoding="utf-8")
+        mine, tip = "a" * 40, "b" * 40
+
+        def sup(**kw):
+            base = dict(staged=str(newer_dir), lane="L1", declared=decl3, root=str(root), mine=mine, tip=tip,
+                        changed_list="src/MeshWeaver.AI/X.cs", scope_script=str(scope),
+                        module_libraries_project="src/Shelf/Shelf.csproj", build_extensions_project="",
+                        msbuild_evaluation=["head.json", "tip.json"], out=str(root / "superseded.json"))
+            base.update(kw)
+            return run(superseded, argparse.Namespace(**base))
+
+        asked.write_text("", encoding="utf-8")
+        rc, out = sup()
+        doc = json.loads((root / "superseded.json").read_text()) if rc == 0 else {}
+        check("superseded: a module the newer tip reaches stands down, a module it does not reach publishes",
+              rc == 0 and set(doc.get("superseded", {})) == {"MeshWeaver.AI"}, out)
+        lines = asked.read_text().splitlines()
+        check("superseded: only OWED records are asked (a not-owed record is never a candidate)",
+              len(lines) == 2 and not any("MeshWeaver.Maps" in l for l in lines), "\n".join(lines))
+        check("superseded: the scope is asked as a PUBLICATION reach, with the shelf and BOTH evaluations",
+              all("--publication-reach" in l and "--module-libraries-project src/Shelf/Shelf.csproj" in l
+                  and "--msbuild-evaluation head.json --msbuild-evaluation tip.json" in l for l in lines),
+              "\n".join(lines))
+        rc, out = run(publish, args(staged=str(newer_dir), declared=decl3,
+                                    selected="MeshWeaver.AI MeshWeaver.Mcp MeshWeaver.Maps",
+                                    superseded=f"@{root / 'superseded.json'}"))
+        check("publish --superseded: the stood-down module is NOT handed over, its sibling IS",
+              rc == 0 and "STOOD DOWN" in out and "-> MeshWeaver.Mcp@" in out
+              and "-> MeshWeaver.AI@" not in out, out)
+        rc, out = run(publish, args(staged=str(newer_dir), declared=decl3,
+                                    selected="MeshWeaver.AI MeshWeaver.Mcp MeshWeaver.Maps"))
+        check("publish NEGATIVE CONTROL: without --superseded both owed modules are handed over",
+              rc == 0 and "-> MeshWeaver.AI@" in out and "-> MeshWeaver.Mcp@" in out, out)
+        (root / "foreign-sup.json").write_text(json.dumps({"lane": "L1", "superseded": {"MeshWeaver.Maps": "x"}}))
+        rc, out = run(publish, args(staged=str(newer_dir), declared=decl3,
+                                    selected="MeshWeaver.AI MeshWeaver.Mcp MeshWeaver.Maps",
+                                    superseded=f"@{root / 'foreign-sup.json'}"))
+        check("publish --superseded naming a module this call does not hand over REFUSES (different evidence)",
+              rc == 1 and "different staged evidence" in out, out)
+        (root / "lane-sup.json").write_text(json.dumps({"lane": "L2", "superseded": {}}))
+        rc, out = run(publish, args(staged=str(newer_dir), declared=decl3,
+                                    selected="MeshWeaver.AI MeshWeaver.Mcp MeshWeaver.Maps",
+                                    superseded=f"@{root / 'lane-sup.json'}"))
+        check("publish --superseded for ANOTHER lane refuses", rc == 1 and "lane" in out, out)
+        asked.write_text("", encoding="utf-8")
+        rc, out = sup(tip=mine)
+        doc = json.loads((root / "superseded.json").read_text()) if rc == 0 else {}
+        check("superseded: this run IS the tip — nothing stands down and the scope is never asked",
+              rc == 0 and doc.get("superseded") == {} and asked.read_text() == "", out)
+        rc, out = sup(changed_list="")
+        check("superseded: the tip's tree equals this run's — nothing stands down",
+              rc == 0 and json.loads((root / "superseded.json").read_text()).get("superseded") == {}, out)
+        rc, out = sup(tip="main")
+        check("superseded: a tip that is not a full sha is RED ('cannot tell' never publishes)", rc == 1, out)
+        rc, out = sup(scope_script=str(root / "absent.py"))
+        check("superseded: an absent scope script is RED", rc == 1, out)
+        stage("boom", "MeshWeaver.Boom")
+        rc, out = sup(staged=str(root / "boom"), declared=json.dumps([{"module": "MeshWeaver.Boom"}]))
+        check("superseded: a scope script that FAILS is RED, never 'nothing newer'",
+              rc == 1 and "MeshWeaver.Boom" in out, out)
+
         rc, out = run(partition, root / "never-fetched", "L1", root / "x-aside")
         check("H7 partition: a directory that was never fetched is nothing to set aside", rc == 0, out)
         rc, out = run(partition, mixed, "", root / "x-aside")
@@ -1539,7 +1806,8 @@ jobs:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", nargs="?",
-                   choices=("verdict", "check-caller", "check-callers", "publish", "lane-key", "partition"))
+                   choices=("verdict", "check-caller", "check-callers", "publish", "lane-key", "partition",
+                            "superseded"))
     p.add_argument("--root", default="")
     p.add_argument("--verdicts", default="")
     p.add_argument("--required", default="")
@@ -1560,6 +1828,17 @@ def main() -> int:
     p.add_argument("--lane-id", dest="lane_id", default="")
     p.add_argument("--aside", default="", help="partition: where another lane's records are set aside")
     p.add_argument("--modules", default="", help="lane-key: the pack call's `modules` input, verbatim (or @file)")
+    p.add_argument("--superseded", default="",
+                   help="publish: a `superseded` result (@file) — those modules stand down for a newer trunk commit")
+    p.add_argument("--mine", default="", help="superseded: this run's commit")
+    p.add_argument("--tip", default="", help="superseded: the trunk tip")
+    p.add_argument("--changed-list", dest="changed_list", default="",
+                   help="superseded: the files the tip changed against --mine, comma-separated")
+    p.add_argument("--scope-script", dest="scope_script", default="", help="superseded: node-repo-scope.py")
+    p.add_argument("--module-libraries-project", dest="module_libraries_project", default="")
+    p.add_argument("--build-extensions-project", dest="build_extensions_project", default="")
+    p.add_argument("--msbuild-evaluation", dest="msbuild_evaluation", action="append", default=[])
+    p.add_argument("--out", default="", help="superseded: where the decision is written")
     p.add_argument("--self-test", dest="self_test", action="store_true")
     a = p.parse_args()
     if a.self_test:
@@ -1586,7 +1865,13 @@ def main() -> int:
         raw = Path(a.modules[1:]).read_text(encoding="utf-8") if a.modules.startswith("@") else a.modules
         print(lane_key(a.lane_id, raw))
         return 0
+    if a.command == "superseded":
+        if not a.staged:
+            p.error("superseded needs --staged")
+        return superseded(a)
     if a.command == "publish":
+        if a.check_only and a.superseded:
+            p.error("publish --check-only takes no --superseded: it POSTs nothing, so there is nothing to stand down")
         if a.check_only:
             a.registry = a.registry or "check-only"
             a.source = a.source or "check-only"
