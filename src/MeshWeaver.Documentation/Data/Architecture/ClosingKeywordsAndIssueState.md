@@ -91,7 +91,8 @@ the checklist; it does not hold a release-blocking count open on work an agent c
 Neither route lets a merge close the issue — the running fix in (3) and the checklist entry both
 come after the merge — so the gate below is unchanged by them. A later pull request whose body
 closes such an issue after the evidence exists declares it with `Verified-closing:` like any other
-verified close, naming the three pieces of evidence as its reason.
+verified close, naming that route's evidence as its reason: the three pieces above for an event that
+cannot be provoked, or the owner-checklist entry (and what it records) for an owner hand action.
 
 🚨 **A duplicate is not an exception, it is a different close.** A closing keyword closes an issue
 as *completed*. An issue that is a duplicate, superseded or not-planned wants that state reason
