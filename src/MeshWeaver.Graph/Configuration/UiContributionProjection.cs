@@ -295,6 +295,15 @@ internal static class UiContributionProjection
         IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> areas, Permission permissions)
         => [.. areas.Where(a => permissions.HasFlag(a.RequiredPermission))];
 
+    /// <summary>The projected start-page cards the viewer may see: Read on the user node ALWAYS, plus whatever
+    /// the contribution declares on top — a permission set holding the declared mask but not Read (Sync alone,
+    /// say) shows nothing. Pure.</summary>
+    /// <param name="areas">The projected cards.</param>
+    /// <param name="permissions">The viewer's effective permissions on the user node.</param>
+    public static IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> FilterHomeAreas(
+        IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> areas, Permission permissions)
+        => permissions.HasFlag(Permission.Read) ? FilterInboxAreas(areas, permissions) : [];
+
     /// <summary>Whether <paramref name="gates"/> can only be decided on the anchoring node's SHAPE. Pure.</summary>
     private static bool NeedsNodeShape(UiContributionGates? gates)
         => gates is not null && (gates.ExcludePartitionRoot || gates.SyncedOnly || gates.NodeTypes is { Count: > 0 });

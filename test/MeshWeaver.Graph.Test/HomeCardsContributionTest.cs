@@ -55,9 +55,12 @@ public class HomeCardsContributionTest
         };
         var projected = UiContributionProjection.ProjectHomeAreas(contributions, "jroe", UserHome, isAdmin: false, viewerId: "jroe");
 
-        UiContributionProjection.FilterInboxAreas(projected, Permission.Read).Select(a => a.Area).Should().Equal(["R"],
+        UiContributionProjection.FilterHomeAreas(projected, Permission.Read).Select(a => a.Area).Should().Equal(["R"],
             "an entry demanding Sync is hidden from a viewer without it, and the home is a partition root");
-        UiContributionProjection.FilterInboxAreas(projected, Permission.None).Should().BeEmpty("never less than Read");
+        UiContributionProjection.FilterHomeAreas(projected, Permission.Read | Permission.Sync).Select(a => a.Area).Should().Equal(["R", "S"]);
+        UiContributionProjection.FilterHomeAreas(projected, Permission.None).Should().BeEmpty("never less than Read");
+        UiContributionProjection.FilterHomeAreas(projected, Permission.Sync).Should().BeEmpty(
+            "Sync without Read shows nothing — not even the card that declares Sync: Read is the floor for every card");
         UiContributionProjection.ProjectHomeAreas(
                 [C("Edu/HomeCards/Synced", new UiContribution { Context = UiContribution.HomeContext, Area = "Y", Gates = new UiContributionGates { SyncedOnly = true } })],
                 "jroe", UserActivityLayoutAreas.HomeShape("jroe"), isAdmin: false, viewerId: "jroe")

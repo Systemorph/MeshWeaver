@@ -349,7 +349,7 @@ public static class UserActivityLayoutAreas
         // e-mail alias, and a legacy `User/{id}` home's path is not the owner id either.
         return catalog.Contributions
             .CombineLatest(AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerId), host.Hub.GetEffectivePermissions(userPath, viewerId),
-                (contributions, isAdmin, permissions) => UiContributionProjection.FilterInboxAreas(
+                (contributions, isAdmin, permissions) => UiContributionProjection.FilterHomeAreas(
                     UiContributionProjection.ProjectHomeAreas(contributions, userPath, homeShape, isAdmin, userPath), permissions))
             .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal)
             .Select(areas => (UiControl?)HomeCards(host.Hub.Address, areas));
