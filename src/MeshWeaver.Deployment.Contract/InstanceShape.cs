@@ -926,6 +926,21 @@ public sealed record SignInSpec
     /// <summary>Apple sign-in client id.</summary>
     [Description("Apple client id")]
     public string? AppleClientId { get; init; }
+
+    /// <summary>
+    /// True when <see cref="MicrosoftClientId"/> names the fleet's SHARED sign-in app for throwaway
+    /// and test instances rather than an app registered for this instance alone. The control
+    /// instance's governed Provision then ADDS this host's redirect URI
+    /// (<c>https://{host}/signin-microsoft</c>) to that app and its Teardown REMOVES it, together
+    /// with the client credential the Provision added under the deployment's id — through the
+    /// operator identity, which owns the app, never by hand. Renders no portal key: the portal signs
+    /// in through <see cref="MicrosoftClientId"/> exactly as for its own app. Entra has no wildcard
+    /// web redirect URI, so a per-instance add and remove is the only shape; the app's redirect-URI
+    /// limit bounds how many such instances may exist at once. Manual: MeshWeaver.Plugins
+    /// <c>Hosting/SharedTestSignInApp</c>.
+    /// </summary>
+    [Description("Microsoft client id is the fleet's shared throwaway-instance app (Provision adds this host's redirect URI, Teardown removes it)")]
+    public bool SharedThrowawayApp { get; init; }
 }
 
 /// <summary>
