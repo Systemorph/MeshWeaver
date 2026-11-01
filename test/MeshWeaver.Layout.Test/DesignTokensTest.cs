@@ -95,6 +95,16 @@ public class DesignTokensTest
     }
 
     [Fact]
+    public void Stylesheet_ForAnAddedAccent_WritesOnlyItsBlocks()
+    {
+        var css = DesignTokens.Stylesheet(["#ff8800"], includeDefaultAndAliases: false);
+        Assert.Contains(":root[data-theme=\"light\"][data-accent=\"#ff8800\"] {", css);
+        Assert.Contains(":root[data-theme=\"dark\"][data-accent=\"#ff8800\"] {", css);
+        Assert.DoesNotContain(":not([data-accent])", css);
+        Assert.DoesNotContain("!important", css);
+    }
+
+    [Fact]
     public void EveryAliasTarget_IsADefinedToken()
     {
         var names = DesignTokens.For(DesignTokens.DefaultAccent, ThemeMode.Light).Select(t => t.Name).ToHashSet();

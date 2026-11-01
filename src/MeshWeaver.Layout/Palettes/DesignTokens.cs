@@ -202,7 +202,12 @@ public static class DesignTokens
     /// carries an inline custom property.
     /// </summary>
     /// <param name="accents">Accent colours as <c>#rrggbb</c>; the first is the default.</param>
-    public static string Stylesheet(IReadOnlyList<string> accents)
+    /// <param name="includeDefaultAndAliases">
+    /// <c>false</c> writes ONLY the per-accent blocks — no default selector and no Fluent alias
+    /// block — for a sheet that ADDS an accent (a user's custom hex) to a page whose base sheet is
+    /// already loaded.
+    /// </param>
+    public static string Stylesheet(IReadOnlyList<string> accents, bool includeDefaultAndAliases = true)
     {
         ArgumentNullException.ThrowIfNull(accents);
         var list = accents.Count == 0 ? [DefaultAccent.ToHex()] : accents.Select(a => OklchColor.FromHex(a).ToHex()).Distinct().ToList();
@@ -214,7 +219,7 @@ public static class DesignTokens
             for (var i = 0; i < list.Count; i++)
             {
                 var selector = $":root[data-theme=\"{theme}\"][data-accent=\"{list[i]}\"]";
-                if (i == 0)
+                if (i == 0 && includeDefaultAndAliases)
                     selector = $":root[data-theme=\"{theme}\"]:not([data-accent]), {selector}";
                 css.Append(selector).AppendLine(" {");
                 foreach (var token in For(OklchColor.FromHex(list[i]), mode))
@@ -222,6 +227,8 @@ public static class DesignTokens
                 css.AppendLine("}");
             }
         }
+        if (!includeDefaultAndAliases)
+            return css.ToString();
         css.AppendLine(":root { color-scheme: var(--mw-color-scheme); }");
         css.AppendLine(":root, :root [style*=\"--\"] {");
         foreach (var (fluent, value) in FluentAliases)
