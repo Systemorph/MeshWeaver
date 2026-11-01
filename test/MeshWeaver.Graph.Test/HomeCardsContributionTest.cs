@@ -99,7 +99,7 @@ public class HomeCardsContributionTest
         // The container keeps its child views protected; read them the way the layout renderer receives them.
         var views = (System.Collections.IEnumerable)typeof(StackControl).BaseType!
             .GetProperty("Views", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(cards)!;
-        var embedded = views.OfType<LayoutAreaControl>().ToList();
+        var embedded = views.OfType<LayoutAreaControl>();
         embedded.Select(e => (e.Address.ToString(), e.Reference.Area)).Should().Equal([("Edu/Courses", "LearningPathNudge"), ("jroe", "Own")],
             "each card renders on its contributor's address; one that names none renders on the user's own hub");
         UserActivityLayoutAreas.HomeCards(new Address("jroe"), []).Areas.Should().BeEmpty("nothing declared, nothing shown — no gap");
