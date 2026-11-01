@@ -339,17 +339,25 @@ public static class UserActivityLayoutAreas
         var ownerId = OwnerIdOf(userPath);
         if (HomeCardsViewer(host.ViewerContext, ownerId) is not { } viewerId)
             return Observable.Return<UiControl?>(Controls.Stack);
-        var userNode = host.Workspace.GetMeshNodeStream().Select(node => (MeshNode?)node).StartWith((MeshNode?)null);
+        // The node-shape gates need the home's SHAPE, not its data: this region is registered on User hubs
+        // only, so the node is the User-typed partition root at this path — a fact of registration, not a
+        // read. Deciding it statically means the cards never wait on the user node (templates first).
+        var homeShape = HomeShape(userPath);
         // The admin verdict and the permission floor read the viewer's ACTUAL identity; the viewer-home gate
         // gets the CONFIRMED home PATH — the owner check above may have matched a UPN/GUID sign-in through its
         // e-mail alias, and a legacy `User/{id}` home's path is not the owner id either.
         return catalog.Contributions
-            .CombineLatest(userNode, AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerId), host.Hub.GetEffectivePermissions(userPath, viewerId),
-                (contributions, node, isAdmin, permissions) => UiContributionProjection.FilterInboxAreas(
-                    UiContributionProjection.ProjectHomeAreas(contributions, userPath, node, isAdmin, userPath), permissions))
+            .CombineLatest(AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerId), host.Hub.GetEffectivePermissions(userPath, viewerId),
+                (contributions, isAdmin, permissions) => UiContributionProjection.FilterInboxAreas(
+                    UiContributionProjection.ProjectHomeAreas(contributions, userPath, homeShape, isAdmin, userPath), permissions))
             .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal)
             .Select(areas => (UiControl?)HomeCards(host.Hub.Address, areas));
     }
+
+    /// <summary>The start page's node SHAPE for the gates: the User-typed partition root at
+    /// <paramref name="userPath"/> (the region is registered on User hubs only). Pure.</summary>
+    internal static MeshNode HomeShape(string userPath) =>
+        MeshNode.FromPath(userPath) with { NodeType = UserNodeType.NodeType };
 
     /// <summary>The identity the start-page cards are evaluated for: the viewer's id when the viewer is a real
     /// person who OWNS the home at <paramref name="ownerId"/>; null — no cards — for anyone else (another
