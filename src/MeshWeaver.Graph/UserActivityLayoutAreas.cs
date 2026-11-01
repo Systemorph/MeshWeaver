@@ -45,6 +45,13 @@ public static class UserActivityLayoutAreas
     public const string ThreadsArea = "Threads";
     /// <summary>Area name for the catalog region embedded via <c>@@("area/Catalog")</c>.</summary>
     public const string CatalogArea = "Catalog";
+    /// <summary>
+    /// Area name for the start-page CARDS region embedded via <c>@@("area/HomeCards")</c>: the areas packages
+    /// contribute to the home (<see cref="UiContribution.HomeContext"/>), one under the other, in their order.
+    /// Renders nothing while none is declared or none has anything to say.
+    /// </summary>
+    public const string HomeCardsArea = "HomeCards";
+
     /// <summary>Area name for the chat composer region embedded via <c>@@("area/Composer")</c>.</summary>
     public const string ComposerArea = "Composer";
 
@@ -109,6 +116,7 @@ public static class UserActivityLayoutAreas
             .WithView(ThreadsArea, ThreadsAreaView)
             .WithView(CatalogArea, CatalogAreaView)
             .WithView(ComposerArea, ComposerAreaView)
+            .WithView(HomeCardsArea, HomeCardsAreaView)
             // "/{user}/Chat" (ChatArea) is a well-known URL (thread-catalog Create-New, chat menu
             // links, the Threads app tile). Since ChatNodeType was removed there is NO {user}/Chat
             // node any more: the URL resolves to prefix={user} + remainder="Chat", which AreaPage
@@ -302,12 +310,50 @@ public static class UserActivityLayoutAreas
         $$"""
         ### Welcome back, {{ownerName}}
 
+        @@("area/HomeCards")
+
         @@("area/Composer")
 
         @@("area/Catalog")
 
         _This home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
         """;
+
+    /// <summary>
+    /// The start-page cards (<see cref="HomeCardsArea"/>): every <see cref="UiContribution.HomeContext"/> entry this
+    /// viewer may see, live from the shared catalog — projected against the user node's shape and filtered by the
+    /// viewer's live permissions on it, the inbox lane's rule — each embedded through
+    /// <see cref="LayoutAreaControl"/> on its own address, so the contributing package renders its own card, in the
+    /// viewer's context, with its own checks. An empty stack while nothing is declared; a fault reaches the area's
+    /// error boundary, never an empty lane that hides it.
+    /// </summary>
+    internal static IObservable<UiControl?> HomeCardsAreaView(LayoutAreaHost host, RenderingContext _)
+    {
+        if (host.Hub.ServiceProvider.GetService<UiContributionCatalog>() is not { } catalog)
+            return Observable.Return<UiControl?>(Controls.Stack);
+        var userPath = host.Hub.Address.ToString();
+        var owner = OwnerIdOf(userPath);
+        var userNode = host.Workspace.GetMeshNodeStream().Select(node => (MeshNode?)node).StartWith((MeshNode?)null);
+        return catalog.Contributions
+            .CombineLatest(userNode, AdminAppNodeType.LiveAdminVerdict(host.Hub, owner), host.Hub.GetEffectivePermissions(userPath),
+                (contributions, node, isAdmin, permissions) => UiContributionProjection.FilterInboxAreas(
+                    UiContributionProjection.ProjectHomeAreas(contributions, userPath, node, isAdmin, owner), permissions))
+            .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal)
+            .Select(areas => (UiControl?)HomeCards(host.Hub.Address, areas));
+    }
+
+    /// <summary>The cards region for <paramref name="areas"/>: one embedded area per contribution, stacked. Pure.</summary>
+    /// <param name="userAddress">The user hub — the address of an entry that declares none.</param>
+    /// <param name="areas">The projected, permission-filtered entries, in order.</param>
+    internal static StackControl HomeCards(Address userAddress,
+        IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> areas)
+    {
+        var stack = Controls.Stack.WithVerticalGap(12).WithWidth("100%");
+        foreach (var entry in areas)
+            stack = stack.WithView(Controls.LayoutArea(entry.Address is null ? userAddress : new Address(entry.Address), entry.Area)
+                .WithShowProgress(false), "Card-" + entry.Id);
+        return stack;
+    }
 
     // ── Editable home: Edit (this page's Body) + Reset-to-default ─────────────────────────────────
 

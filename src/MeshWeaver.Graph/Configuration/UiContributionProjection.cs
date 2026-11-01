@@ -233,11 +233,41 @@ internal static class UiContributionProjection
         MeshNode? userNode,
         bool isAdmin,
         string? viewerId)
+        => ProjectUserHomeAreas(UiContribution.InboxContext, contributions, userPath, userNode, isAdmin, viewerId);
+
+    /// <summary>
+    /// Projects the catalog's <see cref="UiContribution.HomeContext"/> entries into the cards the START PAGE of the
+    /// user at <paramref name="userPath"/> embeds under its heading — exactly the rules of
+    /// <see cref="ProjectInboxAreas"/> (node-shape gates against the user node, held back while it is unknown; the
+    /// partition rule; the permission floor for <see cref="FilterInboxAreas"/>; a URL-safe id per contribution
+    /// path). Pure.
+    /// </summary>
+    /// <param name="contributions">The catalog snapshot.</param>
+    /// <param name="userPath">The home's user node.</param>
+    /// <param name="userNode">That node, or null while it loads.</param>
+    /// <param name="isAdmin">Whether the viewer is a platform admin.</param>
+    /// <param name="viewerId">The viewer's id, for the viewer-home gate.</param>
+    public static IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> ProjectHomeAreas(
+        IReadOnlyList<(MeshNode Node, UiContribution Content)> contributions,
+        string userPath,
+        MeshNode? userNode,
+        bool isAdmin,
+        string? viewerId)
+        => ProjectUserHomeAreas(UiContribution.HomeContext, contributions, userPath, userNode, isAdmin, viewerId);
+
+    /// <summary>The shared projection of an EMBEDDING context anchored on a user node (Inbox, Home). Pure.</summary>
+    private static IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> ProjectUserHomeAreas(
+        string context,
+        IReadOnlyList<(MeshNode Node, UiContribution Content)> contributions,
+        string userPath,
+        MeshNode? userNode,
+        bool isAdmin,
+        string? viewerId)
     {
         var areas = new List<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)>();
         foreach (var (node, contribution) in contributions)
         {
-            if (contribution.Context != UiContribution.InboxContext)
+            if (contribution.Context != context)
                 continue;
             if (contribution.Area is not { Length: > 0 } area)
                 continue;

@@ -164,6 +164,19 @@ public record UiContribution
     public const string InboxContext = "Inbox";
 
     /// <summary>
+    /// The START-PAGE context (the signed-in person's own home, <c>/</c> → <c>{user}/Activity</c>): a contribution
+    /// here EMBEDS the layout area <see cref="Area"/> of the hub at <see cref="Address"/> (unset ⇒ the person's own
+    /// user node) as a CARD under the home's "Welcome back" heading — the default welcome template carries the
+    /// <c>@@("area/HomeCards")</c> region, and an authored home body may embed it too. It is the lane a package uses
+    /// to put ONE timely prompt on the start page (the Learning app's "build your learning path") without the home
+    /// naming the package. Same rules as <see cref="InboxContext"/>: the partition rule of every embedding context,
+    /// the closed node-shape gates against the user node (a shape gate narrows while the node is unknown), and the
+    /// viewer's live permission floor of Read on it. The contributed area decides for itself whether it has anything
+    /// to say: rendering an empty control leaves no gap, so a card that is not timely simply shows nothing.
+    /// </summary>
+    public const string HomeContext = "Home";
+
+    /// <summary>
     /// Which menu the entry contributes to: <c>Node</c>, <c>Mesh</c>, <c>Settings</c> (the GLOBAL
     /// settings page), <c>NodeSettings</c> (the PER-NODE settings page), <c>TopBar</c>, <c>AI</c>,
     /// <c>Profile</c>, <c>PersonApp</c>, <c>AppSettings</c> (with <see cref="Host"/>) or any key a
