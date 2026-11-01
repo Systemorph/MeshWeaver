@@ -369,6 +369,15 @@ changed anything. `apply` had never run before, because it only runs as an appro
 shared registry. `acr-retention-apply-selftest.py` now runs it on every pull request, offline,
 against an `az` that accepts exactly the options the real CLI accepts.
 
+**An unchanged schedule is left alone.** ACR refuses a `timer update` that names the schedule the
+trigger already carries: `(DuplicateTimerTriggersNotSupported) Cannot create multiple timer triggers
+with the same schedule: '0 3 * * *'`. The live `purge-old-images` trigger already runs at the recorded
+schedule, so the re-requested apply (`Ops/Actions/registry-retention-apply-20261101-3438`, Memex run
+41303901662) died on exactly that. It had already written the task's definition, and it had not yet
+written the status. `apply` now reads the trigger's schedule first and writes it only when it
+differs. The self-test's fake `az` refuses the same-schedule update with the registry's message, so
+the old script reproduces the production error there.
+
 🚨 **Measured 2026-10-09, the measured half refuses today**: the lock lane had been red on every
 nightly run since 2026-10-03 with *"installation `memex-cloud` reports core 57a6e5f and NO manifest in
 memex-portal-next carries a tag for it"*. The cause was the lane, not the registry: the portal's
