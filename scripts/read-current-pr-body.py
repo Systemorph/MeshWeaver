@@ -37,7 +37,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import sys
 import time
 import urllib.error
@@ -69,6 +68,47 @@ class ApiUnavailable(Exception):
 
 class ApiRefused(Exception):
     """GitHub answered with a deliberate refusal (401, 404, a non-rate-limit 403, ...)."""
+
+
+class DestinationError(Exception):
+    """The LOCAL file a download streams into could not be opened, written or closed (a full disk,
+    a read-only path). Deliberately NOT an OSError: `api_get` reads every OSError as a transport
+    outage, and a local storage failure retried as one would end as "GitHub unavailable"."""
+
+    def __init__(self, dest, error):
+        super().__init__(f"cannot write the download to {dest}: {error}")
+        self.dest = dest
+        self.error = error
+
+
+def _stream_to(response, dest, chunk_size=1 << 20):
+    """Copy `response` into `dest`, keeping the two failure sides apart: a failed READ propagates
+    as the transport error it is (retried), a failed open/write/close raises DestinationError
+    (surfaced at once). A body shorter than its Content-Length is IncompleteRead — a sized
+    HTTPResponse.read() returns b"" at an early close instead of raising, so the count is checked."""
+    expected = _header(getattr(response, "headers", None), "content-length")
+    try:
+        sink = open(dest, "wb")
+    except OSError as error:
+        raise DestinationError(dest, error) from error
+    received = 0
+    try:
+        while True:
+            chunk = response.read(chunk_size)
+            if not chunk:
+                break
+            received += len(chunk)
+            try:
+                sink.write(chunk)
+            except OSError as error:
+                raise DestinationError(dest, error) from error
+    finally:
+        try:
+            sink.close()
+        except OSError as error:
+            raise DestinationError(dest, error) from error
+    if expected.isdigit() and received < int(expected):
+        raise http.client.IncompleteRead(b"", int(expected) - received)
 
 
 def _header(headers, name):
@@ -121,14 +161,19 @@ def api_get(path, *, token, base_url=None, budget_seconds=DEFAULT_BUDGET_SECONDS
 
     `dest` (a path) streams the BYTES of a successful answer to that file and returns None — an
     artifact `…/zip`, whose 302 to signed storage is followed WITHOUT the token. A connection that
-    drops mid-body is transient like any other and the file is rewritten from the start on retry
-    (MeshWeaver#7448: `gh run download` gave a rate limit no classification at all)."""
+    drops mid-body — raised, or a short body against its Content-Length — is transient like any
+    other and the file is rewritten from the start on retry (MeshWeaver#7448: `gh run download`
+    gave a rate limit no classification at all). A LOCAL failure to open, write or close the file
+    raises DestinationError at once, never a retry and never NO VERDICT."""
     base_url = (base_url or os.environ.get("GITHUB_API_URL") or "https://api.github.com").rstrip("/")
     urlopen = urlopen or _opener()
     if dest is not None:
-        # Opened once up front: an unwritable destination is the caller's defect, raised here —
-        # inside the loop its OSError would read as a transport failure and become NO VERDICT.
-        open(dest, "wb").close()
+        # Opened once up front: an unwritable destination is the caller's defect, raised here as
+        # DestinationError — the same class `_stream_to` raises for a failed write or close.
+        try:
+            open(dest, "wb").close()
+        except OSError as error:
+            raise DestinationError(dest, error) from error
     deadline = clock() + budget_seconds
     attempt = 0
     while True:
@@ -145,8 +190,7 @@ def api_get(path, *, token, base_url=None, budget_seconds=DEFAULT_BUDGET_SECONDS
         try:
             with urlopen(request, timeout=30) as response:
                 if dest is not None:
-                    with open(dest, "wb") as sink:
-                        shutil.copyfileobj(response, sink, 1 << 20)
+                    _stream_to(response, dest)
                     return None
                 text = response.read().decode("utf-8")
                 return text if raw else json.loads(text)

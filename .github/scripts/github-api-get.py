@@ -12,7 +12,8 @@ deployed plugin set is not available"). This helper keeps the one distinction a 
   exit 3  NO VERDICT — rate-limited / 5xx / unreachable past the retry budget; the `::error`
           naming the reset time is already printed (on stderr, so a `$(…)` capture cannot swallow
           it), the caller must stop RED
-  exit 1  any other refusal (401, a non-rate-limit 403, 422, …) — stop RED
+  exit 1  any other refusal (401, a non-rate-limit 403, 422, …), or the --download file could not
+          be written locally (a full disk) — stop RED
 
 Retry and classification are `scripts/read-current-pr-body.py`'s `api_get` (one implementation):
 bounded backoff honouring `retry-after` / `x-ratelimit-reset`, and a wait the budget cannot cover
@@ -63,6 +64,10 @@ def main(argv):
     except reader.ApiUnavailable as error:
         print(f"::error title=NO VERDICT — GitHub API::{error.sentence()}", file=sys.stderr)
         return reader.NO_VERDICT_EXIT
+    except reader.DestinationError as error:
+        # The runner's own storage failed (a full disk): a defect here, not an outage at GitHub.
+        print(f"::error title=Download not written::{error}", file=sys.stderr)
+        return 1
     except reader.ApiRefused as error:
         if str(error).startswith("HTTP 404 "):
             return 4
