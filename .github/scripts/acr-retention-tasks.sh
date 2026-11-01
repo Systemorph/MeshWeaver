@@ -380,10 +380,23 @@ cmd_apply() {
     # trigger the task already carries — or a new one when it carries none.
     az acr task update --registry "$REGISTRY" --name "$task" \
       --file "$recorded" -o none || return 1
-    local timer
+    # 🚨 AN UPDATE TO THE SCHEDULE THE TRIGGER ALREADY HAS IS REFUSED. ACR answers
+    # `(DuplicateTimerTriggersNotSupported) Cannot create multiple timer triggers with the same
+    # schedule: '0 3 * * *'` when `task timer update` names the schedule the trigger already carries
+    # — the second governed apply died on exactly that, after the definition was written
+    # (Ops/Actions/registry-retention-apply-20261101-3438, Memex run 41303901662). The live
+    # `purge-old-images` timer is at the recorded schedule, so the steady state of every apply is
+    # this case: an unchanged schedule is left alone, and only a different one is written.
+    local timer live_schedule
     timer=$(az acr task show --registry "$REGISTRY" --name "$task" \
               --query "trigger.timerTriggers[0].name" -o tsv) || return 1
     if [ -n "$timer" ]; then
+      live_schedule=$(az acr task show --registry "$REGISTRY" --name "$task" \
+                        --query "trigger.timerTriggers[0].schedule" -o tsv) || return 1
+    fi
+    if [ -n "$timer" ] && [ "$live_schedule" = "$schedule" ]; then
+      echo "  $task: timer '$timer' already at $schedule — left unchanged"
+    elif [ -n "$timer" ]; then
       az acr task timer update --registry "$REGISTRY" --name "$task" \
         --timer-name "$timer" --schedule "$schedule" -o none || return 1
     else
