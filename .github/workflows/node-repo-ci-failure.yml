@@ -345,6 +345,7 @@ jobs:
       # (create / append / reopen-recent / close / noop / refuse-malformed) must be shown to fire on
       # its case before its verdict on the real repository means anything.
       - name: "The ledger can say no (self-test)"
+        id: selftest
         run: python3 "$RUNNER_TEMP/ci-failure-ledger.py" --self-test
 
       # Before the ledger writes and before anything is signed: the URL the HMAC would travel to is
@@ -476,10 +477,12 @@ jobs:
       # (`actions: read`, already demanded above) and an unreadable log is RED, never "no miss". It acts
       # only for the main build ledger (label `ci-main-red`) — another lane's call says so and reads
       # nothing — and posts no event: the step above already told triage about this run.
-      # `!cancelled()` and no input test: it runs after a red main ledger step too, so a miss is
-      # never lost because the other ledger could not be written.
+      # `!cancelled()` and no input test: it runs after a red main ledger step or a failed event
+      # delivery too, so a miss is never lost because the other ledger could not be written. Its one
+      # PREREQUISITE is the self-test: a ledger whose rules were just shown NOT to hold must never
+      # create, append to or close a real issue, so a failed (or never-run) self-test masks it.
       - name: Open, append to, or close the artifact-store miss ledger (NOT MEASURED, infra)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.selftest.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ secrets.github-token }}
           LEDGER_OUTCOME: ${{ inputs.outcome }}

@@ -159,6 +159,7 @@ MISS_LABEL = "ci-artifact-store-miss"
 MISS_TITLE = "ci-artifact-store-miss: an artifact-store miss — NOT MEASURED (infra)"
 MISS_SEVERITY = "sev:M"          # infra, tracked and visible; a person raises it if it threatens production
 MISS_LINE = re.compile(r"##\[error\]ci-run-artifacts: NOT MEASURED — artifact store miss \(infra\)")
+JOB_LOG_LINE = re.compile(r"^\ufeff?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ", re.MULTILINE)  # as retry-known-transients.py
 MAX_LOG_BYTES = 16 * 1024 * 1024  # over the cap is RED — a match over part of a log is a false "no miss"
 LABEL_DESCRIPTIONS = {
     MISS_LABEL: "a CI job could not read an artifact its producer published — NOT MEASURED (infra), the miss ledger",
@@ -742,7 +743,7 @@ class GitHub:
         found: list[dict] = []
         for page in range(1, 11):
             _, data = self.call("GET", f"actions/runs/{run_id}/jobs", {"per_page": 100, "page": page})
-            jobs = (data or {}).get("jobs", [])
+            jobs = jobs_of_listing(data, run_id, page)
             for j in jobs:
                 if j.get("conclusion") not in FAILED_CONCLUSIONS:
                     continue
@@ -772,7 +773,7 @@ class GitHub:
         found: list[dict] = []
         for page in range(1, 11):
             _, data = self.call("GET", f"actions/runs/{run_id}/jobs", {"per_page": 100, "page": page})
-            jobs = (data or {}).get("jobs", [])
+            jobs = jobs_of_listing(data, run_id, page)
             for j in jobs:
                 if j.get("conclusion") not in LISTED_CONCLUSIONS:
                     continue
@@ -793,7 +794,7 @@ class GitHub:
         found: list[dict] = []
         for page in range(1, 11):
             _, data = self.call("GET", f"actions/runs/{run_id}/jobs", {"per_page": 100, "page": page})
-            jobs = (data or {}).get("jobs", [])
+            jobs = jobs_of_listing(data, run_id, page)
             found.extend(j for j in jobs if j.get("conclusion") in LISTED_CONCLUSIONS)
             if len(jobs) < 100:
                 break
@@ -838,7 +839,7 @@ class GitHub:
         if len(data) > MAX_LOG_BYTES:
             raise Red(f"the log of job {job_id} is over {MAX_LOG_BYTES} bytes — refusing a truncated read, "
                       "which could only produce a false 'no miss'")
-        return data.decode("utf-8", errors="replace")
+        return checked_job_log(job_id, data)
 
 
 # ── apply the verdict ─────────────────────────────────────────────────────────────────────────
@@ -959,6 +960,31 @@ def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
     except (Red, ApiOutage) as e:
         print(f"::warning title=ci-failure-ledger::could not stamp {', '.join(taxonomy(severity))} on #{issue.number} ({e}) — the issue-taxonomy lane will name it")
     return issue, event_body("ci-failure", run, issue)
+
+
+def jobs_of_listing(data, run_id, page: int) -> list[dict]:
+    """The `jobs` list of one `actions/runs/{id}/jobs` page. Pure. Anything that is not an object
+    carrying a `jobs` LIST (an empty body, JSON `null`, `{}`) is RED: defaulting it to no jobs would
+    read every log of nothing and answer "no red job" / "no store miss". A real `{"jobs": []}` stays."""
+    if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
+        raise Red(f"GET actions/runs/{run_id}/jobs (page {page}) answered no `jobs` list "
+                  f"({type(data).__name__}: {str(data)[:120]!r}) — the run's jobs cannot be read")
+    return data["jobs"]
+
+
+def checked_job_log(job_id, data: bytes) -> str:
+    """One downloaded job log, decoded STRICTLY and proven to be a log. Pure. An undecodable, empty or
+    non-log body (no timestamped line) is RED — matching it would be a false "no store miss". The same
+    rule as retry-known-transients.py's `read_job_log`."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise Red(f"the log of job {job_id} is not UTF-8 ({e}) — not a job log") from e
+    if not text.strip():
+        raise Red(f"the log of job {job_id} came back EMPTY — not a job log")
+    if not JOB_LOG_LINE.search(text):
+        raise Red(f"the {len(data)}-byte body for job {job_id} carries no timestamped log line — not a job log")
+    return text
 
 
 def printed_a_store_miss(log: str) -> bool:
@@ -1827,6 +1853,22 @@ def self_test() -> int:
     vl, _ = artifact_miss_ledger(lane, miss_args("failure", label="ci-lock-pinned-digests-red"), now)
     check("another lane's ledger call reads nothing and writes nothing for the miss ledger",
           vl.action == "noop" and lane.writes == 0 and getattr(lane, "reads", 0) == 0)
+
+    def refused(fn, *args):
+        try:
+            fn(*args)
+        except Red:
+            return True
+        return False
+
+    check("a jobs page that is empty, null or `{}` is RED, never 'no red job' (no logs read over nothing)",
+          all(refused(jobs_of_listing, d, "777", 1) for d in (None, "", {}, {"jobs": None}, [], {"total_count": 0})))
+    check("…while a genuine `{\"jobs\": []}` is an empty list, and a real page passes through",
+          jobs_of_listing({"jobs": []}, "777", 1) == [] and jobs_of_listing({"jobs": [{"id": 1}]}, "777", 1) == [{"id": 1}])
+    check("a log body that is empty, blank, non-UTF-8 or carries no timestamped line is RED, never 'no miss'",
+          all(refused(checked_job_log, 5, b) for b in (b"", b"  \n", b"\xff\xfe\x00garbage", b"<html>Gateway</html>")))
+    check("…while a real log (BOM included) decodes and still shows its miss",
+          printed_a_store_miss(checked_job_log(5, ("\ufeff" + emitted).encode("utf-8"))))
 
     blind = _Fake(run_jobs=[red_job(1, "x")])
     blind.logs = {1: Red("GET actions/jobs/1/logs answered HTTP 500")}

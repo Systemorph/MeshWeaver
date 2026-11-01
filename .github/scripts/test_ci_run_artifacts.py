@@ -7,6 +7,7 @@ import io
 import json
 import multiprocessing
 from pathlib import Path
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -19,6 +20,9 @@ SPEC.loader.exec_module(ART)
 LEDGER_SPEC = importlib.util.spec_from_file_location(
     "ci_failure_ledger", Path(__file__).with_name("ci-failure-ledger.py"))
 LEDGER = importlib.util.module_from_spec(LEDGER_SPEC)
+# Registered BEFORE it executes: its dataclasses resolve postponed (`from __future__`) annotations
+# through sys.modules, and an unregistered module raises AttributeError on Python 3.12/3.14.
+sys.modules[LEDGER_SPEC.name] = LEDGER
 LEDGER_SPEC.loader.exec_module(LEDGER)
 
 
