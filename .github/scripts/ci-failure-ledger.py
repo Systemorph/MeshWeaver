@@ -610,11 +610,20 @@ def _wait_budget_seconds() -> int:
     return (int(raw) if raw.isdigit() else DEFAULT_API_WAIT_MINUTES) * 60
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is surfaced as the HTTPError it is, never followed (see `GitHub.job_log`)."""
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 class GitHub:
-    def __init__(self, repo: str, token: str, *, urlopen=None, sleep=time.sleep, clock=time.time,
-                 wait_budget_seconds: int | None = None):
+    def __init__(self, repo: str, token: str, *, urlopen=None, api_open_no_redirect=None, sleep=time.sleep,
+                 clock=time.time, wait_budget_seconds: int | None = None):
         self.repo, self.token = repo, token
         self._urlopen = urlopen or urllib.request.urlopen
+        # The job-log GET must SEE the 302 to storage rather than follow it with the bearer attached,
+        # so it goes through an opener that does not follow redirects (injectable for the self-test).
+        self._open_no_redirect = api_open_no_redirect or urllib.request.build_opener(_NoRedirect()).open
         self._sleep, self._clock = sleep, clock
         # ONE budget for the whole script, never one per call: N reads cannot add up to N waits.
         budget = _wait_budget_seconds() if wait_budget_seconds is None else wait_budget_seconds
@@ -805,41 +814,63 @@ class GitHub:
         before uploading one). Needs `actions: read`, which this lane already demands.
 
         The API answers 302 to signed blob storage; the redirect is followed WITHOUT the token (a
-        bearer must never travel to another origin), which is why the opener here does not follow
-        redirects itself. Anything else that is not a log is RED or an ApiOutage, never "no miss"."""
+        bearer must never travel to another origin), which is why the API leg uses an opener that does
+        not follow redirects itself. A rate limit, 5xx or dropped connection on the API leg is retried
+        under the SAME script-wide wait budget and `outage_wait` policy as every other read (`call`),
+        and a wait the budget cannot cover is an ApiOutage naming the reset. Anything else that is not
+        a log is RED or an ApiOutage, never "no miss"."""
         path = f"actions/jobs/{job_id}/logs"
-
-        class _Stop(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, *args, **kwargs):
-                return None
-
-        req = urllib.request.Request(f"{API}/repos/{self.repo}/{path}", headers={
-            "Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "ci-failure-ledger"})
-        try:
+        attempt = 0
+        while True:
+            req = urllib.request.Request(f"{API}/repos/{self.repo}/{path}", headers={
+                "Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "ci-failure-ledger"})
+            headers = None
             try:
-                with urllib.request.build_opener(_Stop).open(req, timeout=60) as resp:
+                with self._open_no_redirect(req, timeout=60) as resp:
                     data = resp.read(MAX_LOG_BYTES + 1)
+                break
             except urllib.error.HTTPError as e:
                 if e.code in (404, 410):
                     return None
                 location = e.headers.get("Location") if e.code in (301, 302, 303, 307, 308) else None
-                if not location:
-                    text = e.read().decode(errors="replace")
-                    if classify_answer(e.code, e.headers, text) in ("rate-limited", "transient"):
-                        raise ApiOutage("GET", path, f"HTTP {e.code}") from e
-                    raise Red(f"GET {path} answered HTTP {e.code}: {text[:200]}") from e
-                with self._urlopen(urllib.request.Request(location, headers={"User-Agent": "ci-failure-ledger"}),
-                                   timeout=60) as resp:
-                    data = resp.read(MAX_LOG_BYTES + 1)
-        except urllib.error.HTTPError as e:
-            raise Red(f"the log of job {job_id} could not be downloaded from storage: HTTP {e.code}") from e
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise ApiOutage("GET", path, f"could not read the log ({getattr(e, 'reason', e)})") from e
+                if location:
+                    data = self._download_log(job_id, path, location)
+                    break
+                headers = e.headers
+                try:
+                    status, text = e.code, e.read().decode(errors="replace")
+                    kind = classify_answer(status, headers, text)
+                except (TimeoutError, OSError) as unread:
+                    status, text, kind = e.code, f"(error body unreadable: {type(unread).__name__})", "transient"
+                if kind == "refused":
+                    raise Red(f"GET {path} answered HTTP {status}: {text[:200]}") from e
+                reason = f"HTTP {status} rate limit" if kind == "rate-limited" else f"HTTP {status}"
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                reason = f"could not read the log ({getattr(e, 'reason', e)})"
+            delay, reset_epoch = outage_wait(attempt, headers, self._clock())
+            if self._clock() + delay > self._deadline:
+                # A wait the budget cannot cover is not slept at all: say when to re-run instead.
+                raise ApiOutage("GET", path, reason, reset_epoch)
+            print(f"GitHub API {reason} on GET {path}; retrying in {delay}s "
+                  f"(wait budget {int(self._deadline - self._clock())}s left)", file=sys.stderr)
+            self._sleep(delay)
+            attempt += 1
         if len(data) > MAX_LOG_BYTES:
             raise Red(f"the log of job {job_id} is over {MAX_LOG_BYTES} bytes — refusing a truncated read, "
                       "which could only produce a false 'no miss'")
         return checked_job_log(job_id, data)
+
+    def _download_log(self, job_id: int, path: str, location: str) -> bytes:
+        """The storage leg: the signed URL, fetched WITHOUT the token."""
+        try:
+            with self._urlopen(urllib.request.Request(location, headers={"User-Agent": "ci-failure-ledger"}),
+                               timeout=60) as resp:
+                return resp.read(MAX_LOG_BYTES + 1)
+        except urllib.error.HTTPError as e:
+            raise Red(f"the log of job {job_id} could not be downloaded from storage: HTTP {e.code}") from e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise ApiOutage("GET", path, f"could not read the log from storage ({getattr(e, 'reason', e)})") from e
 
 
 # ── apply the verdict ─────────────────────────────────────────────────────────────────────────
@@ -1877,6 +1908,108 @@ def self_test() -> int:
         check("an unreadable log is RED, never 'no miss'", False, "returned")
     except Red:
         check("an unreadable log is RED, never 'no miss'", blind.writes == 0)
+
+    # The REAL `GitHub.job_log` transport, driven offline (the cases above replace it with `_Fake`):
+    # the API leg goes through the no-redirect opener, the storage leg through `urlopen`.
+    class _Body:
+        def __init__(self, data: bytes):
+            self.data = data
+
+        def read(self, n=-1):
+            return self.data if n is None or n < 0 else self.data[:n]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def log_err(code, text="", **hdrs):
+        h = email.message.Message()
+        for k, v in hdrs.items():
+            h[k.replace("_", "-")] = str(v)
+        return urllib.error.HTTPError("https://api.github.com/x", code, "x", h, io.BytesIO(text.encode()))
+
+    class _LogTransport:
+        """Scripted answers for the API leg and the storage leg; records each request and sleep."""
+        def __init__(self, api, storage=()):
+            self.api, self.storage, self.slept, self.now = list(api), list(storage), [], 1_000_000.0
+            self.api_reqs, self.storage_reqs = [], []
+
+        def _next(self, queue, reqs, req):
+            reqs.append(req)
+            a = queue.pop(0)
+            if isinstance(a, BaseException):
+                raise a
+            return a
+
+        def api_open(self, req, timeout=None):
+            return self._next(self.api, self.api_reqs, req)
+
+        def urlopen(self, req, timeout=None):
+            return self._next(self.storage, self.storage_reqs, req)
+
+        def sleep(self, seconds):
+            self.slept.append(seconds)
+            self.now += seconds
+
+        def clock(self):
+            return self.now
+
+    def log_client(t, budget=300):
+        return GitHub("o/r", "t", urlopen=t.urlopen, api_open_no_redirect=t.api_open, sleep=t.sleep,
+                      clock=t.clock, wait_budget_seconds=budget)
+
+    real_log = emitted.encode("utf-8")
+    signed = "https://results-receiver.example/blob?sig=x"
+
+    tr = _LogTransport([log_err(302, Location=signed)], [_Body(real_log)])
+    got = log_client(tr).job_log(9)
+    check("job_log follows the 302 to storage WITHOUT the token, and reads the log",
+          got is not None and printed_a_store_miss(got)
+          and tr.api_reqs[0].get_header("Authorization") == "Bearer t"
+          and tr.storage_reqs[0].full_url == signed and not tr.storage_reqs[0].has_header("Authorization"),
+          f"{len(tr.api_reqs)} api / {len(tr.storage_reqs)} storage requests")
+
+    for code in (404, 410):
+        tn = _LogTransport([log_err(code)])
+        check(f"job_log answers None for HTTP {code} (no log held), reading no storage",
+              log_client(tn).job_log(9) is None and not tn.storage_reqs)
+
+    t5 = _LogTransport([log_err(502, "bad gateway"), log_err(302, Location=signed)], [_Body(real_log)])
+    check("a 5xx on the log GET is retried under the shared budget, then the log is read",
+          printed_a_store_miss(log_client(t5).job_log(9) or "") and len(t5.api_reqs) == 2 and len(t5.slept) == 1,
+          f"{len(t5.api_reqs)} api requests, slept {t5.slept}")
+
+    t5b = _LogTransport([log_err(502, "bad gateway")])
+    try:
+        log_client(t5b, budget=0).job_log(9)
+        check("a 5xx past the budget is an ApiOutage", False, "returned")
+    except ApiOutage:
+        check("…NEGATIVE CONTROL: a 5xx the budget cannot cover is an ApiOutage at once, nothing slept",
+              t5b.slept == [] and len(t5b.api_reqs) == 1)
+
+    tr8 = _LogTransport([log_err(403, rate_body, x_ratelimit_remaining=0, x_ratelimit_reset=1_003_600)])
+    try:
+        log_client(tr8).job_log(9)
+        check("a rate limit on the log GET beyond the budget is an ApiOutage", False, "returned")
+    except ApiOutage as e:
+        check("a rate limit on the log GET beyond the budget is NO VERDICT naming the reset",
+              "rate-limited until" in e.sentence() and tr8.slept == [], e.sentence())
+
+    tr9 = _LogTransport([log_err(403, '{"message":"Resource not accessible by integration"}',
+                                 x_ratelimit_remaining=4000)])
+    try:
+        log_client(tr9).job_log(9)
+        check("a permission 403 on the log GET is Red", False, "returned")
+    except Red:
+        check("a permission 403 on the log GET is Red, unretried", len(tr9.api_reqs) == 1 and tr9.slept == [])
+
+    tbig = _LogTransport([log_err(302, Location=signed)], [_Body(b"x" * (MAX_LOG_BYTES + 1))])
+    check("a log over the size cap is RED, never matched in part", refused(log_client(tbig).job_log, 9))
+
+    tsto = _LogTransport([log_err(302, Location=signed)], [log_err(403, "AuthenticationFailed")])
+    check("a storage refusal is RED", refused(log_client(tsto).job_log, 9))
 
     if fails:
         print("::error title=ci-failure-ledger self-test::" + "; ".join(fails), file=sys.stderr)
