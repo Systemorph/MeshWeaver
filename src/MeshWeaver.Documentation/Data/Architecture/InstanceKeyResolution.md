@@ -111,11 +111,46 @@ stays outside the deadline: it has its own query budget and snapshot, and cuttin
 one read that warms that snapshot.
 
 The caller's own limit must exceed this budget for the 503 to reach it. Making the hook's
-"no answer in time" distinguishable from a 5xx is the hook's half, in the deployment repository.
+"no answer in time" distinguishable from a 5xx is the hook's half, in the deployment repository
+(MeshWeaver.Deploy#106: separate exit codes for a stall, a 503, another 5xx and an unreachable
+exchange).
 
 Pinned by `InstanceKeyResolutionAnswersWithinOneBudgetTest` (`MeshWeaver.Hosting.Test`, virtual time):
 three legs of four seconds each answer `Unavailable` at ten seconds, and three legs of three seconds
 each still resolve the instance.
+
+## The exchange's line on `/health` (#7721)
+
+During #7484 the validating instance's `/health` read Healthy on every line except an overdue fleet
+watch, a different subsystem. Nothing on it described the exchange.
+
+The authenticator now counts what every instance-key resolution answered
+(`InstanceRegistryAuthenticator.Outcomes`, an `InstanceKeyResolutionTally`): resolved, refused and
+unavailable, with the time of the newest of each. It counts once per answer, after the fault handler,
+so a faulted read is counted as the `Unavailable` the caller is told. A request with no credential,
+or with a short-lived token, is not a key resolution and is not counted. The counts are per replica.
+
+`InstanceKeyExchangeHealthCheck` (`instance_key_exchange`) reads that tally:
+
+| Reading | Verdict |
+|---|---|
+| no key presented yet | Healthy, "nothing measured yet" |
+| no unavailable answer | Healthy, with the counts |
+| the NEWEST resolution was unavailable, less than ten minutes ago | **Degraded**: callers are being told to retry right now |
+| an unavailable answer, followed by a resolved or refused one, or ten minutes of no traffic | Healthy, with the counts and the time of the last unavailable answer |
+
+`/health` is unauthenticated, so the line carries counts and times only. Why a resolution reached no
+verdict names node paths and read failures; the tally does not keep it, and the authenticator logs it
+at Warning where it happens. Each count's newest time is stamped after the tally's current reading is
+read, on every compare-and-exchange attempt, so a concurrent writer can never publish an older time
+over a newer one.
+
+It is never Unhealthy and does not belong on readiness. An unavailable resolution is a slow or faulted
+mesh read that the sibling replicas share, so taking this replica out of the Service fixes nothing.
+Core defines the check. The portal host registers it on the census tag, so the reading prints
+whatever the status (the MeshWeaver.Plugins half).
+
+Pinned by `InstanceKeyExchangeHealthLineTest` (`MeshWeaver.Hosting.Test`, virtual time).
 
 ## What did not change
 
