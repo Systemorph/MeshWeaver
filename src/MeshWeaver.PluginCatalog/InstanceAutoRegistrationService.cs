@@ -137,6 +137,25 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
                 .SelectMany(raw => raw.Length == 0 ? Observable.Return("") : Exchange(registry.Url, raw));
 
     /// <summary>
+    /// The credential for <paramref name="registry"/> as a SOURCE: COLD, and each subscription
+    /// resolves it afresh (<see cref="ResolveToken"/>) — the cached exchanged token while it has more
+    /// than <see cref="RefreshMargin"/> left, a newly exchanged one after that. Hand THIS, never a
+    /// resolved string, to a client that outlives one request
+    /// (<see cref="RegistryPackageSource(IMessageHub, string, IObservable{string})"/>,
+    /// <see cref="PluginBundleClient(IMessageHub, string, IObservable{string})"/>).
+    ///
+    /// <para>🚨 MeshWeaver#7790: since a configured instance key is exchanged too (#7312), every
+    /// registry client of a pass held a token that expires — at most
+    /// <see cref="SyncAccessToken.MaximumLifetime"/>, and as little as <see cref="RefreshMargin"/>
+    /// when it came from the cache. A boot reconcile or default install that outlived it was refused
+    /// 401 for every remaining fetch, with the instance key valid throughout.</para>
+    /// </summary>
+    /// <param name="registry">The registry to authenticate against.</param>
+    /// <returns>A cold source that emits one credential per subscription.</returns>
+    public IObservable<string> Credential(PluginRegistryReference registry) =>
+        Observable.Defer(() => ResolveToken(registry)).Take(1);
+
+    /// <summary>
     /// The DURABLE credential this installation holds for <paramref name="registry"/> — the
     /// configured <c>Token</c>, else the stored auto-registration key decrypted — with NO exchange.
     /// Empty when it holds neither. Cold; emits once.
@@ -1514,9 +1533,9 @@ public sealed class InstanceAutoRegistrationService(
                         // and the RegistryPackageSource's own (the module landing inside
                         // InstallOrUpdate, #1664) — so every lane reads the same promise-cached
                         // bundle index.
-                        var bundles = new PluginBundleClient(hub, registry.Url, token);
+                        var bundles = new PluginBundleClient(hub, registry.Url, tokenResolver.Credential(registry));
                         return new ConfiguredPackageSource(
-                            new RegistryPackageSource(hub, registry.Url, token) { Bundles = bundles },
+                            new RegistryPackageSource(hub, registry.Url, tokenResolver.Credential(registry)) { Bundles = bundles },
                             string.IsNullOrWhiteSpace(registry.Ref) ? "HEAD" : registry.Ref,
                             string.IsNullOrWhiteSpace(registry.Name) ? registry.Url : registry.Name)
                         {

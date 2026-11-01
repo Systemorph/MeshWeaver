@@ -59,7 +59,7 @@ public sealed class PluginBundleClient
 
     private readonly IMessageHub _hub;
     private readonly string _registryUrl;
-    private readonly string _token;
+    private readonly IObservable<string> _credential;
     private readonly IIoPool _httpPool;
     private readonly HttpClient _http;
     private readonly ILogger<PluginBundleClient>? _logger;
@@ -103,12 +103,37 @@ public sealed class PluginBundleClient
     /// <param name="registryUrl">Registry instance base URL, e.g.
     /// <c>https://memex.meshweaver.cloud</c>; a trailing slash is trimmed.</param>
     /// <param name="token">This installation's instance key (<c>mwi_…</c>), sent as
-    /// <c>Authorization: Bearer</c>. The bundle routes fail closed, so an empty token gets 401.</param>
+    /// <c>Authorization: Bearer</c>. The bundle routes fail closed, so an empty token gets 401.
+    /// 🚨 A FIXED credential: use it only for one that does not expire. An exchanged sync token
+    /// expires, and a client holding one is refused 401 on every later request (MeshWeaver#7790) —
+    /// pass the credential SOURCE instead
+    /// (<see cref="PluginBundleClient(IMessageHub, string, IObservable{string})"/>).</param>
     public PluginBundleClient(IMessageHub hub, string registryUrl, string? token = null)
+        : this(hub, registryUrl, Observable.Return(token ?? ""))
+    {
+    }
+
+    /// <summary>
+    /// Creates the client over a credential SOURCE that is read once PER REQUEST — the index read,
+    /// each HTTP bundle download, and each OCI artifact pull.
+    ///
+    /// <para>🚨 MeshWeaver#7790: a bundle client lives as long as the pass that built it (a boot
+    /// reconcile adopting dozens of bundles), and the credential is usually a short-lived exchanged
+    /// token (<see cref="RegistryTokenResolver.Credential"/>). Captured once, the token expired
+    /// mid-pass and every later download was refused 401 while the instance key was valid — the
+    /// <c>FetchFailed (HTTP 401 …)</c> misses on <c>bundle_adoption</c>.</para>
+    /// </summary>
+    /// <param name="hub">Calling hub (I/O pool, workspace, assembly store).</param>
+    /// <param name="registryUrl">Registry instance base URL; a trailing slash is trimmed.</param>
+    /// <param name="credential">COLD; subscribed once per request, and its first value is presented
+    /// as <c>Authorization: Bearer</c>. Empty → unauthenticated (the bundle routes answer 401).</param>
+    public PluginBundleClient(IMessageHub hub, string registryUrl, IObservable<string> credential)
     {
         _hub = hub;
         _registryUrl = (registryUrl ?? "").TrimEnd('/');
-        _token = (token ?? "").Trim();
+        _credential = (credential ?? throw new ArgumentNullException(nameof(credential)))
+            .Take(1)
+            .Select(token => (token ?? "").Trim());
         _httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
                     ?? IoPool.Unbounded;
         // The BUNDLE client, not the shared registry one: these are megabyte transfers off a slow
@@ -206,7 +231,8 @@ public sealed class PluginBundleClient
     /// registry does not serve bundles (404) — an older registry is a reason to compile, not an
     /// error to surface to a user installing a plugin.
     /// </summary>
-    public IObservable<BundleIndex> FetchIndex() => _httpPool.Invoke(ReadIndex);
+    public IObservable<BundleIndex> FetchIndex() =>
+        _credential.SelectMany(token => _httpPool.Invoke(ct => ReadIndex(token, ct)));
 
     /// <summary>
     /// The one index read every package of this client shares — cold at the call site, hot and
@@ -222,10 +248,13 @@ public sealed class PluginBundleClient
     /// </summary>
     internal IObservable<BundleIndex> PassIndex() => SharedIndex();
 
+    // The credential is read BEFORE the slot: the caller that creates the promise presents a live
+    // token, and a caller answered from the replay sends nothing, so its token is never used.
     private IObservable<BundleIndex> SharedIndex() =>
-        Observable.Defer(() => _index.GetOrCreate(() => _httpPool.Run(ReadIndex)));
+        _credential.SelectMany(token =>
+            _index.GetOrCreate(() => _httpPool.Run(ct => ReadIndex(token, ct))));
 
-    private async Task<BundleIndex> ReadIndex(CancellationToken ct)
+    private async Task<BundleIndex> ReadIndex(string token, CancellationToken ct)
     {
         // 🚨 The index is asked IN THIS INSTANCE'S LANE, exactly as the download route has been
         // asked since #1751 — and until #3768 it was not, which is what made the download
@@ -240,7 +269,7 @@ public sealed class PluginBundleClient
         var url = $"{_registryUrl}{RoutePrefix}/index.json"
                   + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
                   + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
-        using var request = Request(HttpMethod.Get, url);
+        using var request = Request(token, HttpMethod.Get, url);
         // 🚨 Bounded at every stage like the bundle itself (#4528). The index is small, but the
         // stall that took the fleet's reconcile down was THIS request — the registry accepting the
         // connection and never beginning a response — and a buffered `SendAsync(request, ct)`
@@ -1020,7 +1049,7 @@ public sealed class PluginBundleClient
         return Observable.Defer(() =>
         {
             var client = new OciRegistryClient(
-                _hub, reference.Registry, Observable.Return(_token),
+                _hub, reference.Registry, _credential,
                 httpClientName: InstanceRegistrationClient.BundleHttpClientName, logger: _logger);
             // Dropped, never landed, when the transfer faults: ToArray is read only after the
             // receipt, which the client emits only once the bytes hashed to the layer's digest.
@@ -1072,7 +1101,7 @@ public sealed class PluginBundleClient
     /// without an archive that also has to seed.
     /// </summary>
     internal IObservable<FetchResult> DownloadOverHttp(string pluginId, string version) =>
-        _httpPool.Invoke(async ct =>
+        _credential.SelectMany(token => _httpPool.Invoke(async ct =>
         {
             // 🚨 The consumer asks IN ITS OWN LANE (#1751): the registry resolves each NodeType's
             // assembly through that type's Release node for exactly this (identity, architecture)
@@ -1083,7 +1112,7 @@ public sealed class PluginBundleClient
                       + $"/{Uri.EscapeDataString(version)}"
                       + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
                       + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
-            using var request = Request(HttpMethod.Get, url);
+            using var request = Request(token, HttpMethod.Get, url);
             var receipt = await Receive(request, $"Bundle for {pluginId}@{version}", ct)
                 .ConfigureAwait(false);
 
@@ -1124,7 +1153,7 @@ public sealed class PluginBundleClient
                 ThroughputKibPerSecond(receipt.Body.Length, receipt.Elapsed));
 
             return new FetchResult(receipt.Body, BundleAdoptionKind.Adopted);
-        });
+        }));
 
     /// <summary>One registry transfer that ran to the end of its body: the status the registry
     /// answered, the body, and how long the whole transfer took from the request going out.</summary>
@@ -1468,13 +1497,13 @@ public sealed class PluginBundleClient
 
     // Per-REQUEST auth header — never on the client: _http can be the process-wide SharedHttp, and
     // mutating its DefaultRequestHeaders would leak this registry's token to every other registry.
-    private HttpRequestMessage Request(HttpMethod method, string url)
+    private static HttpRequestMessage Request(string token, HttpMethod method, string url)
     {
         var request = new HttpRequestMessage(method, url);
-        if (_token.Length > 0)
+        if (token.Length > 0)
             request.Headers.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue(
-                    PluginRegistryTokens.Scheme, _token);
+                    PluginRegistryTokens.Scheme, token);
         return request;
     }
 }
