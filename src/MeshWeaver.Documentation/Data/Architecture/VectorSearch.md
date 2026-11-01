@@ -133,13 +133,17 @@ The limit is **declared per deployment, next to the model**, because each model 
 its own scale: `Embedding:NearestFallbackMaxDistance` (env `Embedding__NearestFallbackMaxDistance`,
 default 0.6, a cosine distance in `[0, 2]`; a value outside that range refuses the host at
 composition, naming the key). The startup line `Semantic (vector) search ENABLED: …` prints the
-value in force. A value below 0.5 leaves the 0.5 close-neighbour bar in force.
+value in force. A value below 0.5 leaves the 0.5 close-neighbour bar in force: the statement binds
+the greater of the two (see the SQL under "Hybrid recall" below).
 
 What it does NOT cover:
 
 - **The unpinned cross-schema fan-out** keeps rule 1 alone — "no row matched" over two hundred
   partitions is a different question, and no measurement asked for it.
-- **SQLite and Snowflake** keep their close-neighbour bar alone.
+- **SQLite** keeps its close-neighbour bar alone (`SqliteVectorMeshQuery.MinNeighbourSimilarity`):
+  word-less neighbours within 0.5, never the looser limit.
+- **The Snowflake fan-out** admits no semantic neighbours at all — it keeps the lexical contract
+  described under routing above, so neither the 0.5 bar nor the fallback applies there.
 - **The in-memory `QueryEvaluator` has no vector route at all** — it filters lexically — so there
   is no in-memory half to keep in parity. The live gate already relaxes the free-text half on a
   semantic host (`PostgreSqlPartitionedMeshQuery.RelevanceShape`, below), so a newly written
@@ -388,6 +392,12 @@ SELECT n.* FROM (
 WHERE n._lex OR n._distance <= 0.5 OR NOT n._any_lex
 ORDER BY <lexical tier>, n._distance ASC NULLS LAST LIMIT @topK
 ```
+
+`@nearestFallbackMaxDistance` is bound to the **greater** of the declared
+`Embedding:NearestFallbackMaxDistance` and 0.5 (`EffectiveNearestFallbackMaxDistance`). The inner
+filter, and the content-chunk prefilter that reads the same parameter, run *before* the 0.5 test, so
+a declared 0.4 bound as-is would discard a word-less neighbour at 0.45 that rule 1 must keep while
+another row carries the words.
 
 Only a *pure-semantic* call (no lexical term — i.e. `IVectorSearchProvider.Search` invoked with no text to blend) keeps the embedding-only filter. The `ORDER BY` then puts an exact name match first, then name-prefix, then id-prefix, then name-substring, with cosine distance breaking ties inside each tier — so typing an exact node name cannot be buried past the `LIMIT` by a semantically closer neighbour.
 
