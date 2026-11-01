@@ -47,6 +47,13 @@ public sealed record QueryCaretToken(
     bool Negated = false,
     bool Quoted = false)
 {
+    /// <summary>
+    /// The ordered-comparison operator typed in front of the value (<c>&gt;</c>, <c>&lt;</c>, <c>&gt;=</c>,
+    /// <c>&lt;=</c>), or empty. It is NOT part of <see cref="Prefix"/> or of the replaced span: an accepted
+    /// value is inserted after it.
+    /// </summary>
+    public string Operator { get; init; } = "";
+
     /// <summary>The token for a position with nothing to complete.</summary>
     /// <param name="caret">The caret offset.</param>
     /// <returns>A <see cref="QueryCaretKind.None"/> token anchored at the caret.</returns>
@@ -137,6 +144,7 @@ public static class QueryCaret
         var valueStart = bodyStart + colon + 1;
         var value = word[(colon + 1)..];
         var op = OperatorLength(value);
+        var opText = value[..op];
         valueStart += op;
         value = value[op..];
         var bar = value.LastIndexOf('|');
@@ -158,8 +166,8 @@ public static class QueryCaret
 
         if (field.StartsWith(ContentPrefix, StringComparison.OrdinalIgnoreCase))
             return new QueryCaretToken(QueryCaretKind.ContentValue, field[ContentPrefix.Length..], value,
-                valueStart, caret, negated);
-        return new QueryCaretToken(QueryCaretKind.Value, field, value, valueStart, caret, negated);
+                valueStart, caret, negated) { Operator = opText };
+        return new QueryCaretToken(QueryCaretKind.Value, field, value, valueStart, caret, negated) { Operator = opText };
     }
 
     private static QueryCaretToken InsideQuote(string text, int caret, int quoteStart)
