@@ -425,6 +425,17 @@ no chip otherwise. Opening the stream anyway faulted with `UnauthorizedAccessExc
 logged as an Error and ended the chip's pipeline for the rest of the view. Pinned by
 `ComposerAccessTest` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Chat.Test`).
 
+**A viewer refused Read on the thread itself sees the access-denied state (#7839).** Inside a
+thread the composer is embedded in the thread node, so loading it reads the thread under the
+viewer's identity. When the mesh refuses that read (no grant, or a grant revoked while the view was
+open), the refusal is the mesh's correct answer about this viewer, not a fault: the chat view
+replaces itself with the localized access-denied state (`error.accessDenied` + `error.accessDeniedHint`)
+and logs a Warning, instead of reporting "Loading the composer" at Error with the error modal. The
+recognition is narrow — a decided refusal naming exactly the bound thread path, from the composer
+load or the `/data/"thread"` binding. A refusal of another path stays fail-visible, and a NO-VERDICT
+end (`ErrorType.Unavailable`, #7832) is never shown as a denial. Pinned by `ThreadReadDenialTest`
+and `ThreadChatBindingPolicyTest` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Chat.Test`).
+
 ## Thread identity — the owner is the standing access context
 
 Everything the thread hub does with no live caller (the submission watcher's claim write, the
