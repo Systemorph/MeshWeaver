@@ -486,6 +486,15 @@ last version. On a one-way (system-owned) Space no person could delete it either
 sources and the README slot are excluded from the mirror without being retired, so they are
 never pruned this way. Regression guard: `AnIgnorePatternRetiresWhatTheSyncImportedTest`.
 
+**Ignore patterns are a list, and a list is not typed into the settings tab (#7843).** The
+settings tab's editor once offered `Ignore` as a text field, which stored the patterns as one
+string. The record then no longer deserialized, so every read of the configuration — the status
+line ("Not synced yet"), the reimport gate ("absent or names no repository") and the periodic
+reconcile — treated the Space as unconfigured while the tab still showed its repository URL, and
+nothing imported. The editor no longer offers list members. A config written in that shape still
+reads: the string is split at line breaks and commas, and the next sync's result write stores the
+array. Regression guard: `AConfigWithTypedIgnorePatternsStillReadsTest`.
+
 ---
 
 ## 5. Operations — branch, commit, checkout, pull request
