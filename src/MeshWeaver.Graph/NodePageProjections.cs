@@ -60,7 +60,7 @@ internal static class NodePageProjections
         "width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--neutral-layer-2); flex-shrink: 0;";
 
     /// <summary>The tile of a Fluent icon: the icon takes the accent colour, as it always has.</summary>
-    internal const string FluentTileStyle = TileStyle + " color: var(--accent-fill-rest);";
+    internal const string FluentTileStyle = TileStyle + " color: var(--mw-accent-text, var(--accent-foreground-rest));";
 
     internal const string EmptyTileStyle = TileStyle
         + " border: 2px dashed var(--neutral-stroke-rest); background: transparent; color: var(--neutral-foreground-hint);";
