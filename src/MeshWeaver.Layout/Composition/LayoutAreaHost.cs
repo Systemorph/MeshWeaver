@@ -1138,6 +1138,13 @@ public record LayoutAreaHost : IDisposable
                 Id = AreaFrameClassifier.HubRecyclingId
             };
 
+        // NO VERDICT (#974, #7825): a permission check or read that did not answer says nothing
+        // about this viewer's rights. Same localized copy NamedAreaView shows for it — never the
+        // English diagnostic, never "Access denied". The cause stays in the render-failure log.
+        if (AreaErrorClassifier.IsAvailabilityFailure(ex))
+            return Controls.Markdown(
+                $"**{this.Localize("error.checkUnavailable")}**\n\n{this.Localize("error.checkUnavailableHint")}");
+
         if (AreaErrorClassifier.IsAccessDenied(ex))
             return Controls.Markdown(
                 $"**{this.Localize("error.accessDenied")}**\n\n{this.Localize("error.accessDeniedHint")}");

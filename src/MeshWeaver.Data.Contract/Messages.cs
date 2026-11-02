@@ -352,7 +352,20 @@ public record UnsubscribeRequest(string StreamId)
 /// is not a <see cref="StreamMessage"/> and so does not get forwarded into the
 /// hosted hub — subscribers stay live without ever observing the upstream error.
 /// </summary>
-public record StreamErrorEvent(string StreamId, string Message) : StreamMessage(StreamId);
+public record StreamErrorEvent(string StreamId, string Message) : StreamMessage(StreamId)
+{
+    /// <summary>
+    /// What KIND of end this is, when the owner knows it — because the exception type does not survive
+    /// the wire (MeshWeaver#7825). <see cref="Messaging.ErrorType.Forbidden"/>: the owner DECIDED the
+    /// subscriber may no longer read (a refused read). <see cref="Messaging.ErrorType.Unavailable"/>:
+    /// NO VERDICT was reached — the check stalled, faulted or answered nothing — which says nothing
+    /// about the subscriber's rights. The subscriber re-raises each as the exception its classifiers
+    /// read (an <see cref="UnauthorizedAccessException"/>; a <see cref="Messaging.DeliveryFailureException"/>
+    /// carrying <see cref="Messaging.ErrorType.Unavailable"/>), so a view renders the denied state or
+    /// the "temporarily unavailable" state instead of a raw fault. Null: unclassified, as before.
+    /// </summary>
+    public Messaging.ErrorType? ErrorType { get; init; }
+}
 
 /// <summary>
 /// 🚨 The OWNER telling a subscriber that the SERVER-SIDE half of <paramref name="StreamId"/> has

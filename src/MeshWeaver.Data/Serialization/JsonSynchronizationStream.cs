@@ -2032,12 +2032,20 @@ public static class JsonSynchronizationStream
                     // OnErrors the local SynchronizationStream. A plain
                     // DeliveryFailure stops at the parent hub because it isn't a
                     // StreamMessage — the subscriber would stay live forever.
-                    hub.Post(new StreamErrorEvent(request.StreamId, ex.Message),
+                    // 🚨 The KIND of end travels with it (MeshWeaver#7825): the exception type does
+                    // not survive the wire, and without it the subscriber re-raised a refused read —
+                    // and a read on which no verdict was reached alike — as a bare
+                    // InvalidOperationException, which every view logged at Error and none could
+                    // present as the denied or the "temporarily unavailable" state.
+                    var kind = ex is UnauthorizedAccessException ? ErrorType.Forbidden
+                        : ReadVerdict.IsNoVerdict(ex) ? ErrorType.Unavailable
+                        : (ErrorType?)null;
+                    hub.Post(new StreamErrorEvent(request.StreamId, ex.Message) { ErrorType = kind },
                         o => o.WithTarget(request.Subscriber));
-                    // A refused read also ends the server-side stream: nothing may be forwarded
-                    // on it again, and a resubscribe must pass the delivery gate afresh rather than
-                    // be re-asserted onto this stream.
-                    if (ex is UnauthorizedAccessException)
+                    // A refused read — or one whose verdict could not be reached — also ends the
+                    // server-side stream: nothing may be forwarded on it again, and a resubscribe
+                    // must pass the delivery gate afresh rather than be re-asserted onto this stream.
+                    if (kind is not null)
                     {
                         Interlocked.Exchange(ref refusedRead, 1);
                         EndRefusedSubscription(workspace, request, reduced, logger);
@@ -2219,6 +2227,12 @@ public static class JsonSynchronizationStream
         var refusal = () => new UnauthorizedAccessException(
             $"Access denied: user '{delivery.AccessContext?.ObjectId ?? "(anonymous)"}' lacks Read permission on '{path}' "
             + $"— the read stream {delivery.Message.StreamId} served has ended (revoked, expired, or no longer admitted)");
+        // 🚨 …and a read on which NO VERDICT was reached ends with the platform's "could not find out",
+        // never with the banner above (MeshWeaver#7825): a stalled or faulted re-check says nothing
+        // about this user's rights, and the banner names a permission it never decided about.
+        Exception NoVerdict(Exception? cause) => ReadVerdict.NoVerdict(
+            $"user '{delivery.AccessContext?.ObjectId ?? "(anonymous)"}' may keep reading '{path}' "
+            + $"(read stream {delivery.Message.StreamId})", cause);
         ClientReadFollow? follow;
         try
         {
@@ -2227,13 +2241,13 @@ public static class JsonSynchronizationStream
         catch (Exception ex)
         {
             logger.LogWarning(ex,
-                "Owner {Owner} could not decide whether to follow the read of stream {StreamId} for {Subscriber} — refusing it",
+                "Owner {Owner} could not decide whether to follow the read of stream {StreamId} for {Subscriber} — ending it, no verdict reached",
                 hub.Address, delivery.Message.StreamId, delivery.Sender);
-            follow = new ClientReadFollow(_ => Observable.Return(false), TimeSpan.Zero);
+            follow = new ClientReadFollow(_ => Observable.Throw<bool>(ex), TimeSpan.Zero);
         }
         if (follow is null)
             return null;
-        var followed = reduced.AdmitEachRevision(item => follow.VerdictOf(item.Value), follow.FirstVerdictBudget, refusal);
+        var followed = reduced.AdmitEachRevision(item => follow.VerdictOf(item.Value), follow.FirstVerdictBudget, refusal, NoVerdict);
         // What the follow holds for this subscription ends with it — on a refusal, on completion and
         // on unsubscribe alike (review of #7016, thread 4338167103).
         return follow.Lifetime is { } lifetime ? followed.Finally(lifetime.Dispose) : followed;

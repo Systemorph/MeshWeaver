@@ -258,9 +258,11 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
         var declared = await DeclaredPointRead.AdmitsRevision(OwnerOf(link), node, Visitor).Take(1)
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
         Assert.True(declared, "CONTROL: the declaration alone admits this revision, so only the tri-state can refuse it");
-        await follow.VerdictOf(node).Take(1).Should().Within(TestTimeouts.Convergence)
-            .Match(admitted => !admitted,
-                "an undetermined standing Read refuses — although the declaration names the visitor", cancellationToken: ct);
+        // Refused as NO VERDICT — an error on the verdict, which ends the read without naming it a
+        // denial (MeshWeaver#7825) — never admitted, and never a decided `false`.
+        var first = await follow.VerdictOf(node).Materialize().Take(1).Should().Within(TestTimeouts.Convergence)
+            .Emit("an undetermined standing Read ends the read — although the declaration names the visitor", cancellationToken: ct);
+        Assert.Equal(System.Reactive.NotificationKind.OnError, first.Kind);
     }
 
     /// <summary>

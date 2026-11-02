@@ -2643,8 +2643,26 @@ forwarded (`RevisionAdmission.AdmitEachRevision`, `MeshWeaver.Data`).
 
 Nothing is dropped or reordered: a revision waits behind an earlier one whose verdict is pending,
 so a patch chain stays contiguous. A verdict that stalls past the permission-establishment budget,
-faults or answers nothing is a refusal. The expiry ends the subscription at its instant with
-nothing else emitting.
+faults or answers nothing ends the subscription too, but as NO VERDICT, never as a denial (see
+below). The expiry ends the subscription at its instant with nothing else emitting.
+
+**An undecided read ends as NO VERDICT, never as "Access denied"**
+([#7825](https://github.com/Systemorph/MeshWeaver/issues/7825)). `RevisionAdmission.AdmitEachRevision`
+tells two endings apart. A verdict that DECIDED `false` ends the read with the gate's refusal, an
+`UnauthorizedAccessException` ("Access denied: user … lacks Read permission on …"). A verdict that
+stalled, faulted or answered nothing ends it with `ReadVerdict.NoVerdict`, a
+`DeliveryFailureException` carrying `ErrorType.Unavailable` ("Permission check unavailable … This is
+NOT a statement about this user's rights"). The read still ends in both cases (fail closed: nothing
+is forwarded on a verdict nobody reached), and a resubscribe meets the gate afresh. The same split
+holds at the node-stream cache: its read gate, its declaration follow and its standing-Read follow.
+On the wire, a `StreamErrorEvent` carries the kind (`ErrorType.Forbidden` / `ErrorType.Unavailable`),
+because an exception type does not survive serialization. The subscriber re-raises it typed, so a
+view presents the denied state or the "temporarily unavailable" state instead of an unclassified
+fault. Before the split, one stalled re-check during a thread-pool stall put a confident denial, at
+Error, on every view of a correctly entitled user's page. The rule is
+[Undetermined Is Not No](../UndeterminedIsNotNo). Tests: `RevisionAdmissionNoVerdictTest` and
+`FollowedReadEndKindReachesTheSubscriberTest` (`MeshWeaver.Data.Test`),
+`FollowedReadEndClassificationTest` (`MeshWeaver.Layout.Test`).
 
 **A standing GRANT on a direct subscription is followed live too** (#7298, the residual of
 #7016). The follow's standing Read used to be the FIRST outcome of the standard read, so a grant row
@@ -2658,7 +2676,8 @@ re-decided") instead of an undetermined outcome. The follow HOLDS on it, admitti
 and ending nothing. Ending a subscription is terminal, and every access commit on the node's scopes
 (any group membership or role in the mesh) withdraws the verdict while it is re-checked, so ending on
 the pending marker would end subscriptions on unrelated commits. The re-check is bounded by the
-permission-establishment budget; past it the answer is undetermined, which refuses.
+permission-establishment budget; past it the answer is undetermined, which ends the read as NO
+VERDICT.
 Tests: `test/MeshWeaver.Graph.Test/OpenSubscriptionEndsWithTheReadTest.cs` (the revoking revision
 never delivered, on the node stream of a stored type and on a direct subscription; a direct
 subscription ended at the expiry; a link that is not revoked still streaming, as the negative
