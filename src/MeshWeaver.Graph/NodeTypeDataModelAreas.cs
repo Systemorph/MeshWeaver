@@ -99,28 +99,31 @@ internal static class NodeTypeDataModelAreas
     {
         var typeName = host.Reference.Id?.ToString();
         var stream = host.Workspace.GetNullableStream(new SchemaReference(string.IsNullOrWhiteSpace(typeName) ? null : typeName));
+        var locale = host.ViewerLocale();
         if (stream is null)
-            return Observable.Return<UiControl?>(Controls.Markdown("*No schema available — this hub has no data context.*"));
+            return Observable.Return<UiControl?>(Controls.Markdown(
+                $"*{LocalizationCatalog.Get("ui.schema.noDataContext", locale)}*"));
         return stream
             .Select(change => change.Value.As<SchemaInfo>(host.Hub.JsonSerializerOptions))
-            .Select(info => (UiControl?)Controls.Markdown(RenderSchemaMarkdown(info, typeName, host.Hub.Address.Path)))
+            .Select(info => (UiControl?)Controls.Markdown(RenderSchemaMarkdown(info, typeName, host.Hub.Address.Path, locale)))
             .StartWith(Controls.Body(host.Localize("ui.resolvingDataModel"))
                 .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 8px 0;"));
     }
 
-    /// <summary>The markdown of the NodeType <c>$Schema</c> area for one schema answer.</summary>
-    internal static string RenderSchemaMarkdown(SchemaInfo? info, string? requestedType, string nodeTypePath)
+    /// <summary>The markdown of the NodeType <c>$Schema</c> area for one schema answer, in the viewer's
+    /// language (type names and paths stay as they are).</summary>
+    internal static string RenderSchemaMarkdown(SchemaInfo? info, string? requestedType, string nodeTypePath, string? locale = null)
     {
         if (info is null || string.IsNullOrWhiteSpace(info.Schema) || info.Schema == "{}")
-            return string.IsNullOrWhiteSpace(requestedType)
-                ? "## Schema\n\n*No content type is known for the instances of this NodeType yet — it has no "
-                  + "compiled release and no registered instance configuration, or its configuration declares no "
-                  + "content type.*"
-                : $"## Schema\n\n*Type '{requestedType}' is not part of the data model of {nodeTypePath}.*";
+            return $"## {LocalizationCatalog.Get("ui.schema.heading", locale)}\n\n*"
+                   + (string.IsNullOrWhiteSpace(requestedType)
+                       ? LocalizationCatalog.Get("ui.schema.noContentType", locale)
+                       : LocalizationCatalog.Get("ui.schema.typeNotInModel", locale, requestedType, nodeTypePath))
+                   + "*";
         var heading = string.IsNullOrWhiteSpace(requestedType)
-            ? $"## Content Type: {info.Type}"
-            : $"## JSON Schema: {info.Type}";
-        return $"{heading}\n\n```json\n{PrettyPrint(info.Schema)}\n```";
+            ? LocalizationCatalog.Get("ui.schema.contentTypeHeading", locale, info.Type)
+            : LocalizationCatalog.Get("ui.schema.typeHeading", locale, info.Type);
+        return $"## {heading}\n\n```json\n{PrettyPrint(info.Schema)}\n```";
     }
 
     /// <summary>
@@ -138,6 +141,12 @@ internal static class NodeTypeDataModelAreas
     internal static IObservable<SchemaInfo>? InstanceSchemaProvider(IWorkspace workspace, string? typeName)
     {
         var hub = workspace.Hub;
+        // A transient probe whose instance configuration is itself a NodeType view (the built-in
+        // NodeType type, a type of types) gets this provider too — but a probe has no own node, so the
+        // provider would never emit and the probe's schema and model reads would time out. A probe
+        // answers from the registry it was configured with.
+        if (TransientProbeAddresses.IsProbeAddress(hub.Address.Path))
+            return null;
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeTypeDataModelAreas));
         var nodeTypePath = hub.Address.Path;
         IObservable<SchemaInfo> Fallback() => typeName is null
@@ -155,8 +164,13 @@ internal static class NodeTypeDataModelAreas
                 .SelectMany(config => config == null
                     ? Observable.Return<SchemaInfo?>(null)
                     : ProbeInstanceSchema(hub, config, nodeTypePath, typeName))
+                // A TEARDOWN is not a missing schema: rethrown, so the request path answers it as the
+                // shutdown it is (and the caller reconnects to a fresh activation). Anything else —
+                // an unloadable build, a probe that faulted — degrades to the fallback, logged.
                 .Catch<SchemaInfo?, Exception>(ex =>
                 {
+                    if (DataExtensions.IsOwnerTeardown(ex))
+                        return Observable.Throw<SchemaInfo?>(ex);
                     logger?.LogWarning(ex, "Instance schema resolution failed for {Path} (type {Type})",
                         nodeTypePath, typeName ?? "<content>");
                     return Observable.Return<SchemaInfo?>(null);
