@@ -23,7 +23,11 @@ namespace MeshWeaver.Messaging.Serialization;
 /// <see cref="Assembly.Location"/>; for an assembly with no location (loaded from a stream, or a
 /// single-file host) the application base directory and the current directory, each also under
 /// <c>bin/</c>. Compiled NodeTypes are emitted as <c>{node}.dll</c> with assembly name
-/// <c>DynamicNode_{node}</c>, and the pipeline writes <c>DynamicNode_{node}.xml</c> beside the dll.</para>
+/// <c>DynamicNode_{node}</c>, and the pipeline writes <c>DynamicNode_{node}.xml</c> beside the dll in its
+/// release directory — but the dll a hub LOADS comes out of the assembly store (content-hashed name) or a
+/// baked bundle, with no sidecar, so the compile also embeds the same XML in the image as the manifest
+/// resource <c>{AssemblyName}.xml</c> (<see cref="EmbeddedDocumentationSuffix"/>), which is read when no file
+/// is found.</para>
 ///
 /// <para><b>Weakly keyed.</b> The per-assembly snapshots live in a
 /// <see cref="ConditionalWeakTable{TKey,TValue}"/>, which does not keep its key alive: a
@@ -49,6 +53,15 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public sealed class XmlDocsReader
 {
+    /// <summary>
+    /// Suffix of the manifest resource an assembly may carry its OWN documentation in:
+    /// <c>{AssemblyName}.xml</c>. The NodeType compile embeds it (<c>EmitPipeline.WithEmbeddedDocumentation</c>),
+    /// because the dll a NodeType hub loads — published by the assembly store under a content-hashed
+    /// name, or adopted from a baked bundle — never has the compiler's sidecar file beside it. Read when no
+    /// documentation FILE is found for the assembly.
+    /// </summary>
+    public const string EmbeddedDocumentationSuffix = ".xml";
+
     // Stack-safety bound on how many distinct members one lookup may hold open at once. Cycles are
     // cut by the in-progress set below, so this only limits pathologically deep legitimate chains.
     private const int MaxInheritDepth = 64;

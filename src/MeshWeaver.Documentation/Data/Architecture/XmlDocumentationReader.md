@@ -230,6 +230,20 @@ open on the stack (a cref cycle) reads empty instead of overflowing it
 the declaring type, a subclass, the open definition, a constructed type and the interface). Namotion only handled the immediate base and matched by name alone, so an
 overloaded base member made it read nothing.
 
+## Mesh-compiled assemblies carry their documentation inside the image
+
+**Measured on a client instance, 2026-11-03:** `@{instance}/schema/` of a mesh-compiled content type carried the property types and their `x-meshNode` queries, but no property had a `description`, even though every one of them had a `/// <summary>`. Platform types still had their descriptions. The reason is that the reader looks for `{AssemblyName}.xml` beside `Assembly.Location`, and the dll a NodeType hub loads never has that file beside it:
+
+- The compile writes `DynamicNode_{node}.xml` into its **release directory** only.
+- The **assembly store** publishes the dll and pdb, with nothing else, under a content-hashed name (`v{n}-{tag}-{hash}.dll`). A local compile is loaded from there.
+- A **baked bundle** carries the dll and pdb, and an adopted bundle is loaded from the same store layout.
+
+So the emit now embeds the compilation's own XML documentation in the image, as the manifest resource `{AssemblyName}.xml` (`EmitPipeline.WithEmbeddedDocumentation`, constant `XmlDocsReader.EmbeddedDocumentationSuffix`). The documentation comes from a metadata-only emit, which binds the declarations and compiles no method bodies. When no documentation file is found, the reader falls back to that resource (`XmlDocFile.FromEmbeddedResource`). A sidecar file still takes precedence if one exists.
+
+Why inside the image and not as another sidecar: an image cannot be separated from its documentation by any store, bundle, copy or rename, and nothing downstream (store, bundle zip, adoption, seeder) needs to learn about a third file. The guarantees of the reader are unchanged: one snapshot per `Assembly` instance in the weak table, a collectible generation's strings are not interned, and a missing or unreadable resource yields `Empty`, never an exception.
+
+A bundle baked before this change has no embedded resource and still shows no descriptions until it is baked again (pinned by `MeshCompiledTypesCarryTheirDocumentationTest.AnImageWithoutEmbeddedDocumentation_DegradesToNoSummary_NeverAFault`). End to end: `AMeshCompiledTypesSchemaDescribesItsContentTest` in `MeshWeaver.Hosting.Test`.
+
 ## Parity evidence
 
 Before the package was removed, both readers were run over every type and every declared member of

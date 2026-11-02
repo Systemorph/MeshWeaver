@@ -288,9 +288,10 @@ public static class EmitPipeline
         EmitResult emitResult;
         try
         {
+            var resources = WithEmbeddedDocumentation(compilation, manifestResources, ct);
             emitResult = compilation.Emit(
                 dllImage, pdbImage, xmlDocumentationStream: xmlDoc,
-                manifestResources: manifestResources.Count == 0 ? null : manifestResources,
+                manifestResources: resources.Count == 0 ? null : resources,
                 options: emitOptions, cancellationToken: ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -335,6 +336,45 @@ public static class EmitPipeline
         // common path hands out a span over it instead of copying a multi-megabyte image.
         static ReadOnlySpan<byte> Bytes(MemoryStream s)
             => s.TryGetBuffer(out var seg) ? seg.AsSpan() : s.ToArray();
+    }
+
+    /// <summary>
+    /// <paramref name="manifestResources"/> plus the compilation's own XML documentation, embedded as
+    /// the manifest resource <c>{AssemblyName}.xml</c> (<see cref="MeshWeaver.Messaging.Serialization.XmlDocsReader"/>
+    /// reads it when no documentation file sits beside the loaded dll).
+    /// <para>🚨 WHY IT TRAVELS INSIDE THE IMAGE. The sidecar <c>DynamicNode_{node}.xml</c> is written into
+    /// the release directory only; the assembly store publishes the dll and pdb under a content-hashed
+    /// name (<c>v{n}-{tag}-{hash}.dll</c>), and a baked bundle carries dll + pdb. So the dll a NodeType hub
+    /// actually LOADS — a local compile out of the store as much as an adopted bundle — never had its
+    /// <c>{AssemblyName}.xml</c> beside it, and every mesh-compiled content type lost its descriptions in
+    /// <c>schema/</c>, <c>$Schema</c> and <c>$Model</c>. Inside the image the docs cannot be separated from
+    /// the code they describe, by any store, bundle or copy.</para>
+    /// <para>The documentation is produced by a METADATA-ONLY emit — declarations are bound, no method
+    /// body is compiled — which the real emit then reuses the bound compilation of.</para>
+    /// </summary>
+    internal static IReadOnlyCollection<ResourceDescription> WithEmbeddedDocumentation(
+        CSharpCompilation compilation, IReadOnlyCollection<ResourceDescription> manifestResources, CancellationToken ct)
+    {
+        var name = compilation.AssemblyName;
+        if (string.IsNullOrEmpty(name))
+            return manifestResources;
+        var resourceName = name + MeshWeaver.Messaging.Serialization.XmlDocsReader.EmbeddedDocumentationSuffix;
+        if (manifestResources.Any(r => string.Equals(ResourceNameOf(r), resourceName, StringComparison.Ordinal)))
+            return manifestResources;
+        using var docs = new MemoryStream();
+        var result = compilation.Emit(Stream.Null, xmlDocumentationStream: docs,
+            options: new EmitOptions(metadataOnly: true), cancellationToken: ct);
+        // A failing metadata pass is reported by the real emit that follows, with its diagnostics.
+        if (!result.Success || docs.Length == 0)
+            return manifestResources;
+        var bytes = docs.ToArray();
+        return [.. manifestResources, new ResourceDescription(resourceName, () => new MemoryStream(bytes), isPublic: true)];
+
+        // ResourceDescription keeps its name internal; its ToString is not it either — read it reflectively once.
+        static string? ResourceNameOf(ResourceDescription resource)
+            => typeof(ResourceDescription)
+                .GetField("ResourceName", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.GetValue(resource) as string;
     }
 
     /// <summary>
@@ -1407,7 +1447,10 @@ public static class EmitPipeline
         EmitResult emitResult;
         try
         {
-            emitResult = compilation.Emit(dllStream, pdbStream, options: emitOptions, cancellationToken: ct);
+            var resources = WithEmbeddedDocumentation(compilation, [], ct);
+            emitResult = compilation.Emit(dllStream, pdbStream,
+                manifestResources: resources.Count == 0 ? null : resources,
+                options: emitOptions, cancellationToken: ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
