@@ -925,7 +925,7 @@ public static class MeshNodeLayoutAreas
 
         var style = "width: 100%; justify-content: flex-start; white-space: nowrap;";
         if (IsDestructive(item))
-            style += " color: var(--error, #d32f2f);";
+            style += " color: var(--mw-danger-text, var(--error, #d32f2f));";
         return Controls.Button(text)
             .WithAppearance(Appearance.Stealth)
             .WithLabel(item.Tooltip ?? item.Label)

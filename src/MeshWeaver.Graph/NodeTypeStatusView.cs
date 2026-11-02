@@ -197,11 +197,11 @@ public sealed record NodeTypeStatusView(
         {
             case CompilationStatus.Pending or CompilationStatus.Compiling:
                 headline = L("ui.compiling", []);
-                headlineStyle = "color: var(--accent-fill-rest); font-weight: 600;";
+                headlineStyle = "color: var(--mw-accent-text, var(--accent-foreground-rest)); font-weight: 600;";
                 break;
             case CompilationStatus.Error when def.CompilationError is { Length: > 0 } compileError:
                 headline = L("ui.compileFailed", []);
-                headlineStyle = "color: var(--error); font-weight: 600;";
+                headlineStyle = "color: var(--mw-danger-text, var(--error)); font-weight: 600;";
                 detail = Fenced(compileError);
                 break;
             case CompilationStatus.Unavailable:
@@ -214,7 +214,7 @@ public sealed record NodeTypeStatusView(
                 break;
             case CompilationStatus.Ok when !string.IsNullOrEmpty(def.LatestReleasePath):
                 headline = L("ui.releasePublished", []);
-                headlineStyle = "color: var(--accent-fill-rest); font-weight: 600;";
+                headlineStyle = "color: var(--mw-accent-text, var(--accent-foreground-rest)); font-weight: 600;";
                 links.Add($"[→ {def.LatestReleasePath}](/{def.LatestReleasePath})");
                 break;
         }
