@@ -9,7 +9,7 @@
     <PackageVersion Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.84.2" />
     <PackageVersion Include="System.ClientModel" Version="1.15.0" />
     <PackageVersion Include="DocumentFormat.OpenXml" Version="3.5.1" />
-    <PackageVersion Include="Markdig" Version="1.5.0" />
+    <PackageVersion Include="Markdig" Version="1.5.1" />
     <PackageVersion Include="ModelContextProtocol.Core" Version="2.3.0" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.11.0" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.14" />
@@ -34,8 +34,8 @@
     <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.14" />
     <!-- The TOTP rung's enrolment QR code — a dependency-free QR encoder that writes SVG. -->
     <PackageVersion Include="Net.Codecrete.QrCodeGenerator" Version="3.2.1" />
-    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.4.0" />
-    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.4.2" />
+    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.4.2" />
     <PackageVersion Include="System.Composition.AttributedModel" Version="10.0.10" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.9.0" />
@@ -52,7 +52,7 @@
     <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.14" />
     <!-- IoPoolSiloTeardown reads the stack of a leaf that outlived the silo join from one dump of
          the process (#7277): the runtime's own dump writer over its diagnostic port, read by ClrMD. -->
-    <PackageVersion Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.661903" />
+    <PackageVersion Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
     <PackageVersion Include="Microsoft.Diagnostics.Runtime" Version="3.1.512801" />
     <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.14" />
@@ -61,13 +61,13 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.11.0" />
-    <PackageVersion Include="Microsoft.Orleans.Core" Version="10.4.0" />
-    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Core" Version="10.4.2" />
+    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.4.2" />
     <!-- Orleans test cluster — a src pin because MeshWeaver.Hosting.Orleans.TestBase ships it. -->
-    <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="10.4.0" />
-    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.4.0" />
-    <PackageVersion Include="Microsoft.Orleans.Server" Version="10.4.0" />
-    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="10.4.2" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.4.2" />
+    <PackageVersion Include="Microsoft.Orleans.Server" Version="10.4.2" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.4.2" />
     <PackageVersion Include="NuGet.Protocol" Version="7.9.0" />
     <PackageVersion Include="NuGet.Packaging" Version="7.9.0" />
     <PackageVersion Include="NuGet.Versioning" Version="7.9.0" />
