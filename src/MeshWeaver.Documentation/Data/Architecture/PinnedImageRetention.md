@@ -364,9 +364,16 @@ the act that made it stale.
 `purge-old-images` and `purge-old-ci-releases` as *matches the record byte for byte* and named the
 stale declaration as the next step; the core pull request that followed deleted
 `recordAheadOfRegistry` from `tasks.json`, so a stand-alone `verify` holds both tasks to the record
-with no exemption. Both tasks stay **Disabled**: the record's `pause` is still in force, and
-`purge-old-images` carries `--dry-run` on both steps under the `dryRun` block. Nothing is deleted
-until a reviewed diff lifts the pause and another approved apply enables the task.
+with no exemption. Both tasks were left **Disabled** under the record's `pause`.
+
+**The pause is lifted in the record, as a report.** A follow-up reviewed diff deleted `pause`
+(its `reEnableWhen` — the lock lane green over a fleet whose tag references and index closures are
+locked, #4081 — is met: #4081 is closed and the lane's scheduled runs on main are green) and records
+`purge-old-images` as `Enabled`, with `--dry-run` still on both steps under the `dryRun` block. It
+re-declares `recordAheadOfRegistry` for that task until the next approved `RegistryRetention`
+apply, whose measured interlock re-checks the lock lane at apply time. Once applied, the task runs
+nightly and logs what the 30-day window would delete, deleting nothing. `purge-old-ci-releases`
+stays Disabled.
 
 **A task's schedule is a timer trigger, not a task property.** `apply` writes the definition with
 `az acr task update --file` and the schedule with `az acr task timer update` on the trigger the task

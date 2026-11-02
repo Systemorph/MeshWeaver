@@ -18,12 +18,12 @@
     "`schedule`/`status`/`timeout` here are ASSERTED by `verify`; the remaining fields are",
     "provenance and are printed, not compared.",
     "",
-    "🚨 2026-09-12: `purge-old-images` is DISABLED. Roland ordered the purge paused while the",
-    "protection is incomplete (Memex#219); measured the same morning with `az acr task list`, both",
-    "tasks read `status: Disabled`. The pause is the MITIGATION and MeshWeaver#4081 is the FIX, so",
-    "#4081 is the precondition for turning the task back on rather than a race against it. Quote no",
-    "deletion date while `pause` below is in force: there is no live clock, and a date that has",
-    "silently stopped being true is what the next reader acts on.",
+    "The purge was PAUSED from 2026-09-12 (Memex#219) while the protection was incomplete; the",
+    "pause was the MITIGATION and MeshWeaver#4081 the FIX. With #4081 closed and the lock lane green",
+    "nightly, the pause is lifted and `purge-old-images` is recorded `Enabled` — as a REPORT: both",
+    "its steps carry `--dry-run` (see `dryRun`), so it logs what the 30-day window would delete and",
+    "deletes nothing. Re-pause by restoring a `pause` block (inForce/since/reason/reEnableWhen) and",
+    "recording the task Disabled, then applying.",
     "",
     "🚨 A DISABLED TASK STILL SHOWS AN ENABLED TIMER. `az acr task list` reports",
     "`status: Disabled` on the task while its `trigger.timerTriggers[0].status` still reads",
@@ -37,7 +37,7 @@
     {
       "name": "purge-old-images",
       "file": "purge-old-images.yaml",
-      "status": "Disabled",
+      "status": "Enabled",
       "schedule": "0 3 * * *",
       "timeout": 3600,
       "stepType": "EncodedTask",
@@ -51,7 +51,7 @@
       },
       "creationDate": "2026-08-31T20:33:48.969331+00:00",
       "notes": [
-        "🚨 DISABLED 2026-09-12 — see the top-level `pause` block. This was `Enabled` at `0 3 * * *`; every note below describes the policy it runs WHEN RE-ENABLED.",
+        "ENABLED as a dry-run report: the pause (2026-09-12, Memex#219) is lifted, `--dry-run` stays on both steps under the top-level `dryRun` block.",
         "ONE task, TWO steps: a 30d step over the CI image repositories, and a separate 30d step",
         "for memex-portal. The filter lists stay SEPARATE even at one window — they are not",
         "symmetric (mw-plugin-test is unique to the first, memex-portal to the second), and a",
@@ -95,13 +95,16 @@
       ]
     }
   ],
-  "pause": {
+  "recordAheadOfRegistry": {
     "inForce": true,
-    "since": "2026-09-12",
-    "measured": "az acr task list --registry meshweaver — purge-old-images status=Disabled (timer trigger still Enabled at 0 3 * * *)",
-    "reason": "Roland ordered the purge paused while artifact protection is incomplete: the fleet's tag references, the platform manifests under every locked index, and one production instance's running index were all unprotected (MeshWeaver#3438).",
-    "issue": "Memex#219",
-    "reEnableWhen": "lock-pinned-digests is green on a fleet whose tag references and index closures are locked — MeshWeaver#4081. Re-enabling before that restores the exposure the pause exists to hold off."
+    "since": "2026-11-02",
+    "tasks": [
+      "purge-old-images"
+    ],
+    "what": "The record lifts the pause: `purge-old-images` is recorded `Enabled` (the live task is `Disabled`), and its YAML comment no longer says the record is ahead of the registry. The window, the filters and `--dry-run` on both steps are unchanged from what the 2026-11-02 apply installed (control `Ops/Actions/registry-retention-apply-20261101b-3438`, Memex run 41419066636). `purge-old-ci-releases` stays Disabled and unchanged. 🚨 This declaration excuses the DEFINITION drift (the YAML comment) only, never the STATUS: `verify` compares `status` outside the declared-drift path and reds on `Enabled` vs live `Disabled` until the apply. That is deliberate — the status is what switches the purge on, and an exemption keyed on a task name must never cover it.",
+    "why": "Lifting the pause is a reviewed diff followed by an approved `RegistryRetention` apply; between the two the record is ahead. `pause.reEnableWhen` was: lock-pinned-digests green on a fleet whose tag references and index closures are locked (MeshWeaver#4081). #4081 is closed, and the lock lane's scheduled runs on main are green (41370289769 on 2026-11-02, 41259318478 on 2026-11-01). The apply's own interlock re-measures that at apply time (newest completed run green and under 36 h old).",
+    "clearedBy": "the next approved `acr-retention-tasks.sh apply` — after which `verify` finds no drift on `purge-old-images` and reds on THIS declaration being stale; delete it in a core pull request.",
+    "issue": "MeshWeaver#3438"
   },
   "dryRun": {
     "inForce": true,
