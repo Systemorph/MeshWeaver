@@ -360,6 +360,21 @@ first governed run (#3438) — it installs the decided `--ago 30d` on the live t
 re-verify names the stale declaration as the next step and does not red on it, because `apply` is
 the act that made it stale.
 
+**The 30-day window is APPLIED.** It was installed by the governed `RegistryRetention` apply [`Ops/Actions/registry-retention-apply-20261101b-3438`](https://control.systemorph.com/Ops/Actions/registry-retention-apply-20261101b-3438) on the control instance ([Memex run 41419066636](https://github.com/Systemorph/Memex/actions/runs/41419066636), 2026-11-02 09:16Z). Its re-verify reported both
+`purge-old-images` and `purge-old-ci-releases` as *matches the record byte for byte* and named the
+stale declaration as the next step; the core pull request that followed deleted
+`recordAheadOfRegistry` from `tasks.json`, so a stand-alone `verify` holds both tasks to the record
+with no exemption. Both tasks were left **Disabled** under the record's `pause`.
+
+**The pause is lifted in the record, as a report.** A follow-up reviewed diff deleted `pause`
+(its `reEnableWhen` — the lock lane green over a fleet whose tag references and index closures are
+locked, #4081 — is met: #4081 is closed and the lane's scheduled runs on main are green) and records
+`purge-old-images` as `Enabled`, with `--dry-run` still on both steps under the `dryRun` block. It
+re-declares `recordAheadOfRegistry` for that task until the next approved `RegistryRetention`
+apply, whose measured interlock re-checks the lock lane at apply time. Once applied, the task runs
+nightly and logs what the 30-day window would delete, deleting nothing. `purge-old-ci-releases`
+stays Disabled.
+
 **A task's schedule is a timer trigger, not a task property.** `apply` writes the definition with
 `az acr task update --file` and the schedule with `az acr task timer update` on the trigger the task
 carries, or `timer add` when it carries none. `az acr task update` has no `--schedule` option. The
@@ -520,8 +535,9 @@ not deleted, so that re-enabling it is a visible act rather than a rediscovery.
 > 🚨 **That table is the 2026-09-06 reading and the CI step has since MOVED in the record.** On
 > 2026-09-13 it became `--ago 30d --untagged` with no `--keep`, which is #3842's decided policy
 > ([ArtifactRetentionInterlock](../ArtifactRetentionInterlock) → *The window is DECIDED*). The
-> **live** task is disabled and still carries the old window; `tasks.json` declares that gap under
-> `recordAheadOfRegistry`. Read the record, not this page, for what `apply` would install.
+> **live** task carried the old window until the governed apply of 2026-11-02 installed the record
+> (see *The governed path* above); it is still disabled. Read the record, not this page, for what
+> the task carries.
 
 🚨 **Two steps, not one, and that is the point.** Unioning the filters under the stricter window
 would have dragged `memex-portal` from 30 days to `7d --keep 10` with nobody deciding to. The merge

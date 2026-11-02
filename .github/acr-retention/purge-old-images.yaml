@@ -41,16 +41,16 @@ version: v1.1.0
 # times a day ages its own manifests out in hours regardless of `--ago` — which is #3438's root
 # cause stated as a flag, not a second-order concern.
 #
-# 🚨 THE RECORD IS AHEAD OF THE REGISTRY HERE, ON PURPOSE, AND tasks.json DECLARES IT under
-# `recordAheadOfRegistry`. The live task is DISABLED (paused, Memex#219) and still carries
-# `--ago 7d --keep 10`; `acr-retention-tasks.sh apply` is what pushes this file onto it, so this
-# is the window a re-enable would install. Do NOT "fix" the drift by running
-# `acr-retention-tasks.sh record` — that overwrites this file FROM the live task and silently
-# restores the 7-day quota window. `lock-pinned-digests.py --check-retention-record` then reds,
-# on every pull request, which is how that mistake is caught.
+# 🚨 THIS FILE IS WHAT THE LIVE TASK RUNS. The governed `RegistryRetention` apply on the control
+# instance (MeshWeaver#3438) pushed it onto the registry; the task no longer carries the old
+# `--ago 7d --keep 10`. Change it ONLY through a reviewed diff here followed by an approved apply —
+# while the two differ, tasks.json declares the gap under `recordAheadOfRegistry`. Never "fix" a
+# drift by running `acr-retention-tasks.sh record`: that overwrites this file FROM the live task, and
+# `lock-pinned-digests.py --check-retention-record` reds on every pull request if a quota window
+# comes back that way.
 #
 # 🚨 DRY-RUN FIRST (MeshWeaver#3438). Both steps carry `--dry-run`, and tasks.json declares it under
-# `dryRun`. Re-enabling this task therefore produces a nightly LOG of exactly what the 30-day window
+# `dryRun`. The enabled task therefore produces a nightly LOG of exactly what the 30-day window
 # would delete, and deletes nothing. Read that log back (a `RegistryRetention` dry run on the control
 # instance) before a reviewed diff drops the flag AND lifts `dryRun` in the same change —
 # `lock-pinned-digests.py --check-retention-record` reds on either half alone, and its self-test
