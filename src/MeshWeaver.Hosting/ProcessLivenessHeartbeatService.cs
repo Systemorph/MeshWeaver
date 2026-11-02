@@ -28,9 +28,12 @@ namespace MeshWeaver.Hosting;
 /// </summary>
 /// <param name="configuration">Host configuration — read once, at start.</param>
 /// <param name="loggerFactory">The logger factory; the heartbeat logs under this type's category.</param>
+/// <param name="services">Where the optional <see cref="IThreadPoolWorkerStacks"/> reader is resolved —
+/// a host without one still gets the <c>[POOLSTALL]</c> line, saying it cannot name the frame.</param>
 internal sealed class ProcessLivenessHeartbeatService(
     IConfiguration configuration,
-    ILoggerFactory loggerFactory) : IHostedService
+    ILoggerFactory loggerFactory,
+    IServiceProvider services) : IHostedService
 {
     /// <summary>How often the loop wakes to notice <see cref="stopped"/>, so shutdown is not held by the cadence.</summary>
     private static readonly TimeSpan StopCheckSlice = TimeSpan.FromMilliseconds(250);
@@ -88,6 +91,10 @@ internal sealed class ProcessLivenessHeartbeatService(
         // this thread for the life of the host; a sampler that cannot start leaves the heartbeat
         // exactly as it was, and the [HEAPSTEP] line then SAYS it could not name anything.
         var sampler = StartSampler();
+        // OPTIONAL by design: the stack reader lives with the Orleans connection (it needs ClrMD and the
+        // runtime's DAC), and a host without it still reports the stall — saying it cannot name the frame.
+        var workerStacks = ResolveWorkerStacks();
+        TimeSpan? lastStallCapture = null;
         ProcessLivenessSample? previous = null;
         var tick = 0L;
         var due = period;
@@ -108,10 +115,17 @@ internal sealed class ProcessLivenessHeartbeatService(
                 var reading = ProcessLiveness.Read(previous, sample, period);
                 var step = ProcessLiveness.DescribeHeapStep(
                     previous, sample, sampler?.Drain());
+                var stalled = ThreadPoolStall.ShouldCapture(previous, reading, lastStallCapture);
                 previous = sample;
                 logger.LogInformation("{Reading}", reading.Describe());
                 if (step is not null)
                     logger.LogWarning("{HeapStep}", step);
+                if (stalled
+                    && Interlocked.CompareExchange(ref stallCaptureInFlight, 1, 0) == 0)
+                {
+                    lastStallCapture = sample.Elapsed;
+                    StartStallCapture(reading, workerStacks);
+                }
             }
             catch (Exception exception)
             {
@@ -123,6 +137,88 @@ internal sealed class ProcessLivenessHeartbeatService(
         }
 
         sampler?.Dispose();
+    }
+
+    /// <summary>1 while a <c>[POOLSTALL]</c> capture runs; at most one is ever in flight.</summary>
+    private int stallCaptureInFlight;
+
+    /// <summary>
+    /// The optional stack reader, resolved without ever throwing: this runs on a raw thread, where an
+    /// unhandled exception (a throwing factory, a provider disposed by a racing shutdown) would end the
+    /// process. A failed resolution is reported and the heartbeat runs on with no reader — its
+    /// <c>[POOLSTALL]</c> line then says it cannot name the frame.
+    /// </summary>
+    private IThreadPoolWorkerStacks? ResolveWorkerStacks()
+    {
+        try
+        {
+            return services.GetService<IThreadPoolWorkerStacks>();
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception,
+                "[POOLSTALL] the ThreadPool worker stack reader could not be resolved; a pool stall in this "
+                + "process will be reported without the frames its workers were in.");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Runs the capture on a dedicated thread of its own, so a slow (or never-returning) dump write
+    /// or ClrMD read can never silence the <c>[LIVENESS]</c> line or forge an overrun on it. The
+    /// in-flight flag keeps it to one capture at a time; it is cleared only when the line is logged.
+    /// </summary>
+    private void StartStallCapture(ProcessLivenessReading reading, IThreadPoolWorkerStacks? workerStacks)
+    {
+        try
+        {
+            new Thread(() =>
+            {
+                try
+                {
+                    logger.LogWarning("{PoolStall}", DescribeStall(reading, workerStacks));
+                }
+                catch (Exception exception)
+                {
+                    logger.LogWarning(exception, "[POOLSTALL] tick {Tick}: the line could not be written.",
+                        reading.Current.TickSeq);
+                }
+                finally
+                {
+                    Volatile.Write(ref stallCaptureInFlight, 0);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = ProcessLiveness.ThreadName + "-poolstall",
+            }.Start();
+        }
+        catch (Exception exception)
+        {
+            Volatile.Write(ref stallCaptureInFlight, 0);
+            logger.LogWarning(exception,
+                "[POOLSTALL] tick {Tick}: the capture thread could not be started, so this stall is reported "
+                + "without its frames.", reading.Current.TickSeq);
+        }
+    }
+
+    /// <summary>
+    /// Captures the pool workers' stacks for a stalled tick and renders the <c>[POOLSTALL]</c> line.
+    /// Runs on the capture's own dedicated thread — never a pool worker, which the stall holds — and
+    /// never throws: a capture that fails is reported IN the line, so the stall is still named.
+    /// </summary>
+    private static string DescribeStall(ProcessLivenessReading reading, IThreadPoolWorkerStacks? workerStacks)
+    {
+        if (workerStacks is null)
+            return ThreadPoolStall.Describe(reading, null, null);
+        try
+        {
+            return ThreadPoolStall.Describe(reading, workerStacks.CaptureWorkerStacks(), null);
+        }
+        catch (Exception exception)
+        {
+            return ThreadPoolStall.Describe(reading, null, $"{exception.GetType().Name}: {exception.Message}");
+        }
     }
 
     private AllocationByTypeSampler? StartSampler()
