@@ -1,8 +1,66 @@
 using System;
+using System.Reactive.Linq;
+using System.Text.Json;
+using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Fixture;
+using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.Composition;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.Layout.Test;
+
+/// <summary>
+/// A server-side render that fails because a read reached NO VERDICT shows the localized
+/// "could not check" copy, never the English diagnostic in the generic panel (review of #7832).
+/// Pre-fix the cache read gate ended such a read with a denial, which had a localized frame; once it
+/// ended as NO VERDICT, <c>LayoutAreaHost.CreateRenderErrorControl</c> had no branch for it.
+/// </summary>
+public class NoVerdictRenderTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private const string UndecidedView = nameof(UndecidedView);
+    private const string BrokenView = nameof(BrokenView);
+    private const string EngineeringFault = "BOOM_an_ordinary_defect";
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+        => base.ConfigureHost(configuration)
+            .WithRoutes(r => r.RouteAddress(ClientType, (_, d) => d.Package()))
+            .AddLayout(layout => layout
+                .WithView(UndecidedView, (LayoutAreaHost _, RenderingContext _)
+                    => Observable.Throw<UiControl?>(ReadVerdict.NoVerdict("user 'u' may read 'Space/Doc'", new TimeoutException("stalled"))))
+                .WithView(BrokenView, (LayoutAreaHost _, RenderingContext _)
+                    => Observable.Throw<UiControl?>(new InvalidOperationException(EngineeringFault))));
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration).AddLayoutClient(d => d);
+
+    private async Task<string> Rendered(string area)
+    {
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), new LayoutAreaReference(area));
+        var control = await stream.GetControlStream(area)
+            .Should().Within(TestTimeouts.Convergence).Match(x => x is MarkdownControl);
+        var text = (control as MarkdownControl)?.Markdown?.ToString() ?? string.Empty;
+        Output.WriteLine($"frame: {text}");
+        return text;
+    }
+
+    [HubFact]
+    public async Task ARenderThatReachedNoVerdict_ShowsTheLocalizedCouldNotCheckFrame()
+    {
+        var text = await Rendered(UndecidedView);
+
+        text.Should().NotContain("Permission check unavailable", "the diagnostic is internal and English-only");
+        text.Should().NotContain("TimeoutException");
+        text.Should().Contain("We could not load this just now.", "the localized error.checkUnavailable copy");
+    }
+
+    [HubFact]
+    public async Task NegativeControl_AnOrdinaryRenderFault_KeepsTheGenericPanelAndItsMessage()
+        => (await Rendered(BrokenView)).Should().Contain(EngineeringFault);
+}
 
 /// <summary>
 /// How a view classifies the end of a followed read (MeshWeaver#7825–#7830). A read on which no

@@ -57,6 +57,23 @@ public static class DeclaredPointRead
     /// render (<c>""</c> = the default area), admitted only when the declaration lists it
     /// (<see cref="PointReadDeclaration.Areas"/>).</param>
     public static IObservable<bool> Admits(IMessageHub hub, string path, AccessContext? caller, string? area = null)
+        => AdmitsCore(hub, path, caller, area, undecidedIsError: false);
+
+    /// <summary>
+    /// <see cref="Admits"/> for a seam that FOLLOWS an admitted read and must tell "the declaration
+    /// no longer admits" from "it could not be decided" (MeshWeaver#7825, review of #7832): a lookup
+    /// that faults, or an ownership re-check that stalls past the permission-establishment budget, is
+    /// an ERROR on the verdict here — never <c>false</c> — so the follow ends the read as NO VERDICT
+    /// instead of as a denial. Every decided outcome is the same as <see cref="Admits"/>. Cold.
+    /// </summary>
+    /// <param name="hub">The hub asking.</param>
+    /// <param name="path">The exact path being read.</param>
+    /// <param name="caller">The caller's context; null or virtual is the anonymous caller.</param>
+    /// <param name="area">As for <see cref="Admits"/>.</param>
+    public static IObservable<bool> AdmitsOrUndecided(IMessageHub hub, string path, AccessContext? caller, string? area = null)
+        => AdmitsCore(hub, path, caller, area, undecidedIsError: true);
+
+    private static IObservable<bool> AdmitsCore(IMessageHub hub, string path, AccessContext? caller, string? area, bool undecidedIsError)
     {
         ArgumentNullException.ThrowIfNull(hub);
         return Observable.Defer(() =>
@@ -82,14 +99,14 @@ public static class DeclaredPointRead
                 .SelectMany(stored => stored is null
                     ? Observable.Return(false)
                     : OwnerCurrent(hub, access, path)
-                        .Select(node => Decide(hub, access, node, userId, caller, options, area))
+                        .Select(node => Decide(hub, access, node, userId, caller, options, area, undecidedIsError))
                         .Switch())
                 .DistinctUntilChanged()
                 .Catch((Exception ex) =>
                 {
                     hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(DeclaredPointRead))
                         .LogWarning(ex, "The declared point read of {Path} for {User} could not be decided — refused", path, userId);
-                    return Observable.Return(false);
+                    return undecidedIsError ? Observable.Throw<bool>(ex) : Observable.Return(false);
                 });
         });
     }
@@ -645,6 +662,23 @@ public static class DeclaredPointRead
     /// <param name="caller">The caller's context; null or virtual is the anonymous caller.</param>
     /// <param name="area">Null for a read of the node itself; otherwise the layout area to render (<c>""</c> = the default area).</param>
     public static IObservable<bool> AdmitsRevision(IMessageHub hub, MeshNode? revision, AccessContext? caller, string? area = null)
+        => AdmitsRevisionCore(hub, revision, caller, area, undecidedIsError: false);
+
+    /// <summary>
+    /// <see cref="AdmitsRevision"/> for a seam that FOLLOWS an admitted read: a lookup that faults, or
+    /// an ownership re-check that stalls, is an ERROR on the verdict — never <c>false</c> — so the
+    /// follow ends the read as NO VERDICT instead of as a denial (MeshWeaver#7825, review of #7832).
+    /// See <see cref="AdmitsOrUndecided"/>. Cold.
+    /// </summary>
+    /// <param name="hub">The hub asking.</param>
+    /// <param name="revision">The revision about to be served.</param>
+    /// <param name="caller">The caller's context; null or virtual is the anonymous caller.</param>
+    /// <param name="area">As for <see cref="AdmitsRevision"/>.</param>
+    public static IObservable<bool> AdmitsRevisionOrUndecided(IMessageHub hub, MeshNode? revision, AccessContext? caller, string? area = null)
+        => AdmitsRevisionCore(hub, revision, caller, area, undecidedIsError: true);
+
+    private static IObservable<bool> AdmitsRevisionCore(
+        IMessageHub hub, MeshNode? revision, AccessContext? caller, string? area, bool undecidedIsError)
     {
         ArgumentNullException.ThrowIfNull(hub);
         return Observable.Defer(() =>
@@ -652,14 +686,14 @@ public static class DeclaredPointRead
             var userId = SubjectOf(caller);
             if (revision is null || string.IsNullOrEmpty(revision.Path) || RefusedOutright(hub, userId, caller))
                 return Observable.Return(false);
-            return Decide(hub, hub.ServiceProvider.GetService<AccessService>(), revision, userId, caller, hub.JsonSerializerOptions, area)
+            return Decide(hub, hub.ServiceProvider.GetService<AccessService>(), revision, userId, caller, hub.JsonSerializerOptions, area, undecidedIsError)
                 .DistinctUntilChanged()
                 .Catch((Exception ex) =>
                 {
                     hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(DeclaredPointRead))
                         .LogWarning(ex, "The declared point read of revision {Version} of {Path} for {User} could not be decided — refused",
                             revision.Version, revision.Path, userId);
-                    return Observable.Return(false);
+                    return undecidedIsError ? Observable.Throw<bool>(ex) : Observable.Return(false);
                 });
         });
     }
@@ -677,11 +711,11 @@ public static class DeclaredPointRead
     /// <summary>The verdict for ONE revision of the node: issuance, declaration, namespace, content, then the audience and the expiry, live.</summary>
     private static IObservable<bool> Decide(
         IMessageHub hub, AccessService? access, MeshNode? node, string userId, AccessContext? caller, JsonSerializerOptions options,
-        string? area)
+        string? area, bool undecidedIsError)
     {
         if (node is null || !IsPlatformIssued(node) || string.IsNullOrEmpty(node.NodeType))
             return Observable.Return(false);
-        return DeclarationOf(hub, access, node.NodeType!)
+        return DeclarationOf(hub, access, node.NodeType!, undecidedIsError)
             .Select(declaration =>
                 declaration is not null
                 && InDeclaredNamespace(declaration, node)
@@ -728,7 +762,7 @@ public static class DeclaredPointRead
     /// same path cannot replace its declaration. Null for any other type, and when no declaration
     /// is present.
     /// </summary>
-    private static IObservable<PointReadDeclaration?> DeclarationOf(IMessageHub hub, AccessService? access, string nodeType)
+    private static IObservable<PointReadDeclaration?> DeclarationOf(IMessageHub hub, AccessService? access, string nodeType, bool undecidedIsError)
     {
         var options = hub.JsonSerializerOptions;
         if (hub.ServiceProvider.FindServedStaticNode(nodeType) is { } declared)
@@ -736,7 +770,7 @@ public static class DeclaredPointRead
         var partition = nodeType.Split('/', 2)[0];
         if (partition.Length == 0)
             return Observable.Return<PointReadDeclaration?>(null);
-        return SystemOwned(hub, access, partition)
+        return SystemOwned(hub, access, partition, undecidedIsError)
             .Select(owned => owned
                 // The type node from its OWNER first, like the instance: a warm mirror must not keep
                 // admitting by a declaration the owner has already withdrawn or narrowed.
@@ -764,7 +798,7 @@ public static class DeclaredPointRead
     /// gap (<see cref="OwnershipChanged"/>), so a config created or deleted is picked up; a config the
     /// owner no longer has answers not-owned.</para>
     /// </summary>
-    private static IObservable<bool> SystemOwned(IMessageHub hub, AccessService? access, string partition)
+    private static IObservable<bool> SystemOwned(IMessageHub hub, AccessService? access, string partition, bool undecidedIsError)
     {
         var options = hub.JsonSerializerOptions;
         var syncPath = AccessAssignmentGuard.SyncConfigPath(partition);
@@ -784,7 +818,8 @@ public static class DeclaredPointRead
             Scheduler.Default,
             () => logger?.LogWarning(
                 "The ownership of {Partition} could not be re-read within the permission-establishment budget ({Budget}) — not system-owned, its declarations refused",
-                partition, budget));
+                partition, budget),
+            stalledIsUndecided: undecidedIsError);
     }
 
     /// <summary>
@@ -817,8 +852,12 @@ public static class DeclaredPointRead
     /// <param name="budget">How long one re-read may take to answer.</param>
     /// <param name="scheduler">Where the budget runs.</param>
     /// <param name="onStalled">Called when a re-read did not answer within the budget.</param>
+    /// <param name="stalledIsUndecided">When true, a re-read past the budget is an ERROR on the
+    /// decision (a <see cref="TimeoutException"/>) rather than <c>false</c>, so a seam that follows an
+    /// admitted read ends it as NO VERDICT instead of as a denial (MeshWeaver#7825, review of #7832).</param>
     internal static IObservable<bool> FollowOwnership(
-        IObservable<Unit> changed, Func<IObservable<bool>> read, TimeSpan budget, IScheduler scheduler, Action? onStalled = null)
+        IObservable<Unit> changed, Func<IObservable<bool>> read, TimeSpan budget, IScheduler scheduler, Action? onStalled = null,
+        bool stalledIsUndecided = false)
         => AttachedThenSeeded(changed, Unit.Default)
             // Each re-read is pending (null) until it answers; a replacement re-read starts pending too.
             .Select(_ => Observable.Defer(read).Select(owned => (bool?)owned).StartWith((bool?)null))
@@ -827,10 +866,13 @@ public static class DeclaredPointRead
             .DistinctUntilChanged()
             .Select(owned => owned is { } answered
                 ? Observable.Return(answered)
-                : Observable.Timer(budget, scheduler).Select(_ =>
+                : Observable.Timer(budget, scheduler).SelectMany(_ =>
                 {
                     onStalled?.Invoke();
-                    return false;
+                    return stalledIsUndecided
+                        ? Observable.Throw<bool>(new TimeoutException(
+                            $"the ownership re-check did not answer within {budget}"))
+                        : Observable.Return(false);
                 }))
             .Switch()
             .DistinctUntilChanged();

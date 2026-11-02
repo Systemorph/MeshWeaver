@@ -149,6 +149,35 @@ public class DeclaredReadLiveInputsTest
         Assert.Equal(1, stalls);
     }
 
+    /// <summary>
+    /// MeshWeaver#7825, review of #7832: for a seam that FOLLOWS an admitted read, an established
+    /// ownership whose re-check stalls is NO VERDICT — an error on the decision, which the follow ends
+    /// the read with as "could not be checked" — never the decided <c>false</c> that it would report
+    /// as a denial. The decision held until the deadline is unchanged. The test above is the negative
+    /// control: the same stall without the flag still answers <c>false</c>.
+    /// </summary>
+    [Fact]
+    public void A_stalled_ownership_reread_of_an_established_declaration_is_undecided_for_a_follow()
+    {
+        var scheduler = new TestScheduler();
+        var changed = new Subject<Unit>();
+        var answers = ImmutableArray.Create(Observable.Return(true).Concat(Observable.Never<bool>()), Observable.Never<bool>());
+        var reads = 0;
+        var seen = ImmutableList<bool>.Empty;
+        Exception? ended = null;
+        using var _ = DeclaredPointRead.FollowOwnership(changed, () => answers[reads++], Budget, scheduler, stalledIsUndecided: true)
+            .Subscribe(v => seen = seen.Add(v), ex => ended = ex);
+
+        changed.OnNext(Unit.Default);
+        scheduler.AdvanceBy(Budget.Ticks - 1);
+        Assert.Equal(new[] { true }, seen);
+        Assert.Null(ended);
+
+        scheduler.AdvanceBy(1);
+        Assert.Equal(new[] { true }, seen);
+        Assert.IsType<TimeoutException>(ended);
+    }
+
     [Fact]
     public void Signals_replacing_a_stalled_reread_inside_the_budget_do_not_restart_its_deadline()
     {

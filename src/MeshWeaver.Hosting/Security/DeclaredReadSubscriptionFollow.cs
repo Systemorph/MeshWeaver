@@ -281,11 +281,13 @@ public static class DeclaredReadSubscriptionFollow
     private static IObservable<bool> DeclaredRead(
         IMessageHub owner, string hubPath, AccessContext caller, PointReadRequest shape, object? revision, ILogger? logger)
     {
-        var ownerCurrent = DeclaredPointRead.Admits(owner, hubPath, caller, shape.Area);
+        // The OrUndecided variants: a lookup fault or a stalled ownership re-check is NO VERDICT
+        // here, never a denial (MeshWeaver#7825, review of #7832).
+        var ownerCurrent = DeclaredPointRead.AdmitsOrUndecided(owner, hubPath, caller, shape.Area);
         if (shape.Area is not null)
             return ownerCurrent;
         return revision.As<MeshNode>(owner.JsonSerializerOptions, logger, hubPath) is { } node
-            ? DeclaredPointRead.AdmitsRevision(owner, node, caller)
+            ? DeclaredPointRead.AdmitsRevisionOrUndecided(owner, node, caller)
                 .CombineLatest(ownerCurrent, (thisRevision, current) => thisRevision && current)
             : Observable.Return(false);
     }

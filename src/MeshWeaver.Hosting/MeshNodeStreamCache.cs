@@ -2632,8 +2632,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             var budget = (meshHub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
                 .PermissionEstablishmentBudget;
             return shared.AdmitEachRevision(
-                revision => DeclaredPointRead.AdmitsRevision(meshHub, revision, captured)
-                    .CombineLatest(DeclaredPointRead.Admits(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
+                revision => DeclaredPointRead.AdmitsRevisionOrUndecided(meshHub, revision, captured)
+                    .CombineLatest(DeclaredPointRead.AdmitsOrUndecided(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
                 budget,
                 () => new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'"),
                 cause => ReadVerdict.NoVerdict($"user '{captured.ObjectId}' may keep reading '{path}'", cause));
@@ -2766,8 +2766,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         inputs.Saw(revision);
                         return DeclaredReadSubscriptionFollow.VerdictOf(
                             StandingReadOf(standing, revision, captured),
-                            () => DeclaredPointRead.AdmitsRevision(meshHub, revision, captured)
-                                .CombineLatest(DeclaredPointRead.Admits(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
+                            () => DeclaredPointRead.AdmitsRevisionOrUndecided(meshHub, revision, captured)
+                                .CombineLatest(DeclaredPointRead.AdmitsOrUndecided(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
                             budget,
                             Scheduler.Default);
                     },
