@@ -71,7 +71,7 @@ Controls.Stack
     .WithView(Controls.Icon(FluentIcons.Warning())
         .WithStyle("color: var(--warning, orange);"))
     .WithView(Controls.Icon(FluentIcons.Info())
-        .WithStyle("color: var(--accent-fill-rest);"))
+        .WithStyle("color: var(--mw-accent-text);"))
     .WithView(Controls.Icon(FluentIcons.Star()))
 ```
 
