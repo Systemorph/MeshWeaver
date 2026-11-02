@@ -80,7 +80,9 @@ public class StandingReadPendingTest
         var standing = new Subject<PermissionCheckOutcome?>();
         var declaration = new Subject<bool>();
         var verdicts = ImmutableList<bool>.Empty;
-        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration, Budget, new TestScheduler()).Subscribe(v => verdicts = verdicts.Add(v));
+        Exception? ended = null;
+        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration, Budget, new TestScheduler())
+            .Subscribe(v => verdicts = verdicts.Add(v), ex => ended = ex);
 
         standing.OnNext(PermissionCheckOutcome.Denied);
         Assert.True(declaration.HasObservers, "a definitive denial hands the decision to the declaration");
@@ -91,7 +93,9 @@ public class StandingReadPendingTest
         Assert.Empty(verdicts);
 
         standing.OnNext(PermissionCheckOutcome.Undetermined("stalled"));
-        Assert.Equal(new[] { false }, verdicts);
+        Assert.Empty(verdicts);
+        Assert.NotNull(ended);
+        Assert.Contains("stalled", ended!.Message);
     }
 
     [Fact]
@@ -141,8 +145,9 @@ public class StandingReadPendingTest
         var standing = new Subject<PermissionCheckOutcome?>();
         var declaration = new Subject<bool>();
         var verdicts = ImmutableList<bool>.Empty;
+        Exception? ended = null;
         using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration, Budget, scheduler)
-            .Subscribe(v => verdicts = verdicts.Add(v));
+            .Subscribe(v => verdicts = verdicts.Add(v), ex => ended = ex);
 
         standing.OnNext(PermissionCheckOutcome.Granted);
         standing.OnNext(null);
@@ -152,7 +157,9 @@ public class StandingReadPendingTest
         Assert.Equal(new[] { true }, verdicts);
 
         scheduler.AdvanceBy(2);
-        Assert.Equal(new[] { true, false }, verdicts);
+        // Ended — but as NO VERDICT (an error), never as a decided `false` (MeshWeaver#7825).
+        Assert.Equal(new[] { true }, verdicts);
+        Assert.IsType<TimeoutException>(ended);
         Assert.False(declaration.HasObservers, "the stalled check is released once it is refused");
     }
 
@@ -179,16 +186,18 @@ public class StandingReadPendingTest
     }
 
     [Fact]
-    public void A_declaration_check_that_completes_without_an_answer_is_a_refusal()
+    public void A_declaration_check_that_completes_without_an_answer_ends_the_read_as_no_verdict()
     {
         var scheduler = new TestScheduler();
         var standing = new Subject<PermissionCheckOutcome?>();
         var verdicts = ImmutableList<bool>.Empty;
+        Exception? ended = null;
         using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, Observable.Empty<bool>, Budget, scheduler)
-            .Subscribe(v => verdicts = verdicts.Add(v));
+            .Subscribe(v => verdicts = verdicts.Add(v), ex => ended = ex);
 
         standing.OnNext(PermissionCheckOutcome.Denied);
-        Assert.Equal(new[] { false }, verdicts);
+        Assert.Empty(verdicts);
+        Assert.NotNull(ended);
     }
 
     [Fact]
@@ -202,8 +211,9 @@ public class StandingReadPendingTest
         var standing = new Subject<PermissionCheckOutcome?>();
         var declaration = new Subject<bool>();
         var verdicts = ImmutableList<bool>.Empty;
+        Exception? ended = null;
         using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration, Budget, scheduler)
-            .Subscribe(v => verdicts = verdicts.Add(v));
+            .Subscribe(v => verdicts = verdicts.Add(v), ex => ended = ex);
 
         standing.OnNext(PermissionCheckOutcome.Granted);
         for (var i = 0; i < 3; i++)
@@ -213,8 +223,10 @@ public class StandingReadPendingTest
             standing.OnNext(null);
             scheduler.AdvanceBy(TimeSpan.FromSeconds(2).Ticks);
         }
-        // 12 s into the transition, no single selection lasted longer than 2 s.
-        Assert.Equal(new[] { true, false }, verdicts);
+        // 12 s into the transition, no single selection lasted longer than 2 s — ended at the shared
+        // deadline, as NO VERDICT (MeshWeaver#7825).
+        Assert.Equal(new[] { true }, verdicts);
+        Assert.IsType<TimeoutException>(ended);
     }
 
     [Fact]

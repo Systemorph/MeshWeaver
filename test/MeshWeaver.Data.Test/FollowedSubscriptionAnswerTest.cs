@@ -107,7 +107,7 @@ public class FollowedSubscriptionAnswerTest(ITestOutputHelper output) : HubTestB
 }
 
 /// <summary>
-/// <see cref="RevisionAdmission.AdmitEachRevision{T}"/>'s hand-over (review of #7016, thread
+/// <see cref="RevisionAdmission"/>.<c>AdmitEachRevision</c>'s hand-over (review of #7016, thread
 /// 4336475629): an admitted revision stays followed until a NEWER revision is admitted, so a
 /// withdrawal while the next revision's first verdict is still pending ends the sequence at once.
 /// </summary>

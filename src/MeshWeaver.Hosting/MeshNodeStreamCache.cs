@@ -2599,7 +2599,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             .SelectMany(probe => probe.Permissions.HasFlag(Permission.Read)
                 ? FollowStandingRead(path, captured, shared)
                 : probe.Undetermined
-                    ? GateOnRead(probe.Permissions, shared, path, captured)
+                    // NO VERDICT is refused, never reported as a denial (MeshWeaver#7825).
+                    ? Observable.Throw<MeshNode>(ReadVerdict.NoVerdict(
+                        $"user '{captured.ObjectId}' may read '{path}'", null))
                     : AdmittedThroughDeclaration(path, captured, shared))
             .CarryAccessContext(accessService);
     }
@@ -2618,7 +2620,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// that ENDS the admission — a revocation stamp, a narrowed audience — reached the caller before
     /// the verdict could turn: for a stored type the declaration is looked up asynchronously, and the
     /// verdict only follows the node after the revision exists. Now every revision waits for its own
-    /// verdict (<see cref="RevisionAdmission.AdmitEachRevision{T}"/>): the declaration decided on that
+    /// verdict (<see cref="RevisionAdmission"/>.<c>AdmitEachRevision</c>): the declaration decided on that
     /// revision's content (<see cref="DeclaredPointRead.AdmitsRevision"/>) AND the live verdict from the
     /// owner's current state (<see cref="DeclaredPointRead.Admits"/>), so neither a lagging mirror nor
     /// a revoking revision is delivered. Nothing is dropped or reordered; a refused revision ends the
@@ -2630,10 +2632,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             var budget = (meshHub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
                 .PermissionEstablishmentBudget;
             return shared.AdmitEachRevision(
-                revision => DeclaredPointRead.AdmitsRevision(meshHub, revision, captured)
-                    .CombineLatest(DeclaredPointRead.Admits(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
+                revision => DeclaredPointRead.AdmitsRevisionOrUndecided(meshHub, revision, captured)
+                    .CombineLatest(DeclaredPointRead.AdmitsOrUndecided(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
                 budget,
-                () => new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'"));
+                () => new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'"),
+                cause => ReadVerdict.NoVerdict($"user '{captured.ObjectId}' may keep reading '{path}'", cause));
         });
 
     /// <summary>
@@ -2642,7 +2645,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// owner-side subscription). The gate's own decision — the permission fold, else the type's read
     /// rule (<see cref="ProbeEffectivePermissions"/>) — is RE-TAKEN whenever one of its inputs may have
     /// moved, and every revision is forwarded only once the live verdict admits it
-    /// (<see cref="RevisionAdmission.AdmitEachRevision{T}"/>).
+    /// (<see cref="RevisionAdmission"/>.<c>AdmitEachRevision</c>).
     ///
     /// <list type="bullet">
     ///   <item><description><b>What re-decides it — signals, never a timer.</b> A committed snapshot of
@@ -2763,13 +2766,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         inputs.Saw(revision);
                         return DeclaredReadSubscriptionFollow.VerdictOf(
                             StandingReadOf(standing, revision, captured),
-                            () => DeclaredPointRead.AdmitsRevision(meshHub, revision, captured)
-                                .CombineLatest(DeclaredPointRead.Admits(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
+                            () => DeclaredPointRead.AdmitsRevisionOrUndecided(meshHub, revision, captured)
+                                .CombineLatest(DeclaredPointRead.AdmitsOrUndecided(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
                             budget,
                             Scheduler.Default);
                     },
                     budget,
-                    () => new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'"))
+                    () => new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'"),
+                    // A re-check that stalled, faulted or lost its signals reached NO verdict
+                    // (MeshWeaver#7825) — the read ends, but not as withdrawn rights.
+                    cause => ReadVerdict.NoVerdict($"user '{captured.ObjectId}' may keep reading '{path}'", cause))
                 .Finally(lifetime.Dispose);
         });
 
