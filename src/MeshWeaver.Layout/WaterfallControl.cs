@@ -215,7 +215,9 @@ public record WaterfallControl(object Steps)
             if (step.Amount != 0 && height < sliver)
             {
                 var anchor = Percent(from);
-                if (to > from)
+                // The DIRECTION is the step's sign, never `to > from`: at large magnitudes double
+                // rounding can make from == to for a small non-zero delta (1e16 − 5e15 + 0.25).
+                if (step.Amount > 0)
                 {
                     bottom = anchor;
                     height = Math.Min(sliver, 100 - anchor);

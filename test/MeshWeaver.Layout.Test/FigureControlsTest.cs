@@ -174,6 +174,13 @@ public class FigureControlsTest(ITestOutputHelper output) : HubTestBase(output)
         result.BottomPercent.Should().BeGreaterThanOrEqualTo(0);
         result.Tone.Should().Be(WaterfallTone.ResultNegative);
 
+        // At large magnitudes rounding makes from == to; the sliver still follows the SIGN of the step.
+        var rounded = WaterfallControl.Layout([WaterfallStep.Total("Big", 1e16), WaterfallStep.Delta("Half", -5e15), WaterfallStep.Delta("Crumb", 0.25)])!;
+        var crumb = rounded.Bars[2];
+        crumb.Tone.Should().Be(WaterfallTone.Increase);
+        crumb.BottomPercent.Should().BeApproximately(50, 1e-9, because: "a positive crumb grows UP from the running level at 50 %");
+        crumb.HeightPercent.Should().BeGreaterThan(0);
+
         var tinyRise = WaterfallControl.Layout([WaterfallStep.Total("Base", 1_000_000), WaterfallStep.Delta("Fee", 1)])!;
         tinyRise.Bars[1].BottomPercent.Should().BeApproximately(1_000_000 / 1_000_001.0 * 100, 1e-6,
             because: "a tiny rise grows upward from the running level");
