@@ -692,6 +692,36 @@ the production `PersistenceService` feed actually meets this interleaving. The C
 first test of a fresh process each time. A cold process widens the window, but that is an inference
 from where they ran, not a measurement.
 
+### A drain delivers only what was queued when it began (#7277)
+
+The first version of the emitter made the drain a thread HIJACK. Whichever thread took the drain went
+on delivering every frame other threads queued while it was busy, for as long as they kept arriving.
+The thread that most often takes the first drain is the Query pool's setup leaf
+(`IoPool.SubscribeThroughPool`). When a provider answers its Initial synchronously, the merged Initial
+is completed inside `source.Subscribe`, so the setup leaf delivers it. That part is by design. Under
+the old rule the setup leaf then went on delivering the live change feed. It was still counted as an
+in-flight leaf and still held a Query-pool permit. A consumer that writes in response to a frame feeds
+its own change straight back into the queue, so the leaf could stay in flight indefinitely. A silo
+stop's 30 s join then expired over it:
+`Did NOT report: Query=1`, naming an `Observable.Using` over `MeshQuery+QueryMembers`. The emitter landed the day before the
+first occurrence.
+
+Now a drain delivers at most the frames that were queued when it took the drain, its own frame
+included. Frames queued after that are handed to the task pool, which drains the next batch by the
+same rule. The draining flag stays taken across the hand-off, so order is unchanged and no producer
+can overtake. No producer's thread outlives its own frame. If the consumer throws during a handed-off
+batch, there is no caller to fault, so `MeshQuery` logs the exception at Error.
+
+`QuerySetupLeafDrainTest` (`test/MeshWeaver.Hosting.Test`) pins it with a real `IoPool`. The consumer
+answers the synchronous Initial by queueing a live frame, then parks inside that live frame. The pool's
+in-flight count must fall to 0 while the consumer is parked. Without the hand-off, the setup leaf is
+the parked thread and the count stays at 1.
+
+**Not established.** This is the only mechanism found by which the named leaf stays in flight without
+anything blocking. Nobody has read a stack of the production leaf. A consumer that blocks inside its
+handling of the Initial itself still runs on the setup leaf. That is by design, and the per-leaf stack
+capture in [Controlled IO Pooling](../ControlledIoPooling) names such a consumer if it happens.
+
 ## See also
 
 - [Access Control](../AccessControl) → "The fold can produce NO answer, and that is a third outcome",

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive;
+using System.Reactive.Concurrency;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
 
@@ -27,14 +28,43 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// enqueue happens under the gate. A frame produced re-entrantly by the observer itself is queued and
 /// delivered after the one being handled, instead of nested inside it (Rx forbids the nesting).</para>
 ///
+/// <para>🚨 <b>A drainer delivers only what was queued when it took the drain — never the stream's
+/// future</b> (MeshWeaver#7277). "Whoever drains delivers everything" made the drain a thread
+/// HIJACK: the thread that happened to deliver a frame went on delivering every frame any other
+/// thread queued while it was busy, for as long as they kept coming. The thread that most often takes
+/// the first drain is the Query pool's SETUP LEAF (<c>IoPool.SubscribeThroughPool</c>): a provider that
+/// answers its Initial synchronously completes the merged Initial inside <c>source.Subscribe</c>, so the
+/// setup leaf delivers it — by design — and then, under the old rule, went on delivering the LIVE
+/// change feed while still counted as an in-flight leaf holding a Query-pool permit. A consumer that
+/// writes in response to a frame feeds its own change straight back into that queue, so the leaf
+/// could hold its permit indefinitely, and a silo stop's 30 s join expired over it:
+/// <c>Did NOT report: Query=1 [Using`2[… MeshQuery+QueryMembers]]</c>. Now a drain delivers at most
+/// the frames queued up to the moment it took the drain (its own frame included) and hands the rest
+/// to <paramref name="handOff"/>, which drains the next batch the same way. Order is unchanged — the
+/// draining flag stays taken across the hand-off — and no producer's thread outlives its own frame.</para>
+///
 /// <para>The one lock here guards the queue and the draining flag only and is never held while the
 /// observer runs. Instance state of one subscription; nothing static.</para>
 /// </summary>
 /// <typeparam name="TItem">The frame type.</typeparam>
-internal sealed class GateFreeEmitter<TItem>(IObserver<TItem> observer)
+/// <param name="observer">The merge's consumer.</param>
+/// <param name="handOff">Where a batch queued by OTHER threads during a drain is delivered; the task
+/// pool when null.</param>
+/// <param name="reportHandOffFault">Where an exception the observer throws during a HANDED-OFF batch is
+/// reported. That batch runs on a scheduler thread with no caller to fault, so the exception would
+/// otherwise be unhandled on it; when null it is rethrown there, exactly as an Rx scheduler would.</param>
+internal sealed class GateFreeEmitter<TItem>(
+    IObserver<TItem> observer,
+    IScheduler? handOff = null,
+    Action<Exception>? reportHandOffFault = null)
 {
     private readonly object queueLock = new();
+    private readonly IScheduler handOffScheduler = handOff ?? TaskPoolScheduler.Default;
     private ImmutableQueue<Notification<TItem>> pending = ImmutableQueue<Notification<TItem>>.Empty;
+    // Sequence numbers of the last frame queued and the last frame delivered; a drain's batch ends at
+    // the `enqueued` it read when it took the drain.
+    private long enqueued;
+    private long delivered;
     private bool draining;
 
     /// <summary>Queues a frame. Call under the merge's gate.</summary>
@@ -49,22 +79,33 @@ internal sealed class GateFreeEmitter<TItem>(IObserver<TItem> observer)
     private void Enqueue(Notification<TItem> notification)
     {
         lock (queueLock)
+        {
             pending = pending.Enqueue(notification);
+            enqueued++;
+        }
     }
 
     /// <summary>
-    /// Delivers every queued frame, unless another thread is already doing so — then that thread
-    /// delivers this caller's frames too, and this call returns at once. Call with the merge's gate
-    /// RELEASED.
+    /// Delivers the frames queued so far, unless another thread is already doing so — then that
+    /// drain delivers this caller's frames too, and this call returns at once. Frames other threads
+    /// queue while this drain runs are handed off, never delivered on this thread. Call with the
+    /// merge's gate RELEASED.
     /// </summary>
     public void Drain()
     {
+        long limit;
         lock (queueLock)
         {
             if (draining)
                 return;
             draining = true;
+            limit = enqueued;
         }
+        DeliverBatch(limit);
+    }
+
+    private void DeliverBatch(long limit)
+    {
         try
         {
             while (true)
@@ -77,7 +118,16 @@ internal sealed class GateFreeEmitter<TItem>(IObserver<TItem> observer)
                         draining = false;
                         return;
                     }
+                    if (delivered >= limit)
+                    {
+                        // Queued by other threads (or re-entrantly by the observer) after this drain
+                        // began: the next batch is delivered off this thread. `draining` stays taken,
+                        // so no producer can overtake it and order is preserved.
+                        handOffScheduler.Schedule(DrainHandedOff);
+                        return;
+                    }
                     pending = pending.Dequeue(out next);
+                    delivered++;
                 }
                 next.Accept(observer);
             }
@@ -89,6 +139,21 @@ internal sealed class GateFreeEmitter<TItem>(IObserver<TItem> observer)
             lock (queueLock)
                 draining = false;
             throw;
+        }
+    }
+
+    private void DrainHandedOff()
+    {
+        long limit;
+        lock (queueLock)
+            limit = enqueued;
+        try
+        {
+            DeliverBatch(limit);
+        }
+        catch (Exception fault) when (reportHandOffFault is not null)
+        {
+            reportHandOffFault(fault);
         }
     }
 }
