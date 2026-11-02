@@ -57,7 +57,20 @@ public enum MeshSearchRenderMode
     /// result columns), so no per-result content read or hub activation happens. Appended last:
     /// enum members serialize by NAME, but the ordinal must stay stable for older rows.
     /// </summary>
-    Icons
+    Icons,
+
+    /// <summary>
+    /// A TABLE: one row per result, one column per <see cref="MeshSearchColumn"/>
+    /// (<see cref="MeshSearchControl.Columns"/>, or the active scope's
+    /// <see cref="MeshSearchScopeTab.Columns"/>), each cell read off the node by the column's selector
+    /// (<c>name</c>, <c>content.receivedOn</c>). Clicking a header sorts in the STORE: the view appends
+    /// <see cref="MeshSearchColumnSort.Term"/> to the query it sends (ascending first, a second click
+    /// flips it), and the header shows the active order. Clicking a row opens the result exactly like
+    /// a <see cref="List"/> row. Scope tabs, the search box, the per-scope hidden queries and the
+    /// Sort-by dropdown keep working; picking a Sort-by option clears the header sort, so the option's
+    /// own order applies again. Appended last to keep the ordinals stable.
+    /// </summary>
+    Table
 }
 
 /// <summary>
@@ -153,6 +166,12 @@ public record MeshSearchScopeTab(string Label, string Query)
     /// them as a SORT KEY. Ordering arrives with that snapshot, after the tiles have painted.</para>
     /// </summary>
     public bool SortByAccess { get; init; }
+
+    /// <summary>
+    /// The <see cref="MeshSearchRenderMode.Table"/> columns while this scope is active, REPLACING the
+    /// control-level <see cref="MeshSearchControl.Columns"/>. Null keeps the control-level set.
+    /// </summary>
+    public IReadOnlyList<MeshSearchColumn>? Columns { get; init; }
 }
 
 /// <summary>
@@ -239,6 +258,14 @@ public record MeshSearchControl()
     /// <see cref="HiddenQuery"/>. Null/empty ⇒ no sort dropdown (unchanged behaviour).
     /// </summary>
     public IReadOnlyList<MeshSearchSortOption>? SortOptions { get; init; }
+
+    /// <summary>
+    /// The columns of the <see cref="MeshSearchRenderMode.Table"/> render mode, left to right (see
+    /// <see cref="MeshSearchColumn"/>). An active scope's own <see cref="MeshSearchScopeTab.Columns"/>
+    /// replace these. Ignored by every other render mode; a Table with no columns shows one Name
+    /// column.
+    /// </summary>
+    public IReadOnlyList<MeshSearchColumn>? Columns { get; init; }
 
     /// <summary>
     /// Scope tabs rendered as a strip above the search header (see
@@ -425,7 +452,7 @@ public record MeshSearchControl()
     /// <param name="ns">The namespace path.</param>
     public MeshSearchControl WithNamespace(string ns) => this with { Namespace = ns };
     /// <summary>Returns a copy with <paramref name="mode"/> as its render mode.</summary>
-    /// <param name="mode">One of Flat, Hierarchical, Grouped, NamespaceTree, or GraphNavigator.</param>
+    /// <param name="mode">One of Flat, List, Hierarchical, Grouped, NamespaceTree, GraphNavigator, Icons, or Table.</param>
     public MeshSearchControl WithRenderMode(MeshSearchRenderMode mode) => this with { RenderMode = mode };
     /// <summary>Returns a copy with <paramref name="columns"/> as the maximum grid column count.</summary>
     /// <param name="columns">Maximum number of grid columns; default 3.</param>
@@ -498,6 +525,13 @@ public record MeshSearchControl()
     /// <param name="options">The user-selectable sort choices; the first is the default and should match <see cref="HiddenQuery"/>.</param>
     public MeshSearchControl WithSortOptions(params MeshSearchSortOption[] options) =>
         this with { SortOptions = options };
+
+    /// <summary>Returns a copy with the <see cref="MeshSearchRenderMode.Table"/> columns set (see <see cref="Columns"/>).</summary>
+    /// <param name="columns">The columns, left to right; each names a header title and the selector its cells read.</param>
+    public MeshSearchControl WithColumns(params MeshSearchColumn[] columns) =>
+        // A snapshot, never the caller's array: replacing an element afterwards must not reach
+        // back into a control value that has already been built.
+        this with { Columns = System.Collections.Immutable.ImmutableArray.Create(columns) };
 
     /// <summary>Returns a copy with the scope-tab strip set (see <see cref="ScopeTabs"/>).</summary>
     /// <param name="tabs">The scopes; the first is initially active and should match <see cref="HiddenQuery"/>.</param>
