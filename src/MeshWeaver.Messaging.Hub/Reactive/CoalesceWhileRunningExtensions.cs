@@ -61,10 +61,22 @@ public static class CoalesceWhileRunningExtensions
                         if (stopped) return;
                     var completedSynchronously = false;
                     var inStart = true;
-                    IDisposable subscription;
+                    // 🚨 The run's slot is INSTALLED BEFORE the run is subscribed (MeshWeaver#7372).
+                    // It used to be the subscription, assigned to `current` AFTER Subscribe returned.
+                    // A run can complete on another thread before that — and with nothing pending its
+                    // completion leaves the pipeline idle, so a NEW trigger may start the next run and
+                    // install it first. The late assignment then replaced (and so DISPOSED) the run in
+                    // flight: its answer was dropped, its completion never came, `running` stayed true,
+                    // and every later trigger only marked a follow-up nobody started — a live query
+                    // frozen for good, silently. Installed first, a slot can only ever be replaced by a
+                    // run that started after this one completed (`running` orders them under `gate`),
+                    // and a slot replaced before its subscription arrives disposes that subscription on
+                    // assignment, which is harmless: its run has already completed.
+                    var slot = new SingleAssignmentDisposable();
+                    current.Disposable = slot;
                     try
                     {
-                        subscription = run().Subscribe(
+                        slot.Disposable = run().Subscribe(
                             item =>
                             {
                                 lock (gate)
@@ -114,7 +126,6 @@ public static class CoalesceWhileRunningExtensions
                         observer.OnError(ex);
                         return;
                     }
-                    current.Disposable = subscription;
                     lock (gate)
                     {
                         inStart = false;

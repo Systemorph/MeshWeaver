@@ -211,4 +211,92 @@ public class LiveRequeryCoalescingTest
                 cancellationToken: ct);
         Volatile.Read(ref runs).Should().Be(2);
     }
+
+    /// <summary>
+    /// 🚨 MeshWeaver#7372 (recurrence). A run that completes on another thread before its
+    /// <c>Subscribe</c> has returned, with NO follow-up pending at that moment — and then a NEW
+    /// trigger, which finds the pipeline idle and starts the next run on its own thread. The first
+    /// run's starting thread then resumes and installs ITS subscription as the current one. The
+    /// pipeline used to hold the current run in a <c>SerialDisposable</c> assigned AFTER
+    /// <c>Subscribe</c> returned, so that late assignment DISPOSED the second run: its answer was
+    /// dropped and its completion never arrived, so the pipeline stayed "running" for the life of
+    /// the subscription and every later trigger only marked a follow-up that never started.
+    ///
+    /// <para>On a live query that is a frozen result set with no error and no log line. It is the
+    /// shape of the Education install failure: the partition's <c>$security-access</c> fold input
+    /// re-ran for the gating pass's policy write, the Public/Anonymous grants landed a few hundred
+    /// milliseconds later, and the fold never saw them — <c>whoami</c> answered no permissions for
+    /// 21 minutes while the store and every fresh query held both grants.</para>
+    ///
+    /// <para>The interleaving is forced, not raced: run 1's completion and the second trigger both
+    /// happen on a helper thread that is joined BEFORE run 1's <c>Subscribe</c> returns. Run 2
+    /// answers only after setup, so whether its subscription survived decides the outcome. The
+    /// negative control is the third trigger: on the defect no third run ever starts.</para>
+    /// </summary>
+    [Fact]
+    public async Task ARunStartedByANewTrigger_WhileTheFinishedRunIsStillBeingInstalled_IsNeverDisposedByIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var triggers = new Subject<Unit>();
+        var runs = 0;
+        IObserver<int>? secondRun = null;
+        var secondRunDisposed = 0;
+        var secondAnswered = new AsyncSubject<int>();
+        var thirdStarted = new AsyncSubject<int>();
+
+        var output = triggers.CoalesceWhileRunning(() => Observable.Create<int>(observer =>
+        {
+            var run = Interlocked.Increment(ref runs);
+            switch (run)
+            {
+                case 1:
+                    // Run 1 answers and completes on ANOTHER thread with nothing pending, and a NEW
+                    // trigger then arrives on that thread — all strictly before this Subscribe returns.
+                    var other = new Thread(() =>
+                    {
+                        observer.OnNext(1);
+                        observer.OnCompleted();
+                        triggers.OnNext(Unit.Default);
+                    }) { IsBackground = true };
+                    other.Start();
+                    other.Join(TestTimeouts.Convergence);
+                    return System.Reactive.Disposables.Disposable.Empty;
+                case 2:
+                    // Run 2 is a read still in flight: it answers later, from the test.
+                    secondRun = observer;
+                    return System.Reactive.Disposables.Disposable.Create(
+                        () => Interlocked.Exchange(ref secondRunDisposed, 1));
+                default:
+                    thirdStarted.OnNext(run);
+                    thirdStarted.OnCompleted();
+                    observer.OnNext(run);
+                    observer.OnCompleted();
+                    return System.Reactive.Disposables.Disposable.Empty;
+            }
+        }));
+
+        using var subscription = output.Subscribe(value =>
+        {
+            if (value != 2) return;
+            secondAnswered.OnNext(value);
+            secondAnswered.OnCompleted();
+        });
+        triggers.OnNext(Unit.Default);
+
+        Volatile.Read(ref runs).Should().Be(2, "the new trigger found the pipeline idle and started run 2");
+        Volatile.Read(ref secondRunDisposed).Should().Be(0,
+            "nothing disposed the output, so nothing may dispose the run in flight — installing the "
+            + "finished run 1 as the current run must not tear down run 2");
+
+        secondRun!.OnNext(2);
+        secondRun.OnCompleted();
+        await secondAnswered.Should().Within(TestTimeouts.Convergence)
+            .Emit("run 2's answer was dropped: its subscription was disposed by run 1's late install",
+                cancellationToken: ct);
+
+        triggers.OnNext(Unit.Default);
+        await thirdStarted.Should().Within(TestTimeouts.Convergence)
+            .Emit("the pipeline stayed 'running' forever — a later trigger never starts a run",
+                cancellationToken: ct);
+    }
 }
