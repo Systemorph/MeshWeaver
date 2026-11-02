@@ -233,11 +233,45 @@ internal static class UiContributionProjection
         MeshNode? userNode,
         bool isAdmin,
         string? viewerId)
+        => ProjectUserHomeAreas(UiContribution.InboxContext, contributions, userPath, userNode, isAdmin, viewerId);
+
+    /// <summary>
+    /// Projects the catalog's <see cref="UiContribution.HomeContext"/> entries into the cards the START PAGE of the
+    /// user at <paramref name="userPath"/> embeds under its heading — exactly the rules of
+    /// <see cref="ProjectInboxAreas"/> (node-shape gates against the user node, held back while it is unknown; the
+    /// partition rule; the permission floor for <see cref="FilterInboxAreas"/>; a URL-safe id per contribution
+    /// path). Pure.
+    /// </summary>
+    /// <param name="contributions">The catalog snapshot.</param>
+    /// <param name="userPath">The home's user node.</param>
+    /// <param name="userNode">That node, or null while it loads.</param>
+    /// <param name="isAdmin">Whether the viewer is a platform admin.</param>
+    /// <param name="viewerId">The viewer's id, for the viewer-home gate.</param>
+    public static IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> ProjectHomeAreas(
+        IReadOnlyList<(MeshNode Node, UiContribution Content)> contributions,
+        string userPath,
+        MeshNode? userNode,
+        bool isAdmin,
+        string? viewerId)
+        // 🚨 A SyncedOnly entry never shows on the start page. The home's sync state is DATA (the user node's
+        // SyncBehavior) that the start page does not wait for — the cards are a template — so the lane
+        // narrows instead of guessing: a gate it cannot decide hides the entry, never widens it.
+        => ProjectUserHomeAreas(UiContribution.HomeContext,
+            [.. contributions.Where(c => c.Content.Gates?.SyncedOnly != true)], userPath, userNode, isAdmin, viewerId);
+
+    /// <summary>The shared projection of an EMBEDDING context anchored on a user node (Inbox, Home). Pure.</summary>
+    private static IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> ProjectUserHomeAreas(
+        string context,
+        IReadOnlyList<(MeshNode Node, UiContribution Content)> contributions,
+        string userPath,
+        MeshNode? userNode,
+        bool isAdmin,
+        string? viewerId)
     {
         var areas = new List<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)>();
         foreach (var (node, contribution) in contributions)
         {
-            if (contribution.Context != UiContribution.InboxContext)
+            if (contribution.Context != context)
                 continue;
             if (contribution.Area is not { Length: > 0 } area)
                 continue;
@@ -260,6 +294,15 @@ internal static class UiContributionProjection
     public static IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> FilterInboxAreas(
         IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> areas, Permission permissions)
         => [.. areas.Where(a => permissions.HasFlag(a.RequiredPermission))];
+
+    /// <summary>The projected start-page cards the viewer may see: Read on the user node ALWAYS, plus whatever
+    /// the contribution declares on top — a permission set holding the declared mask but not Read (Sync alone,
+    /// say) shows nothing. Pure.</summary>
+    /// <param name="areas">The projected cards.</param>
+    /// <param name="permissions">The viewer's effective permissions on the user node.</param>
+    public static IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> FilterHomeAreas(
+        IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)> areas, Permission permissions)
+        => permissions.HasFlag(Permission.Read) ? FilterInboxAreas(areas, permissions) : [];
 
     /// <summary>Whether <paramref name="gates"/> can only be decided on the anchoring node's SHAPE. Pure.</summary>
     private static bool NeedsNodeShape(UiContributionGates? gates)
