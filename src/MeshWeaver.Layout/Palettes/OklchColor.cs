@@ -94,10 +94,14 @@ public readonly record struct OklchColor(double L, double C, double H)
     public static OklchColor FromHex(string hex)
     {
         ArgumentNullException.ThrowIfNull(hex);
-        var s = hex.Trim().TrimStart('#');
+        // At most ONE optional '#', and digits only: AllowHexSpecifier admits no sign or inner
+        // whitespace, so '##123456' and '# 12345' are refused rather than read as a colour.
+        var s = hex.Trim();
+        if (s.StartsWith('#'))
+            s = s[1..];
         if (s.Length == 3)
             s = string.Concat(s[0], s[0], s[1], s[1], s[2], s[2]);
-        if (s.Length != 6 || !int.TryParse(s, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rgb))
+        if (s.Length != 6 || !int.TryParse(s, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var rgb))
             throw new FormatException($"'{hex}' is not a #rgb or #rrggbb colour.");
         return FromSrgb(((rgb >> 16) & 0xff) / 255.0, ((rgb >> 8) & 0xff) / 255.0, (rgb & 0xff) / 255.0);
     }

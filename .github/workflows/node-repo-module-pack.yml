@@ -1011,6 +1011,16 @@ on:
           copy of the catalog — a copy drifts, and MeshWeaver.Plugins refuses a second `modules:`
           list in its ci.yml outright (#3732). MeshWeaver#3878.
         value: ${{ jobs.select.outputs.declared }}
+      publication-plan:
+        description: >
+          THE PUBLICATION PLAN (MeshWeaver.Plugins#4478, slice 3): for every SELECTED module, whether this
+          run owes its hand-over and, if not, why — the pack leg's own `need_publish` predicate
+          (`publish`, `publish-withhold`, a reuse annotation, the ledger), decided ONCE here in `select`
+          by module-publication.py `plan`. A `staged` caller passes it to build-host-publication.yml
+          (`plan`), which applies it to a build host's catalog-wide records, and to
+          node-repo-module-publish.yml (`plan`), which refuses any staged record whose `owed` disagrees —
+          on an Actions run too, so the restated predicate is proven before a host depends on it.
+        value: ${{ jobs.select.outputs.publication-plan }}
 
 jobs:
   # ─────────────────────── WHICH BUNDLES THIS DIFF CAN REACH ───────────────────────
@@ -1076,6 +1086,8 @@ jobs:
       # The matrix as GIVEN, for the workflow's `declared` output — never the selection above, which a
       # narrowed run shrinks; the publication lane's set-aside check needs the whole catalog.
       declared: ${{ inputs.modules }}
+      # What this run owes the registry, per selected module (the `publication-plan` workflow output).
+      publication-plan: ${{ steps.publication-plan.outputs.json }}
     steps:
       # ───────────── THIS CALL'S ARTIFACT NAMESPACE — derived, never assumed ─────────────
       # 🚨 ARTIFACTS ARE RUN-WIDE. A repo may invoke this reusable workflow more than once in one
@@ -1619,6 +1631,34 @@ jobs:
             --matrix "$MATRIX" --run "$PUBLICATION_RUN" --sha "$PUBLICATION_BASE" --root repo \
             --artifact-store "$ARTIFACT_STORE" --expect-store-id "$ARTIFACT_STORE_ID" \
             --event "$EVENT" --key-project "$SHELF_PROJECT" --key-project "$EXTENSIONS_PROJECT"
+
+      # ───────────── THE PUBLICATION PLAN — decided once, here, for both executors ─────────────
+      # MeshWeaver.Plugins#4478 (slice 3). The pack leg decides `need_publish` per module from inputs
+      # only THIS job holds (`publish`, `publish-withhold`, the reuse annotation, the ledger). A build
+      # host sees none of them — it packs the whole catalog on a trunk run and offers every bundle — so
+      # the decision is written down here, as data, and build-host-publication.yml applies it to the
+      # host's records. The publisher then refuses any staged record whose `owed` disagrees with it, on
+      # Actions too: the leg and this step compute one predicate, and every Actions trunk run proves they
+      # agree before a host relies on this one. An unreadable selection is RED, never an empty plan.
+      - name: The publication plan — which selected modules this run owes the registry
+        id: publication-plan
+        env:
+          SELECTION: ${{ steps.reuse.outputs.modules }}
+          LANE: ${{ steps.lane.outputs.id }}
+          PUBLISH: ${{ inputs.publish }}
+          PLAN_WITHHOLD: ${{ inputs.publish-withhold }}
+          LEDGER: ${{ inputs.ledger }}
+        run: |
+          set -euo pipefail
+          # build-logic-ref must carry the loaded workflow's tooling contract (the input's description).
+          tool_help="$(python3 build-logic/.github/scripts/module-publication.py --help)"
+          grep -q 'apply-plan' <<< "$tool_help" \
+            || { echo "::error::build-logic-ref's module-publication.py has no \`plan\` command — it predates the workflow GitHub loaded; pass a build-logic-ref at or after the lane's own commit"; exit 1; }
+          printf '%s' "$SELECTION" > "$RUNNER_TEMP/plan-selection.json"
+          python3 build-logic/.github/scripts/module-publication.py plan --lane "$LANE" \
+            --modules "@$RUNNER_TEMP/plan-selection.json" --publish "$PUBLISH" \
+            --withhold "$PLAN_WITHHOLD" --ledger "$LEDGER" --out "$RUNNER_TEMP/publication-plan.json"
+          { echo "json<<PUBLICATION_PLAN_EOF"; jq -c . "$RUNNER_TEMP/publication-plan.json"; echo "PUBLICATION_PLAN_EOF"; } >> "$GITHUB_OUTPUT"
 
       # ───────────── WHICH OF THE SELECTION STILL OWES A TEST RUN ─────────────
       # The `tests` job's matrix. The predicate is EXACTLY the one the pack job's `Ledger — this

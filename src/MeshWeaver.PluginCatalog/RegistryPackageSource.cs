@@ -38,18 +38,54 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
     private readonly string _registryUrl;
     private readonly IIoPool _httpPool;
     private readonly HttpClient _http;
-    private readonly string _token;
+    private readonly IObservable<string> _credential;
 
     /// <summary>Creates the source. <paramref name="registryUrl"/> is the registry instance base URL
     /// (e.g. <c>https://memex.meshweaver.cloud</c>); trailing slash is trimmed.
     /// <paramref name="token"/> is the instance token issued when this installation registered with
     /// the registry (see <see cref="PluginRegistryTokens"/>), sent as <c>Authorization: Bearer</c>;
-    /// empty → unauthenticated (only an open dev/e2e registry answers).</summary>
+    /// empty → unauthenticated (only an open dev/e2e registry answers).
+    ///
+    /// <para>🚨 A FIXED credential: use it only for one that does not expire (a durable
+    /// <c>mwi_</c> key, a test token). An exchanged sync token expires, and a source holding one
+    /// refuses every request after that with the registry's definitive 401 (MeshWeaver#7790) —
+    /// pass the credential SOURCE instead (<see cref="WithCredential"/>).</para></summary>
     public RegistryPackageSource(IMessageHub hub, string registryUrl, string? token = null)
+        : this(hub, registryUrl, Observable.Return(token ?? ""))
+    {
+    }
+
+    /// <summary>
+    /// A source over a credential SOURCE that is read once PER REQUEST.
+    ///
+    /// <para>🚨 MeshWeaver#7790: the credential a registry is read with is usually a short-lived
+    /// exchanged token (<see cref="RegistryTokenResolver.Credential"/>), while a source lives as long
+    /// as the pass that built it — a boot reconcile, a default install over dozens of packages.
+    /// Captured once, the token expired mid-pass and every later request was refused 401 ("a
+    /// registered instance key is required") although the instance key itself was valid. Read per
+    /// request, each request presents a token that is live when it is sent.</para>
+    /// </summary>
+    /// <param name="hub">The calling hub (I/O pool, HTTP client factory).</param>
+    /// <param name="registryUrl">The registry instance base URL; a trailing slash is trimmed.</param>
+    /// <param name="credential">COLD; subscribed once per request, and its first value is presented
+    /// as <c>Authorization: Bearer</c>. Empty → unauthenticated.</param>
+    /// <param name="bundles">The prebuilt-bundle client for the same registry (<see cref="Bundles"/>),
+    /// or null.</param>
+    /// <returns>The source.</returns>
+    /// <remarks>A named factory, never a competing constructor: a second public constructor whose
+    /// third parameter is a reference type would make the existing
+    /// <c>new RegistryPackageSource(hub, url, null)</c> ambiguous (CS0121).</remarks>
+    public static RegistryPackageSource WithCredential(
+        IMessageHub hub, string registryUrl, IObservable<string> credential, PluginBundleClient? bundles = null) =>
+        new(hub, registryUrl, credential ?? throw new ArgumentNullException(nameof(credential))) { Bundles = bundles };
+
+    private RegistryPackageSource(IMessageHub hub, string registryUrl, IObservable<string> credential)
     {
         _hub = hub;
         _registryUrl = (registryUrl ?? "").TrimEnd('/');
-        _token = (token ?? "").Trim();
+        _credential = credential
+            .Take(1)
+            .Select(token => (token ?? "").Trim());
         _httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
         _http = hub.ServiceProvider.GetService<IHttpClientFactory>()
             ?.CreateClient(InstanceRegistrationClient.HttpClientName) ?? SharedHttp;
@@ -72,14 +108,14 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
 
     // Per-REQUEST auth header — never on the client: _http can be the process-wide SharedHttp, and
     // mutating its DefaultRequestHeaders would leak this registry's token to every other registry.
-    private HttpRequestMessage Request(HttpMethod method, string url, HttpContent? content = null)
+    private static HttpRequestMessage Request(string token, HttpMethod method, string url, HttpContent? content = null)
     {
         var request = new HttpRequestMessage(method, url) { Content = content };
-        if (_token.Length > 0)
+        if (token.Length > 0)
             // Typed header, not TryAddWithoutValidation: a malformed configured token (e.g. with a
             // CRLF) must throw here rather than travel as an invalid header.
             request.Headers.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue(PluginRegistryTokens.Scheme, _token);
+                new System.Net.Http.Headers.AuthenticationHeaderValue(PluginRegistryTokens.Scheme, token);
         return request;
     }
 
@@ -97,17 +133,17 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
     /// card, which renders it) read this form.
     /// </summary>
     public IObservable<RegistryListing> ListCatalog(string gitRef) =>
-        _httpPool.Invoke(async ct =>
+        _credential.SelectMany(token => _httpPool.Invoke(async ct =>
         {
             var url = $"{_registryUrl}{RoutePrefix}?ref={Uri.EscapeDataString(gitRef ?? "")}";
-            using var request = Request(HttpMethod.Get, url);
+            using var request = Request(token, HttpMethod.Get, url);
             using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
                 throw new RegistryResponseException(resp.StatusCode,
                     $"Registry catalog list failed ({(int)resp.StatusCode}): {json}");
             return PluginRegistryPayloads.ParseList(json);
-        })
+        }))
         // 🚨 A successful read is the EVENT a deferred boot reconcile waits for (#2888). Every
         // registry contact this installation makes — a catalog open, an install, the Store's
         // count, the boot reconcile itself — comes through here, so reporting the read from this
@@ -141,7 +177,7 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
     /// none, and the install then records the requested ref, as before.</remarks>
     public IObservable<PackageFetch> FetchPackage(
         PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
-        _httpPool.Invoke(async ct =>
+        _credential.SelectMany(token => _httpPool.Invoke(async ct =>
         {
             // Only the package id is authoritative — the registry resolves the folder from its own
             // curated catalog (see PluginRegistryEndpoints), so a consumer can't reach arbitrary
@@ -150,7 +186,7 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
             // returns everything — the consumer's manifest diff still upserts only what changed.
             var body = JsonSerializer.Serialize(new { id = package.Id, @ref = gitRef, paths }, Json);
             using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
-            using var request = Request(HttpMethod.Post, $"{_registryUrl}{RoutePrefix}/files", content);
+            using var request = Request(token, HttpMethod.Post, $"{_registryUrl}{RoutePrefix}/files", content);
             using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
@@ -166,7 +202,7 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
             {
                 Files = parsed.Files.Where(f => wanted.Contains(f.RelativePath)).ToImmutableList(),
             };
-        });
+        }));
 }
 
 /// <summary>

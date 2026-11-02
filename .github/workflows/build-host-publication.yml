@@ -47,6 +47,7 @@ name: Build host — stage a host-executed run's modules for the publish lane
 #       lane: ${{ needs.modules.outputs.lane }}
 #       selected: ${{ needs.modules.outputs.selected }}
 #       declared: ${{ needs.modules.outputs.declared }}
+#       plan: ${{ needs.modules.outputs.publication-plan }}
 #       artifact-store: …
 #       artifact-store-id: …
 #   publish:
@@ -56,6 +57,17 @@ name: Build host — stage a host-executed run's modules for the publish lane
 #       lane: ${{ needs.host-publication.outputs.lane }}
 #       selected: ${{ needs.host-publication.outputs.selected }}
 #       modules: ${{ needs.host-publication.outputs.declared }}
+#       plan: ${{ needs.host-publication.outputs.plan }}
+#
+# 🧾 THE PUBLICATION PLAN (MeshWeaver.Plugins#4478, slice 3). A build host packs the WHOLE catalog on a
+# trunk run and offers every bundle (`owed: true`): it holds none of the inputs that decide a
+# publication (the selection's publication baseline and carry, `publish-withhold`, reuse, the ledger).
+# The pack call's `select` decides them ONCE and emits `publication-plan`; this lane's `apply-plan`
+# sets every host record the selection does not name aside BY NAME and marks every module the plan
+# does not owe as not owed, with the plan's reason — exactly the records the pack legs stage on
+# Actions. It can only take a hand-over away. The publisher's `--plan` then refuses any record whose
+# `owed` disagrees, on both executors. A host run with no plan is RED: its catalog-wide offer cannot be
+# reconciled with the selection without it.
 #
 # With `executor: actions` this lane is a NO-OP SUCCESS that hands the pack call's outputs through
 # (the pack legs staged the bytes) — never a skip: a skipped ancestor skips the publisher
@@ -95,6 +107,15 @@ on:
           The pack call's `declared` output (needs.<pack>.outputs.declared). Non-empty turns on the
           host-graph contract (see the header): the records are checked before anything is staged, and
           the outputs are emitted.
+        required: false
+        type: string
+        default: ''
+      plan:
+        description: >-
+          The pack call's `publication-plan` output (needs.<pack>.outputs.publication-plan): what this
+          run owes the registry per selected module. REQUIRED for a host fetch under the host-graph
+          contract (apply-plan narrows the host's catalog-wide offer to it); handed through as this
+          lane's `plan` either way, for the publisher's cross-check.
         required: false
         type: string
         default: ''
@@ -155,6 +176,9 @@ on:
       declared:
         description: The pack call's declared matrix, handed through after the check. The publisher's `modules`.
         value: ${{ jobs.stage.outputs.declared }}
+      plan:
+        description: The pack call's publication plan, handed through after the check. The publisher's `plan`.
+        value: ${{ jobs.stage.outputs.plan }}
       staged:
         description: >-
           `true` when this lane staged `module-publication-<lane>-host`; `false` with `executor:
@@ -173,6 +197,7 @@ jobs:
       lane: ${{ steps.out.outputs.lane }}
       selected: ${{ steps.out.outputs.selected }}
       declared: ${{ steps.out.outputs.declared }}
+      plan: ${{ steps.out.outputs.plan }}
       staged: ${{ steps.mode.outputs.fetch }}
     steps:
       # 🛡️ One step decides, out loud, and an unreadable executor is RED, never a fall-through to
@@ -184,6 +209,7 @@ jobs:
           EXECUTOR: ${{ inputs.executor }}
           SELECTED: ${{ inputs.selected }}
           DECLARED: ${{ inputs.declared }}
+          PLAN: ${{ inputs.plan }}
           LANE: ${{ inputs.lane }}
         run: |
           set -euo pipefail
@@ -200,6 +226,12 @@ jobs:
                 echo "fetch=false" >> "$GITHUB_OUTPUT"
                 echo "executor: host — the pack call SELECTED zero modules, so the host owed none; nothing to fetch or stage (the publisher accounts for an empty selection by name)."
               else
+                # 🧾 The host offers its WHOLE catalog; only the pack call's plan says which of it this run
+                # publishes and owes. Without it the offer cannot be reconciled — RED, never a guess.
+                if [ -n "${DECLARED:-}" ] && [ -z "$(printf '%s' "${PLAN:-}" | tr -d '[:space:]')" ]; then
+                  echo "::error title=Publication plan::executor: host under the host-graph contract needs the pack call's publication plan (its publication-plan output, passed as this lane's plan input) — the host packs the whole catalog and offers every bundle, and only the plan says which of them this run publishes and owes"
+                  exit 1
+                fi
                 echo "fetch=true" >> "$GITHUB_OUTPUT"
                 echo "executor: host — fetching the host run's receipts for lane $LANE."
               fi ;;
@@ -259,6 +291,7 @@ jobs:
           LANE: ${{ inputs.lane }}
           SELECTED: ${{ inputs.selected }}
           DECLARED: ${{ inputs.declared }}
+          PLAN: ${{ inputs.plan }}
         run: |
           set -euo pipefail
           head -c 400 "$RUNNER_TEMP/s/module-publication.py" | grep -q "module-publication" || { echo "::error::the fetched module-publication.py does not look like the publication gate"; exit 1; }
@@ -271,10 +304,15 @@ jobs:
           # lane — the check refuses that); completeness is still judged against THIS call's selection.
           python3 "$RUNNER_TEMP/s/module-publication.py" partition \
             --staged "$RUNNER_TEMP/staged" --lane "$LANE" --aside "$RUNNER_TEMP/other-lanes"
+          # 🧾 The pack call's plan narrows the host's catalog-wide offer to the records its legs would
+          # have staged: unselected records aside by name, not-owed ones marked so with the plan's reason.
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+          python3 "$RUNNER_TEMP/s/module-publication.py" apply-plan \
+            --staged "$RUNNER_TEMP/staged" --lane "$LANE" --plan "@$RUNNER_TEMP/plan.json" --aside "$RUNNER_TEMP/unselected"
           printf '%s' "$DECLARED" > "$RUNNER_TEMP/declared.json"
           python3 "$RUNNER_TEMP/s/module-publication.py" publish --check-only \
             --staged "$RUNNER_TEMP/staged" --lane "$LANE" \
-            --declared "@$RUNNER_TEMP/declared.json" --selected "$SELECTED"
+            --declared "@$RUNNER_TEMP/declared.json" --selected "$SELECTED" --plan "@$RUNNER_TEMP/plan.json"
       - name: Stage them for the publish lane
         if: steps.mode.outputs.fetch == 'true'
         uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
@@ -293,6 +331,7 @@ jobs:
           LANE: ${{ inputs.lane }}
           SELECTED: ${{ inputs.selected }}
           DECLARED: ${{ inputs.declared }}
+          PLAN: ${{ inputs.plan }}
         run: |
           set -euo pipefail
           delim="mw_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
@@ -301,6 +340,9 @@ jobs:
             echo "selected=$(printf '%s' "$SELECTED" | tr '\n' ' ')"
             echo "declared<<$delim"
             printf '%s\n' "$DECLARED"
+            echo "$delim"
+            echo "plan<<$delim"
+            printf '%s\n' "$PLAN"
             echo "$delim"
           } >> "$GITHUB_OUTPUT"
           echo "lane=$LANE; selected: ${SELECTED:-<none>}"

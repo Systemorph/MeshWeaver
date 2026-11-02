@@ -97,7 +97,7 @@ public class FluentBuilderTest
         Assert.Contains(built.KeyVaultSecrets!.Secrets, s => s.Key == "Email__ClientSecret" && s.VaultSecret == "email-clientsecret");
         Assert.Equal("client", built.SignIn!.MicrosoftClientId);
         Assert.Equal("portal@example.com", built.Email!.MailboxAddress);
-        Assert.Equal("anthropic/claude-opus-4", built.Ai!.Tiers!.Heavy);
+        Assert.Equal("anthropic/claude-opus-4", built.Ai!.Tiers!.Coding);
         Assert.Equal("hosting", built.Operator!.Namespace);
         Assert.Equal(60, built.StartupProbe!.FailureThreshold);
         Assert.Equal("true", built.ExtraPortalConfig["Features__Onboarding__InvitationOnly"]);

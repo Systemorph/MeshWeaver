@@ -695,7 +695,21 @@ DISPOSE_IOPOOL_DRAIN_DONE elapsed=30016ms leakedIoLeaves=1 pools=[Query=1]
 
 — `Query=1` with nothing in brackets — meant exactly one thing, **`_poolCts.Cancel()` on the Query pool
 never returned**, and nothing on the page said so. It now reads
-`Query=1 [IoPool.Drain: the pool token's cancel did not return within the budget — …]`.
+`Query=1 [IoPool: the pool token's cancel had not returned when the join expired — …]`.
+
+**The same cancel on the silo path read `Query=0` (#7277).** The silo stop does not call `Drain()`; it
+calls `IoPoolRegistry.Dispose()`, which hands the cancel to the canceller thread and puts the wait on
+`Disposed`. The label above used to be set only by `Drain()`'s own join on the cancel, so on this path a
+parked cancel left NO leaf in flight, NO label, and a count read off `CurrentInFlight`:
+`IoPoolSiloTeardown: … Did NOT report: Query=0.` — three production occurrences, on two instances,
+that named nothing. The residual now asks whether the cancel is STILL RUNNING, on either path: the count
+includes it (`Query=1`), the site names it, and the canceller is reported as a synchronous leaf on the
+`IoPool-cancel` thread, so the silo report's one-dump stack capture (`IoPoolSiloTeardown.ReportBlockedStacks`)
+prints the teardown callback it is parked in at the top of that thread.
+When neither a leaf nor the cancel is outstanding and disposal still has not completed, the residual
+says which of the two remaining holds it is: an admission region still open, or blocking-lane threads
+not yet out of their loops. A residual is never an anonymous zero. Pinned by
+`IoPoolSiloTeardownTest.WhenTheJoinExpiresOverAParkedCancel_TheReportNamesTheCancelAndTheFrameItIsParkedIn`.
 
 **What parks a cancel.** Cancelling the pool token runs, inline on the `IoPool-cancel` thread, one
 callback per live `SubscribeThroughPool` subscription: `inner.Dispose(); observer.OnCompleted();` —

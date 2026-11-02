@@ -63,7 +63,7 @@ same lists differently (policy `model-settings-seed-and-ceiling`, see [Policy No
 |---|---|---|
 | A model the record names | seeded, and always offered | seeded; the instance's administrator may switch it off |
 | A model the record does not name | pruned from the record's providers | refused when a person writes it, hidden, skipped, and refused by a round |
-| The model per tier | labels, then the record's `ModelTier__*` | the instance's choice on the tier node, within the ceiling, then labels, then the record's `ModelTier__*` |
+| The model per tier | labels, then the record's seed for the tier node (`AI__Tiers__{tier id}`, then the deprecated `ModelTier__*`) | the instance's choice on the tier node, within the ceiling, then labels, then the record's seed for the tier node |
 | The record drops a model | its node is pruned | the same, and an instance choice that named it is clamped back to the record's seed |
 
 The key is reserved for the typed fields: an `extraPortalConfig` entry cannot impose a ceiling a record

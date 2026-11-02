@@ -320,6 +320,7 @@
         "Systemorph/MeshWeaver",
         "Systemorph/MeshWeaver.Plugins",
         "Systemorph/MeshWeaver.Education",
+        "Systemorph/MeshWeaver.Reinsurance",
         "Systemorph/MeshWeaver.SocialMedia",
         "Systemorph/MeshWeaver.Manufacturing",
         "Systemorph/Memex",
@@ -368,13 +369,10 @@
         "DecisionModels#3; (3) this widening, which names exactly the spokes the live sweep measured as",
         "matching the hub.",
         "",
-        "🚧 ONE SPOKE STILL OWED (#7327): Reinsurance's copy (Reinsurance#277) has not merged, so",
-        "required-in leaves Reinsurance out. The gate is core's (dotnet-test.yml job shared-rules on",
-        "every core pull request and push, and the daily shared-rules.yml sweep), and it reads",
-        "Reinsurance's DEFAULT branch — so naming it now turns CORE's required check red on every core",
-        "pull request until #277 merges, while #277 itself is never judged by it (measured: the widened",
-        "sweep reads 'Systemorph/MeshWeaver.Reinsurance: DRIFTED from the hub' and nothing else). Once",
-        "#277 merges, add Reinsurance here in a core pull request and delete this paragraph."
+        "The eighth spoke, Reinsurance, waited for its copy (Reinsurance#277): naming it before that",
+        "merged would have turned core's required check red on every core pull request, because the gate",
+        "reads each spoke's DEFAULT branch. Reinsurance#277 merged; Reinsurance is in required-in again,",
+        "and the live sweep measured its default branch matching the hub byte-exact."
       ]
     },
     {

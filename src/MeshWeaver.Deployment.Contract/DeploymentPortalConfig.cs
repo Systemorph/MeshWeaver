@@ -39,6 +39,14 @@ public static class DeploymentPortalConfig
     public const string ModelGovernanceKey = "AI__ModelGovernance";
 
     /// <summary>
+    /// The prefix of the record's per-tier seed: <c>AI__Tiers__{tier id}</c> (<c>AI:Tiers:coding</c> to the
+    /// portal), one key per tier the record's <c>ai.tiers</c> names, keyed by the instance's tier NODE id
+    /// (<see cref="ModelTiers.TierIds"/>). Replaces the deprecated <c>ModelTier__Heavy/Standard/Light/Utility</c>
+    /// rank keys, which are still rendered alongside for one release.
+    /// </summary>
+    public const string TierKeyPrefix = "AI__Tiers__";
+
+    /// <summary>
     /// The value of <see cref="ModelGovernanceKey"/> on a customer-governed record: the record SEEDS the
     /// instance's model settings and is their CEILING. The instance's own administrator may narrow
     /// within it (switch a declared model off, choose a declared model per tier) and never exceed it.
@@ -1289,9 +1297,20 @@ public static class DeploymentPortalConfig
                 }
                 : null, null);
             Set("AI__RequiredDataResidency", string.IsNullOrWhiteSpace(ai.RequiredDataResidency) ? null : ai.RequiredDataResidency.Trim());
-            Set("ModelTier__Heavy", ai.Tiers?.Heavy);
-            Set("ModelTier__Standard", ai.Tiers?.Standard);
-            Set("ModelTier__Light", ai.Tiers?.Light);
+            // One tier vocabulary (Plugins#4862): each tier renders keyed by its tier NODE's id, which
+            // is how the instance reads the record's seed for that node.
+            if (ai.Tiers is { } tiers)
+                foreach (var (tier, model) in tiers.Declared())
+                    Set($"{TierKeyPrefix}{tier}", model);
+            // 🕰️ The deprecated rank keys, for ONE release: an image that predates the tier keys reads
+            // only these, so a record rolled onto it must not lose its seed. Rendered from the SAME
+            // pair, so a record that says `coding` still reaches an older image as ModelTier__Heavy.
+            // Raw, exactly as before ("" included, untrimmed): a record that still uses the rank names
+            // renders these keys byte-identically. `review` has no rank key — no image ever read one.
+            static string? RankKey(string? tier, string? alias) => string.IsNullOrWhiteSpace(tier) ? alias : tier;
+            Set("ModelTier__Heavy", RankKey(ai.Tiers?.Coding, ai.Tiers?.Heavy));
+            Set("ModelTier__Standard", RankKey(ai.Tiers?.Reasoning, ai.Tiers?.Standard));
+            Set("ModelTier__Light", RankKey(ai.Tiers?.Chat, ai.Tiers?.Light));
             Set("ModelTier__Utility", ai.Tiers?.Utility);
             // Policy model-settings-seed-and-ceiling: on a customer-governed record that names models,
             // the record's model lists and tiers are the instance's SEED and CEILING, not its value.

@@ -60,7 +60,7 @@ var record = new DeploymentContent()
     .WithKeyVaultSecrets(secrets => secrets.Map("Email__ClientSecret", "email-clientsecret"))
     .WithSignIn(microsoftClientId: "<client id>", microsoftTenantId: "<tenant>")
     .WithEmail(mailboxAddress: "portal@example.com", clientId: "<client id>", tenantId: "<tenant>")
-    .WithAi(ai => ai.OpenRouter(["anthropic/claude-sonnet-4"]).Tiers(heavy: "anthropic/claude-opus-4"))
+    .WithAi(ai => ai.OpenRouter(["anthropic/claude-sonnet-4"]).TierModels(coding: "anthropic/claude-opus-4"))
     .WithReplicas(2)
     .WithResources(requestsCpu: "500m", requestsMemory: "2Gi", limitsCpu: "2", limitsMemory: "8Gi")
     .WithStartupProbe(periodSeconds: 10, failureThreshold: 60)
@@ -246,7 +246,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithGitHubApp(clientId, installationId, installationOwner)` | `GitHubApp.ClientId`, `GitHubApp.InstallationId`, `GitHubApp.InstallationOwner` | `config.memex_portal.GitHub__App__*` | `GitHub__App__ClientId`, `GitHub__App__InstallationId`, `GitHub__App__InstallationOwner` |
 | `WithOpsGitHubApp(clientId, installationId, installationOwner, privateKeySecret, privateKeyConfigKey)` | `OpsGitHubApp.ClientId`, `OpsGitHubApp.InstallationId`, `OpsGitHubApp.InstallationOwner`, `OpsGitHubApp.PrivateKeySecret`, `OpsGitHubApp.PrivateKeyConfigKey` | — (never rendered into this deployment's own portal) | — (the CONTROL instance reads it ABOUT this deployment) |
 | `WithSocialLinkedIn(clientId)` | `SocialLinkedInClientId` | `config.memex_portal.Social__LinkedIn__ClientId` | `Social__LinkedIn__ClientId` |
-| `WithAi(configure)` | `Ai.OpenRouter`, `Ai.OpenRouterEU`, `Ai.Anthropic`, `Ai.AzureFoundry`, `Ai.AzureAis`, `Ai.RequiredDataResidency`, `Ai.Anthropic.DataResidency`, `Ai.Anthropic.DataRetention`, `Ai.OpenRouterEU.ContextWindowTokens`, `Ai.Tiers.Heavy`, `Ai.Tiers.Standard`, `Ai.Tiers.Light`, `Ai.Tiers.Utility` | `config.memex_portal.<Provider>__*`, `config.memex_portal.AI__RequiredDataResidency`, `config.memex_portal.ModelTier__*` | `OpenRouter__Models__0`, `OpenRouterEU__Models__0`, `OpenRouterEU__Endpoint`, `Anthropic__Models__0`, `AzureFoundry__Models__0`, `AzureAIS__Models__0`, `Anthropic__DataResidency`, `Anthropic__DataRetention`, `OpenRouterEU__ContextWindowTokens__0__Model`, `OpenRouterEU__ContextWindowTokens__0__Tokens`, `AI__RequiredDataResidency`, `Features__Ai__Providers__Anthropic`, `Features__Ai__Providers__AzureFoundry`, `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, `ModelTier__Utility` |
+| `WithAi(configure)` | `Ai.OpenRouter`, `Ai.OpenRouterEU`, `Ai.Anthropic`, `Ai.AzureFoundry`, `Ai.AzureAis`, `Ai.RequiredDataResidency`, `Ai.Anthropic.DataResidency`, `Ai.Anthropic.DataRetention`, `Ai.OpenRouterEU.ContextWindowTokens`, `Ai.Tiers.Chat`, `Ai.Tiers.Reasoning`, `Ai.Tiers.Coding`, `Ai.Tiers.Utility`, `Ai.Tiers.Review`, `Ai.Tiers.Heavy`, `Ai.Tiers.Standard`, `Ai.Tiers.Light` | `config.memex_portal.<Provider>__*`, `config.memex_portal.AI__RequiredDataResidency`, `config.memex_portal.AI__Tiers__*`, `config.memex_portal.ModelTier__*` | `OpenRouter__Models__0`, `OpenRouterEU__Models__0`, `OpenRouterEU__Endpoint`, `Anthropic__Models__0`, `AzureFoundry__Models__0`, `AzureAIS__Models__0`, `Anthropic__DataResidency`, `Anthropic__DataRetention`, `OpenRouterEU__ContextWindowTokens__0__Model`, `OpenRouterEU__ContextWindowTokens__0__Tokens`, `AI__RequiredDataResidency`, `Features__Ai__Providers__Anthropic`, `Features__Ai__Providers__AzureFoundry`, `AI__Tiers__chat`, `AI__Tiers__reasoning`, `AI__Tiers__coding`, `AI__Tiers__utility`, `AI__Tiers__review`, `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, `ModelTier__Utility` |
 | `WithOperator(enabled, ns, serviceAccount, image, environment)` | `Operator.Enabled`, `Operator.Namespace`, `Operator.ServiceAccount`, `Operator.Image`, `Operator.Environment` | `hostingOperator` | `Hosting__Operator__Enabled` |
 | `WithOperatorExecutor(executor, maintainer)` | `Operator.Executor`, `Operator.Maintainer` | `hostingOperator.executor`, `hostingOperator.maintainer` (rendered outside `enabled`: the Actions executor runs with the operator Job off) | `Hosting__Operator__Executor`, `Hosting__Operator__Maintainer` |
 | `WithRegistry(configure)` | `Registry.Host`, `Registry.Image`, `Registry.AuthImage`, `Registry.Issuer`, `Registry.StorageAccountName`, `Registry.StorageContainer`, `Registry.ServiceAccount`, `Registry.WorkloadIdentityClientId`, `Registry.KeyVault`, `Registry.PublisherUsername`, `Registry.PublisherPasswordBcrypt`, `Registry.ValidationUrl`, `Registry.NotificationsUrl`, `Registry.Replicas` | `registry` | — |
@@ -260,7 +260,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 
 The nested builders these rows lean on: `KeyVaultSecretsSpec.Map(key, vaultSecret)`;
 `AiProviders.OpenRouter(models, endpoint, order, enabled)` / `.OpenRouterEU(models, endpoint)` / `.Anthropic(…)` / `.AzureFoundry(…)`
-/ `.AzureAis(…)` / `.RequiredDataResidency(region)` / `.Tiers(heavy, standard, light, utility)` (a tier may name a model by node path, e.g. `Provider/OpenRouterEU/z-ai/glm-5.3`, the only unambiguous name when two routes carry the same wire id); `WithStorageLayout(s => s with {…})`
+/ `.AzureAis(…)` / `.RequiredDataResidency(region)` / `.TierModels(chat, reasoning, coding, utility, review)` — keyed by the instance's tier NODES and rendered as `AI__Tiers__{tier id}`; the legacy `.Tiers(heavy, standard, light, utility)` writes the same fields by rank for one release (a tier may name a model by node path, e.g. `Provider/OpenRouterEU/z-ai/glm-5.3`, the only unambiguous name when two routes carry the same wire id); `WithStorageLayout(s => s with {…})`
 and `WithRegistry(r => r with {…})` take the spec record directly.
 
 Fields no method sets — the operator writes them, or they are a legacy shape kept for records that
@@ -440,10 +440,14 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `ModelProvider` | `DataResidency` | Processing region of the endpoint (Eu, Global, …) — blank = not stated | Verarbeitungsregion des Endpunkts (Eu, Global, …) — leer = nicht angegeben |
 | `ModelProvider` | `DataRetention` | Retention note, e.g. ZDR — blank = not stated | Aufbewahrungshinweis, z. B. ZDR — leer = nicht angegeben |
 | `ModelProvider` | `ContextWindowTokens` | Context window in tokens per model id — a model not named stays unchecked | Kontextfenster in Tokens je Modell-ID — ein nicht genanntes Modell bleibt ungeprüft |
-| `ModelTiers` | `Heavy` | Heavy tier model | Modell der Stufe „Heavy“ |
-| `ModelTiers` | `Standard` | Standard tier model | Modell der Stufe „Standard“ |
-| `ModelTiers` | `Light` | Light tier model | Modell der Stufe „Light“ |
 | `ModelTiers` | `Utility` | Utility tier model | Modell der Stufe „Utility“ |
+| `ModelTiers` | `Chat` | Chat tier model | Modell der Stufe „Chat“ |
+| `ModelTiers` | `Reasoning` | Reasoning tier model | Modell der Stufe „Reasoning“ |
+| `ModelTiers` | `Review` | Review tier model | Modell der Stufe „Review“ |
+| `ModelTiers` | `Coding` | Coding tier model | Modell der Stufe „Coding“ |
+| `ModelTiers` | `Heavy` | Legacy alias of the coding tier (heavy) | Veralteter Alias der Stufe „Coding“ (heavy) |
+| `ModelTiers` | `Standard` | Legacy alias of the reasoning tier (standard) | Veralteter Alias der Stufe „Reasoning“ (standard) |
+| `ModelTiers` | `Light` | Legacy alias of the chat tier (light) | Veralteter Alias der Stufe „Chat“ (light) |
 | `AiProviders` | `Anthropic` | Anthropic | Anthropic |
 | `AiProviders` | `AzureAis` | Azure AI Services | Azure AI Services |
 | `AiProviders` | `AzureFoundry` | Azure AI Foundry (models only) | Azure AI Foundry (nur Modelle) |

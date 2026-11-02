@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -244,7 +245,10 @@ def behaviour(doc: dict, hostpub: dict) -> None:
         mode = step(hp, "Who built the bundles, and is anything owed")["run"]
         for env, want_rc, want_fetch in (
                 ({"EXECUTOR": "host", "LANE": "L", "DECLARED": "", "SELECTED": ""}, 0, "true"),     # original contract
-                ({"EXECUTOR": "host", "LANE": "L", "DECLARED": "[]", "SELECTED": "A B"}, 0, "true"),
+                ({"EXECUTOR": "host", "LANE": "L", "DECLARED": "[]", "SELECTED": "A B", "PLAN": '{"lane":"L"}'}, 0, "true"),
+                # 🧾 Plugins#4478 slice 3: a host fetch under the host-graph contract with NO plan is RED.
+                ({"EXECUTOR": "host", "LANE": "L", "DECLARED": "[]", "SELECTED": "A B"}, 1, None),
+                ({"EXECUTOR": "host", "LANE": "L", "DECLARED": "[]", "SELECTED": "A B", "PLAN": "  "}, 1, None),
                 ({"EXECUTOR": "host", "LANE": "L", "DECLARED": "[]", "SELECTED": "  "}, 0, "false"),  # zero selection
                 ({"EXECUTOR": "actions", "LANE": "L", "DECLARED": "[]", "SELECTED": "A"}, 0, "false"),
                 ({"EXECUTOR": "actions", "LANE": "L", "DECLARED": "", "SELECTED": "A"}, 1, None),
@@ -254,11 +258,12 @@ def behaviour(doc: dict, hostpub: dict) -> None:
             check(f"host-publication mode {env} -> rc {want_rc}, fetch={want_fetch}",
                   rc == want_rc and outs.get("fetch") == want_fetch, out)
         out_body = step(hp, "Hand the pack call's lane and selection to the publisher")["run"]
-        rc, out, _ = run_bash(out_body, {"LANE": "L", "SELECTED": "A B", "DECLARED": '[\n{"module":"A"}\n]'}, tmp)
+        rc, out, _ = run_bash(out_body, {"LANE": "L", "SELECTED": "A B", "DECLARED": '[\n{"module":"A"}\n]',
+                                         "PLAN": '{"lane":"L",\n"modules":{}}'}, tmp)
         written = (tmp / "out.txt").read_text(encoding="utf-8")
-        check("host-publication hands lane, selection and a MULTI-LINE declared matrix through intact",
+        check("host-publication hands lane, selection, a MULTI-LINE declared matrix and the plan through intact",
               rc == 0 and "lane=L\n" in written and "selected=A B\n" in written
-              and '[\n{"module":"A"}\n]\n' in written, written)
+              and '[\n{"module":"A"}\n]\n' in written and '{"lane":"L",\n"modules":{}}\n' in written, written)
         steps_hp = hp["steps"]
         gated = [s for s in steps_hp if s.get("id") not in ("mode", "out")]
         check("every fetching step of host-publication is gated on the mode step's `fetch`",
@@ -273,19 +278,20 @@ def behaviour(doc: dict, hostpub: dict) -> None:
         # by repo/sha/stage, not lane — review of #7271): it must set the sibling's aside and pass,
         # and the same body without its `partition` line must refuse (the negative control).
         check_body = step(hp, "The host's records answer the pack call's selection (the publisher's check, no POST)")["run"]
-        names_in_body = [check_body.find(s) for s in ('import yaml', '--self-test', ' partition ', '--check-only')]
-        check("the check step bootstraps PyYAML before the self-test, and partitions before --check-only",
+        names_in_body = [check_body.find(s) for s in ('import yaml', '--self-test', ' partition ', ' apply-plan ', '--check-only')]
+        check("the check step bootstraps PyYAML before the self-test, partitions and applies the plan before --check-only",
               all(i >= 0 for i in names_in_body) and names_in_body == sorted(names_in_body), str(names_in_body))
         (tmp / "s").mkdir(exist_ok=True)
         shutil.copy(ROOT / ".github" / "scripts" / "module-publication.py", tmp / "s" / "module-publication.py")
 
-        def fetched() -> None:
+        def fetched(records=(("MeshWeaver.AI", "L1"), ("MeshWeaver.Mcp", "L2"))) -> None:
             import hashlib as _h, json as _j, zipfile as _z
             staged = tmp / "staged"
             shutil.rmtree(staged, ignore_errors=True)
             shutil.rmtree(tmp / "other-lanes", ignore_errors=True)
+            shutil.rmtree(tmp / "unselected", ignore_errors=True)
             staged.mkdir()
-            for module, lane in (("MeshWeaver.AI", "L1"), ("MeshWeaver.Mcp", "L2")):
+            for module, lane in records:
                 bundle = staged / f"{module}.module.nupkg"
                 with _z.ZipFile(bundle, "w") as zf:
                     zf.writestr("meshweaver/manifest.json", _j.dumps(
@@ -296,7 +302,11 @@ def behaviour(doc: dict, hostpub: dict) -> None:
                      "bundle": {"name": bundle.name, "sha256": _h.sha256(bundle.read_bytes()).hexdigest()}}),
                     encoding="utf-8")
 
-        env = {"LANE": "L1", "SELECTED": "MeshWeaver.AI",
+        def plan_of(*owed_modules: str, lane: str = "L1") -> str:
+            return json.dumps(mp.publication_plan(lane, [{"module": m, "package": m.split(".")[-1]} for m in owed_modules],
+                                                  True, "", "off"))
+
+        env = {"LANE": "L1", "SELECTED": "MeshWeaver.AI", "PLAN": plan_of("MeshWeaver.AI"),
                "DECLARED": '[{"module":"MeshWeaver.AI"},{"module":"MeshWeaver.Mcp"}]'}
         fetched()
         rc, out, _ = run_bash(check_body, env, tmp)
@@ -310,8 +320,30 @@ def behaviour(doc: dict, hostpub: dict) -> None:
         check("NEGATIVE CONTROL: the same step WITHOUT the partition refuses the mixed fetch",
               rc == 1 and "another call" in out, out[-600:])
         fetched()
-        rc, out, _ = run_bash(check_body, {**env, "SELECTED": "MeshWeaver.AI MeshWeaver.Mcp"}, tmp)
+        rc, out, _ = run_bash(check_body, {**env, "SELECTED": "MeshWeaver.AI MeshWeaver.Mcp",
+                                           "PLAN": plan_of("MeshWeaver.AI", "MeshWeaver.Mcp")}, tmp)
         check("EXECUTED: completeness still holds — a selected module only the sibling staged is RED",
+              rc == 1 and "MeshWeaver.Mcp" in out, out[-600:])
+        # 🧾 The host's CATALOG-WIDE offer (Plugins#4478 slice 3): every bundle, one lane, owed:true. The
+        # plan narrows it to the selection — and the same body without apply-plan refuses (negative control).
+        catalog = (("MeshWeaver.AI", "L1"), ("MeshWeaver.Mcp", "L1"), ("MeshWeaver.Maps", "L1"))
+        cat_env = {"LANE": "L1", "SELECTED": "MeshWeaver.AI MeshWeaver.Maps",
+                   "DECLARED": json.dumps([{"module": m} for m, _ in catalog]),
+                   "PLAN": json.dumps(mp.publication_plan("L1", [{"module": "MeshWeaver.AI", "package": "AI"},
+                                                                 {"module": "MeshWeaver.Maps", "package": "Maps"}],
+                                                          True, "Maps", "off"))}
+        fetched(catalog)
+        rc, out, _ = run_bash(check_body, cat_env, tmp)
+        maps = json.loads((tmp / "staged" / "MeshWeaver.Maps.publication.json").read_text()) if rc == 0 else {}
+        check("EXECUTED: the host's catalog-wide offer passes once the plan sets the unselected module aside and "
+              "marks the withheld one not owed",
+              rc == 0 and (tmp / "unselected" / "MeshWeaver.Mcp.publication.json").is_file()
+              and maps.get("owed") is False and "publish-withhold" in str(maps.get("reason"))
+              and (tmp / "staged" / "MeshWeaver.AI.module.nupkg").is_file(), out[-600:])
+        fetched(catalog)
+        no_plan = "\n".join(l for l in check_body.splitlines() if " apply-plan " not in l and "--plan \"@$RUNNER_TEMP/plan.json\" --aside" not in l)
+        rc, out, _ = run_bash(no_plan, cat_env, tmp)
+        check("NEGATIVE CONTROL: the same step WITHOUT apply-plan refuses the catalog-wide offer",
               rc == 1 and "MeshWeaver.Mcp" in out, out[-600:])
         inputs = hostpub["on"]["workflow_call"]["inputs"]
         check("host-publication's executor defaults to `host` (its original behaviour for existing callers)",

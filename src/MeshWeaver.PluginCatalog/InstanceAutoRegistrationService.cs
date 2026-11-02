@@ -100,6 +100,10 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
     /// request in flight when the margin is reached still arrives with a live token.</summary>
     public static readonly TimeSpan RefreshMargin = TimeSpan.FromSeconds(60);
 
+    /// <summary>The clock a cached token's remaining life is judged by. The system clock in
+    /// production; a test moves it past a token's expiry instead of waiting it out.</summary>
+    internal TimeProvider Clock { get; init; } = TimeProvider.System;
+
     // Shared fallback when no IHttpClientFactory is registered — HttpClient is designed to be
     // long-lived and shared; a per-call `new HttpClient()` leaks sockets. Immutable shared
     // resource, not a cache, so it does not fall under the no-static-state rule.
@@ -135,6 +139,25 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
             ? Exchange(registry.Url, configured)
             : StoredCredential(registry)
                 .SelectMany(raw => raw.Length == 0 ? Observable.Return("") : Exchange(registry.Url, raw));
+
+    /// <summary>
+    /// The credential for <paramref name="registry"/> as a SOURCE: COLD, and each subscription
+    /// resolves it afresh (<see cref="ResolveToken"/>) — the cached exchanged token while it has more
+    /// than <see cref="RefreshMargin"/> left, a newly exchanged one after that. Hand THIS, never a
+    /// resolved string, to a client that outlives one request
+    /// (<see cref="RegistryPackageSource.WithCredential"/>,
+    /// <see cref="PluginBundleClient.WithCredential"/>).
+    ///
+    /// <para>🚨 MeshWeaver#7790: since a configured instance key is exchanged too (#7312), every
+    /// registry client of a pass held a token that expires — at most
+    /// <see cref="SyncAccessToken.MaximumLifetime"/>, and as little as <see cref="RefreshMargin"/>
+    /// when it came from the cache. A boot reconcile or default install that outlived it was refused
+    /// 401 for every remaining fetch, with the instance key valid throughout.</para>
+    /// </summary>
+    /// <param name="registry">The registry to authenticate against.</param>
+    /// <returns>A cold source that emits one credential per subscription.</returns>
+    public IObservable<string> Credential(PluginRegistryReference registry) =>
+        Observable.Defer(() => ResolveToken(registry)).Take(1);
 
     /// <summary>
     /// The DURABLE credential this installation holds for <paramref name="registry"/> — the
@@ -175,7 +198,7 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
             return Observable.Return(rawKey);
 
         var cacheKey = TokenCacheKey(url, rawKey);
-        if (tokens.TryGetValue(cacheKey, out var hit) && hit.ExpiresAt - DateTimeOffset.UtcNow > RefreshMargin)
+        if (tokens.TryGetValue(cacheKey, out var hit) && hit.ExpiresAt - Clock.GetUtcNow() > RefreshMargin)
             return Observable.Return(hit.Token);
 
         var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
@@ -215,7 +238,7 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
                         + "instance key directly (legacy)", url, result.Status);
                     return rawKey;
                 }
-                tokens[cacheKey] = (result.Token, DateTimeOffset.UtcNow.AddSeconds(result.ExpiresIn));
+                tokens[cacheKey] = (result.Token, Clock.GetUtcNow().AddSeconds(result.ExpiresIn));
                 return result.Token;
             })
             .Catch((Exception ex) =>
@@ -1514,9 +1537,9 @@ public sealed class InstanceAutoRegistrationService(
                         // and the RegistryPackageSource's own (the module landing inside
                         // InstallOrUpdate, #1664) — so every lane reads the same promise-cached
                         // bundle index.
-                        var bundles = new PluginBundleClient(hub, registry.Url, token);
+                        var bundles = PluginBundleClient.WithCredential(hub, registry.Url, tokenResolver.Credential(registry));
                         return new ConfiguredPackageSource(
-                            new RegistryPackageSource(hub, registry.Url, token) { Bundles = bundles },
+                            RegistryPackageSource.WithCredential(hub, registry.Url, tokenResolver.Credential(registry), bundles),
                             string.IsNullOrWhiteSpace(registry.Ref) ? "HEAD" : registry.Ref,
                             string.IsNullOrWhiteSpace(registry.Name) ? registry.Url : registry.Name)
                         {

@@ -465,7 +465,7 @@ public sealed class IoPoolRegistry : IDisposable
     public IReadOnlyList<PoolResidual> UnreportedResiduals() =>
         _draining
             .Where(kvp => !_reported.ContainsKey(kvp.Key))
-            .Select(kvp => new PoolResidual(kvp.Key, kvp.Value.CurrentInFlight)
+            .Select(kvp => new PoolResidual(kvp.Key, kvp.Value.UnreleasedWork)
             {
                 Sites = kvp.Value.PendingLeafSites,
                 SynchronousLeaves = kvp.Value.PendingSynchronousLeaves,

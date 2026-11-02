@@ -165,6 +165,16 @@ on:
           record from a call this publication does not speak for.
         required: true
         type: string
+      plan:
+        description: >-
+          The pack call's publication plan (`needs.<pack call>.outputs.publication-plan`, or through a
+          build-host-publication.yml call, its `plan` output). Non-empty: every staged record's `owed`
+          must equal the plan's, and the plan must name exactly the selection — the pack leg and the
+          pack call's `select` compute one predicate two ways, and a disagreement refuses the whole
+          publication (MeshWeaver.Plugins#4478). Empty: no cross-check (the behaviour before it).
+        required: false
+        type: string
+        default: ''
       platform-ref:
         description: >-
           The Systemorph/MeshWeaver commit the bundles were built against (a pin, not a branch) — the
@@ -446,6 +456,7 @@ jobs:
           REGISTRY_SOURCE: ${{ inputs.registry-source }}
           LEDGER: ${{ inputs.ledger }}
           NEWEST_ONLY: ${{ inputs.publish-newest-only }}
+          PLAN: ${{ inputs.plan }}
         run: |
           set -euo pipefail
           case "$LEDGER" in
@@ -462,6 +473,12 @@ jobs:
             false) ;;
             *) echo "::error::inputs.publish-newest-only reads '$NEWEST_ONLY', neither true nor false."; exit 1 ;;
           esac
+          # The publication plan, when the caller wires it: every record's `owed` is held to it.
+          plan=()
+          if [ -n "$(printf '%s' "${PLAN:-}" | tr -d '[:space:]')" ]; then
+            printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+            plan=(--plan "@$RUNNER_TEMP/plan.json")
+          fi
           printf '%s' "$DECLARED" > "$RUNNER_TEMP/declared.json"
           python3 meshweaver/.github/scripts/module-publication.py publish \
             --staged "$RUNNER_TEMP/staged" \
@@ -472,4 +489,4 @@ jobs:
             --source "$REGISTRY_SOURCE" \
             --ledger "$LEDGER" \
             --ledger-script meshweaver/.github/scripts/module-build-ledger.py \
-            ${superseded[@]+"${superseded[@]}"}
+            ${superseded[@]+"${superseded[@]}"} ${plan[@]+"${plan[@]}"}
