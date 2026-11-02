@@ -28,9 +28,12 @@ namespace MeshWeaver.Hosting;
 /// </summary>
 /// <param name="configuration">Host configuration — read once, at start.</param>
 /// <param name="loggerFactory">The logger factory; the heartbeat logs under this type's category.</param>
+/// <param name="services">Where the optional <see cref="IThreadPoolWorkerStacks"/> reader is resolved —
+/// a host without one still gets the <c>[POOLSTALL]</c> line, saying it cannot name the frame.</param>
 internal sealed class ProcessLivenessHeartbeatService(
     IConfiguration configuration,
-    ILoggerFactory loggerFactory) : IHostedService
+    ILoggerFactory loggerFactory,
+    IServiceProvider services) : IHostedService
 {
     /// <summary>How often the loop wakes to notice <see cref="stopped"/>, so shutdown is not held by the cadence.</summary>
     private static readonly TimeSpan StopCheckSlice = TimeSpan.FromMilliseconds(250);
@@ -88,6 +91,10 @@ internal sealed class ProcessLivenessHeartbeatService(
         // this thread for the life of the host; a sampler that cannot start leaves the heartbeat
         // exactly as it was, and the [HEAPSTEP] line then SAYS it could not name anything.
         var sampler = StartSampler();
+        // OPTIONAL by design: the stack reader lives with the Orleans connection (it needs ClrMD and the
+        // runtime's DAC), and a host without it still reports the stall — saying it cannot name the frame.
+        var workerStacks = services.GetService<IThreadPoolWorkerStacks>();
+        TimeSpan? lastStallCapture = null;
         ProcessLivenessSample? previous = null;
         var tick = 0L;
         var due = period;
@@ -112,6 +119,11 @@ internal sealed class ProcessLivenessHeartbeatService(
                 logger.LogInformation("{Reading}", reading.Describe());
                 if (step is not null)
                     logger.LogWarning("{HeapStep}", step);
+                if (ThreadPoolStall.ShouldCapture(reading, lastStallCapture))
+                {
+                    lastStallCapture = sample.Elapsed;
+                    logger.LogWarning("{PoolStall}", DescribeStall(reading, workerStacks));
+                }
             }
             catch (Exception exception)
             {
@@ -123,6 +135,25 @@ internal sealed class ProcessLivenessHeartbeatService(
         }
 
         sampler?.Dispose();
+    }
+
+    /// <summary>
+    /// Captures the pool workers' stacks for a stalled tick and renders the <c>[POOLSTALL]</c> line.
+    /// Runs on this dedicated thread — the one thread the stall cannot hold — and never throws: a
+    /// capture that fails is reported IN the line, so the stall is still named as a stall.
+    /// </summary>
+    private static string DescribeStall(ProcessLivenessReading reading, IThreadPoolWorkerStacks? workerStacks)
+    {
+        if (workerStacks is null)
+            return ThreadPoolStall.Describe(reading, null, null);
+        try
+        {
+            return ThreadPoolStall.Describe(reading, workerStacks.CaptureWorkerStacks(), null);
+        }
+        catch (Exception exception)
+        {
+            return ThreadPoolStall.Describe(reading, null, $"{exception.GetType().Name}: {exception.Message}");
+        }
     }
 
     private AllocationByTypeSampler? StartSampler()

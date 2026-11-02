@@ -235,6 +235,75 @@ can be closed.
 That live test is the positive control. A sampler that received nothing would make every real line
 say "cannot name".
 
+## A stalled pool names its frame: the `[POOLSTALL]` line
+
+The `[LIVENESS]` line can say *that* the pool starved — `poolCompleted(+0)` with `poolPending` above
+zero, on a tick whose `gap` is on time. It cannot say *what* held the workers. A stall like that
+leaves nothing behind: the process does not crash, so no dump is written, and no governed action
+can read the stacks of a live pod. Every recurrence was therefore re-triaged from the same
+symptom (#5388).
+
+So the heartbeat now acts on that reading. On the first tick in which the pool finished **no** work
+item while work was queued, it captures every ThreadPool worker's stack, once, and logs them grouped by
+their innermost 12 frames, the largest group first:
+
+```
+[POOLSTALL] tick=1099: the ThreadPool completed no work item in the last 10.12s with 20357 queued over 69 thread(s). 69 worker stack(s) in 3 distinct shape(s), largest first (innermost 12 frames each):
+  ×61:
+     at <the frame the pool is held in>
+     …
+```
+
+- **How the stacks are read.** The heartbeat has its own thread, which the stall cannot hold. It
+  writes one `Normal` minidump of its own process (thread stacks and module data, no heap) and reads
+  it back with ClrMD, then deletes the file. This is the same reader, with the same DAC pin, that the
+  silo stop uses for leaves that outlive its join (#7277): `BlockedThreadStacks.CaptureThreadPoolWorkers`,
+  registered as `IThreadPoolWorkerStacks` by `AddThreadPoolWorkerStacks()` in every Orleans silo.
+- **Cost.** The dump suspends the process for about a second. It is taken at most once every
+  30 minutes (`ThreadPoolStall.CaptureCooldown`), and only after a whole period in which the pool
+  served nothing.
+- **When it cannot read stacks.** The line still prints and says why: no reader registered in this
+  host, the capture failed (with the exception), or the dump held no pool worker. A missing line
+  means the pool did not stall, never that the capture was skipped.
+- **Tests.** `ThreadPoolWorkerStacksTest` parks real pool workers in a known method, captures a real
+  dump, and requires that method at the head of the largest group. Its negative control takes the
+  same capture with nothing parked and must not find the method. `ThreadPoolStallTest` pins the
+  decision (stalled, idle, busy, first tick, cooldown) and the line.
+
+### The stall that made this necessary
+
+memex-cloud, pod `6997ff97bc-5q8t2`, image `3.1.12401`, 2026-11-02. Read through governed `Logs`
+actions on the control instance (`Ops/Actions/t1102-5388-*`):
+
+| tick (UTC) | gap | gcPause in tick | poolThreads | poolPending | poolCompleted |
+|---|---|---|---|---|---|
+| 08:57:57 | 10.06 s | +0.89 s | 69 | 37 | +33,049 |
+| 08:58:27 | 10.20 s | +0.65 s | 69 | 97 | **+0** (and +0 in the two ticks before) |
+| 08:58:37 | 10.01 s | +0.88 s | 69 | 20,335 | +2,314 |
+| 08:58:48 | 10.12 s | +0.80 s | 69 | 20,357 | **+0** |
+| 08:58:58 | 10.11 s | +0.58 s | 69 | 1,236 | +49,091 |
+| 08:59:08 | 10.17 s | +0.78 s | 69 | 1,260 | +1 |
+| 08:59:18 | 10.29 s | +0.80 s | 69 | 1,279 | **+0** |
+| 08:59:28 | 10.22 s | +1.12 s | 69 | 1 | +96,728 |
+
+Orleans logged `Thread Pool execution stalled for 21.95s` (08:58:56) and `24.27s` (08:59:21), and a
+`SiloHealthMonitor` timer that fired 35.7 s late. The pod then drained and exited cleanly
+(`exit 0`, no dump on the volume).
+
+What these readings establish:
+
+- **It was not a machine pause or a crash dump.** Every heartbeat tick was on time. The 10-23 and
+  10-30 reopens of #5388 were the opposite case: `createdump` freezing a dying process.
+- **It was not GC.** GC took 6–11 % of each tick.
+- **It was real starvation.** 69 workers finished nothing for whole periods. The runtime added no
+  thread in about 90 s.
+- **It happened during a NodeType compile and release wave.** At 08:59:21 the compile lane was full,
+  with six of six slots running and four queued, and its longest wait so far was 235 s. Sampled
+  allocation was dominated by Roslyn symbol types.
+
+What they do not establish is the frame the 69 workers were in. That is what the `[POOLSTALL]`
+line exists to capture at the next occurrence.
+
 ## Where this sits
 
 [Error Propagation & Wedges](../ErrorPropagationAndWedges) — what must always happen once you know it is

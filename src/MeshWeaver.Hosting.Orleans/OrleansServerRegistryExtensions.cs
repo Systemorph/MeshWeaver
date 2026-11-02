@@ -257,6 +257,10 @@ public static class OrleansServerRegistryExtensions
         // at process exit (#613). Subscribed at stage First ⇒ stops LAST, so grains keep their
         // full chance to flush before the terminal drain. See IoPoolSiloTeardown.
         services.AddIoPoolSiloTeardown();
+        // A stalled ThreadPool names its own frames: the liveness heartbeat (when the host arms it)
+        // captures the pool workers' stacks once on a tick with no completions and work queued —
+        // the [POOLSTALL] line (MeshWeaver#5388).
+        services.AddThreadPoolWorkerStacks();
         // 🚨 Let ACCEPTED routing work LAND before the silo stops (issue #2638). RoutingGrain's
         // turn is O(1), so Orleans' grain deactivation never waits on a route; the leg runs on
         // the routing pool but holds its permit only for the subscribe; and the per-node delivery

@@ -50,10 +50,39 @@ internal sealed class BlockedThreadStacks(string? dacPath = null)
     /// </summary>
     /// <param name="managedThreadIds">The managed thread ids whose stacks are wanted.</param>
     public IReadOnlyDictionary<int, string> Capture(IReadOnlyCollection<int> managedThreadIds)
+        => Read(runtime => (IReadOnlyDictionary<int, string>)managedThreadIds.Distinct().ToDictionary(
+            id => id,
+            id => runtime.Threads.FirstOrDefault(t => t.ManagedThreadId == id) is { } thread
+                ? Format(thread)
+                : "(no such thread in the dump — the leaf returned, or its thread ended, after the join expired)"));
+
+    /// <summary>
+    /// The stacks of every ThreadPool WORKER thread of this process, read from ONE dump — what a
+    /// stalled pool's workers are standing in (MeshWeaver#5388, the <c>[POOLSTALL]</c> line). A worker
+    /// is a thread the runtime marks <see cref="ClrThreadState.TS_TPWorkerThread"/>, or one whose
+    /// outermost frames are the portable pool's worker loop — the second test covers a runtime that
+    /// does not set the flag on its managed workers. Throws when the dump cannot be written or read.
+    /// Blocking: run it off any scheduler that matters.
+    /// </summary>
+    /// <returns>One entry per worker: its frames, innermost first, one per line.</returns>
+    public IReadOnlyList<string> CaptureThreadPoolWorkers()
+        => Read(runtime => runtime.Threads
+            .Where(thread => thread.IsAlive)
+            .Select(thread => (thread, frames: Frames(thread, int.MaxValue)))
+            .Where(t => t.thread.State.HasFlag(ClrThreadState.TS_TPWorkerThread)
+                        || t.frames.Any(frame => frame.Contains(PoolWorkerLoop, StringComparison.Ordinal)))
+            .Select(t => string.Join(Environment.NewLine, t.frames.Take(MaxFrames).Select(frame => "at " + frame)))
+            .ToArray());
+
+    /// <summary>The portable ThreadPool's worker loop — on the outermost frames of every worker it runs.</summary>
+    internal const string PoolWorkerLoop = "PortableThreadPool+WorkerThread";
+
+    /// <summary>One dump of this process, read through the pinned DAC, and deleted once read.</summary>
+    private T Read<T>(Func<ClrRuntime, T> read)
     {
         // Pinned FIRST, and nothing is dumped without it: see PinDac.
         PinDac();
-        var path = Path.Combine(Path.GetTempPath(), $"mw-blocked-leaf-{Environment.ProcessId}-{Guid.NewGuid():N}.dmp");
+        var path = Path.Combine(Path.GetTempPath(), $"mw-stacks-{Environment.ProcessId}-{Guid.NewGuid():N}.dmp");
         try
         {
             new DiagnosticsClient(Environment.ProcessId).WriteDump(DumpType.Normal, path, logDumpGeneration: false);
@@ -64,11 +93,7 @@ internal sealed class BlockedThreadStacks(string? dacPath = null)
             // (a symbol server, a file locator) that the pin does not hold and its unload would then
             // pull out from under every thread that ran it.
             using var runtime = CreateRuntime(target.ClrVersions[0]);
-            return managedThreadIds.Distinct().ToDictionary(
-                id => id,
-                id => runtime.Threads.FirstOrDefault(t => t.ManagedThreadId == id) is { } thread
-                    ? Format(thread)
-                    : "(no such thread in the dump — the leaf returned, or its thread ended, after the join expired)");
+            return read(runtime);
         }
         finally
         {
@@ -76,6 +101,12 @@ internal sealed class BlockedThreadStacks(string? dacPath = null)
                 File.Delete(path);
         }
     }
+
+    private static IReadOnlyList<string> Frames(ClrThread thread, int max) =>
+        thread.EnumerateStackTrace()
+            .Select(f => f.Method?.Signature ?? f.FrameName ?? f.Kind.ToString())
+            .Take(max)
+            .ToArray();
 
     /// <summary>
     /// The runtime of the dump, read through the pinned DAC. 🚨 On Linux a <see cref="DumpType.Normal"/>
@@ -105,15 +136,12 @@ internal sealed class BlockedThreadStacks(string? dacPath = null)
 
     private static string Format(ClrThread thread)
     {
-        var frames = thread.EnumerateStackTrace()
-            .Select(f => f.Method?.Signature ?? f.FrameName ?? f.Kind.ToString())
-            .Take(MaxFrames + 1)
-            .ToArray();
-        if (frames.Length == 0)
+        var frames = Frames(thread, MaxFrames + 1);
+        if (frames.Count == 0)
             return "(no managed frame on the thread — it is in native code or between managed calls)";
         var shown = frames.Take(MaxFrames).Select(f => "   at " + f);
         return Environment.NewLine + string.Join(Environment.NewLine, shown)
-               + (frames.Length > MaxFrames ? $"{Environment.NewLine}   … (deeper frames omitted)" : "");
+               + (frames.Count > MaxFrames ? $"{Environment.NewLine}   … (deeper frames omitted)" : "");
     }
 
     /// <summary>
