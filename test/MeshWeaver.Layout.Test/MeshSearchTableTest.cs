@@ -148,6 +148,37 @@ public class MeshSearchTableTest
         Assert.Equal("42", MeshSearchColumn.FormatValue(JsonDocument.Parse("42").RootElement));
     }
 
+    /// <summary>The parser reads the text after the LAST hyphen as the direction, so a hyphenated
+    /// selector must sort by ITSELF in both directions — never by its prefix on the ascending click.</summary>
+    [Fact]
+    public void AHyphenatedSelector_SortsByItself_InBothDirections()
+    {
+        var ascending = MeshSearchColumnSort.Toggle(null, "content.policy-id");
+        var descending = MeshSearchColumnSort.Toggle(ascending, "content.policy-id");
+
+        foreach (var (sort, desc) in new[] { (ascending, false), (descending, true) })
+        {
+            var parsed = Parser.Parse(MeshSearchColumnSort.Apply("nodeType:Submission", sort)).OrderBy;
+            Assert.Equal("content.policy-id", parsed?.Property);
+            Assert.Equal(desc, parsed?.Descending);
+        }
+    }
+
+    [Fact]
+    public void AJsonNumberBeyondDecimal_StillRenders() =>
+        Assert.Equal("1E+100", MeshSearchColumn.FormatValue(JsonDocument.Parse("1e100").RootElement));
+
+    [Fact]
+    public void WithColumns_SnapshotsTheCallersArray()
+    {
+        var columns = new[] { new MeshSearchColumn("Name", "name") };
+        var control = Controls.MeshSearch.WithColumns(columns);
+
+        columns[0] = new MeshSearchColumn("Other", "other");
+
+        Assert.Equal("name", control.Columns![0].Field);
+    }
+
     [Fact]
     public void AFormatTheValueCannotTake_RendersTheValue_NotAnError() =>
         Assert.Equal("2026-10-01", MeshSearchColumn.FormatValue(new DateOnly(2026, 10, 1), "Q"));

@@ -104,7 +104,12 @@ public record MeshSearchColumn(string Title, string Field)
         JsonValueKind.String => FormatValue(json.GetString(), format),
         JsonValueKind.True => TrueText,
         JsonValueKind.False => FalseText,
-        JsonValueKind.Number => json.TryGetInt64(out var l) ? FormatValue(l, format) : FormatValue(json.GetDecimal(), format),
+        // Never a throwing read: a valid JSON number outside decimal's range (1e100) still renders,
+        // as the same value typed as a double would.
+        JsonValueKind.Number => json.TryGetInt64(out var l) ? FormatValue(l, format)
+            : json.TryGetDecimal(out var m) ? FormatValue(m, format)
+            : json.TryGetDouble(out var d) ? FormatValue(d, format)
+            : json.GetRawText(),
         JsonValueKind.Array => string.Join(", ", json.EnumerateArray().Select(item => FormatJson(item, format))
             .Where(text => text.Length > 0)),
         _ => json.GetRawText(),
@@ -138,8 +143,15 @@ public record MeshSearchColumn(string Title, string Field)
 /// <param name="Descending">True for newest/largest/Z first.</param>
 public record MeshSearchColumnSort(string Field, bool Descending = false)
 {
-    /// <summary>The store-side sort term: <c>sort:{Field}</c> or <c>sort:{Field}-desc</c>.</summary>
-    public string Term => Descending ? $"sort:{Field}-desc" : $"sort:{Field}";
+    /// <summary>
+    /// The store-side sort term: <c>sort:{Field}</c> or <c>sort:{Field}-desc</c>. The parser reads the
+    /// text after the LAST hyphen as the direction, so a selector that itself contains one
+    /// (<c>content.policy-id</c>) says <c>-asc</c> explicitly — bare, it would sort by
+    /// <c>content.policy</c>.
+    /// </summary>
+    public string Term => Descending ? $"sort:{Field}-desc"
+        : Field.Contains('-') ? $"sort:{Field}-asc"
+        : $"sort:{Field}";
 
     /// <summary>
     /// The sort after a click on the header of <paramref name="field"/>: a column that is not the

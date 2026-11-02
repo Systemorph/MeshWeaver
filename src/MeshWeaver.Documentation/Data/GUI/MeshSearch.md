@@ -232,9 +232,12 @@ Controls.MeshSearch
   that scope is active; a Table with no columns at all shows one *Name* column.
 - **`Sortable = false`** on a column whose selector the store cannot order by; its header is then
   plain text.
-- **Content is loaded.** A Table needs `Content` for its `content.*` columns, so the view adds
-  `content` to a hidden query whose own `select:` leaves it out (a `select:` without `content`
-  yields nodes whose Content is null — the cells would silently stay empty).
+- **What the columns read is loaded.** A Table needs `Content` for its `content.*` columns and the
+  node field behind every other column (`description`, `lastModified`, …), so the view adds them to
+  a hidden query whose own `select:` leaves them out (a `select:` without `content` yields nodes
+  whose Content is null — the cells would silently stay empty).
+- **A selector with a hyphen** (`content.policy-id`) sorts ascending as `sort:content.policy-id-asc`:
+  the parser reads the text after the last hyphen as the direction.
 
 ## A catalog app — a menu of catalogs with one query bar
 

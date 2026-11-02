@@ -529,7 +529,9 @@ public record MeshSearchControl()
     /// <summary>Returns a copy with the <see cref="MeshSearchRenderMode.Table"/> columns set (see <see cref="Columns"/>).</summary>
     /// <param name="columns">The columns, left to right; each names a header title and the selector its cells read.</param>
     public MeshSearchControl WithColumns(params MeshSearchColumn[] columns) =>
-        this with { Columns = columns };
+        // A snapshot, never the caller's array: replacing an element afterwards must not reach
+        // back into a control value that has already been built.
+        this with { Columns = System.Collections.Immutable.ImmutableArray.Create(columns) };
 
     /// <summary>Returns a copy with the scope-tab strip set (see <see cref="ScopeTabs"/>).</summary>
     /// <param name="tabs">The scopes; the first is initially active and should match <see cref="HiddenQuery"/>.</param>
