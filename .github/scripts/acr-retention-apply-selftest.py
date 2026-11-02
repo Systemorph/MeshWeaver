@@ -23,6 +23,16 @@ the apply ends green and names the now-stale `recordAheadOfRegistry` as the next
 stand-alone `verify` still reds on it; and the fake really refuses `task update --schedule`
 (the instrument can fail).
 
+🚨 OFFLINE MEANS NO LIVE EVIDENCE EITHER. `apply` consults `acr-retention-protection.py` whenever the
+record enables a task, and that script fetches the lock lane's newest run from the GitHub API. Run
+against the committed tree, this test therefore went network- and state-dependent the moment the
+record recorded a task `Enabled` (#7834 review): an unreachable API, a rate limit or a red lock lane
+would red every unrelated pull request before the fake registry was exercised. So every scenario
+runs a COPY of `.github/scripts` + `.github/acr-retention` in a temp tree, with the copy's
+`acr-retention-protection.py` replaced by a stub whose verdict the scenario chooses. The production
+interlock gains no override: the stub exists only inside the harness's own temp tree. Scenario 6
+proves the stub is consulted — a red verdict refuses the apply before any registry write.
+
     python3 .github/scripts/acr-retention-apply-selftest.py
 """
 from __future__ import annotations
@@ -30,6 +40,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -123,7 +134,29 @@ with open(STATE, "w") as f:
 '''
 
 
-def setup(root: Path, with_timer: dict[str, bool], live_schedule: dict[str, str] | None = None) -> dict:
+# The protection verdict, chosen per scenario. Same CLI contract as the real script (`--check
+# "<tasks>"`, exit 0 = current, 1 = refuse) and it records that it was asked.
+FAKE_PROTECTION = r'''#!/usr/bin/env python3
+import os, sys
+with open(os.environ["FAKE_PROTECTION_LOG"], "a") as f:
+    f.write(" ".join(sys.argv[1:]) + "\n")
+if os.environ.get("FAKE_PROTECTION") == "red":
+    print("::error::fake protection verdict: the lock lane is red", file=sys.stderr); sys.exit(1)
+print("protection is current (fake verdict)")
+'''
+
+
+def setup(root: Path, with_timer: dict[str, bool], live_schedule: dict[str, str] | None = None,
+          protection: str = "green", record_edit=None) -> dict:
+    # A private copy of the scripts and the record, so neither the committed record's statuses nor
+    # live GitHub state decide what this test exercises.
+    tree = root / "tree"
+    shutil.copytree(HERE, tree / "scripts")
+    shutil.copytree(RECORD, tree / "acr-retention")
+    (tree / "scripts" / "acr-retention-protection.py").write_text(FAKE_PROTECTION)
+    if record_edit is not None:
+        tasks_json = tree / "acr-retention" / "tasks.json"
+        tasks_json.write_text(json.dumps(record_edit(json.loads(tasks_json.read_text())), indent=2))
     bindir = root / "bin"
     bindir.mkdir()
     az = bindir / "az"
@@ -137,13 +170,15 @@ def setup(root: Path, with_timer: dict[str, bool], live_schedule: dict[str, str]
     (root / "state.json").write_text(json.dumps(state))
     env = dict(os.environ)
     env.update(PATH=f"{bindir}{os.pathsep}{env['PATH']}", FAKE_AZ_STATE=str(root / "state.json"),
-               MW_ACR_APPLY_CONFIRM="meshweaver", TMPDIR=str(root))
+               MW_ACR_APPLY_CONFIRM="meshweaver", TMPDIR=str(root),
+               FAKE_PROTECTION=protection, FAKE_PROTECTION_LOG=str(root / "protection.log"),
+               SELFTEST_SCRIPT=str(tree / "scripts" / SCRIPT.name))
     return env
 
 
 def run(env: dict, verb: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["bash", str(SCRIPT), verb], env=env, capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL)
+    return subprocess.run(["bash", env["SELFTEST_SCRIPT"], verb], env=env, capture_output=True,
+                          text=True, stdin=subprocess.DEVNULL)
 
 
 def main() -> int:
@@ -220,14 +255,44 @@ def main() -> int:
             failures.append(f"the fake az accepted `task update --schedule` (exit {r.returncode}) — "
                             "it would not catch the defect this test exists for")
 
+    # 6. The interlock is CONSULTED: a record enabling a task, with the protection verdict red, must
+    #    refuse before any registry write — and with it green the same record applies.
+    def enable_images(d: dict) -> dict:
+        d.pop("pause", None)
+        for task in d["tasks"]:
+            if task["name"] == "purge-old-images":
+                task["status"] = "Enabled"
+        return d
+    for verdict in ("red", "green"):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            env = setup(root, {k: True for k in TASKS}, protection=verdict, record_edit=enable_images)
+            r = run(env, "apply")
+            plog = root / "protection.log"
+            asked = plog.read_text() if plog.is_file() else ""
+            logf = root / "state.json.log"
+            writes = [line for line in (logf.read_text().splitlines() if logf.is_file() else [])
+                      if '"show"' not in line]
+            if "purge-old-images" not in asked:
+                failures.append(f"apply enabling purge-old-images never asked the protection "
+                                f"interlock (verdict {verdict})")
+            if verdict == "red" and (r.returncode == 0 or writes):
+                failures.append(f"apply went ahead on a RED protection verdict (exit {r.returncode}, "
+                                f"{len(writes)} registry write(s))")
+            if verdict == "green" and r.returncode != 0:
+                failures.append(f"apply refused on a GREEN protection verdict:\n"
+                                f"{(r.stdout + r.stderr)[-1500:]}")
+
     if failures:
         print("acr-retention apply self-test FAILED:")
         for f in failures:
             print(f"  ✗ {f}")
         return 1
-    print("acr-retention apply self-test: 5 scenarios held (timer updated, timer added, apply green "
+    print("acr-retention apply self-test: 6 scenarios held (timer updated, timer added, apply green "
           "naming the stale declaration while verify still reds on it, a timer already at the "
-          "recorded schedule left alone, the fake refuses --schedule and a same-schedule update)")
+          "recorded schedule left alone, the fake refuses --schedule and a same-schedule update, "
+          "and a red protection verdict refuses the apply before any registry write) — offline, "
+          "against a private copy of the record and a stubbed protection verdict")
     return 0
 
 
