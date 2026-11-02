@@ -172,8 +172,41 @@ when a `NodeType` is written, which is a relevant change). Per-node write cost s
   and a System query in a mesh with an undeclared Read validator, both still re-read on a foreign
   write.
 
+## A finished run must never dispose the run after it (MeshWeaver#7372)
+
+`CoalesceWhileRunning` runs one re-query at a time. A trigger that arrives during a run marks one
+follow-up. It used to hold the current run in a `SerialDisposable` and assign the run's subscription
+**after** `Subscribe` returned. A run can complete on another thread before that assignment. With
+nothing pending, that completion leaves the pipeline idle, so a new trigger can start the next run and
+install it first. The late assignment of the finished run then replaced the new run, and replacing a
+`SerialDisposable` value disposes it. The new run's answer was dropped and its completion never
+arrived, so the pipeline stayed marked as running. Every later trigger only marked a follow-up that
+nothing started.
+
+On a live query this freezes the result set for the rest of the process. Nothing faults and nothing is
+logged, and fresh readers attach to the same frozen chain through `IMeshNodeStreamCache`. The
+Education install matrix showed it on Postgres. The gating pass's `_Policy` write started a re-query
+of the partition's `$security-access` input. The Public and Anonymous Viewer grants landed about
+300 ms later, and the fold never saw them. For 21 minutes `whoami` reported no permissions for the
+viewer. In the same period the store, the SQL projection and every fresh query held both grants.
+
+The fix installs a per-run `SingleAssignmentDisposable` slot **before** subscribing the run. A slot can
+then be replaced only by a run that started after this run completed, because the `running` flag
+orders runs under the gate. If a slot is replaced before its subscription arrives, assigning the
+subscription disposes it, and that is harmless because the run has already completed. The Postgres
+providers carry their own copy of this operator (`PostgreSqlPartitionedMeshQuery.CoalesceWhileRunning`,
+MeshWeaver.Plugins), and it is fixed the same way.
+
+Regression test: `LiveRequeryCoalescingTest.ARunStartedByANewTrigger_WhileTheFinishedRunIsStillBeingInstalled_IsNeverDisposedByIt`.
+It forces the interleaving with a joined helper thread, so the result does not depend on timing. On
+the old code it fails because the second run's subscription is disposed, and its negative control, a
+third trigger, never starts a run.
+
 ## What this does not claim
 
+- That this race is the only way a fold input can go stale. The Education evidence fits it: the
+  policy re-read landed, the grant re-read never did, and fresh folds stayed empty. Nothing in the
+  captured logs names the disposed run, so the match is inferred from the mechanism, not observed.
 - It does not make a relevant re-query cheaper. A write of an `AccessAssignment` still re-walks its
   partition, and a `GroupMembership` write still re-walks the mesh. Those writes are rare, and they
   are the ones that can change the answer.
