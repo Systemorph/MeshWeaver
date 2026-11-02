@@ -38,7 +38,7 @@ namespace MeshWeaver.Hosting.Security;
 /// and the owner's current state still admits the caller (<see cref="DeclaredPointRead.Admits"/>);
 /// a layout-area subscription follows the latter. The first refusal ends the subscription with a
 /// <c>StreamErrorEvent</c> and disposes the server-side stream. A verdict that stalls past the
-/// permission-establishment budget, faults or answers nothing is a refusal.</para>
+/// permission-establishment budget, faults or answers nothing ends it too, as NO VERDICT — never as a denial (MeshWeaver#7825).</para>
 /// </summary>
 public static class DeclaredReadSubscriptionFollow
 {
@@ -158,8 +158,8 @@ public static class DeclaredReadSubscriptionFollow
     /// bounds only a revision's first verdict; once a revision was admitted under a grant, a later
     /// Granted → pending → Denied hand-over started a NEW declaration check nobody bounded, and a
     /// stalled storage or owner lookup there kept the subscription open past the budget on a grant
-    /// that no longer stood. Past the budget, on a fault, or on an empty answer the check is a
-    /// refusal; after its first answer it is followed live, unbounded.</para>
+    /// that no longer stood. Past the budget, on a fault, or on an empty answer the check ends
+    /// the read as NO VERDICT (an error, never a false); after its first answer it is followed live, unbounded.</para>
     ///
     /// <para>🚨 And the WHOLE unresolved transition shares ONE deadline (review of #7329, thread
     /// 4392164760). From the moment the standing Read stops granting — a pending marker or a
@@ -169,11 +169,11 @@ public static class DeclaredReadSubscriptionFollow
     /// declaration lookup under access commits cycling Denied → pending → Denied faster than the
     /// budget kept an admitted subscription open forever: each pending marker cancelled the
     /// declaration's deadline, and each settled denial ended the pending period's. Past the shared
-    /// deadline the verdict is a refusal.</para>
+    /// deadline the verdict is NO VERDICT, which ends the read without naming it a denial.</para>
     /// </summary>
     /// <param name="standing">The followed standing Read, <c>null</c> while a re-check is in flight.</param>
     /// <param name="declaredRead">The declaration's live verdict for the revision, subscribed only under a definitive denial.</param>
-    /// <param name="budget">How long an unresolved transition — pending markers and declaration checks together — may last before it is a refusal.</param>
+    /// <param name="budget">How long an unresolved transition — pending markers and declaration checks together — may last before it ends the read as NO VERDICT.</param>
     /// <param name="scheduler">Where that deadline runs.</param>
     internal static IObservable<bool> VerdictOf(
         IObservable<PermissionCheckOutcome?> standing, Func<IObservable<bool>> declaredRead, TimeSpan budget, IScheduler scheduler) =>
@@ -184,22 +184,38 @@ public static class DeclaredReadSubscriptionFollow
             return standing
                 .Select(outcome =>
                 {
+                    // 🚨 Every way this verdict can go UNDECIDED is an ERROR on it, never `false`
+                    // (MeshWeaver#7825): RevisionAdmission ends the read on either, but only a `false`
+                    // is a DENIAL — the stalled pending period, the undetermined standing Read and
+                    // the stalled or faulted declaration lookup end it as NO VERDICT, which the
+                    // subscriber presents as "temporarily unavailable", not as withdrawn rights.
                     if (outcome is null)
                     {
                         // Holds the verdict already given, until the shared deadline.
                         var (_, pendingDue) = period.Continue(scheduler.Now + budget);
-                        return Observable.Timer(pendingDue, scheduler).Select(_ => false);
+                        return Observable.Timer(pendingDue, scheduler).SelectMany(_ => Observable.Throw<bool>(
+                            new TimeoutException($"the re-check of the standing Read did not settle within {budget}")));
                     }
-                    if (outcome.IsGranted || outcome.IsUndetermined)
+                    if (outcome.IsUndetermined)
                     {
                         period.Settle();
-                        return Observable.Return(outcome.IsGranted);
+                        return Observable.Throw<bool>(new InvalidOperationException(outcome.UndeterminedReason));
+                    }
+                    if (outcome.IsGranted)
+                    {
+                        period.Settle();
+                        return Observable.Return(true);
                     }
                     var (generation, due) = period.Continue(scheduler.Now + budget);
                     return Observable.Defer(declaredRead)
                         .Timeout(Observable.Timer(due, scheduler), _ => Observable.Never<long>())
-                        .Catch((Exception _) => Observable.Return(false))
-                        .DefaultIfEmpty(false)
+                        // A stall (TimeoutException) or a fault passes through as NO VERDICT; so
+                        // does a lookup that completes without answering.
+                        .Select(admits => (bool?)admits)
+                        .DefaultIfEmpty(null)
+                        .SelectMany(admits => admits is { } answer
+                            ? Observable.Return(answer)
+                            : Observable.Throw<bool>(new InvalidOperationException("the declared point read answered nothing")))
                         // The declaration's first answer settles the transition; a later selection
                         // (a newer generation) is not settled by this, now cancelled, check.
                         .Do(_ => period.SettleIf(generation));

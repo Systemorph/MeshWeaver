@@ -1749,7 +1749,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 {
                     var evt = delivery.Message;
                     logger.LogWarning("Stream {StreamId} received StreamErrorEvent: {Message}", StreamId, evt.Message);
-                    OnError(new InvalidOperationException(evt.Message));
+                    // Re-raised as the KIND the owner named (MeshWeaver#7825), so a view's classifier
+                    // reads a refused read as a denial and an undecided one as NO VERDICT — never
+                    // either as an unclassified fault.
+                    OnError(evt.ErrorType switch
+                    {
+                        ErrorType.Forbidden => new UnauthorizedAccessException(evt.Message),
+                        ErrorType.Unavailable => new DeliveryFailureException(
+                            new DeliveryFailure(delivery, evt.Message) { ErrorType = ErrorType.Unavailable }),
+                        _ => new InvalidOperationException(evt.Message),
+                    });
                     // 🚨 The owner ENDED this stream (review of #7016, thread 4340066051): nothing may
                     // re-open it. Faulting the store alone left this mirror's recovery running — the
                     // change-feed staleness latch, the end/recycle re-arm — and each re-subscribes AS
