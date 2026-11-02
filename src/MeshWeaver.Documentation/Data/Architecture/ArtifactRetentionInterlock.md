@@ -786,7 +786,9 @@ agent files or approves it:
    2026-11-02, and the declaration deleted.
 4. Lift `pause` and record `purge-old-images` as `Enabled` in a reviewed diff, then run another
    approved `RegistryRetention` apply. The apply interlock refuses unless the lock lane's newest run
-   on main is green and under 36 hours old. The task now runs nightly **as a report**.
+   on main is green and under 36 hours old. The task now runs nightly **as a report**. **Record
+   half done** (the pause is lifted and `recordAheadOfRegistry` re-declared for the task); the
+   approved apply that follows its merge is what enables the live task.
 5. Read back at least one nightly run. When nothing it lists is a tag or manifest the fleet
    references, one reviewed diff drops `--dry-run` and the `dryRun` block together. Re-declare
    `recordAheadOfRegistry`, and apply once more with approval.
@@ -827,9 +829,10 @@ not downstream of that night's protection verdict.
 1. **The decided window is APPLIED, but not RUNNING.** The governed `RegistryRetention` apply [`Ops/Actions/registry-retention-apply-20261101b-3438`](https://control.systemorph.com/Ops/Actions/registry-retention-apply-20261101b-3438) on the control instance ([Memex run 41419066636](https://github.com/Systemorph/Memex/actions/runs/41419066636), 2026-11-02 09:16Z) installed
    the record on both tasks: `--ago 30d --untagged` with no `--keep`, and `--dry-run` on the two
    steps of `purge-old-images` only (the `dryRun` block). The superseded `purge-old-ci-releases`
-   carries no `--dry-run` and would delete if enabled. Both stay disabled. What is
-   left is steps 4 and 5 of *What the window SELECTS* above: lifting the pause (enabling the task
-   as a nightly report) and, after reading that report back, dropping `--dry-run`. Both belong to
+   carries no `--dry-run` and would delete if enabled. Both stay disabled. The record has
+   since lifted the pause and records `purge-old-images` `Enabled` (step 4's record half); what is
+   left is the approved apply that enables the live task as a nightly report, and step 5 — after
+   reading that report back, dropping `--dry-run`. Both belong to
    whoever owns the registry. Their cost is storage: dropping `--keep 10` and moving 7d → 30d
    retains strictly more, over five repositories that republish many times a day.
 2. **The two clocks are still two clocks.** The lock is a GitHub Actions cron at 01:00; the purge is
