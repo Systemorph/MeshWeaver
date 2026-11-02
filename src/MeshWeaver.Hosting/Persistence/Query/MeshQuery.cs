@@ -359,6 +359,19 @@ public partial class MeshQuery : IMeshQueryCore
         }
     }
 
+    /// <summary>
+    /// The merge's frame emitter (<see cref="GateFreeEmitter{TItem}"/>). A batch of frames other threads
+    /// queued during a drain is delivered on the task pool, never on the draining thread — which is
+    /// often the Query pool's setup leaf (MeshWeaver#7277). An observer that throws on such a batch has
+    /// no caller to fault, so it is reported here rather than left unhandled on a pool thread.
+    /// </summary>
+    private static GateFreeEmitter<TItem> NewEmitter<TItem>(IObserver<TItem> observer, ILogger? logger)
+        => new(observer, handOff: null, reportHandOffFault: logger is null
+            ? null
+            : fault => logger.LogError(fault,
+                "MeshQuery: a query consumer threw while receiving a handed-off batch of frames; the frames "
+                + "still queued behind it are delivered by the next change"));
+
     private ILogger? _logger;
 
     // Defensive: the unsecured IMeshQueryCore registration constructs MeshQuery with hub: null
@@ -528,7 +541,7 @@ public partial class MeshQuery : IMeshQueryCore
             // thread while the providers may be emitting on their own.
             var gate = new object();
             // The observer is never called while `gate` is held — see GateFreeEmitter.
-            var emitter = new GateFreeEmitter<IReadOnlyCollection<QueryResult>>(observer);
+            var emitter = NewEmitter(observer, logger);
             void UnderGate(Action body)
             {
                 lock (gate)
@@ -891,7 +904,7 @@ public partial class MeshQuery : IMeshQueryCore
                 // 🚨 …and the observer is NEVER called while that gate is held — see
                 // GateFreeEmitter: a frame's consumer can run on into a storage write whose change
                 // delivery waits for a lock another thread holds while it waits for this gate.
-                var singleEmitter = new GateFreeEmitter<QueryResultChange<T>>(observer);
+                var singleEmitter = NewEmitter(observer, singleProbeLogger);
                 void UnderSingleGate(Action body)
                 {
                     lock (singleGate)
@@ -1035,7 +1048,7 @@ public partial class MeshQuery : IMeshQueryCore
             // ran on SYNCHRONOUSLY into a storage write, whose change delivery needs the storage
             // feed's Merge gate, while another thread held that gate delivering a change into this
             // merge and waited for `gate`. Neither write ever answered (MeshWeaver#7117).
-            var emitter = new GateFreeEmitter<QueryResultChange<T>>(observer);
+            var emitter = NewEmitter(observer, Logger);
             void UnderGate(Action body)
             {
                 lock (gate)
