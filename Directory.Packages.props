@@ -53,7 +53,7 @@
     <!-- IoPoolSiloTeardown reads the stack of a leaf that outlived the silo join from one dump of
          the process (#7277): the runtime's own dump writer over its diagnostic port, read by ClrMD. -->
     <PackageVersion Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.661903" />
-    <PackageVersion Include="Microsoft.Diagnostics.Runtime" Version="3.1.512801" />
+    <PackageVersion Include="Microsoft.Diagnostics.Runtime" Version="4.2.751201" />
     <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.11.0" />
