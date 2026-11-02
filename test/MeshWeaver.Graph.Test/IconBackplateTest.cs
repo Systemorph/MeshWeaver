@@ -1,4 +1,5 @@
 using MeshWeaver.Graph;
+using MeshWeaver.Layout.Palettes;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -155,5 +156,16 @@ public class IconBackplateTest
         var svg = Uri.UnescapeDataString(link.Href["data:image/svg+xml,".Length..]);
         svg.Should().Contain("<rect width=\"32\" height=\"32\" rx=\"7\"");
         svg.Should().Contain("🎯");
+    }
+
+    [Fact]
+    public void Palette_EveryPlateHue_CarriesWhiteDetailAtWcagAA()
+    {
+        // The plate exists so white glyph detail stays legible; a generated hue too light for it
+        // would reintroduce the invisible-icon defect with a different colour.
+        var white = OklchColor.FromHex("#ffffff");
+        IconBackplate.Palette.Should().HaveCount(10).And.OnlyHaveUniqueItems();
+        foreach (var hex in IconBackplate.Palette)
+            OklchColor.FromHex(hex).ContrastRatio(white).Should().BeGreaterThanOrEqualTo(IconBackplate.MinDetailContrast, hex);
     }
 }
