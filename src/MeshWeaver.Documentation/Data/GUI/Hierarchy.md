@@ -33,11 +33,38 @@ is resolved by the pure, unit-tested `HierarchyControl.Layout(nodes)` (`FigureCo
 
 It returns `null` for no nodes, and the view says *"No structure to show."* in the viewer's language.
 
+# A deal of options and layers, and chained covers
+
+Beyond the six positional fields a node carries init-only slots for the shapes deals actually take:
+
+| Slot | Vocabulary | Use |
+|---|---|---|
+| `Kind` | `HierarchyNodeKind`: `group`, `option`, `proportional`, `excess-of-loss`, `section` (open) | styles the box — a quota share and an XL layer must not look alike |
+| `Relation` | free text, localized | the edge label to the parent — "option", "inures to", "on retention of" |
+| `Arrange` | `HierarchyArrangement`: `row` (default), `stack` (open) | how the node's CHILDREN lay out; `stack` draws them one above the other, a tower (give the highest layer first) |
+| `Badges` | short localized strings | status chips — a verdict, "bound", "★ favourite" |
+| `Figures` | `KpiItem(Label, Value)` | small figures on the box — our line, our premium |
+
+So the general deal — a submission → 2–5 mutually exclusive options (one `favourite`) → each
+option's 1–6 layers → what each layer covers — stays readable: the options sit side by side, each
+option `stack`s its layers into a column, and a layer's sections sit under it.
+
+```csharp
+Controls.Hierarchy(
+    new HierarchyNode("qs", null, "Quota share 50 %", "30 % commission")
+        { Kind = HierarchyNodeKind.Proportional, Arrange = HierarchyArrangement.Stack },
+    new HierarchyNode("xl2", "qs", "XL layer 2", "10m xs 10m · 2.4 % RoL")
+        { Kind = HierarchyNodeKind.ExcessOfLoss, Relation = "on retention of" },
+    new HierarchyNode("xl1", "qs", "XL layer 1", "5m xs 5m · 6.1 % RoL")
+        { Kind = HierarchyNodeKind.ExcessOfLoss, Relation = "on retention of",
+          Figures = [new KpiItem("Our premium", "77.5k")], Badges = ["bound"] })
+```
+
 # Emphasis and links
 
 `Emphasis` is an open vocabulary (`HierarchyEmphasis`): `current` — the node the page is about,
 outlined in the accent colour and **never a link**; `strong` — the heading node, filled in the
-accent colour; `muted` — a node of secondary weight; empty — an ordinary box. Every other node with
+accent colour; `muted` — a node of secondary weight; `favourite` — the preferred alternative, marked with a star; empty — an ordinary box. Every other node with
 an `Href` is a link; `HierarchyControl.LinkOf(node)` decides, and normalises a bare mesh path to a
 site-root-relative one exactly as `TowerControl.NavigableHref` does.
 

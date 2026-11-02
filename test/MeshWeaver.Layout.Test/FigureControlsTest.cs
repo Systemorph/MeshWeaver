@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text.Json;
@@ -244,6 +245,77 @@ public class FigureControlsTest(ITestOutputHelper output) : HubTestBase(output)
         HierarchyControl.IsEmphasis(nodes[2], HierarchyEmphasis.None).Should().BeTrue();
     }
 
+    /// <summary>
+    /// The general deal shape: a submission → 3 mutually exclusive options (one the favourite) → each
+    /// option's 3 layers as a TOWER (stacked, highest first) → what a layer covers. Every node lands
+    /// exactly once, under its own option, in input order, at its own depth.
+    /// </summary>
+    [Fact]
+    public void Hierarchy_three_options_of_three_layers_each()
+    {
+        var nodes = new List<HierarchyNode>
+        {
+            new("sub", null, "MTPL 2026", "Submission · 3 options", "Acme/MTPL2026", HierarchyEmphasis.Strong)
+                { Kind = HierarchyNodeKind.Group },
+        };
+        foreach (var o in new[] { 1, 2, 3 })
+        {
+            nodes.Add(new($"o{o}", "sub", $"Option {o}", "3 layers", $"Acme/MTPL2026/O{o}",
+                o == 2 ? HierarchyEmphasis.Favourite : null)
+            {
+                Kind = HierarchyNodeKind.Option,
+                Arrange = HierarchyArrangement.Stack,
+                Relation = "option",
+                Badges = o == 2 ? ["★ favourite"] : null,
+            });
+            foreach (var (l, terms) in new[] { (3, "20m xs 20m"), (2, "10m xs 10m"), (1, "5m xs 5m") })
+                nodes.Add(new($"o{o}l{l}", $"o{o}", $"Layer {l}", $"{terms} · 3.1 % RoL")
+                {
+                    Kind = HierarchyNodeKind.ExcessOfLoss,
+                    Figures = [new KpiItem("Our line", "2.5m"), new KpiItem("Our premium", "77.5k")],
+                    Badges = l == 1 ? ["within authority"] : null,
+                });
+        }
+        nodes.Add(new("o2l1s", "o2l1", "Motor TPL", "Section") { Kind = HierarchyNodeKind.Section });
+
+        var layout = HierarchyControl.Layout(nodes)!;
+
+        layout.Depth.Should().Be(4);
+        var sub = layout.Roots.Should().ContainSingle().Subject;
+        sub.Children.Select(c => c.Node.Title).Should().Equal("Option 1", "Option 2", "Option 3");
+        sub.Children.Should().OnlyContain(o => o.Node.StacksChildren && o.Node.IsKind(HierarchyNodeKind.Option));
+        sub.Children.Should().OnlyContain(o => o.Children.Count == 3);
+        sub.Children[0].Children.Select(c => c.Node.Title).Should().Equal("Layer 3", "Layer 2", "Layer 1");
+        HierarchyControl.IsEmphasis(sub.Children[1].Node, HierarchyEmphasis.Favourite).Should().BeTrue();
+        sub.Children[1].Children[2].Children.Should().ContainSingle().Which.Node.Title.Should().Be("Motor TPL");
+        static IEnumerable<HierarchyTreeNode> All(HierarchyTreeNode n) => n.Children.SelectMany(All).Prepend(n);
+        All(sub).Should().HaveCount(nodes.Count, because: "1 submission + 3 options + 9 layers + 1 section, each once");
+        All(sub).Select(n => n.Node.Id).Should().OnlyHaveUniqueItems();
+    }
+
+    /// <summary>
+    /// A chained programme, proportional → non-proportional: a 50 % quota share whose retention is
+    /// protected by two XL layers. The kinds tell the renderer to style them apart; the relation is
+    /// the edge label.
+    /// </summary>
+    [Fact]
+    public void Hierarchy_a_quota_share_protected_by_two_xl_layers()
+    {
+        var layout = HierarchyControl.Layout(
+        [
+            new("qs", null, "Quota share 50 %", "30 % commission") { Kind = HierarchyNodeKind.Proportional, Arrange = HierarchyArrangement.Stack },
+            new("xl2", "qs", "XL layer 2", "10m xs 10m · 2.4 % RoL") { Kind = HierarchyNodeKind.ExcessOfLoss, Relation = "on retention of" },
+            new("xl1", "qs", "XL layer 1", "5m xs 5m · 6.1 % RoL") { Kind = HierarchyNodeKind.ExcessOfLoss, Relation = "on retention of" },
+        ])!;
+
+        var qs = layout.Roots.Should().ContainSingle().Subject;
+        qs.Node.IsKind(HierarchyNodeKind.Proportional).Should().BeTrue();
+        qs.Node.StacksChildren.Should().BeTrue();
+        qs.Children.Select(c => c.Node.Title).Should().Equal("XL layer 2", "XL layer 1");
+        qs.Children.Should().OnlyContain(c => c.Node.IsKind("EXCESS-OF-LOSS") && c.Node.Relation == "on retention of");
+        layout.Depth.Should().Be(2);
+    }
+
     #endregion
 
     #region Wire shape
@@ -270,6 +342,27 @@ public class FigureControlsTest(ITestOutputHelper output) : HubTestBase(output)
                 doc.RootElement.GetProperty("$type").GetString().Should().Be(expectedDiscriminator);
             return JsonSerializer.Deserialize<UiControl>(json, options).Should().BeOfType<T>().Subject;
         }
+    }
+
+    /// <summary>Kind, relation, arrangement, badges and figures survive the wire with the node.</summary>
+    [Fact]
+    public void Hierarchy_node_slots_survive_the_wire()
+    {
+        var options = GetClient().JsonSerializerOptions;
+        var node = new HierarchyNode("l1", "o1", "Layer 1", "5m xs 5m")
+        {
+            Kind = HierarchyNodeKind.ExcessOfLoss,
+            Relation = "inures to",
+            Arrange = HierarchyArrangement.Stack,
+            Badges = ["bound"],
+            Figures = [new KpiItem("Our premium", "77.5k")],
+        };
+        var back = AnalysisRows.Resolve<HierarchyNode>(JsonSerializer.SerializeToElement(new[] { node }, options), options).Single();
+        back.Kind.Should().Be(HierarchyNodeKind.ExcessOfLoss);
+        back.Relation.Should().Be("inures to");
+        back.StacksChildren.Should().BeTrue();
+        back.Badges.Should().Equal("bound");
+        back.Figures.Should().Equal(new KpiItem("Our premium", "77.5k"));
     }
 
     /// <summary>A bound row property (a JSON array off the sync stream) resolves to the same rows as a typed one.</summary>

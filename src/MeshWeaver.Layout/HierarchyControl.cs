@@ -23,6 +23,47 @@ public static class HierarchyEmphasis
 
     /// <summary>A node of secondary weight (a dimension, a reference): drawn subdued.</summary>
     public const string Muted = "muted";
+
+    /// <summary>The preferred one among alternatives (the favourite quote option): marked with a star.</summary>
+    public const string Favourite = "favourite";
+}
+
+/// <summary>
+/// What a <see cref="HierarchyNode"/> IS — an OPEN vocabulary the renderers style distinctly (a
+/// proportional treaty and an excess-of-loss layer must not look alike). Unknown kinds draw plainly.
+/// </summary>
+public static class HierarchyNodeKind
+{
+    /// <summary>A whole the others belong to: a submission, a programme, a book.</summary>
+    public const string Group = "group";
+
+    /// <summary>One of several mutually exclusive alternatives (a quote option).</summary>
+    public const string Option = "option";
+
+    /// <summary>A proportional cover: quota share or surplus (ceded %, commission).</summary>
+    public const string Proportional = "proportional";
+
+    /// <summary>A non-proportional cover: an excess-of-loss layer (limit xs attachment, rate on line).</summary>
+    public const string ExcessOfLoss = "excess-of-loss";
+
+    /// <summary>What a cover applies to: a section, a segment, a line of business.</summary>
+    public const string Section = "section";
+}
+
+/// <summary>
+/// How a node lays out its CHILDREN — an open vocabulary; unknown values lay out as <see cref="Row"/>.
+/// </summary>
+public static class HierarchyArrangement
+{
+    /// <summary>Side by side under the parent — alternatives, parts (the default).</summary>
+    public const string Row = "row";
+
+    /// <summary>
+    /// One above the other under the parent, in input order top-down — a TOWER of layers. Give the
+    /// highest layer first. Keeps a deal of five options with six layers each readable: five columns,
+    /// not thirty boxes in a row.
+    /// </summary>
+    public const string Stack = "stack";
 }
 
 /// <summary>
@@ -41,7 +82,34 @@ public record HierarchyNode(
     string Title,
     string? Subtitle = null,
     string? Href = null,
-    string? Emphasis = null);
+    string? Emphasis = null)
+{
+    /// <summary>What the node is — a <see cref="HierarchyNodeKind"/> constant; styles the box. Optional.</summary>
+    public string? Kind { get; init; }
+
+    /// <summary>
+    /// The label of the edge to the parent — the RELATION, e.g. "inures to", "on retention of",
+    /// "option". Already localized. Optional.
+    /// </summary>
+    public string? Relation { get; init; }
+
+    /// <summary>How this node's children are laid out — a <see cref="HierarchyArrangement"/> constant. Optional.</summary>
+    public string? Arrange { get; init; }
+
+    /// <summary>Short status chips on the box (a verdict, "bound", "declined"). Already localized. Optional.</summary>
+    public IReadOnlyList<string>? Badges { get; init; }
+
+    /// <summary>Small figures on the box (our line, our premium), each a label and a formatted value. Optional.</summary>
+    public IReadOnlyList<KpiItem>? Figures { get; init; }
+
+    /// <summary>Whether this node lays out its children as a <see cref="HierarchyArrangement.Stack"/>.</summary>
+    public bool StacksChildren => string.Equals(Arrange, HierarchyArrangement.Stack, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether this node is of <paramref name="kind"/> (case-insensitive).</summary>
+    /// <param name="kind">A <see cref="HierarchyNodeKind"/> constant.</param>
+    /// <returns>True when <see cref="Kind"/> is <paramref name="kind"/>.</returns>
+    public bool IsKind(string kind) => string.Equals(Kind ?? string.Empty, kind, StringComparison.OrdinalIgnoreCase);
+}
 
 /// <summary>
 /// One node placed in the tree — the pure structure <see cref="HierarchyControl.Layout"/> hands a view.
@@ -59,9 +127,12 @@ public record HierarchyTreeNode(HierarchyNode Node, int Depth, ImmutableList<Hie
 public record HierarchyLayout(ImmutableList<HierarchyTreeNode> Roots, int Depth);
 
 /// <summary>
-/// A top-down hierarchy of boxes — each box a title and a subtitle, joined to its parent by an elbow
-/// connector, the current node emphasised and every other box optionally a link. The structure of a
-/// deal (the deal → its options → what each one covers), an organisation, a programme.
+/// A top-down hierarchy of boxes — each box a title, a subtitle, optional badges and small figures,
+/// joined to its parent by a connector that may carry the RELATION ("inures to"), the current or
+/// favourite node emphasised, every other box optionally a link, and each box styled by its
+/// <see cref="HierarchyNode.Kind"/>. The structure of a deal at any depth — the submission → its
+/// mutually exclusive options → each option's layers (stacked as a tower) → what each layer covers —
+/// and chains of covers (a quota share whose retention is protected by XL layers).
 ///
 /// <para>The nodes are given FLAT (<see cref="HierarchyNode.Parent"/> names the parent), and the tree
 /// is resolved by the pure <see cref="Layout"/>, which is pinned by unit tests: unknown parents become
