@@ -1512,6 +1512,7 @@
   "analysis.waterfall.empty": "Keine Überleitung vorhanden.",
   "analysis.waterfall.unrecognized": "Nicht gezeichnet — unbekannte Art:",
   "analysis.hierarchy.empty": "Keine Struktur vorhanden.",
+  "analysis.hierarchy.favourite": "Favorit",
   "versions.title": "Versionsverlauf",
   "versions.none": "Kein Versionsverlauf vorhanden.",
   "versions.unavailable": "Der Versionsverlauf ist nicht verfügbar.",

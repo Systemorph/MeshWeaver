@@ -321,6 +321,27 @@ public class FigureControlsTest(ITestOutputHelper output) : HubTestBase(output)
         HierarchyControl.IsEmphasis(nodes[2], HierarchyEmphasis.None).Should().BeTrue();
     }
 
+    /// <summary>A bound href never becomes script: only site paths and http(s) URLs are links.</summary>
+    [Theory]
+    [InlineData("javascript://ignored/%0Aalert(1)")]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("JAVASCRIPT:alert(1)")]
+    [InlineData("data:text/html,<script>alert(1)</script>")]
+    [InlineData("vbscript:msgbox(1)")]
+    [InlineData("//evil.example/x")]
+    public void Hierarchy_an_unsafe_href_draws_the_box_unlinked(string href)
+        => HierarchyControl.LinkOf(new HierarchyNode("n", null, "N", Href: href)).Should().BeNull();
+
+    [Theory]
+    [InlineData("Acme/Deal", "/Acme/Deal")]
+    [InlineData("/Acme/Deal", "/Acme/Deal")]
+    [InlineData("https://portal.example.com/Acme", "https://portal.example.com/Acme")]
+    [InlineData("http://portal.example.com/Acme", "http://portal.example.com/Acme")]
+    public void Hierarchy_a_safe_href_is_a_link(string href, string expected)
+    {
+        HierarchyControl.LinkOf(new HierarchyNode("n", null, "N", Href: href)).Should().Be(expected);
+    }
+
     /// <summary>
     /// The general deal shape: a submission → 3 mutually exclusive options (one the favourite) → each
     /// option's 3 layers as a TOWER (stacked, highest first) → what a layer covers. Every node lands

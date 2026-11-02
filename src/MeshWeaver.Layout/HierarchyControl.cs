@@ -97,10 +97,10 @@ public record HierarchyNode(
     public string? Arrange { get; init; }
 
     /// <summary>Short status chips on the box (a verdict, "bound", "declined"). Already localized. Optional.</summary>
-    public IReadOnlyList<string>? Badges { get; init; }
+    public ImmutableList<string>? Badges { get; init; }
 
     /// <summary>Small figures on the box (our line, our premium), each a label and a formatted value. Optional.</summary>
-    public IReadOnlyList<KpiItem>? Figures { get; init; }
+    public ImmutableList<KpiItem>? Figures { get; init; }
 
     /// <summary>Whether this node lays out its children as a <see cref="HierarchyArrangement.Stack"/>.</summary>
     public bool StacksChildren => string.Equals(Arrange, HierarchyArrangement.Stack, StringComparison.OrdinalIgnoreCase);
@@ -230,14 +230,29 @@ public record HierarchyControl(object Nodes)
     }
 
     /// <summary>
-    /// Whether <paramref name="node"/> is drawn as a link: it has an href and it is not the
-    /// <see cref="HierarchyEmphasis.Current"/> node (which would only open the page already open).
-    /// Returns the navigable href (see <see cref="TowerControl.NavigableHref"/>), or null.
+    /// Whether <paramref name="node"/> is drawn as a link: it has an href, it is not the
+    /// <see cref="HierarchyEmphasis.Current"/> node (which would only open the page already open),
+    /// and the href is SAFE to put on an anchor — a site path (a bare mesh path gains its leading
+    /// slash) or an absolute <c>http</c>/<c>https</c> URL. Any other scheme (<c>javascript:</c>,
+    /// <c>data:</c>, …) and a protocol-relative <c>//host</c> draw the box unlinked: node content is
+    /// authored by people, and a bound href must never become script.
     /// </summary>
     /// <param name="node">The node.</param>
     /// <returns>The href to navigate to, or <c>null</c> for an unlinked box.</returns>
-    public static string? LinkOf(HierarchyNode node) =>
-        IsEmphasis(node, HierarchyEmphasis.Current) ? null : TowerControl.NavigableHref(node.Href);
+    public static string? LinkOf(HierarchyNode node)
+    {
+        if (IsEmphasis(node, HierarchyEmphasis.Current) || string.IsNullOrWhiteSpace(node.Href))
+            return null;
+        var href = node.Href.Trim();
+        if (href.StartsWith("//", StringComparison.Ordinal))
+            return null;
+        if (href.StartsWith('/'))
+            return href;
+        if (Uri.TryCreate(href, UriKind.Absolute, out var uri) && !href.StartsWith('/'))
+            return uri.Scheme is "http" or "https" ? href : null;
+        // A scheme-like prefix the Uri parser did not accept ("javascript:…") is never a path.
+        return href.Contains(':') ? null : "/" + href;
+    }
 
     /// <summary>Whether <paramref name="node"/> carries <paramref name="emphasis"/> (case-insensitive).</summary>
     /// <param name="node">The node.</param>

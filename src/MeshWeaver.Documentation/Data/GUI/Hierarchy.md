@@ -65,8 +65,11 @@ Controls.Hierarchy(
 `Emphasis` is an open vocabulary (`HierarchyEmphasis`): `current` — the node the page is about,
 outlined in the accent colour and **never a link**; `strong` — the heading node, filled in the
 accent colour; `muted` — a node of secondary weight; `favourite` — the preferred alternative, marked with a star; empty — an ordinary box. Every other node with
-an `Href` is a link; `HierarchyControl.LinkOf(node)` decides, and normalises a bare mesh path to a
-site-root-relative one exactly as `TowerControl.NavigableHref` does.
+an `Href` is a link; `HierarchyControl.LinkOf(node)` decides. It normalises a bare mesh path to a
+site-root-relative one and accepts absolute `http`/`https` URLs. Any other scheme (`javascript:`,
+`data:`, …) and a protocol-relative `//host` draw the box unlinked, because node content is authored
+by people and a bound href must never become script. The favourite's star carries a localized
+accessible name, so it is not conveyed by colour and glyph alone.
 
 # Binding
 
