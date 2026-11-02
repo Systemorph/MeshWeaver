@@ -107,21 +107,76 @@ public class FigureControlsTest(ITestOutputHelper output) : HubTestBase(output)
         losses.HeightPercent.Should().BeApproximately(100, 1e-9, because: "the delta crosses the axis from 100 to −30");
     }
 
-    /// <summary>A total RESETS the running level (a subtotal), and an unknown kind is drawn as a delta.</summary>
+    /// <summary>A total RESETS the running level (a subtotal); a delta after it hangs from it.</summary>
     [Fact]
-    public void Waterfall_a_subtotal_resets_the_level_and_an_unknown_kind_is_a_delta()
+    public void Waterfall_a_subtotal_resets_the_level()
     {
         var layout = WaterfallControl.Layout(
         [
             WaterfallStep.Total("Gross", 200),
             WaterfallStep.Delta("Ceded", -50),
             WaterfallStep.Total("Net", 150),
-            new WaterfallStep("Something new", -10, "future-kind"),
+            WaterfallStep.Delta("Fees", -10),
         ])!;
 
         layout.Bars[2].From.Should().Be(0);
         layout.Bars[3].From.Should().Be(150, because: "the delta after a subtotal hangs from the subtotal");
         layout.Bars[3].Tone.Should().Be(WaterfallTone.Decrease);
+    }
+
+    /// <summary>
+    /// An unknown kind is never given a meaning: it does not move the running level, is not drawn,
+    /// and is reported. A blank kind is the default delta.
+    /// </summary>
+    [Fact]
+    public void Waterfall_an_unknown_kind_is_reported_never_counted()
+    {
+        var unknown = new WaterfallStep("Something new", -10, "future-kind");
+        var layout = WaterfallControl.Layout(
+        [
+            WaterfallStep.Total("Gross", 200),
+            unknown,
+            new WaterfallStep("Blank kind", -50, ""),
+            WaterfallStep.Total("Net", 150),
+        ])!;
+
+        layout.Unrecognized.Should().Equal(unknown);
+        layout.Bars.Select(b => b.Step.Label).Should().Equal("Gross", "Blank kind", "Net");
+        layout.Bars[1].From.Should().Be(200, because: "the unknown step did not move the running level");
+        layout.Bars[1].Tone.Should().Be(WaterfallTone.Decrease);
+        WaterfallControl.Layout([unknown]).Should().BeNull(because: "nothing recognized, nothing to draw");
+    }
+
+    /// <summary>Finite amounts whose axis overflows the double range have no honest geometry.</summary>
+    [Fact]
+    public void Waterfall_an_overflowing_axis_is_null_never_nan()
+    {
+        WaterfallControl.Layout([WaterfallStep.Total("Up", 1e308), WaterfallStep.Total("Down", -1e308)])
+            .Should().BeNull(because: "max − min overflows to infinity");
+        WaterfallControl.Layout([WaterfallStep.Total("Start", 1e308), WaterfallStep.Delta("More", 1e308)])
+            .Should().BeNull(because: "the running level overflows");
+    }
+
+    /// <summary>The visible minimum of a tiny NEGATIVE result stays below the baseline, on its own side.</summary>
+    [Fact]
+    public void Waterfall_a_tiny_negative_result_stays_below_zero()
+    {
+        var layout = WaterfallControl.Layout(
+        [
+            WaterfallStep.Total("Premium", 1_000_000),
+            WaterfallStep.Delta("Losses", -1_000_001),
+            WaterfallStep.Total("Result", -1),
+        ])!;
+
+        var result = layout.Bars[2];
+        (result.BottomPercent + result.HeightPercent).Should().BeApproximately(layout.ZeroPercent, 1e-9,
+            because: "a negative total hangs from zero downward — its top edge IS the baseline");
+        result.BottomPercent.Should().BeGreaterThanOrEqualTo(0);
+        result.Tone.Should().Be(WaterfallTone.ResultNegative);
+
+        var tinyRise = WaterfallControl.Layout([WaterfallStep.Total("Base", 1_000_000), WaterfallStep.Delta("Fee", 1)])!;
+        tinyRise.Bars[1].BottomPercent.Should().BeApproximately(1_000_000 / 1_000_001.0 * 100, 1e-6,
+            because: "a tiny rise grows upward from the running level");
     }
 
     [Fact]
@@ -223,6 +278,27 @@ public class FigureControlsTest(ITestOutputHelper output) : HubTestBase(output)
         static IEnumerable<HierarchyTreeNode> All(HierarchyTreeNode n) => n.Children.SelectMany(All).Prepend(n);
         All(root).Select(n => n.Node.Id).Order().Should().Equal("x", "y", "z");
         All(root).Select(n => n.Node.Id).Should().OnlyHaveUniqueItems();
+    }
+
+    /// <summary>
+    /// A descendant listed BEFORE its cycle keeps its parent: the cycle is broken at its own first
+    /// member, not at whichever unplaced node comes first.
+    /// </summary>
+    [Fact]
+    public void Hierarchy_a_descendant_listed_before_its_cycle_keeps_its_parent()
+    {
+        var layout = HierarchyControl.Layout(
+        [
+            new("z", "y", "Z"),
+            new("x", "y", "X"),
+            new("y", "x", "Y"),
+        ])!;
+
+        var root = layout.Roots.Should().ContainSingle().Subject;
+        root.Node.Id.Should().Be("x", because: "x is the cycle member that comes first in input order");
+        var y = root.Children.Should().ContainSingle().Subject;
+        y.Node.Id.Should().Be("y");
+        y.Children.Select(c => c.Node.Id).Should().Equal("z");
     }
 
     [Fact]

@@ -1510,6 +1510,7 @@
   "analysis.comparison.empty": "No amounts on either side.",
   "analysis.comparison.absent": "not on this side",
   "analysis.waterfall.empty": "Nothing to bridge.",
+  "analysis.waterfall.unrecognized": "Not drawn — unknown kind:",
   "analysis.hierarchy.empty": "No structure to show.",
   "versions.title": "Version History",
   "versions.none": "No version history available.",

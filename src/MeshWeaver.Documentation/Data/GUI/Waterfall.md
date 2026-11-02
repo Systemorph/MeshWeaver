@@ -32,16 +32,19 @@ Controls.Waterfall(
 The caller states which a step is — the control never infers "the last bar must be the sum". The
 last step, when it is a total, is the **result** and is toned by its sign (`result-positive` /
 `result-negative`); deltas are `increase` / `decrease`, other totals `total`. Both vocabularies are
-open string constants: a renderer that meets an unknown kind draws a delta.
+open string constants. A step whose kind the layout does not know is never given a meaning: it is
+left out of the running level, not drawn, and reported in `WaterfallLayout.Unrecognized` (the view
+names it under the chart). A blank kind is the default, a delta.
 
 # Geometry is the control's, not the view's
 
 `WaterfallControl.Layout(steps)` is pure and unit-tested (`FigureControlsTest`): it returns every
 bar's `From` / `To`, its `BottomPercent` / `HeightPercent` on an axis that spans every level reached
 and always includes zero, the `LevelPercent` its connector runs at, and `ZeroPercent` for the
-baseline. A present-but-tiny amount keeps a visible sliver; an exact zero draws nothing. It returns
+baseline. A present-but-tiny amount keeps a visible sliver, grown from the bar's anchor in the direction of
+its sign (a tiny loss stays below zero); an exact zero draws nothing. It returns
 `null` — and the view says *"Nothing to bridge."* in the viewer's language — for no steps, a
-non-finite amount, or every level at zero. See
+non-finite amount, an axis that overflows the double range, or every level at zero. See
 [Authoring for every renderer](/Doc/GUI/CrossRendererAuthoring) for why the arithmetic lives here.
 
 # Binding

@@ -1510,6 +1510,7 @@
   "analysis.comparison.empty": "Auf keiner Seite Beträge vorhanden.",
   "analysis.comparison.absent": "auf dieser Seite nicht vorhanden",
   "analysis.waterfall.empty": "Keine Überleitung vorhanden.",
+  "analysis.waterfall.unrecognized": "Nicht gezeichnet — unbekannte Art:",
   "analysis.hierarchy.empty": "Keine Struktur vorhanden.",
   "versions.title": "Versionsverlauf",
   "versions.none": "Kein Versionsverlauf vorhanden.",

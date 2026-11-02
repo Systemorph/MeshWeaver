@@ -158,8 +158,9 @@ public record HierarchyControl(object Nodes)
     ///   <item>A node whose parent is blank, itself, or not among the nodes is a ROOT.</item>
     ///   <item>Children keep their input order.</item>
     ///   <item>A repeated <see cref="HierarchyNode.Id"/> keeps its FIRST occurrence; later ones are dropped.</item>
-    ///   <item>A cycle (a → b → a) has no root to hang from: its first node in input order becomes a
-    ///     root, so every node is drawn exactly once.</item>
+    ///   <item>A cycle (a → b → a) has no root to hang from: its member that comes first in input
+    ///     order becomes a root — nodes that merely hang BELOW the cycle keep their parent — so every
+    ///     node is drawn exactly once.</item>
     /// </list>
     /// Returns <c>null</c> when there are no nodes; a view says so in a sentence.
     /// </summary>
@@ -203,10 +204,27 @@ public record HierarchyControl(object Nodes)
         var roots = ImmutableList.CreateBuilder<HierarchyTreeNode>();
         foreach (var root in unique.Where(IsRoot))
             roots.Add(Build(root, 0));
-        // Whatever is left hangs only from itself: a cycle. Break it at its first node in input order.
+        // Whatever is left has no root above it: it is ON a cycle, or hangs below one. Walk up the
+        // parent links from the first unplaced node until a node repeats — that loop is the cycle —
+        // and break it at the cycle member that comes FIRST in input order, so a descendant listed
+        // before its cycle keeps its parent instead of being promoted to a root.
+        var order = unique.Select((n, i) => (n.Id, i)).ToDictionary(x => x.Id, x => x.i, StringComparer.Ordinal);
+        var byId = unique.ToDictionary(n => n.Id, StringComparer.Ordinal);
         foreach (var orphan in unique)
-            if (!placed.Contains(orphan.Id))
-                roots.Add(Build(orphan, 0));
+        {
+            if (placed.Contains(orphan.Id))
+                continue;
+            var path = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var cursor = orphan;
+            while (seen.Add(cursor.Id))
+            {
+                path.Add(cursor.Id);
+                cursor = byId[cursor.Parent!];
+            }
+            var cycle = path.Skip(path.IndexOf(cursor.Id));
+            roots.Add(Build(byId[cycle.MinBy(id => order[id])!], 0));
+        }
 
         return new HierarchyLayout(roots.ToImmutable(), depth);
     }

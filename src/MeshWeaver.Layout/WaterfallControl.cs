@@ -4,8 +4,10 @@ namespace MeshWeaver.Layout;
 
 /// <summary>
 /// What a <see cref="WaterfallStep"/> is — an OPEN vocabulary of string constants, never an enum
-/// (policy <c>open-vocabulary-string-constants</c>): a renderer that meets a kind it does not know
-/// draws it as a <see cref="Delta"/>.
+/// (policy <c>open-vocabulary-string-constants</c>). A kind the layout does not know is NEVER given a
+/// meaning: it takes no part in the arithmetic, is not drawn, and is reported in
+/// <see cref="WaterfallLayout.Unrecognized"/> so the view can say so. A blank kind is the default,
+/// <see cref="Delta"/>.
 /// </summary>
 public static class WaterfallStepKind
 {
@@ -95,8 +97,15 @@ public record WaterfallBarLayout(
 /// <param name="Min">The axis bottom — the lowest level reached, never above zero.</param>
 /// <param name="Max">The axis top — the highest level reached, never below zero.</param>
 /// <param name="ZeroPercent">Where zero sits on the axis, so the view can draw the baseline.</param>
-/// <param name="Bars">The steps in input order, each with its geometry.</param>
-public record WaterfallLayout(double Min, double Max, double ZeroPercent, ImmutableList<WaterfallBarLayout> Bars);
+/// <param name="Bars">The recognized steps in input order, each with its geometry.</param>
+public record WaterfallLayout(double Min, double Max, double ZeroPercent, ImmutableList<WaterfallBarLayout> Bars)
+{
+    /// <summary>
+    /// The steps whose <see cref="WaterfallStep.Kind"/> the layout does not know — left out of the
+    /// running level and not drawn, never guessed at. Empty for a well-formed bridge.
+    /// </summary>
+    public ImmutableList<WaterfallStep> Unrecognized { get; init; } = ImmutableList<WaterfallStep>.Empty;
+}
 
 /// <summary>
 /// A waterfall (bridge) chart: an opening amount, the deltas that hang from the running level, and
@@ -151,16 +160,19 @@ public record WaterfallControl(object Steps)
     /// Resolves <paramref name="steps"/> onto one axis. A total stands on zero and RESETS the running
     /// level to its amount; a delta hangs from the running level and moves it by its signed amount.
     /// The axis spans every level reached and always includes zero. The last step, when it is a
-    /// total, is the RESULT and is toned by its sign. Pure — the waterfall's whole arithmetic.
+    /// total, is the RESULT and is toned by its sign. A step of an unknown kind is left out and
+    /// reported in <see cref="WaterfallLayout.Unrecognized"/>. Pure — the waterfall's whole arithmetic.
     ///
-    /// <para>Returns <c>null</c> when there is nothing honest to draw: no steps, a non-finite amount,
-    /// or every level at zero. A view says so in a sentence rather than drawing an empty frame.</para>
+    /// <para>Returns <c>null</c> when there is nothing honest to draw: no recognized steps, a
+    /// non-finite amount, an axis that overflows the double range, or every level at zero. A view says so in a sentence rather than drawing an empty frame.</para>
     /// </summary>
     /// <param name="steps">The steps to place.</param>
     /// <returns>The resolved geometry, or <c>null</c> when the input cannot be drawn.</returns>
     public static WaterfallLayout? Layout(IEnumerable<WaterfallStep>? steps)
     {
-        var list = (steps ?? []).ToImmutableList();
+        var all = (steps ?? []).Where(s => s is not null).ToImmutableList();
+        var unrecognized = all.Where(s => !IsTotal(s) && !IsDelta(s)).ToImmutableList();
+        var list = all.Where(s => IsTotal(s) || IsDelta(s)).ToImmutableList();
         if (list.IsEmpty || list.Any(s => !double.IsFinite(s.Amount)))
             return null;
 
@@ -183,7 +195,9 @@ public record WaterfallControl(object Steps)
         var min = Math.Min(0, spans.Min(s => Math.Min(s.From, s.To)));
         var max = Math.Max(0, spans.Max(s => Math.Max(s.From, s.To)));
         var span = max - min;
-        if (span <= 0)
+        // Finite amounts can still overflow: ±1e308 levels, or deltas accumulating past double range.
+        // An infinite span would turn every percentage into NaN — there is no honest axis to draw.
+        if (!double.IsFinite(min) || !double.IsFinite(max) || !double.IsFinite(span) || span <= 0)
             return null;
 
         double Percent(double v) => Math.Clamp((v - min) / span, 0, 1) * 100;
@@ -194,11 +208,23 @@ public record WaterfallControl(object Steps)
             var bottom = Percent(Math.Min(from, to));
             var height = Percent(Math.Max(from, to)) - bottom;
             // A present-but-tiny amount keeps a visible sliver so the bar still reads as "there is a
-            // figure here, and it is small"; an exact zero draws nothing.
-            if (step.Amount != 0)
+            // figure here, and it is small"; an exact zero draws nothing. The sliver grows AWAY from
+            // the bar's anchor (zero for a total, the running level for a delta) in the direction of
+            // its sign, so a tiny negative result never shows above the baseline.
+            const double sliver = 0.5;
+            if (step.Amount != 0 && height < sliver)
             {
-                height = Math.Max(height, 0.5);
-                bottom = Math.Min(bottom, 100 - height);
+                var anchor = Percent(from);
+                if (to > from)
+                {
+                    bottom = anchor;
+                    height = Math.Min(sliver, 100 - anchor);
+                }
+                else
+                {
+                    bottom = Math.Max(0, anchor - sliver);
+                    height = anchor - bottom;
+                }
             }
             var total = IsTotal(step);
             var tone = total
@@ -209,8 +235,12 @@ public record WaterfallControl(object Steps)
             return new WaterfallBarLayout(step, from, to, bottom, height, Percent(to), tone, Signed: !total);
         }).ToImmutableList();
 
-        return new WaterfallLayout(min, max, Percent(0), bars);
+        return new WaterfallLayout(min, max, Percent(0), bars) { Unrecognized = unrecognized };
     }
+
+    private static bool IsDelta(WaterfallStep step) =>
+        string.IsNullOrWhiteSpace(step.Kind)
+        || string.Equals(step.Kind, WaterfallStepKind.Delta, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsTotal(WaterfallStep step) =>
         string.Equals(step.Kind, WaterfallStepKind.Total, StringComparison.OrdinalIgnoreCase);
