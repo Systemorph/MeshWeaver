@@ -178,6 +178,43 @@ public class DeclaredReadLiveInputsTest
         Assert.IsType<TimeoutException>(ended);
     }
 
+    /// <summary>
+    /// Review of #7832 (thread 4440906671): a FAILED remote owner read — the owner could not be read,
+    /// not "the node is absent" — reached the declaration as <c>null</c>, so an established declared
+    /// read ended as a decided denial. For a follow it is now an error (NO VERDICT); a genuinely
+    /// absent node is still <c>null</c> (a refusal), and the closed-false callers are unchanged.
+    /// </summary>
+    [Fact]
+    public void A_failed_owner_read_is_undecided_for_a_follow_and_absence_stays_a_refusal()
+    {
+        var failed = MeshWeaver.Mesh.NodeReadOutcome.Unavailable(new TimeoutException("owner did not answer"));
+
+        Exception? ended = null;
+        var seen = ImmutableList<MeshWeaver.Mesh.MeshNode?>.Empty;
+        using (DeclaredPointRead.OwnerReadOf(Observable.Return(failed), "p/_GitSync", undecidedIsError: true)
+                   .Subscribe(n => seen = seen.Add(n), ex => ended = ex))
+        {
+            Assert.Empty(seen);
+            Assert.IsType<InvalidOperationException>(ended);
+            Assert.IsType<TimeoutException>(ended!.InnerException);
+        }
+
+        // Negative controls: the same failure for a one-shot caller, and real absence for a follow.
+        var oneShot = ImmutableList<MeshWeaver.Mesh.MeshNode?>.Empty;
+        using (DeclaredPointRead.OwnerReadOf(Observable.Return(failed), "p/_GitSync", undecidedIsError: false)
+                   .Subscribe(n => oneShot = oneShot.Add(n)))
+            Assert.Equal(new MeshWeaver.Mesh.MeshNode?[] { null }, oneShot);
+
+        Exception? absentEnded = null;
+        var absent = ImmutableList<MeshWeaver.Mesh.MeshNode?>.Empty;
+        using (DeclaredPointRead.OwnerReadOf(Observable.Return(MeshWeaver.Mesh.NodeReadOutcome.Absent), "p/_GitSync", undecidedIsError: true)
+                   .Subscribe(n => absent = absent.Add(n), ex => absentEnded = ex))
+        {
+            Assert.Equal(new MeshWeaver.Mesh.MeshNode?[] { null }, absent);
+            Assert.Null(absentEnded);
+        }
+    }
+
     [Fact]
     public void Signals_replacing_a_stalled_reread_inside_the_budget_do_not_restart_its_deadline()
     {

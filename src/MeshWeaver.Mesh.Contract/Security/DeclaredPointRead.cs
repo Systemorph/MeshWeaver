@@ -98,7 +98,7 @@ public static class DeclaredPointRead
                 .DefaultIfEmpty(null)
                 .SelectMany(stored => stored is null
                     ? Observable.Return(false)
-                    : OwnerCurrent(hub, access, path)
+                    : OwnerCurrent(hub, access, path, undecidedIsError)
                         .Select(node => Decide(hub, access, node, userId, caller, options, area, undecidedIsError))
                         .Switch())
                 .DistinctUntilChanged()
@@ -774,7 +774,7 @@ public static class DeclaredPointRead
             .Select(owned => owned
                 // The type node from its OWNER first, like the instance: a warm mirror must not keep
                 // admitting by a declaration the owner has already withdrawn or narrowed.
-                ? OwnerCurrent(hub, access, nodeType).Select(type => type is null ? null : Parse(type, options))
+                ? OwnerCurrent(hub, access, nodeType, undecidedIsError).Select(type => type is null ? null : Parse(type, options))
                 : Observable.Return<PointReadDeclaration?>(null))
             .Switch()
             .DistinctUntilChanged();
@@ -812,7 +812,7 @@ public static class DeclaredPointRead
                 .DefaultIfEmpty(null)
                 .Select(stored => stored is null
                     ? Observable.Return(false)
-                    : OwnerCurrent(hub, access, syncPath).Select(sync => AccessAssignmentGuard.IsSystemOwned(sync, options)))
+                    : OwnerCurrent(hub, access, syncPath, undecidedIsError).Select(sync => AccessAssignmentGuard.IsSystemOwned(sync, options)))
                 .Switch(),
             budget,
             Scheduler.Default,
@@ -927,13 +927,15 @@ public static class DeclaredPointRead
     /// the very read whose verdict waited for it — the read timed out and failed closed. Remote paths
     /// keep the owner round-trip.</para>
     /// </summary>
-    private static IObservable<MeshNode?> OwnerCurrent(IMessageHub hub, AccessService? access, string path)
+    private static IObservable<MeshNode?> OwnerCurrent(IMessageHub hub, AccessService? access, string path, bool undecidedIsError = false)
     {
         if (IsOwnPath(hub, path))
             return SystemRead(hub, access, path);
-        var ownerRead = access is null
-            ? hub.GetMeshNode(path)
-            : access.RunAsSystem(() => hub.GetMeshNode(path));
+        var ownerRead = OwnerReadOf(
+            access is null
+                ? hub.GetMeshNodeOutcome(path)
+                : access.RunAsSystem(() => hub.GetMeshNodeOutcome(path)),
+            path, undecidedIsError);
         return ownerRead
             .Take(1)
             .SelectMany(current => current is null
@@ -942,6 +944,23 @@ public static class DeclaredPointRead
                     .Where(mirror => mirror is null || mirror.Version >= current.Version)
                     .StartWith(current));
     }
+
+    /// <summary>
+    /// The owner's answer as a node: present → the node; absent or being deleted → <c>null</c> (a
+    /// refusal downstream). An UNAVAILABLE answer — the owner could not be read — is <c>null</c> too,
+    /// except when <paramref name="undecidedIsError"/>: then it is an ERROR on the read, so a seam
+    /// that follows an admitted read ends it as NO VERDICT, never as a decided denial
+    /// (MeshWeaver#7825, review of #7832). <see cref="MeshNodeStreamExtensions.GetMeshNode"/> folds
+    /// the two into one <c>null</c>, which is why the outcome is read here.
+    /// </summary>
+    /// <param name="outcome">The owner's read outcome.</param>
+    /// <param name="path">The path read, for the error.</param>
+    /// <param name="undecidedIsError">Whether an unavailable answer is an error rather than <c>null</c>.</param>
+    internal static IObservable<MeshNode?> OwnerReadOf(IObservable<NodeReadOutcome> outcome, string path, bool undecidedIsError)
+        => outcome.SelectMany(o => undecidedIsError && o.Status == NodeReadStatus.Unavailable
+            ? Observable.Throw<MeshNode?>(new InvalidOperationException(
+                $"the owner of '{path}' could not be read ({o.Failure?.GetType().Name ?? "no answer"})", o.Failure))
+            : Observable.Return(o.Node));
 
     /// <summary>
     /// Whether <paramref name="path"/> is <paramref name="hub"/>'s own node — decided exactly as
