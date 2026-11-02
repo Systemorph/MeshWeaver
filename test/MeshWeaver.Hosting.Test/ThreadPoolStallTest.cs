@@ -17,39 +17,52 @@ public class ThreadPoolStallTest
         new(tick, TimeSpan.FromSeconds(elapsedSeconds), 937, 382, 129, TimeSpan.FromSeconds(34.87),
             3_540_000_000L, true, 69, pending, completed);
 
+    /// <summary>Tick 1098 of the incident: 20,335 already queued.</summary>
+    private static ProcessLivenessSample Before(double atSeconds = 20) =>
+        Sample(1098, atSeconds - 10, 20_335, 43_739_919);
+
     /// <summary>Tick 1099 of the incident: nothing completed, 20,357 queued.</summary>
     private static ProcessLivenessReading Stalled(double atSeconds = 20) =>
-        ProcessLiveness.Read(
-            Sample(1098, atSeconds - 10, 20_335, 43_739_919),
-            Sample(1099, atSeconds, 20_357, 43_739_919),
-            Period);
+        ProcessLiveness.Read(Before(atSeconds), Sample(1099, atSeconds, 20_357, 43_739_919), Period);
 
     [Fact]
-    public void NoCompletionWithWorkQueued_IsAStall()
-        => ThreadPoolStall.MadeNoProgress(Stalled()).Should().BeTrue();
+    public void NoCompletionWithWorkQueuedAtBothEnds_IsAStall()
+        => ThreadPoolStall.MadeNoProgress(Before(), Stalled()).Should().BeTrue();
+
+    /// <summary>
+    /// An idle pool that is handed a work item just before the sample also completed nothing and now
+    /// has work pending — a healthy hand-off, never a stall, and it must not spend the capture window.
+    /// </summary>
+    [Fact]
+    public void AnIdlePoolHandedWorkJustBeforeTheSample_IsNotAStall()
+    {
+        var idle = Sample(1, 0, 0, 100);
+        ThreadPoolStall.MadeNoProgress(idle, ProcessLiveness.Read(idle, Sample(2, 10, 1, 100), Period))
+            .Should().BeFalse("nothing was queued when the period began");
+    }
 
     /// <summary>Controls: an IDLE pool (nothing queued) and a BUSY one (completions climbing) are not stalls.</summary>
     [Fact]
     public void AnIdlePoolAndABusyPool_AreNotStalls()
     {
-        ThreadPoolStall.MadeNoProgress(ProcessLiveness.Read(
-                Sample(1, 0, 0, 100), Sample(2, 10, 0, 100), Period))
+        var idle = Sample(1, 0, 0, 100);
+        ThreadPoolStall.MadeNoProgress(idle, ProcessLiveness.Read(idle, Sample(2, 10, 0, 100), Period))
             .Should().BeFalse("nothing was queued, so nothing was waiting");
-        ThreadPoolStall.MadeNoProgress(ProcessLiveness.Read(
-                Sample(1, 0, 1_236, 43_739_919), Sample(2, 10, 1_260, 43_789_010), Period))
+        var busy = Sample(1, 0, 1_236, 43_739_919);
+        ThreadPoolStall.MadeNoProgress(busy, ProcessLiveness.Read(busy, Sample(2, 10, 1_260, 43_789_010), Period))
             .Should().BeFalse("the pool completed work in the period");
-        ThreadPoolStall.MadeNoProgress(ProcessLiveness.Read(null, Sample(1, 0, 5_000, 100), Period))
+        ThreadPoolStall.MadeNoProgress(null, ProcessLiveness.Read(null, Sample(1, 0, 5_000, 100), Period))
             .Should().BeFalse("the first tick has no period to judge");
     }
 
     [Fact]
     public void TheCaptureIsTakenOnce_ThenNotAgainInsideTheCooldown()
     {
-        ThreadPoolStall.ShouldCapture(Stalled(), lastCapture: null).Should().BeTrue();
-        ThreadPoolStall.ShouldCapture(Stalled(atSeconds: 40), lastCapture: TimeSpan.FromSeconds(20))
+        ThreadPoolStall.ShouldCapture(Before(), Stalled(), lastCapture: null).Should().BeTrue();
+        ThreadPoolStall.ShouldCapture(Before(40), Stalled(atSeconds: 40), lastCapture: TimeSpan.FromSeconds(20))
             .Should().BeFalse("a stall that persists is one stall");
-        ThreadPoolStall.ShouldCapture(
-                Stalled(atSeconds: 20 + ThreadPoolStall.CaptureCooldown.TotalSeconds), TimeSpan.FromSeconds(20))
+        var later = 20 + ThreadPoolStall.CaptureCooldown.TotalSeconds;
+        ThreadPoolStall.ShouldCapture(Before(later), Stalled(atSeconds: later), TimeSpan.FromSeconds(20))
             .Should().BeTrue("a stall after the cooldown is a new reading");
     }
 

@@ -244,7 +244,7 @@ can read the stacks of a live pod. Every recurrence was therefore re-triaged fro
 symptom (#5388).
 
 So the heartbeat now acts on that reading. On the first tick in which the pool finished **no** work
-item while work was queued, it captures every ThreadPool worker's stack, once, and logs them grouped by
+item while work was queued at both the previous tick and this one, it captures every ThreadPool worker's stack, once, and logs them grouped by
 their innermost 12 frames, the largest group first:
 
 ```
@@ -264,8 +264,12 @@ their innermost 12 frames, the largest group first:
   30 minutes (`ThreadPoolStall.CaptureCooldown`), and only after a whole period in which the pool
   served nothing.
 - **When it cannot read stacks.** The line still prints and says why: no reader registered in this
-  host, the capture failed (with the exception), or the dump held no pool worker. A missing line
-  means the pool did not stall, never that the capture was skipped.
+  host, the capture failed (with the exception), or the dump held no pool worker.
+- **A missing `[POOLSTALL]` line does NOT rule out starvation.** Three cases print none for a real
+  stall: a capture already taken in the last 30 minutes (the cooldown), a capture still in flight,
+  and a capture that hangs and never logs. Decide whether the pool made progress from the
+  `[LIVENESS]` counters (`poolCompleted(+0)` with `poolPending` above zero, on consecutive ticks),
+  never from the absence of this line.
 - **Tests.** `ThreadPoolWorkerStacksTest` parks real pool workers in a known method, captures a real
   dump, and requires exactly those workers in that method, rendered as one group naming it. Its
   negative control takes the

@@ -53,23 +53,34 @@ public static class ThreadPoolStall
 
     /// <summary>
     /// True when the pool finished no work item in the whole period this reading spans while work was
-    /// queued — the starvation shape, as opposed to an idle pool (nothing queued) or a busy one
-    /// (completions climbing). False on the first tick, which has no period to judge.
+    /// queued at BOTH ends of it — the starvation shape, as opposed to an idle pool (nothing queued) or
+    /// a busy one (completions climbing). False on the first tick, which has no period to judge.
+    ///
+    /// <para>🚨 <b>Queued at the START too, not only now.</b> An idle pool also completes nothing in a
+    /// period, and a work item queued milliseconds before the sample makes it read "pending &gt; 0" —
+    /// a healthy hand-off, not a stall. Requiring work already pending at the previous tick means the
+    /// queue went a whole period without the pool finishing anything, which an idle-to-queued
+    /// transition cannot produce.</para>
     /// </summary>
+    /// <param name="previous">The previous tick's sample, or null on the first tick.</param>
     /// <param name="reading">The tick's reading.</param>
-    /// <returns>Whether the pool made no progress with work waiting.</returns>
-    public static bool MadeNoProgress(ProcessLivenessReading reading) =>
-        reading.ThreadPoolCompletedDelta == 0 && reading.Current.ThreadPoolPending > 0;
+    /// <returns>Whether the pool made no progress with work waiting for the whole period.</returns>
+    public static bool MadeNoProgress(ProcessLivenessSample? previous, ProcessLivenessReading reading) =>
+        previous is { ThreadPoolPending: > 0 }
+        && reading.ThreadPoolCompletedDelta == 0
+        && reading.Current.ThreadPoolPending > 0;
 
     /// <summary>
     /// Whether this tick captures: the pool made no progress, and the last capture (if any) is at
     /// least <see cref="CaptureCooldown"/> behind on the heartbeat's monotonic clock.
     /// </summary>
+    /// <param name="previous">The previous tick's sample, or null on the first tick.</param>
     /// <param name="reading">The tick's reading.</param>
     /// <param name="lastCapture">The heartbeat clock at the last capture, or null if none was taken.</param>
     /// <returns>Whether to capture now.</returns>
-    public static bool ShouldCapture(ProcessLivenessReading reading, TimeSpan? lastCapture) =>
-        MadeNoProgress(reading)
+    public static bool ShouldCapture(
+        ProcessLivenessSample? previous, ProcessLivenessReading reading, TimeSpan? lastCapture) =>
+        MadeNoProgress(previous, reading)
         && (lastCapture is not { } last || reading.Current.Elapsed - last >= CaptureCooldown);
 
     /// <summary>

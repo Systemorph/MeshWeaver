@@ -115,11 +115,12 @@ internal sealed class ProcessLivenessHeartbeatService(
                 var reading = ProcessLiveness.Read(previous, sample, period);
                 var step = ProcessLiveness.DescribeHeapStep(
                     previous, sample, sampler?.Drain());
+                var stalled = ThreadPoolStall.ShouldCapture(previous, reading, lastStallCapture);
                 previous = sample;
                 logger.LogInformation("{Reading}", reading.Describe());
                 if (step is not null)
                     logger.LogWarning("{HeapStep}", step);
-                if (ThreadPoolStall.ShouldCapture(reading, lastStallCapture)
+                if (stalled
                     && Interlocked.CompareExchange(ref stallCaptureInFlight, 1, 0) == 0)
                 {
                     lastStallCapture = sample.Elapsed;
