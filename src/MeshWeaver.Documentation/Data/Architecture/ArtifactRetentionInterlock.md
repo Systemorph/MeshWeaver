@@ -712,9 +712,12 @@ task carrying a 7-day window is a 7-day window one command away from running. It
 credential and runs on every pull request (`dotnet-test.yml`, the workflow-shell lane). An `--ago`
 it cannot parse is RED, not a default: a window nobody could read is one nobody checked.
 
-**This is a RECORD change, not a registry change.** The live task is disabled and still carries the
-old window; `tasks.json` declares that deliberate gap under `recordAheadOfRegistry`, and three
-things follow from the declaration rather than from anyone remembering it:
+**This was a RECORD change, not a registry change, until the record was applied.** From 2026-09-13
+until the governed `RegistryRetention` apply [`Ops/Actions/registry-retention-apply-20261101b-3438`](https://control.systemorph.com/Ops/Actions/registry-retention-apply-20261101b-3438) on the control instance ([Memex run 41419066636](https://github.com/Systemorph/Memex/actions/runs/41419066636), 2026-11-02 09:16Z), the live task was disabled and still carried the old window, and `tasks.json`
+declared that deliberate gap under `recordAheadOfRegistry`. The apply closed the gap and the
+declaration was then deleted. Whenever the record is again deliberately ahead of the registry (step
+5 below re-declares it), three things follow from the declaration rather than from anyone
+remembering it:
 
 - `acr-retention-tasks.sh verify` prints the declared drift instead of reporting it as an incident
   — a drift report that is always red is one nobody reads — **and reds when a declared task shows
@@ -778,7 +781,9 @@ agent files or approves it:
    and shows the declared drift.
 3. Run `RegistryRetention` with `dryRun: false` and `confirmation: control`, then approve it. This
    installs `--ago 30d --untagged --dry-run` with no `--keep` on the still-disabled task. Then
-   delete `recordAheadOfRegistry` in a core pull request.
+   delete `recordAheadOfRegistry` in a core pull request. **Done:** applied in
+   [Memex run 41419066636](https://github.com/Systemorph/Memex/actions/runs/41419066636) on
+   2026-11-02, and the declaration deleted.
 4. Lift `pause` and record `purge-old-images` as `Enabled` in a reviewed diff, then run another
    approved `RegistryRetention` apply. The apply interlock refuses unless the lock lane's newest run
    on main is green and under 36 hours old. The task now runs nightly **as a report**.
@@ -819,12 +824,14 @@ not downstream of that night's protection verdict.
    names); whether **unbounded growth** is accepted as the policy, with a storage bound measured the
    way the ACR's is; and whether to build the **last-pulled receiver** the registry's notification
    socket is already wired for but pointed at nothing.
-1. **The decided window has not been APPLIED to the registry.** The record states it, dry-run
-   first (see *What the window SELECTS* above for the owner's sequence); the live (disabled) task
-   still carries `--ago 7d --keep 10`. Applying it is the same act as lifting the
-   pause, and it belongs to whoever owns the registry. Its cost is storage: dropping `--keep 10`
-   and moving 7d → 30d retains strictly more, over five repositories that republish many times a
-   day.
+1. **The decided window is APPLIED, but not RUNNING.** The governed `RegistryRetention` apply [`Ops/Actions/registry-retention-apply-20261101b-3438`](https://control.systemorph.com/Ops/Actions/registry-retention-apply-20261101b-3438) on the control instance ([Memex run 41419066636](https://github.com/Systemorph/Memex/actions/runs/41419066636), 2026-11-02 09:16Z) installed
+   the record on both tasks: `--ago 30d --untagged` with no `--keep`, and `--dry-run` on the two
+   steps of `purge-old-images` only (the `dryRun` block). The superseded `purge-old-ci-releases`
+   carries no `--dry-run` and would delete if enabled. Both stay disabled. What is
+   left is steps 4 and 5 of *What the window SELECTS* above: lifting the pause (enabling the task
+   as a nightly report) and, after reading that report back, dropping `--dry-run`. Both belong to
+   whoever owns the registry. Their cost is storage: dropping `--keep 10` and moving 7d → 30d
+   retains strictly more, over five repositories that republish many times a day.
 2. **The two clocks are still two clocks.** The lock is a GitHub Actions cron at 01:00; the purge is
    an ACR timer task at 03:00; nothing makes the second wait for the first. A pin that lands in that
    window meets the purge unprotected, and if the lock job does not run at all the purge still does.
