@@ -254,8 +254,9 @@ their innermost 12 frames, the largest group first:
      …
 ```
 
-- **How the stacks are read.** The heartbeat has its own thread, which the stall cannot hold. It
-  writes one `Normal` minidump of its own process (thread stacks and module data, no heap) and reads
+- **How the stacks are read.** The heartbeat has its own thread, which the stall cannot hold, and
+  it hands the capture to a second dedicated thread so a slow or hung capture can never silence the
+  `[LIVENESS]` line; one capture is in flight at a time. The capture writes one `Normal` minidump of its own process (thread stacks and module data, no heap) and reads
   it back with ClrMD, then deletes the file. This is the same reader, with the same DAC pin, that the
   silo stop uses for leaves that outlive its join (#7277): `BlockedThreadStacks.CaptureThreadPoolWorkers`,
   registered as `IThreadPoolWorkerStacks` by `AddThreadPoolWorkerStacks()` in every Orleans silo.
@@ -266,9 +267,11 @@ their innermost 12 frames, the largest group first:
   host, the capture failed (with the exception), or the dump held no pool worker. A missing line
   means the pool did not stall, never that the capture was skipped.
 - **Tests.** `ThreadPoolWorkerStacksTest` parks real pool workers in a known method, captures a real
-  dump, and requires that method at the head of the largest group. Its negative control takes the
+  dump, and requires exactly those workers in that method, rendered as one group naming it. Its
+  negative control takes the
   same capture with nothing parked and must not find the method. `ThreadPoolStallTest` pins the
-  decision (stalled, idle, busy, first tick, cooldown) and the line.
+  decision (stalled, idle, busy, first tick, cooldown) and the line's grouping and ordering over
+  controlled inputs.
 
 ### The stall that made this necessary
 

@@ -93,7 +93,7 @@ internal sealed class ProcessLivenessHeartbeatService(
         var sampler = StartSampler();
         // OPTIONAL by design: the stack reader lives with the Orleans connection (it needs ClrMD and the
         // runtime's DAC), and a host without it still reports the stall — saying it cannot name the frame.
-        var workerStacks = services.GetService<IThreadPoolWorkerStacks>();
+        var workerStacks = ResolveWorkerStacks();
         TimeSpan? lastStallCapture = null;
         ProcessLivenessSample? previous = null;
         var tick = 0L;
@@ -119,10 +119,11 @@ internal sealed class ProcessLivenessHeartbeatService(
                 logger.LogInformation("{Reading}", reading.Describe());
                 if (step is not null)
                     logger.LogWarning("{HeapStep}", step);
-                if (ThreadPoolStall.ShouldCapture(reading, lastStallCapture))
+                if (ThreadPoolStall.ShouldCapture(reading, lastStallCapture)
+                    && Interlocked.CompareExchange(ref stallCaptureInFlight, 1, 0) == 0)
                 {
                     lastStallCapture = sample.Elapsed;
-                    logger.LogWarning("{PoolStall}", DescribeStall(reading, workerStacks));
+                    StartStallCapture(reading, workerStacks);
                 }
             }
             catch (Exception exception)
@@ -137,10 +138,73 @@ internal sealed class ProcessLivenessHeartbeatService(
         sampler?.Dispose();
     }
 
+    /// <summary>1 while a <c>[POOLSTALL]</c> capture runs; at most one is ever in flight.</summary>
+    private int stallCaptureInFlight;
+
+    /// <summary>
+    /// The optional stack reader, resolved without ever throwing: this runs on a raw thread, where an
+    /// unhandled exception (a throwing factory, a provider disposed by a racing shutdown) would end the
+    /// process. A failed resolution is reported and the heartbeat runs on with no reader — its
+    /// <c>[POOLSTALL]</c> line then says it cannot name the frame.
+    /// </summary>
+    private IThreadPoolWorkerStacks? ResolveWorkerStacks()
+    {
+        try
+        {
+            return services.GetService<IThreadPoolWorkerStacks>();
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception,
+                "[POOLSTALL] the ThreadPool worker stack reader could not be resolved; a pool stall in this "
+                + "process will be reported without the frames its workers were in.");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Runs the capture on a dedicated thread of its own, so a slow (or never-returning) dump write
+    /// or ClrMD read can never silence the <c>[LIVENESS]</c> line or forge an overrun on it. The
+    /// in-flight flag keeps it to one capture at a time; it is cleared only when the line is logged.
+    /// </summary>
+    private void StartStallCapture(ProcessLivenessReading reading, IThreadPoolWorkerStacks? workerStacks)
+    {
+        try
+        {
+            new Thread(() =>
+            {
+                try
+                {
+                    logger.LogWarning("{PoolStall}", DescribeStall(reading, workerStacks));
+                }
+                catch (Exception exception)
+                {
+                    logger.LogWarning(exception, "[POOLSTALL] tick {Tick}: the line could not be written.",
+                        reading.Current.TickSeq);
+                }
+                finally
+                {
+                    Volatile.Write(ref stallCaptureInFlight, 0);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = ProcessLiveness.ThreadName + "-poolstall",
+            }.Start();
+        }
+        catch (Exception exception)
+        {
+            Volatile.Write(ref stallCaptureInFlight, 0);
+            logger.LogWarning(exception,
+                "[POOLSTALL] tick {Tick}: the capture thread could not be started, so this stall is reported "
+                + "without its frames.", reading.Current.TickSeq);
+        }
+    }
+
     /// <summary>
     /// Captures the pool workers' stacks for a stalled tick and renders the <c>[POOLSTALL]</c> line.
-    /// Runs on this dedicated thread — the one thread the stall cannot hold — and never throws: a
-    /// capture that fails is reported IN the line, so the stall is still named as a stall.
+    /// Runs on the capture's own dedicated thread — never a pool worker, which the stall holds — and
+    /// never throws: a capture that fails is reported IN the line, so the stall is still named.
     /// </summary>
     private static string DescribeStall(ProcessLivenessReading reading, IThreadPoolWorkerStacks? workerStacks)
     {

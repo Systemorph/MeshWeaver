@@ -11,7 +11,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 🚨 The <c>[POOLSTALL]</c> capture (MeshWeaver#5388) must NAME the frame the ThreadPool's workers are
 /// held in. The reproduction parks real pool workers inside one known method — the shape of a stalled
 /// pool: workers that do not return — and the capture, read from a real dump of this process, has to
-/// put that method at the head of the largest group. The negative control takes the same capture with
+/// return exactly those workers standing in that method, rendered as one group naming it. The negative control takes the same capture with
 /// nothing parked and must not find the method at all, so the positive reading cannot be an artefact of
 /// the reader.
 /// </summary>
@@ -38,17 +38,22 @@ public class ThreadPoolWorkerStacksTest
 
             var stacks = new ThreadPoolWorkerStacks().CaptureWorkerStacks();
 
-            stacks.Count(stack => stack.Contains(nameof(HeldInTheParkedLeaf), StringComparison.Ordinal))
-                .Should().Be(Held, "every parked worker is a ThreadPool worker standing in the parked leaf");
+            var held = stacks
+                .Where(stack => stack.Contains(nameof(HeldInTheParkedLeaf), StringComparison.Ordinal))
+                .ToArray();
+            held.Should().HaveCount(Held, "every parked worker is a ThreadPool worker standing in the parked leaf");
 
+            // Only the captured parked-worker subset is rendered: the rest of this test process's pool
+            // (idle workers, other tests' work) is not under the test's control, so group ORDER over the
+            // whole capture is pinned with controlled inputs in ThreadPoolStallTest instead.
             var reading = ProcessLiveness.Read(
                 new ProcessLivenessSample(1, TimeSpan.FromSeconds(10), 0, 0, 0, TimeSpan.Zero, 0, true, Held, 0, 1_000),
                 new ProcessLivenessSample(2, TimeSpan.FromSeconds(20), 0, 0, 0, TimeSpan.Zero, 0, true, Held, 20_335, 1_000),
                 TimeSpan.FromSeconds(10));
-            var line = ThreadPoolStall.Describe(reading, stacks, null);
-            var largest = line.Split("  ×", StringSplitOptions.None)[1];
-            largest.Should().StartWith($"{Held}:", "the held workers form the largest group");
-            largest.Should().Contain(nameof(HeldInTheParkedLeaf), "the largest group names the frame that held the pool");
+            var line = ThreadPoolStall.Describe(reading, held, null);
+            var group = line.Split("  ×", StringSplitOptions.None)[1];
+            group.Should().StartWith($"{Held}:", "the parked workers share one stack shape");
+            group.Should().Contain(nameof(HeldInTheParkedLeaf), "the group names the frame that held the workers");
         }
         finally
         {
