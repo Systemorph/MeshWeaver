@@ -10,17 +10,17 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" st
 The portal is moving away from Fluent UI's look, and later from its components. The first step is
 a design system of our own: a set of `--mw-*` CSS custom properties that every stylesheet and
 component styles from. `DesignTokens` in `MeshWeaver.Layout.Palettes` **generates** them from one
-accent colour and a mode (light or dark), using the palette engine ([Colour Palettes](ColorPalettes)).
+accent colour and a mode (light or dark), using the palette engine ([Colour Palettes](../ColorPalettes)).
 Nothing is hand-picked, and every accent a user can choose gets a complete, legible theme.
 
 ## The tokens
 
 | Group | Tokens | What they are for |
 |---|---|---|
-| Surfaces | `--mw-surface-0` … `-3` | The page, cards and panels, hover, pressed/selected. Neutral, faintly tinted towards the accent hue. |
+| Surfaces | `--mw-surface-0` … `-3` | The page, cards and panels, hover, pressed/selected. Neutral, faintly tinted towards the accent hue (not at all for a grey accent). |
 | Text | `--mw-text`, `-muted`, `-disabled` | Body text (7:1 on every surface), secondary text (4.5:1), disabled. |
 | Lines | `--mw-border`, `--mw-border-strong`, `--mw-focus` | Dividers; control outlines and the focus ring (3:1). |
-| Accent | `--mw-accent`, `-hover`, `-active`, `-on`, `-text`, `-subtle` | Primary buttons and the text on them (4.5:1), links on any surface (4.5:1), tinted backgrounds. |
+| Accent | `--mw-accent`, `-hover`, `-active`, `-on`, `-text`, `-subtle` | Primary buttons and the text on them (4.5:1), links on any surface (4.5:1), tinted backgrounds. The accent keeps the saturation the user picked (capped at 0.9 of the cusp), so a grey accent gives a grey theme. |
 | Accent ramp | `--mw-accent-1` … `-9` | Lightest to darkest, for charts, heat and progress. |
 | Status | `--mw-{success,warning,danger,info}`, plus `-hover`, `-active`, `-on`, `-text`, `-subtle` | The same shape as the accent, at fixed hues. |
 | Data | `--mw-cat-1` … `-8` | Categorical series colours at one lightness, starting at the accent hue. |

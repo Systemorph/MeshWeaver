@@ -42,8 +42,11 @@ public class DesignTokensTest
             AtLeast(C("text-muted"), C(s), DesignTokens.TextContrast, $"text-muted on {s}");
             AtLeast(C("accent-text"), C(s), DesignTokens.TextContrast, $"accent-text on {s}");
         }
-        AtLeast(C("border-strong"), C("surface-0"), DesignTokens.UiContrast, "border-strong on surface-0");
-        AtLeast(C("focus"), C("surface-0"), DesignTokens.UiContrast, "focus ring on surface-0");
+        foreach (var s in surfaces)
+        {
+            AtLeast(C("border-strong"), C(s), DesignTokens.UiContrast, $"border-strong on {s}");
+            AtLeast(C("focus"), C(s), DesignTokens.UiContrast, $"focus ring on {s}");
+        }
 
         foreach (var fill in new[] { "accent", "success", "warning", "danger", "info" })
         {
@@ -53,6 +56,27 @@ public class DesignTokensTest
                 foreach (var s in surfaces)
                     AtLeast(C(fill + "-text"), C(s), DesignTokens.TextContrast, $"{fill}-text on {s}");
         }
+    }
+
+    [Theory]
+    [InlineData(ThemeMode.Light)]
+    [InlineData(ThemeMode.Dark)]
+    public void AGreyAccent_StaysNeutral(ThemeMode mode)
+    {
+        var t = DesignTokens.For(OklchColor.FromHex("#808080"), mode).ToDictionary(x => x.Name, x => x.Value);
+        foreach (var name in new[] { "accent", "accent-hover", "accent-active", "accent-text", "accent-subtle", "focus",
+                     "accent-1", "accent-5", "accent-9", "surface-0", "surface-3", "text", "border-strong" })
+            Assert.True(OklchColor.FromHex(t["--mw-" + name]).C < 0.01, $"{name} = {t["--mw-" + name]} is not neutral");
+    }
+
+    [Theory]
+    [InlineData(ThemeMode.Light)]
+    [InlineData(ThemeMode.Dark)]
+    public void AMutedAccent_KeepsItsSaturation(ThemeMode mode)
+    {
+        var muted = DesignTokens.For(OklchColor.FromHex("#5b6b8c"), mode).Single(x => x.Name == "--mw-accent").Value;
+        var vivid = DesignTokens.For(OklchColor.FromHex("#2563eb"), mode).Single(x => x.Name == "--mw-accent").Value;
+        Assert.True(OklchColor.FromHex(muted).C < OklchColor.FromHex(vivid).C * 0.6, $"muted {muted} vs vivid {vivid}");
     }
 
     [Theory]

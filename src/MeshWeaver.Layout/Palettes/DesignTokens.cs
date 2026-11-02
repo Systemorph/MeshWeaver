@@ -53,6 +53,9 @@ public static class DesignTokens
 
     private const double NeutralTint = 0.08;
 
+    // The most saturated an accent is drawn; a vivid pick is capped here, a muted one keeps its own.
+    private const double MaxAccentSaturation = 0.9;
+
     private static readonly (string Name, double Hue)[] Statuses =
     [
         ("success", 150),
@@ -66,33 +69,35 @@ public static class DesignTokens
     {
         var dark = mode == ThemeMode.Dark;
         var h = accent.H;
+        var sat = AccentSaturation(accent);
+        var tint = NeutralTint * sat / MaxAccentSaturation;
         var tokens = ImmutableArray.CreateBuilder<DesignToken>();
         void Add(string name, OklchColor c) => tokens.Add(new DesignToken($"--mw-{name}", c.ToHex()));
         void AddRaw(string name, string value) => tokens.Add(new DesignToken($"--mw-{name}", value));
 
         // ── Neutrals: faintly tinted towards the accent hue.
-        OklchColor Neutral(double l) => CuspPalette.Quantize(CuspPalette.ColorAt(h, l, NeutralTint));
+        OklchColor Neutral(double l) => CuspPalette.Quantize(CuspPalette.ColorAt(h, l, tint));
         OklchColor[] surfaces = dark
             ? [Neutral(0.19), Neutral(0.225), Neutral(0.26), Neutral(0.30)]
             : [Neutral(0.975), Neutral(1.0), Neutral(0.955), Neutral(0.93)];
         for (var i = 0; i < surfaces.Length; i++)
             Add($"surface-{i}", surfaces[i]);
 
-        var text = Solve(Neutral(dark ? 0.94 : 0.23), surfaces, BodyTextContrast, NeutralTint);
-        var muted = Solve(Neutral(dark ? 0.76 : 0.48), surfaces, TextContrast, NeutralTint);
+        var text = Solve(Neutral(dark ? 0.94 : 0.23), surfaces, BodyTextContrast, tint);
+        var muted = Solve(Neutral(dark ? 0.76 : 0.48), surfaces, TextContrast, tint);
         Add("text", text);
         Add("text-muted", muted);
         Add("text-disabled", Neutral(dark ? 0.55 : 0.66));
         Add("border", Neutral(dark ? 0.33 : 0.89));
-        Add("border-strong", Solve(Neutral(dark ? 0.50 : 0.62), surfaces[..2], UiContrast, NeutralTint));
+        Add("border-strong", Solve(Neutral(dark ? 0.50 : 0.62), surfaces, UiContrast, tint));
 
         // ── Accent.
-        AddFill("accent", h, 0.9, dark, surfaces[0], Add);
-        Add("accent-text", Solve(CuspPalette.ColorAt(h, dark ? 0.78 : 0.5, 0.9), surfaces, TextContrast, 0.9));
-        Add("accent-subtle", CuspPalette.ColorAt(h, dark ? 0.29 : 0.94, 0.45));
-        Add("focus", Solve(CuspPalette.ColorAt(h, dark ? 0.78 : 0.5, 0.9), surfaces, UiContrast, 0.9));
+        AddFill("accent", h, sat, dark, surfaces[0], Add);
+        Add("accent-text", Solve(CuspPalette.ColorAt(h, dark ? 0.78 : 0.5, sat), surfaces, TextContrast, sat));
+        Add("accent-subtle", CuspPalette.ColorAt(h, dark ? 0.29 : 0.94, sat / 2));
+        Add("focus", Solve(CuspPalette.ColorAt(h, dark ? 0.78 : 0.5, sat), surfaces, UiContrast, sat));
 
-        var ramp = CuspPalette.Sequential(9, h, 0.8);
+        var ramp = CuspPalette.Sequential(9, h, sat * 0.8 / MaxAccentSaturation);
         for (var i = 0; i < ramp.Length; i++)
             Add($"accent-{i + 1}", ramp[ramp.Length - 1 - i]);   // 1 = lightest … 9 = darkest
 
@@ -242,6 +247,17 @@ public static class DesignTokens
     /// (<c>--mw-{name}-on</c>). Light mode: a mid-dark fill under white. Dark mode: a lighter fill
     /// under the page colour. The fill is moved in lightness until its text reaches 4.5:1.
     /// </summary>
+    /// <summary>
+    /// How saturated <paramref name="accent"/> is on its hue's cusp curve — its chroma over the
+    /// chroma the curve carries at the same lightness at full saturation — capped at
+    /// <see cref="MaxAccentSaturation"/>. A grey accent answers 0, so its theme stays grey.
+    /// </summary>
+    private static double AccentSaturation(OklchColor accent)
+    {
+        var full = CuspPalette.ColorAt(accent.H, accent.L, 1).C;
+        return full < 1e-6 ? 0 : Math.Clamp(accent.C / full, 0, MaxAccentSaturation);
+    }
+
     private static void AddFill(string name, double hue, double saturation, bool dark, OklchColor page, Action<string, OklchColor> add)
     {
         var on = dark ? page : OklchColor.FromHex("#ffffff");
