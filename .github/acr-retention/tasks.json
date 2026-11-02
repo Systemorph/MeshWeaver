@@ -60,8 +60,9 @@
         "decided rule is at least 30 days by age with NO build-count quota; #3843 and #3846",
         "clamped the bundle store and the assembly cache to it and left the registry out in as",
         "many words. `lock-pinned-digests.py --check-retention-record` now asserts it on every",
-        "pull request. See `recordAheadOfRegistry` below: the live task still carries the old",
-        "window, and this record is what `apply` would push.",
+        "pull request. APPLIED on 2026-11-02 by the governed `RegistryRetention` apply",
+        "(control `Ops/Actions/registry-retention-apply-20261101b-3438`, Memex run 41419066636):",
+        "the live task now matches this record byte for byte, still Disabled under `pause`.",
         "Both steps share ONE 3600 s task budget; the per-step `timeout` is a per-step ceiling.",
         "🚨 NEITHER STEP PASSES `--include-locked`, and that is the whole of the pin protection:",
         "`acr purge` skips locked manifests by default. Adding that flag would delete every",
@@ -94,18 +95,6 @@
       ]
     }
   ],
-  "recordAheadOfRegistry": {
-    "inForce": true,
-    "since": "2026-09-13",
-    "tasks": [
-      "purge-old-images",
-      "purge-old-ci-releases"
-    ],
-    "what": "purge-old-images.yaml records `--ago 30d` with no `--keep`, and both steps carry `--dry-run` (see `dryRun`); the live (disabled) task still carries `--ago 7d --keep 10` and deletes for real when enabled. Both records' TAG filters reach only per-build identity tags (`^(staging-…|<sha>|<sha>-p<sha>|<x.y.z>-(ci|rc|next)…)$`) where the live tasks carry `<repo>:.*`, which reaches every release channel, the `arm-complete-*` marker and every official version once its tag ages past the window (MeshWeaver#3438 / Memex#219). The REPOSITORY halves are unchanged, and `acr-retention-tasks.sh verify` never excuses a repository change.",
-    "why": "#3842's decided rule — at least 30 days by age, no build-count quota — was landed in the bundle store (#3843) and the assembly cache (#3846) and explicitly NOT in the registry. The record is what `acr-retention-tasks.sh apply` pushes, so stating the decided window here is what makes re-enabling the task install a window somebody chose. Nothing was applied: this is a record change, not a registry change.",
-    "clearedBy": "the next `acr-retention-tasks.sh apply` — after which `verify` finds no drift on these tasks and reds on THIS declaration being stale, which is how it expires rather than rotting.",
-    "issue": "MeshWeaver#3438"
-  },
   "pause": {
     "inForce": true,
     "since": "2026-09-12",
