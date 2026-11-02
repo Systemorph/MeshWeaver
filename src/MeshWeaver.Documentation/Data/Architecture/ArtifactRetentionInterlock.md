@@ -825,7 +825,9 @@ not downstream of that night's protection verdict.
    way the ACR's is; and whether to build the **last-pulled receiver** the registry's notification
    socket is already wired for but pointed at nothing.
 1. **The decided window is APPLIED, but not RUNNING.** The governed `RegistryRetention` apply [`Ops/Actions/registry-retention-apply-20261101b-3438`](https://control.systemorph.com/Ops/Actions/registry-retention-apply-20261101b-3438) on the control instance ([Memex run 41419066636](https://github.com/Systemorph/Memex/actions/runs/41419066636), 2026-11-02 09:16Z) installed
-   `--ago 30d --untagged --dry-run` with no `--keep` on both tasks; both stay disabled. What is
+   the record on both tasks: `--ago 30d --untagged` with no `--keep`, and `--dry-run` on the two
+   steps of `purge-old-images` only (the `dryRun` block). The superseded `purge-old-ci-releases`
+   carries no `--dry-run` and would delete if enabled. Both stay disabled. What is
    left is steps 4 and 5 of *What the window SELECTS* above: lifting the pause (enabling the task
    as a nightly report) and, after reading that report back, dropping `--dry-run`. Both belong to
    whoever owns the registry. Their cost is storage: dropping `--keep 10` and moving 7d → 30d
