@@ -191,6 +191,54 @@ Refine with any `With…` of the control (`WithCreateNodeType`/`WithCreateNamesp
 `WithMaxColumns` for a grid). A view that has to COMPUTE something across the set (a total, a KPI)
 computes it beside the catalog, never instead of it.
 
+## Table mode — columns and a header that sorts
+
+When a catalog's rows are records a reader compares — submissions with a *received* and an
+*offered* date, claims with a status and an amount — render the results as a **table**:
+`MeshSearchRenderMode.Table` plus one `MeshSearchColumn` per column. Everything else about the
+control stays as it was: the scope tabs, the search box, each scope's hidden query, the *Sort by*
+dropdown, paging, and the row click (it opens the result exactly like a `List` row).
+
+```csharp
+Controls.MeshSearch
+    .WithHiddenQuery("nodeType:Submission namespace:Acme sort:content.lastActivityAt-desc")
+    .WithRenderMode(MeshSearchRenderMode.Table)
+    .WithColumns(
+        new MeshSearchColumn("Submission", "name"),
+        new MeshSearchColumn("Received", "content.receivedOn"),
+        new MeshSearchColumn("Offered", "content.offeredOn"),
+        new MeshSearchColumn("Premium", "content.premium") { Format = "N0" });
+```
+
+- **`Field` is a query selector** — a node field (`name`, `nodeType`, `lastModified`) or a content
+  path (`content.receivedOn`). The cell reads it exactly the way the store reads it for `sort:` and
+  filters, so a column shows the very value it sorts by.
+- **Cells are culture-independent.** Dates (typed, or the ISO strings JSON content carries) render
+  as `yyyy-MM-dd` in the value's own offset; numbers use the invariant culture; `Format` takes any
+  invariant .NET format (`yyyy-MM-dd HH:mm`, `N0`, `P1`). A missing value is an empty cell, a
+  boolean is ✓ / ✗, a list is comma-separated.
+- **A header click sorts in the STORE.** The first click on a column appends `sort:<field>` to the
+  query the view sends, a second click on the same column `sort:<field>-desc`, a third flips it back;
+  the header shows ▲ / ▼ (and `aria-sort`). Because the parser keeps the **last** `sort:`, the
+  header's order wins over the hidden query's, a Sort-by option's and a typed one, and every filter
+  stays. Paging restarts at page one on the new order. The rewrite is the pure
+  `MeshSearchColumnSort.Toggle` / `MeshSearchColumnSort.Apply`.
+- **Header vs. *Sort by* dropdown — the most recent choice wins.** A header click overrides the
+  dropdown's ORDER but keeps the dropdown's result SET (an option such as *Last accessed* changes the
+  set, not only the order). Picking a dropdown option clears the header sort, so the option's own
+  order applies again. Switching scope tabs keeps the header sort when the new scope still shows
+  that column, and clears it otherwise.
+- **Columns per scope.** `MeshSearchScopeTab.Columns` replaces the control-level columns while
+  that scope is active; a Table with no columns at all shows one *Name* column.
+- **`Sortable = false`** on a column whose selector the store cannot order by; its header is then
+  plain text.
+- **What the columns read is loaded.** A Table needs `Content` for its `content.*` columns and the
+  node field behind every other column (`description`, `lastModified`, …), so the view adds them to
+  a hidden query whose own `select:` leaves them out (a `select:` without `content` yields nodes
+  whose Content is null — the cells would silently stay empty).
+- **A selector with a hyphen** (`content.policy-id`) sorts ascending as `sort:content.policy-id-asc`:
+  the parser reads the text after the last hyphen as the direction.
+
 ## A catalog app — a menu of catalogs with one query bar
 
 When a page holds SEVERAL places a reader perceives as different (clients, partners, the deals,
