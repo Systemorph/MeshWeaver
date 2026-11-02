@@ -9,27 +9,58 @@ namespace MeshWeaver.Data;
 public abstract record WorkspaceReference
 {
     /// <summary>
-    /// Encodes a value for safe use as ONE reference/URL segment, escaping <c>.</c> as <c>%9Y</c>
-    /// and <c>/</c> as <c>%9Z</c> in strings. Escaping the slash keeps a path-shaped id (e.g. a
-    /// source Code node path in a NodeType shell's <c>{node}/Code/{id}</c> href) a SINGLE segment:
-    /// with raw slashes the URL resolver's prefix probe contains segments like <c>Source</c>/<c>Test</c>,
-    /// which the satellite-table mapping routes to the <c>code</c> table for the WHOLE probe — the
-    /// node's ancestors then match nothing and navigation dies with "Page not found"
-    /// (Chess/GambitHunt shell links, 2026-07-12). Same principle as the base64url node-bound
-    /// DataContext (<c>LayoutAreaReference.MeshNodePrefix</c>): ids must not leak path segments.
+    /// Encodes a value for safe use as ONE reference/URL segment, with VALID percent-escapes: in the
+    /// part before any <c>?</c>, <c>%</c> → <c>%25</c>, <c>.</c> → <c>%2E</c>, <c>/</c> → <c>%2F</c>. The
+    /// query part, if any, is left as written (its values are unescaped by the reference's own
+    /// parameter parsing).
+    /// <para>Escaping the slash keeps a path-shaped id (e.g. a source Code node path in a NodeType shell's
+    /// <c>{node}/Code/{id}</c> href) a SINGLE segment: with raw slashes the URL resolver's prefix probe
+    /// contains segments like <c>Source</c>/<c>Test</c>, which the satellite-table mapping routes to the
+    /// <c>code</c> table for the WHOLE probe — the node's ancestors then match nothing and navigation dies
+    /// with "Page not found" (Chess/GambitHunt shell links, 2026-07-12). Same principle as the base64url
+    /// node-bound DataContext (<c>LayoutAreaReference.MeshNodePrefix</c>): ids must not leak path
+    /// segments. <c>%2F</c> is left encoded by the server and by the portal's raw-URI navigation, so it
+    /// never becomes a segment before <see cref="Decode"/> runs.</para>
+    /// <para>🚨 It used to write <c>%9Z</c> / <c>%9Y</c> — NOT valid percent-escapes. Clicked in-app (client
+    /// navigation) they worked, but any PAGE LOAD of such a URL — a reload, a new tab, a pasted or shared
+    /// link — was answered HTTP 400 by the server before the portal ever saw it (measured on a client
+    /// instance, 2026-11-03: the NodeType side menu's Sources/Tests links,
+    /// <c>…/Reinsurance/Acceptance/Code/Reinsurance%9ZAcceptance%9ZSource%9ZAcceptanceReport</c> → 400).
+    /// <see cref="Decode"/> still reads that legacy form.</para>
     /// </summary>
     /// <param name="value">The value to encode.</param>
     /// <returns>The encoded value (strings escaped; other values unchanged).</returns>
-    public static object Encode(object value) =>
-        value is string s ? s.Replace(".", "%9Y").Replace("/", "%9Z") : value;
+    public static object Encode(object value)
+    {
+        if (value is not string s)
+            return value;
+        var query = s.IndexOf('?');
+        var path = query < 0 ? s : s[..query];
+        var encoded = path.Replace("%", "%25").Replace(".", "%2E").Replace("/", "%2F");
+        return query < 0 ? encoded : encoded + s[query..];
+    }
+
     /// <summary>
-    /// Reverses <see cref="Encode"/>, restoring <c>/</c> from <c>%9Z</c> and <c>.</c> from
-    /// <c>%9Y</c> in strings.
+    /// Reverses <see cref="Encode"/> for an id as it arrives from a URL: in the part before any
+    /// <c>?</c>, the legacy <c>%9Z</c> / <c>%9Y</c> escapes become <c>/</c> / <c>.</c>, then every valid
+    /// percent-escape is decoded — <see cref="Encode"/>'s own, and whatever a hop on the way added (the
+    /// markdown renderer writes <c>~</c> as <c>%7E</c>, a browser writes a space as <c>%20</c>, the
+    /// portal hands the area the raw URI). The query part keeps its escapes for the reference's own
+    /// parameter parsing; only the legacy escapes are restored there.
     /// </summary>
     /// <param name="value">The value to decode.</param>
     /// <returns>The decoded value (strings unescaped; other values unchanged).</returns>
-    public static object Decode(object value) =>
-        value is string s ? s.Replace("%9Z", "/").Replace("%9Y", ".") : value;
+    public static object Decode(object value)
+    {
+        if (value is not string s)
+            return value;
+        var query = s.IndexOf('?');
+        var path = query < 0 ? s : s[..query];
+        var decoded = Uri.UnescapeDataString(path.Replace("%9Z", "/").Replace("%9Y", "."));
+        return query < 0
+            ? decoded
+            : decoded + s[query..].Replace("%9Z", "/").Replace("%9Y", ".");
+    }
 
 }
 
