@@ -95,6 +95,12 @@ public sealed class PackageListingCache : IDisposable
     // answer predates the merge and must be revalidated, never served as fresh for a whole window.
     private readonly ConcurrentDictionary<PackageListingKey, long> generations = new();
 
+    // 🚨 Every read's place in START order, for every key (#7862 review). A read superseded by an
+    // eviction or an overdue replacement keeps running, so reads can SETTLE out of order; each held
+    // entry records the newest read whose outcome it reflects (HeldListing.Sequence), and a
+    // settlement from an older read — a listing or a failure — is dropped. Interlocked, never a lock.
+    private long sequence;
+
     // 🚨 The multicast connections this cache creates, owned HERE so the cache's own disposal
     // releases them (RootedRxConnectionRatchetGuard). A bare AutoConnect(1) would leave the handle
     // where no teardown can reach it; a pool-queued connect would then run against a closed scope.
@@ -219,13 +225,15 @@ public sealed class PackageListingCache : IDisposable
             createdHere = true;
             var startedAt = ticks();
             var generation = generations.GetValueOrDefault(k);
+            var order = Interlocked.Increment(ref sequence);
             builtAt[k] = startedAt;
             // 🚨 Replay(1) + an OWNED AutoConnect, not the bare source. The entry is subscribed by
             // every concurrent caller, so a COLD observable would be re-run by each of them and the
             // cache would hold a recipe rather than a result. The connect fires on the first real
             // subscriber; the cache's own Do-decoration deliberately does not count as one.
             return produce().Take(1)
-                .Do(listing => Land(k, listing, startedAt, generation))
+                .Do(listing => Land(k, listing, startedAt, generation, order),
+                    exception => Fail(k, exception, order))
                 .Replay(1)
                 .AutoConnectOwnedBy(connections, releaseLane, nameof(PackageListingCache));
         });
@@ -270,12 +278,39 @@ public sealed class PackageListingCache : IDisposable
                 key.RepoUrl, key.GitRef, Elapsed(current.ReadAt)));
     }
 
-    /// <summary>Records a settled read — unless a NEWER read already landed — with the generation
-    /// it STARTED under, so a green build that arrived while it was in flight leaves it stale.</summary>
-    private void Land(PackageListingKey key, IReadOnlyList<PackageManifest> listing, long startedAt, long generation)
+    /// <summary>
+    /// The failure of the last revalidation of <paramref name="key"/> when the listing served for it
+    /// is the one that revalidation failed to replace; null when the held listing is current (its
+    /// last read landed) or nothing is held. Lets a reader that must not pass a stale answer off as a
+    /// fresh one — the registry's catalog listing — say so, while every other reader keeps getting
+    /// the held listing (Plugins#4922 review).
+    /// </summary>
+    /// <param name="key">The listing.</param>
+    /// <returns>The failure, or null.</returns>
+    public Exception? RevalidationFailure(PackageListingKey key) =>
+        held.TryGetValue(key, out var current) ? current.Failure : null;
+
+    /// <summary>Records a settled read — unless a NEWER read (by start order) already settled — with
+    /// the generation it STARTED under, so a green build that arrived while it was in flight leaves it
+    /// stale. A landed read is healthy: it clears a failure only of an OLDER read, never a newer one
+    /// (#7862 review). Lock-free: AddOrUpdate's update is pure and may be retried.</summary>
+    private void Land(PackageListingKey key, IReadOnlyList<PackageManifest> listing, long startedAt, long generation, long order)
     {
-        var landed = new HeldListing(listing, startedAt, generation);
-        held.AddOrUpdate(key, landed, (_, existing) => existing.ReadAt > startedAt ? existing : landed);
+        var landed = new HeldListing(listing, startedAt, generation, order, Failure: null);
+        held.AddOrUpdate(key, landed, (_, existing) => existing.Sequence > order ? existing : landed);
+    }
+
+    /// <summary>
+    /// Records that a read FAILED while a listing is held: the held listing stays servable and is
+    /// marked with the failure — unless a NEWER read (by start order) already settled, whose state
+    /// this older failure must not overwrite (#7862 review). A key with nothing held keeps nothing: a
+    /// first read's failure reaches its waiting callers directly. Compare-and-swap, never a lock.
+    /// </summary>
+    private void Fail(PackageListingKey key, Exception exception, long order)
+    {
+        while (held.TryGetValue(key, out var current) && current.Sequence < order)
+            if (held.TryUpdate(key, current with { Sequence = order, Failure = exception }, current))
+                return;
     }
 
     /// <summary>
@@ -340,7 +375,14 @@ public sealed class PackageListingCache : IDisposable
 
     /// <summary>A settled listing, when its read started, and the eviction generation it started
     /// under — stale as soon as a green build bumps the key's generation past it.</summary>
-    private sealed record HeldListing(IReadOnlyList<PackageManifest> Listing, long ReadAt, long Generation);
+    /// <param name="Listing">The listing served.</param>
+    /// <param name="ReadAt">When the read that produced <paramref name="Listing"/> STARTED.</param>
+    /// <param name="Generation">The eviction generation that read started under.</param>
+    /// <param name="Sequence">The start order of the NEWEST read whose outcome this entry reflects —
+    /// the one that produced the listing, or a later one that failed to replace it.</param>
+    /// <param name="Failure">That later read's failure, or null when the listing is current.</param>
+    private sealed record HeldListing(
+        IReadOnlyList<PackageManifest> Listing, long ReadAt, long Generation, long Sequence, Exception? Failure);
 
     private static string Normalize(string repoUrl)
     {
@@ -356,8 +398,11 @@ public sealed class PackageListingCache : IDisposable
     /// </summary>
     private sealed class CachedPackageSource(
         IPackageSource inner, PackageListingCache cache, string repoUrl, string subdir, string format)
-        : IPackageSource
+        : IPackageSource, IPackageListingHealth
     {
+        public Exception? StaleBecause(string gitRef) =>
+            cache.RevalidationFailure(new PackageListingKey(repoUrl, subdir, format, gitRef));
+
         public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
             cache.Get(
                 new PackageListingKey(repoUrl, subdir, format, gitRef),
@@ -381,4 +426,18 @@ public sealed class PackageListingCache : IDisposable
         public IObservable<bool> PublishesCommit(string commit, string gitRef) =>
             inner.PublishesCommit(commit, gitRef);
     }
+}
+
+/// <summary>
+/// A package source that may answer a listing it HOLDS after a re-read of it failed — the listing
+/// cache's stale-while-revalidate (<see cref="PackageListingCache"/>). A reader that must not pass
+/// such an answer off as fresh asks <see cref="StaleBecause"/> after listing (Plugins#4922 review).
+/// </summary>
+public interface IPackageListingHealth
+{
+    /// <summary>The failure of the last re-read of the listing at <paramref name="gitRef"/> when the
+    /// listing served is the one it failed to replace; null when the listing served is current.</summary>
+    /// <param name="gitRef">The ref the listing was asked at.</param>
+    /// <returns>The failure, or null.</returns>
+    Exception? StaleBecause(string gitRef);
 }
