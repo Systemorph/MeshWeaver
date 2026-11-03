@@ -49,7 +49,10 @@ public class BlockedThreadStacksThreadExitTest
 
             captured[thread.ManagedThreadId].Should().Contain(nameof(ParkedWhileAnUnrelatedThreadExits),
                 "the parked thread is still there, and an unrelated thread's exit must not lose its stack");
-            dumps.Should().Be(2, "the dump the exit voided is taken again — once");
+            // The replacement dump is a REAL dump, so it can meet the same race on its own; any count
+            // from 2 up to the bound is correct. Exact counts are asserted only where the writer is fully faked.
+            dumps.Should().BeInRange(2, BlockedThreadStacks.MaxDumpAttempts,
+                "the dump the exit voided is taken again, and the attempts stay bounded");
         }
         finally
         {
