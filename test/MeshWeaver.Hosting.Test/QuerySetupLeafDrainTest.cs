@@ -140,6 +140,145 @@ public class QuerySetupLeafDrainTest
     }
 
     /// <summary>
+    /// Review of #7844: a hand-off leaf can finish before the thread that subscribed it has assigned its
+    /// subscription. A LATE assignment of that finished leaf must not dispose the hand-off that began
+    /// after it — that cancelled the live leaf and left the queue with its drain taken, so no later frame
+    /// was ever delivered. The seam holds the first hand-off's assignment back while its leaf completes
+    /// and a second hand-off starts and parks; frame 4, queued in the second leaf, must still arrive.
+    /// </summary>
+    [Fact]
+    public async Task ALateAssignmentOfAFinishedHandOff_NeverCancelsTheNextOne()
+    {
+        using var pool = new IoPool(2);
+        var releaseA = 0;
+        var releaseB = 0;
+        var firstDrainReturned = 0;
+        var oneDelivered = new AsyncSubject<Unit>();
+        var threeEntered = new AsyncSubject<Unit>();
+        var fourDelivered = new AsyncSubject<Unit>();
+        GateFreeEmitter<int>? emitter = null;
+        var observer = Observer.Create<int>(value =>
+        {
+            switch (value)
+            {
+                case 0:
+                    emitter!.OnNext(1);
+                    break;
+                case 1:
+                    oneDelivered.OnNext(Unit.Default);
+                    oneDelivered.OnCompleted();
+                    break;
+                case 2:
+                    emitter!.OnNext(3);
+                    break;
+                case 3:
+                    threeEntered.OnNext(Unit.Default);
+                    threeEntered.OnCompleted();
+                    SpinWait.SpinUntil(() => Volatile.Read(ref releaseB) == 1, ParkBound);
+                    emitter!.OnNext(4);
+                    break;
+                case 4:
+                    fourDelivered.OnNext(Unit.Default);
+                    fourDelivered.OnCompleted();
+                    break;
+            }
+        });
+        using var owned = emitter = new GateFreeEmitter<int>(observer, pool, Rethrow);
+        var handOffs = 0;
+        emitter.OnHandOffSubscribed = () =>
+        {
+            if (Interlocked.Increment(ref handOffs) == 1)
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseA) == 1, ParkBound);
+        };
+        try
+        {
+            // Hand-off A: its subscribing thread parks before assigning, while A's leaf delivers 1.
+            new Thread(() =>
+            {
+                emitter.OnNext(0);
+                emitter.Drain();
+                Volatile.Write(ref firstDrainReturned, 1);
+            }) { IsBackground = true }.Start();
+            await oneDelivered.Should().Within(Bound).Emit("hand-off A delivers frame 1");
+            SpinWait.SpinUntil(() => pool.CurrentInFlight == 0, Bound).Should().BeTrue(
+                "hand-off A's leaf finished while its subscribing thread is still parked before the assignment");
+
+            // Hand-off B: begins after A finished, and parks inside frame 3.
+            emitter.OnNext(2);
+            emitter.Drain();
+            await threeEntered.Should().Within(Bound).Emit("hand-off B is running");
+
+            // Now A's late assignment lands.
+            Volatile.Write(ref releaseA, 1);
+            SpinWait.SpinUntil(() => Volatile.Read(ref firstDrainReturned) == 1, Bound).Should().BeTrue();
+
+            Volatile.Write(ref releaseB, 1);
+            await fourDelivered.Should().Within(Bound).Emit(
+                "a late assignment of hand-off A must not cancel hand-off B, which still owns the drain");
+        }
+        finally
+        {
+            Volatile.Write(ref releaseA, 1);
+            Volatile.Write(ref releaseB, 1);
+        }
+    }
+
+    /// <summary>
+    /// Review of #7844: the hand-off leaf checks the pool's token between frames, and a hand-off the
+    /// pool CANCELS terminates the consumer with that cancellation. Not every owner sits under a pooled
+    /// subscription that would terminate it on teardown (autocomplete does not); a consumer that hears
+    /// nothing waits forever. The frame queued behind the cancellation is not delivered.
+    /// </summary>
+    [Fact]
+    public async Task AHandOffThePoolCancels_TerminatesTheConsumer_AndStopsAtTheNextFrame()
+    {
+        var pool = new IoPool(2);
+        var release = 0;
+        var oneEntered = new AsyncSubject<Unit>();
+        var faulted = new AsyncSubject<Exception>();
+        var received = ImmutableList<int>.Empty;
+        GateFreeEmitter<int>? emitter = null;
+        var observer = Observer.Create<int>(
+            value =>
+            {
+                ImmutableInterlocked.Update(ref received, r => r.Add(value));
+                if (value == 0)
+                    emitter!.OnNext(1);
+                if (value != 1)
+                    return;
+                oneEntered.OnNext(Unit.Default);
+                oneEntered.OnCompleted();
+                SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, ParkBound);
+            },
+            error =>
+            {
+                faulted.OnNext(error);
+                faulted.OnCompleted();
+            });
+        using var owned = emitter = new GateFreeEmitter<int>(observer, pool, Rethrow);
+        try
+        {
+            emitter.OnNext(0);
+            emitter.Drain();
+            await oneEntered.Should().Within(Bound).Emit("the hand-off leaf is running its consumer");
+
+            emitter.OnNext(2);
+            pool.Dispose();
+            Volatile.Write(ref release, 1);
+
+            var error = await faulted.Timeout(Bound).FirstAsync().Await(TestContext.Current.CancellationToken);
+            error.Should().BeAssignableTo<OperationCanceledException>(
+                "the consumer is told its hand-off was cancelled, rather than hearing nothing");
+            received.Should().Equal(0, 1);
+            await pool.Disposed.Timeout(ParkBound).FirstAsync().Await(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+    }
+
+    /// <summary>
     /// The hand-off keeps the emitter's contract: frames are delivered in queue order, one at a time,
     /// none lost, the frames queued during a drain included.
     /// </summary>

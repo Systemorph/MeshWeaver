@@ -707,21 +707,31 @@ stop's 30 s join then expired over it:
 first occurrence.
 
 Now a drain delivers at most the frames that were queued when it took the drain, its own frame
-included. Frames queued after that run as a separate batch, by the same rule, on the mesh's Query pool
-as a tracked blocking leaf (`IIoPool.InvokeBlocking`). The draining flag stays taken across the
-hand-off, so order is unchanged and no producer can overtake. No producer's thread outlives its own
-frame. The batch is never a bare scheduler hop: it runs the consumer, and the consumer may use the
-service scope, so the pool's teardown has to wait for it, and its residual names it if it outlives the
-join. A batch that has not started when the subscription ends is cancelled with it. If the consumer
-throws during a handed-off batch, there is no caller to fault, so `MeshQuery` logs the exception at
-Error.
+included. Anything queued after that goes to ONE leaf on the mesh's Query pool, a tracked blocking leaf
+(`IIoPool.InvokeBlocking`) that owns the drain until the queue is empty. The draining flag stays taken
+across the hand-off, so order is unchanged and no producer can overtake. No producer's thread outlives
+its own frame.
+
+The leaf is never a bare scheduler hop. It runs the consumer, and the consumer may use the service
+scope, so the pool's teardown has to wait for it, and its residual names it if it outlives the join.
+It checks the pool's token between frames, so a drain stops it at the next frame boundary. Only one
+leaf exists at a time. Its subscription goes into a slot that is published before it subscribes, so a
+late assignment from a leaf that already finished cannot dispose the next one.
+
+A hand-off the pool cancels terminates the consumer with that cancellation and releases the queue.
+Not every owner sits under a pooled subscription that would terminate it on teardown; autocomplete does
+not. A hand-off ended by the subscription itself owes the consumer silence. If the consumer throws
+inside the leaf, there is no caller to fault, so `MeshQuery` logs the exception at Error.
 
 `QuerySetupLeafDrainTest` (`test/MeshWeaver.Hosting.Test`) pins it with a real `IoPool`. The consumer
 answers the synchronous Initial by queueing a live frame, then parks inside that live frame. The
 only leaf left in flight while the consumer is parked must be the handed-off batch. Without the
 hand-off, the setup leaf is the parked thread. A second test parks a handed-off batch and disposes the
 pool: `IoPool.Disposed` must not fire until the batch finishes. With an untracked hand-off it fires at
-once.
+once. Two more tests pin the slot and the cancellation. One holds back a finished leaf's assignment
+until the next leaf is running; the next leaf must still deliver. The other cancels a running leaf
+through the pool; the consumer must receive the cancellation, and the frame behind it must not be
+delivered. Each test fails with its half of the fix reverted.
 
 **Not established.** This is the only mechanism found by which the named leaf stays in flight without
 anything blocking. Nobody has read a stack of the production leaf. A consumer that blocks inside its

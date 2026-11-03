@@ -41,19 +41,23 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// could hold its permit indefinitely, and a silo stop's 30 s join expired over it:
 /// <c>Did NOT report: Query=1 [Using`2[… MeshQuery+QueryMembers]]</c>. Now a drain delivers at most
 /// the frames queued up to the moment it took the drain (its own frame included) and hands the rest
-/// to a separate batch on the mesh's Query <see cref="IIoPool"/>, which delivers the next batch the same
-/// way. Order is unchanged — the draining flag stays taken across the hand-off — and no producer's
-/// thread outlives its own frame.</para>
+/// to ONE pool leaf, which owns the drain from then on. Order is unchanged — the draining flag stays
+/// taken across the hand-off — and no producer's thread outlives its own frame.</para>
 ///
-/// <para>🚨 <b>The handed-off batch is TRACKED pool work, never a bare scheduler hop</b> (review of
-/// #7844). A batch runs the consumer, and the consumer may use the service scope. On a bare
-/// <c>TaskPoolScheduler</c> it ran outside every teardown count: a silo stop could complete the pooled
-/// subscription and let <c>IoPool.Disposed</c> fire while a handed-off consumer was still running —
-/// the use-after-unload shape (#613) the pool exists to prevent. So each batch is one
-/// <see cref="IIoPool.InvokeBlocking{T}"/> leaf: counted in flight, waited for by the pool's teardown,
-/// and named in its residual if it outlives the join. A batch that has not started when the
-/// subscription ends is cancelled with it (<see cref="Dispose"/>), and one the pool's drain refuses is
-/// never started.</para>
+/// <para>🚨 <b>The hand-off is ONE tracked pool leaf that owns the drain loop with its token</b>
+/// (reviews of #7844). The leaf runs the consumer, and the consumer may use the service scope, so it is
+/// an <see cref="IIoPool.InvokeBlocking{T}"/> leaf: counted in flight, waited for by the pool's
+/// teardown, and named in its residual if it outlives the join — never a bare scheduler hop, which let
+/// <c>IoPool.Disposed</c> fire under a running consumer. It delivers until the queue is empty and
+/// checks its token between frames, so a drain stops it at the next frame boundary instead of letting
+/// it run through a backlog. Exactly one such leaf exists at a time (the draining flag), so there is no
+/// chain of re-subscriptions to order: its subscription goes into a slot published BEFORE it is
+/// subscribed, and a late assignment can only dispose the slot it belongs to.</para>
+///
+/// <para>A hand-off the pool CANCELS (its drain, or a pool already gone) terminates the consumer with
+/// that cancellation and releases the queue — not every owner sits under a pooled subscription that
+/// would terminate it (autocomplete does not), and a consumer that hears nothing waits forever. A
+/// hand-off ended by the subscription itself (<see cref="Dispose"/>) owes the consumer silence.</para>
 ///
 /// <para>The one lock here guards the queue and the draining flag only and is never held while the
 /// observer runs. Instance state of one subscription; nothing static.</para>
@@ -69,6 +73,8 @@ internal sealed class GateFreeEmitter<TItem>(
     IIoPool handOffPool,
     Action<Exception> reportHandOffFault) : IDisposable
 {
+    private enum BatchEnd { Empty, More, Cancelled }
+
     private readonly object queueLock = new();
     private ImmutableQueue<Notification<TItem>> pending = ImmutableQueue<Notification<TItem>>.Empty;
     // Sequence numbers of the last frame queued and the last frame delivered; a drain's batch ends at
@@ -76,10 +82,20 @@ internal sealed class GateFreeEmitter<TItem>(
     private long enqueued;
     private long delivered;
     private bool draining;
-    private bool disposed;
-    // The handed-off batch in flight or queued on the pool — at most one, because `draining` is held
-    // across the hand-off. Disposing it cancels a batch that has not started.
+    // Set by Dispose (the subscription ended) or by a cancelled hand-off (the consumer was terminated):
+    // nothing is delivered after it.
+    private bool ended;
+    // The slot of the ONE hand-off leaf; replacing it disposes the previous leaf's slot, which by then
+    // has released the drain.
     private readonly SerialDisposable handedOff = new();
+
+    /// <summary>
+    /// Test seam (InternalsVisibleTo): runs on the handing-off thread after the hand-off leaf has been
+    /// SUBSCRIBED and before its subscription is assigned to its slot. Null in production. A test parks
+    /// here to hold that assignment back while the leaf completes and a later hand-off begins — the
+    /// ordering a late assignment must not be able to break.
+    /// </summary>
+    internal Action? OnHandOffSubscribed { get; set; }
 
     /// <summary>Queues a frame. Call under the merge's gate.</summary>
     public void OnNext(TItem value) => Enqueue(Notification.CreateOnNext(value));
@@ -110,33 +126,33 @@ internal sealed class GateFreeEmitter<TItem>(
         long limit;
         lock (queueLock)
         {
-            if (draining || disposed)
+            if (draining || ended)
                 return;
             draining = true;
             limit = enqueued;
         }
-        if (DeliverBatch(limit))
+        if (DeliverBatch(limit, CancellationToken.None) == BatchEnd.More)
             HandOff();
     }
 
     /// <summary>
-    /// Ends the subscription's delivery: a handed-off batch that has not started is cancelled, and
-    /// nothing queued afterwards is delivered. A batch already running finishes its frames — the pool
-    /// tracks it until it does.
+    /// Ends the subscription's delivery: a hand-off that has not started is cancelled, and nothing
+    /// queued afterwards is delivered. A hand-off already running stops at its next frame boundary —
+    /// the pool tracks it until it does.
     /// </summary>
     public void Dispose()
     {
         lock (queueLock)
         {
-            disposed = true;
+            ended = true;
             pending = ImmutableQueue<Notification<TItem>>.Empty;
         }
         handedOff.Dispose();
     }
 
-    // Delivers up to `limit`; answers whether frames queued after that remain and must be handed off
-    // (`draining` then stays taken for the hand-off).
-    private bool DeliverBatch(long limit)
+    // Delivers up to `limit`, checking `ct` between frames. Empty releases the drain; More and
+    // Cancelled keep it taken for the caller to hand off or terminate.
+    private BatchEnd DeliverBatch(long limit, CancellationToken ct)
     {
         try
         {
@@ -145,13 +161,15 @@ internal sealed class GateFreeEmitter<TItem>(
                 Notification<TItem> next;
                 lock (queueLock)
                 {
-                    if (pending.IsEmpty || disposed)
+                    if (pending.IsEmpty || ended)
                     {
                         draining = false;
-                        return false;
+                        return BatchEnd.Empty;
                     }
+                    if (ct.IsCancellationRequested)
+                        return BatchEnd.Cancelled;
                     if (delivered >= limit)
-                        return true;
+                        return BatchEnd.More;
                     pending = pending.Dequeue(out next);
                     delivered++;
                 }
@@ -168,31 +186,55 @@ internal sealed class GateFreeEmitter<TItem>(
         }
     }
 
-    // Queued by other threads (or re-entrantly by the observer) after the drain began: the next batch
-    // runs as a tracked leaf of the pool, never on this thread. Subscribed OUTSIDE queueLock.
+    // The ONE hand-off leaf: owns the drain until the queue is empty, batch by batch, with the pool's
+    // token checked between frames. Its slot is published BEFORE it is subscribed.
     private void HandOff()
-        => handedOff.Disposable = handOffPool
-            .InvokeBlocking(_ =>
+    {
+        var slot = new SingleAssignmentDisposable();
+        handedOff.Disposable = slot;
+        var subscription = handOffPool
+            .InvokeBlocking(ct =>
             {
-                long limit;
-                lock (queueLock)
-                    limit = enqueued;
-                return DeliverBatch(limit);
+                while (true)
+                {
+                    long limit;
+                    lock (queueLock)
+                        limit = enqueued;
+                    switch (DeliverBatch(limit, ct))
+                    {
+                        case BatchEnd.Empty:
+                            return System.Reactive.Unit.Default;
+                        case BatchEnd.Cancelled:
+                            throw new OperationCanceledException(ct);
+                    }
+                }
             })
             .Subscribe(
-                more =>
-                {
-                    if (more)
-                        HandOff();
-                },
+                _ => { },
                 fault =>
                 {
-                    // A batch the pool refused or cancelled (its drain, or this subscription ending)
-                    // delivered nothing: the subscriber is terminated by the pooled subscription's own
-                    // teardown, and the flag is left taken so nothing is delivered after it. Anything
-                    // else is the observer's own exception, reported — it has no caller to fault.
                     if (fault is OperationCanceledException)
-                        return;
-                    reportHandOffFault(fault);
+                        TerminateCancelled(fault);
+                    else
+                        // The observer's own exception: it has no caller to fault on a pool lane.
+                        reportHandOffFault(fault);
                 });
+        OnHandOffSubscribed?.Invoke();
+        slot.Disposable = subscription;
+    }
+
+    // The pool cancelled the hand-off (its drain, or a pool already gone) while the drain was taken:
+    // tell the consumer, and release the queue. Never after the subscription ended — that owes silence.
+    private void TerminateCancelled(Exception cancellation)
+    {
+        lock (queueLock)
+        {
+            if (ended)
+                return;
+            ended = true;
+            draining = false;
+            pending = ImmutableQueue<Notification<TItem>>.Empty;
+        }
+        observer.OnError(cancellation);
+    }
 }
