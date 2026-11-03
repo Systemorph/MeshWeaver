@@ -87,6 +87,46 @@ release that is perfectly fine — and an environment frozen for weeks is its ow
 `release-markers=2` beside `targets-published=0` is the CORRECT shape of an already-published run,
 not a contradiction.
 
+## The release may name an EARLIER run (MeshWeaver.Plugins#4924)
+
+`release` is the release this bake maps its identity to, and that is not always the run's own
+number. A scheduled **bake-only reconcile** mints no image: it recovers the release of the run that
+promoted the commit, from the portal image's tag set, and publishes under it. Measured on core CD
+#12463: it baked `6c982c1` and wrote `release=3.1.12461`, because #12461 minted 3.1.12461 and then
+went red at *Arm the fleet*. 3.1.12463 was never minted. That receipt is complete and true.
+
+Every reader once required `release` to equal the run that wrote it. The resolver therefore passed
+those runs over, and MeshWeaver.Plugins' `platform-requirement.py` turned them into a red on every
+pull request whose `Requires-platform:` walk crossed one: 13 of the 20 successful runs from #12438 to
+#12464 were reconciles. The rule is now that `release` names this run **or an earlier one**. A
+release naming a LATER run than the writer is impossible, and it is still refused. A requirement
+placed through such a receipt lands on the release it names (3.1.12461), never on the run number
+(a set that does not exist).
+
+## The bake verifies its own receipt — a refused receipt is red ONCE, in core
+
+There is ONE rule, `receipt_refusal` in `.github/scripts/resolve-platform.py`. The resolver reads every
+set's receipt through it. The platform bake in `main-cd.yml` runs it on the receipt it has just
+written (`resolve-platform.py --verify-receipt <log> --run-number <run>`). A receipt the rule refuses
+turns **that build** red, and `alert-on-failure` files it once, on that run. It is never accepted
+unverified, and a dependent repository never hears about it first.
+
+On the consumer side, a build whose receipt does not verify is a fact about that build. It never
+reds a dependent pull request on its own:
+
+* **Resolution** (`resolve-platform.py`) passes it over with a `skip … source/release unverified`
+  line and takes the next verified set. The newest unverifiable set is skipped, and an older verified
+  one is chosen.
+* **Placement** (MeshWeaver.Plugins `platform-requirement.py`, which places a `Requires-platform:
+  MeshWeaver#N` or a core commit on the first build carrying it) skips that build with a
+  `::warning` naming it, and places the requirement on the next VERIFIED build. When no verified
+  build carries it yet, the requirement is *unresolved* and the run WAITS (policy
+  `request-min-version-wait-until-deployed`). It does not go red.
+
+A dependent pull request goes red only for what is really its own: a declaration it cannot read,
+a broken environment (no token, a transport failure), or a compile or test failure against the set
+it resolved.
+
 ## What to read, and in what order
 
 1. **Read the outcome words, not the run's colour.** A `success` says the script did not fail; it
