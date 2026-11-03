@@ -316,7 +316,9 @@ public static class GitHubSyncConfiguration
             .AddScoped<INodeValidator, InstanceRepositoryAccessWriteGuard>()
             // The deployment's partition allow-list (GitSync:AllowedPartitions): a sync source
             // outside it can be neither created nor updated — Doc/Architecture/SensitiveContentInLogs.
-            .AddScoped<INodeValidator, GitSyncPartitionWriteGuard>());
+            .AddScoped<INodeValidator, GitSyncPartitionWriteGuard>()
+            // …and its update half at the commit point, which stream updates and upserts meet.
+            .AddSingleton<IEntityCommitGuard, GitSyncPartitionCommitGuard>());
 
         // Also register the content types on the mesh hub + every per-node hub so reads via
         // GetQuery / GetMeshNodeStream resolve the typed content (and the $type discriminator).

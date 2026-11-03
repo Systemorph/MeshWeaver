@@ -1583,6 +1583,10 @@ public sealed class GitHubSyncService
         // Create is denied; the Catch below then degrades that denial into a 30s wait for a node that
         // never lands (the GitSync EnsureConfigNode / Editing_a_field CI timeout). Re-assert the
         // captured context on the create's subscribe so CreateNode's own capture picks it up.
+        // The deployment's allow-list answers BEFORE the create: the create's Catch below reads a
+        // rejection as a lost race and waits for a node that, here, can never be written.
+        if (policy.PartitionRefusal(spacePath) is { } policyRefusal)
+            return Observable.Throw<MeshNode>(policyRefusal.ToException());
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
         return WatchConfigNode(spacePath, sourceId).Take(1).SelectMany(existing =>
@@ -1646,6 +1650,8 @@ public sealed class GitHubSyncService
         // context is lost — the GitSync-suite flake ("Access denied: Create permission required for
         // '{space}/_GitSync'", + the dependent waits that then time out). Thread it explicitly to the
         // write's post via WithAccessContext so it never depends on the AsyncLocal surviving the hop.
+        if (policy.PartitionRefusal(spacePath) is { } policyRefusal)
+            return Observable.Throw<MeshNode>(policyRefusal.ToException());
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
         return ReadConfig(spacePath, sourceId).SelectMany(current =>

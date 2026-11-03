@@ -59,11 +59,38 @@ public class GitSyncPolicyReadingTest
     [InlineData("False")]
     [InlineData("off")]
     [InlineData("flase")]
+    [InlineData("")]
+    [InlineData(" ")]
     public void Any_export_value_but_true_switches_exports_off(string value)
     {
         var policy = Read((GitSyncPolicy.ExportEnabledKey, value));
         Assert.False(policy.ExportEnabled, "an off switch that was meant to be off must not read as on");
         Assert.Equal("gitsync.policy.exportDisabled", policy.ExportRefusal("Docs")!.Key);
+    }
+
+    [Fact]
+    public void The_commit_guard_refuses_an_update_of_an_existing_source_outside_the_list()
+    {
+        // The source existed before a restart took its partition off the list: stream updates and
+        // upserts reach the owner's commit point without running the validator chain.
+        var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { [GitSyncPolicy.AllowedPartitionsKey] = "Docs" })
+                .Build())
+            .BuildServiceProvider();
+        var guard = new GitSyncPartitionCommitGuard(services);
+        var options = new System.Text.Json.JsonSerializerOptions();
+        var writer = new MeshWeaver.Messaging.AccessContext { ObjectId = "someone" };
+        var before = new MeshNode("_GitSync", "Patients") { NodeType = GitHubSyncService.ConfigNodeType };
+        var after = before with { Name = "edited" };
+
+        Assert.NotNull(guard.Refusal(nameof(MeshNode), before, after, after.Path, writer, options));
+        Assert.Contains(GitSyncPolicy.AllowedPartitionsKey,
+            guard.Refusal(nameof(MeshNode), before, after, after.Path, writer, options));
+        var allowed = new MeshNode("_GitSync", "Docs") { NodeType = GitHubSyncService.ConfigNodeType };
+        Assert.Null(guard.Refusal(nameof(MeshNode), allowed, allowed with { Name = "edited" }, allowed.Path, writer, options));
+        Assert.Null(guard.Refusal(nameof(MeshNode), null, new MeshNode("Page", "Patients"), "Patients/Page", writer, options));
+        Assert.Null(guard.Refusal(nameof(MeshNode), before, after, after.Path, writer: null, options));
     }
 
     [Fact]
@@ -147,6 +174,25 @@ public class GitSyncHonoursTheDeploymentPolicyTest(ITestOutputHelper output) : M
             .Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(RepoUrl, saved?.RepositoryUrl);
     }
+
+    [Fact(Timeout = 240_000)]
+    public async Task Ensuring_or_adding_a_source_outside_the_allow_list_returns_the_refusal_instead_of_waiting()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var denied = await CreateSpace("GsDenied");
+        var ensured = await Assert.ThrowsAsync<GitSyncRefusalException>(() => Sync
+            .EnsureConfigNode(denied)
+            .Timeout(TestTimeouts.Convergence).Await(ct));
+        Assert.Equal("gitsync.policy.partitionNotAllowed", ensured.Refusal.Key);
+        var added = await Assert.ThrowsAsync<GitSyncRefusalException>(() => Sync
+            .AddSyncSource(denied, "second")
+            .Timeout(TestTimeouts.Convergence).Await(ct));
+        Assert.Equal("gitsync.policy.partitionNotAllowed", added.Refusal.Key);
+    }
+
+    [Fact]
+    public void The_commit_guard_is_registered_where_every_commit_route_asks()
+        => Assert.Contains(Mesh.ServiceProvider.GetServices<IEntityCommitGuard>(), g => g is GitSyncPartitionCommitGuard);
 
     [Fact(Timeout = 240_000)]
     public async Task An_import_into_a_partition_outside_the_allow_list_is_refused()

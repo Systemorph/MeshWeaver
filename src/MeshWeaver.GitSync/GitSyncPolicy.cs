@@ -24,7 +24,7 @@ namespace MeshWeaver.GitSync;
 /// Either an array (<c>GitSync:AllowedPartitions:0</c>, …) or one comma-separated value.</item>
 /// <item><see cref="ExportEnabledKey"/> (<c>GitSync:Export:Enabled</c>): whether this instance
 /// exports (mesh → repository) at all. Absent or <c>true</c>: exports run (the shipped behaviour).
-/// Any other value — <c>false</c>, or one that does not parse — refuses EVERY export: an off switch
+/// Any other value — <c>false</c>, an empty value, or one that does not parse — refuses EVERY export: an off switch
 /// that was meant to be off must not read as on because of a typo.</item>
 /// </list>
 ///
@@ -69,7 +69,9 @@ public sealed class GitSyncPolicy
         if (configuration is null)
             return Unrestricted;
         var exportValue = configuration[ExportEnabledKey];
-        var exportEnabled = string.IsNullOrWhiteSpace(exportValue)
+        // Only an ABSENT key keeps the default. A key that is present but empty (an environment
+        // variable set to nothing) is a value, and every value but `true` is off.
+        var exportEnabled = exportValue is null
                             || (bool.TryParse(exportValue, out var on) && on);
         var section = configuration.GetSection(AllowedPartitionsKey);
         var listed = (section.Value ?? "")
@@ -117,7 +119,7 @@ public sealed class GitSyncPolicy
 }
 
 /// <summary>
-/// Refuses creating or updating a GitSync source (<c>{partition}/_GitSync</c> and its children) in a
+/// Refuses CREATING or updating a GitSync source (<c>{partition}/_GitSync</c> and its children) in a
 /// partition that <see cref="GitSyncPolicy.AllowedPartitionsKey"/> does not list — for every writer,
 /// the platform included, because the deployment's limit is what is being enforced. Deleting a
 /// source is always allowed: removing a sync is never the thing the limit guards against.
@@ -155,5 +157,32 @@ internal sealed class GitSyncPartitionWriteGuard(IServiceProvider services) : IN
         // {partition}/_GitSync or {partition}/_GitSync/{sourceId}
         return segments.Length is 2 or 3
                && string.Equals(segments[1], GitHubSyncService.ConfigId, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+/// <summary>
+/// The allow-list's UPDATE half, at the owning node's commit point (<see cref="IEntityCommitGuard"/>):
+/// a source that already exists when a restart takes its partition off
+/// <see cref="GitSyncPolicy.AllowedPartitionsKey"/> is edited through <c>GetMeshNodeStream(path).Update</c>
+/// and the upsert's update branch, neither of which runs the <see cref="INodeValidator"/> chain. Every
+/// commit route asks this guard, so no attributed write commits a sync source outside the list.
+/// An UNATTRIBUTED commit (an activation's own save, a replay) is left alone: it writes what the store
+/// already holds, and refusing it would wedge the source's hub rather than limit any sync.
+/// </summary>
+internal sealed class GitSyncPartitionCommitGuard(IServiceProvider services) : IEntityCommitGuard
+{
+    private readonly Lazy<GitSyncPolicy> policy = new(() => GitSyncPolicy.From(services));
+
+    /// <inheritdoc />
+    public string? Refusal(string collection, object? before, object after, string ownerPath,
+        AccessContext? writer, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (writer is null
+            || !string.Equals(collection, nameof(MeshNode), StringComparison.Ordinal)
+            || policy.Value.AllowedPartitions.IsEmpty
+            || after.As<MeshNode>(options) is not { } next
+            || !GitSyncPartitionWriteGuard.IsSyncSource(next))
+            return null;
+        return policy.Value.PartitionRefusal(next.Path)?.Render(writer.Locale);
     }
 }
