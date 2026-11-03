@@ -126,6 +126,18 @@ behaviours hold it to that:
 are red against the previous code ("emitted nothing at all" in 12 s). Their negative controls show
 that a key with nothing held does wait for its source.
 
+### A failed re-read is REPORTED to readers that must not pass it off as current
+
+Serving the held listing while a re-read fails keeps the catalog available, but on its own it makes a
+persistent outage behind a warmed cache look like a healthy listing to every reader: the registry
+answered the held cards and its consumers reported healthy polls for as long as the source was down.
+The cache therefore records the failure of each key's last revalidation and clears it when a read
+lands. A wrapped source exposes it as `IPackageListingHealth.StaleBecause(gitRef)`: null while the
+listing served is current, the failure while it is the held listing a re-read failed to replace.
+Readers that only need cards keep getting the held listing; a reader that has to say whether its
+answer is current (the registry's catalog listing, MeshWeaver.Plugins#4922) asks after listing and
+treats a stale answer as a failed source.
+
 ## Where it lives
 
 **A mesh-scoped singleton**, registered by `AddPluginCatalog` — never static

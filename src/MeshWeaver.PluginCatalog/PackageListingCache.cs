@@ -95,6 +95,12 @@ public sealed class PackageListingCache : IDisposable
     // answer predates the merge and must be revalidated, never served as fresh for a whole window.
     private readonly ConcurrentDictionary<PackageListingKey, long> generations = new();
 
+    // 🚨 The failure of each key's LAST revalidation, while the held listing it failed to replace is
+    // still what is served (Plugins#4922 review). Set when a re-read faults, cleared when a read
+    // lands. Without it a persistent outage behind a warmed cache looks like a healthy listing to
+    // every reader: the registry answers the held cards and its consumers report healthy polls.
+    private readonly ConcurrentDictionary<PackageListingKey, Exception> revalidationFailures = new();
+
     // 🚨 The multicast connections this cache creates, owned HERE so the cache's own disposal
     // releases them (RootedRxConnectionRatchetGuard). A bare AutoConnect(1) would leave the handle
     // where no teardown can reach it; a pool-queued connect would then run against a closed scope.
@@ -264,11 +270,27 @@ public sealed class PackageListingCache : IDisposable
             return;
         revalidation.Subscribe(
             _ => { },
-            exception => logger?.LogWarning(exception,
-                "Plugin listing cache: revalidating {Repo} @ {Ref} failed — still serving the listing "
-                + "read {Age} ago, and the next request asks the source again.",
-                key.RepoUrl, key.GitRef, Elapsed(current.ReadAt)));
+            exception =>
+            {
+                revalidationFailures[key] = exception;
+                logger?.LogWarning(exception,
+                    "Plugin listing cache: revalidating {Repo} @ {Ref} failed — still serving the listing "
+                    + "read {Age} ago, and the next request asks the source again.",
+                    key.RepoUrl, key.GitRef, Elapsed(current.ReadAt));
+            });
     }
+
+    /// <summary>
+    /// The failure of the last revalidation of <paramref name="key"/> when the listing served for it
+    /// is the one that revalidation failed to replace; null when the held listing is current (its
+    /// last read landed) or nothing is held. Lets a reader that must not pass a stale answer off as a
+    /// fresh one — the registry's catalog listing — say so, while every other reader keeps getting
+    /// the held listing (Plugins#4922 review).
+    /// </summary>
+    /// <param name="key">The listing.</param>
+    /// <returns>The failure, or null.</returns>
+    public Exception? RevalidationFailure(PackageListingKey key) =>
+        revalidationFailures.TryGetValue(key, out var failure) ? failure : null;
 
     /// <summary>Records a settled read — unless a NEWER read already landed — with the generation
     /// it STARTED under, so a green build that arrived while it was in flight leaves it stale.</summary>
@@ -276,6 +298,7 @@ public sealed class PackageListingCache : IDisposable
     {
         var landed = new HeldListing(listing, startedAt, generation);
         held.AddOrUpdate(key, landed, (_, existing) => existing.ReadAt > startedAt ? existing : landed);
+        revalidationFailures.TryRemove(key, out _);
     }
 
     /// <summary>
@@ -356,8 +379,11 @@ public sealed class PackageListingCache : IDisposable
     /// </summary>
     private sealed class CachedPackageSource(
         IPackageSource inner, PackageListingCache cache, string repoUrl, string subdir, string format)
-        : IPackageSource
+        : IPackageSource, IPackageListingHealth
     {
+        public Exception? StaleBecause(string gitRef) =>
+            cache.RevalidationFailure(new PackageListingKey(repoUrl, subdir, format, gitRef));
+
         public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
             cache.Get(
                 new PackageListingKey(repoUrl, subdir, format, gitRef),
@@ -381,4 +407,18 @@ public sealed class PackageListingCache : IDisposable
         public IObservable<bool> PublishesCommit(string commit, string gitRef) =>
             inner.PublishesCommit(commit, gitRef);
     }
+}
+
+/// <summary>
+/// A package source that may answer a listing it HOLDS after a re-read of it failed — the listing
+/// cache's stale-while-revalidate (<see cref="PackageListingCache"/>). A reader that must not pass
+/// such an answer off as fresh asks <see cref="StaleBecause"/> after listing (Plugins#4922 review).
+/// </summary>
+public interface IPackageListingHealth
+{
+    /// <summary>The failure of the last re-read of the listing at <paramref name="gitRef"/> when the
+    /// listing served is the one it failed to replace; null when the listing served is current.</summary>
+    /// <param name="gitRef">The ref the listing was asked at.</param>
+    /// <returns>The failure, or null.</returns>
+    Exception? StaleBecause(string gitRef);
 }
