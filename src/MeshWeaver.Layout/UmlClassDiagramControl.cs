@@ -93,19 +93,14 @@ public record UmlRelation(string From, string To, string Kind = UmlRelationKind.
     /// <summary>The multiplicity at <see cref="To"/> (<c>0..1</c>, <c>1</c>, <c>*</c>). Optional.</summary>
     public string? ToMultiplicity { get; init; }
 
-    /// <summary>Whether the relation is of <paramref name="kind"/> (case-insensitive; unknown is an association).</summary>
-    /// <param name="kind">A <see cref="UmlRelationKind"/> constant.</param>
+    /// <summary>Whether the relation is of <paramref name="kind"/> — its stored kind compared case-insensitively,
+    /// a missing or blank kind being an association. A module-defined kind (<c>aggregation</c>) is
+    /// itself, never an association: how a renderer DRAWS a kind it does not know is the renderer's
+    /// fallback, kept apart from the kind's identity.</summary>
+    /// <param name="kind">A <see cref="UmlRelationKind"/> constant, or a module's own.</param>
     /// <returns>True when <see cref="Kind"/> is <paramref name="kind"/>.</returns>
-    public bool IsKind(string kind)
-    {
-        var own = Kind?.ToLowerInvariant() switch
-        {
-            UmlRelationKind.Composition => UmlRelationKind.Composition,
-            UmlRelationKind.Generalization => UmlRelationKind.Generalization,
-            _ => UmlRelationKind.Association,
-        };
-        return string.Equals(own, kind, StringComparison.OrdinalIgnoreCase);
-    }
+    public bool IsKind(string kind) => string.Equals(
+        string.IsNullOrWhiteSpace(Kind) ? UmlRelationKind.Association : Kind, kind, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>A point of the laid-out diagram, in diagram units (CSS pixels at zoom 1).</summary>
@@ -368,6 +363,29 @@ public record UmlClassDiagramControl(object Classes, object Relations)
         double Port(int box, List<UmlRelation> list, UmlRelation r) =>
             x[box] + widths[box] * (list.IndexOf(r) + 1) / (list.Count + 1);
 
+        // The x of a vertical lane free of boxes in layers [from, to]: the candidate nearest to
+        // `preferred` among the margins and the middles of every gap between neighbouring boxes.
+        double LaneX(int from, int to, double preferred)
+        {
+            bool Free(double lx) => Enumerable.Range(from, to - from + 1).All(l =>
+                rows[l].All(v => lx < x[v] - 4 || lx > x[v] + widths[v] + 4));
+            var candidates = new List<double> { ColumnGap / 2, canvasWidth - ColumnGap / 2 };
+            for (var l = from; l <= to; l++)
+            {
+                var row = rows[l];
+                for (var i = 0; i + 1 < row.Count; i++)
+                    candidates.Add((x[row[i]] + widths[row[i]] + x[row[i + 1]]) / 2);
+                if (row.Count > 0)
+                {
+                    candidates.Add(x[row[0]] - ColumnGap / 2);
+                    candidates.Add(x[row[^1]] + widths[row[^1]] + ColumnGap / 2);
+                }
+            }
+            return candidates.Where(c => c >= 0 && c <= canvasWidth && Free(c))
+                .OrderBy(c => Math.Abs(c - preferred)).ThenBy(c => c)
+                .DefaultIfEmpty(ColumnGap / 2).First();
+        }
+
         var routes = ImmutableList.CreateBuilder<UmlRoute>();
         foreach (var r in drawn)
         {
@@ -388,7 +406,17 @@ public record UmlClassDiagramControl(object Classes, object Relations)
                 // parallel edges never run on top of each other.
                 var list = outgoing[u];
                 var midY = y[u] + heights[u] + LayerGap * (list.IndexOf(r) + 1) / (list.Count + 1);
-                points = [start, new UmlPoint(start.X, midY), new UmlPoint(end.X, midY), end];
+                if (layer[l] - layer[u] <= 1)
+                    points = [start, new UmlPoint(start.X, midY), new UmlPoint(end.X, midY), end];
+                else
+                {
+                    // An edge that skips layers runs down a LANE that is free in every layer it
+                    // crosses — a gap between boxes, or the margin — so it never passes through a box.
+                    var lane = LaneX(layer[u] + 1, layer[l] - 1, (start.X + end.X) / 2);
+                    var enterY = y[l] - LayerGap * (incoming[l].IndexOf(r) + 1) / (incoming[l].Count + 1);
+                    points = [start, new UmlPoint(start.X, midY), new UmlPoint(lane, midY),
+                              new UmlPoint(lane, enterY), new UmlPoint(end.X, enterY), end];
+                }
             }
             // The polyline runs From → To, whichever box is on top.
             var fromIsUpper = index[r.From] == u;

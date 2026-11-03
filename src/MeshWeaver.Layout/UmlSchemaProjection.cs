@@ -51,8 +51,15 @@ public static class UmlSchemaProjection
         var relations = ImmutableList.CreateBuilder<UmlRelation>();
         var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var list = (inputs ?? []).Where(i => i is not null && !string.IsNullOrWhiteSpace(i.TypePath)).ToList();
+        // The class id a target resolves to: the input's own spelling when it is one, else the FIRST
+        // spelling it was referenced by — so differently cased references to one type are one class
+        // and the layout (which matches ids exactly) never loses a relation.
+        var canonical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var input in list)
+        {
             known.Add(input.TypePath);
+            canonical.TryAdd(input.TypePath, input.TypePath);
+        }
         var foreign = new Dictionary<string, UmlClass>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var input in list)
@@ -62,12 +69,16 @@ public static class UmlSchemaProjection
             foreach (var (name, property) in properties)
             {
                 var (type, many, nullable) = TypeOf(property);
-                var targets = Targets(property);
+                var targets = Targets(property).Select(t => canonical.TryGetValue(t, out var id) ? id : canonical[t] = t)
+                    .Distinct(StringComparer.Ordinal).ToImmutableList();
                 var multiplicity = many ? "*" : nullable ? "0..1" : null;
                 attributes.Add(new UmlAttribute(name, targets.Count > 0 ? string.Join(" | ", targets.Select(Leaf)) : type, multiplicity)
                 {
                     IsReference = targets.Count > 0,
-                    Description = property.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() : null,
+                    // A property schema may legally be a boolean (`true`): it has no description.
+                    Description = property.ValueKind == JsonValueKind.Object
+                                  && property.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String
+                        ? d.GetString() : null,
                 });
                 foreach (var target in targets)
                 {
@@ -127,15 +138,53 @@ public static class UmlSchemaProjection
         foreach (var query in queries.EnumerateArray())
         {
             if (query.ValueKind != JsonValueKind.String) continue;
-            foreach (var token in (query.GetString() ?? string.Empty).Split([' ', '(', ')'], StringSplitOptions.RemoveEmptyEntries))
-            {
-                if (!token.StartsWith(NodeTypeToken, StringComparison.OrdinalIgnoreCase)) continue;
-                var path = token[NodeTypeToken.Length..].Trim('"', '\'', '/');
-                if (path.Length > 0 && !targets.Contains(path, StringComparer.OrdinalIgnoreCase))
+            foreach (var path in NodeTypeValues(query.GetString() ?? string.Empty))
+                if (!targets.Contains(path, StringComparer.OrdinalIgnoreCase))
                     targets.Add(path);
-            }
         }
         return [.. targets];
+    }
+
+    /// <summary>
+    /// The POSITIVE <c>nodeType:</c> values of a query, in order: <c>nodeType:A</c>, a membership group
+    /// <c>nodeType:(A OR B)</c> / <c>nodeType:(A, B)</c>, and a pipe list <c>nodeType:A|B</c>. A negated
+    /// term (<c>-nodeType:X</c>) names no target.
+    /// </summary>
+    /// <param name="query">The query text.</param>
+    /// <returns>The node type paths.</returns>
+    public static IEnumerable<string> NodeTypeValues(string query)
+    {
+        var i = 0;
+        while ((i = query.IndexOf(NodeTypeToken, i, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            var negated = i > 0 && (query[i - 1] == '-' || query[i - 1] == '!');
+            var boundary = i == 0 || char.IsWhiteSpace(query[i - 1]) || query[i - 1] == '(' || negated;
+            var start = i + NodeTypeToken.Length;
+            string value;
+            if (start < query.Length && query[start] == '(')
+            {
+                var close = query.IndexOf(')', start);
+                value = close < 0 ? query[(start + 1)..] : query[(start + 1)..close];
+                i = close < 0 ? query.Length : close + 1;
+            }
+            else
+            {
+                var end = start;
+                while (end < query.Length && !char.IsWhiteSpace(query[end]) && query[end] != ')') end++;
+                value = query[start..end];
+                i = end;
+            }
+            if (!boundary || negated)
+                continue;
+            foreach (var part in value.Split(['|', ','], StringSplitOptions.RemoveEmptyEntries)
+                         .SelectMany(p => p.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                         .Where(p => !string.Equals(p, "OR", StringComparison.OrdinalIgnoreCase)))
+            {
+                var path = part.Trim('"', '\'', '/');
+                if (path.Length > 0)
+                    yield return path;
+            }
+        }
     }
 
     private static (string? Title, string? Description, List<(string Name, JsonElement Property)> Properties) Read(string? json)
@@ -146,7 +195,8 @@ public static class UmlSchemaProjection
         JsonElement root;
         try
         {
-            root = JsonDocument.Parse(json).RootElement.Clone();
+            using var document = JsonDocument.Parse(json);
+            root = document.RootElement.Clone();
         }
         catch (JsonException)
         {

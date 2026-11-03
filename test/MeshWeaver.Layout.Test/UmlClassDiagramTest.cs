@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -115,6 +116,38 @@ public class UmlClassDiagramTest
         Assert.Equal(byTarget.OrderBy(x => x), byTarget);
     }
 
+    /// <summary>
+    /// Review: A→B, B→C and A→C — the A→C edge skips B's layer and must not run through B's box.
+    /// </summary>
+    [Fact]
+    public void AnEdgeThatSkipsALayer_NeverRunsThroughABox()
+    {
+        var layout = UmlClassDiagramControl.Layout([C("A"), C("B"), C("C")], [R("A", "B"), R("B", "C"), R("A", "C")])!;
+        Assert.True(Box(layout, "A").Layer < Box(layout, "B").Layer && Box(layout, "B").Layer < Box(layout, "C").Layer,
+            "precondition: A→C skips B's layer");
+        foreach (var route in layout.Routes)
+            for (var i = 1; i < route.Points.Count; i++)
+                foreach (var box in layout.Boxes.Where(b => b.Class.Id != route.Relation.From && b.Class.Id != route.Relation.To))
+                    Assert.False(Crosses(route.Points[i - 1], route.Points[i], box),
+                        $"{route.Relation.From}→{route.Relation.To} passes through {box.Class.Id}");
+
+        static bool Crosses(UmlPoint a, UmlPoint b, UmlBox box)
+        {
+            double minX = Math.Min(a.X, b.X), maxX = Math.Max(a.X, b.X), minY = Math.Min(a.Y, b.Y), maxY = Math.Max(a.Y, b.Y);
+            return maxX > box.X && minX < box.X + box.Width && maxY > box.Y && minY < box.Y + box.Height;
+        }
+    }
+
+    /// <summary>Review: a module's own relation kind is itself, never an association.</summary>
+    [Fact]
+    public void AModuleDefinedRelationKind_IsItsOwnKind()
+    {
+        var aggregation = new UmlRelation("a", "b", "aggregation");
+        Assert.True(aggregation.IsKind("aggregation"));
+        Assert.False(aggregation.IsKind(UmlRelationKind.Association));
+        Assert.True(new UmlRelation("a", "b", "").IsKind(UmlRelationKind.Association), "a blank kind is an association");
+    }
+
     [Fact]
     public void Attributes_AreCapped_AndTheRestCounted()
     {
@@ -210,6 +243,42 @@ public class UmlClassDiagramTest
         Assert.All(classes, c => Assert.Empty(c.Attributes!));
         Assert.Empty(relations);
     }
+
+    /// <summary>Review: a boolean property schema (legal JSON Schema) is an attribute, not an exception.</summary>
+    [Fact]
+    public void Projection_OfABooleanPropertySchema_IsAnObjectAttribute()
+    {
+        var (classes, _) = UmlSchemaProjection.FromContentSchemas(
+            [new UmlSchemaInput("X/A", """{"type":"object","properties":{"value":true,"name":{"type":"string"}}}""")]);
+        Assert.Equal("value : object", classes.Single().Attributes!.Single(a => a.Name == "value").Line);
+    }
+
+    /// <summary>Review: differently cased references resolve to ONE class id, so the layout keeps every relation.</summary>
+    [Fact]
+    public void Projection_ResolvesDifferentlyCasedReferences_ToOneClass()
+    {
+        var (classes, relations) = UmlSchemaProjection.FromContentSchemas(
+        [
+            new UmlSchemaInput("X/B", """{"type":"object","properties":{"n":{"type":"string"}}}"""),
+            new UmlSchemaInput("X/A", """{"type":"object","properties":{"b":{"type":"string","x-meshNode":["nodeType:x/b"]},"f1":{"type":"string","x-meshNode":["nodeType:Y/F"]},"f2":{"type":"string","x-meshNode":["nodeType:y/f"]}}}"""),
+        ]);
+        Assert.Equal(new[] { "X/A", "X/B", "Y/F" }, classes.Select(c => c.Id).OrderBy(i => i));
+        Assert.Contains(relations, r => r.Role == "b" && r.To == "X/B");
+        Assert.Equal(2, relations.Count(r => r.To == "Y/F"));
+        var layout = UmlClassDiagramControl.Layout(classes, relations)!;
+        Assert.Equal(relations.Count, layout.Routes.Count);
+    }
+
+    /// <summary>Review: membership groups and pipe lists name every target; a negated term names none.</summary>
+    [Theory]
+    [InlineData("nodeType:Crm/Person", "Crm/Person")]
+    [InlineData("nodeType:(Crm/Person OR Crm/Company)", "Crm/Person,Crm/Company")]
+    [InlineData("nodeType:Crm/Person|Crm/Company", "Crm/Person,Crm/Company")]
+    [InlineData("nodeType:(Crm/Person, Crm/Company) namespace:Crm", "Crm/Person,Crm/Company")]
+    [InlineData("-nodeType:Crm/Archived nodeType:Crm/Person", "Crm/Person")]
+    [InlineData("namespace:Crm scope:descendants", "")]
+    public void NodeTypeValues_ReadEveryPositiveTarget(string query, string expected)
+        => Assert.Equal(expected, string.Join(",", UmlSchemaProjection.NodeTypeValues(query)));
 
     [Fact]
     public void Projection_FeedsTheLayout()
