@@ -1124,6 +1124,56 @@ narrowed by declining the recycle when the install wrote nothing. What is closed
 issue named: **the automatic rebind recycle no longer takes a package root down while that package's
 own install is writing under it.**
 
+## When the stall is a flood: a stream's update backlog names its writer (#5799)
+
+A disposal stall on a hosted `sync/*` hub reads as pool starvation (`drainsAwaitingScheduler=1`,
+nothing dequeued). On memex-cloud, at about 17:42Z on 2026-11-03, the reading also had a named
+producer: one owner-side read stream, `sync/ozG3lni4fUqKWuzhIt58Ww`, serving one learner's read of a
+quiz node, held **408,637** queued `UpdateStreamRequest`s. Once a worker was free it drained them at
+about 12,000 a second, each turn taking 0 ms. Its depth stayed at exactly 408,637 for the whole 8 s
+stall, so nothing was arriving while it waited. The backlog had built up before the stall began.
+
+Nothing in the logs could say who posted them. An `UpdateStreamRequest` carries only delegates, so
+the hub's queue depth was the only evidence. On an owner-side read stream two kinds of code post
+them:
+
+- a layout area's writers, which every render, nested-area emission, `UpdateData` and progress
+  line goes through (`LayoutAreaHost` → `Stream.Update`), when the stream serves a
+  `LayoutAreaReference`;
+- the re-assert of a re-subscribe with the same stream id (`alreadyServing.Update`), when it
+  serves a node. Both re-ask paths on the subscriber side allow only one request in flight and log
+  at Information. The query for that stream id found none of those lines, so this path is unlikely
+  but not excluded.
+
+**The instrument.** `SynchronizationStream` now counts the writes it has posted that have not
+started yet. When that count reaches `SyncStreamOptions.UpdateBacklogWarningDepth` (default 1,000),
+and again at each tenfold, it logs **one** Warning per depth:
+
+```
+[SYNC_STREAM] Update backlog on {StreamId}: {Depth} writes queued and not yet started (reporting
+depth {Threshold}) — the write that crossed it came from {Writer}. Reference {Reference}, owner
+{Owner}, subscriber {Subscriber}.
+```
+
+`{Writer}` is the declaring type and method of the delegate the caller wrote. For the value-form
+`Update`/`SetFull` that is the caller's transform, not the stream's own wrapper. For a lambda it is
+the caller's method as the compiler named it, for example `MeshWeaver.Layout.Composition.LayoutAreaHost.<UpdateArea>b__0`.
+The instrument only observes: no write is dropped, refused or delayed.
+`UpdateBacklogNamesItsWriterTest` reproduces the flood deterministically: one turn posts 1,500
+further writes, and none of them can start while that turn runs. The test pins the named writer.
+A negative control posts the same number of writes one after another and is never reported.
+
+**Why there is no "refuse the no-op update" guard at post time.** A no-op is already refused where
+it can be decided: the value-form `Update` returns null when the transform leaves the value equal,
+and `SetCurrent` does not emit a value-equal patch. Deciding it earlier, when the write is posted,
+would mean evaluating the transform against a `Current` read outside the turn. That is the
+stale-capture defect described under #945 in `JsonSynchronizationStream`. A layout-area render
+(`PushRenderResult`) emits a Full on purpose, so its value-equal re-render is not a no-op either.
+
+**Not established yet:** which writer posted the 408,637 writes, which reference that stream served,
+and over what window they built up. The next occurrence names the writer in its first Warning.
+Read that line before anything else.
+
 ## What this page does not claim
 
 The wedge in #3593 is **not fixed**. What changed is that the next occurrence is nameable: the
