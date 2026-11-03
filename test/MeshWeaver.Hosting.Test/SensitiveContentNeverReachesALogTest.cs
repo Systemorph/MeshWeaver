@@ -1,0 +1,312 @@
+using System;
+using System.Collections.Immutable;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Text.Json;
+using System.Threading.Tasks;
+using MeshWeaver.Data;
+using MeshWeaver.Fixture;
+using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Xunit;
+
+namespace MeshWeaver.Hosting.Test;
+
+/// <summary>
+/// 🚨 <b>A <see cref="SensitiveDataAttribute"/> value never reaches a log line, an exception text or
+/// an egress rendering — and the store still holds it.</b> Node content may be health data (a
+/// medical stop-loss book keeps diagnoses in it); the store guards it with access control, and a
+/// log line has none. See <c>Doc/Architecture/SensitiveContentInLogs</c>.
+///
+/// <para>A REAL monolith mesh, a real NodeType whose content type marks two members, a node
+/// written with distinctive values, and a capture provider at <see cref="LogLevel.Trace"/> that
+/// sees every line the mesh writes while the node is created, read, updated and rendered. The
+/// assertions are by VALUE: neither marker may appear in any captured line, any exception text or
+/// any logging rendering — while a read of the stored node returns both, so persistence is
+/// untouched.</para>
+///
+/// <para>🚨 <b>The controls are load-bearing.</b> "No line holds the marker" is vacuous for a blind
+/// recorder or a renderer that drops everything: the recorder must have seen Debug lines naming the
+/// node's path, and the unmarked members' values must survive every rendering.</para>
+/// </summary>
+public class SensitiveContentNeverReachesALogTest : MonolithMeshTestBase
+{
+    private const string PatientType = "SensitivePatient";
+
+    /// <summary>The diagnosis — marked on the positional record parameter.</summary>
+    private const string Diagnosis = "DIAGNOSIS-c41f9e-type2-diabetes";
+
+    /// <summary>A visit note — marked on a property of a nested record in a collection.</summary>
+    private const string VisitNote = "NOTE-8b02d7-insulin-dose";
+
+    /// <summary>An UNMARKED member's value: must survive every rendering (the control).</summary>
+    private const string Ward = "WARD-east-wing-3";
+
+    /// <summary>The content type under test.</summary>
+    /// <param name="Diagnosis">Marked on the parameter only — no <c>property:</c> target.</param>
+    public record PatientRecord([SensitiveData] string? Diagnosis = null)
+    {
+        /// <summary>An ordinary member.</summary>
+        public string? Ward { get; init; }
+
+        /// <summary>A marked non-string member.</summary>
+        [SensitiveData] public int? MemberNumber { get; init; }
+
+        /// <summary>Nested records in a collection, each with a marked member.</summary>
+        public ImmutableList<Visit> Visits { get; init; } = [];
+
+        /// <summary>A polymorphic member: the runtime type is resolved through the same options.</summary>
+        public object? Latest { get; init; }
+    }
+
+    /// <summary>A nested record.</summary>
+    public record Visit
+    {
+        /// <summary>Ordinary.</summary>
+        public string? Clinic { get; init; }
+
+        /// <summary>Marked.</summary>
+        [SensitiveData] public string? Note { get; init; }
+    }
+
+    private readonly TraceCapture capture = new();
+
+    public SensitiveContentNeverReachesALogTest(ITestOutputHelper output) : base(output)
+        // After the base constructor's ClearProviders(). A provider-specific rule beats every
+        // category rule of the shared appsettings, so this provider sees Trace.
+        => Services.AddLogging(l =>
+        {
+            l.Services.AddSingleton<ILoggerProvider>(capture);
+            l.AddFilter<TraceCapture>(null, LogLevel.Trace);
+        });
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddMeshNodes(new MeshNode(PatientType)
+            {
+                Name = "Sensitive patient",
+                Content = new NodeTypeDefinition
+                {
+                    Configuration = "// stands in for in-mesh source — the delegate below is what runs",
+                },
+                HubConfiguration = config => config
+                    .WithTypes(typeof(Visit))
+                    .AddMeshDataSource(source => source.WithContentType<PatientRecord>()),
+            })
+            .ConfigureHub(c => c.WithTypes(typeof(PatientRecord), typeof(Visit)));
+
+    private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+    private static PatientRecord Patient(string ward = Ward) => new(Diagnosis)
+    {
+        Ward = ward,
+        MemberNumber = 4711_0815,
+        Visits = [new Visit { Clinic = "North", Note = VisitNote }],
+        Latest = new Visit { Clinic = "South", Note = VisitNote },
+    };
+
+    private static void ShouldHoldNoMarker(string? text, string what)
+    {
+        text.Should().NotBeNull(what);
+        text.Should().NotContain(Diagnosis, $"{what} must not carry the marked diagnosis");
+        text.Should().NotContain(VisitNote, $"{what} must not carry the marked visit note");
+        text.Should().NotContain("47110815", $"{what} must not carry the marked member number");
+    }
+
+    private async Task<MeshNode> CreatePatient(string id)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        return await MeshService.CreateNode(new MeshNode(id, TestPartition)
+            {
+                Name = "Patient " + id,
+                NodeType = PatientType,
+                State = MeshNodeState.Active,
+                Content = Patient(),
+            })
+            .Take(1)
+            .Should().Within(60.Seconds()).Emit("the patient node must be created", ct);
+    }
+
+    /// <summary>
+    /// 🚨 THE GUARD. Write, read back, update and render a patient while every line the mesh writes
+    /// is captured at Trace: the store returns both marked values; no line, and no logging rendering
+    /// of the node, carries either.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AMarkedValue_IsStored_AndAppearsInNoLogLineOrRendering()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var id = "p" + Guid.NewGuid().ToString("N")[..8];
+        var path = $"{TestPartition}/{id}";
+        await CreatePatient(id);
+
+        // Persistence untouched: the owning hub's own stream holds the values.
+        var stored = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n?.ContentAs<PatientRecord>(Mesh.JsonSerializerOptions)?.Diagnosis == Diagnosis)
+            .FirstAsync().Should().Within(60.Seconds()).Emit("the stored node keeps its diagnosis", ct);
+        var content = stored!.ContentAs<PatientRecord>(Mesh.JsonSerializerOptions)!;
+        content.Visits.Single().Note.Should().Be(VisitNote, "a marked nested value is stored as written");
+        content.MemberNumber.Should().Be(4711_0815);
+
+        // An update through the mesh, so the change paths run too.
+        await MeshService.UpdateNode(stored with { Content = content with { Ward = Ward + "-moved" } })
+            .Take(1).Should().Within(60.Seconds()).Emit("the update lands", ct);
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n?.ContentAs<PatientRecord>(Mesh.JsonSerializerOptions)?.Ward == Ward + "-moved")
+            .FirstAsync().Should().Within(60.Seconds()).Emit("the update is visible", ct);
+
+        // Every logging rendering of the node — typed content, and the same content as untyped JSON.
+        var typed = Mesh.RenderForLog(stored);
+        ShouldHoldNoMarker(typed, "the logging rendering of the typed node");
+        typed.Should().Contain(Ward, "CONTROL — an unmarked value survives the rendering");
+        typed.Should().Contain(SensitiveDataAttribute.Placeholder, "a marked member stays visible, its value replaced");
+        typed.Should().Contain("North").And.Contain("South",
+            "CONTROL — the nested and the polymorphic records are rendered, not dropped");
+
+        var untyped = stored with { Content = JsonSerializer.SerializeToElement(content, Mesh.JsonSerializerOptions) };
+        var untypedRender = Mesh.RenderForLog(untyped);
+        ShouldHoldNoMarker(untypedRender, "the logging rendering of untyped content (resolved through $type)");
+        untypedRender.Should().Contain(Ward, "CONTROL — untyped content is redacted by member, not wiped");
+
+        // The existing logging options (what MessageService renders a body opt-in with) — the shape
+        // that carried the value before this change.
+        ShouldHoldNoMarker(JsonSerializer.Serialize(stored, Mesh.CreateLoggingSerializerOptions()),
+            "CreateLoggingSerializerOptions");
+        ShouldHoldNoMarker(Mesh.RedactJson(JsonSerializer.Serialize(stored, Mesh.JsonSerializerOptions)),
+            "RedactJson over the wire JSON");
+        ShouldHoldNoMarker(stored.ToString(), "MeshNode.ToString()");
+
+        // No bleed: rendering for a log never changes what the hub's own options write.
+        var wire = JsonSerializer.Serialize(stored, Mesh.JsonSerializerOptions);
+        wire.Should().Contain(Diagnosis, "the hub's own options — persistence and the wire — are never redacted")
+            .And.Contain(VisitNote);
+
+        // The Trace capture: nothing the mesh wrote while doing all of the above holds a marker.
+        var lines = capture.Lines;
+        lines.Should().Contain(l => l.Level <= LogLevel.Debug && l.Text.Contains(path, StringComparison.Ordinal),
+            "CONTROL — the recorder sees Debug-and-below lines about this node, or it proves nothing");
+        foreach (var leak in lines.Where(l => l.Text.Contains(Diagnosis) || l.Text.Contains(VisitNote)).Take(5))
+            Output.WriteLine($"LEAK {leak.Level} {leak.Category}: {leak.Text}");
+        lines.Should().NotContain(l => l.Text.Contains(Diagnosis) || l.Text.Contains(VisitNote),
+            "no log line at any level may carry a [SensitiveData] value");
+    }
+
+    /// <summary>
+    /// A deserialisation failure echoes nothing: content whose shape does not bind (a string where
+    /// a list is declared) is created through the mesh; whatever the platform logs and whatever
+    /// error text the write answers, neither holds the marked value.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ADeserializationFailure_EchoesNoMarkedValue()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var id = "bad" + Guid.NewGuid().ToString("N")[..8];
+        var json = $$"""{"$type":"{{nameof(PatientRecord)}}","diagnosis":"{{Diagnosis}}","ward":"{{Ward}}","visits":"not-a-list"}""";
+
+        string answer;
+        try
+        {
+            var created = await MeshService.CreateNode(new MeshNode(id, TestPartition)
+                {
+                    Name = "broken",
+                    NodeType = PatientType,
+                    State = MeshNodeState.Active,
+                    Content = JsonDocument.Parse(json).RootElement.Clone(),
+                })
+                .Take(1).Timeout(60.Seconds()).Await(ct);
+            answer = $"created {created.Path}";
+        }
+        catch (Exception ex) when (ex is not TimeoutException)
+        {
+            // A refusal is an answer too — and its text is built from the payload.
+            answer = ex.ToString();
+        }
+        Output.WriteLine(answer);
+        answer.Should().NotContain(Diagnosis, "an error answer names the problem, never the value");
+
+        // Read it back, so the read-side binding (the degrade seam) runs as well.
+        await MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{TestPartition}/{id}").AsSystem())
+            .Take(1).Timeout(60.Seconds()).Await(ct);
+
+        var lines = capture.Lines;
+        foreach (var leak in lines.Where(l => l.Text.Contains(Diagnosis)).Take(5))
+            Output.WriteLine($"LEAK {leak.Level} {leak.Category}: {leak.Text}");
+        lines.Should().NotContain(l => l.Text.Contains(Diagnosis),
+            "a deserialisation failure is logged by path and type — never by echoing the payload");
+    }
+
+    /// <summary>
+    /// Free text written ABOUT content (a gist an agent wrote) cannot carry an attribute, so the
+    /// egress paths scrub the content's marked values out of it.
+    /// </summary>
+    [Fact]
+    public void FreeTextWrittenAboutContent_IsScrubbedOfItsMarkedValues()
+    {
+        var values = Mesh.SensitiveValues(Patient(), out var complete);
+        complete.Should().BeTrue("every object of a registered content type is typed");
+        values.Should().Contain(Diagnosis).And.Contain(VisitNote).And.Contain("47110815");
+        values.Should().NotContain(Ward, "an unmarked value is not collected");
+
+        var untypedValues = Mesh.SensitiveValues(JsonSerializer.SerializeToElement(Patient(), Mesh.JsonSerializerOptions));
+        untypedValues.SetEquals(values).Should().BeTrue("untyped content resolves through its $type to the same members");
+
+        var gist = $"Patient on {Ward}; last note {VisitNote.ToLowerInvariant()}, diagnosis {Diagnosis}.";
+        var scrubbed = SensitiveDataRedaction.ScrubText(gist, values);
+        ShouldHoldNoMarker(scrubbed, "a scrubbed gist");
+        scrubbed.Should().Contain(Ward, "CONTROL — the rest of the text is kept");
+    }
+
+    /// <summary>
+    /// A <c>$type</c> nobody in this process can resolve fails CLOSED in a rendering: which members
+    /// are sensitive cannot be known, so every scalar is redacted.
+    /// </summary>
+    [Fact]
+    public void AnUnresolvableType_FailsClosed()
+    {
+        var rendered = Mesh.RedactJson($$$"""{"$type":"NoSuchType9f1","whatever":"{{{Diagnosis}}}","nested":{"x":"{{{VisitNote}}}"}}""");
+        ShouldHoldNoMarker(rendered, "an unresolvable $type");
+        rendered.Should().Contain("NoSuchType9f1", "the discriminator still identifies the payload");
+        Mesh.RedactJson("{ not json " + Diagnosis).Should().NotContain(Diagnosis, "unparseable text is never echoed");
+
+        Mesh.SensitiveValues(JsonDocument.Parse($$"""{"$type":"NoSuchType9f1","whatever":"{{Diagnosis}}"}""").RootElement,
+                out var complete)
+            .Should().BeEmpty();
+        complete.Should().BeFalse("an egress path must be told that the marked members could not be known");
+    }
+
+    /// <summary>Records every line at every level, with its category. Instance state only.</summary>
+    private sealed class TraceCapture : ILoggerProvider
+    {
+        private ImmutableList<(string Category, LogLevel Level, string Text)> lines =
+            ImmutableList<(string, LogLevel, string)>.Empty;
+
+        public ImmutableList<(string Category, LogLevel Level, string Text)> Lines => lines;
+
+        public ILogger CreateLogger(string categoryName) => new Recording(this, categoryName);
+
+        public void Dispose() { }
+
+        private void Add(string category, LogLevel level, string text)
+            => ImmutableInterlocked.Update(ref lines, l => l.Add((category, level, text)));
+
+        private sealed class Recording(TraceCapture owner, string category) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+                // The exception's text too: an exception message is text that reaches a log.
+                => owner.Add(category, logLevel, formatter(state, exception) + (exception is null ? "" : "\n" + exception));
+        }
+    }
+}

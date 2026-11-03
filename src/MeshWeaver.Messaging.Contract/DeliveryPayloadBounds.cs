@@ -24,7 +24,7 @@ namespace MeshWeaver.Messaging;
 /// it. So a body that merely travels is affordable; a body that travels, comes BACK as the
 /// acknowledgement, and then travels a THIRD time inside the failure report is not.</para>
 /// </summary>
-public static class DeliveryPayloadBounds
+public static partial class DeliveryPayloadBounds
 {
     /// <summary>
     /// Orleans' memory-stream block size, and therefore the tighter of the two transport ceilings on
@@ -367,11 +367,9 @@ public static class DeliveryPayloadBounds
     /// log record.
     /// </summary>
     /// <param name="delivery">The delivery whose payload head is wanted.</param>
-    /// <returns>The first <see cref="PayloadPreviewChars"/> characters, with an ellipsis when truncated.</returns>
-    public static string Preview(IMessageDelivery delivery) =>
-        delivery.Message is RawJson { Content: { } content }
-            ? Head(content) is var head && head.Length < content.Length ? head + "…" : head
-            : delivery.Message?.GetType().Name ?? "<null>";
+    /// <returns>The payload's <c>$type</c> (see <see cref="Discriminator"/>), or the CLR type name of a
+    /// payload that is still an object.</returns>
+    public static string Preview(IMessageDelivery delivery) => Head(delivery);
 
     /// <summary>
     /// The identifying head of a payload: the front of the JSON when it is already packaged (where
@@ -385,8 +383,30 @@ public static class DeliveryPayloadBounds
             ? Head(content)
             : delivery.Message?.GetType().Name ?? "<null>";
 
+    // 🚨 IDENTIFICATION, never content: the payload's $type discriminator, read from its first
+    // PayloadPreviewChars characters — not those characters themselves. The front of a payload is node
+    // content, which may hold [SensitiveData] values, and raw JSON text carries no type information to
+    // redact them by (Doc/Architecture/SensitiveContentInLogs). The discriminator is what attributes
+    // the payload to its producer.
     private static string Head(string content) =>
-        content.Length <= PayloadPreviewChars ? content : content[..PayloadPreviewChars];
+        Discriminator(content) is { } type ? "$type " + type : "untyped payload";
+
+    /// <summary>
+    /// The <c>$type</c> discriminator a JSON payload declares within its first
+    /// <see cref="PayloadPreviewChars"/> characters, or <c>null</c>. The ONE way a log line or a report
+    /// identifies a packaged payload — never by quoting it.
+    /// </summary>
+    /// <param name="content">The payload's JSON text.</param>
+    /// <returns>The discriminator, or <c>null</c> when none is visible.</returns>
+    public static string? Discriminator(string content)
+    {
+        var window = content.Length <= PayloadPreviewChars ? content : content[..PayloadPreviewChars];
+        var match = DiscriminatorPattern().Match(window);
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex("\"\\$type\"\\s*:\\s*\"([^\"\\\\]{1,256})\"")]
+    private static partial System.Text.RegularExpressions.Regex DiscriminatorPattern();
 
     /// <summary>
     /// JSON-quotes a value so it is safe to embed in a single log line or a JSON report body.

@@ -29,9 +29,10 @@ namespace MeshWeaver.Messaging.Serialization;
 /// allocation that threw <c>OutOfMemoryException</c> while a portal pod tried to report a delivery
 /// failure, and the report was lost.</para>
 ///
-/// <para><b>What replaces it.</b> The head of the payload — where the <c>$type</c> discriminator and
-/// the first fields sit, i.e. everything that identifies the message and its producer — plus the
-/// exact byte count, JSON-quoted so the line stays single and parseable. That is the same
+/// <para><b>What replaces it.</b> The payload's <c>$type</c> discriminator (read from its head) —
+/// what identifies the message and its producer — plus the exact byte count. Not the head itself:
+/// the first fields of a payload are node content, and a raw string carries no type information to
+/// redact <see cref="SensitiveDataAttribute"/> values by. That is the same
 /// identify-don't-dump trade <c>MessageSizeGuard</c>'s refusals already make, and it is bounded by
 /// construction: the render cost of a log line no longer depends on the size of the message.</para>
 ///
@@ -62,7 +63,7 @@ public sealed class LoggingRawJsonConverter : JsonConverter<RawJson>
             + "produce cannot round-trip. Deserialize with the hub's own JsonSerializerOptions.");
 
     /// <summary>
-    /// Writes a bounded description of the payload — its byte count and its head — instead of the
+    /// Writes a bounded description of the payload — its byte count and its $type — instead of the
     /// payload.
     /// </summary>
     /// <param name="writer">The writer to emit to.</param>
@@ -81,8 +82,12 @@ public sealed class LoggingRawJsonConverter : JsonConverter<RawJson>
         writer.WriteString("contentOmitted",
             "[PreventLogging] the raw payload is not written to logs — see LoggingRawJsonConverter");
         writer.WriteNumber("bytes", Encoding.UTF8.GetByteCount(content));
-        writer.WriteString("head",
-            content.Length <= PreviewChars ? content : content[..PreviewChars] + "…");
+        // 🚨 The $type discriminator ONLY — never the head of the payload. The head used to be
+        // written verbatim, and the first fields of a payload are node content, which may hold
+        // [SensitiveData] values: a raw string carries no type information to redact them by
+        // (Doc/Architecture/SensitiveContentInLogs). The discriminator is what identifies the message.
+        if (DeliveryPayloadBounds.Discriminator(content) is { } discriminator)
+            writer.WriteString("type", discriminator);
         writer.WriteEndObject();
     }
 }

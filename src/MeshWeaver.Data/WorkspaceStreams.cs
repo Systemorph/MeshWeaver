@@ -1,6 +1,7 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -99,7 +100,10 @@ c => c
                         ret.StreamId, workspace.Hub.Address);
                     return;
                 }
-                logger.LogDebug("Retrieved values {Changes}", changes.Select(c => JsonSerializer.Serialize(c, ret.Host.JsonSerializerOptions)));
+                // 🚨 Rendered through the LOGGING options, never the hub's own: a change item carries
+                // node content, which may hold [SensitiveData] values (SensitiveContentInLogs). Lazy —
+                // the Select runs only when Debug is enabled and the line is formatted.
+                logger.LogDebug("Retrieved values {Changes}", changes.Select(c => ret.Host.RenderForLog(c)));
                 if (!isInitialized)
                 {
                     // First emission: create initial merged store from all streams
