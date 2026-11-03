@@ -41,28 +41,42 @@ public abstract record WorkspaceReference
     }
 
     /// <summary>
-    /// Reverses <see cref="Encode"/>: in the part before any <c>?</c>, exactly the escapes it writes —
-    /// <c>%2F</c> → <c>/</c>, <c>%2E</c> → <c>.</c>, <c>%25</c> → <c>%</c> (hex case-insensitive) — and
-    /// the legacy <c>%9Z</c> / <c>%9Y</c>, in ONE left-to-right pass, so an escaped <c>%</c> is never
-    /// decoded twice. Every other <c>%XX</c> is left as written.
-    /// <para>🚨 Deliberately NOT a general percent-decode: <c>DispatchView</c> also runs this over internal
-    /// <c>DataContext</c> pointers (<c>/data/"id"</c>), which carry JSON and JSON-pointer escaping, not URI
-    /// escaping — a general decode turned <c>/data/"literal%22id"</c> into <c>/data/"literal"id"</c> and
-    /// broke the binding. The query part keeps its escapes for the reference's own parameter parsing;
-    /// only the legacy escapes are restored there.</para>
+    /// Reverses <see cref="Encode"/> for a value that came out of a URL, and leaves an internal
+    /// <c>DataContext</c> pointer alone.
+    /// <para>🚨 Two kinds of string reach this method. The URL entry points (the portal page, the area
+    /// page, <c>MeshOperations</c>) hand it an area or id segment that <see cref="Encode"/> wrote. The
+    /// view decode hop (<c>DispatchView</c>, <c>BlazorView</c>, the HTML export) hands it a
+    /// <c>DataContext</c> — a JSON POINTER (<c>/data/"id"</c>, built by
+    /// <c>LayoutAreaReference.GetDataPointer</c> with JSON and JSON-pointer escaping), which no producer
+    /// ever passes through <see cref="Encode"/>. Decoding a pointer can only corrupt it:
+    /// <c>/data/"literal%2Fid"</c> would become <c>/data/"literal/id"</c> and the binding would fail to
+    /// deserialize, and <c>%2E</c> / <c>%25</c> would select a different key. A pointer always starts
+    /// with <c>/</c>; an id from a URL segment never does. So a value starting with <c>/</c> is returned
+    /// unchanged, and every other value is decoded by <see cref="DecodeAreaId"/>.</para>
     /// </summary>
     /// <param name="value">The value to decode.</param>
-    /// <returns>The decoded value (strings unescaped; other values unchanged).</returns>
-    public static object Decode(object value)
+    /// <returns>The decoded value (ids unescaped; pointers and non-strings unchanged).</returns>
+    public static object Decode(object value) =>
+        value is string s && !s.StartsWith('/') ? DecodeAreaId(s) : value;
+
+    /// <summary>
+    /// Decodes an area or id segment written by <see cref="Encode"/>. In the part before any
+    /// <c>?</c> it reverses exactly the escapes <see cref="Encode"/> writes — <c>%2F</c> → <c>/</c>,
+    /// <c>%2E</c> → <c>.</c>, <c>%25</c> → <c>%</c> (hex case-insensitive) — plus the legacy
+    /// <c>%9Z</c> / <c>%9Y</c>. It works in ONE left-to-right pass, so an escaped <c>%</c> is never decoded
+    /// twice, and every other <c>%XX</c> is left as written. The query part keeps its escapes for the
+    /// reference's own parameter parsing; only the legacy escapes are restored there.
+    /// </summary>
+    /// <param name="id">The segment.</param>
+    /// <returns>The decoded segment.</returns>
+    public static string DecodeAreaId(string id)
     {
-        if (value is not string s)
-            return value;
-        var query = s.IndexOf('?');
-        var path = query < 0 ? s : s[..query];
+        var query = id.IndexOf('?');
+        var path = query < 0 ? id : id[..query];
         var decoded = DecodeOwnEscapes(path);
         return query < 0
             ? decoded
-            : decoded + s[query..].Replace("%9Z", "/").Replace("%9Y", ".");
+            : decoded + id[query..].Replace("%9Z", "/").Replace("%9Y", ".");
     }
 
     private static string DecodeOwnEscapes(string path)

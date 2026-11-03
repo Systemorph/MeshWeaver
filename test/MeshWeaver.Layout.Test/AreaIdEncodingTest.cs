@@ -81,11 +81,17 @@ public class AreaIdEncodingTest
     /// not URI escaping: a pointer for a bound data id containing a literal percent-escape must come back
     /// unchanged, or the binding breaks. Only Encode's own escapes and the legacy ones are decoded.
     /// </summary>
-    [Fact]
-    public void Decode_LeavesADataContextPointerWithALiteralPercentEscapeIntact()
+    [Theory]
+    [InlineData("literal%22id%20x")]
+    [InlineData("literal%2Fid")]
+    [InlineData("literal%2Eid")]
+    [InlineData("literal%25id")]
+    [InlineData("legacy%9Zid%9Y")]
+    public void Decode_LeavesADataContextPointerIntact_WhateverItsIdContains(string dataId)
     {
-        var pointer = LayoutAreaReference.GetDataPointer("literal%22id%20x");
+        var pointer = LayoutAreaReference.GetDataPointer(dataId);
         Assert.Equal(pointer, (string)WorkspaceReference.Decode(pointer));
+        // …while the same text as a URL id segment is decoded (only Encode's own escapes).
         Assert.Equal("a%7Eb", (string)WorkspaceReference.Decode("a%7Eb"));
     }
 
@@ -93,6 +99,13 @@ public class AreaIdEncodingTest
     [Fact]
     public void Decode_IsOnePass()
         => Assert.Equal("a%2Fb", (string)WorkspaceReference.Decode("a%252Fb"));
+
+    [Fact]
+    public void DecodeAreaId_IsTheUrlDecoder_AndDecodeDelegatesToItForIds()
+    {
+        Assert.Equal("Store/Plugin/Source/X", WorkspaceReference.DecodeAreaId("Store%2FPlugin%2FSource%2FX"));
+        Assert.Equal(WorkspaceReference.DecodeAreaId("a%2Eb%9Zc"), (string)WorkspaceReference.Decode("a%2Eb%9Zc"));
+    }
 
     /// <summary>The query part rides as written — its values are unescaped by the reference's own
     /// parameter parsing, so decoding them here would let an escaped <c>&amp;</c> split a value.</summary>
