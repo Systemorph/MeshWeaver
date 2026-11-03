@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using Microsoft.Diagnostics.NETCore.Client;
 using Microsoft.Diagnostics.Runtime;
 
@@ -28,9 +30,53 @@ namespace MeshWeaver.Connection.Orleans;
 /// <c>ClrMdDacUnloadCrashTest</c>). One extra <see cref="NativeLibrary.Load(string)"/> taken BEFORE ClrMD
 /// loads it keeps the mapping for the life of the process, so ClrMD's unload only drops the count to
 /// ours. The handle is instance state held by this mesh-scoped singleton and deliberately never freed.</para>
+///
+/// <para>🚨 <b>A thread that exits during the dump voids that dump, never the capture.</b> On Linux the
+/// runtime's dump writer (<c>createdump</c>) lists <c>/proc/&lt;pid&gt;/task</c>, attaches to each thread,
+/// and then reads each listed thread's <c>/proc/&lt;tid&gt;/status</c> and registers. It tolerates a thread
+/// gone before the attach (<c>ptrace(ATTACH) … No such process</c>), but a thread that was already EXITING
+/// when it attached disappears before those reads, and createdump then fails the WHOLE dump
+/// (<c>GetStatus fopen(/proc/&lt;tid&gt;/status) FAILED No such file or directory</c>) — losing the parked
+/// thread's stack for an unrelated thread's exit (#7802, measured on a CI shard while the silo's threads
+/// were stopping). The dump writer is outside this process and cannot be told to skip a thread, so a dump
+/// that failed for exactly that reason — a thread other than this process vanished mid-dump — is taken
+/// again: the next enumeration no longer lists the thread that exited. Any other failure is reported as
+/// before, and when every attempt fails the error names each attempt's reason.</para>
 /// </summary>
-internal sealed class BlockedThreadStacks(string? dacPath = null)
+internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>? writeDump = null)
 {
+    /// <summary>
+    /// How many dumps one capture may take when each earlier one failed because a thread exited during
+    /// it. Each attempt costs one dump (about a second); the thread that voided a dump is gone from the next.
+    /// </summary>
+    internal const int MaxDumpAttempts = 3;
+
+    /// <summary>
+    /// The createdump failures that mean "a listed thread exited during the dump": its status file is
+    /// gone (ENOENT, 2), or reading its registers finds no such thread (ESRCH, 3). Group <c>tid</c> is
+    /// the thread — the process itself vanishing is a different failure and is never retried.
+    /// </summary>
+    private static readonly Regex VanishedThread = new(
+        @"GetStatus fopen\(/proc/(?<tid>\d+)/status\) FAILED [^\r\n]*\(2\)"
+        + @"|ptrace\(PTRACE_GETREGSET, (?<tid>\d+), NT_\w+\) FAILED [^\r\n]*\(3\)",
+        RegexOptions.CultureInvariant);
+
+    private readonly Action<string> dumpWriter = writeDump ?? WriteDumpOfThisProcess;
+
+    /// <summary>Asks the runtime, over its diagnostic port, to write a Normal minidump of this process.</summary>
+    /// <param name="path">Where the dump is written.</param>
+    internal static void WriteDumpOfThisProcess(string path) =>
+        new DiagnosticsClient(Environment.ProcessId).WriteDump(DumpType.Normal, path, logDumpGeneration: false);
+
+    /// <summary>
+    /// Whether <paramref name="failure"/> is the dump writer reporting that a thread OTHER than this
+    /// process's main one exited while the dump was being taken — the one failure a fresh dump cures.
+    /// </summary>
+    /// <param name="failure">What writing the dump threw.</param>
+    internal static bool IsVanishedThread(Exception failure) =>
+        VanishedThread.Matches(failure.Message).Any(
+            m => int.TryParse(m.Groups["tid"].Value, out var tid) && tid != Environment.ProcessId);
+
     /// <summary>How many frames of a thread's stack are reported — the blocking frame is at the top.</summary>
     internal const int MaxFrames = 40;
 
@@ -85,7 +131,7 @@ internal sealed class BlockedThreadStacks(string? dacPath = null)
         var path = Path.Combine(Path.GetTempPath(), $"mw-stacks-{Environment.ProcessId}-{Guid.NewGuid():N}.dmp");
         try
         {
-            new DiagnosticsClient(Environment.ProcessId).WriteDump(DumpType.Normal, path, logDumpGeneration: false);
+            WriteDump(path);
             using var target = DataTarget.LoadDump(path);
             if (target.ClrVersions.Length == 0)
                 throw new InvalidOperationException($"the dump of process {Environment.ProcessId} carries no CLR runtime");
@@ -99,6 +145,35 @@ internal sealed class BlockedThreadStacks(string? dacPath = null)
         {
             if (File.Exists(path))
                 File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// Writes the dump, taking it again when a thread exited during it (see the class remarks). Each
+    /// failed attempt's reason is kept, so a capture that still fails says why every dump failed.
+    /// </summary>
+    private void WriteDump(string path)
+    {
+        var failures = ImmutableList<Exception>.Empty;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                dumpWriter(path);
+                return;
+            }
+            catch (Exception ex) when (IsVanishedThread(ex))
+            {
+                failures = failures.Add(ex);
+                if (File.Exists(path))
+                    File.Delete(path);
+                if (attempt >= MaxDumpAttempts)
+                    throw new InvalidOperationException(
+                        $"every one of {MaxDumpAttempts} dumps of process {Environment.ProcessId} failed because a thread "
+                        + "exited while it was being taken: "
+                        + string.Join(" | ", failures.Select((f, i) => $"attempt {i + 1}: {f.Message.Trim()}")),
+                        new AggregateException(failures));
+            }
         }
     }
 
