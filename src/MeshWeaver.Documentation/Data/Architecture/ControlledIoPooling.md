@@ -784,6 +784,15 @@ first-in-process script-reference build, on the Compile pool) on the strength of
   (`Mismatched dac … expected: 0.0`). There the match is proven by location instead: the dump is of
   this process, so the runtime it names must be loaded from the directory the pinned DAC sits in, and
   any other directory is refused. Where the dump does carry the version, ClrMD's own check stands.
+  A thread that EXITS while the dump is taken voids that dump, never the capture: on Linux createdump
+  lists the process's threads, attaches to each and then reads each one's `/proc/<tid>/status`, and a
+  thread that was already exiting when it attached is gone by then — createdump then fails the WHOLE
+  dump (`GetStatus fopen(/proc/<tid>/status) FAILED No such file or directory`), which on a CI shard
+  cost a parked canceller its stack (#7802). createdump cannot be told to skip a thread, so a dump
+  that failed for exactly that reason — some thread other than the process vanished mid-dump — is
+  taken again (at most three dumps); the thread that exited is no longer listed by the next one. Any
+  other failure is the capture's answer at once, and when every dump is voided the error names each
+  attempt's reason. Pinned by `BlockedThreadStacksThreadExitTest`.
   A thread id names a thread, not a leaf: a leaf that returned between the expiry's
   snapshot and the dump has handed its thread back. So each leaf carries its own ticket, which is
   rechecked after the dump. A leaf whose ticket is gone is reported as having returned before its
