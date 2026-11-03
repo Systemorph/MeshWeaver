@@ -153,9 +153,17 @@ Controls.Button(host.Localize("ui.invite"))
     .WithReactiveClickAction(ctx =>
         ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
             .Take(1)                                  // a one-off read for the click — not a live binding
-            .Do(form => Submit(ctx, spacePath, form))
+            .SelectMany(form => Invite(ctx, spacePath, form))   // the work the click requests, RETURNED
+            .Do(outcome => ctx.ReportSummary(outcome))
             .Select(_ => Unit.Default));
 ```
+
+🚨 Return the WORK too, not only the read. The Space invite form once returned the read and fired the
+invite from inside `.Do(form => Submit(…))` on a subscription of its own: the click was answered the
+moment the form was read, its busy state ended before the invite started, and the outcome had nowhere
+to go but a dialog — measured as *"no screen change happening after invite"* (2026-11-03,
+[Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding)). Returned, the button stays
+busy for the invite and settles with its outcome or its error.
 
 The host then owns the subscription: completion answers the click, and an error is logged with the
 area and hub (the click session's failure arm) and refused to the client, whose button leaves its pending
