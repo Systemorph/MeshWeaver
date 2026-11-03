@@ -230,7 +230,7 @@ public static class EmitPipeline
     /// </summary>
     internal static EmittedArtifact EmitCompilationToDirectory(
         CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir, CancellationToken ct)
-        => EmitCompilationToDirectory(compilation, nodeName, nodePath, releaseDir, [], ct);
+        => EmitCore(compilation, nodeName, nodePath, releaseDir, [], ct, null, embedDocumentation: true);
 
     /// <summary>
     /// The same verified emit, carrying MANAGED RESOURCES into the assembly — the shape
@@ -259,8 +259,9 @@ public static class EmitPipeline
     internal static EmittedArtifact EmitCompilationToDirectory(
         CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir,
         IReadOnlyCollection<ResourceDescription> manifestResources, CancellationToken ct)
-        => EmitCompilationToDirectory(compilation, nodeName, nodePath, releaseDir,
-            manifestResources, ct, null);
+        // A PROJECT build (mw-plugin-test build-project) reproduces an SDK build exactly — its
+        // resources are the project's, so nothing is added (EmbeddedResourceTest pins the parity).
+        => EmitCore(compilation, nodeName, nodePath, releaseDir, manifestResources, ct, null, embedDocumentation: false);
 
     // The existing entry points keep their signatures and default behavior. Only the
     // NodeType pipeline supplies the optional CI diagnostic scheduler; it must not do
@@ -269,6 +270,19 @@ public static class EmitPipeline
         CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir,
         IReadOnlyCollection<ResourceDescription> manifestResources, CancellationToken ct,
         Action<CSharpCompilation, Exception>? captureFailure)
+        // Only the NodeType pipeline supplies the capture: a NodeType compile, so its docs travel in the image.
+        => EmitCore(compilation, nodeName, nodePath, releaseDir, manifestResources, ct, captureFailure, embedDocumentation: true);
+
+    /// <summary>
+    /// The verified emit itself. <paramref name="embedDocumentation"/> adds the compilation's XML docs as
+    /// the manifest resource <c>{AssemblyName}.xml</c> (<see cref="WithEmbeddedDocumentation"/>) — on for a
+    /// NodeType compile, whose dll is loaded from the assembly store or a bundle with no sidecar file; off
+    /// for a project build, which must match an SDK build resource for resource.
+    /// </summary>
+    private static EmittedArtifact EmitCore(
+        CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir,
+        IReadOnlyCollection<ResourceDescription> manifestResources, CancellationToken ct,
+        Action<CSharpCompilation, Exception>? captureFailure, bool embedDocumentation)
     {
         // #5212 leg 6: the process's first reading of the compiler image, taken BEFORE any emit can
         // fail, so a later canary can say whether the image or its mapping changed since.
@@ -288,7 +302,9 @@ public static class EmitPipeline
         EmitResult emitResult;
         try
         {
-            var resources = WithEmbeddedDocumentation(compilation, manifestResources, ct);
+            var resources = embedDocumentation
+                ? WithEmbeddedDocumentation(compilation, manifestResources, ct)
+                : manifestResources;
             emitResult = compilation.Emit(
                 dllImage, pdbImage, xmlDocumentationStream: xmlDoc,
                 manifestResources: resources.Count == 0 ? null : resources,
