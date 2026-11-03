@@ -221,6 +221,51 @@ demanding `X-Hub-Signature-256` from Stripe would 401 every payment delivery.
    decide the verdict), and it makes core's CD verdict depend on other repositories' state, which is
    the CI-to-CI coupling `main-cd.yml` has already deleted twice.
 
+## A target declares the event kinds it accepts (#7863)
+
+An organisation webhook subscribes to whole event KINDS, and it feeds every kind to every target it
+posts to. The control instance's `Hosting/PlatformBuilds` received `check_run`, `check_suite`,
+`workflow_job` and `workflow_run` deliveries at roughly nine times the rate of everything else. Each
+one was written as a `WebhookEvent` node, which put it into the full-JSON, text-search and vector
+indexes. The drain then dropped it unread, because those kinds are worth something only while fresh
+and the inbox was hours behind. The write and the index churn were the whole cost, and nothing used
+the result.
+
+So a target may DECLARE which GitHub event kinds it takes in. The declaration rides on the allowlist
+entry, next to `SecretConfigKey`, for the same reason: the record that makes a target reachable says
+what it takes in, so the two cannot drift.
+
+```yaml
+WebhookInbox__Targets__0: "Hosting/PlatformBuilds"
+WebhookInbox__Targets__0__SecretConfigKey: "Hosting:PlatformWebhookSecret"
+WebhookInbox__Targets__0__AcceptedEvents: "pull_request,pull_request_review,pull_request_review_comment,issues"
+```
+
+The value is a comma-separated list. The list form (`…__AcceptedEvents__0`, `…__1`) works too.
+
+| the delivery | the answer | stored |
+|---|---|---|
+| a declared kind (`X-GitHub-Event`, matched ignoring case) | 200 `accepted`, as before | yes |
+| an undeclared kind | **200**, `"status":"ignored"`; counted on `meshweaver.webhook.deliveries.ignored` (tag `target`) | **never** |
+| no `X-GitHub-Event` at all (the fleet's own signed envelopes, Stripe) | as before | yes |
+| a target that declares nothing, or declares a blank value | as before; every kind | yes |
+
+An ignored delivery is answered 2xx because the sender did nothing wrong. A refusal would only make
+GitHub mark the hook as failing and retry. The filter runs **after** the signature check, so an
+undeclared kind with a drifted secret is still a 401: the filter never hides a broken pair.
+
+**Where the declaration lives, and why not on the target node.** The allowlist, the secret key and
+the slot index are deployment-record configuration already, and `Deliver` reads them there for every
+delivery. A declaration on the target node would put half of a target's intake contract in the record
+and half in a node shipped by a module, which is the drift `SecretConfigKey` was placed on the entry
+to prevent. The record also differs per instance where the node does not: the same `Hosting/PlatformBuilds`
+node is fed by an organisation webhook on one instance and by nothing on another.
+
+**What the declared set must be.** It is the set of kinds the target's consumer ACTS on, read from
+the consumer's code, not the set its sender happens to post. A kind left out stops reaching the
+consumer at all, so its fresh-event path is replaced by whatever backstop that consumer has. Name
+each such path, and its backstop, in the change that narrows the set.
+
 ## 🚨 A stalled read answers 503, never a bare 500 (#6125)
 
 Before storing, the endpoint confirms the allowlisted target exists with a `path:{target}` query.
@@ -295,7 +340,8 @@ this change makes the inbox's answer independent of it.
   endpoint: allowlist check → 404, `ContentLength > MaxBodyBytes` → 413, target-node existence,
   then the `WebhookEvent` write.
 - `src/MeshWeaver.Graph/Configuration/WebhookEventNodeType.cs` — the `WebhookEvent` node type, the
-  allowlist reader (`WebhookInbox.ReadTargets` → `WebhookTarget(Path, SecretConfigKey)`), the HMAC
+  allowlist reader (`WebhookInbox.ReadTargets` → `WebhookTarget(Path, SecretConfigKey)` with its
+  declared `AcceptedEvents`), the intake filter and its counter (`WebhookInboxMetrics`), the HMAC
   check (`VerifyHmacSha256`) and the constants both ends share: `TargetsConfigSection`,
   `SecretConfigKeyName`, `SignatureHeader` and `MaxBodyBytes = 1024 * 1024`.
 - `src/MeshWeaver.Mesh.Contract/Services/CreateAnsweredOnCommit.cs` — the create that answers on
@@ -304,3 +350,7 @@ this change makes the inbox's answer independent of it.
   `SignedTarget_WithTheRightSecret_IsAccepted` against
   `SignedTarget_WithADriftedSecret_IsRefused_AndStoresNothing`. Both returned `Accepted` before
   #3312; if a change ever makes them agree again, the hole is back.
+  The declared intake filter is pinned there too: `UnacceptedGitHubEvent_IsAnswered2xx_Counted_AndNeverWritten`,
+  `AcceptedGitHubEvent_IsWritten`, `TargetWithNoDeclaredSet_AcceptsEveryKind`,
+  `DeliveryWithoutAGitHubEvent_IsWritten_OnADeclaringTarget` and
+  `UnacceptedGitHubEvent_WithADriftedSecret_IsStillRefused`.
