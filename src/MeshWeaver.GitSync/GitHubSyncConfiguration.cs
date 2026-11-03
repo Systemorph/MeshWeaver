@@ -313,7 +313,10 @@ public static class GitHubSyncConfiguration
             .AddSingleton<InstanceGitHubAppCatalog>()
             // …and ONLY through their verbs: a direct write, even under an Admin-partition Editor
             // grant, is refused (the shape of the Instance Secrets write guard).
-            .AddScoped<INodeValidator, InstanceRepositoryAccessWriteGuard>());
+            .AddScoped<INodeValidator, InstanceRepositoryAccessWriteGuard>()
+            // The deployment's partition allow-list (GitSync:AllowedPartitions): a sync source
+            // outside it can be neither created nor updated — Doc/Architecture/SensitiveContentInLogs.
+            .AddScoped<INodeValidator, GitSyncPartitionWriteGuard>());
 
         // Also register the content types on the mesh hub + every per-node hub so reads via
         // GetQuery / GetMeshNodeStream resolve the typed content (and the $type discriminator).

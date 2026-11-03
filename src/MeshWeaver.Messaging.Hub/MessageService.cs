@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Reflection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 // ReSharper disable InconsistentlySynchronizedField
@@ -218,6 +219,49 @@ public class MessageService : IMessageService
         loggingSerializerOptions ??= hub.CreateLoggingSerializerOptions();
 
     /// <summary>
+    /// The configuration key that opts a deployment IN to rendering message BODIES into log
+    /// lines (<c>Messaging:LogMessageBodies</c>, default <c>false</c>). Off, every log line this
+    /// service writes about a delivery carries only <see cref="LogSummary"/> — type, id,
+    /// sender → target, state — because a message body is node content, and node content may be
+    /// sensitive (health data, personal data) and logs travel further than the store: to Loki,
+    /// and from there into filed issues. See <c>Doc/Architecture/SensitiveContentInLogs</c>.
+    /// </summary>
+    public const string LogMessageBodiesKey = "Messaging:LogMessageBodies";
+
+    private bool? logMessageBodies;
+
+    /// <summary>
+    /// Whether <see cref="LogMessageBodiesKey"/> is set to <c>true</c> in this hub's configuration.
+    /// Read once per service; anything other than a literal <c>true</c> (absent, empty, a typo)
+    /// keeps bodies OUT of the log — the safe reading wins on doubt.
+    /// </summary>
+    private bool LogMessageBodies =>
+        logMessageBodies ??= ReadLogMessageBodies(hub);
+
+    private static bool ReadLogMessageBodies(IMessageHub hub)
+    {
+        try
+        {
+            var value = hub.ServiceProvider.GetService<IConfiguration>()?[LogMessageBodiesKey];
+            return bool.TryParse(value, out var on) && on;
+        }
+        catch (ObjectDisposedException)
+        {
+            // Called from catch blocks on a hub that may be tearing down: no configuration
+            // reachable means no opt-in.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The ONE rendering of a delivery for a log line on the error and shutdown paths:
+    /// <see cref="LogSummary"/> unless the deployment opted in with
+    /// <see cref="LogMessageBodiesKey"/>, in which case the <see cref="LogText"/> body render.
+    /// </summary>
+    private string LogDelivery(IMessageDelivery delivery) =>
+        LogMessageBodies ? LogText(delivery) : LogSummary(delivery);
+
+    /// <summary>
     /// Renders a delivery for log output through <see cref="LoggingSerializerOptions"/>
     /// so <c>[PreventLogging]</c> members — notably <c>MeshNode.Content</c> and
     /// other large payloads — are stripped. The log keeps the message's
@@ -225,6 +269,8 @@ public class MessageService : IMessageService
     /// every time. Use this instead of a raw <c>{@Delivery}</c> destructure
     /// (which bypasses the resolver and serialises everything). Falls back to a
     /// type+id summary if serialisation throws — it is called from catch blocks.
+    /// 🚨 Only <see cref="LogDelivery"/> may call this: a body render reaches the log only when
+    /// the deployment opted in with <see cref="LogMessageBodiesKey"/>.
     /// </summary>
     private string LogText(IMessageDelivery delivery)
     {
@@ -2621,7 +2667,7 @@ public class MessageService : IMessageService
                                             && !handled.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
                     {
                         fate?.Add("NO_HANDLER_MATCHED", Address);
-                        ReportFailure(handled.WithProperty("Error", $"No handler found for delivery {handled.Message.GetType().FullName}: {handled.Message}"),
+                        ReportFailure(handled.WithProperty("Error", $"No handler found for delivery {handled.Message.GetType().FullName} (ID: {handled.Id})"),
                             ErrorType.Ignored);
                     }
                     if (traceEnabled)
@@ -2709,8 +2755,8 @@ public class MessageService : IMessageService
                         logger.LogTrace("MESSAGE_FLOW: EXECUTION_TIMEOUT_DURING_DISPOSAL | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
                             messageTypeName, Address, executionStopwatch.ElapsedMilliseconds);
                     if (delivery.Message is not ExecutionRequest)
-                        logger.LogWarning("Execution timed out during disposal for {@Delivery} after {Duration}ms in {Address}",
-                            delivery, executionStopwatch.ElapsedMilliseconds, Address);
+                        logger.LogWarning("Execution timed out during disposal for {Delivery} after {Duration}ms in {Address}",
+                            LogDelivery(delivery), executionStopwatch.ElapsedMilliseconds, Address);
                     return Observable.Return(delivery);
                 }
 
@@ -2839,7 +2885,7 @@ public class MessageService : IMessageService
                 else
                 {
                     logger.LogError("An exception occurred during the processing of {Delivery} after {Duration}ms. Exception: {Exception}. Address: {Address}.",
-                        LogText(delivery), executionStopwatch.ElapsedMilliseconds, e, Address);
+                        LogDelivery(delivery), executionStopwatch.ElapsedMilliseconds, e, Address);
                     // A GENUINE fault — the handler threw on a hub whose scope is open. The
                     // classification (Unknown, the exception text) is right at every run level;
                     // what #4072 measured is that the CARRIER went missing once this hub was past
