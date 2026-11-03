@@ -921,7 +921,7 @@ public partial class MeshOperations
 
     /// <summary>
     /// Splits a path-resolution remainder into <c>(area, id)</c> — the same
-    /// <c>{area}/{id}</c> split and <c>%9Y</c> decode the Blazor <c>AreaPage</c> applies.
+    /// <c>{area}/{id}</c> split and area-id decode (<c>WorkspaceReference.Decode</c>) the Blazor <c>AreaPage</c> applies.
     /// </summary>
     private static (string? Area, string? Id) SplitAreaRemainder(string? remainder)
     {
