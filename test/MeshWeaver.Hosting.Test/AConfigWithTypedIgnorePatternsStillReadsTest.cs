@@ -65,8 +65,12 @@ public class AConfigWithTypedIgnorePatternsStillReadsTest(ITestOutputHelper outp
                 createBranchIfMissing: false, createRepoIfMissing: false)
             .Timeout(TestTimeouts.Convergence).Await(ct);
 
-        // Positive control: the typed read answers before the text write.
-        var before = await Sync.ReadConfig(space).Timeout(TestTimeouts.Convergence).Await(ct);
+        // Positive control: the typed read answers before the text write. Wait for the synced
+        // query to carry the saved URL first — a one-shot read could take an earlier frame.
+        var before = await Sync.WatchConfig(space)
+            .Where(c => c?.RepositoryUrl == RepoUrl)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(RepoUrl, before?.RepositoryUrl);
 
         // The stored shape the settings tab's text field wrote: the record's JSON with `ignore`

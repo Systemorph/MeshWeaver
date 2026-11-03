@@ -127,18 +127,25 @@ public record MeshNodeEditorField(string Key, string Label, MeshNodeEditorFieldK
             })
             .ToImmutableList();
 
-    /// <summary>Whether a member of <paramref name="type"/> serializes as a JSON scalar (string,
-    /// number, bool, enum, date, id) — the only shape a single text, checkbox or dropdown control
-    /// can write back without changing the member's JSON kind.</summary>
+    /// <summary>Whether a member of <paramref name="type"/> serializes as a JSON scalar — the only
+    /// shape a single text, checkbox or dropdown control can write back without changing the
+    /// member's JSON kind. An explicit allow-list, never "is a value type": a record struct or a
+    /// <c>KeyValuePair</c> is a value type and serializes as an object.</summary>
     private static bool HasScalarJsonForm(Type type)
     {
         var t = Nullable.GetUnderlyingType(type) ?? type;
-        if (t == typeof(string) || t == typeof(Uri))
-            return true;
-        if (typeof(System.Collections.IEnumerable).IsAssignableFrom(t))
-            return false;
-        return t.IsValueType;
+        return t.IsEnum || ScalarJsonTypes.Contains(t);
     }
+
+    /// <summary>The CLR types the hub serializer writes as a single JSON value (immutable).</summary>
+    private static readonly ImmutableHashSet<Type> ScalarJsonTypes =
+    [
+        typeof(string), typeof(char), typeof(bool),
+        typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
+        typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(decimal),
+        typeof(DateTime), typeof(DateTimeOffset), typeof(DateOnly), typeof(TimeOnly), typeof(TimeSpan),
+        typeof(Guid), typeof(Uri),
+    ];
 }
 
 /// <summary>
