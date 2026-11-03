@@ -48,7 +48,22 @@ public static class SensitiveDataRedaction
     /// <param name="member">A property or field.</param>
     /// <returns><c>true</c> when the member is marked.</returns>
     public static bool IsSensitive(MemberInfo? member) =>
-        member is not null && member.IsDefined(typeof(SensitiveDataAttribute), inherit: true);
+        // Attribute.IsDefined, never MemberInfo.IsDefined: the latter ignores `inherit` for
+        // properties, so an override that does not repeat the attribute would drop the protection.
+        member is not null && Attribute.IsDefined(member, typeof(SensitiveDataAttribute), inherit: true);
+
+    /// <summary>
+    /// Whether <paramref name="type"/> declares any marked member — a public property or field, or a
+    /// public constructor parameter.
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when some member is marked.</returns>
+    public static bool DeclaresSensitiveMembers(Type type) =>
+        type.GetProperties(BindingFlags.Public | BindingFlags.Instance).Any(IsSensitive)
+        || type.GetFields(BindingFlags.Public | BindingFlags.Instance).Any(IsSensitive)
+        || type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+            .SelectMany(c => c.GetParameters())
+            .Any(p => Attribute.IsDefined(p, typeof(SensitiveDataAttribute), inherit: true));
 
     /// <summary>
     /// Whether a serialized property is marked — on its property/field, or on the positional record
@@ -64,14 +79,14 @@ public static class SensitiveDataRedaction
         if (IsSensitive(member))
             return true;
         if (property.AssociatedParameter?.AttributeProvider is ParameterInfo associated)
-            return associated.IsDefined(typeof(SensitiveDataAttribute), inherit: true);
+            return Attribute.IsDefined(associated, typeof(SensitiveDataAttribute), inherit: true);
         // The association is made when the type info is CONFIGURED, after the modifiers ran — so
         // match the declaring type's constructor parameters by name as well.
         return member.DeclaringType is { } declaring
             && declaring.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
                 .SelectMany(c => c.GetParameters())
                 .Any(p => string.Equals(p.Name, member.Name, StringComparison.OrdinalIgnoreCase)
-                          && p.IsDefined(typeof(SensitiveDataAttribute), inherit: true));
+                          && Attribute.IsDefined(p, typeof(SensitiveDataAttribute), inherit: true));
     }
 
     /// <summary>
@@ -266,10 +281,16 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
     private readonly ConditionalWeakTable<Type, Shape> shapes = new();
 
     /// <summary>What a JSON object/array of one CLR type looks like to the walk.</summary>
+    /// <param name="Kind">The type's JSON shape.</param>
+    /// <param name="Members">For an object: JSON member name → (marked, declared type).</param>
+    /// <param name="ElementType">For a collection or dictionary: the element (value) type.</param>
+    /// <param name="WhollySensitive">A type that declares marked members but is written by a custom
+    /// converter: its JSON cannot be mapped to members, so ALL of it is treated as marked.</param>
     private sealed record Shape(
         JsonTypeInfoKind Kind,
         ImmutableDictionary<string, (bool Sensitive, Type Type)> Members,
-        Type? ElementType);
+        Type? ElementType,
+        bool WhollySensitive = false);
 
     private static readonly Shape Opaque =
         new(JsonTypeInfoKind.None, ImmutableDictionary<string, (bool, Type)>.Empty, null);
@@ -287,19 +308,21 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
     public JsonNode? Redact(JsonNode? node, Type? declared)
     {
         var copy = node?.DeepClone();
-        Walk(copy, declared, failClosed: false, onSensitive: (parent, set) => set(JsonValue.Create(SensitiveDataAttribute.Placeholder)));
+        Walk(copy, declared, failClosed: false, redact: true,
+            onSensitive: (_, set) => set(JsonValue.Create(SensitiveDataAttribute.Placeholder)), onUnresolved: null);
         return copy;
     }
 
     /// <summary>
     /// Adds every marked value under <paramref name="node"/> to <paramref name="sink"/>; returns
-    /// <c>false</c> when some object's <c>$type</c> could not be resolved (the answer is incomplete).
+    /// <c>false</c> when the answer is incomplete — some object's <c>$type</c> could not be resolved,
+    /// or a type's members could not be mapped.
     /// </summary>
     public bool Collect(JsonNode? node, Type? declared, ImmutableHashSet<string>.Builder sink)
     {
         var complete = true;
-        Walk(node, declared, failClosed: false, onSensitive: (value, _) => AddLeaves(value, sink),
-            redactOpaque: false, onUnresolved: () => complete = false);
+        Walk(node, declared, failClosed: false, redact: false,
+            onSensitive: (value, _) => AddLeaves(value, sink), onUnresolved: () => complete = false);
         return complete;
     }
 
@@ -328,68 +351,119 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
         }
     }
 
-    private void Walk(JsonNode? node, Type? declared, bool failClosed,
-        Action<JsonNode?, Action<JsonNode?>> onSensitive, bool redactOpaque = true, Action? onUnresolved = null)
+    /// <param name="failClosed">An enclosing object's members could not be known: every scalar below
+    /// is redacted (rendering only).</param>
+    /// <param name="redact">Rendering (true) or collecting (false).</param>
+    private void Walk(JsonNode? node, Type? declared, bool failClosed, bool redact,
+        Action<JsonNode?, Action<JsonNode?>> onSensitive, Action? onUnresolved)
     {
         switch (node)
         {
             case JsonObject obj:
-                var type = declared;
+            {
+                var type = ResolveObjectType(obj, declared, out var resolvedAll);
                 var closed = failClosed;
-                if (obj.TryGetPropertyValue("$type", out var discriminator)
-                    && discriminator is JsonValue dv && dv.GetValueKind() == JsonValueKind.String)
+                if (!resolvedAll)
                 {
-                    var resolved = resolve(dv.GetValue<string>());
-                    if (resolved is not null)
-                        type = resolved;
-                    else if (!IsKnownStructural(declared))
-                    {
-                        // A $type nobody in this process can resolve: which members are sensitive is
-                        // unknowable, so a RENDERING fails closed and redacts every scalar below.
-                        closed = redactOpaque;
-                        onUnresolved?.Invoke();
-                    }
+                    // Which members are marked cannot be known: a RENDERING redacts every scalar below,
+                    // and a COLLECTION reports itself incomplete.
+                    closed = redact;
+                    onUnresolved?.Invoke();
                 }
                 var shape = type is null ? Opaque : ShapeOf(type);
+                if (shape.WhollySensitive)
+                {
+                    onUnresolved?.Invoke();
+                    if (!redact)
+                    {
+                        onSensitive(obj, _ => { });
+                        return;
+                    }
+                    closed = true;
+                }
                 foreach (var name in obj.Select(p => p.Key).ToArray())
                 {
-                    var child = obj[name];
                     if (name == "$type")
                         continue;
-                    if (shape.Kind == JsonTypeInfoKind.Object && shape.Members.TryGetValue(name, out var member))
+                    var child = obj[name];
+                    (bool Sensitive, Type Type)? member =
+                        shape.Kind == JsonTypeInfoKind.Object && shape.Members.TryGetValue(name, out var m) ? m : null;
+                    var childType = member?.Type ?? (shape.Kind == JsonTypeInfoKind.Dictionary ? shape.ElementType : null);
+                    var wholly = childType is not null && child is not null && ShapeOf(childType).WhollySensitive;
+                    if (member?.Sensitive == true || wholly)
                     {
-                        if (member.Sensitive)
-                        {
-                            if (child is not null)
-                                onSensitive(child, replacement => obj[name] = replacement);
-                            continue;
-                        }
-                        Walk(child, member.Type, closed, onSensitive, redactOpaque, onUnresolved);
+                        // A custom-written member is treated as marked as a whole; its members could
+                        // not be mapped, so the answer is reported incomplete.
+                        if (wholly)
+                            onUnresolved?.Invoke();
+                        if (child is not null)
+                            onSensitive(child, replacement => obj[name] = replacement);
+                        continue;
                     }
-                    else if (shape.Kind == JsonTypeInfoKind.Dictionary)
-                        Walk(child, shape.ElementType, closed, onSensitive, redactOpaque, onUnresolved);
-                    else if (closed && child is JsonValue)
+                    // Closed-scalar replacement BEFORE the member and dictionary branches: under an
+                    // unknowable outer type even a known inner member could be the marked one.
+                    if (closed && child is JsonValue)
+                    {
                         obj[name] = JsonValue.Create(SensitiveDataAttribute.Placeholder);
-                    else
-                        Walk(child, null, closed, onSensitive, redactOpaque, onUnresolved);
+                        continue;
+                    }
+                    Walk(child, childType, closed, redact, onSensitive, onUnresolved);
                 }
                 break;
+            }
             case JsonArray array:
+            {
                 var elementType = declared is null ? null : ShapeOf(declared) is { Kind: JsonTypeInfoKind.Enumerable } s ? s.ElementType : null;
                 for (var i = 0; i < array.Count; i++)
                 {
-                    if (failClosed && array[i] is JsonValue)
+                    if (elementType is not null && ShapeOf(elementType).WhollySensitive && array[i] is { } whole)
+                    {
+                        onUnresolved?.Invoke();
+                        var index = i;
+                        onSensitive(whole, replacement => array[index] = replacement);
+                    }
+                    else if (failClosed && array[i] is JsonValue)
                         array[i] = JsonValue.Create(SensitiveDataAttribute.Placeholder);
                     else
-                        Walk(array[i], elementType, failClosed, onSensitive, redactOpaque, onUnresolved);
+                        Walk(array[i], elementType, failClosed, redact, onSensitive, onUnresolved);
                 }
                 break;
+            }
         }
     }
 
+    /// <summary>
+    /// The CLR type an object describes. An EXACT declared type (a runtime type, a concrete member
+    /// type) is authoritative when the object's <c>$type</c> names it — never swapped for whatever
+    /// generation the discriminator resolves to now, which after a rebuild may carry other
+    /// annotations — and is refined only to a resolved SUBTYPE. A discriminator that names neither the
+    /// declared type nor anything resolvable leaves <paramref name="resolved"/> false: fail closed.
+    /// </summary>
+    private Type? ResolveObjectType(JsonObject obj, Type? declared, out bool resolved)
+    {
+        resolved = true;
+        var exact = IsExact(declared) ? declared : null;
+        if (!obj.TryGetPropertyValue("$type", out var discriminatorNode)
+            || discriminatorNode is not JsonValue dv || dv.GetValueKind() != JsonValueKind.String)
+            return exact;
+        var discriminator = dv.GetValue<string>();
+        if (exact is not null && Names(discriminator, exact))
+            return exact;
+        var candidate = resolve(discriminator);
+        if (candidate is not null && (exact is null || exact.IsAssignableFrom(candidate)))
+            return candidate;
+        resolved = false;
+        return exact;
+    }
+
+    private static bool Names(string discriminator, Type type) =>
+        string.Equals(discriminator, type.Name, StringComparison.Ordinal)
+        || string.Equals(discriminator, type.FullName, StringComparison.Ordinal);
+
     /// <summary>A declared type whose shape is fully known without a discriminator.</summary>
-    private static bool IsKnownStructural(Type? declared) =>
-        declared is not null && declared != typeof(object) && !declared.IsAbstract && !declared.IsInterface;
+    private static bool IsExact(Type? declared) =>
+        declared is not null && declared != typeof(object) && declared != typeof(JsonElement)
+        && !typeof(JsonNode).IsAssignableFrom(declared) && !declared.IsAbstract && !declared.IsInterface;
 
     private Shape ShapeOf(Type type) => shapes.GetValue(type, Build);
 
@@ -418,7 +492,9 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
                 null),
             JsonTypeInfoKind.Enumerable or JsonTypeInfoKind.Dictionary =>
                 new Shape(info.Kind, ImmutableDictionary<string, (bool, Type)>.Empty, info.ElementType),
-            _ => Opaque,
+            // Written by a custom converter: its JSON cannot be mapped to members. If it declares any
+            // marked member, all of it is treated as marked.
+            _ => SensitiveDataRedaction.DeclaresSensitiveMembers(type) ? Opaque with { WhollySensitive = true } : Opaque,
         };
     }
 }
@@ -448,13 +524,15 @@ internal sealed class SensitiveObjectConverter(SensitiveJsonRedactor redactor, J
                 WriteNode(writer, redactor.Redact(node, null));
                 return;
         }
-        if (inner is not null)
-            inner.Write(writer, value, options);
-        else if (value.GetType() == typeof(object))
+        // A plain System.Object first: the inner converter would resolve `object` through these same
+        // options — i.e. back to this converter — and recurse without its depth guard.
+        if (value.GetType() == typeof(object))
         {
             writer.WriteStartObject();
             writer.WriteEndObject();
         }
+        else if (inner is not null)
+            inner.Write(writer, value, options);
         else
             JsonSerializer.Serialize(writer, value, value.GetType(), options);
     }
@@ -488,4 +566,46 @@ internal sealed class SensitiveJsonNodeConverter(SensitiveJsonRedactor redactor)
 
     public override void Write(Utf8JsonWriter writer, JsonNode value, JsonSerializerOptions options) =>
         SensitiveObjectConverter.WriteNode(writer, redactor.Redact(value, null));
+}
+
+/// <summary>
+/// Logging-options converter factory for a type that declares <see cref="SensitiveDataAttribute"/>
+/// members but is written by a CUSTOM converter (its metadata has no properties, so the resolver's
+/// modifier cannot reach the members): the whole value is written as the placeholder — fail closed.
+/// </summary>
+internal sealed class SensitiveOpaqueTypeConverterFactory(JsonSerializerOptions typing) : JsonConverterFactory
+{
+    private readonly ConditionalWeakTable<Type, object> verdicts = new();
+    private static readonly object Yes = new();
+    private static readonly object No = new();
+
+    public override bool CanConvert(Type typeToConvert) =>
+        verdicts.GetValue(typeToConvert, Decide) == Yes;
+
+    private object Decide(Type type)
+    {
+        if (type.IsPrimitive || type == typeof(string) || type == typeof(object) || type.IsEnum
+            || !SensitiveDataRedaction.DeclaresSensitiveMembers(type))
+            return No;
+        try
+        {
+            return typing.GetTypeInfo(type).Kind == JsonTypeInfoKind.None ? Yes : No;
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or ArgumentException)
+        {
+            return Yes;
+        }
+    }
+
+    public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options) =>
+        (JsonConverter)Activator.CreateInstance(typeof(PlaceholderConverter<>).MakeGenericType(typeToConvert))!;
+
+    private sealed class PlaceholderConverter<T> : JsonConverter<T>
+    {
+        public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            throw new NotSupportedException("The logging serializer options are write-only.");
+
+        public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(SensitiveDataAttribute.Placeholder);
+    }
 }

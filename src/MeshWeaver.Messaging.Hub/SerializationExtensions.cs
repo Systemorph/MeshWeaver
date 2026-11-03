@@ -203,6 +203,7 @@ public static class SerializationExtensions
         loggingOptions.Converters.Insert(0, new SensitiveJsonNodeConverter(redactor));
         loggingOptions.Converters.Insert(0, new SensitiveJsonElementConverter(redactor));
         loggingOptions.Converters.Insert(0, new SensitiveObjectConverter(redactor, objectConverter));
+        loggingOptions.Converters.Insert(0, new SensitiveOpaqueTypeConverterFactory(baseOptions));
 
         return loggingOptions;
     }

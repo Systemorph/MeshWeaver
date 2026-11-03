@@ -24,7 +24,7 @@ namespace MeshWeaver.Messaging;
 /// it. So a body that merely travels is affordable; a body that travels, comes BACK as the
 /// acknowledgement, and then travels a THIRD time inside the failure report is not.</para>
 /// </summary>
-public static partial class DeliveryPayloadBounds
+public static class DeliveryPayloadBounds
 {
     /// <summary>
     /// Orleans' memory-stream block size, and therefore the tighter of the two transport ceilings on
@@ -401,12 +401,36 @@ public static partial class DeliveryPayloadBounds
     public static string? Discriminator(string content)
     {
         var window = content.Length <= PayloadPreviewChars ? content : content[..PayloadPreviewChars];
-        var match = DiscriminatorPattern().Match(window);
-        return match.Success ? match.Groups[1].Value : null;
+        // Tokens, not a pattern: only a ROOT-level "$type" identifies the payload. A nested one is a
+        // member's value — possibly a marked one — and the window may cut the JSON anywhere, so the
+        // reader runs as a non-final block and an unfinished token simply ends the scan (null).
+        var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(window), isFinalBlock: false, state: default);
+        try
+        {
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+                return null;
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
+                    return null;
+                if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
+                    continue;
+                var isType = reader.ValueTextEquals("$type");
+                if (!reader.Read())
+                    return null;
+                if (isType)
+                    return reader.TokenType == JsonTokenType.String && reader.GetString() is { Length: > 0 and <= 256 } type
+                        ? type
+                        : null;
+                if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray && !reader.TrySkip())
+                    return null;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+        return null;
     }
-
-    [System.Text.RegularExpressions.GeneratedRegex("\"\\$type\"\\s*:\\s*\"([^\"\\\\]{1,256})\"")]
-    private static partial System.Text.RegularExpressions.Regex DiscriminatorPattern();
 
     /// <summary>
     /// JSON-quotes a value so it is safe to embed in a single log line or a JSON report body.

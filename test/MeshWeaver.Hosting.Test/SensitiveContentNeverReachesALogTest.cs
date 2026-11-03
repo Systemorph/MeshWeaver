@@ -282,6 +282,90 @@ public class SensitiveContentNeverReachesALogTest : MonolithMeshTestBase
         complete.Should().BeFalse("an egress path must be told that the marked members could not be known");
     }
 
+    /// <summary>A base type marking a VIRTUAL member.</summary>
+    public record MarkedBase
+    {
+        /// <summary>Marked here, overridden below without repeating the attribute.</summary>
+        [SensitiveData] public virtual string? Secret { get; init; }
+    }
+
+    /// <summary>Overrides the marked member and does not repeat the attribute.</summary>
+    public record Overriding : MarkedBase
+    {
+        /// <inheritdoc />
+        public override string? Secret { get; init; }
+    }
+
+    /// <summary>A type with marked members that a CUSTOM converter writes.</summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(CustomWrittenConverter))]
+    public record CustomWritten([SensitiveData] string Secret);
+
+    /// <summary>Writes <see cref="CustomWritten"/> in its own shape.</summary>
+    public sealed class CustomWrittenConverter : System.Text.Json.Serialization.JsonConverter<CustomWritten>
+    {
+        /// <inheritdoc />
+        public override CustomWritten Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => new(JsonDocument.ParseValue(ref reader).RootElement.GetProperty("s").GetString()!);
+
+        /// <inheritdoc />
+        public override void Write(Utf8JsonWriter writer, CustomWritten value, JsonSerializerOptions options)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("s", value.Secret);
+            writer.WriteEndObject();
+        }
+    }
+
+    /// <summary>Holds the edge shapes.</summary>
+    public record Holder
+    {
+        /// <summary>A custom-written member.</summary>
+        public CustomWritten? Custom { get; init; }
+
+        /// <summary>An untyped JSON member.</summary>
+        public JsonElement? Extra { get; init; }
+    }
+
+    /// <summary>
+    /// The edges the review of the redaction point named: each one exposed a marked (or unknowable)
+    /// value before it was closed.
+    /// </summary>
+    [Fact]
+    public void TheEdges_AnOverride_ACustomConverter_AnUnknownType_AndAPlainObject_ExposeNothing()
+    {
+        // A nested $type is a member's value: only the ROOT discriminator identifies a payload.
+        DeliveryPayloadBounds.Discriminator($$"""{"privateData":{"$type":"{{Diagnosis}}"},"$type":"Envelope"}""")
+            .Should().Be("Envelope");
+        DeliveryPayloadBounds.Discriminator($$"""{"privateData":{"$type":"{{Diagnosis}}" """).Should().BeNull();
+
+        // An override that does not repeat the attribute keeps the protection (Inherited = true).
+        ShouldHoldNoMarker(Mesh.RenderForLog(new Overriding { Secret = Diagnosis }), "an overriding member");
+
+        // A custom converter hides the members from the resolver: the whole value is redacted.
+        var holder = new Holder { Custom = new CustomWritten(Diagnosis) };
+        ShouldHoldNoMarker(Mesh.RenderForLog(holder), "a custom-written member");
+        var values = Mesh.SensitiveValues(holder, out var complete);
+        values.Should().Contain(Diagnosis, "a custom-written type's leaves are all treated as marked");
+        complete.Should().BeFalse("its members could not be mapped, so the answer is not complete");
+
+        // An unknown $type inside an untyped (JsonElement) member, and inside a known type: fail closed.
+        var extra = new Holder { Extra = JsonDocument.Parse($$"""{"$type":"NoSuchType2c","x":"{{Diagnosis}}"}""").RootElement.Clone() };
+        ShouldHoldNoMarker(Mesh.RenderForLog(extra), "an unknown $type under a JsonElement member");
+        Mesh.SensitiveValues(extra, out var extraComplete);
+        extraComplete.Should().BeFalse();
+        var unknownDerived = Mesh.RedactJson($$$"""{"$type":"{{{nameof(PatientRecord)}}}","ward":"{{{Ward}}}","latest":{"$type":"NoSuchVisit","clinic":"{{{VisitNote}}}"}}""");
+        ShouldHoldNoMarker(unknownDerived, "an unknown $type under an object member");
+        unknownDerived.Should().Contain(Ward, "CONTROL — the known outer type is still redacted by member");
+
+        // Under an unknown OUTER type even a known inner type's unmarked member is redacted.
+        ShouldHoldNoMarker(
+            Mesh.RedactJson($$$"""{"$type":"NoSuchOuter","inner":{"$type":"{{{nameof(Visit)}}}","clinic":"{{{VisitNote}}}"}}"""),
+            "a known type inside an unknown one");
+
+        // A plain System.Object renders, and does not recurse.
+        Mesh.RenderForLog(new object()).Should().Be("{}");
+    }
+
     /// <summary>Records every line at every level, with its category. Instance state only.</summary>
     private sealed class TraceCapture : ILoggerProvider
     {
