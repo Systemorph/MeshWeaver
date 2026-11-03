@@ -61,7 +61,35 @@ internal sealed class XmlDocFile
     /// <param name="assembly">The assembly.</param>
     /// <returns>The parsed file, or <see cref="Empty"/>.</returns>
     public static XmlDocFile Load(Assembly assembly)
-        => Locate(assembly) is { } path ? Parse(path, intern: !assembly.IsCollectible) : Empty;
+        => Locate(assembly) is { } path
+            ? Parse(path, intern: !assembly.IsCollectible)
+            : FromEmbeddedResource(assembly);
+
+    /// <summary>
+    /// The documentation an assembly carries INSIDE its image, as the manifest resource
+    /// <c>{AssemblyName}.xml</c> — what a mesh-compiled NodeType assembly ships, since the dll a hub loads
+    /// (assembly store, adopted bundle) has no sidecar file. <see cref="Empty"/> when there is none.
+    /// </summary>
+    /// <param name="assembly">The assembly.</param>
+    /// <returns>The parsed documentation, or <see cref="Empty"/>.</returns>
+    public static XmlDocFile FromEmbeddedResource(Assembly assembly)
+    {
+        if (assembly.IsDynamic || assembly.GetName().Name is not { Length: > 0 } name)
+            return Empty;
+        var resource = name + XmlDocsReader.EmbeddedDocumentationSuffix;
+        try
+        {
+            using var stream = assembly.GetManifestResourceStream(resource);
+            return stream is null
+                ? Empty
+                : Parse(() => XDocument.Load(stream, LoadOptions.PreserveWhitespace),
+                    $"{name}!{resource}", intern: !assembly.IsCollectible);
+        }
+        catch (Exception e) when (e is IOException or BadImageFormatException or NotSupportedException)
+        {
+            return Empty;
+        }
+    }
 
     /// <summary>
     /// The documentation file of <paramref name="assembly"/>: <c>{AssemblyName}.xml</c> beside
@@ -106,11 +134,14 @@ internal sealed class XmlDocFile
     /// <param name="intern">Whether to intern the texts and IDs — only for an assembly that can never unload.</param>
     /// <returns>The parsed file.</returns>
     public static XmlDocFile Parse(string path, bool intern)
+        => Parse(() => XDocument.Load(path, LoadOptions.PreserveWhitespace), path, intern);
+
+    private static XmlDocFile Parse(Func<XDocument> load, string origin, bool intern)
     {
         XDocument document;
         try
         {
-            document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
+            document = load();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or XmlException)
         {
@@ -132,7 +163,7 @@ internal sealed class XmlDocFile
                     members.Add(intern ? string.Intern(id) : id, doc);
             }
         }
-        return new XmlDocFile(members.ToImmutable(), path);
+        return new XmlDocFile(members.ToImmutable(), origin);
     }
 
     /// <summary>What <paramref name="member"/> contributes to a lookup, or <c>null</c> when it contributes nothing.</summary>

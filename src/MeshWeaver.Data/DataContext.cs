@@ -202,6 +202,18 @@ public sealed record DataContext : IDisposable
         ImmutableDictionary<string, ImmutableList<UnifiedReferenceResolver>>.Empty;
 
     /// <summary>
+    /// The hub's own answer to a <see cref="SchemaReference"/>, when the schema it describes is not
+    /// the one of this workspace's own registry. Null — the default — answers from the registry: the
+    /// declared content type (<see cref="IContentTypeSource"/>) for an untyped reference, the named
+    /// type otherwise. Set with <see cref="DataContextExtensions.WithSchemaProvider"/>; a NodeType
+    /// definition hub sets it so that <c>@{type}/schema/</c> describes its INSTANCES' content type
+    /// (the type its configuration declares with <c>WithContentType</c>), not
+    /// <c>NodeTypeDefinition</c>. Both the request path (<c>GetDataRequest</c>) and the workspace
+    /// stream behind <see cref="SchemaReference"/> consult it, so every reader sees one answer.
+    /// </summary>
+    public SchemaProvider? SchemaProvider { get; init; }
+
+    /// <summary>
     /// Global access restrictions applied to all data operations.
     /// Evaluated before type-specific restrictions.
     /// </summary>
@@ -905,6 +917,14 @@ public sealed record DataContext : IDisposable
 public delegate IObservable<object?> VirtualPathHandler(IWorkspace workspace, string? entityId);
 
 /// <summary>
+/// Supplies a hub's answer to a <see cref="SchemaReference"/> (<see cref="DataContext.SchemaProvider"/>).
+/// </summary>
+/// <param name="workspace">The workspace answering the reference.</param>
+/// <param name="typeName">The type the reference names, or null for the node's content type.</param>
+/// <returns>A live schema stream, or null to answer from the workspace's own registry.</returns>
+public delegate IObservable<SchemaInfo>? SchemaProvider(IWorkspace workspace, string? typeName);
+
+/// <summary>
 /// Resolver delegate for unified reference paths.
 /// Takes the path (without prefix) and returns a synchronization stream, or null if not handled.
 /// </summary>
@@ -1095,6 +1115,16 @@ public static class DataContextExtensions
                 existingResolvers.Insert(0, resolver))
         };
     }
+
+    /// <summary>
+    /// Sets the hub's answer to a <see cref="SchemaReference"/> (<see cref="DataContext.SchemaProvider"/>).
+    /// The provider may return null for a reference it does not answer; the registry answers then.
+    /// </summary>
+    /// <param name="dataContext">The data context to configure.</param>
+    /// <param name="provider">The schema provider.</param>
+    /// <returns>Updated data context.</returns>
+    public static DataContext WithSchemaProvider(this DataContext dataContext, SchemaProvider provider)
+        => dataContext with { SchemaProvider = provider };
 
     /// <summary>
     /// Adds a global access restriction that applies to all data operations.
