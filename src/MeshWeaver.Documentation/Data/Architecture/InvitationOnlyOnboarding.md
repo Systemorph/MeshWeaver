@@ -87,11 +87,17 @@ form-cancel convention from `CreateLayoutArea`); it has no click action and send
 The invite is RETURNED to the click, so from the click until the invite answered the button is
 disabled with the status line *"Sending the invitation to …"* and the framework's Cancel; it then
 settles with the outcome as its summary line (*"Invited … as Editor. They get access automatically
-when they sign up."* / *"… already has an account — granted Editor on this Space."*) and clears the
-email and message for the next invite. A fault settles it with the reason as its error line — an
-invalid address, a caller without the right, or *"The invitation was not sent: …"* — never a silent
-nothing. Nothing bounds the invite with a timeout: a hang stays visibly busy and Cancel ends it; it is
-never turned into an outcome that did not happen.
+when they sign up."* / *"… already has an account — granted Editor on this Space."*). A fault settles
+it with the reason as its error line — an invalid address, a caller without the right, or *"The
+invitation was not sent: …"* — and so does a permission check or an invite that completes without an
+answer: no path completes the click silently. Nothing bounds the invite with a timeout: a hang stays
+visibly busy, and it is never turned into an outcome that did not happen.
+
+**Cancel during the invite releases the button, it does not stop the writes.** The invite is several
+writes (the deferred grant, then the invitation; or the grant, then the pin), and disposing them could
+stop between two commits — a grant scheduled with no invitation email. So once the permission check
+granted, the writes run to their end on their own subscription (idempotent upserts; a late fault is
+logged), and Cancel only lets go of the click. Before the check has granted, Cancel stops everything.
 
 This replaced an outcome **dialog** (maintainer, 2026-11-03: *"no screen change happening after
 invite"*). The click used to fire the invite on its own subscription and answer at once, so its busy
@@ -100,7 +106,7 @@ close action. The store keeps a closed dialog, and that dialog's control is iden
 text (the text lives in `$Dialog/ContentArea`), so after a first dialog had been dismissed every later
 outcome on the page was no visible change; and while the invite had not answered, nothing showed at
 all. `SpaceInviteFormTest` (MeshWeaver.Graph.Test) pins the settled click for every outcome, a
-second invite on the same page, the button row and Cancel.
+second invite on the same page, the Viewer refusal, the button row and Cancel.
 
 **Who may invite.** The area is served on every node a viewer may read, and for an address with no
 account the service writes the invitation and the deferred grant AS SYSTEM — no access check sees

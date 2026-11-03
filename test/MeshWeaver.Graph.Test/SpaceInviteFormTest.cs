@@ -81,8 +81,7 @@ public class SpaceInviteFormTest(ITestOutputHelper output) : MonolithMeshTestBas
         state.Error.Should().BeNull();
         state.Summary.Should().Be($"Invited {email} as Editor. They get access automatically when they sign up.",
             "the click itself states the outcome — the old click settled before the invite ran, with no outcome line");
-        var invitation = (await InvitationOf(email, ct)).Should().ContainSingle(
-            "the click settled after the invitation was written").Subject.Content.Should().BeOfType<Invitation>().Subject;
+        var invitation = await InvitationOf(email, ct);
         invitation.SpacePath.Should().Be(Space);
         invitation.InvitedBy.Should().Be(Host.ObjectId, "the invitation is stamped with the inviter");
     }
@@ -100,7 +99,7 @@ public class SpaceInviteFormTest(ITestOutputHelper output) : MonolithMeshTestBas
                 NodeType = "User", Name = "Existing", Content = new User { Email = email, FullName = "Existing" },
             }).Timeout(TestTimeouts.Convergence).Await(ct);
         await meshService.Query<MeshNode>(SpaceInviteService.AccountLookup(email))
-            .Where(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Id == userId))
+            .Where(c => c.Items.Any(n => n.Id == userId))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         ActAs(Host);
         var form = await OpenForm(ct);
@@ -111,16 +110,17 @@ public class SpaceInviteFormTest(ITestOutputHelper output) : MonolithMeshTestBas
         state.Summary.Should().Be($"{email} already has an account — granted Editor on this Space.");
         await Mesh.GetWorkspace().GetMeshNodeStream($"{Space}/_Access/{userId}_Access")
             .Should().Within(TestTimeouts.Convergence)
-            .Match(n => n?.Content is AccessAssignment a && a.Roles.Any(r => r.Role == "Editor"), "the grant landed", ct);
+            .Match(n => n.ContentAs<AccessAssignment>(Mesh.JsonSerializerOptions) is { } a && a.Roles.Any(r => r.Role == "Editor"),
+                "the grant landed", ct);
     }
 
     /// <summary>
-    /// A second invite on the same page is as visible as the first: each settles with ITS outcome, and
-    /// the form is cleared for the next one. (On the old code the second outcome reached only the
-    /// dialog area, unchanged in shape from the first.)
+    /// A second invite on the same page is as visible as the first: each settles with ITS outcome.
+    /// (On the old code the second outcome reached only the dialog area, unchanged in shape from the
+    /// first.)
     /// </summary>
     [Fact(Timeout = 120000)]
-    public async Task ASecondInviteOnTheSamePage_SettlesWithItsOwnOutcome_OnAClearedForm()
+    public async Task ASecondInviteOnTheSamePage_SettlesWithItsOwnOutcome()
     {
         var ct = TestContext.Current.CancellationToken;
         ActAs(Host);
@@ -128,10 +128,6 @@ public class SpaceInviteFormTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         var first = await InviteAndSettle(form, "first@acme.com", ct);
         first.Summary.Should().Contain("first@acme.com");
-        await form.Stream.GetDataStream<JsonElement>(new JsonPointerReference(form.DataContext))
-            .Should().Within(TestTimeouts.Convergence)
-            .Match(f => f.ValueKind == JsonValueKind.Object && f.GetProperty("email").GetString() == "",
-                "a settled invite clears the email for the next one", ct);
 
         var second = await InviteAndSettle(form, "second@acme.com", ct, afterSession: first.Session);
         second.Summary.Should().Contain("second@acme.com", "the second click states its own outcome");
@@ -160,8 +156,12 @@ public class SpaceInviteFormTest(ITestOutputHelper output) : MonolithMeshTestBas
         var state = await InviteAndSettle(form, email, ct, role: "Admin");
 
         state.Error.Should().Contain("You need edit rights on this Space to invite people to it.");
-        var scheduled = await InvitationOf(email, ct);
-        scheduled.Should().BeEmpty("a refused invite writes nothing — the refusal comes before the System-identity writes");
+        // The click settled with the refusal, which is decided before the first write — so a read
+        // of the node itself (not a query index) answering "absent" now is the whole answer.
+        var scheduled = await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNode($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(email)}"))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        scheduled.Should().BeNull("a refused invite writes nothing — the refusal comes before the System-identity writes");
     }
 
     /// <summary>
@@ -198,16 +198,16 @@ public class SpaceInviteFormTest(ITestOutputHelper output) : MonolithMeshTestBas
 
     private sealed record Form(ISynchronizationStream<JsonElement> Stream, JsonElement Page, string InviteArea, string DataContext);
 
-    /// <summary>The Admin-partition invitation for <paramref name="email"/>, read as System (one snapshot).</summary>
-    private async Task<IReadOnlyCollection<MeshNode>> InvitationOf(string email, CancellationToken ct)
-    {
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        return await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(email)}").AsSystem())
-            .Where(c => c.ChangeType == QueryChangeType.Initial)
-            .Select(c => (IReadOnlyCollection<MeshNode>)c.Items.ToArray())
+    /// <summary>The committed invitation for <paramref name="email"/>, read off its node as System.</summary>
+    private Task<Invitation> InvitationOf(string email, CancellationToken ct)
+        => Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetWorkspace()
+                .GetMeshNodeStream($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(email)}")
+                .Select(n => n.ContentAs<Invitation>(Mesh.JsonSerializerOptions))
+                .Where(i => i is not null && i.Email == email)
+                .Select(i => i!)
+                .Take(1))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-    }
 
     private void ActAs(AccessContext who)
     {

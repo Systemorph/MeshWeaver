@@ -8,6 +8,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -126,7 +127,9 @@ public static class SpaceInviteLayoutArea
     /// <summary>
     /// The Invite click: who clicked (read on the click's own turn), the form (a one-off read), the
     /// permission, then the invite — all RETURNED to the click, so the button is busy until the invite
-    /// answered, settles with the outcome as its summary, and fails visibly with the reason.
+    /// answered, settles with the outcome as its summary, and fails visibly with the reason. Every
+    /// path ends in exactly one of the two: a decision or an invite that completes without an answer
+    /// is an error, never a silently accepted click.
     /// </summary>
     internal static IObservable<Unit> Submit(UiActionContext ctx, string spacePath, string formId)
     {
@@ -137,17 +140,8 @@ public static class SpaceInviteLayoutArea
         var caller = access.Context ?? access.CircuitContext;
         return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
             .Take(1)
-            .SelectMany(form => Invite(ctx, spacePath, form, caller)
-                .Do(text =>
-                {
-                    ctx.ReportSummary(text);
-                    // A fresh form for the next invite — the role, language and pin are kept.
-                    ctx.Host.UpdateData(formId, new Dictionary<string, object?>(form)
-                    {
-                        ["email"] = "",
-                        ["message"] = "",
-                    });
-                }))
+            .SelectMany(form => Invite(ctx, spacePath, form, caller))
+            .Do(ctx.ReportSummary)
             .Select(_ => Unit.Default);
     }
 
@@ -170,24 +164,53 @@ public static class SpaceInviteLayoutArea
         ctx.ReportProgress(host.Localize("ui.inviteSending", email));
         var sp = host.Hub.ServiceProvider;
         var access = sp.GetRequiredService<AccessService>();
-        // TakeDecisionOutsideGate: the continuation WRITES, so it must not run inside the permission
-        // fold's gate. RunAs: that hop leaves the click's turn, so the caller's identity is
-        // re-established for the immediate grant, which runs as the caller.
-        return host.Hub.GetEffectivePermissions(spacePath, callerId)
+        var noAnswer = host.Localize("ui.inviteFailed", host.Localize("error.checkUnavailable"));
+        // CheckPermissionOutcome: a fold that faulted or produced no verdict is UNDETERMINED and
+        // refused as such — and DefaultIfEmpty makes a decision stream that completes without one
+        // undetermined too, so the click can never complete without saying what happened.
+        // TakeDecisionOutsideGate: the continuation WRITES, so it must not run inside the
+        // permission fold's gate.
+        return host.Hub.CheckPermissionOutcome(spacePath, callerId, InvitePermission)
             .TakeDecisionOutsideGate()
-            .SelectMany(permissions => InvitePermission.IsMetBy(permissions)
-                ? access.RunAs(caller, () =>
+            .DefaultIfEmpty(PermissionCheckOutcome.Undetermined("the permission check produced no verdict"))
+            .SelectMany(decision => decision.IsGranted
+                ? RunToTheEnd(host, access.RunAs(caller, () =>
                     new SpaceInviteService(host.Hub, sp.GetRequiredService<IMeshService>(), access)
-                        .Invite(spacePath, email, role, pin, callerId, message, language))
-                : Observable.Throw<SpaceInviteOutcome>(
-                    new UnauthorizedAccessException(host.Localize("ui.inviteNotAllowed"))))
+                        .Invite(spacePath, email, role, pin, callerId, message, language)))
+                : Observable.Throw<SpaceInviteOutcome>(decision.IsUndetermined
+                    ? new InvalidOperationException(noAnswer)
+                    : new UnauthorizedAccessException(host.Localize("ui.inviteNotAllowed"))))
             .Take(1)
-            .Select(outcome => outcome == SpaceInviteOutcome.Granted
+            .Select(outcome => (string?)(outcome == SpaceInviteOutcome.Granted
                 ? host.Localize("ui.inviteGranted", email, role)
-                : host.Localize("ui.inviteInvited", email, role))
+                : host.Localize("ui.inviteInvited", email, role)))
+            .DefaultIfEmpty(null)
+            .SelectMany(text => text is null
+                ? Observable.Throw<string>(new InvalidOperationException(noAnswer))
+                : Observable.Return(text))
             .Catch<string, Exception>(ex => Observable.Throw<string>(
                 ex is ArgumentException or UnauthorizedAccessException
+                    || (ex is InvalidOperationException && ex.Message == noAnswer)
                     ? ex
                     : new InvalidOperationException(host.Localize("ui.inviteFailed", ex.Message), ex)));
+    }
+
+    /// <summary>
+    /// Starts <paramref name="writes"/> and lets them run to their end, whoever is still listening.
+    /// The invite is several writes (the deferred grant, then the invitation; or the grant, then the
+    /// pin), and the click's Cancel disposes what the click returned: disposing the writes themselves
+    /// could stop them between two commits — a grant scheduled with no invitation email. So Cancel
+    /// releases the button, and the writes, idempotent upserts, still complete; a fault that arrives
+    /// after the click let go is logged rather than lost.
+    /// </summary>
+    private static IObservable<SpaceInviteOutcome> RunToTheEnd(LayoutAreaHost host, IObservable<SpaceInviteOutcome> writes)
+    {
+        var running = writes
+            .Do(_ => { }, ex => host.Hub.ServiceProvider.GetService<ILoggerFactory>()?
+                .CreateLogger(typeof(SpaceInviteLayoutArea))
+                .LogWarning(ex, "Space invite on {Hub} failed", host.Hub.Address))
+            .Replay(1);
+        running.Connect();
+        return running;
     }
 }
