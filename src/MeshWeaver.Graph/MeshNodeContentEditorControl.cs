@@ -83,6 +83,14 @@ public record MeshNodeEditorField(string Key, string Label, MeshNodeEditorFieldK
     /// key the type drops on read. Only the default <see cref="JsonIgnoreCondition.Always"/> form
     /// is skipped — <c>[JsonIgnore(Condition = Never)]</c> means the opposite ("always write this,
     /// even at its default") and stays editable.</para>
+    ///
+    /// <para>🚨 <b>A member whose JSON form is an array or an object is not offered at all</b>
+    /// (#7843). Every renderer of a <see cref="MeshNodeEditorFieldKind.Text"/> field writes the typed
+    /// text back as a JSON STRING, and a string where the record declares a list or a nested record
+    /// does not deserialize — so one edit made the WHOLE content unreadable to every typed read, while
+    /// this editor, which reads the raw JSON, kept showing the other fields as if nothing had
+    /// happened. Measured on <c>GitHubSyncConfig.Ignore</c>: the Space's sync configuration then read
+    /// as absent everywhere. Such a member is edited through its own control, never through text.</para>
     /// </summary>
     /// <param name="contentType">The content record type to derive fields from.</param>
     /// <param name="locale">
@@ -96,6 +104,7 @@ public record MeshNodeEditorField(string Key, string Label, MeshNodeEditorFieldK
             .Where(p => p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
             .Where(p => p.GetCustomAttribute<JsonIgnoreAttribute>()
                 is not { Condition: JsonIgnoreCondition.Always })
+            .Where(p => HasScalarJsonForm(p.PropertyType))
             .Select(p =>
             {
                 var label = p.LocalizedDescription(locale)
@@ -117,6 +126,26 @@ public record MeshNodeEditorField(string Key, string Label, MeshNodeEditorFieldK
                 return new MeshNodeEditorField(key, label, kind);
             })
             .ToImmutableList();
+
+    /// <summary>Whether a member of <paramref name="type"/> serializes as a JSON scalar — the only
+    /// shape a single text, checkbox or dropdown control can write back without changing the
+    /// member's JSON kind. An explicit allow-list, never "is a value type": a record struct or a
+    /// <c>KeyValuePair</c> is a value type and serializes as an object.</summary>
+    private static bool HasScalarJsonForm(Type type)
+    {
+        var t = Nullable.GetUnderlyingType(type) ?? type;
+        return t.IsEnum || ScalarJsonTypes.Contains(t);
+    }
+
+    /// <summary>The CLR types the hub serializer writes as a single JSON value (immutable).</summary>
+    private static readonly ImmutableHashSet<Type> ScalarJsonTypes =
+    [
+        typeof(string), typeof(char), typeof(bool),
+        typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
+        typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(decimal),
+        typeof(DateTime), typeof(DateTimeOffset), typeof(DateOnly), typeof(TimeOnly), typeof(TimeSpan),
+        typeof(Guid), typeof(Uri),
+    ];
 }
 
 /// <summary>

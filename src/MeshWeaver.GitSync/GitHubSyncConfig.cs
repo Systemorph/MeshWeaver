@@ -99,6 +99,7 @@ public record GitHubSyncConfig
     /// </summary>
     [Description("Ignore patterns (gitignore-style, relative to the Space root; unset = default: Release/)")]
     [Translation("de", "Ignorier-Muster (gitignore-Stil, relativ zur Space-Wurzel; leer = Standard: Release/)")]
+    [JsonConverter(typeof(IgnorePatternsJsonConverter))]
     public string[]? Ignore { get; init; }
 
     /// <summary>
