@@ -103,6 +103,10 @@ public class SensitiveContentNeverReachesALogTest : MonolithMeshTestBase
             })
             .ConfigureHub(c => c.WithTypes(typeof(PatientRecord), typeof(Visit)));
 
+    /// <inheritdoc />
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration).WithTypes(typeof(PatientRecord), typeof(Visit)).AddData();
+
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     private static PatientRecord Patient(string ward = Ward) => new(Diagnosis)
@@ -157,8 +161,13 @@ public class SensitiveContentNeverReachesALogTest : MonolithMeshTestBase
         content.MemberNumber.Should().Be(4711_0815);
 
         // An update through the mesh, so the change paths run too.
-        await MeshService.UpdateNode(stored with { Content = content with { Ward = Ward + "-moved" } })
-            .Take(1).Should().Within(60.Seconds()).Emit("the update lands", ct);
+        // Through the canonical mutation API, derived from the CURRENT content.
+        await GetClient().GetWorkspace().GetMeshNodeStream(path)
+            .Update(node => node with
+            {
+                Content = node.ContentAs<PatientRecord>(Mesh.JsonSerializerOptions)! with { Ward = Ward + "-moved" },
+            })
+            .Should().Within(60.Seconds()).Emit("the update lands", ct);
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.ContentAs<PatientRecord>(Mesh.JsonSerializerOptions)?.Ward == Ward + "-moved")
             .FirstAsync().Should().Within(60.Seconds()).Emit("the update is visible", ct);
@@ -324,6 +333,88 @@ public class SensitiveContentNeverReachesALogTest : MonolithMeshTestBase
 
         /// <summary>An untyped JSON member.</summary>
         public JsonElement? Extra { get; init; }
+    }
+
+    /// <summary>Writes a <see cref="PatientRecord"/> in its own shape — used at PROPERTY level.</summary>
+    public sealed class PatientAsTextConverter : System.Text.Json.Serialization.JsonConverter<PatientRecord>
+    {
+        /// <inheritdoc />
+        public override PatientRecord Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => new(reader.GetString());
+
+        /// <inheritdoc />
+        public override void Write(Utf8JsonWriter writer, PatientRecord value, JsonSerializerOptions options)
+            => writer.WriteStringValue(value.Diagnosis);
+    }
+
+    /// <summary>An UNMARKED member whose own converter writes the marked member under no name.</summary>
+    public record PropertyConverted
+    {
+        /// <summary>Written by <see cref="PatientAsTextConverter"/>.</summary>
+        [System.Text.Json.Serialization.JsonConverter(typeof(PatientAsTextConverter))]
+        public PatientRecord? Patient { get; init; }
+    }
+
+    /// <summary>A type written as a bare string by its own converter.</summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(TextWrittenConverter))]
+    public record TextWritten([SensitiveData] string Secret);
+
+    /// <summary>Writes <see cref="TextWritten"/> as a JSON string.</summary>
+    public sealed class TextWrittenConverter : System.Text.Json.Serialization.JsonConverter<TextWritten>
+    {
+        /// <inheritdoc />
+        public override TextWritten Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => new(reader.GetString()!);
+
+        /// <inheritdoc />
+        public override void Write(Utf8JsonWriter writer, TextWritten value, JsonSerializerOptions options)
+            => writer.WriteStringValue(value.Secret);
+    }
+
+    /// <summary>A marked dictionary, and a marked extension bag.</summary>
+    public record Bags
+    {
+        /// <summary>Its KEYS are data.</summary>
+        [SensitiveData] public ImmutableDictionary<string, string>? ByPatient { get; init; }
+
+        /// <summary>Flattened into the object: its entries match no member name.</summary>
+        [SensitiveData, System.Text.Json.Serialization.JsonExtensionData]
+        public System.Collections.Generic.Dictionary<string, JsonElement>? Extra { get; init; }
+    }
+
+    /// <summary>The second review round's edges.</summary>
+    [Fact]
+    public void TheEdges_PropertyConverters_TextRoots_DictionaryKeys_AndExtensionData_ExposeNothing()
+    {
+        // A property-level converter over a type with marked members.
+        var converted = new PropertyConverted { Patient = new PatientRecord(Diagnosis) };
+        ShouldHoldNoMarker(Mesh.RenderForLog(converted), "a property-level converter");
+        var convertedJson = JsonSerializer.Serialize(converted, Mesh.JsonSerializerOptions);
+        convertedJson.Should().Contain(Diagnosis, "CONTROL — the hub's own options write it");
+        Mesh.SensitiveValues(converted, out var convertedComplete).Should().Contain(Diagnosis);
+        convertedComplete.Should().BeFalse("the converter's JSON cannot be mapped to members");
+
+        // A marked root written as a bare string.
+        Mesh.SensitiveValues(new TextWritten(Diagnosis), out var textComplete).Should().Contain(Diagnosis);
+        textComplete.Should().BeFalse();
+        ShouldHoldNoMarker(Mesh.RenderForLog(new TextWritten(Diagnosis)), "a root written as text");
+
+        // A marked dictionary's keys are data.
+        var bags = new Bags
+        {
+            ByPatient = ImmutableDictionary<string, string>.Empty.Add("PATIENT-77123", "diagnosis on file"),
+            Extra = new() { ["noteOfVisit"] = JsonDocument.Parse($"\"{VisitNote}\"").RootElement.Clone() },
+        };
+        var bagValues = Mesh.SensitiveValues(bags);
+        bagValues.Should().Contain("PATIENT-77123", "a marked dictionary's keys are values");
+        bagValues.Should().Contain(VisitNote, "a marked extension bag's entries are values");
+        bagValues.Should().NotContain("byPatient", "a type's own member names are never collected");
+
+        // Extension data: typed and untyped renderings.
+        ShouldHoldNoMarker(Mesh.RenderForLog(bags), "a typed marked extension bag");
+        var untyped = Mesh.RedactJson(JsonSerializer.Serialize(bags, Mesh.JsonSerializerOptions));
+        ShouldHoldNoMarker(untyped, "an untyped marked extension bag");
+        untyped.Should().NotContain("PATIENT-77123");
     }
 
     /// <summary>
