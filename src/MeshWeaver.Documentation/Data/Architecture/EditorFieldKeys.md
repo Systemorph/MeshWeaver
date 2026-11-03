@@ -131,6 +131,24 @@ from its CLR default and which lacked the attribute. Every editable enum (`SyncD
 member, so its round trip was already lossless; and it is likewise the only one of the five with a
 `[JsonPropertyName]` rename or a plain `[JsonIgnore]`.
 
+## Failure 3 — a list or a record edited as text (#7843)
+
+`FromType` used to give every property that was neither a bool nor an enum the `Text` kind, and
+every renderer of a `Text` field writes what was typed as a **JSON string**. On a `string[]`, an
+`ImmutableList<T>` or a nested record that changes the member's JSON kind, and the whole record
+then fails to deserialize — not just the one field. Measured on `GitHubSyncConfig.Ignore`: after
+the patterns were typed into the GitHub settings tab, the stored content carried
+`"ignore": "Release/\nDrafts/"`, `ContentAs<GitHubSyncConfig>` answered null, and every typed read
+of the config — the status line, the reimport gate, the periodic reconcile — reported the Space as
+not configured, while this editor, which reads the raw JSON, kept showing the repository URL.
+
+`FromType` now offers only members whose JSON form is a scalar (string, number, bool, enum, date,
+id). A list or a record is edited through its own control or not at all here. Configs that the old
+editor already wrote still read: `GitHubSyncConfig.Ignore` accepts the string form (patterns
+separated by line breaks or commas) and the next platform write stores the array again. Regression
+guards: `MeshNodeEditorFieldTest.FromType_NeverOffersACollectionOrAnObjectAsText` and
+`AConfigWithTypedIgnorePatternsStillReadsTest`.
+
 ## Why neither failure was caught
 
 Both are **writes that succeed**. There is no exception to catch, no log line to grep, and the
@@ -177,7 +195,9 @@ tri-state the framework's typed write already implements — absent creates, unr
    value's opposite.
 3. Is any property `[JsonIgnore]`? It is not persisted, so it is not editable — hide it from the
    editor, which `FromType` now does.
-4. Is any property both computed and public? `FromType` filters on `[Browsable(false)]` and
+4. Is any property a list or a nested record? It is not offered — a text field would replace it
+   with a string and make the whole record unreadable (failure 3).
+5. Is any property both computed and public? `FromType` filters on `[Browsable(false)]` and
    `[JsonIgnore]`, not on settability — a get-only property without either is still offered.
 
 ## Related

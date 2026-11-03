@@ -108,4 +108,51 @@ public class MeshNodeEditorFieldTest
         Assert.Contains("loud", keys);
         Assert.Contains("plain", keys);
     }
+
+    private record WithStructuredMembers
+    {
+        public string? RepositoryUrl { get; init; }
+        public string[]? Ignore { get; init; }
+        public System.Collections.Immutable.ImmutableList<string>? Tags { get; init; }
+        public System.Collections.Generic.Dictionary<string, string>? Versions { get; init; }
+        public Nested? Inner { get; init; }
+        public Point Location { get; init; }
+        public Point? MaybeLocation { get; init; }
+        public System.Collections.Generic.KeyValuePair<string, string> Pair { get; init; }
+        public int Count { get; init; }
+        public System.DateTimeOffset? At { get; init; }
+        public System.Guid Id { get; init; }
+    }
+
+    private record Nested(string? Value);
+
+    /// <summary>A VALUE type that serializes as a JSON object — "is a value type" is not "is a scalar".</summary>
+    private record struct Point(int X, int Y);
+
+    /// <summary>
+    /// 🚨 <b>A member whose JSON form is an ARRAY or an OBJECT is never offered as a text field</b>
+    /// (MeshWeaver#7843). Every renderer of a <see cref="MeshNodeEditorFieldKind.Text"/> field
+    /// writes the typed text back as a JSON STRING, so a text field over <c>string[]</c> replaced
+    /// the list with a string and the record stopped deserializing — measured on
+    /// <c>GitHubSyncConfig.Ignore</c>: after the patterns were typed into the settings tab, every
+    /// configuration read answered "absent or names no repository" while the node still rendered its
+    /// repository URL. The negative control is the scalars beside them, which stay editable.
+    /// </summary>
+    [Fact]
+    public void FromType_NeverOffersACollectionOrAnObjectAsText()
+    {
+        var keys = MeshNodeEditorField.FromType(typeof(WithStructuredMembers)).Select(f => f.Key).ToArray();
+
+        Assert.DoesNotContain("ignore", keys);
+        Assert.DoesNotContain("tags", keys);
+        Assert.DoesNotContain("versions", keys);
+        Assert.DoesNotContain("inner", keys);
+        Assert.DoesNotContain("location", keys);
+        Assert.DoesNotContain("maybeLocation", keys);
+        Assert.DoesNotContain("pair", keys);
+        Assert.Contains("repositoryUrl", keys);
+        Assert.Contains("count", keys);
+        Assert.Contains("at", keys);
+        Assert.Contains("id", keys);
+    }
 }
