@@ -201,7 +201,8 @@ public static class SpaceInviteLayoutArea
     /// pin), and the click's Cancel disposes what the click returned: disposing the writes themselves
     /// could stop them between two commits — a grant scheduled with no invitation email. So Cancel
     /// releases the button, and the writes, idempotent upserts, still complete; a fault that arrives
-    /// after the click let go is logged rather than lost.
+    /// after the click let go is logged rather than lost. The connection is owned by the hub
+    /// (<c>ConnectOwnedBy</c>), so the hub's shutdown still ends it.
     /// </summary>
     private static IObservable<SpaceInviteOutcome> RunToTheEnd(LayoutAreaHost host, IObservable<SpaceInviteOutcome> writes)
     {
@@ -210,7 +211,9 @@ public static class SpaceInviteLayoutArea
                 .CreateLogger(typeof(SpaceInviteLayoutArea))
                 .LogWarning(ex, "Space invite on {Hub} failed", host.Hub.Address))
             .Replay(1);
-        running.Connect();
+        // Owned by the hub, not by the click: Cancel cannot stop the writes, the hub's teardown can
+        // (the chain resolves the hub's services, which close with it).
+        running.ConnectOwnedBy(host.Hub);
         return running;
     }
 }
