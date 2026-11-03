@@ -4481,9 +4481,14 @@ internal static class NodeTypeCompilationHelpers
         NodeTypeDefinition def, string? modulesHash, string? nodeTypePath = null) =>
         def.CompilationStatus is CompilationStatus.Error or CompilationStatus.Unavailable
         // NO usable build was ever recorded — the complement of HasStaleFrameworkBuild, which
-        // owns every case where coordinates DO exist.
-        && string.IsNullOrEmpty(def.LatestAssemblyCollection)
-        && string.IsNullOrEmpty(def.LatestAssemblyPath)
+        // owns every case where coordinates DO exist and the framework moved. 🚨 #6195: an
+        // UNAVAILABLE settle on a type that HAS a build is nobody else's case when the framework
+        // did not move — HasStaleFrameworkBuild reads coordinates and framework only — so before
+        // this it was retried by nothing: three Hosting types whose compile ran out of its
+        // CPU-lane bound kept their last good build and sat red for about 7 h. It stays the
+        // complement: a framework-stale build is still left to that twin.
+        && (NoRecordedBuild(def)
+            || (def.CompilationStatus is CompilationStatus.Unavailable && !HasStaleFrameworkBuild(def)))
         // The source set must be ESTABLISHED before it can be compared — see above.
         && def.CurrentSourceVersions is not null
         // 🚨 …and the failure must be one a fresh attempt could possibly answer differently
@@ -4508,6 +4513,10 @@ internal static class NodeTypeCompilationHelpers
                 def.FailedBuildInputs,
                 BuildInputsToken(modulesHash, def.CurrentSourceVersions),
                 StringComparison.Ordinal));
+
+    // No assembly coordinates were ever recorded — what only a successful compile writes.
+    private static bool NoRecordedBuild(NodeTypeDefinition def) =>
+        string.IsNullOrEmpty(def.LatestAssemblyCollection) && string.IsNullOrEmpty(def.LatestAssemblyPath);
 
     /// <summary>
     /// 🚨 True when a NodeType is sitting on a COMPILE FAILURE formed on an OLDER platform build than
@@ -5176,7 +5185,12 @@ internal static class NodeTypeCompilationHelpers
         // declares it needs, so the compile was never run — a fact about the replica, which a
         // replica that meets the floor answers differently. Stamping it Error put one replica's
         // module generation onto the record every replica reads.
+        // 🚨 CpuLaneExpiredException (#6195): the compile leg ran out of its CPU-lane bound and was
+        // cancelled, so Roslyn formed no verdict. Stamping it Error said "this code does not
+        // compile" for a type that compiles in about 240 s on a healthy replica, and an Error under
+        // the live inputs is never retried: three Hosting types stayed red for about 7 h until a roll.
         error is SourceDiscoveryUnavailableException or AddressRecyclingException or DependencyFloorUnmetException
+            or CpuLaneExpiredException
         || (error is not null
             && EmitPipeline.IsProcessEmitFailure(error.Data[EmitPipeline.EmitCanaryDataKey]));
 
@@ -5201,6 +5215,10 @@ internal static class NodeTypeCompilationHelpers
             ("Compile NOT ATTEMPTED — this replica does not meet the dependency floor of the "
              + "type's package",
                 "activity.compile.notAttemptedBelowFloor"),
+        // #6195: the leg ran out of its CPU-lane bound and was cancelled — Roslyn formed no verdict.
+        CpuLaneExpiredException =>
+            ("Compile NOT SETTLED — the compile leg ran out of its CPU-lane bound and was cancelled",
+                "activity.compile.laneExpired"),
         // Roslyn SUCCEEDED here; the assembly store did not keep the bytes
         // (a full volume, memex 2026-09-08). Saying "Roslyn failed" would send
         // the reader to the source when the cause is the disk.

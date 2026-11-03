@@ -1189,7 +1189,11 @@ internal class MeshNodeCompilationService(
                                         new DependencySourceUnit(path, codeFiles[i].Code ?? string.Empty))],
                                     includeClosure.ToImmutableSortedDictionary(StringComparer.Ordinal)))),
                         _cacheOptions.RoslynCompileTimeout, "roslyn-compile", node.Path,
-                        _cpuLane is IoPool lanePool ? () => lanePool.AdmissionsCompleted : null)
+                        _cpuLane is IoPool lanePool ? () => lanePool.AdmissionsCompleted : null,
+                        laneState: _cpuLane is IoPool lane
+                            ? () => $"CPU lane {lane.CurrentInFlight}/{lane.MaxConcurrency} running, "
+                                    + $"{lane.CurrentlyWaiting} queued"
+                            : null)
                     .Select(emit =>
                     {
                         var actualPath = emit.Path;

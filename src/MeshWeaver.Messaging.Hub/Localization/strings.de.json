@@ -1676,6 +1676,7 @@
   "activity.compile.notAttempted": "Kompilierung NICHT VERSUCHT — die Quellmenge konnte nicht ermittelt werden: {detail}",
   "activity.compile.notSettled": "Kompilierung NICHT ABGESCHLOSSEN — eine Mesh-Adresse, die sie liest, wurde während des gesamten Zeitbudgets des Lesers recycelt: {detail}",
   "activity.compile.notAttemptedBelowFloor": "Kompilierung NICHT VERSUCHT — dieses Replikat erfüllt die Abhängigkeitsuntergrenze des Pakets dieses Typs nicht: {detail}",
+  "activity.compile.laneExpired": "Kompilierung NICHT ABGESCHLOSSEN — der Kompilierschritt hat sein Zeitbudget auf der CPU-Spur überschritten und wurde abgebrochen: {detail}",
   "activity.compile.roslynFailed": "Roslyn ist fehlgeschlagen: {detail}",
   "activity.compile.notPublished": "Assembly NICHT VERÖFFENTLICHT — Roslyn hat sie erzeugt, aber der Assembly-Store hat die Bytes nicht behalten, daher wurde kein Release erstellt: {detail}",
   "activity.compile.aborted": "Kompilierung abgebrochen durch {exceptionType}:\n{detail}",

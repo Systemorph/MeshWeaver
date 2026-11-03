@@ -68,7 +68,7 @@ public class CpuLaneBoundTest
             .Should().Within(Generous)
             .Emit("a prefix that never queues must time out", cancellationToken: TestContext.Current.CancellationToken);
 
-        fault.Should().BeOfType<TimeoutException>().Which.Message.Should()
+        fault.Should().BeOfType<CpuLaneExpiredException>().Which.Message.Should()
             .Contain("roslyn-compile").And.Contain("IO prefix did not reach the CPU lane");
         cancelled.Set.Should().Be(1, "the bound must cancel the token the prefix was started with");
     }
@@ -88,7 +88,7 @@ public class CpuLaneBoundTest
             .Should().Within(Generous)
             .Emit("an admitted emit past the bound must time out", cancellationToken: TestContext.Current.CancellationToken);
 
-        fault.Should().BeOfType<TimeoutException>().Which.Message.Should()
+        fault.Should().BeOfType<CpuLaneExpiredException>().Which.Message.Should()
             .Contain("emit did not complete").And.Contain("admitted to the CPU lane");
 
         var next = await lane.InvokeBlocking(_ => 42)
@@ -121,7 +121,7 @@ public class CpuLaneBoundTest
                 .Emit("a compile behind a lane that stopped draining must fail, not park",
                     cancellationToken: TestContext.Current.CancellationToken);
 
-            fault.Should().BeOfType<TimeoutException>().Which.Message.Should()
+            fault.Should().BeOfType<CpuLaneExpiredException>().Which.Message.Should()
                 .Contain("queued for a CPU-lane slot").And.Contain("completed NO leaf");
         }
         finally
