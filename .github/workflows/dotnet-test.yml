@@ -638,7 +638,7 @@ jobs:
   # or `cancelled` holds (stage 0 red), `skipped` passes. The green-tree reuse path is passed in too:
   # nothing is spent there, so it is not held.
   stage-gate:
-    needs: [precheck, pr-body, shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, workflow-shell, cross-repo-pair]
+    needs: [precheck, pr-body, shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, workflow-shell, workflow-shell-executions, cross-repo-pair]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/node-repo-stage-gate.yml
     permissions:
@@ -653,6 +653,7 @@ jobs:
         shared-rules=${{ needs.shared-rules.result }} closing-keywords=${{ needs.closing-keywords.result }}
         package-pin-removal=${{ needs.package-pin-removal.result }} interface-addition=${{ needs.interface-addition.result }}
         i18n-mirror-sync=${{ needs.i18n-mirror-sync.result }} workflow-shell=${{ needs.workflow-shell.result }}
+        workflow-shell-executions=${{ needs.workflow-shell-executions.result }}
         cross-repo-pair=${{ needs.cross-repo-pair.result }} pr-body=${{ needs.pr-body.result }}
 
   # ── WHO RUNS THE BUILD AND THE SUITES: a standing build host, or Actions ─────────────────────
@@ -2347,7 +2348,9 @@ jobs:
     # 🛡️ NO SKIP-TRAPDOOR. Every input is in this repository — no secret, no cluster, no registry
     # — so there is no condition under which this may decline to run and still render a tick:
     #   * no `needs:`, so nothing upstream can skip it (not even the green-tree reuse path — this
-    #     job is seconds, and the reuse optimisation exists for a 70-runner-minute suite);
+    #     gate is minutes, and the reuse optimisation exists for a 70-runner-minute suite);
+    #   * it runs as TWO jobs, this one and `workflow-shell-executions` below, because one job of
+    #     ~130 guards in series outgrew its 10-minute cap (see that job's header);
     #   * no input-shaped `if:`, because GitHub renders a skipped job with the same tick as a
     #     passed one;
     #   * no path filter, which is that same defect from the other side (an unrelated PR would
@@ -2361,24 +2364,10 @@ jobs:
     - uses: actions/checkout@v7
       with: { fetch-depth: 1 }
 
-    # jmespath is PINNED, and the pin is the fidelity claim: it is the engine the azure-cli
-    # itself evaluates `--query` with, so "this query throws on a null field" is reproduced here
-    # rather than asserted about. A venv keeps it off the runner's externally-managed python.
-    #
-    # The two Azure SDK pins are the SAME pins publish-bake-bundles.sh installs for its bulk
-    # helper (SDK_PINS in that script — the overlap harness reads them from there and holds this
-    # venv to them through `sdk-check`), so the harness constructs the real clients the helper
-    # uses and a moved SDK surface goes red here rather than in a production publish.
+    # The tool assertion lives in ONE composite action both halves of this gate run, so the two
+    # jobs cannot drift onto different pins (the pins, and why they are pinned, are documented there).
     - name: Assert the tools this gate needs
-      run: |
-        set -euo pipefail
-        command -v shellcheck >/dev/null || { echo "::error::shellcheck is not on this runner"; exit 1; }
-        shellcheck --version | head -2
-        python3 -m venv "$RUNNER_TEMP/wfshell"
-        "$RUNNER_TEMP/wfshell/bin/pip" install --quiet --disable-pip-version-check \
-          'jmespath==1.0.1' 'PyYAML==6.0.2' \
-          'azure-storage-file-share==12.26.0' 'azure-identity==1.25.3'
-        echo "$RUNNER_TEMP/wfshell/bin" >> "$GITHUB_PATH"
+      uses: ./.github/actions/workflow-shell-tools
 
     # 🚨 Run the self-test FIRST, and let it fail the job. An unproven gate is no gate: every
     # check below must be shown to FIRE on its defect and stay SILENT on its fix before its
@@ -3283,6 +3272,32 @@ jobs:
     - name: "Gate the shell CI itself runs"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-shell.py
+
+  # ── CI's own shell, second half: the EXECUTIONS ────────────────────────────────────────────
+  # Split out of `workflow-shell` because the one job outgrew its 10-minute cap: its ~130 steps
+  # summed to 9–10 minutes on every main run of 2026-11-03, and two of those runs (41692779248,
+  # 41706286324) were cut mid-step by "The job has exceeded the maximum execution time of 10m0s" —
+  # a red with no verdict, on main, from a gate whose every step was green up to the cut. Nothing
+  # in it was stuck: it is independent guards in series, so the cure is two jobs, not a higher cap.
+  # This half holds the harnesses that EXECUTE a lane's or a script's real code against fixtures
+  # (the costliest, the publish-bake overlap harness, is ~2.5 min of real publications).
+  # Same posture as the first half: no `needs:`, no input-shaped `if:`, no path filter, no
+  # `continue-on-error`, the same tool assertion and the same one prerequisite line (#4784) —
+  # `check-guard-step-masking.py` holds this job to it too. Both halves gate stage 2 and Consolidate.
+  workflow-shell-executions:
+    name: "CI's own shell (executions)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+
+    - name: Assert the tools this gate needs
+      uses: ./.github/actions/workflow-shell-tools
+
+    - name: The workspace and the tools are present — the ONE prerequisite every guard shares
+      id: ready
+      run: echo "ok=true" >> "$GITHUB_OUTPUT"
 
     # Deliverable that needs no credential: EXECUTE main-cd's release-version recovery — the step
     # that never once succeeded — against a fixture shaped like the live registry (2101 manifests,
@@ -4423,7 +4438,7 @@ jobs:
     # side (their push and daily runs). Nothing on the deploy side refuses a roll onto an unverified
     # core + plugin combination: arming (`one-promotion-gate`) judges platform evidence only, and the
     # combo verdict is ADVISORY (`platform-rolls-independently-of-packages`, ComboGateWiring).
-    needs: [precheck, stage-gate, admission, host-follow, host-results, host-build-outputs, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, pr-body, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
+    needs: [precheck, stage-gate, admission, host-follow, host-results, host-build-outputs, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, workflow-shell-executions, shared-rules, pr-body, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -4823,6 +4838,15 @@ jobs:
       if: needs.workflow-shell.result != 'success'
       run: |
         echo "::error::The 'CI's own shell' gate concluded '${{ needs.workflow-shell.result }}' — see that job. It shellchecks every workflow \`run:\` block, refuses a captured command substitution that swallows BOTH stderr and its exit status (the #2642 shape: a failed call becomes an empty answer that is then read as authoritative), refuses an az \`--query\` that throws on a null field, runs actionlint over every workflow so a STRUCTURAL defect (#3228: a duplicate key PyYAML silently accepts and GitHub refuses) is named here instead of landing as a job-less \`startup_failure\` on a satellite that pins these lanes, and EXECUTES main-cd's release-version recovery against a fixture. main-cd.yml is exercised by no other check on this PR."
+        exit 1
+
+    # The gate's second half (split for its 10-minute cap) — the same rule, its own verdict.
+    - name: Fail if CI's own shell gate failed (executions half)
+      # `!= 'success'` rather than `== 'failure'`: a gate that was skipped or cancelled has
+      # produced no verdict, and "no verdict" must never read as "passed".
+      if: needs.workflow-shell-executions.result != 'success'
+      run: |
+        echo "::error::The 'CI's own shell (executions)' gate concluded '${{ needs.workflow-shell-executions.result }}' — see that job. It EXECUTES the lanes' and scripts' real code against fixtures — main-cd's decision steps, the publish-bake overlap harness, the module publication and pack lanes, the compile-check reference set, the seal and carry-forward scripts — none of which any other check on this PR runs."
         exit 1
 
     # `!= 'success'` rather than `== 'failure'`, for the same reason as the gate above: a job
