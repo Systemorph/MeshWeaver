@@ -1107,6 +1107,10 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
 #    :<sha7> and :latest on every change to the watcher or its contract (Plugins#823/#992).
 #    A tag you did not read from the registry is not a tag you can deploy.
 az acr repository show-tags -n meshweaver --repository memex-log-watcher -o tsv
+#    The lane mirrors every one of those tags, by digest, to the fleet registry cr.meshweaver.cloud
+#    (MeshWeaver.Deploy#133), where any valid instance key may pull it; an estate without ACR
+#    access lists the tags there with its key (`crane ls cr.meshweaver.cloud/memex-log-watcher`)
+#    and pins a <version>. `latest` is a declared moving label (.github/release-channels.json).
 
 # 3. Apply the Deployment + PVC.
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
