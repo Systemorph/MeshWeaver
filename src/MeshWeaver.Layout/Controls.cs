@@ -575,5 +575,39 @@ public static class Controls
     /// <returns>A new <see cref="ComparisonBarsControl"/>.</returns>
     public static ComparisonBarsControl ComparisonBars(object pairs) => new(pairs);
 
+    /// <summary>
+    /// Creates a waterfall (bridge) chart — an opening total, the signed deltas hanging from the
+    /// running level, and the result standing on the axis again.
+    /// </summary>
+    /// <param name="steps">The <see cref="WaterfallStep"/> bars, in order.</param>
+    /// <returns>A new <see cref="WaterfallControl"/>.</returns>
+    public static WaterfallControl Waterfall(params WaterfallStep[] steps) =>
+        new(steps.ToImmutableList());
+
+    /// <summary>
+    /// Creates a waterfall over <paramref name="steps"/> — a concrete
+    /// <c>IEnumerable&lt;WaterfallStep&gt;</c>, or a data-binding reference resolving to one.
+    /// </summary>
+    /// <param name="steps">The steps, or a data-binding reference resolving to them.</param>
+    /// <returns>A new <see cref="WaterfallControl"/>.</returns>
+    public static WaterfallControl Waterfall(object steps) => new(steps);
+
+    /// <summary>
+    /// Creates a top-down hierarchy of boxes from FLAT <see cref="HierarchyNode"/>s, each naming its
+    /// parent — the current node emphasised, every other box optionally a link.
+    /// </summary>
+    /// <param name="nodes">The nodes.</param>
+    /// <returns>A new <see cref="HierarchyControl"/>.</returns>
+    public static HierarchyControl Hierarchy(params HierarchyNode[] nodes) =>
+        new(nodes.ToImmutableList());
+
+    /// <summary>
+    /// Creates a hierarchy over <paramref name="nodes"/> — a concrete
+    /// <c>IEnumerable&lt;HierarchyNode&gt;</c>, or a data-binding reference resolving to one.
+    /// </summary>
+    /// <param name="nodes">The nodes, or a data-binding reference resolving to them.</param>
+    /// <returns>A new <see cref="HierarchyControl"/>.</returns>
+    public static HierarchyControl Hierarchy(object nodes) => new(nodes);
+
     #endregion
 }
