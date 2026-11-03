@@ -1107,7 +1107,28 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
 #    :<sha7> and :latest on every change to the watcher or its contract (Plugins#823/#992).
 #    A tag you did not read from the registry is not a tag you can deploy.
 az acr repository show-tags -n meshweaver --repository memex-log-watcher -o tsv
+#    Pin a <major>.<minor>.<patch> tag (the lane mints the highest published version + 1, so it
+#    only moves forward); :latest moves on every publish and :<sha7> names a commit, not a release.
+```
 
+> 🌐 **An estate that mirrors every image from the fleet registry reads the watcher there too.**
+> Such an estate pulls only from `cr.meshweaver.cloud` with its instance key
+> (`<prefix>PluginCatalog-RegistryToken`). The fleet registry has its own storage and is not a
+> read-through cache of the ACR, so an image reaches it only by a push. The `log-watcher image`
+> lane therefore copies every tag above to it by digest (core's `mirror-image-to-registry.sh`,
+> the route `main-cd` gives the portal images), and `memex-log-watcher:latest` is declared in
+> `.github/release-channels.json`. List the tags with a registry-aware client, which performs the
+> bearer-token exchange the registry requires (any account name, the instance key as the
+> password): `crane auth login cr.meshweaver.cloud -u instance -p "$INSTANCE_KEY"`, then
+> `crane ls cr.meshweaver.cloud/memex-log-watcher`, and pin a version tag. A raw
+> `GET /v2/memex-log-watcher/tags/list` with the key as a Basic-auth password answers 401 — the
+> registry accepts only a bearer token; over plain HTTP, first exchange the key at the realm
+> (`GET https://cr.meshweaver.cloud/auth?service=cr.meshweaver.cloud&scope=repository:memex-log-watcher:pull`
+> with Basic auth) and send the returned `token` as `Authorization: Bearer`. No per-key grant is needed: the registry ACL lets any authenticated instance
+> key pull any image repository outside `plugins/`
+> ([MeshWeaver.Deploy#133](https://github.com/Systemorph/MeshWeaver.Deploy/issues/133)).
+
+```bash
 # 3. Apply the Deployment + PVC.
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command "kubectl apply -f log-watcher.yaml" \
