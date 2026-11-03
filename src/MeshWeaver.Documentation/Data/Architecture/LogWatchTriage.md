@@ -1107,11 +1107,23 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
 #    :<sha7> and :latest on every change to the watcher or its contract (Plugins#823/#992).
 #    A tag you did not read from the registry is not a tag you can deploy.
 az acr repository show-tags -n meshweaver --repository memex-log-watcher -o tsv
-#    The lane mirrors every one of those tags, by digest, to the fleet registry cr.meshweaver.cloud
-#    (MeshWeaver.Deploy#133), where any valid instance key may pull it; an estate without ACR
-#    access lists the tags there with its key (`crane ls cr.meshweaver.cloud/memex-log-watcher`)
-#    and pins a <version>. `latest` is a declared moving label (.github/release-channels.json).
+#    Pin a <major>.<minor>.<patch> tag (the lane mints the highest published version + 1, so it
+#    only moves forward); :latest moves on every publish and :<sha7> names a commit, not a release.
+```
 
+> 🌐 **An estate that mirrors every image from the fleet registry reads the watcher there too.**
+> Such an estate pulls only from `cr.meshweaver.cloud` with its instance key
+> (`<prefix>PluginCatalog-RegistryToken`). The fleet registry has its own storage and is not a
+> read-through cache of the ACR, so an image reaches it only by a push. The `log-watcher image`
+> lane therefore copies every tag above to it by digest (core's `mirror-image-to-registry.sh`,
+> the route `main-cd` gives the portal images), and `memex-log-watcher:latest` is declared in
+> `.github/release-channels.json`. The route is the same as for the portal images:
+> `GET https://cr.meshweaver.cloud/v2/memex-log-watcher/tags/list` with the instance key, then
+> pin a version tag. No per-key grant is needed: the registry ACL lets any authenticated instance
+> key pull any image repository outside `plugins/`
+> ([MeshWeaver.Deploy#133](https://github.com/Systemorph/MeshWeaver.Deploy/issues/133)).
+
+```bash
 # 3. Apply the Deployment + PVC.
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command "kubectl apply -f log-watcher.yaml" \
