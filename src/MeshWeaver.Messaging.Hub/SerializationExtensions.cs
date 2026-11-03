@@ -202,6 +202,7 @@ public static class SerializationExtensions
         var objectConverter = baseOptions.Converters.OfType<ObjectPolymorphicConverter>().FirstOrDefault();
         loggingOptions.Converters.Insert(0, new SensitiveJsonNodeConverter(redactor));
         loggingOptions.Converters.Insert(0, new SensitiveJsonElementConverter(redactor));
+        loggingOptions.Converters.Insert(0, new SensitiveJsonDocumentConverter(redactor));
         loggingOptions.Converters.Insert(0, new SensitiveObjectConverter(redactor, objectConverter));
         loggingOptions.Converters.Insert(0, new SensitiveOpaqueTypeConverterFactory(baseOptions));
 

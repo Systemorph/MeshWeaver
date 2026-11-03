@@ -382,6 +382,88 @@ public class SensitiveContentNeverReachesALogTest : MonolithMeshTestBase
         public System.Collections.Generic.Dictionary<string, JsonElement>? Extra { get; init; }
     }
 
+    /// <summary>Marked on the BASE's positional parameter only.</summary>
+    public record PositionalBase([SensitiveData] string Secret);
+
+    /// <summary>Re-declares the parameter unmarked.</summary>
+    public record PositionalDerived(string Secret) : PositionalBase(Secret);
+
+    /// <summary>A sealed element with a marked member, held in a read-only list.</summary>
+    public sealed record Entry
+    {
+        /// <summary>Marked.</summary>
+        [SensitiveData] public string? Note { get; init; }
+    }
+
+    /// <summary>Holds read-only collections and a document.</summary>
+    public record Lists
+    {
+        /// <summary>Kind None under the hub's ReadOnlyCollectionConverterFactory.</summary>
+        public IReadOnlyList<Entry>? Entries { get; init; }
+
+        /// <summary>A raw document.</summary>
+        public JsonDocument? Document { get; init; }
+    }
+
+    /// <summary>An UNMARKED wrapper whose own converter writes a descendant's marked value.</summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(EnvelopeConverter))]
+    public record Envelope(PatientRecord Patient);
+
+    /// <summary>Writes the wrapped patient's diagnosis verbatim.</summary>
+    public sealed class EnvelopeConverter : System.Text.Json.Serialization.JsonConverter<Envelope>
+    {
+        /// <inheritdoc />
+        public override Envelope Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => new(new PatientRecord(reader.GetString()));
+
+        /// <inheritdoc />
+        public override void Write(Utf8JsonWriter writer, Envelope value, JsonSerializerOptions options)
+            => writer.WriteStringValue(value.Patient.Diagnosis);
+    }
+
+    /// <summary>The third review round's edges.</summary>
+    [Fact]
+    public void TheEdges_BaseParameters_ExtensionKeys_UnknownKeys_MalformedTypes_Documents_ReadOnlyLists_AndDescendants()
+    {
+        var registered = Mesh.TypeRegistry;
+        registered.WithTypes(typeof(PositionalDerived), typeof(Entry), typeof(Lists));
+
+        // A derived positional record re-declaring the base's marked parameter.
+        ShouldHoldNoMarker(Mesh.RenderForLog(new PositionalDerived(Diagnosis)), "a derived positional record");
+        Mesh.SensitiveValues(new PositionalDerived(Diagnosis)).Should().Contain(Diagnosis);
+
+        // A marked extension bag's KEY.
+        var bags = new Bags { Extra = new() { ["PATIENT-55001"] = JsonDocument.Parse("1").RootElement.Clone() } };
+        Mesh.SensitiveValues(bags).Should().Contain("PATIENT-55001");
+        Mesh.RedactJson(JsonSerializer.Serialize(bags, Mesh.JsonSerializerOptions)).Should().NotContain("PATIENT-55001");
+
+        // An unknown type's keys are data too; a malformed discriminator names nothing.
+        Mesh.RedactJson("""{"$type":"UnavailablePatientType","byPatient":{"PATIENT-77123":"x"}}""")
+            .Should().NotContain("PATIENT-77123").And.Contain("UnavailablePatientType");
+        foreach (var malformed in new[] { "42", "null", "[]", "{}" })
+        {
+            Mesh.RedactJson($$"""{"$type":{{malformed}},"diagnosis":"{{Diagnosis}}"}""").Should().NotContain(Diagnosis, malformed);
+            Mesh.SensitiveValues(JsonDocument.Parse($$"""{"$type":{{malformed}},"diagnosis":"x"}""").RootElement, out var c);
+            c.Should().BeFalse($"a $type of {malformed} is not a discriminator");
+        }
+
+        // A JsonDocument — at the root and as a member.
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(Patient(), Mesh.JsonSerializerOptions));
+        ShouldHoldNoMarker(Mesh.RenderForLog(document), "a JsonDocument root");
+        ShouldHoldNoMarker(Mesh.RenderForLog(new Lists { Document = document }), "a JsonDocument member");
+
+        // A read-only list of sealed elements (no $type on the elements).
+        var lists = new Lists { Entries = [new Entry { Note = VisitNote }] };
+        ShouldHoldNoMarker(Mesh.RenderForLog(lists), "a typed read-only list");
+        ShouldHoldNoMarker(Mesh.RedactJson(JsonSerializer.Serialize(lists, Mesh.JsonSerializerOptions)), "an untyped read-only list");
+        Mesh.SensitiveValues(lists).Should().Contain(VisitNote);
+
+        // An unmarked wrapper whose converter writes a marked descendant.
+        ShouldHoldNoMarker(Mesh.RenderForLog(new Envelope(new PatientRecord(Diagnosis))), "a converter over a marked descendant");
+        Mesh.SensitiveValues(new Envelope(new PatientRecord(Diagnosis)), out var envelopeComplete).Should().Contain(Diagnosis);
+        envelopeComplete.Should().BeFalse();
+    }
+
     /// <summary>The second review round's edges.</summary>
     [Fact]
     public void TheEdges_PropertyConverters_TextRoots_DictionaryKeys_AndExtensionData_ExposeNothing()

@@ -66,6 +66,55 @@ public static class SensitiveDataRedaction
             .Any(p => Attribute.IsDefined(p, typeof(SensitiveDataAttribute), inherit: true));
 
     /// <summary>
+    /// Whether <paramref name="type"/> declares a marked member ITSELF or anywhere below it — through
+    /// its members' types and collection element types (platform <c>System.*</c> types are not
+    /// entered). The question a custom converter raises: it may write any descendant verbatim.
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when a marked member is reachable.</returns>
+    public static bool ReachesSensitiveMembers(Type type) => Reaches(type, ImmutableHashSet<Type>.Empty, 0);
+
+    private static bool Reaches(Type type, ImmutableHashSet<Type> seen, int depth)
+    {
+        if (depth > 8 || seen.Contains(type) || type.IsPrimitive || type.IsEnum || type == typeof(string)
+            || type == typeof(object))
+            return false;
+        if (type.IsArray)
+            return Reaches(type.GetElementType()!, seen, depth + 1);
+        seen = seen.Add(type);
+        if (type.IsGenericType && type.GetGenericArguments().Any(a => Reaches(a, seen, depth + 1)))
+            return true;
+        if (type.Namespace is { } ns && (ns == "System" || ns.StartsWith("System.", StringComparison.Ordinal)))
+            return false;
+        if (DeclaresSensitiveMembers(type))
+            return true;
+        return type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                   .Where(p => p.GetIndexParameters().Length == 0)
+                   .Any(p => Reaches(p.PropertyType, seen, depth + 1))
+               || type.GetFields(BindingFlags.Public | BindingFlags.Instance).Any(f => Reaches(f.FieldType, seen, depth + 1));
+    }
+
+    /// <summary>The element type of a collection (and the value type of a dictionary), or null.</summary>
+    internal static Type? ElementTypeOf(Type type, out bool dictionary)
+    {
+        dictionary = false;
+        if (type == typeof(string))
+            return null;
+        if (type.IsArray)
+            return type.GetElementType();
+        var interfaces = type.IsInterface ? type.GetInterfaces().Append(type) : type.GetInterfaces();
+        var dict = interfaces.FirstOrDefault(i => i.IsGenericType
+            && (i.GetGenericTypeDefinition() == typeof(IDictionary<,>) || i.GetGenericTypeDefinition() == typeof(IReadOnlyDictionary<,>)));
+        if (dict is not null)
+        {
+            dictionary = true;
+            return dict.GetGenericArguments()[1];
+        }
+        return interfaces.FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+            ?.GetGenericArguments()[0];
+    }
+
+    /// <summary>
     /// Whether a serialized property is marked — on its property/field, or on the positional record
     /// parameter it binds to (<c>record R([SensitiveData] string X)</c> puts the attribute on the
     /// parameter only).
@@ -78,15 +127,19 @@ public static class SensitiveDataRedaction
             return false;
         if (IsSensitive(member))
             return true;
-        if (property.AssociatedParameter?.AttributeProvider is ParameterInfo associated)
-            return Attribute.IsDefined(associated, typeof(SensitiveDataAttribute), inherit: true);
-        // The association is made when the type info is CONFIGURED, after the modifiers ran — so
-        // match the declaring type's constructor parameters by name as well.
-        return member.DeclaringType is { } declaring
-            && declaring.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+        if (property.AssociatedParameter?.AttributeProvider is ParameterInfo associated
+            && Attribute.IsDefined(associated, typeof(SensitiveDataAttribute), inherit: true))
+            return true;
+        // The association is made when the type info is CONFIGURED, after the modifiers ran, and a
+        // derived positional record re-declares the parameter unmarked (`record Derived(string X) :
+        // Base(X)`) — so match constructor parameters by name up the whole hierarchy.
+        for (var declaring = member.DeclaringType; declaring is not null && declaring != typeof(object); declaring = declaring.BaseType)
+            if (declaring.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                 .SelectMany(c => c.GetParameters())
                 .Any(p => string.Equals(p.Name, member.Name, StringComparison.OrdinalIgnoreCase)
-                          && Attribute.IsDefined(p, typeof(SensitiveDataAttribute), inherit: true));
+                          && Attribute.IsDefined(p, typeof(SensitiveDataAttribute), inherit: true)))
+                return true;
+        return false;
     }
 
     /// <summary>
@@ -121,7 +174,7 @@ public static class SensitiveDataRedaction
     /// <param name="property">The resolved JSON property.</param>
     /// <returns><c>true</c> when the property's converter hides marked members.</returns>
     internal static bool HidesSensitiveMembers(JsonPropertyInfo property) =>
-        property.CustomConverter is not null && DeclaresSensitiveMembers(property.PropertyType);
+        property.CustomConverter is not null && ReachesSensitiveMembers(property.PropertyType);
 
     /// <summary>
     /// The hub's logging serializer options — built once per hub and cached on it. Use these for
@@ -417,10 +470,19 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
                 var closed = failClosed;
                 if (!resolvedAll)
                 {
-                    // Which members are marked cannot be known: a RENDERING redacts every scalar below,
-                    // and a COLLECTION reports itself incomplete.
-                    closed = redact;
+                    // Which members are marked cannot be known. A COLLECTION reports itself incomplete;
+                    // a RENDERING keeps only the identifying discriminator — keys can be data too.
                     onUnresolved?.Invoke();
+                    if (redact)
+                    {
+                        var discriminator = obj.TryGetPropertyValue("$type", out var d) && d is JsonValue dv
+                                            && dv.GetValueKind() == JsonValueKind.String ? dv.GetValue<string>() : null;
+                        obj.Clear();
+                        if (discriminator is not null)
+                            obj["$type"] = discriminator;
+                        obj["content"] = SensitiveDataAttribute.Placeholder;
+                        return;
+                    }
                 }
                 var shape = type is null ? Opaque : ShapeOf(type);
                 if (shape.WhollySensitive)
@@ -440,6 +502,8 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
                     var child = obj[name];
                     // A JSON member no declared member matches is an extension-data entry when the
                     // type has an extension bag: it inherits the bag's mark.
+                    var extensionEntry = shape.Kind == JsonTypeInfoKind.Object && shape.Extension is not null
+                                         && !shape.Members.ContainsKey(name);
                     Member? member = shape.Kind == JsonTypeInfoKind.Object
                         ? shape.Members.TryGetValue(name, out var m) ? m : shape.Extension
                         : null;
@@ -451,6 +515,22 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
                         // not be mapped, so the answer is reported incomplete.
                         if (wholly || member?.Opaque == true)
                             onUnresolved?.Invoke();
+                        if (extensionEntry)
+                        {
+                            // A marked extension bag's KEYS are its data too: collected, and renamed
+                            // away in a rendering.
+                            if (!redact)
+                                onSensitive(JsonValue.Create(name), null, _ => { });
+                            else
+                            {
+                                obj.Remove(name);
+                                var key = SensitiveDataAttribute.Placeholder;
+                                for (var n = 2; obj.ContainsKey(key); n++)
+                                    key = SensitiveDataAttribute.Placeholder + n;
+                                obj[key] = JsonValue.Create(SensitiveDataAttribute.Placeholder);
+                                continue;
+                            }
+                        }
                         if (child is not null)
                             onSensitive(child, member?.Opaque == true ? null : childType, replacement => obj[name] = replacement);
                         continue;
@@ -498,9 +578,14 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
     {
         resolved = true;
         var exact = IsExact(declared) ? declared : null;
-        if (!obj.TryGetPropertyValue("$type", out var discriminatorNode)
-            || discriminatorNode is not JsonValue dv || dv.GetValueKind() != JsonValueKind.String)
+        if (!obj.TryGetPropertyValue("$type", out var discriminatorNode))
             return exact;
+        if (discriminatorNode is not JsonValue dv || dv.GetValueKind() != JsonValueKind.String)
+        {
+            // A present but malformed discriminator (number, null, array, object) names nothing.
+            resolved = false;
+            return exact;
+        }
         var discriminator = dv.GetValue<string>();
         if (exact is not null && Names(discriminator, exact))
             return exact;
@@ -540,8 +625,15 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or ArgumentException)
         {
-            return Opaque;
+            // Metadata that cannot be built maps nothing: fail closed when marked members are reachable.
+            return SensitiveDataRedaction.ReachesSensitiveMembers(type) ? Opaque with { WhollySensitive = true } : Opaque;
         }
+        if (info.Kind == JsonTypeInfoKind.None && SensitiveDataRedaction.ElementTypeOf(type, out var isDictionary) is { } element)
+            // A collection written by a converter (the hub's ReadOnlyCollectionConverterFactory gives
+            // IReadOnlyList<T>/IEnumerable<T> Kind None): keep its element shape — those converters write
+            // each element through the options.
+            return new Shape(isDictionary ? JsonTypeInfoKind.Dictionary : JsonTypeInfoKind.Enumerable,
+                ImmutableDictionary<string, Member>.Empty, element);
         return info.Kind switch
         {
             JsonTypeInfoKind.Object => new Shape(JsonTypeInfoKind.Object,
@@ -560,7 +652,7 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
                 new Shape(info.Kind, ImmutableDictionary<string, Member>.Empty, info.ElementType),
             // Written by a custom converter: its JSON cannot be mapped to members. If it declares any
             // marked member, all of it is treated as marked.
-            _ => SensitiveDataRedaction.DeclaresSensitiveMembers(type) ? Opaque with { WhollySensitive = true } : Opaque,
+            _ => SensitiveDataRedaction.ReachesSensitiveMembers(type) ? Opaque with { WhollySensitive = true } : Opaque,
         };
     }
 }
@@ -588,6 +680,9 @@ internal sealed class SensitiveObjectConverter(SensitiveJsonRedactor redactor, J
                 return;
             case JsonNode node:
                 WriteNode(writer, redactor.Redact(node, null));
+                return;
+            case JsonDocument document:
+                WriteNode(writer, redactor.Redact(SensitiveJsonRedactor.FromElement(document.RootElement), null));
                 return;
         }
         // A plain System.Object first: the inner converter would resolve `object` through these same
@@ -650,8 +745,11 @@ internal sealed class SensitiveOpaqueTypeConverterFactory(JsonSerializerOptions 
 
     private object Decide(Type type)
     {
+        // A collection's converter writes each element through these options (the element type's own
+        // modifier then applies), so a collection is never claimed here as a whole.
         if (type.IsPrimitive || type == typeof(string) || type == typeof(object) || type.IsEnum
-            || !SensitiveDataRedaction.DeclaresSensitiveMembers(type))
+            || SensitiveDataRedaction.ElementTypeOf(type, out _) is not null
+            || !SensitiveDataRedaction.ReachesSensitiveMembers(type))
             return No;
         try
         {
@@ -674,4 +772,17 @@ internal sealed class SensitiveOpaqueTypeConverterFactory(JsonSerializerOptions 
         public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options) =>
             writer.WriteStringValue(SensitiveDataAttribute.Placeholder);
     }
+}
+
+/// <summary>
+/// Logging-options converter for <see cref="JsonDocument"/>: STJ's own converter writes a document
+/// directly and bypasses the <see cref="JsonElement"/> converter, so its root is redacted here.
+/// </summary>
+internal sealed class SensitiveJsonDocumentConverter(SensitiveJsonRedactor redactor) : JsonConverter<JsonDocument>
+{
+    public override JsonDocument Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        throw new NotSupportedException("The logging serializer options are write-only.");
+
+    public override void Write(Utf8JsonWriter writer, JsonDocument value, JsonSerializerOptions options) =>
+        SensitiveObjectConverter.WriteNode(writer, redactor.Redact(SensitiveJsonRedactor.FromElement(value.RootElement), null));
 }
