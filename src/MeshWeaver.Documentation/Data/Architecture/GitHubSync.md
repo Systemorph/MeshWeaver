@@ -897,6 +897,7 @@ names it, never in the platform.
 
 ## See also
 
+- [Sensitive Content Stays Out of Logs](/Doc/Architecture/SensitiveContentInLogs) — the deployment's limits on GitSync: `GitSync:AllowedPartitions` (which partitions may sync) and `GitSync:Export:Enabled` (whether this instance exports at all).
 - [DataSyncSetup.md](/Doc/Architecture/DataSyncSetup) — the import-source model (platform content synced from a repo at a release tag).
 - [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport) — the import mechanism reused here (fingerprint, activity lock, upsert, prune).
 - [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost) — what one webhook delivery costs, the single field that makes it free, and why a source that never converges re-clones its repository on every green build.

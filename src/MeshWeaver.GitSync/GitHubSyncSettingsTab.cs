@@ -155,7 +155,7 @@ public static class GitHubSyncSettingsTab
             .Select(_ => (UiControl?)MeshNodeContentEditorControl.ForType(
                 GitHubSyncService.ConfigPath(spacePath), typeof(GitHubSyncConfig)))
             .Catch<UiControl?, Exception>(ex => Observable.Return((UiControl?)ActionNotice.Error(
-                host.Localize("ui.gitSync.tab.initFailed", ex.Message)).ToControl()))
+                host.Localize("ui.gitSync.tab.initFailed", GitSyncRefusalException.Localize(ex, host.ViewerLocale()))).ToControl()))
             .StartWith(GitSyncViews.Hint(host.Localize("ui.gitSync.loadingRepoSettings"))));
 
         // Which hosting service the URL names (MeshWeaver#5248) — derived from the URL, live, so the
