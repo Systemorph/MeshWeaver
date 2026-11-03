@@ -802,6 +802,19 @@ def receipt_fields(record: str) -> dict[str, str] | None:
     return fields
 
 
+def receipt_superseded(fields: dict[str, str]) -> bool:
+    """A SUPERSEDED no-op: every target already held a NEWER sealed publication, so this bake
+    deliberately sealed nothing (publish-bake-bundles.sh, "Not sealing backwards; skipping") and
+    succeeded. Valid — never a red — and never a candidate: this content is live nowhere."""
+    def count(key: str) -> int | None:
+        value = fields.get(key, "0")
+        return int(value) if re.fullmatch(r"[0-9]+", value) else None
+    reached = [count(k) for k in ("targets-published", "targets-converged", "targets-already")]
+    superseded = count("targets-superseded")
+    return (None not in reached and superseded is not None
+            and sum(reached) == 0 and superseded > 0)
+
+
 def receipt_refusal(fields: dict[str, str], run_number: int) -> str | None:
     """Why a final publication receipt written by core CD run `run_number` does not verify, or None.
 
@@ -838,6 +851,8 @@ def receipt_refusal(fields: dict[str, str], run_number: int) -> str | None:
         return f"source-sha={sha or '<absent>'} is not a full commit sha"
     if not release:
         return f"release={fields.get('release', '<absent>')} is not a set name"
+    if int(release.group(2)) <= 0:
+        return f"release={fields['release']} names no CD run"
     if int(release.group(2)) > run_number:
         return f"release={fields['release']} names a LATER run than #{run_number}, which wrote it"
     if fields.get("arch") not in ("linux-x64", "linux-arm64"):
@@ -848,6 +863,10 @@ def receipt_refusal(fields: dict[str, str], run_number: int) -> str | None:
         return "a count (bundles, targets-*, release-markers) is absent or not a number"
     if int(counts[0]) == 0:
         return "bundles=0: nothing was published"
+    if receipt_superseded(fields):
+        # A deliberate successful no-op: verified as such. The resolver passes it over as a
+        # publication that is live nowhere; it never reds the run that wrote it.
+        return None
     if int(counts[1]) + int(counts[2]) + int(already) == 0:
         return "no target was published, converged or already held this publication"
     if int(counts[3]) == 0:
@@ -874,6 +893,10 @@ def verify_receipt_main(path: str, run_number: int) -> int:
         print(f"::error title=The bake receipt does not verify::core CD #{run_number}: {why}. Every "
               "dependent repository passes this build over until its receipt verifies.")
         return 1
+    if receipt_superseded(fields):
+        print(f"bake receipt verifies as a SUPERSEDED no-op: core CD #{run_number} sealed nothing — every "
+              f"target already held a newer publication than {fields['source-sha'][:10]}. Not a candidate set.")
+        return 0
     print(f"bake receipt verifies: core CD #{run_number} published {fields['source-sha'][:10]} "
           f"under {fields['release']}")
     return 0
@@ -915,6 +938,10 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
             raise ProvenanceUnavailable(
                 f"platform-bake job {job_id} has an incomplete or inconsistent final publication "
                 f"receipt: {refusal}")
+        if receipt_superseded(fields):
+            raise ProvenanceUnavailable(
+                f"platform-bake job {job_id} sealed nothing: every target already held a NEWER "
+                "publication (superseded) — a valid no-op, and not a candidate set")
         sha = fields["source-sha"]
         release = match_set_name(fields["release"])
         version = release.group(1)
@@ -3748,6 +3775,12 @@ def self_test() -> int:
         ("a short source sha is refused", reconcile.replace("6c982c1cd4ccae53c5210979f9d7a2149d279368", "6c982c1"), 12463, False),
         ("a non-set release is refused", reconcile.replace("release=3.1.12461", "release=none"), 12463, False),
         ("a repeated key is refused", reconcile + " bundles=1", 12463, False),
+        ("a run-0 release is refused", reconcile.replace("release=3.1.12461", "release=3.0.0-ci.0"), 12463, False),
+        # publish-bake-bundles.sh's deliberate no-op (test-publish-bake-overlap.py, "Not sealing
+        # backwards"): every target held NEWER content. Verified, so the run is never red for it.
+        ("a SUPERSEDED no-op verifies", reconcile.replace("targets-already=2", "targets-already=0")
+         .replace("targets-superseded=0", "targets-superseded=2").replace("release-markers=2", "release-markers=0"),
+         12463, True),
     ):
         total += 1
         fields = receipt_fields(record)
@@ -3763,6 +3796,20 @@ def self_test() -> int:
         total += 1
         if (rc == 0) != want_ok:
             failures.append(f"--verify-receipt: {name}: exit {rc}, want {'0' if want_ok else '1'}")
+    superseded_noop = (reconcile.replace("targets-already=2", "targets-already=0")
+                       .replace("targets-superseded=0", "targets-superseded=2"))
+    total += 1
+    if not receipt_superseded(receipt_fields(superseded_noop)) or receipt_superseded(receipt_fields(reconcile)):
+        failures.append("receipt rule: only a receipt that reached nothing AND was superseded is a superseded no-op")
+    total += 1
+    noop_jobs = [{"id": 77, "name": REQUIRED_JOBS[2][1] + " (linux-x64)", "status": "completed", "conclusion": "success"}]
+    try:
+        publication_source(lambda path: f"2026-11-03T06:36:36Z bake published: {superseded_noop}\n",
+                           noop_jobs, 12463, {})
+        failures.append("resolver: a superseded no-op must never be a candidate set")
+    except ProvenanceUnavailable as error:
+        if "superseded" not in str(error):
+            failures.append(f"resolver: a superseded no-op must be passed over AS superseded, got: {error}")
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "bake.log")
         with open(path, "w", encoding="utf-8") as handle:
