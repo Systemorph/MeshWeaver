@@ -186,6 +186,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import io
 import json
 import os
@@ -790,6 +791,117 @@ class PublicationSource(NamedTuple):
     set_name: str
 
 
+def receipt_fields(record: str) -> dict[str, str] | None:
+    """`key=value` tokens of one final receipt, or None when one is malformed or repeated."""
+    fields: dict[str, str] = {}
+    for token in record.split():
+        key, separator, value = token.partition("=")
+        if not separator or not value or key in fields:
+            return None
+        fields[key] = value
+    return fields
+
+
+def receipt_superseded(fields: dict[str, str]) -> bool:
+    """A SUPERSEDED no-op: every target already held a NEWER sealed publication, so this bake
+    deliberately sealed nothing (publish-bake-bundles.sh, "Not sealing backwards; skipping") and
+    succeeded. Valid — never a red — and never a candidate: this content is live nowhere."""
+    def count(key: str) -> int | None:
+        value = fields.get(key, "0")
+        return int(value) if re.fullmatch(r"[0-9]+", value) else None
+    reached = [count(k) for k in ("targets-published", "targets-converged", "targets-already")]
+    superseded = count("targets-superseded")
+    return (None not in reached and superseded is not None
+            and sum(reached) == 0 and superseded > 0)
+
+
+def receipt_refusal(fields: dict[str, str], run_number: int) -> str | None:
+    """Why a final publication receipt written by core CD run `run_number` does not verify, or None.
+
+    The ONE rule — the resolver reads a set's receipt through it, and the platform bake runs it on
+    its OWN receipt the moment it is written (`--verify-receipt`, main-cd.yml), so a build whose
+    receipt no consumer can verify goes red in core, ONCE, on that build, and never surfaces first
+    as a red in a dependent repository.
+
+    🚨 THE RELEASE MAY NAME AN EARLIER RUN. A scheduled `bake-only reconcile` mints no image: it
+    recovers the release of the run that promoted that commit and publishes UNDER IT. Measured:
+    core CD #12463 baked 6c982c1 and wrote `release=3.1.12461`, because #12461 minted 3.1.12461
+    (and then failed at `Arm the fleet`); 3.1.12463 was never minted. That receipt is complete and
+    true. Requiring `release == run_number` refused 13 of the 20 successful runs from #12438 to
+    #12464, every one a reconcile. A release naming a LATER run than the one that wrote it is
+    impossible, and stays refused.
+    """
+    sha = fields.get("source-sha", "")
+    release = match_set_name(fields.get("release", ""))
+    counts = [fields.get(key, "") for key in
+              ("bundles", "targets-published", "targets-converged", "release-markers")]
+    # 🚨 A TARGET THAT ALREADY HELD THIS PUBLICATION REACHED IT (#4247). `targets-already` counts
+    # the targets that were already sealed ON THIS CONTENT when the bake asked — the ordinary
+    # shape when two runs bake one commit, and of any re-bake. It used to be recorded NOWHERE,
+    # so such a receipt read `targets-published=0 targets-converged=0` — byte-identical to a
+    # publication that reached nothing — and this check PASSED THE SET OVER as unattributable.
+    # Measured on main-cd #8457 and #8459 (both cdb2878bb): the bake log says twice "holds a
+    # COMPLETE publication of THIS content … already published; skipping", and two otherwise
+    # sealed sets were skipped for it. OPTIONAL, defaulting to 0: a receipt written before
+    # #4247 does not carry the field, and must keep parsing exactly as it did.
+    already = fields.get("targets-already", "0")
+    if fields.get("source") != "meshweaver-content":
+        return f"source={fields.get('source', '<absent>')} is not meshweaver-content"
+    if not SHA.fullmatch(sha):
+        return f"source-sha={sha or '<absent>'} is not a full commit sha"
+    if not release:
+        return f"release={fields.get('release', '<absent>')} is not a set name"
+    if int(release.group(2)) <= 0:
+        return f"release={fields['release']} names no CD run"
+    if int(release.group(2)) > run_number:
+        return f"release={fields['release']} names a LATER run than #{run_number}, which wrote it"
+    if fields.get("arch") not in ("linux-x64", "linux-arm64"):
+        return f"arch={fields.get('arch', '<absent>')} is not a platform architecture"
+    if not fields.get("identity") or fields["identity"] == "unknown":
+        return f"identity={fields.get('identity', '<absent>')} is no framework identity"
+    if not all(re.fullmatch(r"[0-9]+", value) for value in counts) or not re.fullmatch(r"[0-9]+", already):
+        return "a count (bundles, targets-*, release-markers) is absent or not a number"
+    if int(counts[0]) == 0:
+        return "bundles=0: nothing was published"
+    if receipt_superseded(fields):
+        # A deliberate successful no-op: verified as such. The resolver passes it over as a
+        # publication that is live nowhere; it never reds the run that wrote it.
+        return None
+    if int(counts[1]) + int(counts[2]) + int(already) == 0:
+        return "no target was published, converged or already held this publication"
+    if int(counts[3]) == 0:
+        return "release-markers=0: no release marker was written"
+    return None
+
+
+def verify_receipt_main(path: str, run_number: int) -> int:
+    """`--verify-receipt`: the platform bake's self-check of the receipt it just wrote."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+    except (OSError, UnicodeDecodeError) as error:
+        print(f"::error title=The bake receipt could not be read::{path}: {error}")
+        return 1
+    records = FINAL_BAKE_RECEIPT.findall(text)
+    if len(records) != 1:
+        print(f"::error title=The bake receipt does not verify::core CD #{run_number} wrote "
+              f"{len(records)} final publication receipts; every consumer requires exactly one")
+        return 1
+    fields = receipt_fields(records[0])
+    why = "a token is malformed or repeated" if fields is None else receipt_refusal(fields, run_number)
+    if why is not None:
+        print(f"::error title=The bake receipt does not verify::core CD #{run_number}: {why}. Every "
+              "dependent repository passes this build over until its receipt verifies.")
+        return 1
+    if receipt_superseded(fields):
+        print(f"bake receipt verifies as a SUPERSEDED no-op: core CD #{run_number} sealed nothing — every "
+              f"target already held a newer publication than {fields['source-sha'][:10]}. Not a candidate set.")
+        return 0
+    print(f"bake receipt verifies: core CD #{run_number} published {fields['source-sha'][:10]} "
+          f"under {fields['release']}")
+    return 0
+
+
 def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
                        receipts: dict[tuple[int, int], PublicationSource]) -> PublicationSource:
     """Read the producer's final publication receipt, once per successful platform-bake job.
@@ -818,36 +930,20 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
         if len(records) != 1:
             raise ProvenanceUnavailable(
                 f"platform-bake job {job_id} has {len(records)} final publication receipts; expected one")
-        fields: dict[str, str] = {}
-        for token in records[0].split():
-            key, separator, value = token.partition("=")
-            if not separator or not value or key in fields:
-                raise ProvenanceUnavailable(f"platform-bake job {job_id} has a malformed final receipt")
-            fields[key] = value
-        sha = fields.get("source-sha", "")
-        release = match_set_name(fields.get("release", ""))
-        counts = [fields.get(key, "") for key in
-                  ("bundles", "targets-published", "targets-converged", "release-markers")]
-        # 🚨 A TARGET THAT ALREADY HELD THIS PUBLICATION REACHED IT (#4247). `targets-already` counts
-        # the targets that were already sealed ON THIS CONTENT when the bake asked — the ordinary
-        # shape when two runs bake one commit, and of any re-bake. It used to be recorded NOWHERE,
-        # so such a receipt read `targets-published=0 targets-converged=0` — byte-identical to a
-        # publication that reached nothing — and this check PASSED THE SET OVER as unattributable.
-        # Measured on main-cd #8457 and #8459 (both cdb2878bb): the bake log says twice "holds a
-        # COMPLETE publication of THIS content … already published; skipping", and two otherwise
-        # sealed sets were skipped for it. OPTIONAL, defaulting to 0: a receipt written before
-        # #4247 does not carry the field, and must keep parsing exactly as it did.
-        already = fields.get("targets-already", "0")
-        if (fields.get("source") != "meshweaver-content" or not SHA.fullmatch(sha)
-                or not release or int(release.group(2)) != run_number
-                or fields.get("arch") not in ("linux-x64", "linux-arm64")
-                or not fields.get("identity") or fields["identity"] == "unknown"
-                or not all(re.fullmatch(r"[0-9]+", value) for value in counts)
-                or not re.fullmatch(r"[0-9]+", already)
-                or int(counts[0]) == 0 or int(counts[1]) + int(counts[2]) + int(already) == 0
-                or int(counts[3]) == 0):
+        fields = receipt_fields(records[0])
+        if fields is None:
+            raise ProvenanceUnavailable(f"platform-bake job {job_id} has a malformed final receipt")
+        refusal = receipt_refusal(fields, run_number)
+        if refusal is not None:
             raise ProvenanceUnavailable(
-                f"platform-bake job {job_id} has an incomplete or inconsistent final publication receipt")
+                f"platform-bake job {job_id} has an incomplete or inconsistent final publication "
+                f"receipt: {refusal}")
+        if receipt_superseded(fields):
+            raise ProvenanceUnavailable(
+                f"platform-bake job {job_id} sealed nothing: every target already held a NEWER "
+                "publication (superseded) — a valid no-op, and not a candidate set")
+        sha = fields["source-sha"]
+        release = match_set_name(fields["release"])
         version = release.group(1)
         # The receipt NAMES its release — keep that spelling rather than re-composing it from the
         # line, which cannot tell the withdrawn slip's `3.1.0-ci.<n>` from `3.1.<n>`.
@@ -3657,6 +3753,73 @@ def self_test() -> int:
         if got != want:
             failures.append(f"semver notation: {name}: got {got!r}, want {want!r}")
 
+    # ── the final publication receipt: ONE rule for the resolver and the bake's self-check ──
+    # The REAL receipt of core CD #12463's bake job 125766424253, byte for byte: a scheduled
+    # bake-only reconcile of 6c982c1 publishing under the release #12461 minted. Refused on main
+    # as "incomplete or inconsistent" (release != run), which red MeshWeaver.Plugins#4924.
+    reconcile = ("identity=c003e001 arch=linux-x64 source=meshweaver-content "
+                 "source-sha=6c982c1cd4ccae53c5210979f9d7a2149d279368 bundles=1 surface=true "
+                 "targets-published=0 targets-converged=0 targets-already=2 targets-superseded=0 "
+                 "release=3.1.12461 release-markers=2 release-surfaces=2")
+    import tempfile
+    for name, record, run, want_ok in (
+        ("a bake-only reconcile under the release an earlier run minted verifies", reconcile, 12463, True),
+        ("the minting run's own receipt verifies", reconcile, 12461, True),
+        ("a release naming a LATER run than the writer is refused", reconcile, 12460, False),
+        ("no release marker is refused", reconcile.replace("release-markers=2", "release-markers=0"), 12463, False),
+        ("an absent count is refused", reconcile.replace(" bundles=1", ""), 12463, False),
+        ("no bundles is refused", reconcile.replace("bundles=1", "bundles=0"), 12463, False),
+        ("a target that reached nothing is refused",
+         reconcile.replace("targets-already=2", "targets-already=0"), 12463, False),
+        ("an unknown identity is refused", reconcile.replace("identity=c003e001", "identity=unknown"), 12463, False),
+        ("a short source sha is refused", reconcile.replace("6c982c1cd4ccae53c5210979f9d7a2149d279368", "6c982c1"), 12463, False),
+        ("a non-set release is refused", reconcile.replace("release=3.1.12461", "release=none"), 12463, False),
+        ("a repeated key is refused", reconcile + " bundles=1", 12463, False),
+        ("a run-0 release is refused", reconcile.replace("release=3.1.12461", "release=3.0.0-ci.0"), 12463, False),
+        # publish-bake-bundles.sh's deliberate no-op (test-publish-bake-overlap.py, "Not sealing
+        # backwards"): every target held NEWER content. Verified, so the run is never red for it.
+        ("a SUPERSEDED no-op verifies", reconcile.replace("targets-already=2", "targets-already=0")
+         .replace("targets-superseded=0", "targets-superseded=2").replace("release-markers=2", "release-markers=0"),
+         12463, True),
+    ):
+        total += 1
+        fields = receipt_fields(record)
+        ok = fields is not None and receipt_refusal(fields, run) is None
+        if ok != want_ok:
+            failures.append(f"receipt rule: {name}: verified={ok}, want {want_ok}")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "bake.log")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(f"2026-11-03T06:36:36.4059199Z bake published: {record}\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = verify_receipt_main(path, run)
+        total += 1
+        if (rc == 0) != want_ok:
+            failures.append(f"--verify-receipt: {name}: exit {rc}, want {'0' if want_ok else '1'}")
+    superseded_noop = (reconcile.replace("targets-already=2", "targets-already=0")
+                       .replace("targets-superseded=0", "targets-superseded=2"))
+    total += 1
+    if not receipt_superseded(receipt_fields(superseded_noop)) or receipt_superseded(receipt_fields(reconcile)):
+        failures.append("receipt rule: only a receipt that reached nothing AND was superseded is a superseded no-op")
+    total += 1
+    noop_jobs = [{"id": 77, "name": REQUIRED_JOBS[2][1] + " (linux-x64)", "status": "completed", "conclusion": "success"}]
+    try:
+        publication_source(lambda path: f"2026-11-03T06:36:36Z bake published: {superseded_noop}\n",
+                           noop_jobs, 12463, {})
+        failures.append("resolver: a superseded no-op must never be a candidate set")
+    except ProvenanceUnavailable as error:
+        if "superseded" not in str(error):
+            failures.append(f"resolver: a superseded no-op must be passed over AS superseded, got: {error}")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "bake.log")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write('echo "bake published: identity=$IDENTITY …"\n')   # the echoed script, no receipt
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = verify_receipt_main(path, 12463)
+    total += 1
+    if rc == 0:
+        failures.append("--verify-receipt: a log with NO final receipt must be refused")
+
     def case(name: str, expect_ok: bool, fn: Callable[[], Chosen], check=None) -> None:
         nonlocal total
         total += 1
@@ -5651,6 +5814,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--verify-receipt", default="", metavar="LOG",
+                        help="check the ONE final publication receipt in LOG under the rule every "
+                             "consumer applies (the platform bake's self-check), then exit")
+    parser.add_argument("--run-number", type=int, default=None, metavar="N",
+                        help="with --verify-receipt: the core CD run that wrote the receipt")
     parser.add_argument("--no-registry", action="store_true",
                         help="resolve the core commit and set name only (no ACR credential)")
     parser.add_argument("--wait-for-seal", type=float, default=0.0, metavar="SECONDS",
@@ -5707,6 +5875,13 @@ def main() -> int:
 
     if arguments.self_test:
         return self_test()
+
+    if arguments.verify_receipt:
+        if arguments.run_number is None:
+            print("::error title=--verify-receipt needs --run-number::the receipt is checked against "
+                  "the core CD run that wrote it")
+            return 1
+        return verify_receipt_main(arguments.verify_receipt, arguments.run_number)
 
     if arguments.check_caps:
         return check_caps_main(arguments.root, arguments.build_api,
