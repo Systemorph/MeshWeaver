@@ -226,6 +226,10 @@ public record WaterfallControl(object Steps)
             if (padDown)
                 min -= pad;
             span = max - min;
+            // The headroom itself can overflow an axis that was finite a moment ago
+            // (Total(double.MaxValue), Delta(1)): the same "nothing honest to draw" outcome.
+            if (!double.IsFinite(min) || !double.IsFinite(max) || !double.IsFinite(span) || span <= 0)
+                return null;
         }
 
         var bars = list.Select((step, i) =>

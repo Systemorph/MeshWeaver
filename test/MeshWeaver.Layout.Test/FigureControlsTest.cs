@@ -155,6 +155,11 @@ public class FigureControlsTest(ITestOutputHelper output) : HubTestBase(output)
             .Should().BeNull(because: "max − min overflows to infinity");
         WaterfallControl.Layout([WaterfallStep.Total("Start", 1e308), WaterfallStep.Delta("More", 1e308)])
             .Should().BeNull(because: "the running level overflows");
+        // The edge headroom must not overflow an axis that was finite before it was padded.
+        WaterfallControl.Layout([WaterfallStep.Total("Max", double.MaxValue), WaterfallStep.Delta("Crumb", 1)])
+            .Should().BeNull(because: "padding the top of a double.MaxValue axis overflows to infinity");
+        WaterfallControl.Layout([WaterfallStep.Total("Min", -double.MaxValue), WaterfallStep.Delta("Crumb", -1)])
+            .Should().BeNull(because: "padding the bottom of a −double.MaxValue axis overflows, never NaN percentages");
     }
 
     /// <summary>The visible minimum of a tiny NEGATIVE result stays below the baseline, on its own side.</summary>
