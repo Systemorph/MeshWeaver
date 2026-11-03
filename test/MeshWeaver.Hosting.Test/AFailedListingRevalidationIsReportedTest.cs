@@ -147,6 +147,41 @@ public class AFailedListingRevalidationIsReportedTest
         return (source, health, a, b, settledA, settledB);
     }
 
+    /// <summary>
+    /// The health reaches the reader THROUGH the origin binding (MeshWeaver.Plugins#4922): every source
+    /// <c>PackageSources.FromRepo</c> builds is <c>InstallOrigin.Bind(cached, origin)</c>, and a binding
+    /// that did not forward <see cref="IPackageListingHealth"/> left the registry blind to an outage
+    /// behind a warmed cache. A warmed, origin-bound source that fails reports it; it recovers.
+    /// </summary>
+    [Fact]
+    public async Task AnOriginBoundSource_ForwardsTheCachesHealth()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        long now = 0;
+        var failing = false;
+        var cache = new PackageListingCache(Window, () => now);
+        var bound = InstallOrigin.Bind(cache.Wrap(new FakeSource(() => failing
+                ? Observable.Throw<IReadOnlyList<PackageManifest>>(new InvalidOperationException("GitHub is down"))
+                : Observable.Return<IReadOnlyList<PackageManifest>>([new PackageManifest { Id = "Hosting" }])),
+            Repo, "", "node"), InstallOrigin.ForRepo(Repo, ""));
+        var health = Assert.IsAssignableFrom<IPackageListingHealth>(bound);
+        Assert.NotNull(InstallOrigin.Of(bound));
+
+        await bound.ListPackages(Ref).Should().Within(TestTimeouts.Quick).Emit("the first read answers", cancellationToken: ct);
+        Assert.Null(health.StaleBecause(Ref));
+        now += StopwatchTicks(Window + TimeSpan.FromSeconds(1));
+        failing = true;
+        await bound.ListPackages(Ref).Should().Within(TestTimeouts.Quick).Emit("the held listing is served", cancellationToken: ct);
+        var stale = await Until(() => health.StaleBecause(Ref)).Should().Within(TestTimeouts.Quick)
+            .Emit("the failed revalidation is reported through the binding", cancellationToken: ct);
+        Assert.Contains("GitHub is down", stale.Message);
+
+        // A bound source with no cache behind it is current.
+        var plain = Assert.IsAssignableFrom<IPackageListingHealth>(InstallOrigin.Bind(new FakeSource(() =>
+            Observable.Return<IReadOnlyList<PackageManifest>>([])), InstallOrigin.ForRepo(Repo, "")));
+        Assert.Null(plain.StaleBecause(Ref));
+    }
+
     /// <summary>The first non-null value of <paramref name="read"/>, polled — the condition itself, never a sleep.</summary>
     private static IObservable<T> Until<T>(Func<T?> read) where T : class =>
         Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
