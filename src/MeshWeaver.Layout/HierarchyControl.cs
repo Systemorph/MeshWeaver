@@ -226,7 +226,8 @@ public record HierarchyControl(object Nodes)
             roots.Add(Build(byId[cycle.MinBy(id => order[id])!], 0));
         }
 
-        return new HierarchyLayout(roots.ToImmutable(), depth);
+        // Cycle roots were appended after the ordinary ones; Roots promises INPUT order.
+        return new HierarchyLayout(roots.OrderBy(r => order[r.Node.Id]).ToImmutableList(), depth);
     }
 
     /// <summary>
@@ -234,7 +235,8 @@ public record HierarchyControl(object Nodes)
     /// <see cref="HierarchyEmphasis.Current"/> node (which would only open the page already open),
     /// and the href is SAFE to put on an anchor — a site path (a bare mesh path gains its leading
     /// slash) or an absolute <c>http</c>/<c>https</c> URL. Any other scheme (<c>javascript:</c>,
-    /// <c>data:</c>, …) and a protocol-relative <c>//host</c> draw the box unlinked: node content is
+    /// <c>data:</c>, …), a protocol-relative <c>//host</c>, and any href carrying a backslash or a
+    /// control character (which browsers normalise into <c>//host</c>) draw the box unlinked: node content is
     /// authored by people, and a bound href must never become script.
     /// </summary>
     /// <param name="node">The node.</param>
@@ -244,6 +246,11 @@ public record HierarchyControl(object Nodes)
         if (IsEmphasis(node, HierarchyEmphasis.Current) || string.IsNullOrWhiteSpace(node.Href))
             return null;
         var href = node.Href.Trim();
+        // Browsers normalise a backslash to a slash and strip tabs/newlines inside a URL, so
+        // `/\evil.example/x` or `/<newline>/evil.example/x` would become the protocol-relative
+        // `//evil.example/x` — another host. Neither has a place in a mesh path or a URL we link.
+        if (href.Any(c => c == '\\' || char.IsControl(c)))
+            return null;
         if (href.StartsWith("//", StringComparison.Ordinal))
             return null;
         if (href.StartsWith('/'))

@@ -329,6 +329,21 @@ public class FigureControlsTest(ITestOutputHelper output) : HubTestBase(output)
         y.Children.Select(c => c.Node.Id).Should().Equal("z");
     }
 
+    /// <summary>Roots keep INPUT order even when one of them is a broken cycle.</summary>
+    [Fact]
+    public void Hierarchy_roots_keep_input_order_with_a_cycle()
+    {
+        var layout = HierarchyControl.Layout(
+        [
+            new("x", "y", "X"),
+            new("y", "x", "Y"),
+            new("z", null, "Z"),
+        ])!;
+
+        layout.Roots.Select(r => r.Node.Id).Should().Equal("x", "z");
+        layout.Roots[0].Children.Select(c => c.Node.Id).Should().Equal("y");
+    }
+
     [Fact]
     public void Hierarchy_layout_is_null_when_there_are_no_nodes()
     {
@@ -357,6 +372,10 @@ public class FigureControlsTest(ITestOutputHelper output) : HubTestBase(output)
     [InlineData("data:text/html,<script>alert(1)</script>")]
     [InlineData("vbscript:msgbox(1)")]
     [InlineData("//evil.example/x")]
+    [InlineData("/\\evil.example/x")]
+    [InlineData("/\n/evil.example/x")]
+    [InlineData("/\t/evil.example/x")]
+    [InlineData("Acme\\Deal")]
     public void Hierarchy_an_unsafe_href_draws_the_box_unlinked(string href)
         => HierarchyControl.LinkOf(new HierarchyNode("n", null, "N", Href: href)).Should().BeNull();
 
