@@ -41,12 +41,15 @@ public abstract record WorkspaceReference
     }
 
     /// <summary>
-    /// Reverses <see cref="Encode"/> for an id as it arrives from a URL: in the part before any
-    /// <c>?</c>, the legacy <c>%9Z</c> / <c>%9Y</c> escapes become <c>/</c> / <c>.</c>, then every valid
-    /// percent-escape is decoded — <see cref="Encode"/>'s own, and whatever a hop on the way added (the
-    /// markdown renderer writes <c>~</c> as <c>%7E</c>, a browser writes a space as <c>%20</c>, the
-    /// portal hands the area the raw URI). The query part keeps its escapes for the reference's own
-    /// parameter parsing; only the legacy escapes are restored there.
+    /// Reverses <see cref="Encode"/>: in the part before any <c>?</c>, exactly the escapes it writes —
+    /// <c>%2F</c> → <c>/</c>, <c>%2E</c> → <c>.</c>, <c>%25</c> → <c>%</c> (hex case-insensitive) — and
+    /// the legacy <c>%9Z</c> / <c>%9Y</c>, in ONE left-to-right pass, so an escaped <c>%</c> is never
+    /// decoded twice. Every other <c>%XX</c> is left as written.
+    /// <para>🚨 Deliberately NOT a general percent-decode: <c>DispatchView</c> also runs this over internal
+    /// <c>DataContext</c> pointers (<c>/data/"id"</c>), which carry JSON and JSON-pointer escaping, not URI
+    /// escaping — a general decode turned <c>/data/"literal%22id"</c> into <c>/data/"literal"id"</c> and
+    /// broke the binding. The query part keeps its escapes for the reference's own parameter parsing;
+    /// only the legacy escapes are restored there.</para>
     /// </summary>
     /// <param name="value">The value to decode.</param>
     /// <returns>The decoded value (strings unescaped; other values unchanged).</returns>
@@ -56,10 +59,39 @@ public abstract record WorkspaceReference
             return value;
         var query = s.IndexOf('?');
         var path = query < 0 ? s : s[..query];
-        var decoded = Uri.UnescapeDataString(path.Replace("%9Z", "/").Replace("%9Y", "."));
+        var decoded = DecodeOwnEscapes(path);
         return query < 0
             ? decoded
             : decoded + s[query..].Replace("%9Z", "/").Replace("%9Y", ".");
+    }
+
+    private static string DecodeOwnEscapes(string path)
+    {
+        if (path.IndexOf('%') < 0)
+            return path;
+        var sb = new System.Text.StringBuilder(path.Length);
+        for (var i = 0; i < path.Length; i++)
+        {
+            if (path[i] == '%' && i + 2 < path.Length)
+            {
+                var code = path.Substring(i + 1, 2).ToUpperInvariant();
+                var ch = code switch
+                {
+                    "2F" or "9Z" => '/',
+                    "2E" or "9Y" => '.',
+                    "25" => '%',
+                    _ => '\0',
+                };
+                if (ch != '\0')
+                {
+                    sb.Append(ch);
+                    i += 2;
+                    continue;
+                }
+            }
+            sb.Append(path[i]);
+        }
+        return sb.ToString();
     }
 
 }

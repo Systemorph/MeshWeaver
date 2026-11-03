@@ -22,7 +22,7 @@ public class AreaIdEncodingTest
     [InlineData("path/with.dot/and/slashes.cs")]
     [InlineData("Reinsurance/Acceptance/Source/AcceptanceReport")]
     [InlineData("with~tilde")]
-    [InlineData("100%/literal%9Z-percent")]
+    [InlineData("100%/literal%9Z-and%2F-percent")]
     [InlineData("with space/and ümlaut")]
     [InlineData("Esl/EslOffice/Model/DirCarrier")]
     public void Encode_RoundTrips(string id)
@@ -76,11 +76,23 @@ public class AreaIdEncodingTest
         => Assert.Equal("Chess/GambitHunt/Source/Gambit.Hunt",
             (string)WorkspaceReference.Decode("Chess%9ZGambitHunt%9ZSource%9ZGambit%9YHunt"));
 
-    /// <summary>An escape a hop on the way added is decoded too — the markdown renderer writes <c>~</c>
-    /// as <c>%7E</c>, a browser a space as <c>%20</c>; the portal hands the area the raw URI.</summary>
+    /// <summary>
+    /// 🚨 Decode also runs over internal DataContext pointers (DispatchView), which carry JSON escaping,
+    /// not URI escaping: a pointer for a bound data id containing a literal percent-escape must come back
+    /// unchanged, or the binding breaks. Only Encode's own escapes and the legacy ones are decoded.
+    /// </summary>
     [Fact]
-    public void Decode_ReadsEscapesAddedOnTheWay()
-        => Assert.Equal("Reinsurance~Acceptance with space", (string)WorkspaceReference.Decode("Reinsurance%7EAcceptance%20with%20space"));
+    public void Decode_LeavesADataContextPointerWithALiteralPercentEscapeIntact()
+    {
+        var pointer = LayoutAreaReference.GetDataPointer("literal%22id%20x");
+        Assert.Equal(pointer, (string)WorkspaceReference.Decode(pointer));
+        Assert.Equal("a%7Eb", (string)WorkspaceReference.Decode("a%7Eb"));
+    }
+
+    /// <summary>An escaped percent is decoded exactly once.</summary>
+    [Fact]
+    public void Decode_IsOnePass()
+        => Assert.Equal("a%2Fb", (string)WorkspaceReference.Decode("a%252Fb"));
 
     /// <summary>The query part rides as written — its values are unescaped by the reference's own
     /// parameter parsing, so decoding them here would let an escaped <c>&amp;</c> split a value.</summary>
