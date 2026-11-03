@@ -93,6 +93,9 @@ public class PodHubUnclaimedDeliveryTest(TwoSiloCacheUpdateFixture fixture, ITes
             var refusal = await Assert.ThrowsAsync<PodHubNotHereException>(() => grain.Deliver(Delivery(address, "lost-owner"))
                 .WaitAsync(Bound, TestContext.Current.CancellationToken));
             refusal.Released.Should().BeFalse("no Detach reached this activation");
+            refusal.RespondingPod.Should().Be(Environment.MachineName,
+                "the no-route refusal names the answering POD, and the field survives the real grain "
+                + "call's serialization — the router's refusal line can only print what arrives here (#7842)");
             ((DateTime)keepAlive.GetValue(context)!).Should().Be(DateTime.MinValue,
                 "a vanished owner's keep-alive must not retain the refusal activation indefinitely");
             Assert.Same(context, directory.Single(entry => entry.Key.Equals(grain.GetGrainId())).Value);

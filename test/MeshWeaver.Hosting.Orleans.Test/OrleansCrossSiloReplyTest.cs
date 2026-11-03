@@ -305,6 +305,9 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
             "Detach must leave a tombstone that remembers the owner said goodbye — an activation that "
             + "deactivates on idle is re-created on the caller with no local route and no memory, and "
             + "then the only verdict the cluster can give is the transient one that never evicts");
+        RoutingGrain.RespondingPod(refusal).Should().Be(Environment.MachineName,
+            "the released refusal names the answering POD, and the field crosses the silo boundary — "
+            + "the router's refusal line can only print what arrives here (#7842)");
 
         // (2) Through the router, to the sender: the TERMINAL verdict, not the ride-out one.
         var verdict = await hubA.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(circuit))

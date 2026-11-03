@@ -252,12 +252,25 @@ When that is the silo printing the line, it is the second case. And the claim's 
 answering `false` — now says so in its own words instead of borrowing the wire-level sentence, which
 is what made eight days of logs ambiguous.
 
-> 🚨 **The owner-side half of this failure is invisible in production by design.** `PodHubGrain`'s
-> step-aside and refusal lines are `Information`, and the successful claim is `Debug`; the deployed
-> log configuration ships neither. That is the correct cost model — those lines are per-delivery —
-> but it means an investigation must reach for the *router-side* `Warning`, and that line therefore
-> has to carry the identifying facts. Do not "temporarily" raise a level to investigate; add the fact
-> to the line that already ships.
+The refusal also names the answering **pod** (`PodHubNotHereException.RespondingPod`, the host name,
+which is the pod name on Kubernetes), not only its silo's IP: `… is on silo '10.244.6.213:11111@…'
+(pod 'memex-portal-deployment-…')`. An IP cannot be matched against the pod names every other fleet
+line is keyed by. Measured on a memex roll (#7842): when the old silo began its stop, three routers on
+three pods refused the same live `cache/{meshId}` hub, all naming silo `10.244.6.213`. That cache hub
+was waiting for replies its owners had already produced. Whether that silo was the cache hub's own pod
+(its claim no longer finding its local route) or another (the directory pointing away from the owner)
+could not be decided from the log. A peer predating the field prints `(not reported — a peer
+predating the field)` for the pod.
+
+> 🚨 **The owner-side half of this failure is not visible in production by default.** `PodHubGrain`'s
+> step-aside and refusal lines are `Information` and now name their pod, and the successful claim is
+> `Debug`. The code default ships none of them; an investigation reaches for the *router-side*
+> `Warning`, and that line therefore carries the identifying facts (silo and pod). For #7842 the
+> portal configuration ships `PodHubGrain` and Orleans' grain-directory namespace at `Information`,
+> as a permanent, costed entry in that file (MeshWeaver.Plugins `Memex.Portal.Distributed`
+> appsettings). The directory lines fire on membership changes. The `PodHubGrain` refusal line is
+> per refused delivery, so a refusal burst costs one line per refusal. Never raise a level in code to
+> investigate; the configuration entry is the place, with its cost stated.
 
 ## What this does not fix
 
