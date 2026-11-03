@@ -1107,7 +1107,24 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
 #    :<sha7> and :latest on every change to the watcher or its contract (Plugins#823/#992).
 #    A tag you did not read from the registry is not a tag you can deploy.
 az acr repository show-tags -n meshweaver --repository memex-log-watcher -o tsv
+#    Pin a <major>.<minor>.<patch> tag (the lane mints the highest published version + 1, so it
+#    only moves forward); :latest moves on every publish and :<sha7> names a commit, not a release.
+```
 
+> 🚨 **An estate that mirrors every image from the fleet registry cannot get the watcher there
+> yet.** Such an estate pulls only from `cr.meshweaver.cloud` with its instance key
+> (`<prefix>PluginCatalog-RegistryToken`) and reads the tags with
+> `GET /v2/<repo>/tags/list`. The `log-watcher image` lane pushes `memex-log-watcher` to
+> `meshweaver.azurecr.io` only, and core's declared release channels
+> (`.github/release-channels.json`) do not list the repository. The fleet registry has its own
+> storage and is not a read-through cache of the ACR, so an image reaches it only by a push, and
+> nothing pushes this one. Once the image is published there, the route is the same as for the
+> portal images: `GET https://cr.meshweaver.cloud/v2/memex-log-watcher/tags/list` with the
+> instance key, then pin a version tag. No per-key grant is needed: the registry ACL lets any
+> authenticated instance key pull any image repository outside `plugins/`. The gap is tracked in
+> [MeshWeaver.Deploy#133](https://github.com/Systemorph/MeshWeaver.Deploy/issues/133).
+
+```bash
 # 3. Apply the Deployment + PVC.
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command "kubectl apply -f log-watcher.yaml" \
