@@ -264,6 +264,12 @@ public class QuerySetupLeafDrainTest
 
             emitter.OnNext(2);
             pool.Dispose();
+            // Dispose only WAKES the pool's canceller thread. Release the consumer once the pool
+            // token is actually cancelled — the canceller exits after Cancel() has returned, and the
+            // hand-off's linked token is cancelled inside that call — or frame 2 could be delivered
+            // before the cancellation exists, and there would be nothing to terminate.
+            SpinWait.SpinUntil(() => !pool.CancellerIsAlive, Bound).Should().BeTrue(
+                "the pool's canceller has run the cancel");
             Volatile.Write(ref release, 1);
 
             var error = await faulted.Timeout(Bound).FirstAsync().Await(TestContext.Current.CancellationToken);
