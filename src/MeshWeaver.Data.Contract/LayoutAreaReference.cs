@@ -80,7 +80,7 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <c>Content</c> JSON, or <see cref="MeshNodeFieldsTarget"/> ("n") to bind against the whole
     /// node JSON (top-level fields like <c>Name</c>/<c>Description</c>/<c>Icon</c>/<c>Category</c>/
     /// <c>Order</c> + a nested <c>content/…</c> path). The path is base64url so it carries no
-    /// <c>/</c>, <c>.</c>, or <c>%9Y</c> — surviving the <c>DispatchView</c> <c>WorkspaceReference.Decode</c>
+    /// <c>/</c>, <c>.</c> or <c>%</c> — surviving the <c>DispatchView</c> <c>WorkspaceReference.Decode</c>
     /// hop and JSON-pointer parsing untouched. Field-pointer resolution against the node is
     /// case-insensitive, so both PascalCase DTO pointers and camelCase content pointers bind.</para>
     /// </summary>
