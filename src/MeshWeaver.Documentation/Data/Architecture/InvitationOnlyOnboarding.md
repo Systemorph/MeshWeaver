@@ -76,6 +76,46 @@ An offer the node has already moved past (a newer invite overwrote it before the
 emailed, unstamped: it was a real invite and its Space is announced nowhere else. Back-to-back invites
 to two Spaces therefore produce two emails, one per Space.
 
+### The Space Invite form: what a click shows, and Cancel
+
+The Space **Invite** form (`{Space}/Invite`, the node menu's **Invite people**,
+`SpaceInviteLayoutArea`) ends with ONE button row, its last element: **Cancel**, then **Invite**.
+Cancel only navigates back to the node the form was opened on (`{node}/Overview`, the platform's
+form-cancel convention from `CreateLayoutArea`); it has no click action and sends nothing.
+
+**The Invite click is its own feedback** ([Buttons: Pending State](/Doc/GUI/ButtonPendingState)).
+The invite is RETURNED to the click, so from the click until the invite answered the button is
+disabled with the status line *"Sending the invitation to …"* and the framework's Cancel; it then
+settles with the outcome as its summary line (*"Invited … as Editor. They get access automatically
+when they sign up."* / *"… already has an account — granted Editor on this Space."*). A fault settles
+it with the reason as its error line — an invalid address, a caller without the right, or *"The
+invitation was not sent: …"* — and so does a permission check or an invite that completes without an
+answer: no path completes the click silently. Nothing bounds the invite with a timeout: a hang stays
+visibly busy, and it is never turned into an outcome that did not happen.
+
+**Cancel during the invite releases the button, it does not stop the writes.** The invite is several
+writes (the deferred grant, then the invitation; or the grant, then the pin), and disposing them could
+stop between two commits — a grant scheduled with no invitation email. So once the permission check
+granted, the writes run to their end on their own subscription (idempotent upserts; a late fault is
+logged), and Cancel only lets go of the click. Before the check has granted, Cancel stops everything.
+
+This replaced an outcome **dialog** (maintainer, 2026-11-03: *"no screen change happening after
+invite"*). The click used to fire the invite on its own subscription and answer at once, so its busy
+state ended before any work started, and the only outcome surface was a closable `$Dialog` with no
+close action. The store keeps a closed dialog, and that dialog's control is identical whatever its
+text (the text lives in `$Dialog/ContentArea`), so after a first dialog had been dismissed every later
+outcome on the page was no visible change; and while the invite had not answered, nothing showed at
+all. `SpaceInviteFormTest` (MeshWeaver.Graph.Test) pins the settled click for every outcome, a
+second invite on the same page, the Viewer refusal, the button row and Cancel.
+
+**Who may invite.** The area is served on every node a viewer may read, and for an address with no
+account the service writes the invitation and the deferred grant AS SYSTEM — no access check sees
+the inviter on that half. So the click itself requires `Permission.Update` on the Space (the gate the
+**Invite people** menu item shows itself on) for the signed-in caller, and refuses everyone else
+before anything is written (*"You need edit rights on this Space to invite people to it."*). The
+immediate grant to an existing account still runs as the caller and is refused by the mesh where
+they hold no right to write it.
+
 ### The host's personal message
 
 The Space **Invite** form has an optional **Personal message** field. What the host types travels on
