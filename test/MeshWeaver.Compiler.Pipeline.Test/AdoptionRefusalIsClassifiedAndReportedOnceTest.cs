@@ -198,10 +198,13 @@ public class AdoptionRefusalIsClassifiedAndReportedOnceTest
             + string.Join(", ", offenders));
 
         var reportingSites = files.Sum(f => reporter.Matches(f.Text).Count);
-        reportingSites.Should().BeGreaterThanOrEqualTo(5,
-            "the five guarded load paths (schema probe, data-source schema, data-model area, cell "
-            + "surface, contract handler) report through the ledger; fewer means the matcher went "
-            + "blind and this guard would pass having checked nothing");
+        // Four since the NodeType schema interceptor (MeshDataSource.HandleNodeTypeSchemaRequest, the
+        // "data-source schema" site) was removed: a NodeType's schema now resolves its build through the
+        // data-model area's ResolveInstanceHubConfig, which reports through the ledger itself.
+        reportingSites.Should().BeGreaterThanOrEqualTo(4,
+            "the four guarded load paths (schema probe, data-model area — which now also answers the "
+            + "NodeType schema — cell surface, contract handler) report through the ledger; fewer means "
+            + "the matcher went blind and this guard would pass having checked nothing");
     }
 
     private sealed class RecordingLogger : ILogger

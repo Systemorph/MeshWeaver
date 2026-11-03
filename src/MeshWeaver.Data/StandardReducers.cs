@@ -582,9 +582,7 @@ public static class StandardReducers
         var value = reference switch
         {
             SchemaReference schema => Observable.Defer(() =>
-                (string.IsNullOrWhiteSpace(schema.Type) ? DataExtensions.DefaultSchemaTypeName(hub) : schema.Type) is { } typeName
-                    ? DataExtensions.ObserveSchema(hub, typeName).Select(info => (object)info)
-                    : Observable.Return<object>(new SchemaInfo("", "{}"))),
+                DataExtensions.ObserveSchemaReference(hub, schema).Select(info => (object)info)),
             _ => DataExtensions.ObserveDomainTypes(hub).Select(types => (object)types),
         };
 

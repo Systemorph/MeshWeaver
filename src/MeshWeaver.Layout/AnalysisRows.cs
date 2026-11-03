@@ -6,8 +6,9 @@ namespace MeshWeaver.Layout;
 /// <summary>
 /// How an analysis view's row property resolves to the rows themselves.
 ///
-/// <para><see cref="KpiStripControl.Items"/>, <see cref="TowerControl.Bands"/> and
-/// <see cref="ComparisonBarsControl.Pairs"/> are declared <c>object</c> so a caller may hand over the
+/// <para><see cref="KpiStripControl.Items"/>, <see cref="TowerControl.Bands"/>,
+/// <see cref="ComparisonBarsControl.Pairs"/>, <see cref="WaterfallControl.Steps"/> and
+/// <see cref="HierarchyControl.Nodes"/> are declared <c>object</c> so a caller may hand over the
 /// rows directly OR bind them to a live data section — and those two arrive at a renderer
 /// differently: a direct hand-over keeps its CLR type, a pointer-resolved one comes off the
 /// synchronization stream as a <see cref="JsonElement"/>. Both are the same rows, so the resolution

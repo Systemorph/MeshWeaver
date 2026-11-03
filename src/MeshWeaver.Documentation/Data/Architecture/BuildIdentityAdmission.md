@@ -157,7 +157,7 @@ populated, or on `CompilationStatus == Ok` alone:
 > identity → refused, naming what the release offers; no artifact link at all (a release written
 > before links existed) → admitted **unverified**, logged — an absence is not a verdict (#890).
 | `NodeTypeContractHandler` — published-release hydrate | `LatestReleasePath` + coordinates |
-| `MeshDataSource.HandleNodeTypeSchemaRequest` | coordinates |
+| `NodeTypeDataModelAreas.InstanceSchemaProvider` (via `ResolveInstanceHubConfig`; replaced `MeshDataSource.HandleNodeTypeSchemaRequest`) | coordinates |
 | `NodeTypeDataModelAreas.ResolveInstanceHubConfig` | coordinates |
 | `MeshOperations.ResolveHubConfigForSchema` | `CompilationStatus == Ok` (since #6635: a settled record — `Ok`, or `Error` still naming its last good build — plus coordinates; a record at `Error` no longer waits out the 5 s bound) |
 | `CellSurfaceAssemblyProvider` | `CompilationStatus == Ok` — and it takes a lifetime **lease** |

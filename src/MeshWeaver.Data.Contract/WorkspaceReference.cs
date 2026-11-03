@@ -9,27 +9,116 @@ namespace MeshWeaver.Data;
 public abstract record WorkspaceReference
 {
     /// <summary>
-    /// Encodes a value for safe use as ONE reference/URL segment, escaping <c>.</c> as <c>%9Y</c>
-    /// and <c>/</c> as <c>%9Z</c> in strings. Escaping the slash keeps a path-shaped id (e.g. a
-    /// source Code node path in a NodeType shell's <c>{node}/Code/{id}</c> href) a SINGLE segment:
-    /// with raw slashes the URL resolver's prefix probe contains segments like <c>Source</c>/<c>Test</c>,
-    /// which the satellite-table mapping routes to the <c>code</c> table for the WHOLE probe — the
-    /// node's ancestors then match nothing and navigation dies with "Page not found"
-    /// (Chess/GambitHunt shell links, 2026-07-12). Same principle as the base64url node-bound
-    /// DataContext (<c>LayoutAreaReference.MeshNodePrefix</c>): ids must not leak path segments.
+    /// Encodes a value for safe use as ONE reference/URL segment, with VALID percent-escapes: in the
+    /// part before any <c>?</c>, <c>%</c> → <c>%25</c>, <c>.</c> → <c>%2E</c>, <c>/</c> → <c>%2F</c>. The
+    /// query part, if any, is left as written (its values are unescaped by the reference's own
+    /// parameter parsing).
+    /// <para>Escaping the slash keeps a path-shaped id (e.g. a source Code node path in a NodeType shell's
+    /// <c>{node}/Code/{id}</c> href) a SINGLE segment: with raw slashes the URL resolver's prefix probe
+    /// contains segments like <c>Source</c>/<c>Test</c>, which the satellite-table mapping routes to the
+    /// <c>code</c> table for the WHOLE probe — the node's ancestors then match nothing and navigation dies
+    /// with "Page not found" (Chess/GambitHunt shell links, 2026-07-12). Same principle as the base64url
+    /// node-bound DataContext (<c>LayoutAreaReference.MeshNodePrefix</c>): ids must not leak path
+    /// segments. <c>%2F</c> is left encoded by the server and by the portal's raw-URI navigation, so it
+    /// never becomes a segment before <see cref="Decode"/> runs.</para>
+    /// <para>🚨 It used to write <c>%9Z</c> / <c>%9Y</c> — NOT valid percent-escapes. Clicked in-app (client
+    /// navigation) they worked, but any PAGE LOAD of such a URL — a reload, a new tab, a pasted or shared
+    /// link — was answered HTTP 400 by the server before the portal ever saw it (measured on a client
+    /// instance, 2026-11-03: the NodeType side menu's Sources/Tests links,
+    /// <c>…/Reinsurance/Acceptance/Code/Reinsurance%9ZAcceptance%9ZSource%9ZAcceptanceReport</c> → 400).
+    /// <see cref="Decode"/> still reads that legacy form.</para>
     /// </summary>
     /// <param name="value">The value to encode.</param>
     /// <returns>The encoded value (strings escaped; other values unchanged).</returns>
-    public static object Encode(object value) =>
-        value is string s ? s.Replace(".", "%9Y").Replace("/", "%9Z") : value;
+    public static object Encode(object value)
+    {
+        if (value is not string s)
+            return value;
+        var query = s.IndexOf('?');
+        var path = query < 0 ? s : s[..query];
+        var encoded = path.Replace("%", "%25").Replace(".", "%2E").Replace("/", "%2F");
+        // A segment that is all dots — "." or ".." — is a DOT SEGMENT to a browser even percent-encoded
+        // (`%2E`, `%2E%2E`), and URL parsing removes it before navigation: the id would never arrive.
+        // Such an id gets the sentinel `%3B`, which Encode emits nowhere else (a literal "%3B" in an id
+        // is written `%253B`), and DecodeAreaId removes it.
+        if (path is "." or "..")
+            encoded += DotSegmentSentinel;
+        return query < 0 ? encoded : encoded + s[query..];
+    }
+
+    /// <summary>The suffix that keeps an all-dots id from being read as a URL dot segment (see <see cref="Encode"/>).</summary>
+    internal const string DotSegmentSentinel = "%3B";
+
     /// <summary>
-    /// Reverses <see cref="Encode"/>, restoring <c>/</c> from <c>%9Z</c> and <c>.</c> from
-    /// <c>%9Y</c> in strings.
+    /// Reverses <see cref="Encode"/> for a value that came out of a URL, and leaves an internal
+    /// <c>DataContext</c> pointer alone.
+    /// <para>🚨 Two kinds of string reach this method. The URL entry points (the portal page, the area
+    /// page, <c>MeshOperations</c>) hand it an area or id segment that <see cref="Encode"/> wrote. The
+    /// view decode hop (<c>DispatchView</c>, <c>BlazorView</c>, the HTML export) hands it a
+    /// <c>DataContext</c> — a JSON POINTER (<c>/data/"id"</c>, built by
+    /// <c>LayoutAreaReference.GetDataPointer</c> with JSON and JSON-pointer escaping), which no producer
+    /// ever passes through <see cref="Encode"/>. Decoding a pointer can only corrupt it:
+    /// <c>/data/"literal%2Fid"</c> would become <c>/data/"literal/id"</c> and the binding would fail to
+    /// deserialize, and <c>%2E</c> / <c>%25</c> would select a different key. A pointer always starts
+    /// with <c>/</c>; an id from a URL segment never does. So a value starting with <c>/</c> is returned
+    /// unchanged, and every other value is decoded by <see cref="DecodeAreaId"/>.</para>
     /// </summary>
     /// <param name="value">The value to decode.</param>
-    /// <returns>The decoded value (strings unescaped; other values unchanged).</returns>
+    /// <returns>The decoded value (ids unescaped; pointers and non-strings unchanged).</returns>
     public static object Decode(object value) =>
-        value is string s ? s.Replace("%9Z", "/").Replace("%9Y", ".") : value;
+        value is string s && !s.StartsWith('/') ? DecodeAreaId(s) : value;
+
+    /// <summary>
+    /// Decodes an area or id segment written by <see cref="Encode"/>. In the part before any
+    /// <c>?</c> it reverses exactly the escapes <see cref="Encode"/> writes — <c>%2F</c> → <c>/</c>,
+    /// <c>%2E</c> → <c>.</c>, <c>%25</c> → <c>%</c> (hex case-insensitive) — plus the legacy
+    /// <c>%9Z</c> / <c>%9Y</c>. It works in ONE left-to-right pass, so an escaped <c>%</c> is never decoded
+    /// twice, and every other <c>%XX</c> is left as written. The query part keeps its escapes for the
+    /// reference's own parameter parsing; only the legacy escapes are restored there.
+    /// </summary>
+    /// <param name="id">The segment.</param>
+    /// <returns>The decoded segment.</returns>
+    public static string DecodeAreaId(string id)
+    {
+        var query = id.IndexOf('?');
+        var path = query < 0 ? id : id[..query];
+        if (path.EndsWith(DotSegmentSentinel, StringComparison.OrdinalIgnoreCase)
+            && path[..^DotSegmentSentinel.Length].ToUpperInvariant() is "%2E" or "%2E%2E")
+            path = path[..^DotSegmentSentinel.Length];
+        var decoded = DecodeOwnEscapes(path);
+        return query < 0
+            ? decoded
+            : decoded + id[query..].Replace("%9Z", "/").Replace("%9Y", ".");
+    }
+
+    private static string DecodeOwnEscapes(string path)
+    {
+        if (path.IndexOf('%') < 0)
+            return path;
+        var sb = new System.Text.StringBuilder(path.Length);
+        for (var i = 0; i < path.Length; i++)
+        {
+            if (path[i] == '%' && i + 2 < path.Length)
+            {
+                var code = path.Substring(i + 1, 2).ToUpperInvariant();
+                var ch = code switch
+                {
+                    "2F" or "9Z" => '/',
+                    "2E" or "9Y" => '.',
+                    "25" => '%',
+                    _ => '\0',
+                };
+                if (ch != '\0')
+                {
+                    sb.Append(ch);
+                    i += 2;
+                    continue;
+                }
+            }
+            sb.Append(path[i]);
+        }
+        return sb.ToString();
+    }
 
 }
 
