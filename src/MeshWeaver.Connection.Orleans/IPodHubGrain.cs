@@ -174,6 +174,22 @@ public sealed class PodHubNotHereException : Exception
     [global::Orleans.Id(3)]
     public bool Released { get; set; }
 
+    /// <summary>
+    /// The POD (host name) of the silo whose activation answered, when known — beside
+    /// <see cref="RespondingSilo"/>, which is only the silo's network address.
+    ///
+    /// <para>🚨 An IP is not an identity a reader can act on (#7842). On a roll of memex, three
+    /// routers on three pods logged the same refusal of one live cache hub and named silo
+    /// <c>10.244.6.213</c>; whether that was the hub's OWN pod (a claim that no longer finds its
+    /// local route) or another one (a directory entry pointing away from the owner) are different
+    /// faults, and nothing in the log could tell which pod the address belonged to. The pod name is
+    /// what every other fleet log line is keyed by, so the refusal carries it.</para>
+    ///
+    /// <para>Null on an older peer, and on the <see cref="ClaimRefused"/> shape.</para>
+    /// </summary>
+    [global::Orleans.Id(4)]
+    public string? RespondingPod { get; set; }
+
     /// <inheritdoc />
     public override string Message => ClaimRefusal
         ? $"The pod-hub claim for '{Address}' was refused: Attach answered false, so the activation "

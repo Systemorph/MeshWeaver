@@ -427,7 +427,7 @@ internal class RoutingGrain(
                 ? AnswerPodHubNotHere(
                     delivery, addressPath, address.Type, meshConfig,
                     FallBackToStream, PostVerdictToSender, logger, podHubRefusalLog,
-                    RespondingSilo(ex), WasReleased(ex))
+                    RespondingSilo(ex), WasReleased(ex), RespondingPod(ex))
                 // A REAL failure of the call, transient retries exhausted (or a non-transient
                 // fault) — the owning silo threw, went away mid-call, or the placement could not
                 // be made. This is the whole gain over a publish: it is OBSERVABLE, so it becomes
@@ -532,6 +532,11 @@ internal class RoutingGrain(
     /// the stamp, the shape <c>DataExtensions.HandleTargetUnservedFailure</c> evicts on. The transient
     /// shape is unchanged for every other refusal, so the #2756 ride-out is untouched.
     /// </param>
+    /// <param name="respondingPod">
+    /// The POD the answering activation is on (<see cref="RespondingPod"/>), named on the line beside
+    /// <paramref name="respondingSilo"/> so a reader can tell the owner's own pod from another (#7842).
+    /// Null on a peer that predates the field.
+    /// </param>
     internal static IObservable<Unit> AnswerPodHubNotHere(
         IMessageDelivery delivery,
         string addressPath,
@@ -542,8 +547,10 @@ internal class RoutingGrain(
         ILogger logger,
         DeadTargetRefusalLog? refusalLog = null,
         string? respondingSilo = null,
-        bool released = false)
+        bool released = false,
+        string? respondingPod = null)
     {
+        var answeredBy = DescribeResponder(respondingSilo, respondingPod);
         if (meshConfig.ClientHostedAddressTypes.Contains(addressType))
             return fallBackToStream();
 
@@ -565,7 +572,7 @@ internal class RoutingGrain(
                 + "torn-down hub). Nobody will claim it again, so this is a TERMINAL verdict: the "
                 + "sender's owner-side client-subscription eviction drops the server-side stream it "
                 + "was still fanning out to, instead of pushing to the corpse until idle release. The "
-                + $"tombstone that answered is on silo '{respondingSilo ?? "(not reported)"}'.";
+                + $"tombstone that answered is on {answeredBy}.";
             var suppressed = 0;
             if (refusalLog is null || refusalLog.ShouldReport(addressPath, out suppressed))
                 logger.LogWarning(
@@ -592,9 +599,8 @@ internal class RoutingGrain(
             $"Directed delivery to pod hub '{addressPath}' was refused: no silo in this cluster is "
             + "currently serving that hub. Transient — the owner claims its address for as long as it "
             + "is registered, and re-asserts that claim on every cluster membership change, so a retry "
-            + "is the correct response. The activation that answered is on silo "
-            + $"'{respondingSilo ?? "(not reported — a peer predating the field)"}'; when that is THIS "
-            + "router's own silo, the grain directory holds no entry for the address at all and "
+            + $"is the correct response. The activation that answered is on {answeredBy}; when that "
+            + "is THIS router's own silo, the grain directory holds no entry for the address at all and "
             + "prefer-local placed a throw-away activation here (#2938).";
         var suppressedSincePriorReport = 0;
         if (refusalLog is null || refusalLog.ShouldReport(addressPath, out suppressedSincePriorReport))
@@ -660,9 +666,10 @@ internal class RoutingGrain(
             $"RoutingGrain.RouteMessage FAILURE_SENDER_RELEASED_DROPPED id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
         logger.LogDebug(
             "[ROUTE] Dropped the {ErrorType} DeliveryFailure for {DeliveryId}: its sender {Sender} was RELEASED "
-            + "by its owner (the registration that claimed it was disposed; the tombstone on silo {Silo} "
+            + "by its owner (the registration that claimed it was disposed; the tombstone on {Responder} "
             + "answered), so there is nobody left to tell. Original failure: {FailureMessage}",
-            errorType, delivery.Id, delivery.Sender, RespondingSilo(ex) ?? "(not reported)", failureMessage);
+            errorType, delivery.Id, delivery.Sender, DescribeResponder(RespondingSilo(ex), RespondingPod(ex)),
+            failureMessage);
         return Observable.Return(Unit.Default);
     }
 
@@ -694,6 +701,37 @@ internal class RoutingGrain(
         PodHubNotHereException notHere => notHere.RespondingSilo,
         _ => RespondingSilo(ex.InnerException),
     };
+
+    /// <summary>
+    /// The POD whose activation answered (<see cref="PodHubNotHereException.RespondingPod"/>), dug out
+    /// of the same wrapped chain as <see cref="RespondingSilo"/> — or null on a peer that predates the
+    /// field.
+    ///
+    /// <para>🚨 Why the pod and not only the silo (#7842): on a roll of memex three routers on three
+    /// pods refused the same live cache hub and named silo <c>10.244.6.213</c>. Whether that silo was
+    /// the hub's OWN pod (its claim no longer finds its local route) or another (the directory entry
+    /// points away from the owner) are different faults, and an IP cannot be matched against the pod
+    /// names every other log line carries.</para>
+    /// </summary>
+    /// <param name="ex">The exception the pod-hub call failed with.</param>
+    /// <returns>The responding pod's name, or null.</returns>
+    internal static string? RespondingPod(Exception? ex) => ex switch
+    {
+        null => null,
+        PodHubNotHereException notHere => notHere.RespondingPod,
+        _ => RespondingPod(ex.InnerException),
+    };
+
+    /// <summary>
+    /// How a refusal line names the activation that answered: <c>silo '…' (pod '…')</c>, with each
+    /// half saying so when a peer predating the field did not report it.
+    /// </summary>
+    /// <param name="silo">The responding silo, or null.</param>
+    /// <param name="pod">The responding pod, or null.</param>
+    /// <returns>The phrase for the refusal line.</returns>
+    internal static string DescribeResponder(string? silo, string? pod) =>
+        $"silo '{silo ?? "(not reported — a peer predating the field)"}' "
+        + $"(pod '{pod ?? "(not reported — a peer predating the field)"}')";
 
     /// <summary>
     /// Whether the refusal came from the owner's RELEASE tombstone
