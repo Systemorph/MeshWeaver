@@ -4103,13 +4103,31 @@ public static class DataExtensions
         IMessageHub hub,
         SchemaReference reference,
         GetDataRequest _)
-    {
-        var typeName = string.IsNullOrWhiteSpace(reference.Type) ? DefaultSchemaTypeName(hub) : reference.Type;
-        if (typeName is null)
-            return Observable.Return(new GetDataResponse(new SchemaInfo("", "{}"), hub.Version));
+        => ObserveSchemaReference(hub, reference).Select(schema => new GetDataResponse(schema, hub.Version));
 
-        return ObserveSchema(hub, typeName).Select(schema => new GetDataResponse(schema, hub.Version));
+    /// <summary>
+    /// The ONE answer to a <see cref="SchemaReference"/> on <paramref name="hub"/>, shared by the request
+    /// path and the workspace stream: the hub's declared <see cref="DataContext.SchemaProvider"/> when it
+    /// answers the reference, else the workspace's own registry — the declared content type for an untyped
+    /// reference (<see cref="DefaultSchemaTypeName"/>), the named type otherwise.
+    /// </summary>
+    internal static IObservable<SchemaInfo> ObserveSchemaReference(IMessageHub hub, SchemaReference reference)
+    {
+        var typeName = string.IsNullOrWhiteSpace(reference.Type) ? null : reference.Type;
+        var workspace = hub.GetWorkspace();
+        if (workspace.DataContext.SchemaProvider?.Invoke(workspace, typeName) is { } provided)
+            return provided;
+        return ObserveRegistrySchema(hub, typeName);
     }
+
+    /// <summary>
+    /// The schema the workspace's OWN registry gives a reference — what <see cref="ObserveSchemaReference"/>
+    /// answers when no provider does, and what a provider falls back to for a type only the hub itself knows.
+    /// </summary>
+    internal static IObservable<SchemaInfo> ObserveRegistrySchema(IMessageHub hub, string? typeName)
+        => (typeName ?? DefaultSchemaTypeName(hub)) is { } resolved
+            ? ObserveSchema(hub, resolved)
+            : Observable.Return(new SchemaInfo("", "{}"));
 
     /// <summary>
     /// Observable for DataModelReference — the registered types, once their descriptions are in

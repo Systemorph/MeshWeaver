@@ -297,8 +297,13 @@ public static class MeshDataSourceExtensions
             .WithHandler<SaveMeshNodeRequest>(HandleSaveMeshNode)
             .WithHandler<DeleteMeshNodeRequest>(HandleDeleteMeshNode)
             // Post-load INodeValidator-Read hook for MeshNodeReference reads.
-            .AddDeliveryPipeline(AddReadValidatorPipeline)
-            .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
+            .AddDeliveryPipeline(AddReadValidatorPipeline);
+            // NOTE: a NodeType's schema is answered by its DataContext.SchemaProvider
+            // (NodeTypeDataModelAreas.InstanceSchemaProvider, installed by AddNodeTypeView). The
+            // GetDataRequest interceptor that used to live here answered only a bare SchemaReference
+            // (never the `schema/…` unified path MCP and the GUI send), returned the delivery
+            // unprocessed so the default handler answered NodeTypeDefinition FIRST, and subscribed a
+            // 10 s own-node wait on every non-NodeType hub for every schema read.
     }
 
     /// <summary>
@@ -1993,126 +1998,6 @@ public static class MeshDataSourceExtensions
                 "[SaveMeshNode] dispose-flush persisted path={Path} version={Version}",
                 saved?.Path, saved?.Version))
             .Select(_ => System.Reactive.Unit.Default);
-    }
-
-    /// <summary>
-    /// Handler for GetDataRequest with SchemaReference on NodeType nodes.
-    /// Sync handler: composes storage read + sub-hub schema fetch reactively and
-    /// posts the response from inside Subscribe. Returns request.Processed()
-    /// immediately so the hub scheduler is not blocked. No await, no Task in the
-    /// hub flow (Doc/Architecture/AsynchronousCalls.md).
-    /// </summary>
-    private static IMessageDelivery HandleNodeTypeSchemaRequest(
-        IMessageHub hub,
-        IMessageDelivery<GetDataRequest> request)
-    {
-        // Only handle SchemaReference with empty type — pass through otherwise.
-        if (request.Message.Reference is not SchemaReference { Type: null or "" })
-            return request;
-
-        var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
-        // Address.Path (segments only) — ToString() on hosted hubs adds "~<host>",
-        // which never matches persistence keys (segment-only).
-        var hubPath = hub.Address.Path;
-
-        if (compilationService == null)
-            return request;
-
-        // Read own MeshNode from the workspace (live, no extra storage hop). The
-        // per-NodeType hub itself is the schema authority — its own NodeTypeDefinition
-        // carries LatestAssemblyCollection + LatestAssemblyPath; resolve through
-        // IAssemblyStore to the local DLL and recover the HubConfiguration delegate
-        // by reflecting against the cached assembly (no Roslyn re-run).
-        hub.GetWorkspace().GetMeshNodeStream()
-            .Where(node => node?.Content is NodeTypeDefinition
-                || (node is not null && string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal)))
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .SelectMany(node =>
-            {
-                // ContentAs, never a CLR type test: a NodeType node whose Content arrived
-                // un-materialized IS a NodeType node, and reading it with `is` answers "no
-                // definition" for a type that has one (AGENTS.md, the untyped-payload rule).
-                var def = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
-                if (def is null
-                    || string.IsNullOrEmpty(def.LatestAssemblyCollection)
-                    || string.IsNullOrEmpty(def.LatestAssemblyPath))
-                    return Observable.Empty<GetDataResponse>();
-
-                // 🚨 ADOPT-TIME IDENTITY GATE (#3472). The schema probe loads the type's assembly
-                // and spins a transient hub over the types it finds; it never consulted
-                // HasUsableBuild, so a record naming a foreign-framework build was loaded here on
-                // the two coordinate fields alone. Refusing answers exactly as a store miss does
-                // (no schema response — the caller's own not-found path), which is where this
-                // lands today on any store whose key carries the framework tag.
-                if (NodeTypeBuildIdentity.Refuses(def))
-                {
-                    // Level by healability, once per (type, record identity) — #5066.
-                    hub.ServiceProvider.GetRequiredService<NodeTypeAdoptionRefusalLog>().Report(
-                        hub.ServiceProvider.GetService<ILoggerFactory>()
-                            ?.CreateLogger(typeof(MeshDataSourceExtensions)),
-                        "DataSourceSchema", node!.Path, def,
-                        "No schema is answered from those bytes.");
-                    return Observable.Empty<GetDataResponse>();
-                }
-
-                var version = def.LastCompiledVersion ?? node!.Version;
-                var store = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
-                    ? (IAssemblyStore)FrameworkAssemblyStore.Instance
-                    : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
-
-                return store.TryGetBuildPath(node.Path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid)
-                    .SelectMany(localPath =>
-                    {
-                        if (string.IsNullOrEmpty(localPath))
-                            return Observable.Empty<GetDataResponse>();
-
-                        return compilationService.GetConfigurationsFromExistingAssembly(localPath!, hubPath)
-                            .Take(1)
-                            .SelectMany(result =>
-                            {
-                                var matching = result?.NodeTypeConfigurations
-                                    .FirstOrDefault(c => string.Equals(c.NodeType, hubPath, StringComparison.OrdinalIgnoreCase))
-                                    ?? result?.NodeTypeConfigurations.FirstOrDefault();
-                                if (matching?.HubConfiguration == null)
-                                    return Observable.Empty<GetDataResponse>();
-
-                                var dummyAddress = new Address($"{TransientProbeAddresses.SchemaProbePrefix}{Guid.NewGuid():N}");
-                                // 🚨 AsTransientNodeProbe: built to answer one SchemaReference and
-                                // disposed in the Finally below. It must not install the per-node
-                                // control plane — those watchers would only open `sync/` sub-hubs
-                                // and then fault as this hub is torn down out from under them.
-                                // Stamp the NodeType path so the WithContentType inside the
-                                // NodeType's configuration records an EXACT registry entry from the
-                                // probe too — a probe reaches WithContentType exactly as a real
-                                // activation does, so leaving it unstamped would make registration
-                                // depend on which of the two ran first (see NodeTypePathHolder).
-                                var subHub = hub.GetHostedHub(dummyAddress, c =>
-                                    matching.HubConfiguration(
-                                        c.AddData().WithNodeTypePath(matching.NodeType ?? hubPath))
-                                        .AsTransientNodeProbe());
-
-                                // The probe's OWN schema stream, never a GetDataRequest posted
-                                // to itself — read once the probe has STARTED (the init gate the
-                                // self-posted request used to provide; the stream alone can reduce
-                                // off the empty store before the data sources initialize). One-shot
-                                // is right: the probe dies here.
-                                return NodeTypeDataModelAreas.ProbeStarted(subHub)
-                                    .SelectMany(_ => subHub.GetWorkspace().GetNullableStream(new SchemaReference())
-                                        ?? Observable.Empty<ChangeItem<object>>())
-                                    .Take(1)
-                                    .Select(change => new GetDataResponse(change.Value, subHub.Version))
-                                    .Finally(subHub.Dispose);
-                            });
-                    });
-            })
-            .Subscribe(
-                schemaResponse => hub.Post(schemaResponse, o => o.ResponseFor(request)),
-                _ => { /* swallow — default handler still has a chance via no-response below */ });
-
-        // Return Processed; if our reactive chain doesn't post a response (non-NodeType,
-        // missing config, error), the default handler chain still runs and handles it.
-        return request;
     }
 
     private static IMessageDelivery HandleCreateRelease(

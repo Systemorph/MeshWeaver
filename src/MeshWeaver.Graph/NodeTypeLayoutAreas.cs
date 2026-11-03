@@ -96,6 +96,10 @@ public static class NodeTypeLayoutAreas
     public static MessageHubConfiguration AddNodeTypeView(this MessageHubConfiguration configuration)
         => configuration
             .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
+            // A SchemaReference on a NodeType describes its INSTANCES' content type — the one its
+            // configuration declares with WithContentType — never NodeTypeDefinition. One provider
+            // answers @{type}/schema/, a GetDataRequest and the $Schema area alike.
+            .AddData(data => data.WithSchemaProvider(NodeTypeDataModelAreas.InstanceSchemaProvider))
             .AddLayout(layout => layout
                 .WithDefaultArea(OverviewArea)
                 .WithView(SearchArea, Search)  // standard instance search, wrapped in the shell
@@ -110,7 +114,9 @@ public static class NodeTypeLayoutAreas
                 .WithView(ProgressArea, Progress)
                 // UCR special areas for unified content references
                 .WithView(MeshNodeLayoutAreas.DataArea, MeshNodeLayoutAreas.Data)
-                .WithView(MeshNodeLayoutAreas.SchemaArea, MeshNodeLayoutAreas.Schema)
+                // $Schema on a NodeType is the INSTANCE content schema (via the schema provider
+                // above), not the definition hub's own NodeTypeDefinition.
+                .WithView(MeshNodeLayoutAreas.SchemaArea, NodeTypeSchema)
                 // $Model on a NodeType shows the INSTANCE data model (compiled types),
                 // not the definition hub's own registry — diagram with a JSON toggle.
                 .WithView(MeshNodeLayoutAreas.ModelArea, NodeTypeDataModel));
@@ -810,6 +816,14 @@ public static class NodeTypeLayoutAreas
     /// </summary>
     public static UiControl NodeTypeDataModel(LayoutAreaHost host, RenderingContext ctx)
         => Shell(host, NodeTypeDataModelAreas.Content);
+
+    /// <summary>
+    /// The NodeType's <c>$Schema</c> area: the JSON schema of its instances' content type (with an
+    /// Id, of that type in the instance model). Bare — no shell — because it is embedded by callers
+    /// that frame it themselves (the data model explorer's JSON Schema tab, markdown <c>@@</c> embeds).
+    /// </summary>
+    public static IObservable<UiControl?> NodeTypeSchema(LayoutAreaHost host, RenderingContext ctx)
+        => NodeTypeDataModelAreas.Schema(host, ctx);
 
     private static IObservable<UiControl?> CodeContent(LayoutAreaHost host, RenderingContext ctx)
     {

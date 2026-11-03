@@ -70,7 +70,7 @@ closed*. Every surface below either loads a NodeType's assembly or invokes somet
 | 3 | `NodeTypeContractHandler` — legacy `GetCompilationPathRequest` | Hands a configuration to an activating instance | ✅ (via the same node state) |
 | 4 | `CellSurfaceAssemblyProvider` — the kernel cell-surface join | Loads the assembly straight through `NodeAssemblyLoadContext` so **every script submission in the session can call its functions by bare name**, with full write access | ✅ (its own check) |
 | 5 | `NodeTypeDataModelAreas.ProbeInstanceModel` | Renders the type's `$Model` / data-model page through a **transient probe** hub | ❌ deliberate |
-| 6 | `MeshDataSource.HandleNodeTypeSchemaRequest` | Answers one `SchemaReference`, transient probe | ❌ deliberate |
+| 6 | `NodeTypeDataModelAreas.ProbeInstanceSchema` (was `MeshDataSource.HandleNodeTypeSchemaRequest`) | Answers a NodeType's `SchemaReference`, transient probe | ❌ deliberate |
 | 7 | `MeshOperations.ReadFromContentType` | Schema validation for agent-facing tools, transient probe | ❌ deliberate |
 | 8 | `NodeTypeBatchBake` / `DynamicTypePreWarmer` | Boot-time compile/pre-warm sweep — produces `Compiled` provenance by construction | n/a |
 
