@@ -350,7 +350,26 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
 
         private void Watch(IMessageHub hub)
         {
-            var collection = hub.ServiceProvider.GetService<HostedHubsCollection>();
+            // 🚨 HostedHubsCollection.Hubs deliberately lists hubs that are still TEARING DOWN (the
+            // retiring and joining sets, so the owner's disposal join can see them), and a hub's
+            // scope closes on DisposalCompleted — before its entry leaves those sets. So the
+            // snapshot this walk enumerates can hand over a hub whose service scope is already
+            // closed, and resolving from it throws ObjectDisposedException (main run 41692779248,
+            // shard 5: the counter's constructor faulted before the test began). A hub that is
+            // disposing hosts no new child, so there is nothing of it to watch.
+            if (hub.IsDisposing)
+                return;
+
+            HostedHubsCollection? collection;
+            try
+            {
+                collection = hub.ServiceProvider.GetService<HostedHubsCollection>();
+            }
+            catch (ObjectDisposedException) when (hub.IsDisposing)
+            {
+                // It began disposing between the check above and the resolve — the same case.
+                return;
+            }
             if (collection is null || !watched.TryAdd(collection, 0))
                 return;
 
