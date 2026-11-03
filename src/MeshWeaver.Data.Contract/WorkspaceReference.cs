@@ -37,8 +37,17 @@ public abstract record WorkspaceReference
         var query = s.IndexOf('?');
         var path = query < 0 ? s : s[..query];
         var encoded = path.Replace("%", "%25").Replace(".", "%2E").Replace("/", "%2F");
+        // A segment that is all dots — "." or ".." — is a DOT SEGMENT to a browser even percent-encoded
+        // (`%2E`, `%2E%2E`), and URL parsing removes it before navigation: the id would never arrive.
+        // Such an id gets the sentinel `%3B`, which Encode emits nowhere else (a literal "%3B" in an id
+        // is written `%253B`), and DecodeAreaId removes it.
+        if (path is "." or "..")
+            encoded += DotSegmentSentinel;
         return query < 0 ? encoded : encoded + s[query..];
     }
+
+    /// <summary>The suffix that keeps an all-dots id from being read as a URL dot segment (see <see cref="Encode"/>).</summary>
+    internal const string DotSegmentSentinel = "%3B";
 
     /// <summary>
     /// Reverses <see cref="Encode"/> for a value that came out of a URL, and leaves an internal
@@ -73,6 +82,9 @@ public abstract record WorkspaceReference
     {
         var query = id.IndexOf('?');
         var path = query < 0 ? id : id[..query];
+        if (path.EndsWith(DotSegmentSentinel, StringComparison.OrdinalIgnoreCase)
+            && path[..^DotSegmentSentinel.Length].ToUpperInvariant() is "%2E" or "%2E%2E")
+            path = path[..^DotSegmentSentinel.Length];
         var decoded = DecodeOwnEscapes(path);
         return query < 0
             ? decoded

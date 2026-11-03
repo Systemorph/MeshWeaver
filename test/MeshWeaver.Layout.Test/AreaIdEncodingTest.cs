@@ -70,6 +70,32 @@ public class AreaIdEncodingTest
         Assert.True(Uri.TryCreate("https://portal.example.com/Node/Code/" + encoded, UriKind.Absolute, out _));
     }
 
+    /// <summary>
+    /// 🚨 Review: an all-dots id ("." or "..") must not become a URL DOT SEGMENT — `%2E` / `%2E%2E` are
+    /// removed by URL parsing before navigation. Asserted on the PARSED URL's path, not on whether a URL
+    /// could be created, plus the round-trip; ids that merely contain dots are unaffected.
+    /// </summary>
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("...")]
+    [InlineData("..x")]
+    [InlineData("%3B")]
+    public void AnAllDotsId_SurvivesUrlParsing_AndRoundTrips(string id)
+    {
+        var encoded = (string)WorkspaceReference.Encode(id);
+        // The parsed URL keeps the id as its own third segment — a dot segment would be removed
+        // (`/Node/Code/%2E%2E` parses to `/Node/`). (.NET's Uri unescapes %2E in AbsolutePath, so the
+        // segment is compared by structure, not byte for byte.)
+        var url = new Uri("https://portal.example.com/Node/Code/" + encoded);
+        var segments = url.AbsolutePath.Trim('/').Split('/');
+        Assert.Equal(new[] { "Node", "Code" }, segments[..2]);
+        Assert.Equal(3, segments.Length);
+        Assert.NotEqual(".", segments[2]);
+        Assert.NotEqual("..", segments[2]);
+        Assert.Equal(id, (string)WorkspaceReference.Decode(encoded));
+    }
+
     /// <summary>Links already out there carry the legacy escapes — they still decode.</summary>
     [Fact]
     public void Decode_ReadsTheLegacyEscapes()
