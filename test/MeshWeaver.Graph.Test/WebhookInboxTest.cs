@@ -2,6 +2,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Diagnostics.Metrics;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -197,6 +200,14 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         // Allowlisted but no node at the path → refused (the satellite would be ownerless).
         (await WebhookInbox.Deliver(Mesh, ["Ghost"], "Ghost", null, [], "{}")
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
+            .Status.Should().Be(WebhookInbox.DeliveryStatus.UnknownTarget);
+
+        // ... and for a kind the target does not accept, too: the owner is checked BEFORE the
+        // accepted-events filter, so an ignored kind never answers 2xx where a stored one is refused.
+        (await WebhookInbox.Deliver(Mesh,
+                    [new WebhookInbox.WebhookTarget("Ghost") { AcceptedEvents = ["pull_request"] }], "Ghost", null,
+                    [new KeyValuePair<string, string>(WebhookInbox.GitHubEventHeader, "check_run")], "{}")
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.UnknownTarget);
 
@@ -464,5 +475,172 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         configuration.GetSection(WebhookInbox.TargetsConfigSection).GetChildren()
             .Select(c => c.Value).Where(v => !string.IsNullOrWhiteSpace(v))
             .Should().Equal("Hosting/PlatformBuilds", "Store/Payments");
+    }
+
+    // ── A declared intake filter (MeshWeaver#7863) ─────────────────────────────────────────────────
+
+    private static KeyValuePair<string, string> GitHubEvent(string kind, string header = WebhookInbox.GitHubEventHeader) =>
+        new(header, kind);
+
+    private static WebhookInbox.WebhookTarget Declaring(string path, string? secretConfigKey, params string[] accepted) =>
+        new(path, secretConfigKey)
+        {
+            AcceptedEvents = accepted.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+        };
+
+    private const string CheckRunBody = "{\"action\":\"completed\",\"check_run\":{\"id\":1}}";
+    private const string PullRequestBody = "{\"action\":\"opened\",\"pull_request\":{\"number\":7}}";
+
+    /// <summary>
+    /// 🚨 THE CHANGE: a kind the target does not declare is answered 2xx and NEVER written — no node,
+    /// so nothing for the full-JSON, text and vector indexes to churn on — and it is COUNTED on the
+    /// platform meter. The signature is still verified first.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task UnacceptedGitHubEvent_IsAnswered2xx_Counted_AndNeverWritten()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await CreateTarget("Filtered", ct);
+        long counted = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Name == WebhookInboxMetrics.IgnoredCounterName)
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            foreach (var tag in tags)
+                if (tag.Key == "target" && Equals(tag.Value, "Filtered"))
+                    Interlocked.Add(ref counted, value);
+        });
+        listener.Start();
+
+        var result = await Post(
+            Declaring("Filtered", SecretKey, "pull_request", "issues"), "Filtered",
+            [Sign(CheckRunBody, InstanceSecret), GitHubEvent("check_run")], CheckRunBody, ct);
+
+        result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted,
+            "the sender did nothing wrong — a refusal would make GitHub mark the hook failing");
+        result.IgnoredEvent.Should().Be("check_run");
+        result.NodePath.Should().BeNull("an ignored delivery is never written");
+        result.SignatureVerified.Should().BeTrue("the filter runs after the signature verified");
+        (await InboxCount("Filtered", ct)).Should().Be(0);
+        Interlocked.Read(ref counted).Should().Be(1, "every ignored delivery is counted");
+    }
+
+    /// <summary>A declared kind is stored exactly as before — the header matched ignoring case,
+    /// because HTTP/2 delivers it lowercased.</summary>
+    [Fact(Timeout = 120000)]
+    public async Task AcceptedGitHubEvent_IsWritten()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await CreateTarget("FilteredAccepts", ct);
+
+        var result = await Post(
+            Declaring("FilteredAccepts", SecretKey, "pull_request", "issues"), "FilteredAccepts",
+            [Sign(PullRequestBody, InstanceSecret), GitHubEvent("PULL_REQUEST", "x-github-event")], PullRequestBody, ct);
+
+        result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
+        result.IgnoredEvent.Should().BeNull();
+        result.NodePath.Should().StartWith($"FilteredAccepts/{WebhookInbox.InboxContainer}/");
+        (await InboxCount("FilteredAccepts", ct)).Should().Be(1);
+    }
+
+    /// <summary>A target that declares no set keeps today's contract: every kind is stored.</summary>
+    [Fact(Timeout = 120000)]
+    public async Task TargetWithNoDeclaredSet_AcceptsEveryKind()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await CreateTarget("Undeclared", ct);
+
+        var result = await Post(
+            new WebhookInbox.WebhookTarget("Undeclared", SecretKey), "Undeclared",
+            [Sign(CheckRunBody, InstanceSecret), GitHubEvent("check_run")], CheckRunBody, ct);
+
+        result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
+        result.IgnoredEvent.Should().BeNull();
+        result.NodePath.Should().NotBeNull();
+        (await InboxCount("Undeclared", ct)).Should().Be(1);
+    }
+
+    /// <summary>A delivery naming no GitHub event is not a GitHub delivery — the fleet's own signed
+    /// envelopes — and a declared set never filters it.</summary>
+    [Fact(Timeout = 120000)]
+    public async Task DeliveryWithoutAGitHubEvent_IsWritten_OnADeclaringTarget()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await CreateTarget("FilteredEnvelope", ct);
+
+        var result = await Post(
+            Declaring("FilteredEnvelope", SecretKey, "pull_request"), "FilteredEnvelope",
+            [Sign(BuildFact, InstanceSecret)], BuildFact, ct);
+
+        result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
+        result.IgnoredEvent.Should().BeNull();
+        (await InboxCount("FilteredEnvelope", ct)).Should().Be(1);
+    }
+
+    /// <summary>The filter never turns a 401 into a 2xx: an undeclared kind whose signature does
+    /// not verify is still refused, so a drifted secret stays visible on every kind.</summary>
+    [Fact(Timeout = 120000)]
+    public async Task UnacceptedGitHubEvent_WithADriftedSecret_IsStillRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await CreateTarget("FilteredDrifted", ct);
+
+        var result = await Post(
+            Declaring("FilteredDrifted", SecretKey, "pull_request"), "FilteredDrifted",
+            [Sign(CheckRunBody, InstanceSecret + "x"), GitHubEvent("check_run")], CheckRunBody, ct);
+
+        result.Status.Should().Be(WebhookInbox.DeliveryStatus.SignatureInvalid);
+        result.IgnoredEvent.Should().BeNull();
+    }
+
+    /// <summary>The declaration rides on the allowlist entry, in both configuration shapes; a blank
+    /// value is no declaration (accept all), never "accept nothing".</summary>
+    [Fact]
+    public void ReadTargets_ParsesTheAcceptedEvents_InBothShapes()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                [$"{WebhookInbox.TargetsConfigSection}:0"] = "Hosting/PlatformBuilds",
+                [$"{WebhookInbox.TargetsConfigSection}:0:{WebhookInbox.AcceptedEventsName}"] =
+                    "pull_request, issues,pull_request_review",
+                [$"{WebhookInbox.TargetsConfigSection}:1"] = "Hosting/Other",
+                [$"{WebhookInbox.TargetsConfigSection}:1:{WebhookInbox.AcceptedEventsName}:0"] = "issues",
+                [$"{WebhookInbox.TargetsConfigSection}:1:{WebhookInbox.AcceptedEventsName}:1"] = "push",
+                [$"{WebhookInbox.TargetsConfigSection}:2"] = "Store/Payments",
+                [$"{WebhookInbox.TargetsConfigSection}:2:{WebhookInbox.AcceptedEventsName}"] = "",
+            }).Build();
+
+        var targets = WebhookInbox.ReadTargets(configuration);
+
+        targets[0].AcceptedEvents!.Order(StringComparer.Ordinal).Should().Equal("issues", "pull_request", "pull_request_review");
+        targets[0].Accepts("Issues").Should().BeTrue();
+        targets[0].Accepts("check_run").Should().BeFalse();
+        targets[0].Accepts(null).Should().BeTrue("a delivery naming no GitHub event is never filtered");
+        targets[1].AcceptedEvents!.Order(StringComparer.Ordinal).Should().Equal("issues", "push");
+        targets[2].AcceptedEvents.Should().BeNull("a blank declaration keeps the accept-all contract");
+        targets[2].Accepts("check_run").Should().BeTrue();
+    }
+
+    /// <summary>A set assigned in code with the DEFAULT (case-sensitive) comparer is normalized on
+    /// init: the target still matches ignoring case, as configuration-read targets do; an empty set
+    /// is no declaration.</summary>
+    [Fact]
+    public void AcceptedEvents_AssignedWithTheDefaultComparer_StillMatchIgnoringCase()
+    {
+        var target = new WebhookInbox.WebhookTarget("Hosting/PlatformBuilds")
+        {
+            AcceptedEvents = ImmutableHashSet.Create("pull_request"),
+        };
+
+        target.AcceptedEvents!.KeyComparer.Should().BeSameAs(StringComparer.OrdinalIgnoreCase);
+        target.Accepts("PULL_REQUEST").Should().BeTrue();
+        target.Accepts("check_run").Should().BeFalse();
+        new WebhookInbox.WebhookTarget("X") { AcceptedEvents = ImmutableHashSet<string>.Empty }
+            .AcceptedEvents.Should().BeNull("an empty set is no declaration");
     }
 }
