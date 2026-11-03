@@ -3792,14 +3792,23 @@ jobs:
           # marker is what lets anything outside the image answer "which framework identity is
           # release X?" — the release gates (#1754 deployment, #1755 build) hold when it is
           # absent, so this run publishing it is what OPENS the gate for the release it just armed.
+          # `tee` keeps the receipt for the self-check below; `pipefail` keeps the script's exit code.
           .github/scripts/publish-bake-bundles.sh "$BAKE_DIR" meshweaver-content \
-            "${{ needs.gate.outputs.sha }}" "$RELEASE_VERSION"
+            "${{ needs.gate.outputs.sha }}" "$RELEASE_VERSION" | tee "$RUNNER_TEMP/publish-bake.log"
           {
             echo "### 📦 Platform content bake published"
             echo "- identity: \`$(cat "$BAKE_DIR/framework-mvid.txt")\` (resolved by the image this run promoted)"
             echo "- source: \`meshweaver-content\`  targets: \`${BAKE_PUBLISH_TARGETS}\`"
             echo "- release marker: \`_releases/${RELEASE_VERSION}\` — environments may now be rolled to it"
           } >> "$GITHUB_STEP_SUMMARY"
+      # 🚨 THE RECEIPT VERIFIES HERE, ONCE, ON THIS BUILD — or this build is red (Doc/Architecture/
+      # BakePublicationReceipt). Every consumer reads the final `bake published:` line through
+      # resolve-platform.py's `receipt_refusal`; a receipt that rule refuses is passed over by every
+      # dependent repository. Until this step, the first anyone heard of such a receipt was a red in a
+      # Plugins pull request (MeshWeaver.Plugins#4924, core CD #12463). Now the build that wrote it
+      # goes red under the same rule, and `alert-on-failure` files it once, on this run.
+      - name: "Self-check: this bake's receipt verifies under the rule every consumer applies"
+        run: python3 .github/scripts/resolve-platform.py --verify-receipt "$RUNNER_TEMP/publish-bake.log" --run-number "${{ github.run_number }}"
       # ───────── THE SAME SEALED SET, TO THE FLEET REGISTRY (Doc/Architecture/PluginBundlesInTheRegistry) ─────────
       # After the share seal succeeded — never before, and never instead: the share copy stays
       # until every consumer reads the registry (bundle-fetch reads cr; ShippedPrebuiltBundles
