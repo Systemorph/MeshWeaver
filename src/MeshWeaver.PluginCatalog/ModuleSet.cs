@@ -808,8 +808,10 @@ public static class ModuleSetStore
     {
         try
         {
-            var text = File.ReadAllText(file);
-            return JsonSerializer.Deserialize<T>(text, Json);
+            // Lock-free (MeshWeaver#7690): a set record is published by a rename and never
+            // rewritten, so the BCL's non-blocking advisory lock could only refuse a correct read.
+            var text = MeshWeaver.Utils.LockFreeRead.ReadText(file);
+            return text is null ? null : JsonSerializer.Deserialize<T>(text, Json);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {

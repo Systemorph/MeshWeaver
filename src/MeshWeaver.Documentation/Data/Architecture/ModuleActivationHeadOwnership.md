@@ -165,12 +165,12 @@ things produce it:
 A genuine server-side sharing violation maps to `EBUSY` and reads differently. Every record read
 therefore adds to the original message the step that failed, the path and the error number:
 
-- 11 at **OPEN**, which includes the advisory shared lock, is either a lock or the transport;
+- 11 at **OPEN** was either a lock or the transport while readers took the advisory shared lock;
+  they no longer do (below), so it is now the transport;
 - 11 at **READ** can only be the transport.
 
 The current image takes no exclusive lock on any activation record. Writers publish by one no-replace
-rename ([Atomic File Publication](../AtomicFilePublication)), and readers open with
-`FileShare.ReadWrite | FileShare.Delete`.
+rename ([Atomic File Publication](../AtomicFilePublication)).
 
 **What the recurrences established (#7690, #7797).** Three occurrences on memex-cloud, all errno 11 at
 OPEN where the step was recorded:
@@ -186,6 +186,21 @@ What remains is a transient SMB status mapped to `EAGAIN` (possibly, unproven, d
 process outside the portal holding a node-local exclusive lock. The logs cannot tell these apart: the
 node's kernel and SMB-client logs are not collected. The fail-closed drop is the designed answer to
 either, and it held: the next whole read restored the module each time.
+
+**Readers take no lock (#7690, #7797).** The faults above were all at OPEN, and OPEN was the one step
+that could be refused by ANOTHER holder of the file: every BCL open for reading on Unix — `FileStream`,
+`File.ReadAllText` — also calls `flock(LOCK_SH | LOCK_NB)`, and when that non-blocking lock answers
+`EWOULDBLOCK` the open throws the sentence above. The lock protected nothing: a record is published
+whole by one no-replace rename and never rewritten, so there is no writer a reader could wait out.
+Every activation-record, marker and set-record read now goes through `MeshWeaver.Utils.LockFreeRead`,
+which opens with `open(2)` and no advisory lock (Windows keeps its kernel share modes). So no process on
+the node — in the portal or outside it — can refuse a record read any more, and the cause the logs could
+not separate is removed rather than diagnosed. What is left at either step is the file system itself,
+which the diagnostic now says outright: with no lock taken, 11 at OPEN or READ is the SMB transport.
+Pinned by `LockFreeReadTest` and `FaultedActivationReadIsNeverReusedTest`
+(`AnActivationRecordHeldUnderAnExclusiveLock_StillReadsWhole`): another handle holds the record with
+`FileShare.None` (an exclusive `flock`), the BCL open is measured to be refused in the same window,
+and the activation still reads the module whole.
 
 ### 🚨 What an image that predates the records sees when the two disagree
 

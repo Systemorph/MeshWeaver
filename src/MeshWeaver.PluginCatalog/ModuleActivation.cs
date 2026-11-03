@@ -2473,79 +2473,51 @@ public static class ModuleActivationSidecar
     /// Reads a file's content AND its write time from one open handle, answering null for "not
     /// there". The handle is what pairs them: a writer renaming a new file over the path replaces
     /// the directory entry, never the file this handle holds, so the time always belongs to the
-    /// bytes read. Opened with the most permissive sharing, so this read never refuses another
-    /// replica's replace.
+    /// bytes read.
     ///
-    /// <para>🚨 <b>A failure names its STEP and its error number (MeshWeaver#7689).</b> On Linux, .NET
-    /// renders errno 11 (<c>EAGAIN</c> = <c>EWOULDBLOCK</c>) from ANY step as "being used by another
-    /// process". That covers a <c>flock</c> refused by a node-local exclusive holder, and also the SMB
-    /// client's mapping of a throttled or timed-out request (<c>STATUS_INSUFFICIENT_RESOURCES</c>,
-    /// <c>STATUS_IO_TIMEOUT</c>, <c>STATUS_RETRY</c>). The bare message cannot tell a lock from the
-    /// storage, so the fault is re-raised as an <see cref="IOException"/> whose message keeps the
-    /// original text and adds the step (OPEN, which includes the advisory lock, or READ) and the
-    /// number. Error 11 at READ can only be the transport. The level is the caller's, unchanged.</para>
+    /// <para>🚨 <b>Lock-free (MeshWeaver#7690, #7797).</b> Every record is published immutable — a
+    /// complete temp file made visible by ONE no-replace rename (<see cref="WriteOnce"/>) — so there
+    /// is no writer a reader's lock could wait out. The BCL open nevertheless takes
+    /// <c>flock(LOCK_SH | LOCK_NB)</c> on Unix and THROWS when that non-blocking lock answers
+    /// <c>EWOULDBLOCK</c>, which on the <c>nobrl</c> Azure Files share is whatever else on the node
+    /// holds the inode, or the SMB client's mapping of a throttled request — and memex-cloud dropped
+    /// whole modules from a read for it. <see cref="MeshWeaver.Utils.LockFreeRead"/> opens with no
+    /// advisory lock at all, so no other holder of the file can refuse the read.</para>
+    ///
+    /// <para><b>A failure still names its STEP and its error number (MeshWeaver#7689).</b> With no
+    /// lock taken, a refusal at OPEN is the file system or its transport — never another process's
+    /// lock. The fault keeps the original message first and adds the step and the number. The level
+    /// is the caller's, unchanged.</para>
     /// </summary>
     private static (string Text, DateTime WrittenAtUtc)? TryReadWithWriteTime(string path)
     {
-        FileStream stream;
         try
         {
-            stream = new FileStream(
-                path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return MeshWeaver.Utils.LockFreeRead.ReadTextWithWriteTime(path);
         }
-        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        catch (MeshWeaver.Utils.LockFreeReadException e)
         {
-            return null;
-        }
-        catch (IOException e)
-        {
-            throw RecordReadFault("OPEN (open, stat and the advisory shared lock)", path, e);
-        }
-
-        using (stream)
-        {
-            try
-            {
-                var writtenAt = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-                using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
-                return (reader.ReadToEnd(), writtenAt);
-            }
-            // Absence after the open (the modules GC retired the record between the open and the
-            // stat on a share that reports it so) is still absence, never corruption — exactly as
-            // before the step was named (review of #7733).
-            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
-            {
-                return null;
-            }
-            catch (IOException e)
-            {
-                throw RecordReadFault("READ (the file was already open)", path, e);
-            }
+            throw RecordReadFault(e);
         }
     }
 
     /// <summary>The diagnostic form of a record-read fault (MeshWeaver#7689): the original message
     /// first, so every existing search for it still matches, then the step, the path and the error
     /// number. The original exception rides as the inner one.</summary>
-    internal static IOException RecordReadFault(string step, string path, IOException fault) =>
-        new($"{fault.Message} [step: {step}; path: '{path}'; error number (HResult): {fault.HResult} "
-            + $"(0x{fault.HResult:X8}). On Linux, 11 at OPEN is either a node-local exclusive flock or "
-            + "a transient SMB status mapped to EAGAIN; 11 at READ can only be the SMB transport "
-            + "(MeshWeaver#7689).]", fault);
+    internal static IOException RecordReadFault(MeshWeaver.Utils.LockFreeReadException fault) =>
+        new($"{fault.InnerException?.Message} [step: "
+            + (fault.Step == MeshWeaver.Utils.LockFreeReadStep.Open
+                ? "OPEN (open(2) only — no advisory lock is taken)"
+                : "READ (the file was already open)")
+            + $"; path: '{fault.Path}'; error number (HResult): {fault.ErrorNumber} "
+            + $"(0x{fault.ErrorNumber:X8}). No lock is taken on a record, so neither step can be "
+            + "refused by another holder of the file: on Linux, 11 (EAGAIN) at either step is the SMB "
+            + "transport (MeshWeaver#7689, #7690).]", fault);
 
     /// <summary>Reads a file, answering null for "not there" — including the ENOENT a concurrent
-    /// rename produces on SMB, which is genuinely absence and never corruption.</summary>
-    private static string? TryReadAllText(string path)
-    {
-        try
-        {
-            return File.ReadAllText(path);
-        }
-        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return null;
-        }
-    }
+    /// rename produces on SMB, which is genuinely absence and never corruption. Lock-free, like
+    /// <see cref="TryReadWithWriteTime"/>: every file read here is published by a rename.</summary>
+    private static string? TryReadAllText(string path) => TryReadWithWriteTime(path)?.Text;
 
     private static void WriteAtomic(string path, string content)
     {
