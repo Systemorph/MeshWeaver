@@ -47,6 +47,7 @@ public sealed class GitHubSyncService
     private readonly FileFormatParserRegistry parsers;
     private readonly FileFormatParserRegistry strictImportParsers;
     private readonly JsonSerializerOptions strictImportOptions;
+    private readonly GitSyncPolicy policy;
 
     private sealed class SyncSnapshotParseException(string message, string commitSha)
         : InvalidOperationException(message)
@@ -78,6 +79,9 @@ public sealed class GitHubSyncService
         // The hosting providers (Azure Repos, …) a URL may belong to: registered beside the sync
         // (GitHubSyncConfiguration.AddGitHubSyncServices + AddGitHostingProvider).
         providers = hub.ServiceProvider.GetRequiredService<GitHostingProviders>();
+        // The deployment's limits (GitSync:AllowedPartitions, GitSync:Export:Enabled) —
+        // Doc/Architecture/SensitiveContentInLogs. Absent keys keep every partition and export open.
+        policy = GitSyncPolicy.From(hub.ServiceProvider);
         var contributedParsers = hub.ServiceProvider.GetServices<IFileFormatParser>().ToArray();
         parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, contributedParsers);
         // A newer authored record must not be materialized by an older image while silently
@@ -139,6 +143,10 @@ public sealed class GitHubSyncService
         string spacePath, string userId, string? sourceId = null,
         Action<string, LogLevel>? progress = null)
     {
+        // The deployment's export limit comes first: on an instance that does not export (or does
+        // not sync this partition), nothing is read, resolved or pushed.
+        if (policy.ExportRefusal(spacePath) is { } policyRefusal)
+            return Observable.Throw<GitHubPushResult>(policyRefusal.ToException());
         return ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
@@ -375,6 +383,8 @@ public sealed class GitHubSyncService
         // as the USER (so they become its admin). Re-assert it on the create's subscribe so
         // meshService.CreateNode's own at-call capture picks it up. (Same async-boundary fix as
         // UpdateConfig / EnsureConfigNode — the GitSync CI access-context flake.)
+        if (policy.PartitionRefusal(newSpaceId) is { } policyRefusal)
+            return Observable.Throw<StaticRepoImportResult>(policyRefusal.ToException());
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
         return ResolveReadAuth(userId, repositoryUrl).SelectMany(auth =>
@@ -436,6 +446,8 @@ public sealed class GitHubSyncService
         string spacePath, string commitish, string userId, string? sourceId,
         Action<string, LogLevel>? progress, bool force, bool reconcile)
     {
+        if (policy.PartitionRefusal(spacePath) is { } policyRefusal)
+            return Observable.Throw<StaticRepoImportResult>(policyRefusal.ToException());
         return ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
@@ -1571,6 +1583,10 @@ public sealed class GitHubSyncService
         // Create is denied; the Catch below then degrades that denial into a 30s wait for a node that
         // never lands (the GitSync EnsureConfigNode / Editing_a_field CI timeout). Re-assert the
         // captured context on the create's subscribe so CreateNode's own capture picks it up.
+        // The deployment's allow-list answers BEFORE the create: the create's Catch below reads a
+        // rejection as a lost race and waits for a node that, here, can never be written.
+        if (policy.PartitionRefusal(spacePath) is { } policyRefusal)
+            return Observable.Throw<MeshNode>(policyRefusal.ToException());
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
         return WatchConfigNode(spacePath, sourceId).Take(1).SelectMany(existing =>
@@ -1634,6 +1650,8 @@ public sealed class GitHubSyncService
         // context is lost — the GitSync-suite flake ("Access denied: Create permission required for
         // '{space}/_GitSync'", + the dependent waits that then time out). Thread it explicitly to the
         // write's post via WithAccessContext so it never depends on the AsyncLocal surviving the hop.
+        if (policy.PartitionRefusal(spacePath) is { } policyRefusal)
+            return Observable.Throw<MeshNode>(policyRefusal.ToException());
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
         return ReadConfig(spacePath, sourceId).SelectMany(current =>
