@@ -103,6 +103,12 @@ SUBJECTS: dict[str, dict[str, tuple[str, ...]]] = {
             "Assert the tools this gate needs",
             READINESS_STEP,
         ),
+        # The gate's second half, split out for its 10-minute cap — the same prerequisite line.
+        "workflow-shell-executions": (
+            "uses:actions/checkout",
+            "Assert the tools this gate needs",
+            READINESS_STEP,
+        ),
     },
 }
 
@@ -242,23 +248,31 @@ _PREFIX = (
 ) + _READY
 
 # The second subject has to exist in every fixture too, or every case would fire on its absence and
-# say nothing about the property under test. One minimal, correct `workflow-shell` job, reused.
+# say nothing about the property under test. One minimal, correct job per declared `dotnet-test.yml`
+# subject (the gate's two halves), reused.
+def _shell_job(job: str, guard_if: str = "      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}\n") -> str:
+    return (
+        f"  {job}:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    timeout-minutes: 10\n"
+        "    steps:\n"
+        "    - uses: actions/checkout@v7\n"
+        "    - name: Assert the tools this gate needs\n"
+        "      run: echo\n"
+        f"    - name: {READINESS_STEP}\n"
+        "      id: ready\n"
+        '      run: echo "ok=true" >> "$GITHUB_OUTPUT"\n'
+        "    - name: shell guard\n"
+        + guard_if
+        + "      run: echo\n"
+    )
+
+
 _SHELL_OK = (
     "on: {push: {}}\n"
     "jobs:\n"
-    "  workflow-shell:\n"
-    "    runs-on: ubuntu-latest\n"
-    "    timeout-minutes: 10\n"
-    "    steps:\n"
-    "    - uses: actions/checkout@v7\n"
-    "    - name: Assert the tools this gate needs\n"
-    "      run: echo\n"
-    f"    - name: {READINESS_STEP}\n"
-    "      id: ready\n"
-    '      run: echo "ok=true" >> "$GITHUB_OUTPUT"\n'
-    "    - name: shell guard\n"
-    "      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}\n"
-    "      run: echo\n"
+    + _shell_job("workflow-shell")
+    + _shell_job("workflow-shell-executions")
 )
 
 _GATED = "${{ !cancelled() && steps.ready.outputs.ok == 'true' }}"
@@ -354,6 +368,22 @@ def self_test() -> int:
         violations, _, _ = check_tree(root)
         fired = bool(violations)
         print(f"self-test {'ok' if fired else 'FAIL':4} {'shell-job-checked-too':30} expected=fire "
+              f"got={'fire' if fired else 'silent'}")
+        failures += 0 if fired else 1
+
+    # …and the gate's SECOND half on its own: a correct first half must not vouch for it.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".github" / "workflows").mkdir(parents=True)
+        (root / ".github" / "workflows" / "node-repo-validate.yml").write_text(
+            _PREFIX + guarded, encoding="utf-8")
+        (root / ".github" / "workflows" / "dotnet-test.yml").write_text(
+            "on: {push: {}}\njobs:\n" + _shell_job("workflow-shell")
+            + _shell_job("workflow-shell-executions", guard_if=""),
+            encoding="utf-8")
+        violations, _, _ = check_tree(root)
+        fired = bool(violations)
+        print(f"self-test {'ok' if fired else 'FAIL':4} {'executions-half-checked-too':30} expected=fire "
               f"got={'fire' if fired else 'silent'}")
         failures += 0 if fired else 1
 

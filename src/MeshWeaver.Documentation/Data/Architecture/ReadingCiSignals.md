@@ -148,12 +148,24 @@ That keeps the two failure modes apart, which is the whole property:
 | a **prerequisite** (checkout, its history fetch, the tool/Python setup) | `ready` is skipped, its output is empty, every guard is skipped, and the prerequisite's own red is the verdict |
 | a **guard** | `ready` is untouched, so every other guard still reports |
 
-`.github/scripts/check-guard-step-masking.py` enforces both halves on two declared subjects —
-`node-repo-validate.yml`'s `validate` (39 guards) and `dotnet-test.yml`'s `workflow-shell` (61 guards,
-the job that gates `main-cd.yml`, the module lanes and every script a satellite fetches). It also
+`.github/scripts/check-guard-step-masking.py` enforces both halves on three declared subjects —
+`node-repo-validate.yml`'s `validate` and the two halves of `dotnet-test.yml`'s *CI's own shell*,
+`workflow-shell` and `workflow-shell-executions` (the gate on `main-cd.yml`, the module lanes and every
+script a satellite fetches). It also
 requires the prerequisites to *be* a prefix, matched exactly (a prefix comparison let
 `actions/checkout-foo` satisfy `uses:actions/checkout`), refuses a job whose guard list is empty so it
 cannot pass by having nothing to check, and refuses a readiness step that stopped publishing `ok=true`.
+
+**CI's own shell is TWO jobs because one outgrew its cap.** Its guards ran in series in one job
+capped at 10 minutes, and by 2026-11-03 they summed to 9–10 minutes on every main run: two main runs
+(41692779248, 41706286324) were cut mid-step with *"The job has exceeded the maximum execution time of
+10m0s"* — a `cancelled` with no verdict, which Consolidate correctly reads as red. Nothing was stuck,
+so the cap stayed and the work was split: `workflow-shell` keeps the static guards and self-tests,
+`workflow-shell-executions` runs the harnesses that EXECUTE a lane's or a script's real code against
+fixtures (the costliest, the publish-bake overlap harness, is about 2.5 minutes). Both run the same
+tool assertion (`.github/actions/workflow-shell-tools`, so their pins cannot drift) and the same one
+prerequisite line, and both are needs of the stage gate and of Consolidate. When a half approaches
+its cap again, split again — a higher cap is the band-aid this replaced.
 
 A guard's own *fetch* is deliberately **not** a prerequisite: its consumers run and fail naming the file
 they could not open, which is a second red rather than a silent skip, and the fetch's `::error::` is the
