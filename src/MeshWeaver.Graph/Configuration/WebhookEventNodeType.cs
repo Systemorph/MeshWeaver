@@ -222,7 +222,18 @@ public static class WebhookInbox
         /// property rather than a positional parameter, so modules compiled against the two-argument
         /// constructor keep binding.
         /// </summary>
-        public ImmutableHashSet<string>? AcceptedEvents { get; init; }
+        /// <remarks>Normalized on init: whatever comparer the assigned set carries, the target
+        /// compares ignoring case, and an empty set is no declaration (accept all) — the same
+        /// reading <see cref="ReadTargets"/> gives a blank configuration value.</remarks>
+        public ImmutableHashSet<string>? AcceptedEvents
+        {
+            get => acceptedEvents;
+            init => acceptedEvents = value is null || value.IsEmpty
+                ? null
+                : value.WithComparer(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private readonly ImmutableHashSet<string>? acceptedEvents;
 
         /// <summary>
         /// Whether a delivery carrying <paramref name="gitHubEvent"/> is one this target takes in:
@@ -457,7 +468,7 @@ public static class WebhookInbox
             return verifyOnly
                 ? Observable.Return(new DeliveryResult(DeliveryStatus.Accepted) { VerifyOnly = true })
                 : IgnoredEventOf(matched, kept) is { } unaccepted
-                    ? Ignore(hub, normalized, unaccepted, signatureVerified: false, senderKey: null)
+                    ? Store(hub, normalized, contentType, kept, body, signatureVerified: false, senderKey: null, ignoredEvent: unaccepted)
                     : Store(hub, normalized, contentType, kept, body, signatureVerified: false, senderKey: null);
 
         // The portal-set sender keys (InstanceSecrets) are read from a live catalog; wait for its
@@ -502,9 +513,8 @@ public static class WebhookInbox
                 });
             // Filtered only AFTER the signature verified: an undeclared kind is still answered 401
             // when its signature does not verify, so a drifted secret stays visible on every kind.
-            if (IgnoredEventOf(matched, kept) is { } unaccepted)
-                return Ignore(hub, normalized, unaccepted, signatureVerified: true, senderKey: sender?.Sender);
-            return Store(hub, normalized, contentType, kept, body, signatureVerified: true, senderKey: sender?.Sender);
+            return Store(hub, normalized, contentType, kept, body, signatureVerified: true, senderKey: sender?.Sender,
+                ignoredEvent: IgnoredEventOf(matched, kept));
         });
     }
 
@@ -517,27 +527,16 @@ public static class WebhookInbox
     }
 
     /// <summary>
-    /// Answers a delivery of a kind the target does not accept: counted on
-    /// <see cref="WebhookInboxMetrics"/>, never written. Cold — the count is taken on Subscribe.
+    /// Stores the delivery under its owner — or, when <paramref name="ignoredEvent"/> is set (a kind
+    /// the target does not accept), answers it WITHOUT writing and counts it on
+    /// <see cref="WebhookInboxMetrics"/>. Either way the owner node is checked FIRST, so an
+    /// allowlisted path with no owner is <see cref="DeliveryStatus.UnknownTarget"/> for every kind:
+    /// an ignored kind never answers 2xx where a stored one would be refused.
     /// </summary>
-    private static IObservable<DeliveryResult> Ignore(
-        IMessageHub hub, string target, string gitHubEvent, bool signatureVerified, string? senderKey) =>
-        Observable.Defer(() =>
-        {
-            // Optional by design: a mesh that never called AddWebhookInbox still answers the
-            // delivery; only the count is missing, and the answer itself names the ignored kind.
-            hub.ServiceProvider.GetService<WebhookInboxMetrics>()?.Ignored(target);
-            return Observable.Return(new DeliveryResult(DeliveryStatus.Accepted)
-            {
-                SignatureVerified = signatureVerified,
-                SenderKey = senderKey,
-                IgnoredEvent = gitHubEvent,
-            });
-        });
-
     private static IObservable<DeliveryResult> Store(
         IMessageHub hub, string normalized, string? contentType,
-        ImmutableDictionary<string, string> kept, string body, bool signatureVerified, string? senderKey)
+        ImmutableDictionary<string, string> kept, string body, bool signatureVerified, string? senderKey,
+        string? ignoredEvent = null)
     {
         var mesh = hub.ServiceProvider.GetService<IMeshService>();
         if (mesh is null)
@@ -560,6 +559,18 @@ public static class WebhookInbox
                     {
                         if (owner is null)
                             return Observable.Return(new DeliveryResult(DeliveryStatus.UnknownTarget));
+                        if (ignoredEvent is not null)
+                        {
+                            // Optional by design: a mesh that never called AddWebhookInbox still
+                            // answers; only the count is missing, and the answer names the kind.
+                            hub.ServiceProvider.GetService<WebhookInboxMetrics>()?.Ignored(normalized);
+                            return Observable.Return(new DeliveryResult(DeliveryStatus.Accepted)
+                            {
+                                SignatureVerified = signatureVerified,
+                                SenderKey = senderKey,
+                                IgnoredEvent = ignoredEvent,
+                            });
+                        }
                         var id = Guid.NewGuid().ToString("N");
                         var node = new MeshNode(id, $"{normalized}/{InboxContainer}")
                         {

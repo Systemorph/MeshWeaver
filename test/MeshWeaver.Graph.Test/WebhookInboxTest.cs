@@ -203,6 +203,14 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.UnknownTarget);
 
+        // ... and for a kind the target does not accept, too: the owner is checked BEFORE the
+        // accepted-events filter, so an ignored kind never answers 2xx where a stored one is refused.
+        (await WebhookInbox.Deliver(Mesh,
+                    [new WebhookInbox.WebhookTarget("Ghost") { AcceptedEvents = ["pull_request"] }], "Ghost", null,
+                    [new KeyValuePair<string, string>(WebhookInbox.GitHubEventHeader, "check_run")], "{}")
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
+            .Status.Should().Be(WebhookInbox.DeliveryStatus.UnknownTarget);
+
         // Path-shape games never resolve to an allowlisted target.
         (await WebhookInbox.Deliver(Mesh, ["Existing"], "Existing/../Other", null, [], "{}")
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
@@ -616,5 +624,23 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         targets[1].AcceptedEvents!.Order(StringComparer.Ordinal).Should().Equal("issues", "push");
         targets[2].AcceptedEvents.Should().BeNull("a blank declaration keeps the accept-all contract");
         targets[2].Accepts("check_run").Should().BeTrue();
+    }
+
+    /// <summary>A set assigned in code with the DEFAULT (case-sensitive) comparer is normalized on
+    /// init: the target still matches ignoring case, as configuration-read targets do; an empty set
+    /// is no declaration.</summary>
+    [Fact]
+    public void AcceptedEvents_AssignedWithTheDefaultComparer_StillMatchIgnoringCase()
+    {
+        var target = new WebhookInbox.WebhookTarget("Hosting/PlatformBuilds")
+        {
+            AcceptedEvents = ImmutableHashSet.Create("pull_request"),
+        };
+
+        target.AcceptedEvents!.KeyComparer.Should().BeSameAs(StringComparer.OrdinalIgnoreCase);
+        target.Accepts("PULL_REQUEST").Should().BeTrue();
+        target.Accepts("check_run").Should().BeFalse();
+        new WebhookInbox.WebhookTarget("X") { AcceptedEvents = ImmutableHashSet<string>.Empty }
+            .AcceptedEvents.Should().BeNull("an empty set is no declaration");
     }
 }
