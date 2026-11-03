@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics.Metrics;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -103,6 +104,31 @@ public static class WebhookInbox
     /// </summary>
     public const string SecretConfigKeyName = "SecretConfigKey";
 
+    /// <summary>
+    /// The child of a target entry DECLARING which GitHub event kinds that target accepts —
+    /// <c>WebhookInbox:Targets:0:AcceptedEvents = pull_request,issues</c> (env:
+    /// <c>WebhookInbox__Targets__0__AcceptedEvents</c>), or a list under it
+    /// (<c>…:AcceptedEvents:0</c>, <c>…:AcceptedEvents:1</c>). Matched against the delivery's
+    /// <see cref="GitHubEventHeader"/>, ignoring case (MeshWeaver#7863).
+    ///
+    /// <para>🚨 Declared on the allowlist entry, like <see cref="SecretConfigKeyName"/>, for the same
+    /// reason: the record that makes a target reachable says what it takes in, so the two cannot
+    /// drift. An organisation webhook subscribes to whole event KINDS for every target it feeds, and
+    /// a target that consumes three of them otherwise stores, indexes and deletes the rest.</para>
+    ///
+    /// <para>A target that declares NOTHING (absent or blank) accepts every kind — the contract every
+    /// target had before this key existed. A delivery that carries no <see cref="GitHubEventHeader"/>
+    /// is not a GitHub delivery (the fleet's own signed envelopes, a Stripe event) and is never
+    /// filtered by it. A delivery of an undeclared kind is answered 2xx with
+    /// <see cref="DeliveryResult.IgnoredEvent"/> set, counted, and NEVER written: the sender did
+    /// nothing wrong, so it must not see a refusal and retry.</para>
+    /// </summary>
+    public const string AcceptedEventsName = "AcceptedEvents";
+
+    /// <summary>The header naming a GitHub webhook delivery's event kind, matched by
+    /// <see cref="AcceptedEventsName"/>.</summary>
+    public const string GitHubEventHeader = "X-GitHub-Event";
+
     /// <summary>The GitHub-style signature header verified for targets that declare a secret:
     /// <c>sha256=&lt;lowercase hex&gt;</c> of HMAC-SHA256 over the raw body.</summary>
     public const string SignatureHeader = "X-Hub-Signature-256";
@@ -170,6 +196,13 @@ public static class WebhookInbox
         /// verified, and nothing was stored (<see cref="NodePath"/> is null).
         /// </summary>
         public bool VerifyOnly { get; init; }
+
+        /// <summary>
+        /// The <see cref="GitHubEventHeader"/> kind of a delivery the target does not accept
+        /// (<see cref="AcceptedEventsName"/>): it was answered, counted and NOT stored
+        /// (<see cref="NodePath"/> is null). Null for every delivery that was stored, or refused.
+        /// </summary>
+        public string? IgnoredEvent { get; init; }
     }
 
     /// <summary>
@@ -182,6 +215,25 @@ public static class WebhookInbox
     {
         /// <summary>A bare path is an allowlisted target that declares no signature.</summary>
         public static implicit operator WebhookTarget(string path) => new(path);
+
+        /// <summary>
+        /// The GitHub event kinds this target accepts (<see cref="AcceptedEventsName"/>), compared
+        /// ignoring case; null when it declares none, which accepts every kind. An init-only
+        /// property rather than a positional parameter, so modules compiled against the two-argument
+        /// constructor keep binding.
+        /// </summary>
+        public ImmutableHashSet<string>? AcceptedEvents { get; init; }
+
+        /// <summary>
+        /// Whether a delivery carrying <paramref name="gitHubEvent"/> is one this target takes in:
+        /// always when it declares no <see cref="AcceptedEvents"/>, always when the delivery names no
+        /// event (it is not a GitHub delivery), else only a declared kind. Pure.
+        /// </summary>
+        /// <param name="gitHubEvent">The delivery's <see cref="GitHubEventHeader"/>, or null.</param>
+        public bool Accepts(string? gitHubEvent) =>
+            AcceptedEvents is null
+            || string.IsNullOrWhiteSpace(gitHubEvent)
+            || AcceptedEvents.Contains(gitHubEvent.Trim());
     }
 
     /// <summary>
@@ -202,9 +254,28 @@ public static class WebhookInbox
             var secretConfigKey = entry[SecretConfigKeyName];
             targets.Add(new WebhookTarget(
                 path,
-                string.IsNullOrWhiteSpace(secretConfigKey) ? null : secretConfigKey.Trim()));
+                string.IsNullOrWhiteSpace(secretConfigKey) ? null : secretConfigKey.Trim())
+            {
+                AcceptedEvents = ReadAcceptedEvents(entry.GetSection(AcceptedEventsName)),
+            });
         }
         return targets.ToImmutable();
+    }
+
+    /// <summary>
+    /// A target's <see cref="AcceptedEventsName"/> declaration: the section's own value split on
+    /// commas (the one-key env form) plus every child value (the list form). Null when nothing is
+    /// declared — a blank value is no declaration, so a chart that renders the key empty keeps the
+    /// accept-all contract instead of silently refusing every kind. Pure over the configuration.
+    /// </summary>
+    private static ImmutableHashSet<string>? ReadAcceptedEvents(IConfigurationSection section)
+    {
+        var declared = (section.Value ?? "").Split([',', ';', ' ', '\n', '\r', '\t'], StringSplitOptions.RemoveEmptyEntries)
+            .Concat(section.GetChildren().Select(c => c.Value).OfType<string>())
+            .Select(v => v.Trim())
+            .Where(v => v.Length > 0)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        return declared.IsEmpty ? null : declared;
     }
 
     /// <summary>
@@ -293,11 +364,13 @@ public static class WebhookInbox
         headers.Any(h => string.Equals(h.Key, VerifyOnlyHeader, StringComparison.OrdinalIgnoreCase)
                          && string.Equals(h.Value?.Trim(), "true", StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Registers the WebhookEvent node type on the mesh builder.</summary>
+    /// <summary>Registers the WebhookEvent node type on the mesh builder, and the inbox's meter
+    /// (<see cref="WebhookInboxMetrics"/>).</summary>
     public static TBuilder AddWebhookInbox<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.WithMeshType<WebhookEvent>();
+        builder.ConfigureServices(services => services.AddSingleton<WebhookInboxMetrics>());
         return builder;
     }
 
@@ -346,6 +419,11 @@ public static class WebhookInbox
     /// before it is hashed; signature last, and always BEFORE the node is created — a delivery
     /// that fails to verify must leave nothing behind, or the endpoint has merely moved the silent
     /// drop from the consumer into the store (#3312).</para>
+    ///
+    /// <para>🚨 A target that declares <see cref="AcceptedEventsName"/> answers a delivery of any
+    /// other GitHub event kind 2xx with <see cref="DeliveryResult.IgnoredEvent"/> set and writes
+    /// NOTHING (MeshWeaver#7863). That filter runs after the signature, so it never turns a 401 into
+    /// a 2xx.</para>
     /// </summary>
     public static IObservable<DeliveryResult> Deliver(
         IMessageHub hub,
@@ -378,7 +456,9 @@ public static class WebhookInbox
             // A verify-only request to a target that verifies nothing has nothing to test.
             return verifyOnly
                 ? Observable.Return(new DeliveryResult(DeliveryStatus.Accepted) { VerifyOnly = true })
-                : Store(hub, normalized, contentType, kept, body, signatureVerified: false, senderKey: null);
+                : IgnoredEventOf(matched, kept) is { } unaccepted
+                    ? Ignore(hub, normalized, unaccepted, signatureVerified: false, senderKey: null)
+                    : Store(hub, normalized, contentType, kept, body, signatureVerified: false, senderKey: null);
 
         // The portal-set sender keys (InstanceSecrets) are read from a live catalog; wait for its
         // first listing so the first delivery after a start is not checked against configuration alone.
@@ -420,9 +500,40 @@ public static class WebhookInbox
                     SenderKey = sender?.Sender,
                     VerifyOnly = true,
                 });
+            // Filtered only AFTER the signature verified: an undeclared kind is still answered 401
+            // when its signature does not verify, so a drifted secret stays visible on every kind.
+            if (IgnoredEventOf(matched, kept) is { } unaccepted)
+                return Ignore(hub, normalized, unaccepted, signatureVerified: true, senderKey: sender?.Sender);
             return Store(hub, normalized, contentType, kept, body, signatureVerified: true, senderKey: sender?.Sender);
         });
     }
+
+    /// <summary>The delivery's <see cref="GitHubEventHeader"/> when <paramref name="target"/> does
+    /// NOT accept it (<see cref="WebhookTarget.Accepts"/>); null when it is to be stored. Pure.</summary>
+    private static string? IgnoredEventOf(WebhookTarget target, ImmutableDictionary<string, string> headers)
+    {
+        headers.TryGetValue(GitHubEventHeader, out var gitHubEvent);
+        return target.Accepts(gitHubEvent) ? null : gitHubEvent!.Trim();
+    }
+
+    /// <summary>
+    /// Answers a delivery of a kind the target does not accept: counted on
+    /// <see cref="WebhookInboxMetrics"/>, never written. Cold — the count is taken on Subscribe.
+    /// </summary>
+    private static IObservable<DeliveryResult> Ignore(
+        IMessageHub hub, string target, string gitHubEvent, bool signatureVerified, string? senderKey) =>
+        Observable.Defer(() =>
+        {
+            // Optional by design: a mesh that never called AddWebhookInbox still answers the
+            // delivery; only the count is missing, and the answer itself names the ignored kind.
+            hub.ServiceProvider.GetService<WebhookInboxMetrics>()?.Ignored(target);
+            return Observable.Return(new DeliveryResult(DeliveryStatus.Accepted)
+            {
+                SignatureVerified = signatureVerified,
+                SenderKey = senderKey,
+                IgnoredEvent = gitHubEvent,
+            });
+        });
 
     private static IObservable<DeliveryResult> Store(
         IMessageHub hub, string normalized, string? contentType,
@@ -477,4 +588,48 @@ public static class WebhookInbox
                             });
                     }));
     }
+}
+
+/// <summary>
+/// The webhook inbox's counters, on the platform meter (<see cref="PlatformMetrics.MeterName"/>, which
+/// the portal already exports). One counter today: <c>meshweaver.webhook.deliveries.ignored</c>, a
+/// delivery answered and NOT written because its target does not accept its GitHub event kind
+/// (<see cref="WebhookInbox.AcceptedEventsName"/>, MeshWeaver#7863). Counted rather than logged at
+/// Information: at the organisation webhook's rate that would be thousands of lines an hour that
+/// each say the same thing.
+///
+/// <para>🚨 Tagged by TARGET only. A target is an allowlisted path, so the tag is bounded by
+/// configuration; the event kind is not tagged, because on a target that declares no secret it is
+/// whatever an anonymous caller writes into a header. The endpoint logs the kind at Debug.</para>
+///
+/// <para>An INSTANCE owned by the mesh (registered by <see cref="WebhookInbox.AddWebhookInbox{TBuilder}"/>),
+/// never a static: its meter is disposed with the mesh, so two meshes in one process never count
+/// into one series (Doc/Architecture/NoStaticState).</para>
+/// </summary>
+public sealed class WebhookInboxMetrics : IDisposable
+{
+    /// <summary>The counter's instrument name.</summary>
+    public const string IgnoredCounterName = "meshweaver.webhook.deliveries.ignored";
+
+    private readonly Meter meter;
+    private readonly Counter<long> ignored;
+
+    /// <summary>Creates the mesh's inbox meter.</summary>
+    public WebhookInboxMetrics()
+    {
+        meter = new Meter(PlatformMetrics.MeterName);
+        ignored = meter.CreateCounter<long>(
+            IgnoredCounterName,
+            unit: "{delivery}",
+            description: "Webhook deliveries answered and not stored because their target does not accept "
+                         + "their GitHub event kind (WebhookInbox:Targets:N:AcceptedEvents).");
+    }
+
+    /// <summary>Counts one ignored delivery to <paramref name="target"/>.</summary>
+    /// <param name="target">The allowlisted target path.</param>
+    public void Ignored(string target) =>
+        ignored.Add(1, new KeyValuePair<string, object?>("target", target));
+
+    /// <summary>Releases the meter with the mesh that owns it.</summary>
+    public void Dispose() => meter.Dispose();
 }
