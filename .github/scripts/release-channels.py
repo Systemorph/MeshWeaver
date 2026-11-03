@@ -493,6 +493,11 @@ def self_test() -> int:
     expect("the hosting-operator writer names the repository that publishes it",
            any(b.get("repo") == "Systemorph/MeshWeaver.Plugins" and b["workflow"] == "hosting-operator.yml"
                for e in real["channels"] if e["id"] == "main" for b in e["writers"]))
+    expect("memex-log-watcher:latest is declared, on the fleet registry too (MeshWeaver.Plugins log-watcher-image.yml#build; MeshWeaver.Deploy#133)",
+           tags_for(real, "3.1.10050", "log-watcher-image.yml", job="build", repository="memex-log-watcher") == ["latest"]
+           and any(b.get("repo") == "Systemorph/MeshWeaver.Plugins" and "cr.meshweaver.cloud" in b["registries"]
+                   for e in real["channels"] if e["id"] == "latest" for b in e["writers"]
+                   if b["workflow"] == "log-watcher-image.yml"))
     # A binding into ANOTHER repository is not opened here; one into THIS repository still is.
     elsewhere = json.loads(json.dumps(real))
     elsewhere["channels"][3]["writers"][0].update(workflow="no-such-workflow.yml", repo="Systemorph/Elsewhere")

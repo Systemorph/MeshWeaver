@@ -340,7 +340,7 @@
       "id": "latest",
       "tag": "latest",
       "edition": "continuous",
-      "meaning": "The newest ARMED set on memex-portal-ai and memex-migration — moved with `{major}-latest` in main-cd's Phase D, the default tag the Aspire integration and the CLI pull from the fleet registry; and the tester's moving tag (MeshWeaver.Plugins pins MW_TEST_IMAGE to it). Never a self-update candidate: it has no numeric core.",
+      "meaning": "The newest ARMED set on memex-portal-ai and memex-migration — moved with `{major}-latest` in main-cd's Phase D, the default tag the Aspire integration and the CLI pull from the fleet registry; and the tester's moving tag (MeshWeaver.Plugins pins MW_TEST_IMAGE to it); and the red-log watcher's moving tag (memex-log-watcher, published by MeshWeaver.Plugins log-watcher-image.yml to ACR and the fleet registry). Never a self-update candidate: it has no numeric core.",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
@@ -396,6 +396,19 @@
             "meshweaver.azurecr.io"
           ],
           "state": "what main-cd's ContainerBaseImage references; rebuilt by hand or on a base Dockerfile change"
+        },
+        {
+          "workflow": "log-watcher-image.yml",
+          "repo": "Systemorph/MeshWeaver.Plugins",
+          "job": "build",
+          "repositories": [
+            "memex-log-watcher"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "every merge there that touches the watcher or its contract, beside the version and sha7 tags; mirrored to the fleet registry by digest (mirror-image-to-registry.sh) so an estate that mirrors only from cr can read it (MeshWeaver.Deploy#133)"
         }
       ]
     },
