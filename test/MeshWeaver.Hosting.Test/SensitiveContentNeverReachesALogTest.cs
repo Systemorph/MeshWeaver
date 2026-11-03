@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -403,7 +404,23 @@ public class SensitiveContentNeverReachesALogTest : MonolithMeshTestBase
 
         /// <summary>A raw document.</summary>
         public JsonDocument? Document { get; init; }
+
+        /// <summary>An interface dictionary of sealed elements (no $type on the values).</summary>
+        public IReadOnlyDictionary<string, Entry>? ByKey { get; init; }
+
+        /// <summary>An abstract-typed member with a marked member of its own.</summary>
+        public AbstractNote? Abstract { get; init; }
     }
+
+    /// <summary>An abstract type marking a member.</summary>
+    public abstract record AbstractNote
+    {
+        /// <summary>Marked on the abstract type.</summary>
+        [SensitiveData] public string? Text { get; init; }
+    }
+
+    /// <summary>A concrete note.</summary>
+    public sealed record ConcreteNote : AbstractNote;
 
     /// <summary>An UNMARKED wrapper whose own converter writes a descendant's marked value.</summary>
     [System.Text.Json.Serialization.JsonConverter(typeof(EnvelopeConverter))]
@@ -457,6 +474,21 @@ public class SensitiveContentNeverReachesALogTest : MonolithMeshTestBase
         ShouldHoldNoMarker(Mesh.RenderForLog(lists), "a typed read-only list");
         ShouldHoldNoMarker(Mesh.RedactJson(JsonSerializer.Serialize(lists, Mesh.JsonSerializerOptions)), "an untyped read-only list");
         Mesh.SensitiveValues(lists).Should().Contain(VisitNote);
+
+        // No discriminator: the declared contract (an interface dictionary, an abstract member type).
+        var contract = JsonNode.Parse(JsonSerializer.Serialize(new Lists
+        {
+            ByKey = ImmutableDictionary<string, Entry>.Empty.Add("k1", new Entry { Note = VisitNote }),
+        }, Mesh.JsonSerializerOptions))!.AsObject();
+        contract["abstract"] = new JsonObject { ["text"] = Diagnosis };
+        contract["byKey"]!["k1"]!.AsObject().Remove("$type");
+        contract["$type"] = nameof(Lists);
+        var contractRender = Mesh.RedactJson(contract.ToJsonString());
+        Output.WriteLine(contractRender);
+        ShouldHoldNoMarker(contractRender, "members described only by their declared contract");
+        var contractValues = Mesh.SensitiveValues(JsonDocument.Parse(contract.ToJsonString()).RootElement, out var contractComplete);
+        contractValues.Should().Contain(VisitNote).And.Contain(Diagnosis);
+        contractComplete.Should().BeTrue();
 
         // An unmarked wrapper whose converter writes a marked descendant.
         ShouldHoldNoMarker(Mesh.RenderForLog(new Envelope(new PatientRecord(Diagnosis))), "a converter over a marked descendant");

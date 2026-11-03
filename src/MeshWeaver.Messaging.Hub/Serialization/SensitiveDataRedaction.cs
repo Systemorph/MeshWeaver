@@ -579,7 +579,12 @@ internal sealed class SensitiveJsonRedactor(JsonSerializerOptions typing, Func<s
         resolved = true;
         var exact = IsExact(declared) ? declared : null;
         if (!obj.TryGetPropertyValue("$type", out var discriminatorNode))
-            return exact;
+            // No discriminator: the DECLARED contract still describes it — an interface dictionary's
+            // value type, an abstract type's (marked) members — so keep it, not only an exact type.
+            return declared is not null && declared != typeof(object) && declared != typeof(JsonElement)
+                   && !typeof(JsonNode).IsAssignableFrom(declared)
+                ? declared
+                : null;
         if (discriminatorNode is not JsonValue dv || dv.GetValueKind() != JsonValueKind.String)
         {
             // A present but malformed discriminator (number, null, array, object) names nothing.
