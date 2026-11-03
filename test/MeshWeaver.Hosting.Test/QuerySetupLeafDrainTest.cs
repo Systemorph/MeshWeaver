@@ -227,10 +227,14 @@ public class QuerySetupLeafDrainTest
     /// Review of #7844: the hand-off leaf checks the pool's token between frames, and a hand-off the
     /// pool CANCELS terminates the consumer with that cancellation. Not every owner sits under a pooled
     /// subscription that would terminate it on teardown (autocomplete does not); a consumer that hears
-    /// nothing waits forever. The frame queued behind the cancellation is not delivered.
+    /// nothing waits forever. The frame queued behind the cancellation is not delivered — and with NO
+    /// frame queued behind it (the cancel lands during the hand-off's LAST frame), the consumer is
+    /// terminated all the same: an empty queue must not read as "done" once the token is cancelled.
     /// </summary>
-    [Fact]
-    public async Task AHandOffThePoolCancels_TerminatesTheConsumer_AndStopsAtTheNextFrame()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AHandOffThePoolCancels_TerminatesTheConsumer_AndStopsAtTheNextFrame(bool frameQueuedBehind)
     {
         var pool = new IoPool(2);
         var release = 0;
@@ -262,7 +266,8 @@ public class QuerySetupLeafDrainTest
             emitter.Drain();
             await oneEntered.Should().Within(Bound).Emit("the hand-off leaf is running its consumer");
 
-            emitter.OnNext(2);
+            if (frameQueuedBehind)
+                emitter.OnNext(2);
             pool.Dispose();
             // Dispose only WAKES the pool's canceller thread. Release the consumer once the pool
             // token is actually cancelled — the canceller exits after Cancel() has returned, and the

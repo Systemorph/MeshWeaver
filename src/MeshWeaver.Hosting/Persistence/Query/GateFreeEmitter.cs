@@ -161,13 +161,22 @@ internal sealed class GateFreeEmitter<TItem>(
                 Notification<TItem> next;
                 lock (queueLock)
                 {
-                    if (pending.IsEmpty || ended)
+                    // 🚨 Order matters: ended, THEN cancellation, THEN emptiness (review of #7844). A
+                    // cancel that lands while the leaf runs its LAST frame finds the queue empty; read
+                    // as Empty it would release the drain silently and the consumer would get no
+                    // terminal — autocomplete has no pooled subscription to give it one.
+                    if (ended)
                     {
                         draining = false;
                         return BatchEnd.Empty;
                     }
                     if (ct.IsCancellationRequested)
                         return BatchEnd.Cancelled;
+                    if (pending.IsEmpty)
+                    {
+                        draining = false;
+                        return BatchEnd.Empty;
+                    }
                     if (delivered >= limit)
                         return BatchEnd.More;
                     pending = pending.Dequeue(out next);
