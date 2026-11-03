@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.PluginCatalog;
@@ -57,6 +60,91 @@ public class AFailedListingRevalidationIsReportedTest
             .Emit("the held listing is served while the recovering re-read runs", cancellationToken: ct);
         await Until(() => health.StaleBecause(Ref) is null ? new object() : null).Should().Within(TestTimeouts.Quick)
             .Emit("a landed read clears the report", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// #7862 review, completion order 1: an OLDER read A fails after a NEWER read B landed. A was
+    /// superseded (a green build evicted it while it ran, so B started beside it) and its failure must
+    /// not mark B's fresh listing stale.
+    /// </summary>
+    [Fact]
+    public async Task ASupersededReadThatFailsAfterANewerOneLanded_DoesNotMarkItStale()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (source, health, a, b, settledA, settledB) = await TwoReadsInFlight(ct);
+
+        b.OnNext([new PackageManifest { Id = "Newer" }]);
+        b.OnCompleted();
+        await settledB.Should().Within(TestTimeouts.Quick).Emit("read B settles", cancellationToken: ct);
+        a.OnError(new InvalidOperationException("the superseded read failed"));
+        await settledA.Should().Within(TestTimeouts.Quick).Emit("read A settles", cancellationToken: ct);
+
+        Assert.Null(health.StaleBecause(Ref));
+        var served = await source.ListPackages(Ref).Should().Within(TestTimeouts.Quick)
+            .Emit("the newer listing is served", cancellationToken: ct);
+        Assert.Equal(["Newer"], served.Select(p => p.Id));
+    }
+
+    /// <summary>
+    /// #7862 review, completion order 2: an OLDER read A lands after a NEWER read B failed. A's
+    /// listing is rejected (B is the newer outcome) and it must not clear B's failure either.
+    /// </summary>
+    [Fact]
+    public async Task ASupersededReadThatLandsAfterANewerOneFailed_DoesNotClearTheFailure()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (source, health, a, b, settledA, settledB) = await TwoReadsInFlight(ct);
+
+        b.OnError(new InvalidOperationException("the newer read failed"));
+        await settledB.Should().Within(TestTimeouts.Quick).Emit("read B settles", cancellationToken: ct);
+        a.OnNext([new PackageManifest { Id = "Older" }]);
+        a.OnCompleted();
+        await settledA.Should().Within(TestTimeouts.Quick).Emit("read A settles", cancellationToken: ct);
+
+        var stale = health.StaleBecause(Ref);
+        Assert.NotNull(stale);
+        Assert.Contains("the newer read failed", stale!.Message);
+        var served = await source.ListPackages(Ref).Should().Within(TestTimeouts.Quick)
+            .Emit("the held listing is still served", cancellationToken: ct);
+        Assert.Equal(["Hosting"], served.Select(p => p.Id));
+    }
+
+    /// <summary>
+    /// A warmed listing, then TWO re-reads in flight at once: A, started by an expired request, and
+    /// B, started after a green build evicted A while it ran. Each read's settlement is signalled
+    /// AFTER the cache has processed it (Finally runs once the terminal has passed the cache's own
+    /// handling), so the test orders completions by condition, never by a sleep.
+    /// </summary>
+    private static async Task<(IPackageSource Source, IPackageListingHealth Health,
+        AsyncSubject<IReadOnlyList<PackageManifest>> A, AsyncSubject<IReadOnlyList<PackageManifest>> B,
+        AsyncSubject<Unit> SettledA, AsyncSubject<Unit> SettledB)> TwoReadsInFlight(CancellationToken ct)
+    {
+        long now = 0;
+        var cache = new PackageListingCache(Window, () => now);
+        var a = new AsyncSubject<IReadOnlyList<PackageManifest>>();
+        var b = new AsyncSubject<IReadOnlyList<PackageManifest>>();
+        var settledA = new AsyncSubject<Unit>();
+        var settledB = new AsyncSubject<Unit>();
+        var reads = 0;
+        var source = cache.Wrap(new FakeSource(() => Interlocked.Increment(ref reads) switch
+            {
+                1 => Observable.Return<IReadOnlyList<PackageManifest>>([new PackageManifest { Id = "Hosting" }]),
+                2 => a.Finally(() => { settledA.OnNext(Unit.Default); settledA.OnCompleted(); }),
+                _ => b.Finally(() => { settledB.OnNext(Unit.Default); settledB.OnCompleted(); }),
+            }),
+            Repo, "", "node");
+        var health = Assert.IsAssignableFrom<IPackageListingHealth>(source);
+
+        await source.ListPackages(Ref).Should().Within(TestTimeouts.Quick).Emit("the first read answers", cancellationToken: ct);
+        now += StopwatchTicks(Window + TimeSpan.FromSeconds(1));
+        await source.ListPackages(Ref).Should().Within(TestTimeouts.Quick).Emit("read A starts behind the held listing", cancellationToken: ct);
+        await Until(() => Volatile.Read(ref reads) >= 2 ? new object() : null).Should().Within(TestTimeouts.Quick)
+            .Emit("read A is in flight", cancellationToken: ct);
+        Assert.Equal(1, cache.EvictRepo(Repo));
+        await source.ListPackages(Ref).Should().Within(TestTimeouts.Quick).Emit("read B starts beside A", cancellationToken: ct);
+        await Until(() => Volatile.Read(ref reads) >= 3 ? new object() : null).Should().Within(TestTimeouts.Quick)
+            .Emit("read B is in flight", cancellationToken: ct);
+        return (source, health, a, b, settledA, settledB);
     }
 
     /// <summary>The first non-null value of <paramref name="read"/>, polled — the condition itself, never a sleep.</summary>
