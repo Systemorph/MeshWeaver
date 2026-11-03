@@ -32,8 +32,8 @@ internal sealed record NodeTypeInstanceModel(
 /// the <c>$Model</c> area (diagram / per-type detail). The NodeType definition hub's
 /// own registry only knows <see cref="NodeTypeDefinition"/> — the instance model
 /// comes from applying the type's instance hub configuration to a short-lived probe
-/// hub, the same pattern <c>MeshDataSourceExtensions.HandleNodeTypeSchemaRequest</c>
-/// uses to answer <c>SchemaReference</c> requests.
+/// hub — the same probe <see cref="InstanceSchemaProvider"/> answers the type's
+/// <c>SchemaReference</c> (<c>@{type}/schema/</c>) from.
 /// </summary>
 internal static class NodeTypeDataModelAreas
 {
@@ -57,8 +57,7 @@ internal static class NodeTypeDataModelAreas
 
             if (!string.IsNullOrWhiteSpace(typeName))
             {
-                var typeDef = model.AllTypes.FirstOrDefault(td => td.Type.Name == typeName)
-                    ?? model.SeedTypes.FirstOrDefault(td => td.Type.Name == typeName);
+                var typeDef = ResolveModelType(model, typeName!, host.Hub.Address.Path);
                 return Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
                     .WithView(typeDef == null
                         ? Controls.Markdown($"# Type not found\n\nType '{typeName}' was not found in this NodeType's data model.")
@@ -69,6 +68,153 @@ internal static class NodeTypeDataModelAreas
                 .WithView(Controls.H2(host.Localize("ui.dataModel")).WithStyle("margin: 0;"))
                 .WithView(BuildDiagramJsonTabs(model, linkBase, locale: host.ViewerLocale()));
         });
+    }
+
+    /// <summary>
+    /// The type a <c>$Model</c> Id names in a NodeType's instance model: a registered type of that
+    /// name, else — when the Id is the NodeType's OWN name (the last segment of its path, which is how
+    /// a caller that knows only the type node addresses it, e.g. <c>Esl/…/DirCarrier</c> whose content
+    /// type is <c>EslOfficeCarrier</c>) — the content type.
+    /// </summary>
+    internal static ITypeDefinition? ResolveModelType(NodeTypeInstanceModel model, string typeName, string nodeTypePath)
+        => model.AllTypes.FirstOrDefault(td => td.Type.Name == typeName)
+           ?? model.SeedTypes.FirstOrDefault(td => td.Type.Name == typeName)
+           ?? (IsOwnName(typeName, nodeTypePath) && model.ContentTypeName is { } content
+               ? model.SeedTypes.FirstOrDefault(td => td.Type.Name == content)
+                 ?? model.AllTypes.FirstOrDefault(td => td.Type.Name == content)
+               : null);
+
+    private static bool IsOwnName(string typeName, string nodeTypePath)
+        => string.Equals(typeName, nodeTypePath[(nodeTypePath.LastIndexOf('/') + 1)..], StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The NodeType's <c>$Schema</c> area: the JSON schema of the content its INSTANCES carry — the
+    /// type its configuration declares with <c>WithContentType</c> — never the definition hub's own
+    /// <see cref="NodeTypeDefinition"/>. With an Id, the schema of that type in the instance model
+    /// (the NodeType's own name addresses the content type). Read from the hub's own
+    /// <see cref="SchemaReference"/> stream, which <see cref="InstanceSchemaProvider"/> answers, so the
+    /// area, <c>@{type}/schema/</c> and a <c>GetDataRequest</c> can never disagree.
+    /// </summary>
+    internal static IObservable<UiControl?> Schema(LayoutAreaHost host, RenderingContext _)
+    {
+        var typeName = host.Reference.Id?.ToString();
+        var stream = host.Workspace.GetNullableStream(new SchemaReference(string.IsNullOrWhiteSpace(typeName) ? null : typeName));
+        var locale = host.ViewerLocale();
+        if (stream is null)
+            return Observable.Return<UiControl?>(Controls.Markdown(
+                $"*{LocalizationCatalog.Get("ui.schema.noDataContext", locale)}*"));
+        return stream
+            .Select(change => change.Value.As<SchemaInfo>(host.Hub.JsonSerializerOptions))
+            .Select(info => (UiControl?)Controls.Markdown(RenderSchemaMarkdown(info, typeName, host.Hub.Address.Path, locale)))
+            .StartWith(Controls.Body(host.Localize("ui.resolvingDataModel"))
+                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 8px 0;"));
+    }
+
+    /// <summary>The markdown of the NodeType <c>$Schema</c> area for one schema answer, in the viewer's
+    /// language (type names and paths stay as they are).</summary>
+    internal static string RenderSchemaMarkdown(SchemaInfo? info, string? requestedType, string nodeTypePath, string? locale = null)
+    {
+        if (info is null || string.IsNullOrWhiteSpace(info.Schema) || info.Schema == "{}")
+            return $"## {LocalizationCatalog.Get("ui.schema.heading", locale)}\n\n*"
+                   + (string.IsNullOrWhiteSpace(requestedType)
+                       ? LocalizationCatalog.Get("ui.schema.noContentType", locale)
+                       : LocalizationCatalog.Get("ui.schema.typeNotInModel", locale, requestedType, nodeTypePath))
+                   + "*";
+        var heading = string.IsNullOrWhiteSpace(requestedType)
+            ? LocalizationCatalog.Get("ui.schema.contentTypeHeading", locale, info.Type)
+            : LocalizationCatalog.Get("ui.schema.typeHeading", locale, info.Type);
+        return $"## {heading}\n\n```json\n{PrettyPrint(info.Schema)}\n```";
+    }
+
+    /// <summary>
+    /// The <see cref="DataContext.SchemaProvider"/> of a NodeType definition hub: a
+    /// <see cref="SchemaReference"/> on the type describes its INSTANCES' content, resolved the way an
+    /// instance activation resolves it — the type's published build (or, for a static type, its
+    /// registered instance configuration) applied to a short-lived probe hub. Nothing about it depends on
+    /// an instance having been activated in this process.
+    /// <para>Live: re-resolves when the published build changes, as the <c>$Model</c> area does. A type
+    /// the instance model does not know falls back to the definition hub's own registry, so an explicit
+    /// <c>schema/NodeTypeDefinition</c> (or <c>schema/MeshNode</c>) still describes the definition. An
+    /// untyped reference on a type with no resolvable instance configuration answers the empty schema —
+    /// never <c>NodeTypeDefinition</c> dressed up as the content type.</para>
+    /// </summary>
+    internal static IObservable<SchemaInfo>? InstanceSchemaProvider(IWorkspace workspace, string? typeName)
+    {
+        var hub = workspace.Hub;
+        // A transient probe whose instance configuration is itself a NodeType view (the built-in
+        // NodeType type, a type of types) gets this provider too — but a probe has no own node, so the
+        // provider would never emit and the probe's schema and model reads would time out. A probe
+        // answers from the registry it was configured with.
+        if (TransientProbeAddresses.IsProbeAddress(hub.Address.Path))
+            return null;
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeTypeDataModelAreas));
+        var nodeTypePath = hub.Address.Path;
+        IObservable<SchemaInfo> Fallback() => typeName is null
+            ? Observable.Return(new SchemaInfo("", "{}"))
+            : DataExtensions.ObserveRegistrySchema(hub, typeName);
+
+        return Observable.Defer(() => workspace.GetMeshNodeStream())
+            .Where(n => n is not null)
+            .DistinctUntilChanged(n =>
+            {
+                var def = n!.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+                return (def?.LatestAssemblyCollection, def?.LatestAssemblyPath, def?.LastCompiledVersion);
+            })
+            .Select(node => ResolveInstanceHubConfig(hub, node!)
+                .SelectMany(config => config == null
+                    ? Observable.Return<SchemaInfo?>(null)
+                    : ProbeInstanceSchema(hub, config, nodeTypePath, typeName))
+                // A TEARDOWN is not a missing schema: rethrown, so the request path answers it as the
+                // shutdown it is (and the caller reconnects to a fresh activation). Anything else —
+                // an unloadable build, a probe that faulted — degrades to the fallback, logged.
+                .Catch<SchemaInfo?, Exception>(ex =>
+                {
+                    if (DataExtensions.IsOwnerTeardown(ex))
+                        return Observable.Throw<SchemaInfo?>(ex);
+                    logger?.LogWarning(ex, "Instance schema resolution failed for {Path} (type {Type})",
+                        nodeTypePath, typeName ?? "<content>");
+                    return Observable.Return<SchemaInfo?>(null);
+                })
+                .SelectMany(info => IsEmptySchema(info) ? Fallback() : Observable.Return(info!)))
+            .Switch();
+    }
+
+    private static bool IsEmptySchema(SchemaInfo? info)
+        => info is null || string.IsNullOrWhiteSpace(info.Schema) || info.Schema == "{}";
+
+    /// <summary>
+    /// Applies the instance configuration to a short-lived probe hub and reads the probe's own
+    /// <see cref="SchemaReference"/> for <paramref name="typeName"/> (null = the content type). The
+    /// NodeType's own name, when it names no registered type, addresses the content type.
+    /// </summary>
+    internal static IObservable<SchemaInfo?> ProbeInstanceSchema(
+        IMessageHub hub,
+        Func<MessageHubConfiguration, MessageHubConfiguration> config,
+        string nodeTypePath,
+        string? typeName)
+    {
+        var probeAddress = new Address($"{TransientProbeAddresses.SchemaProbePrefix}{Guid.NewGuid():N}");
+        // 🚨 AsTransientNodeProbe — see ProbeInstanceModel: data context yes, per-node control plane no.
+        var probe = hub.GetHostedHub(probeAddress,
+            c => config(c.AddData().WithNodeTypePath(nodeTypePath)).AsTransientNodeProbe());
+        if (probe == null)
+            return Observable.Return<SchemaInfo?>(null);
+
+        IObservable<SchemaInfo?> Read(string? type)
+            => (probe.GetWorkspace().GetNullableStream(new SchemaReference(type))
+                    ?? Observable.Empty<ChangeItem<object>>())
+                .Take(1)
+                .Select(change => change.Value.As<SchemaInfo>(probe.JsonSerializerOptions));
+
+        return ProbeStarted(probe)
+            .SelectMany(_ => Read(typeName))
+            .SelectMany(info => typeName is not null && IsEmptySchema(info) && IsOwnName(typeName, nodeTypePath)
+                ? Read(null)
+                : Observable.Return(info))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .DefaultIfEmpty(null)
+            .Finally(probe.Dispose);
     }
 
     /// <summary>

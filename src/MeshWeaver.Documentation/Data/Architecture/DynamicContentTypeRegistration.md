@@ -562,6 +562,26 @@ next read is typed).
 `GetStream: Content for Ops/Status/… stayed an untyped JsonElement` line between the first new
 replica's boot and their own shutdown line.
 
+## A NodeType's schema describes its CONTENT — with no instance activated
+
+`@{type}/schema/`, the `$Schema` area and `$Model` on a **NodeType** node describe what its **instances** carry: the type its configuration declares with `WithContentType<T>()`. They never describe the definition hub's own `NodeTypeDefinition`. The MCP `get` tool already documents this contract ("A NodeType answers the same question for every instance"). The data model explorer's tabs depend on it.
+
+**How.** `AddNodeTypeView` installs a `DataContext.SchemaProvider` on the NodeType hub (`NodeTypeDataModelAreas.InstanceSchemaProvider`). It resolves the type's instance configuration the way an activation does, from the published build (or a static type's registered configuration), applies it to a transient `$schema-probe` hub, and reads that probe's own `SchemaReference`. Every schema reader goes through `DataExtensions.ObserveSchemaReference`:
+- the `GetDataRequest` path
+- the workspace `SchemaReference` stream behind `schema/…`
+- the `$Schema` area
+
+so they cannot disagree. The provider re-resolves when the record's build coordinates change.
+
+`schema/{T}` names a type of the instance model. The NodeType's **own name** (`schema/DirCarrier`, `$Model/DirCarrier`) addresses its content type when no type of that name exists. A type only the definition hub knows (`schema/NodeTypeDefinition`) falls back to the hub's own registry. An untyped read on a type with no resolvable build answers the empty schema; it is never `NodeTypeDefinition` presented as content.
+
+**What it replaced** (measured on a client instance, 2026-11-03):
+- `$Schema` on a NodeType was the generic node-schema area and rendered `Content Type: NodeTypeDefinition`.
+- `schema/` answered `NodeTypeDefinition`, and `schema/{T}` answered `{}`.
+- The old `GetDataRequest` interceptor (`HandleNodeTypeSchemaRequest`, installed on *every* node hub) matched only a bare untyped `SchemaReference`, never the `schema/…` path MCP and the GUI send. It also returned the delivery unprocessed, so the default handler answered first.
+
+Pinned end to end, on a type compiled by the real batch bake with no hub activated, by `AMeshCompiledTypesSchemaDescribesItsContentTest`.
+
 ## What this does not establish
 
 - **The fifteen records themselves were not read.** The MCP connection to the control instance's

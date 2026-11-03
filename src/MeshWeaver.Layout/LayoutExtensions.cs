@@ -223,6 +223,10 @@ public static class LayoutExtensions
                 typeof(ComparisonPair),
                 typeof(WaterfallStep),
                 typeof(HierarchyNode),
+                // UmlClassDiagramControl's Classes / Relations rows (object-typed, so the sweep misses them).
+                typeof(UmlClass),
+                typeof(UmlAttribute),
+                typeof(UmlRelation),
                 // A slide show's pre-rendered frames ride inside SlideShowControl.Frames — plain
                 // records, so the IUiControl sweep above misses them. Unregistered, the receiving
                 // hub would adopt SlideFrame under an auto short-name as a side effect of the read,
