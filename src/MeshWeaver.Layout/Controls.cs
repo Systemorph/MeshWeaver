@@ -575,5 +575,14 @@ public static class Controls
     /// <returns>A new <see cref="ComparisonBarsControl"/>.</returns>
     public static ComparisonBarsControl ComparisonBars(object pairs) => new(pairs);
 
+    /// <summary>
+    /// Creates a UML class diagram — class boxes with an attribute compartment, joined by associations,
+    /// compositions and generalizations, laid out by <see cref="UmlClassDiagramControl.Layout"/>.
+    /// </summary>
+    /// <param name="classes">The classes, or a data-binding reference resolving to them.</param>
+    /// <param name="relations">The relations, or a data-binding reference resolving to them.</param>
+    /// <returns>A new <see cref="UmlClassDiagramControl"/>.</returns>
+    public static UmlClassDiagramControl UmlClassDiagram(object classes, object relations) => new(classes, relations);
+
     #endregion
 }
