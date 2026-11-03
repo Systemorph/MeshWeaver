@@ -181,9 +181,25 @@ public class FigureControlsTest(ITestOutputHelper output) : HubTestBase(output)
         crumb.BottomPercent.Should().BeApproximately(50, 1e-9, because: "a positive crumb grows UP from the running level at 50 %");
         crumb.HeightPercent.Should().BeGreaterThan(0);
 
+        // A tiny step anchored on the axis EDGE still gets its sliver, on its own side: the axis gains
+        // headroom instead of clamping the bar to zero height.
+        var atTop = WaterfallControl.Layout([WaterfallStep.Total("Big", 1e16), WaterfallStep.Delta("Crumb", 0.25)])!;
+        atTop.Bars[1].HeightPercent.Should().BeGreaterThan(0.4);
+        atTop.Bars[1].BottomPercent.Should().BeApproximately(atTop.Bars[0].HeightPercent, 1e-9,
+            because: "the crumb starts at the top of the base and grows UP");
+        (atTop.Bars[1].BottomPercent + atTop.Bars[1].HeightPercent).Should().BeLessThanOrEqualTo(100);
+        var atBottom = WaterfallControl.Layout([WaterfallStep.Total("Deep", -1e16), WaterfallStep.Delta("Crumb", -0.25)])!;
+        atBottom.Bars[1].HeightPercent.Should().BeGreaterThan(0.4);
+        (atBottom.Bars[1].BottomPercent + atBottom.Bars[1].HeightPercent).Should().BeApproximately(atBottom.Bars[0].BottomPercent, 1e-9,
+            because: "the crumb hangs DOWN from the bottom of the deficit");
+        atBottom.Bars[1].BottomPercent.Should().BeGreaterThanOrEqualTo(0);
+        // The headroom only appears when a step needs it — an ordinary bridge keeps its exact axis.
+        WaterfallControl.Layout(Bridge())!.Max.Should().Be(100);
+
         var tinyRise = WaterfallControl.Layout([WaterfallStep.Total("Base", 1_000_000), WaterfallStep.Delta("Fee", 1)])!;
-        tinyRise.Bars[1].BottomPercent.Should().BeApproximately(1_000_000 / 1_000_001.0 * 100, 1e-6,
-            because: "a tiny rise grows upward from the running level");
+        tinyRise.Bars[1].BottomPercent.Should().BeApproximately(tinyRise.Bars[0].HeightPercent, 1e-9,
+            because: "a tiny rise grows upward from the running level (the top of the base)");
+        (tinyRise.Bars[1].BottomPercent + tinyRise.Bars[1].HeightPercent).Should().BeLessThanOrEqualTo(100);
     }
 
     [Fact]

@@ -94,8 +94,8 @@ public record WaterfallBarLayout(
 /// <summary>
 /// The whole waterfall on one axis.
 /// </summary>
-/// <param name="Min">The axis bottom — the lowest level reached, never above zero.</param>
-/// <param name="Max">The axis top — the highest level reached, never below zero.</param>
+/// <param name="Min">The axis bottom — the lowest level reached, never above zero (less a hair of headroom when a tiny step needs room below).</param>
+/// <param name="Max">The axis top — the highest level reached, never below zero (plus a hair of headroom when a tiny step needs room above).</param>
 /// <param name="ZeroPercent">Where zero sits on the axis, so the view can draw the baseline.</param>
 /// <param name="Bars">The recognized steps in input order, each with its geometry.</param>
 public record WaterfallLayout(double Min, double Max, double ZeroPercent, ImmutableList<WaterfallBarLayout> Bars)
@@ -202,6 +202,32 @@ public record WaterfallControl(object Steps)
 
         double Percent(double v) => Math.Clamp((v - min) / span, 0, 1) * 100;
 
+        // A tiny step whose anchor sits on the axis EDGE has no room on its own side for the sliver
+        // (Total 1e16 then Delta +0.25 anchors at 100 %; Total −1e16 then Delta −0.25 at 0 %). Clamping
+        // would give a non-zero step zero height, so the axis gains a hair of headroom on that side.
+        const double sliver = 0.5;
+        bool Starved(int i, bool up)
+        {
+            var step = list[i];
+            var (from, to) = spans[i];
+            if (step.Amount == 0 || (step.Amount > 0) != up)
+                return false;
+            var height = Math.Abs(Percent(to) - Percent(from));
+            var room = up ? 100 - Percent(from) : Percent(from);
+            return height < sliver && room < sliver;
+        }
+        var padUp = Enumerable.Range(0, list.Count).Any(i => Starved(i, up: true));
+        var padDown = Enumerable.Range(0, list.Count).Any(i => Starved(i, up: false));
+        if (padUp || padDown)
+        {
+            var pad = span * 0.01;
+            if (padUp)
+                max += pad;
+            if (padDown)
+                min -= pad;
+            span = max - min;
+        }
+
         var bars = list.Select((step, i) =>
         {
             var (from, to) = spans[i];
@@ -211,7 +237,6 @@ public record WaterfallControl(object Steps)
             // figure here, and it is small"; an exact zero draws nothing. The sliver grows AWAY from
             // the bar's anchor (zero for a total, the running level for a delta) in the direction of
             // its sign, so a tiny negative result never shows above the baseline.
-            const double sliver = 0.5;
             if (step.Amount != 0 && height < sliver)
             {
                 var anchor = Percent(from);

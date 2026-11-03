@@ -42,7 +42,8 @@ names it under the chart). A blank kind is the default, a delta.
 bar's `From` / `To`, its `BottomPercent` / `HeightPercent` on an axis that spans every level reached
 and always includes zero, the `LevelPercent` its connector runs at, and `ZeroPercent` for the
 baseline. A present-but-tiny amount keeps a visible sliver, grown from the bar's anchor in the direction of
-its sign (a tiny loss stays below zero); an exact zero draws nothing. It returns
+its sign (a tiny loss stays below zero). When that anchor sits on the axis edge, the axis gains a
+hair of headroom on that side rather than clamping the bar away. An exact zero draws nothing. It returns
 `null` — and the view says *"Nothing to bridge."* in the viewer's language — for no steps, a
 non-finite amount, an axis that overflows the double range, or every level at zero. See
 [Authoring for every renderer](/Doc/GUI/CrossRendererAuthoring) for why the arithmetic lives here.
