@@ -93,9 +93,16 @@ internal static class InstallOrigin
     }
 
     private sealed class OriginatedPackageSource(IPackageSource inner, string origin)
-        : IPackageSource, IOriginatedPackageSource
+        : IPackageSource, IOriginatedPackageSource, IPackageListingHealth
     {
         public string Origin => origin;
+
+        // Forwarded for the same reason as the members below (MeshWeaver.Plugins#4922): every source
+        // PackageSources.FromRepo builds is bound to an origin, so a binding that did not forward the
+        // listing cache's health would hide a failed revalidation from every reader — the registry
+        // would keep answering the held listing as current. An inner source without health is current.
+        public Exception? StaleBecause(string gitRef) =>
+            (inner as IPackageListingHealth)?.StaleBecause(gitRef);
 
         public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
             inner.ListPackages(gitRef);
