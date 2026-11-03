@@ -54,6 +54,22 @@ public class GitSyncPolicyReadingTest
         }
     }
 
+    [Fact]
+    public void A_scalar_override_replaces_an_earlier_array_rather_than_adding_to_it()
+    {
+        // The base layer allows two partitions; the deployment's override names one, as a scalar.
+        var policy = GitSyncPolicy.FromConfiguration(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{GitSyncPolicy.AllowedPartitionsKey}:0"] = "Docs",
+                [$"{GitSyncPolicy.AllowedPartitionsKey}:1"] = "Patients",
+            })
+            .AddInMemoryCollection(new Dictionary<string, string?> { [GitSyncPolicy.AllowedPartitionsKey] = "Docs" })
+            .Build());
+        Assert.True(policy.IsPartitionAllowed("Docs"));
+        Assert.False(policy.IsPartitionAllowed("Patients"), "the tighter override is the whole list");
+    }
+
     [Theory]
     [InlineData("false")]
     [InlineData("False")]

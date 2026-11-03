@@ -21,7 +21,8 @@ namespace MeshWeaver.GitSync;
 /// a sync source outside the list can be neither created nor updated (<see cref="GitSyncPartitionWriteGuard"/>),
 /// and no export, import or re-import runs for it. An entry is a partition name, matched
 /// case-insensitively against the first path segment; an entry ending in <c>*</c> matches by prefix.
-/// Either an array (<c>GitSync:AllowedPartitions:0</c>, …) or one comma-separated value.</item>
+/// Either an array (<c>GitSync:AllowedPartitions:0</c>, …) or one comma-separated value; a configured
+/// comma-separated value is the WHOLE list and replaces any array an earlier configuration layer set.</item>
 /// <item><see cref="ExportEnabledKey"/> (<c>GitSync:Export:Enabled</c>): whether this instance
 /// exports (mesh → repository) at all. Absent or <c>true</c>: exports run (the shipped behaviour).
 /// Any other value — <c>false</c>, an empty value, or one that does not parse — refuses EVERY export: an off switch
@@ -73,10 +74,13 @@ public sealed class GitSyncPolicy
         // variable set to nothing) is a value, and every value but `true` is off.
         var exportEnabled = exportValue is null
                             || (bool.TryParse(exportValue, out var on) && on);
+        // A SCALAR value is the complete list: a later provider's scalar does not remove the array
+        // children an earlier provider set, so reading both would let a tighter override keep the
+        // looser list's partitions. The children count only where no scalar is configured.
         var section = configuration.GetSection(AllowedPartitionsKey);
-        var listed = (section.Value ?? "")
-            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
-            .Concat(section.GetChildren().Select(c => c.Value ?? ""));
+        var listed = section.Value is { } scalar
+            ? scalar.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
+            : section.GetChildren().Select(c => c.Value ?? "");
         return new GitSyncPolicy(exportEnabled, listed);
     }
 

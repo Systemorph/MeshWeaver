@@ -63,7 +63,7 @@ it produces reach Loki and, from there, any issue a red line is filed into.
 | Egress | Key | Default | Off means |
 |---|---|---|---|
 | GitSync export (mesh → repository) | `GitSync:Export:Enabled` | on (absent = `true`) | every export is refused with `gitsync.policy.exportDisabled`; imports are unaffected. Any value but `true` is OFF — a typo in an off switch never reads as on. |
-| GitSync partitions | `GitSync:AllowedPartitions` | absent = every partition | set (an array, or one comma-separated value; an entry ending in `*` matches by prefix), a sync source (`{partition}/_GitSync`, `{partition}/_GitSync/{id}`) outside the list can be neither created nor updated, and no export, import or re-import runs for it (`gitsync.policy.partitionNotAllowed`). |
+| GitSync partitions | `GitSync:AllowedPartitions` | absent = every partition | set (an array, or one comma-separated value — which, when configured, is the whole list and replaces an array from an earlier configuration layer; an entry ending in `*` matches by prefix), a sync source (`{partition}/_GitSync`, `{partition}/_GitSync/{id}`) outside the list can be neither created nor updated, and no export, import or re-import runs for it (`gitsync.policy.partitionNotAllowed`). |
 | Incident filing (log → GitHub issue), feedback hand-over to a control instance | MeshWeaver.Plugins keys | on | documented on the Observability and Feedback pages in MeshWeaver.Plugins, which own those paths. |
 
 🚨 **The GitSync allow-list binds the platform as well.** A system-synced module Space provisioned
