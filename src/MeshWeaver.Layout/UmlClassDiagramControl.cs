@@ -351,6 +351,14 @@ public record UmlClassDiagramControl(object Classes, object Relations)
             (incoming.TryGetValue(l, out var i) ? i : incoming[l] = []).Add(r);
         }
 
+        // Ports in the order of the box at the other end, left to right — so edges leaving (or entering)
+        // one box fan out without crossing each other.
+        double CentreOf(int v) => x[v] + widths[v] / 2;
+        foreach (var (u, list) in outgoing)
+            list.Sort((a, b) => CentreOf(Oriented(a).Lower).CompareTo(CentreOf(Oriented(b).Lower)));
+        foreach (var (l, list) in incoming)
+            list.Sort((a, b) => CentreOf(Oriented(a).Upper).CompareTo(CentreOf(Oriented(b).Upper)));
+
         (int Upper, int Lower) Oriented(UmlRelation r)
         {
             var (a, b) = Ends(r);
@@ -376,7 +384,10 @@ public record UmlClassDiagramControl(object Classes, object Relations)
             }
             else
             {
-                var midY = y[u] + heights[u] + LayerGap / 2;
+                // Each edge leaving a box turns at its own height, so the horizontal legs of
+                // parallel edges never run on top of each other.
+                var list = outgoing[u];
+                var midY = y[u] + heights[u] + LayerGap * (list.IndexOf(r) + 1) / (list.Count + 1);
                 points = [start, new UmlPoint(start.X, midY), new UmlPoint(end.X, midY), end];
             }
             // The polyline runs From → To, whichever box is on top.

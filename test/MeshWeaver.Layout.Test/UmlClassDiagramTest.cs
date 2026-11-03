@@ -97,6 +97,25 @@ public class UmlClassDiagramTest
     }
 
     [Fact]
+    public void ParallelEdgesFromOneBox_TurnAtDifferentHeights()
+    {
+        var layout = UmlClassDiagramControl.Layout(
+            [C("a"), C("b"), C("c"), C("d")], [R("a", "b"), R("a", "c"), R("a", "d")])!;
+        var turns = layout.Routes.Select(r => r.Points[1].Y).ToList();
+        Assert.Equal(turns.Count, turns.Distinct().Count());
+    }
+
+    [Fact]
+    public void EdgesLeavingOneBox_FanOutInTheOrderOfTheirTargets()
+    {
+        // Relations given in the REVERSE of their targets' left-to-right order.
+        var layout = UmlClassDiagramControl.Layout(
+            [C("a"), C("b"), C("c"), C("d")], [R("a", "d"), R("a", "c"), R("a", "b")])!;
+        var byTarget = layout.Routes.OrderBy(r => Box(layout, r.Relation.To).X).Select(r => r.Points[0].X).ToList();
+        Assert.Equal(byTarget.OrderBy(x => x), byTarget);
+    }
+
+    [Fact]
     public void Attributes_AreCapped_AndTheRestCounted()
     {
         var attributes = Enumerable.Range(0, 10).Select(i => new UmlAttribute($"p{i}", "string")).ToArray();
