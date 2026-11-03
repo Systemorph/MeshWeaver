@@ -95,8 +95,28 @@ phases, each with its own named expiry:
 
 A caller that joins a compile already in flight times against the leader's queue and admission.
 
+🚨 **An expiry is not a verdict about the code, so it settles `Unavailable` and is retried** (#6195).
+Every expiry throws `CpuLaneExpiredException` (still a `TimeoutException`), which
+`NodeTypeCompilationHelpers.IsAvailabilityNonVerdict` reads: the type is stamped
+`CompilationStatus=Unavailable`, the park budget is untouched, and the failed-verdict re-drive
+compiles it again, at most `MaxAutomaticFailureRedrives` times per process. That re-drive also covers
+a type that still HOLDS a last good build on this framework, which is nobody else's case:
+`HasStaleFrameworkBuild` claims a build only when the framework moved. Measured on
+memex.systemorph.com on 2026-11-03: a Hosting source sync made the prebuilt bundle stale, three
+Hosting types each compiled a 302-file source closure (about 240 s of Roslyn on a healthy replica)
+together on a replica spending about 20 % of wall time in GC pauses, and all three crossed the 300 s
+bound. They were stamped `Error` under the live inputs and kept their old build, so no path retried
+them, and they stayed red for about 7 h until a roll replaced the pods.
+
+The expiry message now carries the readings that incident had to reconstruct from the liveness log:
+the lane's occupancy (`CPU lane r/n running, q queued`) and the process's GC pause share, total pause
+time, heap size and gen2 count at the moment it fired. Read them before anything else. A full lane
+with an empty queue and a high GC share is a slow compile on a starved process. A full lane with a
+queue is a wave. A lane with free slots and a low GC share is the emit itself.
+
 `CpuLaneBoundTest` pins each expiry against a real one-slot pool, and the draining case that must not
-expire. `CompileBoundExcludesCpuLaneQueueTest` runs the draining case through the real compile service.
+expire. `LaneExpiryIsNotACompileVerdictTest` pins the classification and the retry of a type that
+holds a last good build. `CompileBoundExcludesCpuLaneQueueTest` runs the draining case through the real compile service.
 
 Its leaves:
 

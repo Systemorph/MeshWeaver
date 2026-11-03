@@ -30,6 +30,17 @@ namespace MeshWeaver.Graph.Configuration;
 /// queued after five minutes were parked at <c>CompilationStatus=Error</c>, which read as a red
 /// package.</para>
 ///
+/// <para>🚨 <b>An expiry is NOT a verdict about the code</b> (#6195). It throws
+/// <see cref="CpuLaneExpiredException"/>, which the terminal write-back reads as an availability
+/// non-verdict: the type is stamped <c>Unavailable</c>, the park budget is untouched, and the
+/// failed-verdict re-drive asks again. Measured on memex.systemorph.com (2026-11-03): three Hosting
+/// types, each compiling a 302-file source closure whose Roslyn half takes about 240 s on a healthy
+/// replica, crossed the 300 s bound on a replica spending about 20 % of wall time in GC pauses. They
+/// were stamped <c>Error</c> with their verdict "formed under the live inputs", so nothing retried
+/// them, and they stayed red for about 7 h until a roll replaced the pods. The expiry message now also
+/// carries the lane's occupancy and the process's GC pause share at the moment of expiry, because that
+/// incident's message carried neither and both had to be reconstructed from the liveness log.</para>
+///
 /// <para>Why the stall window is a multiple of the bound: an admitted compile is cancelled at its own
 /// bound, but cancellation is observed at Roslyn's next check, so its completion can land shortly
 /// after. A window of one bound would call that a stall. A window of
@@ -51,7 +62,8 @@ internal static class CpuLaneBound
         string legName,
         string nodePath,
         Func<long>? laneProgress,
-        IScheduler? scheduler = null)
+        IScheduler? scheduler = null,
+        Func<string>? laneState = null)
         => Observable.Defer(() =>
         {
             var clock = scheduler ?? DefaultScheduler.Instance;
@@ -60,17 +72,18 @@ internal static class CpuLaneBound
             var prefixExpired = Observable.Timer(bound, clock)
                 .TakeUntil(wait.Queued)
                 .Select(_ => Expired(legName, nodePath,
-                    $"its IO prefix did not reach the CPU lane within {Seconds(bound)}s"));
+                    $"its IO prefix did not reach the CPU lane within {Seconds(bound)}s", laneState));
             var laneStalled = wait.Queued
                 .SelectMany(_ => Stalled(laneProgress, bound * StallWindowFactor, clock))
                 .TakeUntil(wait.Admitted)
                 .Select(window => Expired(legName, nodePath,
                     $"it was queued for a CPU-lane slot and the lane completed NO leaf for {Seconds(window)}s "
-                    + "(every slot is held by work that does not stop when cancelled)"));
+                    + "(every slot is held by work that does not stop when cancelled)", laneState));
             var emitExpired = wait.Admitted
                 .SelectMany(_ => Observable.Timer(bound, clock))
                 .Select(_ => Expired(legName, nodePath,
-                    $"its emit did not complete within {Seconds(bound)}s of being admitted to the CPU lane"));
+                    $"its emit did not complete within {Seconds(bound)}s of being admitted to the CPU lane",
+                    laneState));
 
             var expiry = Observable.Merge(prefixExpired, laneStalled, emitExpired)
                 .Take(1)
@@ -105,16 +118,42 @@ internal static class CpuLaneBound
                     .Select(_ => window);
             });
 
-    private static TimeoutException Expired(string legName, string nodePath, string why)
+    private static CpuLaneExpiredException Expired(
+        string legName, string nodePath, string why, Func<string>? laneState)
         => new($"Compile leg '{legName}' for '{nodePath}' timed out: {why}. Time spent waiting in a "
-            + "draining CPU-lane queue is not counted. The compile fails terminally instead of parking at "
-            + "CompilationStatus=Compiling forever (where the single-flight status lock would absorb "
-            + "every later trigger); retry via the Compile button / a fresh RequestedReleaseAt once the "
-            + "cause is understood.");
+            + "draining CPU-lane queue is not counted. "
+            + $"At the expiry: {Reading(laneState)}; {GcReading()}. "
+            + "No verdict about the code was formed, so the type settles at CompilationStatus=Unavailable "
+            + "(never Compiling, where the single-flight status lock would absorb every later trigger, and "
+            + "never Error, which nothing retries) and the failed-verdict re-drive compiles it again under "
+            + "its own bound.");
+
+    private static string Reading(Func<string>? laneState)
+        => laneState?.Invoke() ?? "CPU-lane occupancy not measured (no bounded lane)";
+
+    // Process-wide, from the runtime's own counters: the share of wall time the last GC spent paused
+    // and the total pause time since start. A compile is suspended for every pause, so this is the
+    // first thing to read when an admitted emit runs past its bound.
+    private static string GcReading()
+    {
+        var info = GC.GetGCMemoryInfo();
+        return string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"GC pause {info.PauseTimePercentage:0.#}% of time, {GC.GetTotalPauseDuration().TotalSeconds:0.#}s "
+            + $"paused since start, heap {info.HeapSizeBytes / (1024.0 * 1024 * 1024):0.##}GiB, "
+            + $"gen2 collections {GC.CollectionCount(2)}");
+    }
 
     private static string Seconds(TimeSpan span) => span.TotalSeconds.ToString("0.#",
         System.Globalization.CultureInfo.InvariantCulture);
 }
+
+/// <summary>
+/// A <see cref="CpuLaneBound"/> expiry: the compile leg ran out of its bound, so no verdict about the
+/// code was formed. Still a <see cref="TimeoutException"/> for every reader that asks only that;
+/// <c>NodeTypeCompilationHelpers.IsAvailabilityNonVerdict</c> reads THIS type to stamp
+/// <c>Unavailable</c> instead of <c>Error</c> and to leave the park budget alone (#6195).
+/// </summary>
+internal sealed class CpuLaneExpiredException(string message) : TimeoutException(message);
 
 /// <summary>
 /// The two moments of a compile's CPU half that <see cref="CpuLaneBound"/> times against: QUEUED for a
