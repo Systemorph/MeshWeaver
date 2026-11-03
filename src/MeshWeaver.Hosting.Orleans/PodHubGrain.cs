@@ -100,6 +100,12 @@ internal sealed class PodHubGrain(
     /// </summary>
     private string? SiloIdentity => localSilo?.SiloAddress.ToParsableString();
 
+    /// <summary>
+    /// This process's POD — its host name, which is the pod name on Kubernetes — so a refusal names
+    /// the pod and not only the silo's IP (#7842). See <see cref="PodHubNotHereException.RespondingPod"/>.
+    /// </summary>
+    private static string PodName => Environment.MachineName;
+
     /// <inheritdoc />
     public Task<bool> Attach()
     {
@@ -109,10 +115,10 @@ internal sealed class PodHubGrain(
             // The activation landed on a silo that does not own the address. Relocate to the
             // owner's hint so a stale directory entry cannot recreate it on this silo again.
             logger.LogInformation(
-                "[POD-HUB] Attach for {Address} landed on silo {Silo}, which has no local route for it "
+                "[POD-HUB] Attach for {Address} landed on silo {Silo} (pod {Pod}), which has no local route for it "
                 + "({LocalRoutes} routing service resolved) — stepping aside so the owner's retry can "
                 + "claim it. Expected while a hub MOVES between pods.",
-                AddressPath, SiloIdentity ?? "(unknown)",
+                AddressPath, SiloIdentity ?? "(unknown)", PodName,
                 localRoutes is null ? "NO" : "a");
             TryRelocateOnIdle();
             return Task.FromResult(false);
@@ -184,7 +190,7 @@ internal sealed class PodHubGrain(
                 "[POD-HUB] {Address} was released by its owner — answering the TERMINAL refusal so the "
                 + "sender's owner-side eviction can act on it ({MessageType} {Id})",
                 AddressPath, delivery.Message?.GetType().Name, delivery.Id);
-            throw new PodHubNotHereException(AddressPath, SiloIdentity, released: true);
+            throw new PodHubNotHereException(AddressPath, SiloIdentity, released: true) { RespondingPod = PodName };
         }
 
         var route = localRoutes?.TryGetLocalRoute(address);
@@ -195,9 +201,9 @@ internal sealed class PodHubGrain(
             // converge. This is a definitive answer about a transport, and the router reads it as
             // "fall back" during the roll and as "NACK the sender" after it.
             logger.LogInformation(
-                "[POD-HUB] {Address} has no local route on silo {Silo} — the owner is gone, or its claim "
+                "[POD-HUB] {Address} has no local route on silo {Silo} (pod {Pod}) — the owner is gone, or its claim "
                 + "is not held there. Answering PodHubNotHere; the router decides what to do with it.",
-                AddressPath, SiloIdentity ?? "(unknown)");
+                AddressPath, SiloIdentity ?? "(unknown)", PodName);
             // A delivery is not an ownership claim (#2299/#5177). Deactivating here forwards the
             // calls already queued on this activation to a fresh one, whose first refusal also
             // deactivates it. Orleans exhausts its forwarding budget and those callers receive an
@@ -212,7 +218,7 @@ internal sealed class PodHubGrain(
             // because the directory has no entry at all". Those are different faults (#2938), and
             // the second used to re-create the activation on every refusal. With the silo named,
             // one log line separates them without relying on activation churn to find the owner.
-            throw new PodHubNotHereException(AddressPath, SiloIdentity);
+            throw new PodHubNotHereException(AddressPath, SiloIdentity) { RespondingPod = PodName };
         }
 
         // 🚨 HAND OFF, DO NOT AWAIT THE HUB. Subscribing invokes the local route, which posts the

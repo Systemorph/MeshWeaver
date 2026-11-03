@@ -5,6 +5,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -94,6 +95,52 @@ public class PodHubNotHereRefusalTest
             + "the subscriber probe produces — it is what lets an OWNER drop the server-side stream it "
             + "can no longer push to, ending the #2426 fan-out-to-a-corpse loop");
         nack.Message.Should().Contain("portal/unclaimed");
+    }
+
+    /// <summary>
+    /// 🚨 The refusal names the answering POD, not only its silo's IP (#7842). On a roll of memex
+    /// three routers refused one live cache hub naming silo <c>10.244.6.213</c>, and no log line could
+    /// say which pod that was — so whether the hub's own pod or another answered stayed unknown.
+    ///
+    /// <para><b>Fails on unfixed code:</b> the parameter does not exist and the line names the IP
+    /// alone.</para>
+    /// </summary>
+    [Fact]
+    public async Task ARefusal_NamesTheAnsweringPod_BesideItsSilo()
+    {
+        var nacks = new List<Nack>();
+        var logger = new RecordingLogger();
+
+        await RoutingGrain.AnswerPodHubNotHere(
+                Delivery("d-7842"), "cache/owner-mesh", "cache",
+                Declaring(),
+                fallBackToStream: () => Observable.Return(Unit.Default),
+                postFailureToSender: (m, t, u) => nacks.Add(new Nack(m, t, u)),
+                logger: logger,
+                respondingSilo: "10.244.6.213:11111@152646574",
+                respondingPod: "memex-portal-deployment-abc-l62ct")
+            .Await();
+
+        var nack = nacks.Should().ContainSingle().Subject;
+        nack.Message.Should().Contain("silo '10.244.6.213:11111@152646574'")
+            .And.Contain("pod 'memex-portal-deployment-abc-l62ct'",
+                "the pod name is what every other fleet log line is keyed by; an IP alone cannot be "
+                + "matched against them");
+    }
+
+    /// <summary>
+    /// The pod is read off the wrapped chain Orleans hands the router, exactly as the silo is — and a
+    /// peer predating the field degrades to saying so, never to an empty name.
+    /// </summary>
+    [Fact]
+    public void TheRespondingPod_IsReadThroughTheWrappedChain_AndAnOldPeerSaysSo()
+    {
+        var thrown = new PodHubNotHereException("cache/x", "10.0.0.1:11111@1") { RespondingPod = "pod-a" };
+        var wrapped = new InvalidOperationException("orleans wrapper", thrown);
+
+        RoutingGrain.RespondingPod(wrapped).Should().Be("pod-a");
+        RoutingGrain.DescribeResponder("10.0.0.1:11111@1", null).Should()
+            .Contain("pod '(not reported — a peer predating the field)'");
     }
 
     /// <summary>
