@@ -707,15 +707,21 @@ stop's 30 s join then expired over it:
 first occurrence.
 
 Now a drain delivers at most the frames that were queued when it took the drain, its own frame
-included. Frames queued after that are handed to the task pool, which drains the next batch by the
-same rule. The draining flag stays taken across the hand-off, so order is unchanged and no producer
-can overtake. No producer's thread outlives its own frame. If the consumer throws during a handed-off
-batch, there is no caller to fault, so `MeshQuery` logs the exception at Error.
+included. Frames queued after that run as a separate batch, by the same rule, on the mesh's Query pool
+as a tracked blocking leaf (`IIoPool.InvokeBlocking`). The draining flag stays taken across the
+hand-off, so order is unchanged and no producer can overtake. No producer's thread outlives its own
+frame. The batch is never a bare scheduler hop: it runs the consumer, and the consumer may use the
+service scope, so the pool's teardown has to wait for it, and its residual names it if it outlives the
+join. A batch that has not started when the subscription ends is cancelled with it. If the consumer
+throws during a handed-off batch, there is no caller to fault, so `MeshQuery` logs the exception at
+Error.
 
 `QuerySetupLeafDrainTest` (`test/MeshWeaver.Hosting.Test`) pins it with a real `IoPool`. The consumer
-answers the synchronous Initial by queueing a live frame, then parks inside that live frame. The pool's
-in-flight count must fall to 0 while the consumer is parked. Without the hand-off, the setup leaf is
-the parked thread and the count stays at 1.
+answers the synchronous Initial by queueing a live frame, then parks inside that live frame. The
+only leaf left in flight while the consumer is parked must be the handed-off batch. Without the
+hand-off, the setup leaf is the parked thread. A second test parks a handed-off batch and disposes the
+pool: `IoPool.Disposed` must not fire until the batch finishes. With an untracked hand-off it fires at
+once.
 
 **Not established.** This is the only mechanism found by which the named leaf stays in flight without
 anything blocking. Nobody has read a stack of the production leaf. A consumer that blocks inside its

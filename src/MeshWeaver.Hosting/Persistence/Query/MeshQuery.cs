@@ -361,16 +361,23 @@ public partial class MeshQuery : IMeshQueryCore
 
     /// <summary>
     /// The merge's frame emitter (<see cref="GateFreeEmitter{TItem}"/>). A batch of frames other threads
-    /// queued during a drain is delivered on the task pool, never on the draining thread — which is
-    /// often the Query pool's setup leaf (MeshWeaver#7277). An observer that throws on such a batch has
-    /// no caller to fault, so it is reported here rather than left unhandled on a pool thread.
+    /// queued during a drain is delivered as a TRACKED blocking leaf of the Query pool, never on the
+    /// draining thread — which is often the Query pool's setup leaf (MeshWeaver#7277) — and never on an
+    /// untracked scheduler hop the pool's teardown cannot wait for (review of #7844). An observer that
+    /// throws on such a batch has no caller to fault, so it is reported here. The emitter is disposed
+    /// with the merge's subscription, which cancels a batch that has not started.
     /// </summary>
-    private static GateFreeEmitter<TItem> NewEmitter<TItem>(IObserver<TItem> observer, ILogger? logger)
-        => new(observer, handOff: null, reportHandOffFault: logger is null
-            ? null
-            : fault => logger.LogError(fault,
-                "MeshQuery: a query consumer threw while receiving a handed-off batch of frames; the frames "
-                + "still queued behind it are delivered by the next change"));
+    private GateFreeEmitter<TItem> NewEmitter<TItem>(IObserver<TItem> observer, ILogger? logger)
+        => new(observer, QueryPool, fault =>
+        {
+            if (logger is not null)
+                logger.LogError(fault,
+                    "MeshQuery: a query consumer threw while receiving a handed-off batch of frames; the "
+                    + "frames still queued behind it are delivered by the next change");
+            else
+                Console.Error.WriteLine(
+                    "MeshQuery: a query consumer threw while receiving a handed-off batch of frames: " + fault);
+        });
 
     private ILogger? _logger;
 
@@ -611,7 +618,7 @@ public partial class MeshQuery : IMeshQueryCore
                     emitter.OnError(stalled);
                 });
             });
-            return new System.Reactive.Disposables.CompositeDisposable(subscription, arm);
+            return new System.Reactive.Disposables.CompositeDisposable(subscription, arm, emitter);
         });
     }
 
@@ -997,7 +1004,7 @@ public partial class MeshQuery : IMeshQueryCore
                             singleEmitter.OnCompleted();
                         });
                     });
-                return new System.Reactive.Disposables.CompositeDisposable(probeArm, sub);
+                return new System.Reactive.Disposables.CompositeDisposable(probeArm, sub, singleEmitter);
             });
         }
 
@@ -1303,6 +1310,7 @@ public partial class MeshQuery : IMeshQueryCore
                     });
                 }));
 
+            subscriptions.Add(emitter);
             return new System.Reactive.Disposables.CompositeDisposable(subscriptions);
         });
     }
