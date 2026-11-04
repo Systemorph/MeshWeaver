@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
@@ -30,6 +31,17 @@ namespace MeshWeaver.Graph.Configuration;
 /// queued after five minutes were parked at <c>CompilationStatus=Error</c>, which read as a red
 /// package.</para>
 ///
+/// <para>🚨 <b>An expiry is NOT a verdict about the code</b> (#6195). It throws
+/// <see cref="CpuLaneExpiredException"/>, which the terminal write-back reads as an availability
+/// non-verdict: the type is stamped <c>Unavailable</c>, the park budget is untouched, and the
+/// failed-verdict re-drive asks again. Measured on memex.systemorph.com (2026-11-03): three Hosting
+/// types, each compiling a 302-file source closure whose Roslyn half takes about 240 s on a healthy
+/// replica, crossed the 300 s bound on a replica spending about 20 % of wall time in GC pauses. They
+/// were stamped <c>Error</c> with their verdict "formed under the live inputs", so nothing retried
+/// them, and they stayed red for about 7 h until a roll replaced the pods. The expiry message now also
+/// carries the lane's occupancy and the process's GC pause share at the moment of expiry, because that
+/// incident's message carried neither and both had to be reconstructed from the liveness log.</para>
+///
 /// <para>Why the stall window is a multiple of the bound: an admitted compile is cancelled at its own
 /// bound, but cancellation is observed at Roslyn's next check, so its completion can land shortly
 /// after. A window of one bound would call that a stall. A window of
@@ -51,7 +63,8 @@ internal static class CpuLaneBound
         string legName,
         string nodePath,
         Func<long>? laneProgress,
-        IScheduler? scheduler = null)
+        IScheduler? scheduler = null,
+        Func<CpuLaneReading>? laneState = null)
         => Observable.Defer(() =>
         {
             var clock = scheduler ?? DefaultScheduler.Instance;
@@ -59,18 +72,14 @@ internal static class CpuLaneBound
 
             var prefixExpired = Observable.Timer(bound, clock)
                 .TakeUntil(wait.Queued)
-                .Select(_ => Expired(legName, nodePath,
-                    $"its IO prefix did not reach the CPU lane within {Seconds(bound)}s"));
+                .Select(_ => Expired(legName, nodePath, CpuLaneExpiryPhase.Prefix, bound, laneState));
             var laneStalled = wait.Queued
                 .SelectMany(_ => Stalled(laneProgress, bound * StallWindowFactor, clock))
                 .TakeUntil(wait.Admitted)
-                .Select(window => Expired(legName, nodePath,
-                    $"it was queued for a CPU-lane slot and the lane completed NO leaf for {Seconds(window)}s "
-                    + "(every slot is held by work that does not stop when cancelled)"));
+                .Select(window => Expired(legName, nodePath, CpuLaneExpiryPhase.Stalled, window, laneState));
             var emitExpired = wait.Admitted
                 .SelectMany(_ => Observable.Timer(bound, clock))
-                .Select(_ => Expired(legName, nodePath,
-                    $"its emit did not complete within {Seconds(bound)}s of being admitted to the CPU lane"));
+                .Select(_ => Expired(legName, nodePath, CpuLaneExpiryPhase.Emit, bound, laneState));
 
             var expiry = Observable.Merge(prefixExpired, laneStalled, emitExpired)
                 .Take(1)
@@ -105,15 +114,155 @@ internal static class CpuLaneBound
                     .Select(_ => window);
             });
 
-    private static TimeoutException Expired(string legName, string nodePath, string why)
-        => new($"Compile leg '{legName}' for '{nodePath}' timed out: {why}. Time spent waiting in a "
-            + "draining CPU-lane queue is not counted. The compile fails terminally instead of parking at "
-            + "CompilationStatus=Compiling forever (where the single-flight status lock would absorb "
-            + "every later trigger); retry via the Compile button / a fresh RequestedReleaseAt once the "
-            + "cause is understood.");
+    private static CpuLaneExpiredException Expired(
+        string legName, string nodePath, string phase, TimeSpan window, Func<CpuLaneReading>? laneState)
+        => new(legName, nodePath, phase, window.TotalSeconds, laneState?.Invoke(), GcReading.Now());
+}
 
-    private static string Seconds(TimeSpan span) => span.TotalSeconds.ToString("0.#",
-        System.Globalization.CultureInfo.InvariantCulture);
+/// <summary>Which phase of <see cref="CpuLaneBound"/> expired. Never persisted as a value of its own:
+/// it selects the catalog key of the activity line (<see cref="CpuLaneExpiredException.MessageKey"/>).</summary>
+internal static class CpuLaneExpiryPhase
+{
+    /// <summary>The IO prefix did not reach the CPU lane within the bound.</summary>
+    public const string Prefix = "prefix";
+
+    /// <summary>Queued for a slot while the lane completed no leaf for the stall window.</summary>
+    public const string Stalled = "stalled";
+
+    /// <summary>Admitted, and the emit did not finish within the bound.</summary>
+    public const string Emit = "emit";
+}
+
+/// <summary>The CPU lane's occupancy at one moment.</summary>
+/// <param name="Running">Leaves holding a slot.</param>
+/// <param name="Capacity">The lane's slot count.</param>
+/// <param name="Queued">Leaves waiting for a slot.</param>
+internal sealed record CpuLaneReading(int Running, int Capacity, int Queued);
+
+/// <summary>
+/// The process's garbage-collection state at one moment, from the runtime's own counters. A compile is
+/// suspended for every pause, so this is the first thing to read when an admitted emit runs past its
+/// bound (#6195: about 20 % of wall time in pauses on the replica where three compiles expired).
+/// </summary>
+/// <param name="PausePercent">Share of wall time the last GC spent paused.</param>
+/// <param name="PausedSeconds">Total pause time since the process started.</param>
+/// <param name="HeapGiB">Heap size after the last GC.</param>
+/// <param name="Gen2Collections">Gen2 collections since the process started.</param>
+internal sealed record GcReading(double PausePercent, double PausedSeconds, double HeapGiB, int Gen2Collections)
+{
+    /// <summary>Read the counters now.</summary>
+    public static GcReading Now()
+    {
+        var info = GC.GetGCMemoryInfo();
+        return new(Math.Round(info.PauseTimePercentage, 1), Math.Round(GC.GetTotalPauseDuration().TotalSeconds, 1),
+            Math.Round(info.HeapSizeBytes / (1024.0 * 1024 * 1024), 2), GC.CollectionCount(2));
+    }
+}
+
+/// <summary>
+/// A <see cref="CpuLaneBound"/> expiry: the compile leg ran out of its bound, so no verdict about the
+/// code was formed. Still a <see cref="TimeoutException"/> for every reader that asks only that;
+/// <c>NodeTypeCompilationHelpers.IsAvailabilityNonVerdict</c> reads THIS type to stamp
+/// <c>Unavailable</c> instead of <c>Error</c> and to leave the park budget alone (#6195).
+///
+/// <para>The <see cref="Exception.Message"/> is the English diagnostic for server logs. What a person
+/// reads is <see cref="ToActivityMessage"/>: a catalog key per phase with every reading as a named
+/// argument, so the sentence is the viewer's language and the numbers are formatted in their culture.</para>
+/// </summary>
+internal sealed class CpuLaneExpiredException(
+    string legName, string nodePath, string phase, double seconds, CpuLaneReading? lane, GcReading gc)
+    : TimeoutException(EnglishMessage(legName, nodePath, phase, seconds, lane, gc))
+{
+    /// <summary>The leg that expired, e.g. <c>roslyn-compile</c>.</summary>
+    public string LegName { get; } = legName;
+
+    /// <summary>The NodeType whose compile expired.</summary>
+    public string NodePath { get; } = nodePath;
+
+    /// <summary>The phase that expired — one of <see cref="CpuLaneExpiryPhase"/>.</summary>
+    public string Phase { get; } = phase;
+
+    /// <summary>The bound (or stall window) that elapsed, in seconds.</summary>
+    public double Seconds { get; } = seconds;
+
+    /// <summary>The lane's occupancy at the expiry; <c>null</c> when the lane is not a bounded pool.</summary>
+    public CpuLaneReading? Lane { get; } = lane;
+
+    /// <summary>The process's GC state at the expiry.</summary>
+    public GcReading Gc { get; } = gc;
+
+    /// <summary>
+    /// The catalog key of this expiry's line. Spelled out per phase, never assembled: every
+    /// <c>activity.*</c> key must be NAMED in source (<c>UnkeyedActivityLogMessageRatchetGuard</c>).
+    /// </summary>
+    public string MessageKey => Phase switch
+    {
+        CpuLaneExpiryPhase.Prefix => "activity.compile.laneExpired.prefix",
+        CpuLaneExpiryPhase.Stalled => "activity.compile.laneExpired.stalled",
+        _ => "activity.compile.laneExpired.emit",
+    };
+
+    /// <summary>
+    /// The activity line: the English sentence as fallback text, the key, and every reading as a named
+    /// argument. An absent lane reading binds as an em dash, which needs no translation.
+    /// </summary>
+    public MeshWeaver.Data.LogMessage ToActivityMessage() =>
+        new MeshWeaver.Data.LogMessage(Message, Microsoft.Extensions.Logging.LogLevel.Error)
+            .WithKey(MessageKey, Arguments());
+
+    /// <summary>
+    /// The same sentence as a persisted <see cref="MeshWeaver.Mesh.KeyedText"/> for the record's
+    /// <c>CompilationErrorText</c>, so the type's status pages render it in the viewer's language
+    /// (#6195 review). The readings stay NUMERIC scalars, so they are formatted in the VIEWER's culture
+    /// when rendered (<c>4,26 GiB</c> for a German viewer), never frozen into one culture at write
+    /// time. A number survives the record's JSON round trip as a number that renders identically, so
+    /// <see cref="EnglishSummary"/> — derived from this same object — is still reproduced afterwards.
+    /// </summary>
+    public MeshWeaver.Mesh.KeyedText ToKeyedText() =>
+        new(MessageKey, Arguments().ToImmutableDictionary(a => a.Name, a => a.Value ?? (object)""));
+
+    /// <summary>The English rendering of <see cref="ToKeyedText"/> — what the record stores as
+    /// <c>CompilationError</c>, and what <c>KeyedTexts.Localize</c> checks the keyed form against.</summary>
+    public string EnglishSummary => ToKeyedText().Render("en");
+
+    private (string Name, object? Value)[] Arguments() =>
+    [
+        ("leg", LegName),
+        ("path", NodePath),
+        ("seconds", Math.Round(Seconds, 1)),
+        ("running", (object?)Lane?.Running ?? "—"),
+        ("capacity", (object?)Lane?.Capacity ?? "—"),
+        ("queued", (object?)Lane?.Queued ?? "—"),
+        ("gcPausePercent", Gc.PausePercent),
+        ("gcPausedSeconds", Gc.PausedSeconds),
+        ("heapGiB", Gc.HeapGiB),
+        ("gen2", Gc.Gen2Collections),
+    ];
+
+    private static string EnglishMessage(
+        string legName, string nodePath, string phase, double seconds, CpuLaneReading? lane, GcReading gc)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var why = phase switch
+        {
+            CpuLaneExpiryPhase.Prefix => $"its IO prefix did not reach the CPU lane within {seconds.ToString("0.#", inv)}s",
+            CpuLaneExpiryPhase.Stalled => $"it was queued for a CPU-lane slot and the lane completed NO leaf for "
+                                          + $"{seconds.ToString("0.#", inv)}s (every slot is held by work that does "
+                                          + "not stop when cancelled)",
+            _ => $"its emit did not complete within {seconds.ToString("0.#", inv)}s of being admitted to the CPU lane",
+        };
+        var laneText = lane is null
+            ? "CPU-lane occupancy not measured (no bounded lane)"
+            : $"CPU lane {lane.Running}/{lane.Capacity} running, {lane.Queued} queued";
+        return $"Compile leg '{legName}' for '{nodePath}' timed out: {why}. Time spent waiting in a draining "
+            + $"CPU-lane queue is not counted. At the expiry: {laneText}; GC pause "
+            + $"{gc.PausePercent.ToString("0.#", inv)}% of time, {gc.PausedSeconds.ToString("0.#", inv)}s paused "
+            + $"since start, heap {gc.HeapGiB.ToString("0.##", inv)}GiB, gen2 collections {gc.Gen2Collections}. "
+            + "No verdict about the code was formed, so the type settles at CompilationStatus=Unavailable "
+            + "(never Compiling, where the single-flight status lock would absorb every later trigger, and "
+            + "never Error, which nothing retries) and the failed-verdict re-drive compiles it again under "
+            + "its own bound.";
+    }
 }
 
 /// <summary>
