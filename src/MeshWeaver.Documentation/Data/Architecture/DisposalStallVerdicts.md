@@ -1150,12 +1150,13 @@ started yet. When that count reaches `SyncStreamOptions.UpdateBacklogWarningDept
 and again at each tenfold, it logs **one** Warning per depth:
 
 ```
-[SYNC_STREAM] Update backlog on {StreamId}: {Depth} writes queued and not yet started (reporting
-depth {Threshold}) — the write that crossed it came from {Writer}. Reference {Reference}, owner
-{Owner}, subscriber {Subscriber}.
+[SYNC_STREAM] Update backlog on hub {Hub} (stream {StreamId}): {Depth} writes queued and not yet
+started (reporting depth {Threshold}) — the write that crossed it came from {Writer}. Reference
+{Reference}, owner {Owner}, subscriber {Subscriber}.
 ```
 
-`{Writer}` is the declaring type and method of the delegate the caller wrote. For the value-form
+`{Hub}` is the sync hub's own address (`sync/{ClientId}`), the one the disposal-stall and
+pump-depth lines name, so a search for the stalled hub finds this line. `{Writer}` is the declaring type and method of the delegate the caller wrote. For the value-form
 `Update`/`SetFull` that is the caller's transform, not the stream's own wrapper. For a lambda it is
 the caller's method as the compiler named it, for example `MeshWeaver.Layout.Composition.LayoutAreaHost.<UpdateArea>b__0`.
 The instrument only observes: no write is dropped, refused or delayed.

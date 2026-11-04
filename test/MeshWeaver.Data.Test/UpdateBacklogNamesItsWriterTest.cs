@@ -59,6 +59,8 @@ public class UpdateBacklogNamesItsWriterTest(ITestOutputHelper output) : HubTest
         stream.LastUpdateBacklogReport!.Value.Writer.Should().Be(
             $"{typeof(UpdateBacklogNamesItsWriterTest).FullName}.{nameof(KeepWriting)}",
             "the report names the code the CALLER wrote, never the stream's own wrapper lambda");
+        stream.LastUpdateBacklogReport!.Value.Hub.Should().Be(stream.Hub.Address.ToString(),
+            "the report names the sync hub's own address — the one the disposal-stall lines carry");
         stream.Dispose();
     }
 

@@ -728,7 +728,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
 
     /// <summary>The last backlog report this stream made — the reporting depth and the writer it
     /// named — or null. What the Warning says, readable by a test.</summary>
-    internal (int Depth, string Writer)? LastUpdateBacklogReport { get; private set; }
+    internal (int Depth, string Writer, string Hub)? LastUpdateBacklogReport { get; private set; }
 
     /// <summary>
     /// 🚨 NAMES THE WRITER BEHIND A BACKLOG (MeshWeaver#5799). A read stream on memex-cloud held
@@ -747,13 +747,17 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             || Interlocked.CompareExchange(ref reportedBacklog, threshold, last) != last)
             return;
         var writer = UpdateBacklog.Describe(origin);
-        LastUpdateBacklogReport = (threshold, writer);
+        // The HUB address, `sync/{ClientId}`, is what the disposal-stall and pump-depth lines name
+        // (review of #7877): without it a search for the stalled hub misses this warning. StreamId
+        // stays beside it — it is the per-instance id other stream diagnostics carry.
+        var hubAddress = SynchronizationAddress.Create(ClientId).ToString();
+        LastUpdateBacklogReport = (threshold, writer, hubAddress);
         logger.LogWarning(
-            "[SYNC_STREAM] Update backlog on {StreamId}: {Depth} writes queued and not yet started "
-            + "(reporting depth {Threshold}) — the write that crossed it came from {Writer}. "
-            + "Reference {Reference}, owner {Owner}, subscriber {Subscriber}. A writer posting faster "
-            + "than this stream's turns run is a loop or a flood at that writer.",
-            StreamId, depth, threshold, writer, Reference, Owner,
+            "[SYNC_STREAM] Update backlog on hub {Hub} (stream {StreamId}): {Depth} writes queued and "
+            + "not yet started (reporting depth {Threshold}) — the write that crossed it came from "
+            + "{Writer}. Reference {Reference}, owner {Owner}, subscriber {Subscriber}. A writer posting "
+            + "faster than this stream's turns run is a loop or a flood at that writer.",
+            hubAddress, StreamId, depth, threshold, writer, Reference, Owner,
             Configuration.Subscriber?.ToString() ?? "(none)");
     }
     /// <summary>
