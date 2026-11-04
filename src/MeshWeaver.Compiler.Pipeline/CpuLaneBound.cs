@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
@@ -204,11 +205,13 @@ internal sealed class CpuLaneExpiredException(
     /// <summary>
     /// The same sentence as a persisted <see cref="MeshWeaver.Mesh.KeyedText"/> for the record's
     /// <c>CompilationErrorText</c>, so the type's status pages render it in the viewer's language
-    /// (#6195 review). Every argument is a STRING, formatted invariantly once, so the stored English
-    /// fallback (<see cref="EnglishSummary"/>) is reproduced exactly after a JSON round trip.
+    /// (#6195 review). The readings stay NUMERIC scalars, so they are formatted in the VIEWER's culture
+    /// when rendered (<c>4,26 GiB</c> for a German viewer), never frozen into one culture at write
+    /// time. A number survives the record's JSON round trip as a number that renders identically, so
+    /// <see cref="EnglishSummary"/> — derived from this same object — is still reproduced afterwards.
     /// </summary>
     public MeshWeaver.Mesh.KeyedText ToKeyedText() =>
-        MeshWeaver.Mesh.KeyedText.Of(MessageKey, [.. Arguments().Select(a => (a.Name, Invariant(a.Value)))]);
+        new(MessageKey, Arguments().ToImmutableDictionary(a => a.Name, a => a.Value ?? (object)""));
 
     /// <summary>The English rendering of <see cref="ToKeyedText"/> — what the record stores as
     /// <c>CompilationError</c>, and what <c>KeyedTexts.Localize</c> checks the keyed form against.</summary>
@@ -227,13 +230,6 @@ internal sealed class CpuLaneExpiredException(
         ("heapGiB", Gc.HeapGiB),
         ("gen2", Gc.Gen2Collections),
     ];
-
-    private static string Invariant(object? value) => value switch
-    {
-        null => "",
-        IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
-        _ => value.ToString() ?? "",
-    };
 
     private static string EnglishMessage(
         string legName, string nodePath, string phase, double seconds, CpuLaneReading? lane, GcReading gc)

@@ -132,8 +132,9 @@ What a person reads is one catalog sentence per phase, `activity.compile.laneExp
 with every reading passed as a named argument. The sentence is in the viewer's language and the
 numbers use the viewer's culture. The exception's English `Message` goes to server logs only. The record
 carries the same sentence: `CompilationError` holds its English rendering, and `CompilationErrorText`
-holds the keyed form with string arguments, so the English text is reproduced exactly after the JSON
-round trip. The compile-log panel (`NodeTypeStatusView`) and the NodeType status area both render the
+holds the keyed form. Its readings stay numeric, so they render in the viewer's culture (`4,26 GiB` for
+a German viewer), and a JSON number renders exactly as the number it was. That is why the English text
+is still reproduced after the record's round trip. The compile-log panel (`NodeTypeStatusView`) and the NodeType status area both render the
 keyed form in the viewer's language through `KeyedTexts.Localize`.
 
 The expiry message now carries the readings that incident had to reconstruct from the liveness log:

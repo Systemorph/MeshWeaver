@@ -288,6 +288,35 @@ public class LaneExpiryIsNotACompileVerdictTest
             .CompilationErrorText.Should().BeNull();
     }
 
+    /// <summary>
+    /// 🚨 #6195 review — the record's readings stay NUMERIC through persistence, so a German viewer
+    /// reads them in the German culture (<c>4,26 GiB</c>, <c>20,3 %</c>) and an English one in the
+    /// English culture, while the keyed form still reproduces the stored English text after the JSON
+    /// round trip. Invariant strings would have frozen <c>4.26</c> for everyone.
+    /// </summary>
+    [Fact]
+    public void FractionalReadings_SurviveTheJsonRoundTrip_AndRenderInTheViewersCulture()
+    {
+        var expired = new CpuLaneExpiredException("roslyn-compile", TypePath, CpuLaneExpiryPhase.Emit, 300,
+            new CpuLaneReading(3, 6, 0), new GcReading(20.3, 71.5, 4.26, 164));
+        var stamped = NodeTypeCompilationHelpers.ApplyCompileFailure(
+            BuiltType(CompilationStatus.Compiling), result: null, expired, activityPath: null, modulesHash: "mod-1");
+
+        stamped.CompilationError.Should().Contain("heap 4.26 GiB").And.Contain("20.3% of the time");
+
+        var persisted = System.Text.Json.JsonSerializer.Deserialize<ImmutableList<KeyedText>>(
+            System.Text.Json.JsonSerializer.Serialize(stamped.CompilationErrorText));
+        persisted![0].Args!["heapGiB"].Should().BeOfType<System.Text.Json.JsonElement>()
+            .Which.ValueKind.Should().Be(System.Text.Json.JsonValueKind.Number, "the reading is persisted as a number");
+
+        KeyedTexts.Reproduces(persisted, stamped.CompilationError)
+            .Should().BeTrue("the persisted numbers render the stored English text exactly");
+        KeyedTexts.Localize(stamped.CompilationError, persisted, "en").Should().Be(stamped.CompilationError);
+        KeyedTexts.Localize(stamped.CompilationError, persisted, "de")
+            .Should().Contain("Heap 4,26 GiB").And.Contain("20,3 % der Zeit").And.Contain("71,5 s")
+            .And.Contain("CPU-Spur 3/6");
+    }
+
     // A type that compiled successfully on THIS framework before: it holds a last good build.
     private static NodeTypeDefinition BuiltType(CompilationStatus status) => new()
     {
