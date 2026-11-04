@@ -157,4 +157,143 @@ public class SyncTokenSigningKeyIsHeldTest(ITestOutputHelper output) : MonolithM
             .Current.Should().Equal(first.Current);
         registry.ReadsIssued.Should().Be(reads, "the re-taken hold answers without a read");
     }
+
+    private static byte[] KeyBytes(byte seed) => Enumerable.Repeat(seed, SyncTokenSigningKeys.KeyByteLength).ToArray();
+
+    /// <summary>A key node as a mirror frame would carry it. Untagged material is read as-is by the
+    /// protector, so the bytes a frame carries are the bytes the service must answer with.</summary>
+    private static MeshNode KeyNode(byte seed) =>
+        new(SyncTokenSigningKeys.Id, SyncTokenSigningKeys.Namespace)
+        {
+            NodeType = SyncTokenSigningKeys.NodeType,
+            Content = new SyncTokenSigningKey
+            {
+                ProtectedCurrent = Convert.ToBase64String(KeyBytes(seed)),
+                CurrentIssuedAt = DateTimeOffset.UtcNow,
+                RotateAfter = DateTimeOffset.UtcNow.AddDays(30),
+            },
+        };
+
+    /// <summary>Every mirror the service subscribes is a subject the test drives.</summary>
+    private sealed class Mirrors
+    {
+        private readonly List<Subject<MeshNode>> all = new();
+
+        public IObservable<MeshNode> Open()
+        {
+            var mirror = new Subject<MeshNode>();
+            lock (all)
+                all.Add(mirror);
+            return mirror;
+        }
+
+        public int Count
+        {
+            get
+            {
+                lock (all)
+                    return all.Count;
+            }
+        }
+
+        public Subject<MeshNode> Last
+        {
+            get
+            {
+                lock (all)
+                    return all[^1];
+            }
+        }
+    }
+
+    private async Task<(SyncTokenSigningKeyService Registry, Mirrors Mirrors, byte[] Stored)> HeldOnSeed(
+        byte seed, CancellationToken ct)
+    {
+        var writer = NewService();
+        var stored = await writer.Resolve().Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("the key is minted", cancellationToken: ct);
+        writer.Dispose();
+
+        var mirrors = new Mirrors();
+        var registry = NewService(mirrors.Open);
+        (await registry.Existing().Should().Within(TestTimeouts.Convergence)
+            .Emit("a cold registry reads once", cancellationToken: ct)).Should().NotBeNull();
+        mirrors.Count.Should().Be(1, "the read took the hold");
+        mirrors.Last.OnNext(KeyNode(seed));
+        registry.IsHeld.Should().BeTrue("the hold delivered a record");
+        return (registry, mirrors, stored.Current);
+    }
+
+    /// <summary>Review of #7889, P1: a run of reattachments that fail WITHOUT delivering must not keep
+    /// extending the fallback window — once the window opened by losing the healthy hold has elapsed,
+    /// the next request reads.</summary>
+    [Fact]
+    public async Task FailedReattachments_DoNotExtendTheFallback_PastItsExpiryARequestReads()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (registry, mirrors, _) = await HeldOnSeed(7, ct);
+        using var owned = registry;
+        var reads = registry.ReadsIssued;
+
+        mirrors.Last.OnError(new InvalidOperationException("the owner failed"));
+        var step = SyncTokenSigningKeyService.CacheDuration / 3;
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            clock += step;
+            (await registry.Existing().Should().Within(TestTimeouts.Convergence)
+                    .Emit("inside the window the newest key answers", cancellationToken: ct))!
+                .Current.Should().Equal(KeyBytes(7));
+            registry.ReadsIssued.Should().Be(reads, "inside the window nothing is read");
+            mirrors.Count.Should().Be(1 + attempt, "each request re-took the hold");
+            mirrors.Last.OnError(new InvalidOperationException("the reattachment failed before delivering"));
+        }
+
+        clock += step + TimeSpan.FromSeconds(1);
+        await registry.Existing().Should().Within(TestTimeouts.Convergence)
+            .Emit("past the window the request reads", cancellationToken: ct);
+        registry.ReadsIssued.Should().Be(reads + 1,
+            "failed reattachments must not have renewed the window that the lost healthy hold opened");
+    }
+
+    /// <summary>Review of #7889, P2: a rotation the hold delivered AFTER the last request survives the
+    /// hold's loss — the fallback serves the newest record, never the older materialisation.</summary>
+    [Fact]
+    public async Task ARotationDeliveredBeforeTheMirrorFaults_IsWhatTheFallbackServes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (registry, mirrors, _) = await HeldOnSeed(7, ct);
+        using var owned = registry;
+        (await registry.Existing().Should().Within(TestTimeouts.Convergence)
+                .Emit("the held key answers", cancellationToken: ct))!
+            .Current.Should().Equal(KeyBytes(7));
+        var reads = registry.ReadsIssued;
+
+        mirrors.Last.OnNext(KeyNode(9)); // the rotation arrives with no request in between
+        mirrors.Last.OnError(new InvalidOperationException("the owner failed"));
+
+        (await registry.Existing().Should().Within(TestTimeouts.Convergence)
+                .Emit("the fallback answers", cancellationToken: ct))!
+            .Current.Should().Equal(KeyBytes(9), "the newest delivered record is what this replica knows");
+        registry.ReadsIssued.Should().Be(reads, "answered from memory");
+    }
+
+    /// <summary>Review of #7889, P2: a frame with no usable key drops what this replica knew — the next
+    /// request reads instead of serving the superseded key.</summary>
+    [Fact]
+    public async Task AFrameWithNoUsableKey_DropsTheKnownKey_AndTheNextRequestReads()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (registry, mirrors, stored) = await HeldOnSeed(7, ct);
+        using var owned = registry;
+        var reads = registry.ReadsIssued;
+
+        mirrors.Last.OnNext(KeyNode(7) with { Content = null });
+        registry.IsHeld.Should().BeFalse("an unusable frame releases the hold");
+
+        var answered = await registry.Existing().Should().Within(TestTimeouts.Convergence)
+            .Emit("the request reads the node", cancellationToken: ct);
+        registry.ReadsIssued.Should().Be(reads + 1, "nothing known about the key may be served any more");
+        answered!.Current.Should().Equal(stored, "the read answers with what the store holds");
+        answered.Current.SequenceEqual(KeyBytes(7)).Should().BeFalse("the superseded key is gone");
+    }
 }

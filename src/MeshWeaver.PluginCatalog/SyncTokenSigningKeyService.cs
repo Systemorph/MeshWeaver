@@ -33,34 +33,49 @@ namespace MeshWeaver.PluginCatalog;
 /// in the process-wide cache (<c>GetMeshNodeStream</c>), as System, for the life of the mesh: every
 /// later request is answered from memory, and a rotation written on ANY replica arrives through the
 /// change feed instead of waiting for a TTL. The one-shot read remains only for a cold process (no
-/// hold yet) or a hold that has terminated and whose last material is older than
-/// <see cref="CacheDuration"/>.</para>
+/// hold yet), or once the fallback window after a lost hold has elapsed.</para>
 ///
-/// <para>A hold that faults or completes is dropped; the last material it delivered stays servable
-/// for <see cref="CacheDuration"/> (the staleness the TTL always allowed — the outgoing key stays
-/// verifiable through its grace window) and the next request re-takes the hold without waiting for
-/// it. Instance state, never static (Doc/Architecture/NoStaticState): the service is a mesh-scoped
+/// <para>A hold that faults or completes is dropped; the NEWEST record it delivered (a rotation
+/// included) stays servable for <see cref="CacheDuration"/> from the loss, and the next request
+/// re-takes the hold without waiting for it. A reattachment that fails without delivering never
+/// extends that window, and a frame with no usable key drops everything known about the key, so a
+/// stale key cannot outlive its evidence. Instance state, never static (Doc/Architecture/NoStaticState): the service is a mesh-scoped
 /// singleton and its hold dies with the mesh.</para>
 /// </summary>
 public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncTokenSigningKeyService> logger)
     : IDisposable
 {
-    /// <summary>How long material may be served from memory when NO hold is live — a cold process
-    /// whose first read has not answered yet, or a hold that terminated. While the hold is live the
-    /// node is never re-read; this is then only how often the held record is re-materialised, so a
-    /// closed grace window or a due rotation is noticed without any IO.</summary>
+    /// <summary>How long the last known key may be served when NO hold is delivering — measured from
+    /// the moment a successful read or write delivered it, or from the moment a HEALTHY hold (one that
+    /// had delivered a record) was lost. A reattachment that fails without delivering never extends it,
+    /// so a run of failed reattachments falls back to a read once it has elapsed. While a hold is
+    /// delivering, the node is never re-read; this is then only how often the held record is
+    /// re-materialised, so a closed grace window or a due rotation is noticed without any IO.</summary>
     public static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(1);
 
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
 
     private readonly object gate = new();
-    private (DateTimeOffset At, SyncTokenSigningMaterial Material, SyncTokenSigningKey? From)? cached;
 
-    /// <summary>The live hold on the key's mirror; null when none is held.</summary>
+    /// <summary>The NEWEST record this replica knows — from a read, a write, or a hold frame. Kept when
+    /// a hold terminates (it is still the newest truth seen), dropped when a frame says the node no
+    /// longer carries a usable key.</summary>
+    private SyncTokenSigningKey? latest;
+
+    /// <summary>Until when <see cref="latest"/> may be served while no hold is delivering; null when
+    /// it may not be served without a read.</summary>
+    private DateTimeOffset? fallbackUntil;
+
+    /// <summary>Materialisation of a specific record (by reference), so a held record is decrypted at
+    /// most once per <see cref="CacheDuration"/>.</summary>
+    private (DateTimeOffset At, SyncTokenSigningMaterial Material, SyncTokenSigningKey From)? materialized;
+
+    /// <summary>Bumped whenever the known key is invalidated, so a materialisation that was in flight
+    /// across the invalidation cannot restore what it replaced.</summary>
+    private long generation;
+
+    /// <summary>The hold on the key's mirror; null when none is held.</summary>
     private HoldSlot? hold;
-
-    /// <summary>The newest record the live hold delivered; null until its first frame.</summary>
-    private SyncTokenSigningKey? held;
 
     private bool disposed;
     private int readsIssued;
@@ -79,7 +94,7 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
         get
         {
             lock (gate)
-                return hold is not null && held is not null;
+                return hold is { Delivered: true };
         }
     }
 
@@ -122,62 +137,73 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
 
         var access = hub.ServiceProvider.GetService<AccessService>();
         return access.RunAsSystem(Read)
-            .Select(stored => stored is null ? null : Materialize(stored))
-            .Do(material =>
+            .Select(stored => stored is null
+                ? ((SyncTokenSigningKey Stored, SyncTokenSigningMaterial Material)?)null
+                : (stored, Materialize(stored)))
+            .Do(read =>
             {
                 // Absent: nothing to hold — a point stream on a path that does not exist is a framework
                 // defect (CqrsAndContentAccess, "An OPTIONAL node"), and a verify never mints.
-                if (material is null)
-                    return;
-                Remember(null, material);
-            });
+                if (read is { } found)
+                    Remember(found.Stored, found.Material);
+            })
+            .Select(read => read?.Material);
     }
 
     /// <summary>
-    /// The material this replica can answer with WITHOUT any IO, or null when it must read. A live
-    /// hold answers always (re-materialised from the held record at most once per
-    /// <see cref="CacheDuration"/>); without one, the last material answers while it is younger
-    /// than <see cref="CacheDuration"/>, and the hold is re-taken without waiting for it. Never blocks.
+    /// The material this replica can answer with WITHOUT any IO, or null when it must read. A hold
+    /// that is delivering answers always; without one, the newest known record answers until
+    /// <see cref="fallbackUntil"/>, and the hold is re-taken without waiting for it. Never blocks.
     /// </summary>
     private SyncTokenSigningMaterial? FromMemory()
     {
         var now = Now();
-        SyncTokenSigningKey? record;
+        SyncTokenSigningKey record;
         HoldSlot? toSubscribe = null;
-        SyncTokenSigningMaterial? answer = null;
+        SyncTokenSigningMaterial? hit = null;
+        long seenGeneration;
         lock (gate)
         {
-            record = hold is null ? null : held;
-            if (record is null)
+            if (latest is null)
+                return null;
+            if (hold is not { Delivered: true })
             {
-                if (cached is { } hit && now - hit.At < CacheDuration)
-                {
-                    toSubscribe = TakeHoldLocked();
-                    answer = hit.Material;
-                }
+                if (fallbackUntil is not { } until || now >= until)
+                    return null;
+                toSubscribe = TakeHoldLocked();
             }
-            else if (cached is { } current && ReferenceEquals(current.From, record) && now - current.At < CacheDuration)
-                answer = current.Material;
+            record = latest;
+            seenGeneration = generation;
+            if (materialized is { } m && ReferenceEquals(m.From, record) && now - m.At < CacheDuration)
+                hit = m.Material;
         }
         if (toSubscribe is not null)
             Subscribe(toSubscribe);
-        if (answer is not null || record is null)
-            return answer;
+        if (hit is not null)
+            return hit;
 
-        // Re-materialise the HELD record — local CPU only (decrypt + grace/rotation evaluation).
+        // Materialise the newest record — local CPU only (decrypt + grace/rotation evaluation).
         var material = Materialize(record);
         lock (gate)
-            cached = (now, material, record);
+        {
+            // An invalidation that ran meanwhile wins: never restore what it dropped.
+            if (generation == seenGeneration && ReferenceEquals(latest, record))
+                materialized = (now, material, record);
+        }
         return material;
     }
 
-    /// <summary>Records material just read or written, and takes the hold: the node exists now.</summary>
-    private void Remember(SyncTokenSigningKey? stored, SyncTokenSigningMaterial material)
+    /// <summary>Records a key just read or written — fresh truth, so the fallback window restarts —
+    /// and takes the hold: the node exists now.</summary>
+    private void Remember(SyncTokenSigningKey stored, SyncTokenSigningMaterial material)
     {
         HoldSlot? toSubscribe;
         lock (gate)
         {
-            cached = (Now(), material, stored);
+            var now = Now();
+            latest = stored;
+            materialized = (now, material, stored);
+            fallbackUntil = now + CacheDuration;
             toSubscribe = TakeHoldLocked();
         }
         if (toSubscribe is not null)
@@ -197,7 +223,6 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
             return null;
         var slot = new HoldSlot();
         hold = slot;
-        held = null;
         return slot;
     }
 
@@ -217,27 +242,57 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
             node =>
             {
                 var record = node?.ContentAs<SyncTokenSigningKey>(hub.JsonSerializerOptions);
-                if (record is null)
+                if (record is null || string.IsNullOrWhiteSpace(record.ProtectedCurrent))
+                {
+                    Invalidate(slot);
                     return;
+                }
                 lock (gate)
                 {
-                    if (ReferenceEquals(hold, slot))
-                        held = record;
+                    if (!ReferenceEquals(hold, slot))
+                        return;
+                    latest = record;
+                    slot.Delivered = true;
                 }
             },
             ex =>
             {
                 logger.LogDebug(ex,
-                    "The held mirror of {Path} faulted — released; the last key stays servable for {Window} "
+                    "The held mirror of {Path} faulted — released; the newest key stays servable for {Window} "
                     + "and the next request re-takes the hold", SyncTokenSigningKeys.Path, CacheDuration);
                 Release(slot);
             },
             () => Release(slot));
     }
 
+    /// <summary>
+    /// A frame that carries no usable key: the node no longer says what the key is, so nothing known
+    /// about it may be served any more. Drops the known record, its materialisation and the fallback
+    /// window, bumps <see cref="generation"/> so an in-flight materialisation cannot restore them, and
+    /// releases the hold — the next request reads, and observes absence or failure for itself.
+    /// </summary>
+    private void Invalidate(HoldSlot slot)
+    {
+        lock (gate)
+        {
+            if (!ReferenceEquals(hold, slot))
+                return;
+            hold = null;
+            latest = null;
+            materialized = null;
+            fallbackUntil = null;
+            generation++;
+        }
+        logger.LogWarning(
+            "The held mirror of {Path} delivered a frame with no usable signing key — dropped what this "
+            + "replica knew about the key; the next request reads the node", SyncTokenSigningKeys.Path);
+        slot.Subscription.Dispose();
+    }
+
     /// <summary>Drops <paramref name="slot"/> if it is still the live hold (pair-exact, so a newer hold
-    /// is never touched). The last material stays servable for <see cref="CacheDuration"/> from now:
-    /// a terminated mirror establishes nothing NEW about the key, and the TTL always allowed that much.</summary>
+    /// is never touched). The newest record stays known. Only the loss of a HEALTHY hold — one that
+    /// delivered — opens a fresh fallback window; a reattachment that terminates without delivering
+    /// leaves the window where it was, so repeated failures cannot keep a stale key alive.</summary>
     private void Release(HoldSlot slot)
     {
         lock (gate)
@@ -245,9 +300,8 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
             if (ReferenceEquals(hold, slot))
             {
                 hold = null;
-                held = null;
-                if (cached is { } last)
-                    cached = (Now(), last.Material, null);
+                if (slot.Delivered && latest is not null)
+                    fallbackUntil = Now() + CacheDuration;
             }
         }
         slot.Subscription.Dispose();
@@ -270,7 +324,6 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
             disposed = true;
             slot = hold;
             hold = null;
-            held = null;
         }
         slot?.Subscription.Dispose();
     }
@@ -278,6 +331,9 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
     private sealed class HoldSlot
     {
         public SingleAssignmentDisposable Subscription { get; } = new();
+
+        /// <summary>Whether this hold has delivered a usable record. Written under the service's gate.</summary>
+        public bool Delivered { get; set; }
     }
 
     /// <summary>
@@ -314,14 +370,15 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
 
                     return meshService.CreateOrUpdateNode(NodeFor(rotated)).Select(_ => rotated);
                 }))
-            .Select(Materialize)
-            .Do(material =>
+            .Select(rotated => (Stored: rotated, Material: Materialize(rotated)))
+            .Do(written =>
             {
-                Remember(null, material);
+                Remember(written.Stored, written.Material);
                 logger.LogInformation(
                     "Sync token signing key rotated by {By}; the outgoing key stays verifiable for {Grace}",
                     rotatedBy, SyncTokenSigningKeys.RotationGrace);
-            });
+            })
+            .Select(written => written.Material);
     }
 
     /// <summary>
