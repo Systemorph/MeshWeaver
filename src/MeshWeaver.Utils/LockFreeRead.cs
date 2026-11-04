@@ -47,6 +47,12 @@ public static class LockFreeRead
     public static SafeFileHandle Open(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
+        // 🚨 Validated BEFORE the platform split (Copilot's review of #7873): the native open takes
+        // a zero-terminated string, so an embedded NUL would silently open a DIFFERENT, shorter path.
+        // The BCL and the Windows branch refuse such a path; so does this one.
+        if (path.Contains('\0'))
+            throw new ArgumentException($"The path contains an embedded NUL character: '{path.Replace('\0', '?')}'.", nameof(path));
+        path = Path.GetFullPath(path);
         if (OperatingSystem.IsWindows())
             return File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -142,7 +148,7 @@ public static class LockFreeRead
             {
                 ENOENT => new FileNotFoundException(message, path),
                 ENOTDIR => new DirectoryNotFoundException(message),
-                EACCES or EPERM or EISDIR => new UnauthorizedAccessException(message),
+                EACCES or EPERM or EISDIR => new PosixAccessDeniedException(message, error),
                 _ => new IOException(message, error),
             };
         }
@@ -157,6 +163,26 @@ public static class LockFreeRead
             public static extern int open([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
         }
     }
+}
+
+/// <summary>
+/// A permission refusal of a lock-free open on Unix that keeps the platform error number as its
+/// <see cref="Exception.HResult"/>, exactly as the BCL's <see cref="IOException"/>s do — a plain
+/// <see cref="UnauthorizedAccessException"/> carries <c>E_ACCESSDENIED</c> instead, which would make
+/// <c>EACCES</c>, <c>EPERM</c> and <c>EISDIR</c> indistinguishable (Copilot's review of #7873).
+/// </summary>
+public sealed class PosixAccessDeniedException : UnauthorizedAccessException
+{
+    /// <summary>Creates the refusal for <paramref name="errorNumber"/>.</summary>
+    /// <param name="message">The rendered message, naming the path.</param>
+    /// <param name="errorNumber">The platform error number (<c>errno</c>).</param>
+    public PosixAccessDeniedException(string message, int errorNumber) : base(message)
+    {
+        HResult = errorNumber;
+    }
+
+    /// <summary>The platform error number (<c>errno</c>) of the refusal.</summary>
+    public int ErrorNumber => HResult;
 }
 
 /// <summary>The step of a <see cref="LockFreeRead"/> that failed.</summary>

@@ -93,7 +93,12 @@ public class LockFreeReadTest : IDisposable
             var fault = Assert.Throws<LockFreeReadException>(() => LockFreeRead.ReadText(path));
             Assert.Equal(LockFreeReadStep.Open, fault.Step);
             Assert.Equal(path, fault.Path);
-            Assert.IsType<UnauthorizedAccessException>(fault.InnerException);
+            // The native errno survives the wrapper (Copilot's review of #7873): EACCES is 13 on
+            // Linux and macOS alike, never the E_ACCESSDENIED HRESULT 0x80070005.
+            Assert.IsAssignableFrom<UnauthorizedAccessException>(fault.InnerException);
+            Assert.Equal(13, fault.ErrorNumber);
+            Assert.Equal(13, fault.InnerException!.HResult);
+            Assert.Contains("error number (HResult): 13 ", fault.Message);
             Assert.Contains("step: OPEN", fault.Message);
             Assert.Contains(path, fault.Message);
         }
@@ -101,6 +106,20 @@ public class LockFreeReadTest : IDisposable
         {
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
+    }
+
+    /// <summary>An embedded NUL must be refused, never truncated (Copilot's review of #7873): the
+    /// native open takes a zero-terminated string, so "record.json\0suffix" would otherwise read
+    /// "record.json" — bytes from a path the caller did not name. The file at the truncated name
+    /// EXISTS, so a pass cannot come from the shorter path being absent.</summary>
+    [Fact]
+    public void APathWithAnEmbeddedNul_IsRefused_NeverReadAsTheShorterPath()
+    {
+        var path = Path.Combine(root, "record.json");
+        File.WriteAllText(path, "the wrong file");
+
+        Assert.Throws<ArgumentException>(() => LockFreeRead.Open(path + "\0suffix").Dispose());
+        Assert.Throws<ArgumentException>(() => LockFreeRead.ReadText(path + "\0suffix"));
     }
 
     [Fact]
