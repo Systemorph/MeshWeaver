@@ -368,6 +368,20 @@ def marker_seen(runs: list, version: str) -> bool:
     return False
 
 
+_JOB_HEADER = re.compile(r"^  ([A-Za-z_][\w-]*):\s*$", re.M)
+
+
+def workflow_jobs(text: str) -> list[tuple[str, str]]:
+    """(job id, its text) for each job under `jobs:`; a fragment with no `jobs:` block is ONE job."""
+    at = re.search(r"^jobs:\s*$", text, re.M)
+    if not at:
+        return [("publish", text)]
+    rest = text[at.end():]
+    heads = list(_JOB_HEADER.finditer(rest))
+    return [(m.group(1), rest[m.end():heads[i + 1].start() if i + 1 < len(heads) else len(rest)])
+            for i, m in enumerate(heads)]
+
+
 def workflow_findings(text: str) -> list[str]:
     """Shapes of template-feed.yml that would read a sealed set as 'nothing to publish'.
 
@@ -395,9 +409,12 @@ def workflow_findings(text: str) -> list[str]:
     if "$FEED_TOOL" in text and (not bindings or any(b != LANE_TOOL for b in bindings)):
         out.append(f"FEED_TOOL is bound to {bindings or 'nothing'}, not {LANE_TOOL} — the calls through it "
                    "would run the set's copy (or none)")
-    if LANE_REF not in text or "path: lane" not in text:
-        out.append("the publish job does not check out the lane's own tooling at the commit that defines "
-                   "the workflow into `lane` — the script it runs would come from the set's tree")
+    # PER JOB: every job runs in its own workspace, so a job that runs $FEED_TOOL needs its OWN lane
+    # checkout — another job's (preflight's) satisfies nothing (#7660 review).
+    for name, body in workflow_jobs(text):
+        if "$FEED_TOOL" in body and (LANE_REF not in body or "path: lane" not in body):
+            out.append(f"the {name} job does not check out the lane's own tooling at the commit that defines "
+                       "the workflow into `lane` — the script it runs would come from the set's tree")
     # WHO PUBLISHES decides every new id's visibility: a package created with a workflow's GITHUB_TOKEN
     # takes the publishing repository's visibility, and a public package can never be made private
     # again (MeshWeaver#7660 — the public core repository created 40 of 43 ids public).
@@ -629,8 +646,23 @@ def self_test() -> int:
             failures.append(f"marker_seen, {label}: expected {want}")
     wf = Path(__file__).resolve().parents[1] / "workflows" / "template-feed.yml"
     if wf.is_file():
-        for f in workflow_findings(wf.read_text(encoding="utf-8")):
+        real = wf.read_text(encoding="utf-8")
+        for f in workflow_findings(real):
             failures.append(f"template-feed.yml: {f}")
+        # 8e. The lane checkout is judged PER JOB: break ONLY publish's checkout in the REAL workflow,
+        #     keeping preflight's, and the check must name publish (#7660 review).
+        jobs = dict(workflow_jobs(real))
+        if "$FEED_TOOL" not in jobs.get("preflight", "") or LANE_REF not in jobs.get("preflight", ""):
+            failures.append("8e's control is vacuous: the real preflight job no longer runs $FEED_TOOL off its own lane checkout")
+        pub = jobs.get("publish", "")
+        for label, broken in [("publish's lane checkout removed", pub.replace("          path: lane\n", "", 1)),
+                              ("publish's lane checkout at github.sha", pub.replace(LANE_REF, "ref: ${{ github.sha }}", 1))]:
+            if broken == pub:
+                failures.append(f"8e, {label}: the real publish job has nothing to break — the control checked nothing")
+                continue
+            got = workflow_findings(real.replace(pub, broken, 1))
+            if len(got) != 1 or "the publish job does not check out" not in got[0]:
+                failures.append(f"8e, {label} (preflight's kept): expected exactly the publish finding, got {got}")
     else:
         failures.append(f"{wf} not found — the workflow-shape check checked nothing")
 
