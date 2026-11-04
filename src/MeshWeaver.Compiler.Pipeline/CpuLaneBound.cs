@@ -199,17 +199,41 @@ internal sealed class CpuLaneExpiredException(
     /// </summary>
     public MeshWeaver.Data.LogMessage ToActivityMessage() =>
         new MeshWeaver.Data.LogMessage(Message, Microsoft.Extensions.Logging.LogLevel.Error)
-            .WithKey(MessageKey,
-                ("leg", LegName),
-                ("path", NodePath),
-                ("seconds", Math.Round(Seconds, 1)),
-                ("running", (object?)Lane?.Running ?? "—"),
-                ("capacity", (object?)Lane?.Capacity ?? "—"),
-                ("queued", (object?)Lane?.Queued ?? "—"),
-                ("gcPausePercent", Gc.PausePercent),
-                ("gcPausedSeconds", Gc.PausedSeconds),
-                ("heapGiB", Gc.HeapGiB),
-                ("gen2", Gc.Gen2Collections));
+            .WithKey(MessageKey, Arguments());
+
+    /// <summary>
+    /// The same sentence as a persisted <see cref="MeshWeaver.Mesh.KeyedText"/> for the record's
+    /// <c>CompilationErrorText</c>, so the type's status pages render it in the viewer's language
+    /// (#6195 review). Every argument is a STRING, formatted invariantly once, so the stored English
+    /// fallback (<see cref="EnglishSummary"/>) is reproduced exactly after a JSON round trip.
+    /// </summary>
+    public MeshWeaver.Mesh.KeyedText ToKeyedText() =>
+        MeshWeaver.Mesh.KeyedText.Of(MessageKey, [.. Arguments().Select(a => (a.Name, Invariant(a.Value)))]);
+
+    /// <summary>The English rendering of <see cref="ToKeyedText"/> — what the record stores as
+    /// <c>CompilationError</c>, and what <c>KeyedTexts.Localize</c> checks the keyed form against.</summary>
+    public string EnglishSummary => ToKeyedText().Render("en");
+
+    private (string Name, object? Value)[] Arguments() =>
+    [
+        ("leg", LegName),
+        ("path", NodePath),
+        ("seconds", Math.Round(Seconds, 1)),
+        ("running", (object?)Lane?.Running ?? "—"),
+        ("capacity", (object?)Lane?.Capacity ?? "—"),
+        ("queued", (object?)Lane?.Queued ?? "—"),
+        ("gcPausePercent", Gc.PausePercent),
+        ("gcPausedSeconds", Gc.PausedSeconds),
+        ("heapGiB", Gc.HeapGiB),
+        ("gen2", Gc.Gen2Collections),
+    ];
+
+    private static string Invariant(object? value) => value switch
+    {
+        null => "",
+        IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+        _ => value.ToString() ?? "",
+    };
 
     private static string EnglishMessage(
         string legName, string nodePath, string phase, double seconds, CpuLaneReading? lane, GcReading gc)

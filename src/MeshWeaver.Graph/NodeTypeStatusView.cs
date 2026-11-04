@@ -118,7 +118,7 @@ public sealed record NodeTypeStatusView(
         var pendingNotes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
         var hasNotes = pendingNotes is not null;
 
-        var (logStyle, logHeadline, logHeadlineStyle, logDetail, logLinks) = CompileLog(def, L);
+        var (logStyle, logHeadline, logHeadlineStyle, logDetail, logLinks) = CompileLog(def, L, locale);
         var (panelStyle, chip, chipStyle, compileLabel, compileDisabled) = CompilePanel(def, L);
         var (holdStyle, holdHeadline, holdDetail) = DeliveryHold(def, L);
 
@@ -182,7 +182,7 @@ public sealed record NodeTypeStatusView(
     /// error text, and links to the latest release and the compile activity log.
     /// </summary>
     private static (string Style, string Headline, string HeadlineStyle, string Detail, string Links) CompileLog(
-        NodeTypeDefinition? def, Func<string, object?[], string> L)
+        NodeTypeDefinition? def, Func<string, object?[], string> L, string? locale)
     {
         var hasState = def is not null
             && (def.CompilationStatus is not null
@@ -199,10 +199,12 @@ public sealed record NodeTypeStatusView(
                 headline = L("ui.compiling", []);
                 headlineStyle = "color: var(--mw-accent-text, var(--accent-foreground-rest)); font-weight: 600;";
                 break;
+            // #7355 / #6195 review — a platform sentence renders in the VIEWER's language through its
+            // keyed form; a Roslyn diagnostic or any unkeyed text renders verbatim.
             case CompilationStatus.Error when def.CompilationError is { Length: > 0 } compileError:
                 headline = L("ui.compileFailed", []);
                 headlineStyle = "color: var(--mw-danger-text, var(--error)); font-weight: 600;";
-                detail = Fenced(compileError);
+                detail = Fenced(KeyedTexts.Localize(compileError, def.CompilationErrorText, locale)!);
                 break;
             case CompilationStatus.Unavailable:
                 // Availability problem, not a compile failure — the text is the "could not
@@ -210,7 +212,7 @@ public sealed record NodeTypeStatusView(
                 headline = L("ui.compileStateUnknown", []);
                 headlineStyle = "color: var(--warning-foreground); font-weight: 600;";
                 if (def.CompilationError is { Length: > 0 } unavailableReason)
-                    detail = Fenced(unavailableReason);
+                    detail = Fenced(KeyedTexts.Localize(unavailableReason, def.CompilationErrorText, locale)!);
                 break;
             case CompilationStatus.Ok when !string.IsNullOrEmpty(def.LatestReleasePath):
                 headline = L("ui.releasePublished", []);

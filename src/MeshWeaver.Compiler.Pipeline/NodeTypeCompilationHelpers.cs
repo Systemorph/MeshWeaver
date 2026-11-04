@@ -1359,19 +1359,8 @@ internal static class NodeTypeCompilationHelpers
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
             //
-            // 🚨 #6195 review — the key carries the ATTEMPT (its compile activity), not only the
-            // state. The Where above drops the Pending/Compiling emissions between two settles, so a
-            // retry that settles Unavailable again under unchanged inputs arrived with the SAME
-            // (status, inputs, platform) key and was silently swallowed here: the type stayed
-            // Unavailable without reaching MaxAutomaticFailureRedrives or its give-up line. Each
-            // terminal write stamps its own LastCompilationActivityPath, so two completed attempts
-            // never share a key, while an unrelated edit of a settled record still does.
-            .DistinctUntilChanged(node =>
-            {
-                var d = (NodeTypeDefinition)node!.Content!;
-                return (d.CompilationStatus, BuildInputsToken(guards.ModulesHash, d.CurrentSourceVersions),
-                    d.FailedPlatformVersion, d.LastCompilationActivityPath);
-            })
+            // 🚨 #6195 review — the key carries the ATTEMPT, not only the state: see RedriveDedupeKey.
+            .DistinctUntilChanged(node => RedriveDedupeKey((NodeTypeDefinition)node!.Content!, guards.ModulesHash))
             .Subscribe(
                 node =>
                 {
@@ -1386,7 +1375,7 @@ internal static class NodeTypeCompilationHelpers
                     var (forTheseInputs, total) =
                         parkRegistry?.RecordFailureRedrive(hubPath, liveInputs) ?? (1, 1);
 
-                    if (forTheseInputs > 1)
+                    if (IsNonConvergingRedrive(def, forTheseInputs))
                         logger?.LogError(
                             "Failed-verdict re-drive DID NOT CONVERGE for NodeType {HubPath}: this process has "
                             + "already re-driven it for EXACTLY these compile inputs ({Inputs}) — attempt "
@@ -4548,6 +4537,39 @@ internal static class NodeTypeCompilationHelpers
                 BuildInputsToken(modulesHash, def.CurrentSourceVersions),
                 StringComparison.Ordinal));
 
+    /// <summary>
+    /// The failed-verdict re-drive's de-duplication key: the settled STATE plus the ATTEMPT that
+    /// produced it (#6195 review). The re-drive's filter drops the Pending/Compiling emissions between
+    /// two settles, so a retry that settles <c>Unavailable</c> again under unchanged inputs arrives
+    /// with the same (status, inputs, platform) — keyed on the state alone it was swallowed, and the
+    /// type stayed Unavailable without reaching the retry cap or its give-up line. Two stamps tell the
+    /// attempts apart: <see cref="NodeTypeDefinition.LastCompileStartedAt"/>, which the Pending →
+    /// Compiling claim stamps for EVERY attempt, and the activity path, which is null when the
+    /// activity could not be created. An unrelated edit of a settled record changes neither, so it is
+    /// still de-duplicated. Pure.
+    /// </summary>
+    /// <param name="d">The settled definition.</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the live inputs.</param>
+    /// <returns>The key.</returns>
+    internal static (CompilationStatus?, string, string?, string?, DateTimeOffset?) RedriveDedupeKey(
+        NodeTypeDefinition d, string? modulesHash) =>
+        (d.CompilationStatus, BuildInputsToken(modulesHash, d.CurrentSourceVersions),
+            d.FailedPlatformVersion, d.LastCompilationActivityPath, d.LastCompileStartedAt);
+
+    /// <summary>
+    /// Whether a second re-drive for the very same inputs means the re-drive is feeding itself — the
+    /// write-cycle diagnosis. True only for an <c>Error</c>: its flip stamps the live inputs, so the
+    /// trigger cannot legitimately fire twice for them. An <c>Unavailable</c> verdict is re-asked
+    /// under unchanged inputs BY DESIGN (it formed no verdict — a recycling read, a CPU-lane expiry),
+    /// so repeated retries of it are the recovery working, bounded by the retry cap, and are never
+    /// reported as a write cycle (#6195 review). Pure.
+    /// </summary>
+    /// <param name="def">The definition being re-driven.</param>
+    /// <param name="forTheseInputs">How often this process has re-driven it for these inputs.</param>
+    /// <returns>True when the diagnosis applies.</returns>
+    internal static bool IsNonConvergingRedrive(NodeTypeDefinition def, int forTheseInputs) =>
+        forTheseInputs > 1 && def.CompilationStatus is not CompilationStatus.Unavailable;
+
     // The guards ownership is judged with: the caller's full set, else the modules hash alone.
     private static BuildGuards? GuardsOrHash(BuildGuards? guards, string? modulesHash) =>
         guards ?? (modulesHash is null ? null : new BuildGuards(modulesHash, null, ""));
@@ -5412,8 +5434,17 @@ internal static class NodeTypeCompilationHelpers
             // through module surfaces that never carried them (measured: rbuergi/OperationRequest,
             // four days). Prefixed rather than replacing: the diagnostics are still the evidence.
             CompilationError = lead is null
-                ? SummarizeCompileError(result, error)
+                ? (error is CpuLaneExpiredException expiredSummary
+                    ? expiredSummary.EnglishSummary
+                    : SummarizeCompileError(result, error))
                 : $"{lead}\n{SummarizeCompileError(result, error)}",
+            // 🚨 #6195 review — a CPU-lane expiry is a platform sentence, so its keyed form rides
+            // beside the English text and every status page renders it in the VIEWER's language
+            // (KeyedTexts.Localize). Only when it is the whole error: a source-coverage lead in front
+            // is not keyed, and then the English text renders verbatim, as for any unkeyed error.
+            CompilationErrorText = lead is null && error is CpuLaneExpiredException expiredText
+                ? System.Collections.Immutable.ImmutableList.Create(expiredText.ToKeyedText())
+                : null,
             CompilationDiagnostics = result?.Diagnostics is { Count: > 0 } ds
                 ? System.Collections.Immutable.ImmutableList.CreateRange(ds)
                 : null,

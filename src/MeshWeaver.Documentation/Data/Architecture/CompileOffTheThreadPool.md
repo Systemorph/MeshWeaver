@@ -111,11 +111,15 @@ them, and they stayed red for about 7 h until a roll replaced the pods.
 Three rules keep that retry reachable, each pinned through the real watchers by
 `ALaneExpiryIsRetriedByTheWatcherTest`:
 
-- **Every completed attempt is a new event.** The re-drive de-duplicates on (status, inputs,
-  platform, `LastCompilationActivityPath`). Without the activity path, a retry that expired again
-  under unchanged inputs carried the same key, because the Pending and Compiling emissions in
-  between are filtered out. It was dropped, and the type stayed `Unavailable` without reaching the
-  retry cap or its give-up line.
+- **Every completed attempt is a new event.** The re-drive de-duplicates on
+  `RedriveDedupeKey`: status, inputs, platform, `LastCompilationActivityPath`, and
+  `LastCompileStartedAt`. Every Pending → Compiling claim stamps that last field, so it is set even
+  when no activity node could be created. With the state alone, a retry that expired again under
+  unchanged inputs carried the same key, because the Pending and Compiling emissions in between are
+  filtered out. It was dropped, and the type stayed `Unavailable` without reaching the retry cap or
+  its give-up line. These repeated `Unavailable` retries are the recovery working, so they are never
+  reported as the "did not converge" write cycle (`IsNonConvergingRedrive`). That diagnosis applies
+  only to an `Error`.
 - **A stale build stays the framework-stale kickoff's until that kickoff has acted.** The kickoff is
   one-shot (`Take(1)`), and a failed rebuild keeps the old coordinates and framework stamp. So once it
   has rebuilt, skipped or restamped, the hub records that, and an `Unavailable` settle on that stale
@@ -126,7 +130,11 @@ Three rules keep that retry reachable, each pinned through the real watchers by
 
 What a person reads is one catalog sentence per phase, `activity.compile.laneExpired.{prefix|stalled|emit}`,
 with every reading passed as a named argument. The sentence is in the viewer's language and the
-numbers use the viewer's culture. The exception's English `Message` goes to server logs only.
+numbers use the viewer's culture. The exception's English `Message` goes to server logs only. The record
+carries the same sentence: `CompilationError` holds its English rendering, and `CompilationErrorText`
+holds the keyed form with string arguments, so the English text is reproduced exactly after the JSON
+round trip. The compile-log panel (`NodeTypeStatusView`) and the NodeType status area both render the
+keyed form in the viewer's language through `KeyedTexts.Localize`.
 
 The expiry message now carries the readings that incident had to reconstruct from the liveness log:
 the lane's occupancy (`CPU lane r/n running, q queued`) and the process's GC pause share, total pause

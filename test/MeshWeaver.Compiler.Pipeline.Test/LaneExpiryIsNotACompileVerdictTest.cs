@@ -214,6 +214,80 @@ public class LaneExpiryIsNotACompileVerdictTest
             .Should().BeTrue();
     }
 
+    /// <summary>
+    /// 🚨 #6195 review — two consecutive settles must be told apart by their ATTEMPT even when no
+    /// compile activity could be created (the activity path is then null for both). The Pending →
+    /// Compiling claim stamps <see cref="NodeTypeDefinition.LastCompileStartedAt"/> on every attempt.
+    /// An unrelated edit of a settled record must still be de-duplicated.
+    /// </summary>
+    [Fact]
+    public void ConsecutiveSettles_WithoutActivityNodes_HaveDistinctKeys_AndAnUnrelatedEditDoesNot()
+    {
+        var first = BuiltType(CompilationStatus.Unavailable) with
+        {
+            LastCompilationActivityPath = null,
+            LastCompileStartedAt = DateTimeOffset.UnixEpoch.AddMinutes(1),
+        };
+        var second = first with { LastCompileStartedAt = DateTimeOffset.UnixEpoch.AddMinutes(7) };
+
+        NodeTypeCompilationHelpers.RedriveDedupeKey(second, "mod-1")
+            .Should().NotBe(NodeTypeCompilationHelpers.RedriveDedupeKey(first, "mod-1"),
+                "a second expiry under unchanged inputs is a new attempt and must be re-driven");
+        NodeTypeCompilationHelpers.RedriveDedupeKey(first with { Description = "edited" }, "mod-1")
+            .Should().Be(NodeTypeCompilationHelpers.RedriveDedupeKey(first, "mod-1"),
+                "an unrelated edit of the settled record is not a new attempt");
+    }
+
+    /// <summary>
+    /// 🚨 #6195 review — an Unavailable verdict is re-asked under unchanged inputs by design, so its
+    /// repeated retries are never diagnosed as a write cycle; an Error re-driven twice for the same
+    /// inputs still is.
+    /// </summary>
+    [Theory]
+    [InlineData(CompilationStatus.Unavailable, 2, false)]
+    [InlineData(CompilationStatus.Unavailable, 5, false)]
+    [InlineData(CompilationStatus.Error, 2, true)]
+    [InlineData(CompilationStatus.Error, 1, false)]
+    public void RepeatedUnavailableRetries_AreNotAWriteCycle(CompilationStatus status, int forTheseInputs, bool expected)
+        => NodeTypeCompilationHelpers.IsNonConvergingRedrive(BuiltType(status), forTheseInputs).Should().Be(expected);
+
+    /// <summary>
+    /// 🚨 #6195 review — the RECORD carries the expiry's keyed form beside its English text, so the
+    /// type's status pages render it in the viewer's language. The keyed form must still reproduce
+    /// the English text after the record's JSON round trip, or every reader falls back to English.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ALaneExpiry_IsRecordedWithItsKeyedText_AndTheStatusPageRendersItInTheViewersLanguage()
+    {
+        using var lane = new IoPool(1);
+        var fault = (CpuLaneExpiredException)await ExpireAnAdmittedEmit(lane, TestContext.Current.CancellationToken);
+        var stamped = NodeTypeCompilationHelpers.ApplyCompileFailure(
+            BuiltType(CompilationStatus.Compiling), result: null, fault, activityPath: null, modulesHash: "mod-1");
+
+        stamped.CompilationError.Should().Be(fault.EnglishSummary);
+        stamped.CompilationErrorText.Should().ContainSingle().Which.Key.Should().Be("activity.compile.laneExpired.emit");
+
+        var persisted = System.Text.Json.JsonSerializer.Deserialize<ImmutableList<KeyedText>>(
+            System.Text.Json.JsonSerializer.Serialize(stamped.CompilationErrorText));
+        KeyedTexts.Reproduces(persisted, stamped.CompilationError)
+            .Should().BeTrue("after the round trip the keyed form must still match the stored English");
+
+        var german = KeyedTexts.Localize(stamped.CompilationError, persisted, "de");
+        german.Should().StartWith("Kompilierung NICHT ABGESCHLOSSEN").And.NotContain("did not finish");
+
+        var view = MeshWeaver.Graph.NodeTypeStatusView.From(
+            new MeshNode("InstanceAction", "Hosting"),
+            stamped with { CompilationErrorText = persisted }, TypePath, "de");
+        view.LogDetail.Should().Contain("Kompilierung NICHT ABGESCHLOSSEN", "the compile log panel is localized")
+            .And.NotContain("did not finish");
+
+        // Negative control: a Roslyn verdict carries no keyed form and renders verbatim.
+        NodeTypeCompilationHelpers.ApplyCompileFailure(
+                BuiltType(CompilationStatus.Compiling), result: null,
+                new CompilationException(TypePath, "CS0103: The name 'Nope' does not exist"), activityPath: null)
+            .CompilationErrorText.Should().BeNull();
+    }
+
     // A type that compiled successfully on THIS framework before: it holds a last good build.
     private static NodeTypeDefinition BuiltType(CompilationStatus status) => new()
     {
