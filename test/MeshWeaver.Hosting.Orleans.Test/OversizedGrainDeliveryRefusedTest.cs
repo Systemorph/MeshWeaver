@@ -267,8 +267,10 @@ public class OversizedGrainDeliveryRefusedTest
             delivery, Target, Encoding.UTF8.GetByteCount(hostile), TestLimitBytes);
 
         refusal.Split('\n').Should().HaveCount(1,
-            "the payload head is JSON-quoted, so newlines inside it cannot split one refusal into "
+            "the payload is never quoted, so newlines inside it cannot split one refusal into "
             + "what a log pipeline would read as several records");
-        refusal.Should().Contain("\\n", "…the newlines survive, escaped, so the payload is still identifiable");
+        refusal.Should().Contain("Evil",
+            "the payload is identified by its root $type — its content is never quoted, so it cannot forge records "
+            + "(Doc/Architecture/SensitiveContentInLogs)");
     }
 }
