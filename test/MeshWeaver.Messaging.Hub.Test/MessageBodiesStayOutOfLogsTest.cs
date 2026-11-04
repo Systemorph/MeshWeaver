@@ -28,6 +28,15 @@ public abstract class MessageBodiesLogTestBase : HubTestBase
 
     protected sealed record SensitiveRequest(string Diagnosis) : IRequest<Ack>;
 
+    /// <summary>The value of a member MARKED <see cref="SensitiveDataAttribute"/>.</summary>
+    protected const string MarkedMarker = "MARKED-DIAGNOSIS-2d81e0";
+
+    /// <summary>The value of an UNMARKED member of the same message (the control).</summary>
+    protected const string WardMarker = "WARD-east-5c7a";
+
+    /// <summary>A request with one marked and one unmarked member.</summary>
+    protected sealed record PatientRequest([SensitiveData] string Diagnosis, string Ward) : IRequest<Ack>;
+
     /// <summary>A fire-and-forget message nobody handles (the no-handler path).</summary>
     protected sealed record UnhandledSensitiveEvent(string Diagnosis);
 
@@ -46,12 +55,13 @@ public abstract class MessageBodiesLogTestBase : HubTestBase
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
-            .WithTypes(typeof(SensitiveRequest), typeof(UnhandledSensitiveEvent), typeof(Ack))
-            .WithHandler<SensitiveRequest>((_, _) => throw new InvalidOperationException("a genuine bug"));
+            .WithTypes(typeof(SensitiveRequest), typeof(UnhandledSensitiveEvent), typeof(Ack), typeof(PatientRequest))
+            .WithHandler<SensitiveRequest>((_, _) => throw new InvalidOperationException("a genuine bug"))
+            .WithHandler<PatientRequest>((_, _) => throw new InvalidOperationException("a patient bug"));
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration)
-            .WithTypes(typeof(SensitiveRequest), typeof(UnhandledSensitiveEvent), typeof(Ack));
+            .WithTypes(typeof(SensitiveRequest), typeof(UnhandledSensitiveEvent), typeof(Ack), typeof(PatientRequest));
 
     /// <summary>Posts a request whose handler throws, and returns the message service's Error line.</summary>
     protected async Task<LogEntry> HandlerFaultErrorLine()
@@ -63,6 +73,20 @@ public abstract class MessageBodiesLogTestBase : HubTestBase
             .Subscribe(_ => { }, _ => { });
         return await Capture.Entries.Should().Within(10.Seconds()).Match(
             e => e.Level == LogLevel.Error && e.Message.Contains("An exception occurred during the processing of"),
+            "a handler fault is logged at Error by the message service");
+    }
+
+    /// <summary>Posts a <see cref="PatientRequest"/> whose handler throws, and returns its Error line.</summary>
+    protected async Task<LogEntry> PatientFaultErrorLine()
+    {
+        var client = GetClient();
+        GetHost();
+        using var _ = client
+            .Observe<Ack>(new PatientRequest(MarkedMarker, WardMarker), o => o.WithTarget(CreateHostAddress()))
+            .Subscribe(_ => { }, _ => { });
+        return await Capture.Entries.Should().Within(10.Seconds()).Match(
+            e => e.Level == LogLevel.Error && e.Message.Contains("An exception occurred during the processing of")
+                 && e.Message.Contains(nameof(PatientRequest)),
             "a handler fault is logged at Error by the message service");
     }
 
@@ -153,5 +177,18 @@ public class MessageBodiesOptInTest(ITestOutputHelper output)
         var line = await HandlerFaultErrorLine();
         line.Message.Should().Contain(SensitiveMarker,
             "Messaging:LogMessageBodies=true is the explicit opt-in to body rendering");
+    }
+
+    /// <summary>
+    /// 🚨 The opt-in renders the body — and still never a <see cref="SensitiveDataAttribute"/> value:
+    /// the body goes through the logging serializer, the one redaction point.
+    /// </summary>
+    [HubFact]
+    public async Task The_opt_in_still_redacts_a_marked_member()
+    {
+        var line = await PatientFaultErrorLine();
+        line.Message.Should().Contain(WardMarker, "CONTROL — the opt-in does render the body");
+        line.Message.Should().NotContain(MarkedMarker, "a [SensitiveData] value never reaches a log, opt-in or not");
+        line.Message.Should().Contain(SensitiveDataAttribute.Placeholder, "the member is shown, its value replaced");
     }
 }
