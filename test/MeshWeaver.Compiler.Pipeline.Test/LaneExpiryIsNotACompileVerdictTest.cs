@@ -8,6 +8,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.Compiler.Pipeline.Test;
@@ -60,8 +61,7 @@ public class LaneExpiryIsNotACompileVerdictTest
                     });
                 }),
                 Bound, "roslyn-compile", TypePath, () => lane.AdmissionsCompleted,
-                laneState: () => $"CPU lane {lane.CurrentInFlight}/{lane.MaxConcurrency} running, "
-                                 + $"{lane.CurrentlyWaiting} queued")
+                laneState: () => new CpuLaneReading(lane.CurrentInFlight, lane.MaxConcurrency, lane.CurrentlyWaiting))
             .Materialize()
             .Where(n => n.Kind != System.Reactive.NotificationKind.OnNext)
             .Take(1)
@@ -84,7 +84,27 @@ public class LaneExpiryIsNotACompileVerdictTest
 
         NodeTypeCompilationHelpers.IsAvailabilityNonVerdict(fault)
             .Should().BeTrue("the leg was cancelled before Roslyn formed any verdict");
-        NodeTypeCompilationHelpers.CompileFailureLead(fault).Key.Should().Be("activity.compile.laneExpired");
+
+        // 🚨 The activity line a person reads is ONE keyed sentence with the readings as arguments —
+        // never the English Message spliced into a translated lead (#6195 review).
+        var line = ((CpuLaneExpiredException)fault).ToActivityMessage();
+        line.MessageKey.Should().Be("activity.compile.laneExpired.emit");
+        var key = line.MessageKey!;
+        foreach (var name in new[] { "leg", "path", "seconds", "running", "capacity", "queued",
+                     "gcPausePercent", "gcPausedSeconds", "heapGiB", "gen2" })
+            line.MessageArgs!.ContainsKey(name).Should().BeTrue($"the reading '{name}' rides as an argument");
+        foreach (var locale in new[] { "en", "de" })
+        {
+            LocalizationCatalog.ContainsKey(key).Should().BeTrue();
+            var rendered = LocalizationCatalog.GetNamed(
+                key, locale, line.MessageArgs, fallback: null);
+            rendered.Should().NotContain("{", $"every placeholder of the {locale} sentence is bound")
+                .And.Contain(TypePath).And.Contain("1/1");
+        }
+        LocalizationCatalog
+            .GetNamed(key, "de", line.MessageArgs, fallback: null)
+            .Should().NotContain("did not finish").And.NotContain("At the expiry",
+                "a German viewer reads no English platform prose");
 
         var stamped = NodeTypeCompilationHelpers.ApplyCompileFailure(
             BuiltType(CompilationStatus.Compiling), result: null, fault, activityPath: null, modulesHash: "mod-1");
@@ -135,6 +155,63 @@ public class LaneExpiryIsNotACompileVerdictTest
         NodeTypeCompilationHelpers.HasStaleFrameworkBuild(def, modulesHash: null).Should().BeTrue();
         NodeTypeCompilationHelpers.HasStaleFailureVerdict(def, "mod-1", TypePath)
             .Should().BeFalse("two kickoffs claiming one state is how a rebuild loop starts");
+    }
+
+    /// <summary>
+    /// 🚨 #6195 review — a framework-stale build that settled Unavailable belongs to the one-shot
+    /// framework-stale kickoff until that kickoff has acted; once it has, it never looks again, so the
+    /// failed-verdict re-drive takes it over instead of leaving it to an owner that has unsubscribed.
+    /// </summary>
+    [Fact]
+    public void AnUnavailableSettle_OnAStaleBuild_PassesToTheReDrive_OnceTheStaleKickoffHasActed()
+    {
+        var def = BuiltType(CompilationStatus.Unavailable) with
+        {
+            CompiledFrameworkVersion = "0ldfr4me",
+            FailedBuildInputs = NodeTypeCompilationHelpers.BuildInputsToken("mod-1", LiveSources),
+        };
+
+        NodeTypeCompilationHelpers.HasStaleFailureVerdict(def, "mod-1", TypePath, staleBuildKickoffSpent: false)
+            .Should().BeFalse("the kickoff has not acted yet: it owns the stale build");
+        NodeTypeCompilationHelpers.HasStaleFailureVerdict(def, "mod-1", TypePath, staleBuildKickoffSpent: true)
+            .Should().BeTrue("the kickoff consumed its one shot, so nothing else would ever retry it");
+    }
+
+    /// <summary>
+    /// 🚨 #6195 review — ownership is decided with the SAME full guards the framework-stale kickoff
+    /// uses. A build on the current framework whose modules (legacy stamp) or recorded dependencies
+    /// drifted is stale to that kickoff, so it is not claimed here until the kickoff has acted.
+    /// </summary>
+    [Theory]
+    [InlineData("modules")]
+    [InlineData("dependency")]
+    public void ModuleOrDependencyDrift_IsOwnedByTheStaleKickoff_UnderTheFullGuards(string drift)
+    {
+        const string Toolchain = "mvid:toolchain-1";
+        Func<string, string?> resolver(string id) => name => name == "Custom.Module" ? id : null;
+        var record = drift == "dependency"
+            ? MeshWeaver.Compiler.CompiledDependencies.Compute(["Custom.Module"], resolver("mvid:v1"), Toolchain)
+            : null;
+        var def = BuiltType(CompilationStatus.Unavailable) with
+        {
+            CompiledDependencies = record,
+            CompiledModulesHash = drift == "modules" ? "mod-OLD" : null,
+        };
+        var guards = new NodeTypeCompilationHelpers.BuildGuards(
+            ModulesHash: "mod-1", DependencyIdOf: resolver("mvid:v2"), ToolchainId: Toolchain);
+
+        NodeTypeCompilationHelpers.HasStaleFrameworkBuild(def, guards)
+            .Should().BeTrue($"the {drift} drift makes the build stale to the framework-stale kickoff");
+        NodeTypeCompilationHelpers.HasStaleFailureVerdict(def, "mod-1", TypePath, guards)
+            .Should().BeFalse("two kickoffs must never claim one state");
+        NodeTypeCompilationHelpers.HasStaleFailureVerdict(def, "mod-1", TypePath, guards, staleBuildKickoffSpent: true)
+            .Should().BeTrue("…until the stale kickoff has acted");
+
+        // Negative control: with no drift the build is nobody else's, and the re-drive owns it.
+        var undrifted = guards with { DependencyIdOf = resolver("mvid:v1") };
+        NodeTypeCompilationHelpers.HasStaleFailureVerdict(
+                def with { CompiledModulesHash = null }, "mod-1", TypePath, undrifted)
+            .Should().BeTrue();
     }
 
     // A type that compiled successfully on THIS framework before: it holds a last good build.

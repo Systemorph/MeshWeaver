@@ -1191,8 +1191,7 @@ internal class MeshNodeCompilationService(
                         _cacheOptions.RoslynCompileTimeout, "roslyn-compile", node.Path,
                         _cpuLane is IoPool lanePool ? () => lanePool.AdmissionsCompleted : null,
                         laneState: _cpuLane is IoPool lane
-                            ? () => $"CPU lane {lane.CurrentInFlight}/{lane.MaxConcurrency} running, "
-                                    + $"{lane.CurrentlyWaiting} queued"
+                            ? () => new CpuLaneReading(lane.CurrentInFlight, lane.MaxConcurrency, lane.CurrentlyWaiting)
                             : null)
                     .Select(emit =>
                     {
