@@ -474,18 +474,19 @@ produce exactly one terminal status — an *empty* completion is caught by a tot
 | Stage | Option (default) | On expiry |
 |---|---|---|
 | Source snapshot — the one-shot read of the source set | `SourceSnapshotTimeout` (30 s) | `Unavailable`, naming the source query that never emitted — **not** `Error`; see below |
-| `roslyn-compile` — NuGet restore, source generators, `Emit`, disk write | `RoslynCompileTimeout` (5 min) | `Error` naming the leg; the stage is **cancelled**, so an unreachable package feed stops instead of pinning a compile thread |
+| `roslyn-compile` — NuGet restore, source generators, `Emit`, disk write | `RoslynCompileTimeout` (5 min) | `Unavailable` naming the leg, the lane occupancy and the GC pause share (`CpuLaneExpiredException`, #6195); the stage is **cancelled**, so an unreachable package feed stops instead of pinning a compile thread, and the failed-verdict re-drive retries it — see [Compiling Off the Thread Pool](../CompileOffTheThreadPool) |
 | `assembly-load` — assembly load, `GetTypes`, provider reflection, config instantiation | `AssemblyLoadTimeout` (2 min) | `Error` naming the leg (a running type initializer cannot be interrupted, so the stage is abandoned, not cancelled) |
 | `assembly-store-upload` — publishing the bytes to the `IAssemblyStore` | `AssemblyStoreUploadTimeout` (2 min) | **Not** an error: an upload failure has never failed a compile, so the compile settles `Ok` with a warning naming the leg on its ActivityLog — the assembly is usable locally but cross-silo activation will not find it |
 
-A tripped bound is never something to raise: it means a stage genuinely stopped answering, and
-the message names which one. Fix that stage, then retry with **Create Release** / the Compile
+A tripped bound is never something to raise: it means a stage stopped answering or ran slower than
+its bound, and the message names which one. A `roslyn-compile` expiry is retried automatically (it
+formed no verdict); for the others, fix that stage, then retry with **Create Release** / the Compile
 button — the terminal status is settled, so the next trigger dispatches normally.
 
 ### 🚨 A compile NEVER runs against an unestablished source set
 
-The source snapshot is the one stage whose failure is **not** a compile verdict, and it is the
-only one that settles `Unavailable` instead of `Error`.
+The source snapshot is a stage whose failure is **not** a compile verdict, and it settles
+`Unavailable` instead of `Error` (so does a `roslyn-compile` expiry, above).
 
 Discovery races two legs — a direct `IMeshService` read and the cached synced query — and each
 leg issues one query per declared `Sources`/`Tests` entry. Those queries can fail

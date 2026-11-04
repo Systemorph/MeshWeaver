@@ -95,8 +95,57 @@ phases, each with its own named expiry:
 
 A caller that joins a compile already in flight times against the leader's queue and admission.
 
+🚨 **An expiry is not a verdict about the code, so it settles `Unavailable` and is retried** (#6195).
+Every expiry throws `CpuLaneExpiredException` (still a `TimeoutException`), which
+`NodeTypeCompilationHelpers.IsAvailabilityNonVerdict` reads: the type is stamped
+`CompilationStatus=Unavailable`, the park budget is untouched, and the failed-verdict re-drive
+compiles it again, at most `MaxAutomaticFailureRedrives` times per process. That re-drive also covers
+a type that still HOLDS a last good build on this framework, which is nobody else's case:
+`HasStaleFrameworkBuild` claims a build only when the framework moved. Measured on
+memex.systemorph.com on 2026-11-03: a Hosting source sync made the prebuilt bundle stale, three
+Hosting types each compiled a 302-file source closure (about 240 s of Roslyn on a healthy replica)
+together on a replica spending about 20 % of wall time in GC pauses, and all three crossed the 300 s
+bound. They were stamped `Error` under the live inputs and kept their old build, so no path retried
+them, and they stayed red for about 7 h until a roll replaced the pods.
+
+Three rules keep that retry reachable, each pinned through the real watchers by
+`ALaneExpiryIsRetriedByTheWatcherTest`:
+
+- **Every completed attempt is a new event.** The re-drive de-duplicates on
+  `RedriveDedupeKey`: status, inputs, platform, `LastCompilationActivityPath`, and
+  `LastCompileStartedAt`. Every Pending → Compiling claim stamps that last field, so it is set even
+  when no activity node could be created. With the state alone, a retry that expired again under
+  unchanged inputs carried the same key, because the Pending and Compiling emissions in between are
+  filtered out. It was dropped, and the type stayed `Unavailable` without reaching the retry cap or
+  its give-up line. These repeated `Unavailable` retries are the recovery working, so they are never
+  reported as the "did not converge" write cycle (`IsNonConvergingRedrive`). That diagnosis applies
+  only to an `Error`.
+- **A stale build stays the framework-stale kickoff's until that kickoff has acted.** The kickoff is
+  one-shot (`Take(1)`), and a failed rebuild keeps the old coordinates and framework stamp. So once it
+  has rebuilt, skipped or restamped, the hub records that, and an `Unavailable` settle on that stale
+  build passes to the failed-verdict re-drive.
+- **Both kickoffs judge ownership with the same full `BuildGuards`**: modules hash, dependency ids
+  and toolchain. A build whose modules or recorded dependencies drifted is therefore never claimed by
+  both at once, at the trigger or at the commit-time re-check.
+
+What a person reads is one catalog sentence per phase, `activity.compile.laneExpired.{prefix|stalled|emit}`,
+with every reading passed as a named argument. The sentence is in the viewer's language and the
+numbers use the viewer's culture. The exception's English `Message` goes to server logs only. The record
+carries the same sentence: `CompilationError` holds its English rendering, and `CompilationErrorText`
+holds the keyed form. Its readings stay numeric, so they render in the viewer's culture (`4,26 GiB` for
+a German viewer), and a JSON number renders exactly as the number it was. That is why the English text
+is still reproduced after the record's round trip. The compile-log panel (`NodeTypeStatusView`) and the NodeType status area both render the
+keyed form in the viewer's language through `KeyedTexts.Localize`.
+
+The expiry message now carries the readings that incident had to reconstruct from the liveness log:
+the lane's occupancy (`CPU lane r/n running, q queued`) and the process's GC pause share, total pause
+time, heap size and gen2 count at the moment it fired. Read them before anything else. A full lane
+with an empty queue and a high GC share is a slow compile on a starved process. A full lane with a
+queue is a wave. A lane with free slots and a low GC share is the emit itself.
+
 `CpuLaneBoundTest` pins each expiry against a real one-slot pool, and the draining case that must not
-expire. `CompileBoundExcludesCpuLaneQueueTest` runs the draining case through the real compile service.
+expire. `LaneExpiryIsNotACompileVerdictTest` pins the classification and the retry of a type that
+holds a last good build. `CompileBoundExcludesCpuLaneQueueTest` runs the draining case through the real compile service.
 
 Its leaves:
 
