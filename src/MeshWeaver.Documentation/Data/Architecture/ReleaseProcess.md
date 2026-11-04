@@ -461,7 +461,8 @@ release) and, when that run SEALED a set — `Promote`, `Verify every image ship
 5. verifies that every pinned id was packed at its planned version and that every `MeshWeaver.*`
    dependency of every package is itself published by the lane (`template-feed.py verify`);
 6. pushes with the workflow's `GITHUB_TOKEN` (`packages: write`) and `--skip-duplicate`, so a
-   version already on the feed is skipped rather than an error; and
+   version already on the feed is skipped rather than an error — **only from a private repository**
+   (see *Who publishes* below); and
 7. reads every package's visibility back and is RED unless each is `private`; and
 8. **proves a user can restore**: with an empty package cache and the job's own token as the
    credential, it installs `MeshWeaver.MemexTemplate` from the feed at the set's version,
@@ -486,9 +487,40 @@ on every core pull request (`workflow-shell` job) and again before every publish
 the lane's own ledger issue (label `ci-template-feed`) and closed by the next real publication; a
 dry run never closes it.
 
+**Who publishes decides the visibility.** A package a workflow *creates* with its `GITHUB_TOKEN`
+"inherits the visibility and permissions model of the repository where the workflow is run" (GitHub,
+*Publishing and installing a package with GitHub Actions*), it is linked to the repository its
+`RepositoryUrl` names, and "once you make a package public, you cannot make it private again"
+(GitHub, *Configuring a package's access control and visibility*). This repository is public, and
+its first real publication created 40 of 43 ids public (MeshWeaver#7660). So the lane has two entry
+points with one body:
+
+- **here** (`workflow_run` after CD, or a dispatch) it reads its own repository's visibility, finds
+  it public, and runs DRY whatever was asked: it packs, verifies the closure and lists the set. That
+  proof is what this repository's ledger tracks;
+- **MeshWeaver.Plugins `template-feed.yml`** (private) calls it through `workflow_call` on a
+  schedule — a private repository cannot hear this one's `workflow_run` — and that run pushes. Its
+  `GITHUB_TOKEN` creates every new id **private** and linked to MeshWeaver.Plugins, because the
+  pack's `RepositoryUrl` names the PUBLISHING repository, never a literal. A scheduled run takes
+  the newest sealed set and does nothing when one of the caller's own recent successful runs holds a
+  successful `Published to the private feed: <version>` job. That job runs only after the push, the
+  visibility check and the restore proof all succeeded, so a package left on the feed by a push that
+  failed a later check never counts as published (`template-feed.py marker`, pinned by the
+  self-test). A dispatch always republishes and re-proves, which is how a deleted package is
+  restored. Its reds file on MeshWeaver.Plugins' own `ci-template-feed` ledger.
+
+The push step refuses a non-private publisher a second time, reading the repository's visibility
+itself, and `template-feed.py --self-test` reds a workflow that pushes without that refusal or
+whose `RepositoryUrl` is a literal. An id created before this rule, public, cannot be flipped back:
+delete it (package settings → Danger Zone → Delete this package) and the next private run
+recreates it. An id that already exists and is linked to another repository accepts the private
+caller's push only once its *Manage Actions access* grants MeshWeaver.Plugins **Write**; the push
+step names that fix when it is refused.
+
 **Inputs from the set, the instrument from the lane.** What is packed comes from the set: core at
 its `core_sha`, Plugins at its `plugins_sha`. The lane's own tool, `template-feed.py`, comes from the
-commit the workflow runs at (`github.sha`, a sparse `lane/` checkout). The set is usually older than
+commit that DEFINES the workflow (`job.workflow_sha` — under `workflow_call`, `github.sha` is the
+caller's commit in another repository), checked out sparsely into `lane/`. The set is usually older than
 the lane. The first sealed set after the lane merged was cut from a commit that had no
 `template-feed.py`, and the lane died `can't open file` before it measured anything
 (MeshWeaver#7660). The self-test refuses a workflow that runs the script out of the set's tree,
@@ -499,7 +531,8 @@ publishes.
 
 **Dry run.** `gh workflow run template-feed.yml -f dry-run=true [-f cd-run-id=<run>]` packs,
 verifies and lists the packages in the run summary and pushes nothing. `dry-run` defaults to `true`
-on a dispatch; the `workflow_run` path always publishes.
+on a dispatch here, and every run here is dry regardless (above); the private caller's
+scheduled run publishes, and its own dispatch takes the same `dry-run` input.
 
 **Never nuget.org.** `template-feed.py push-guard` refuses every push source except the org feed,
 and refuses nuget.org by name: a nupkg there can never be recalled. These packages are not a return

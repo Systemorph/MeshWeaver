@@ -15,6 +15,16 @@
 # push-guard` refuses nuget.org (a nupkg there can never be recalled) and anything else. A new
 # package's visibility is asserted `private` after the push, and the lane is RED otherwise.
 #
+# 🚨 PUSHED ONLY FROM A PRIVATE REPOSITORY (MeshWeaver#7660). A package a workflow CREATES with its
+# GITHUB_TOKEN "inherits the visibility and permissions model of the repository where the workflow is
+# run" (GitHub docs, "Publishing and installing a package with GitHub Actions"), and "once you make a
+# package public, you cannot make it private again". This repository is public: its first real
+# publication created 40 of 43 ids public. So the PUSH runs only when this workflow is called
+# (`workflow_call`) from a PRIVATE repository — MeshWeaver.Plugins `template-feed.yml`, whose
+# GITHUB_TOKEN creates every new id private and linked to that repository (RepositoryUrl names the
+# PUBLISHING repository). Run here (workflow_run / dispatch) the lane packs, verifies and lists the
+# set, and pushes nothing; the push step refuses a non-private publisher outright.
+#
 # 🚨 THE ID LIST IS DERIVED FROM THE TEMPLATE, NEVER LISTED. The lane runs the generator from the
 # Plugins commit the set was built from and reads the generated Directory.Packages.props; an id the
 # template pins that no project packs, or a pin the packed version cannot satisfy, is a RED naming it
@@ -53,6 +63,18 @@ on:
         description: "Pack, verify and list the packages, but push nothing"
         type: boolean
         default: true
+  # The PUBLISHING entry point: MeshWeaver.Plugins (private) calls this on a schedule, so the push
+  # runs with a private repository's GITHUB_TOKEN and every id it creates is private (#7660).
+  workflow_call:
+    inputs:
+      cd-run-id:
+        description: "A 'Continuous Delivery (main)' run id of Systemorph/MeshWeaver (empty = the newest run that promoted a set)"
+        type: string
+        default: ""
+      dry-run:
+        description: "Pack, verify and list the packages, but push nothing"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -65,6 +87,9 @@ concurrency:
 
 env:
   FEED: https://nuget.pkg.github.com/Systemorph/index.json
+  # The repository whose CD runs seal the sets — named, never $GITHUB_REPOSITORY, because under
+  # workflow_call that is the CALLER (MeshWeaver.Plugins).
+  CORE_REPO: Systemorph/MeshWeaver
 
 jobs:
   preflight:
@@ -73,7 +98,7 @@ jobs:
     # conclude `failure` when an independent job (control-image, satellite-compat, …) fails; gating
     # on the conclusion skipped that set and read green. Whether a set was sealed is decided ONLY
     # by the Promote / Verify / Bake job results below (template-feed.py --self-test pins this).
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -85,14 +110,41 @@ jobs:
       plugins_sha: ${{ steps.set.outputs.plugins_sha }}
       run_id: ${{ steps.run.outputs.run_id }}
       dry_run: ${{ steps.run.outputs.dry_run }}
+      publisher: ${{ steps.run.outputs.publisher }}
+      already: ${{ steps.set.outputs.already }}
+    env:
+      # The lane's OWN tool (the marker decision), from the lane's commit — never the set's.
+      FEED_TOOL: lane/.github/scripts/template-feed.py
     steps:
+      - name: This lane's own commit
+        id: lane
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          sha="$(jq -r '.workflow_sha // empty' <<< "$JOB_CONTEXT")"
+          [ -n "$sha" ] || sha="${GITHUB_WORKFLOW_SHA:-}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::neither job.workflow_sha nor GITHUB_WORKFLOW_SHA names this lane's commit ('$sha')"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out the lane's own tooling
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ steps.lane.outputs.sha }}
+          path: lane
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/scripts/
       - name: Every external input, or a red build naming what to provision
         env:
           PLUGINS_REPO_SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
         run: |
           set -euo pipefail
           missing=()
-          [ -n "${PLUGINS_REPO_SSH_KEY:-}" ] || missing+=("secrets.PLUGINS_REPO_SSH_KEY  the deploy key main-cd's host checkouts already use (Settings → Secrets → Actions). The lane checks out the Plugins commit the set was built from: the template generator and six of the packages live there.")
+          # Called from MeshWeaver.Plugins itself, the Plugins checkout is the caller's own repository and
+          # its GITHUB_TOKEN reads it; everywhere else the deploy key is required.
+          [ "$GITHUB_REPOSITORY" = Systemorph/MeshWeaver.Plugins ] || [ -n "${PLUGINS_REPO_SSH_KEY:-}" ] || missing+=("secrets.PLUGINS_REPO_SSH_KEY  the deploy key main-cd's host checkouts already use (Settings → Secrets → Actions). The lane checks out the Plugins commit the set was built from: the template generator and six of the packages live there.")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::The template feed cannot run — provision the following, then re-run:"
             for m in "${missing[@]}"; do echo "  • $m"; done
@@ -110,6 +162,12 @@ jobs:
           INPUT_DRY: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
+          # WHO PUBLISHES decides the visibility of every id this run creates (#7660): a package created
+          # with a workflow's GITHUB_TOKEN takes that repository's visibility, and a public package can
+          # never be made private again. Only a PRIVATE publisher may push; any other packs and verifies.
+          vis=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.visibility')
+          if [ "$vis" = private ]; then publisher=private; else publisher=public; fi
+          echo "publisher: $GITHUB_REPOSITORY ($vis)"
           if [ "$EVENT" = workflow_run ]; then
             id="$WR_ID"; dry=false
           else
@@ -118,16 +176,20 @@ jobs:
             if [ -z "$id" ]; then
               # The newest COMPLETED CD run on main that uploaded a promotion record — whatever its
               # conclusion: the job results below decide whether it sealed a set.
-              for cand in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/main-cd.yml/runs?branch=main&status=completed&per_page=30" --jq '.workflow_runs[].id'); do
-                n=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$cand/artifacts?name=promotion-record" --jq '.total_count')
+              for cand in $(gh api "repos/$CORE_REPO/actions/workflows/main-cd.yml/runs?branch=main&status=completed&per_page=30" --jq '.workflow_runs[].id'); do
+                n=$(gh api "repos/$CORE_REPO/actions/runs/$cand/artifacts?name=promotion-record" --jq '.total_count')
                 if [ "$n" -gt 0 ]; then id="$cand"; break; fi
               done
               [ -n "$id" ] || { echo "::error::no completed 'Continuous Delivery (main)' run among the newest 30 carries a promotion record — name one with cd-run-id"; exit 1; }
             fi
           fi
           [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::'$id' is not a run id"; exit 1; }
+          if [ "$publisher" != private ] && [ "$dry" != true ]; then
+            echo "::notice::$GITHUB_REPOSITORY is $vis — a package it created would be $vis, irreversibly. This run packs and verifies only; MeshWeaver.Plugins' template-feed.yml (private) publishes."
+            dry=true
+          fi
           echo "CD run $id (dry-run: $dry)"
-          { echo "run_id=$id"; echo "dry_run=$dry"; } >> "$GITHUB_OUTPUT"
+          { echo "run_id=$id"; echo "dry_run=$dry"; echo "publisher=$publisher"; } >> "$GITHUB_OUTPUT"
 
       # A set is SEALED when Promote, Verify every image shipped and every platform bake leg
       # succeeded (Doc/Architecture/ReleaseProcess; the release skill's precondition 1). A run that
@@ -138,9 +200,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.run.outputs.run_id }}
+          PUBLISHER: ${{ steps.run.outputs.publisher }}
+          DRY: ${{ steps.run.outputs.dry_run }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" --paginate \
+          gh api "repos/$CORE_REPO/actions/runs/$RUN_ID/jobs?per_page=100" --paginate \
             --jq '.jobs[] | [.name, (.conclusion // "none")] | @tsv' > "$RUNNER_TEMP/jobs.tsv"
           promote=$(awk -F'\t' '$1 ~ /^Promote: tag the full set/ {print $2}' "$RUNNER_TEMP/jobs.tsv" | head -1)
           verify=$(awk -F'\t' '$1 == "Verify every image shipped" {print $2}' "$RUNNER_TEMP/jobs.tsv" | head -1)
@@ -152,20 +217,39 @@ jobs:
             exit 0
           fi
           mkdir -p "$RUNNER_TEMP/rec"
-          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name promotion-record --dir "$RUNNER_TEMP/rec"
+          gh run download "$RUN_ID" --repo "$CORE_REPO" --name promotion-record --dir "$RUNNER_TEMP/rec"
           rec="$RUNNER_TEMP/rec/promotion-record.json"
           version=$(jq -r '.v_portal' "$rec"); core=$(jq -r '.core_sha' "$rec"); plugins=$(jq -r '.plugins_sha' "$rec")
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the promotion record's version '$version' is not a <major>.<minor>.<run> set version"; exit 1; }
           [[ "$core" =~ ^[0-9a-f]{40}$ ]]    || { echo "::error::the promotion record's core_sha '$core' is not a commit"; exit 1; }
           [[ "$plugins" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the promotion record's plugins_sha '$plugins' is not a commit"; exit 1; }
           echo "sealed set $version = core $core + plugins $plugins"
+          # The private caller runs on a SCHEDULE (it cannot hear this repository's workflow_run), so most
+          # of its runs find a set it already published. "Already published" is the caller's own run
+          # history: a SUCCESSFUL `Published to the private feed: <version>` job, which runs only after
+          # push, visibility and restore all succeeded — never a package's presence on the feed, which a
+          # push that failed its later checks leaves behind too. Only a SCHEDULED run skips: a dispatch
+          # always republishes and re-proves (e.g. after a package was deleted).
+          if [ "$PUBLISHER" = private ] && [ "$DRY" != true ] && [ "$EVENT" = schedule ]; then
+            wf="${GITHUB_WORKFLOW_REF%%@*}"; wf="${wf##*/}"
+            echo '[]' > "$RUNNER_TEMP/runs.json"
+            for rid in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$wf/runs?branch=main&status=completed&per_page=20" --jq '[.workflow_runs[] | select(.conclusion == "success") | .id][:5][]'); do
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$rid/jobs?per_page=100" --jq '[.jobs[] | {name, conclusion}]' > "$RUNNER_TEMP/jobs-$rid.json"
+              jq --slurpfile j "$RUNNER_TEMP/jobs-$rid.json" '. + $j' "$RUNNER_TEMP/runs.json" > "$RUNNER_TEMP/runs.next" && mv "$RUNNER_TEMP/runs.next" "$RUNNER_TEMP/runs.json"
+            done
+            if [ "$(python3 "$FEED_TOOL" marker --runs "$RUNNER_TEMP/runs.json" --version "$version")" = seen ]; then
+              { echo "candidate=false"; echo "already=true"; echo "version=$version"; } >> "$GITHUB_OUTPUT"
+              echo "### Set $version was published by an earlier fully green run of $wf — nothing to publish" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
           { echo "candidate=true"; echo "version=$version"; echo "core_sha=$core"; echo "plugins_sha=$plugins"; } >> "$GITHUB_OUTPUT"
 
   publish:
     name: "Pack the template's packages and push them to the private feed"
     needs: [preflight]
     if: needs.preflight.outputs.candidate == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     # Measured locally: ~43 projects pack in well under the cap. Reaching 45 is STUCK, not slow.
     timeout-minutes: 45
     permissions:
@@ -177,12 +261,26 @@ jobs:
       # The lane's OWN tool, from the lane's commit (the `lane` checkout below) — never the set's.
       FEED_TOOL: lane/.github/scripts/template-feed.py
     steps:
-      # The SET's core tree: what gets packed, and the --core the generator reads.
+      # The SET's core tree: what gets packed, and the --core the generator reads. The repository is
+      # NAMED: under workflow_call the default would be the caller's.
       - uses: actions/checkout@v7
         with:
+          repository: Systemorph/MeshWeaver
           ref: ${{ needs.preflight.outputs.core_sha }}
           fetch-depth: 1
-      # 🚨 The lane's own tooling comes from the commit THIS WORKFLOW runs at (github.sha), never
+      # The commit that DEFINES this workflow: github.sha run here, the called @ref's commit under
+      # workflow_call (where github.sha is the CALLER's commit, in another repository).
+      - name: This lane's own commit
+        id: lane
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          sha="$(jq -r '.workflow_sha // empty' <<< "$JOB_CONTEXT")"
+          [ -n "$sha" ] || sha="${GITHUB_WORKFLOW_SHA:-}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::neither job.workflow_sha nor GITHUB_WORKFLOW_SHA names this lane's commit ('$sha') — its tool must not fall back to the set's tree"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      # 🚨 The lane's own tooling comes from the commit that DEFINES this workflow, never
       # from the sealed set's core_sha. The set is usually older than the lane: the first sealed set
       # after the lane merged was cut from a commit that predates template-feed.py, so running the
       # script out of the set's tree died `can't open file` before the lane measured anything
@@ -191,7 +289,8 @@ jobs:
       - name: Check out the lane's own tooling (this workflow's commit, not the set's)
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          repository: Systemorph/MeshWeaver
+          ref: ${{ steps.lane.outputs.sha }}
           path: lane
           fetch-depth: 1
           sparse-checkout-cone-mode: false
@@ -242,12 +341,14 @@ jobs:
       # 🚨 Two invocations, because the version lines differ: the platform line is stamped with the
       # set's version; an own-line package (MeshWeaver.Aspire.Hosting.Memex) keeps the version its
       # csproj declares and must NOT receive a global -p:Version. RepositoryUrl names THIS
-      # repository, which is what lets the workflow's GITHUB_TOKEN publish the package.
+      # repository — the PUBLISHING one (the private caller), never a literal: a NuGet package is linked
+      # to its RepositoryUrl's repository, that link is what lets the workflow's GITHUB_TOKEN publish it,
+      # and a package CREATED that way takes the publishing repository's visibility (#7660).
       - name: Pack
         run: |
           set -euo pipefail
           common=(-c Release -p:IsPackable=true -p:MeshWeaverRoot="$GITHUB_WORKSPACE"
-                  -p:RepositoryUrl=https://github.com/Systemorph/MeshWeaver -o "$RUNNER_TEMP/nupkgs" -nologo)
+                  -p:RepositoryUrl="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" -o "$RUNNER_TEMP/nupkgs" -nologo)
           dotnet pack pack-platform.slnx "${common[@]}" -p:Version="$VERSION"
           if grep -q '<Project ' pack-own.slnx; then dotnet pack pack-own.slnx "${common[@]}"; fi
 
@@ -265,6 +366,7 @@ jobs:
         id: push
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLISHER: ${{ needs.preflight.outputs.publisher }}
         run: |
           set -euo pipefail
           python3 "$FEED_TOOL" push-guard --source "$FEED"
@@ -272,14 +374,23 @@ jobs:
             echo "dry run: pushing nothing"
             exit 0
           fi
+          # 🚨 Read AGAIN, here, from the repository itself: preflight forces a dry run for a public
+          # publisher, and this is the second key on the same lock — a package this token CREATES
+          # takes this repository's visibility, and a public package can never be made private (#7660).
+          vis=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.visibility')
+          if [ "$vis" != private ] || [ "$PUBLISHER" != private ]; then
+            echo "::error::refusing to push from $GITHUB_REPOSITORY ($vis): every id this push created would be $vis, and GitHub cannot make a public package private again. Publish through MeshWeaver.Plugins' template-feed.yml, which calls this lane from a private repository."
+            exit 1
+          fi
           for f in "$RUNNER_TEMP"/nupkgs/*.nupkg; do
             case "$f" in *.symbols.nupkg) continue ;; esac
-            dotnet nuget push "$f" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate
+            dotnet nuget push "$f" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate || {
+              echo "::error::pushing $(basename "$f") from $GITHUB_REPOSITORY failed. A package that ALREADY exists on the feed and is linked to another repository accepts a push from this one only once the package grants it Write: https://github.com/orgs/Systemorph/packages → the package → Package settings → Manage Actions access → Add repository → $GITHUB_REPOSITORY (Write)."; exit 1; }
           done
 
-      # A package the push CREATED must be private. GitHub creates a new package private by
-      # default; this reads it back rather than trusting the default, and is RED if any package is
-      # not private or cannot be read.
+      # A package the push CREATED must be private. A package created with a workflow's GITHUB_TOKEN
+      # takes the PUBLISHING repository's visibility (#7660) — this reads it back rather than trusting
+      # that, and is RED if any package is not private or cannot be read.
       - name: Every published package is private
         if: ${{ !cancelled() && steps.push.outcome == 'success' }}
         env:
@@ -290,8 +401,11 @@ jobs:
           bad=0
           for id in $(jq -r '.packages[].id' "$RUNNER_TEMP/plan.json"); do
             vis=$(gh api "orgs/Systemorph/packages/nuget/$id" --jq '.visibility' 2>&1) || {
-              echo "::error::cannot read the visibility of $id ($vis). The workflow token needs read access to the org's packages; grant this repository access to the package (package settings → Manage Actions access)"; bad=1; continue; }
-            if [ "$vis" != private ]; then echo "::error::$id is '$vis' on the feed — it must be private. Change it in the package settings NOW."; bad=1; fi
+              echo "::error::cannot read the visibility of $id ($vis). Grant $GITHUB_REPOSITORY access to it: https://github.com/orgs/Systemorph/packages/nuget/package/$id/settings → Manage Actions access → Add repository → $GITHUB_REPOSITORY (Write)"; bad=1; continue; }
+            if [ "$vis" != private ]; then
+              echo "::error::$id is '$vis' on the feed — it must be private. A package created by a workflow's GITHUB_TOKEN takes the visibility of the repository that pushed it, so the fix is WHO publishes: only a private repository's run of this lane pushes (MeshWeaver.Plugins' template-feed.yml, MeshWeaver#7660). GitHub cannot make a public package private again: delete it (https://github.com/orgs/Systemorph/packages/nuget/package/$id/settings → Danger Zone → Delete this package) and the next run from the private caller recreates it private."
+              bad=1
+            fi
           done
           [ "$bad" = 0 ] || exit 1
           echo "every published package is private"
@@ -367,32 +481,72 @@ jobs:
     name: "Template feed verdict"
     needs: [preflight, publish]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       published: ${{ steps.v.outputs.published }}
+    env:
+      FEED_TOOL: lane/.github/scripts/template-feed.py
     steps:
+      - name: This lane's own commit
+        id: lane
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          sha="$(jq -r '.workflow_sha // empty' <<< "$JOB_CONTEXT")"
+          [ -n "$sha" ] || sha="${GITHUB_WORKFLOW_SHA:-}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::neither job.workflow_sha nor GITHUB_WORKFLOW_SHA names this lane's commit ('$sha')"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out the lane's own tooling
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ steps.lane.outputs.sha }}
+          path: lane
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/scripts/
+      # The decision is `template-feed.py verdict` (pinned by its self-test): a found marker for this
+      # set closes the ledger after a transient red; a genuine "no sealed set" leaves it untouched; a
+      # public publisher's forced dry run closes only its pack-proof ledger; an operator's dry run on
+      # the private publisher closes nothing.
       - id: v
         env:
           PRE: ${{ needs.preflight.result }}
           CANDIDATE: ${{ needs.preflight.outputs.candidate }}
+          ALREADY: ${{ needs.preflight.outputs.already }}
           PUB: ${{ needs.publish.result }}
           DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
+          PUBLISHER: ${{ needs.preflight.outputs.publisher }}
         run: |
           set -euo pipefail
-          echo "preflight=$PRE candidate=${CANDIDATE:-} publish=$PUB"
-          [ "$PRE" = success ] || { echo "::error::preflight did not succeed ($PRE)"; exit 1; }
-          if [ "$CANDIDATE" != true ]; then
-            echo "No sealed set in that CD run — nothing to publish."
-            echo "published=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          [ "$PUB" = success ] || { echo "::error::a sealed set exists and publish did not succeed ($PUB) — generated templates cannot restore it"; exit 1; }
-          # A dry run proves the pack, not the feed: it must never close the ledger.
-          if [ "$DRY_RUN" = true ]; then echo "dry run: packed and verified, nothing published"; echo "published=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-          echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "preflight=$PRE candidate=${CANDIDATE:-} already=${ALREADY:-} publish=$PUB publisher=${PUBLISHER:-}"
+          python3 "$FEED_TOOL" verdict --pre "$PRE" --candidate "${CANDIDATE:-}" --already "${ALREADY:-}" \
+            --publish "$PUB" --dry "${DRY_RUN:-}" --publisher "${PUBLISHER:-}" --out "$GITHUB_OUTPUT"
+
+  # 🚨 THE DURABLE "PUBLISHED" MARKER (#7660 review). A private publisher's run records this job ONLY
+  # when push, visibility and restore all succeeded (publish's own steps fail it otherwise), and
+  # carries it forward on a scheduled run that found it. The scheduled caller's preflight reads its
+  # own successful runs for this job (`template-feed.py marker`) — never a package's presence on the
+  # feed. Its NAME is the record: `Published to the private feed: <version>`.
+  published:
+    name: "Published to the private feed: ${{ needs.preflight.outputs.version }}"
+    needs: [preflight, verdict]
+    if: >-
+      always() && needs.verdict.result == 'success' && needs.preflight.outputs.publisher == 'private'
+      && needs.verdict.outputs.published == 'true'
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: echo "set $VERSION is on the private feed, every package private, and a template installed from it restores and builds"
 
   # The red has an audience: this lane runs on no pull request, so its failure goes onto ONE
-  # ledger issue under its OWN label, cleared by the next real publication.
+  # ledger issue under its OWN label in the repository the run belongs to — here for the pack proof,
+  # in MeshWeaver.Plugins for the publication its private caller makes — cleared by the next green.
   feed-red:
     name: "Template feed red: file it"
     needs: [preflight, publish, verdict]
@@ -401,7 +555,7 @@ jobs:
       contents: read
       issues: write
       actions: read
-    uses: ./.github/workflows/node-repo-ci-failure.yml
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
     with:
       outcome: failure
       run: ${{ github.run_id }}
@@ -425,7 +579,7 @@ jobs:
       contents: read
       issues: write
       actions: read
-    uses: ./.github/workflows/node-repo-ci-failure.yml
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
     with:
       outcome: success
       run: ${{ github.run_id }}
