@@ -718,6 +718,48 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     }
 
     private const string SynchronizationGate = nameof(SynchronizationGate);
+
+    // UpdateStreamRequests posted to this stream's hub and not yet started (MeshWeaver#5799).
+    private int queuedUpdates;
+    // The backlog depth last reported — see UpdateBacklog.ReportAt.
+    private int reportedBacklog;
+    // SyncStreamOptions.UpdateBacklogWarningDepth, resolved once in the constructor.
+    private readonly int updateBacklogFloor;
+
+    /// <summary>The last backlog report this stream made — the reporting depth and the writer it
+    /// named — or null. What the Warning says, readable by a test.</summary>
+    internal (int Depth, string Writer, string Hub)? LastUpdateBacklogReport { get; private set; }
+
+    /// <summary>
+    /// 🚨 NAMES THE WRITER BEHIND A BACKLOG (MeshWeaver#5799). A read stream on memex-cloud held
+    /// 408,637 queued <see cref="UpdateStreamRequest"/>s and the only evidence was the hub's queue
+    /// depth: the message carries nothing but delegates, so no log line could say WHO posted them,
+    /// and the flood starved the pool for every other sync hub. When the not-yet-started writes on
+    /// this stream reach a reporting depth (<see cref="UpdateBacklog.ReportAt"/>: the configured
+    /// floor, then each tenfold), one Warning names the delegate that crossed it — its declaring
+    /// type and method, which for a closure is the caller's own method — with the stream's
+    /// reference, owner and subscriber. Observation only: nothing is dropped, refused or delayed.
+    /// </summary>
+    private void ReportUpdateBacklog(int depth, Delegate origin)
+    {
+        var last = Volatile.Read(ref reportedBacklog);
+        if (UpdateBacklog.ReportAt(depth, last, updateBacklogFloor) is not { } threshold
+            || Interlocked.CompareExchange(ref reportedBacklog, threshold, last) != last)
+            return;
+        var writer = UpdateBacklog.Describe(origin);
+        // The HUB address, `sync/{ClientId}`, is what the disposal-stall and pump-depth lines name
+        // (review of #7877): without it a search for the stalled hub misses this warning. StreamId
+        // stays beside it — it is the per-instance id other stream diagnostics carry.
+        var hubAddress = SynchronizationAddress.Create(ClientId).ToString();
+        LastUpdateBacklogReport = (threshold, writer, hubAddress);
+        logger.LogWarning(
+            "[SYNC_STREAM] Update backlog on hub {Hub} (stream {StreamId}): {Depth} writes queued and "
+            + "not yet started (reporting depth {Threshold}) — the write that crossed it came from "
+            + "{Writer}. Reference {Reference}, owner {Owner}, subscriber {Subscriber}. A writer posting "
+            + "faster than this stream's turns run is a loop or a flood at that writer.",
+            hubAddress, StreamId, depth, threshold, writer, Reference, Owner,
+            Configuration.Subscriber?.ToString() ?? "(none)");
+    }
     /// <summary>
     /// Low-level write: posts a transform that maps the current state to the next change item to the
     /// stream's hub, where it is applied serially. Captures the caller's access context (falling back to
@@ -731,6 +773,17 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
 
     /// <inheritdoc cref="ISynchronizationStream{TStream}.Update(System.Func{TStream,ChangeItem{TStream}},System.Action{System.Exception},System.Action)"/>
     public void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback, Action? applied)
+        => PostUpdate(update, exceptionCallback, applied, update);
+
+    /// <summary>
+    /// The one place an <see cref="UpdateStreamRequest"/> is posted. <paramref name="origin"/> is
+    /// the delegate the CALLER wrote — the value transform for the value-form writes, which wrap it
+    /// — so the backlog warning (<see cref="UpdateBacklog"/>) names the code that keeps writing,
+    /// never this class's own wrapper lambda.
+    /// </summary>
+    private void PostUpdate(
+        Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback, Action? applied,
+        Delegate origin)
     {
         if (!TryGetActiveHub(out var hub))
         {
@@ -787,14 +840,35 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // into _creationContext (which stays real-user only, never System).
         if (capturedContext is null && Configuration.RunsAsInfrastructure)
             capturedContext = InfrastructureContext;
-        hub.Post(
-            new UpdateStreamRequest(update, exceptionCallback, applied),
-            opt =>
-            {
-                // The proof that the stream posted this write to itself (AcceptInputFromSubscriberOnly).
-                opt = opt.WithProperty(OwnWriteProperty, ownWriteToken);
-                return capturedContext is null ? opt : opt.WithAccessContext(capturedContext);
-            });
+        // Counted BEFORE the post, so a handler that runs before Post returns cannot drive the
+        // count below zero; rolled back when the post did not carry the write (a throw, or a
+        // Failed / Ignored delivery), because only an admitted write ever reaches the handler that
+        // takes it out of the backlog (review of #7877). Reported only once admitted, outside
+        // the rollback.
+        var depth = Interlocked.Increment(ref queuedUpdates);
+        IMessageDelivery? posted;
+        try
+        {
+            posted = hub.Post(
+                new UpdateStreamRequest(update, exceptionCallback, applied),
+                opt =>
+                {
+                    // The proof that the stream posted this write to itself (AcceptInputFromSubscriberOnly).
+                    opt = opt.WithProperty(OwnWriteProperty, ownWriteToken);
+                    return capturedContext is null ? opt : opt.WithAccessContext(capturedContext);
+                });
+        }
+        catch
+        {
+            Interlocked.Decrement(ref queuedUpdates);
+            throw;
+        }
+        if (posted is null or { State: MessageDeliveryState.Failed or MessageDeliveryState.Ignored })
+        {
+            Interlocked.Decrement(ref queuedUpdates);
+            return;
+        }
+        ReportUpdateBacklog(depth, origin);
     }
 
     /// <summary>
@@ -841,7 +915,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// A no-op transform (returns the same value or null) is dropped.
     /// </summary>
     public void Update(Func<TStream?, TStream?> valueUpdate, Action<Exception> exceptionCallback)
-        => Update(current =>
+        => PostUpdate(current =>
         {
             var updated = valueUpdate(current);
             if (updated is null) return null;
@@ -853,7 +927,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             // into BuildChangeItem.
             if (!TryGetActiveHub(out var hub)) return null;
             return BuildChangeItem(hub, current, updated);
-        }, exceptionCallback);
+        }, exceptionCallback, null, valueUpdate);
 
     /// <inheritdoc cref="Update(System.Func{TStream,TStream},System.Action{System.Exception})"/>
     public void Update(Func<TStream?, TStream?> valueUpdate)
@@ -870,14 +944,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// re-assertion; an identical-JSON no-op is dropped later by the change-feed (<c>ToDataChanged</c>).
     /// </summary>
     public void SetFull(Func<TStream?, TStream?> valueUpdate, Action<Exception> exceptionCallback)
-        => Update(current =>
+        => PostUpdate(current =>
         {
             var updated = valueUpdate(current);
             if (updated is null) return null;
             // Hub resolved once on the turn — see Update above (#3321 step 3).
             if (!TryGetActiveHub(out var hub)) return null;
             return BuildFullChangeItem(hub, current, updated);
-        }, exceptionCallback);
+        }, exceptionCallback, null, valueUpdate);
 
     /// <inheritdoc cref="SetFull(System.Func{TStream,TStream},System.Action{System.Exception})"/>
     public void SetFull(Func<TStream?, TStream?> valueUpdate)
@@ -1383,6 +1457,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // with `ArgumentNullException … (Parameter 'logger')`, leaving each hub FAILED and every
         // observable emitting nothing. 34 of 34 DataTest cases went from green to timing out.
         logger = ResolveLogger(Host);
+        updateBacklogFloor = ResolveUpdateBacklogFloor(Host);
 
         logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
@@ -1518,6 +1593,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// constructor is still executing. A null there faults the buildup and leaves the hub FAILED —
     /// a whole-suite outage produced by a missing log line.</para>
     /// </summary>
+    // Resolved ONCE, at construction, where the host's container is live: a lookup per write could
+    // meet a container that host teardown closed after TryGetActiveHub succeeded and throw
+    // ObjectDisposedException into the producer (review of #7877).
+    private static int ResolveUpdateBacklogFloor(IMessageHub host)
+    {
+        try
+        {
+            return host.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
+                ?.Value.UpdateBacklogWarningDepth ?? SyncStreamOptions.DefaultUpdateBacklogWarningDepth;
+        }
+        catch (ObjectDisposedException)
+        {
+            // Same race as ResolveLogger; the caller is about to be refused anyway.
+            return SyncStreamOptions.DefaultUpdateBacklogWarningDepth;
+        }
+    }
+
     private static ILogger<SynchronizationStream<TStream>> ResolveLogger(IMessageHub host)
     {
         try
@@ -1786,6 +1879,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 var update = request.Message.Update;
                 var exceptionCallback = request.Message.ExceptionCallback;
                 var applied = request.Message.Applied;
+                // Leaves the backlog the moment its turn starts (see ReportUpdateBacklog).
+                Interlocked.Decrement(ref queuedUpdates);
                 try
                 {
                     // Read the current state right before invoking the update function
