@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -213,10 +214,9 @@ public class MessageService : IMessageService
     private readonly Lock gateStateLock = new();
 
     //private volatile int pendingStartupMessages;
-    private JsonSerializerOptions? loggingSerializerOptions;
-
-    private JsonSerializerOptions LoggingSerializerOptions =>
-        loggingSerializerOptions ??= hub.CreateLoggingSerializerOptions();
+    // The hub's cached logging options: [PreventLogging] stripped, [SensitiveData] redacted
+    // (SensitiveDataRedaction — the one redaction point).
+    private JsonSerializerOptions LoggingSerializerOptions => hub.GetLoggingSerializerOptions();
 
     /// <summary>
     /// The configuration key that opts a deployment IN to rendering message BODIES into log

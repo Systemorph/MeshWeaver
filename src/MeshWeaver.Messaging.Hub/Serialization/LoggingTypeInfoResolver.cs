@@ -5,7 +5,9 @@ using System.Text.Json.Serialization.Metadata;
 namespace MeshWeaver.Messaging.Serialization;
 
 /// <summary>
-/// A custom JSON type info resolver that filters out properties marked with [PreventLogging] attribute.
+/// A custom JSON type info resolver that filters out properties marked with [PreventLogging] attribute
+/// and REDACTS the values of properties marked <see cref="SensitiveDataAttribute"/> (see
+/// <see cref="SensitiveDataRedaction"/>, the one redaction point).
 /// This resolver wraps an existing resolver and removes properties that should not appear in logs.
 /// Note: Entire types marked with [PreventLogging] are excluded from logging at a higher level
 /// (in MessageService.ShouldLogMessage) to avoid serialization issues.
@@ -16,7 +18,8 @@ public class LoggingTypeInfoResolver(IJsonTypeInfoResolver innerResolver) : IJso
 
     /// <summary>
     /// Resolves type info via the wrapped resolver, then strips any object properties
-    /// annotated with [PreventLogging] so they are omitted from serialized log output.
+    /// annotated with [PreventLogging] so they are omitted from serialized log output, and replaces
+    /// the value of every [SensitiveData] property with the redaction placeholder.
     /// </summary>
     /// <param name="type">The type whose metadata is requested.</param>
     /// <param name="options">The active serializer options.</param>
@@ -40,6 +43,9 @@ public class LoggingTypeInfoResolver(IJsonTypeInfoResolver innerResolver) : IJso
             {
                 typeInfo.Properties.Remove(property);
             }
+
+            // [SensitiveData]: keep the member, replace its value with the placeholder.
+            SensitiveDataRedaction.RedactSensitiveMembers(typeInfo);
         }
 
         return typeInfo;

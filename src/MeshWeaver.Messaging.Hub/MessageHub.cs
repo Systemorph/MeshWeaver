@@ -8,6 +8,7 @@ using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
 using MeshWeaver.Domain;
+using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using MeshWeaver.ServiceProvider;
 using MeshWeaver.ShortGuid;
@@ -2903,6 +2904,21 @@ public sealed class MessageHub : IMessageHub
 
     /// <summary>The JSON serialization options used for messages on this hub (built from the parent hub's options).</summary>
     public JsonSerializerOptions JsonSerializerOptions { get; }
+
+    private JsonSerializerOptions? loggingSerializerOptions;
+    private SensitiveJsonRedactor? sensitiveRedactor;
+
+    /// <summary>
+    /// The write-only LOGGING options for this hub, built once (see
+    /// <see cref="SensitiveDataRedaction.GetLoggingSerializerOptions"/>): <c>[PreventLogging]</c> members
+    /// stripped, <c>[SensitiveData]</c> values redacted. Never used for persistence or the wire.
+    /// </summary>
+    internal JsonSerializerOptions LoggingSerializerOptions =>
+        loggingSerializerOptions ??= this.CreateLoggingSerializerOptions();
+
+    /// <summary>The JSON-tree redactor behind <see cref="LoggingSerializerOptions"/>, built once.</summary>
+    internal SensitiveJsonRedactor SensitiveRedactor =>
+        sensitiveRedactor ??= SensitiveDataRedaction.CreateRedactor(this);
 
     /// <summary>
     /// <c>true</c> from the moment <see cref="Dispose"/> begins. The reactive, Task-free
