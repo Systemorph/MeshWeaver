@@ -148,6 +148,17 @@ dispose flush's attempt surfaces as a `[DISPOSE-ACTION] … faulted` warning on 
 is recycled, and the fresh activation must serve the change from the durable row — with a healthy
 store as the negative control.
 
+**A refusal by an in-flight deletion is not a store fault, and is logged at Information.** When the
+write fails with `SubtreeDeletionInFlightException`, the node or a subtree containing it is being
+deleted, and the refusal is the designed outcome of that race ([The Recursive-Delete
+Drain](../RecursiveDeleteDrain)). The guard that refused it already logs `[SubtreeDeletionGuard] REFUSED
+write` at Warning; the save handler's own line drops to Information, and its handling is unchanged
+(pending again, re-attempted, or nudged once the seal lifts). If the delete commits, the pending state
+is moot; if it aborts, the re-attempt runs as above and a failing dispose flush is still reported. At
+Error, an agent thread asked to delete the space it lives in raised a log incident and a ticket for a
+correct outcome (#7887; #6953 before it). `MeshDataSourceExtensions.SaveFailureLevel` holds the
+decision, pinned by `SaveFailureLevelTest` (MeshWeaver.Graph.Test).
+
 **One write at a time, in order.** A re-attempt follows a failed write quickly, so an OLDER write still
 in flight could otherwise land after the newer one — or after the dispose flush — and roll the row
 back: the file-system adapter's pool runs writes concurrently and its backend has no conditional
