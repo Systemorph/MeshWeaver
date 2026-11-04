@@ -93,6 +93,20 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// registration.
     /// </summary>
     private readonly ConcurrentDictionary<Address, AsyncSubject<Unit>> podHubOutboundReady = new();
+
+    /// <summary>
+    /// Per-address RELEASE IN FLIGHT (#7888): set by a registration's disposal BEFORE it removes its
+    /// local route, and cleared once its pod-hub release (<c>IPodHubGrain.Detach</c>) has settled or
+    /// was skipped. In between, the address has no local route and no Released tombstone yet. A
+    /// delivery reaching the owner's activation in that gap used to be answered with the TRANSIENT
+    /// refusal, the shape that means "a live claim is stranded", so a reply to a hub that had just
+    /// been disposed was logged at Error as an undeliverable NACK. With this marker
+    /// <c>PodHubGrain.Deliver</c> answers the TERMINAL Released refusal it would give a moment later,
+    /// and the router drops that NACK at Debug. Value-matched by a per-registration token, so a
+    /// predecessor's settle never clears a successor's marker. Instance field, never static; entries
+    /// live only for the duration of one release call.
+    /// </summary>
+    private readonly ConcurrentDictionary<Address, object> releasesInFlight = new();
     private readonly CompositeDisposable inFlight = new();
     // Mesh-scoped IO pool for the genuinely-async stream UnsubscribeAsync. The hub's
     // RegisterForDisposal(IDisposable) is synchronous; the async unsubscribe is bridged
@@ -1171,6 +1185,18 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         streams.TryGetValue(GetHostAddress(address), out var callback) ? callback : null;
 
     /// <summary>
+    /// Whether a registration of <paramref name="address"/> in THIS process has been disposed and its
+    /// pod-hub release has not settled yet (#7888). Its local route is already gone, and the
+    /// registration is not coming back: a hub that re-registers claims afresh under a new route. So a
+    /// delivery to the address is answered the way the release will answer it, terminally. See
+    /// <see cref="releasesInFlight"/>.
+    /// </summary>
+    /// <param name="address">The address a delivery is for.</param>
+    /// <returns>True while this process is releasing a registration of the address.</returns>
+    public bool IsReleaseInFlight(Address address) =>
+        releasesInFlight.ContainsKey(GetHostAddress(address));
+
+    /// <summary>
     /// Registers a local delivery callback for an address: the local route goes live at once, and the
     /// address's pod-hub claim is attached so a directed grain call from another process reaches the
     /// callback. Only on a host that registered the Orleans memory stream (a single-process host, an
@@ -1206,7 +1232,13 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // This is a NO-OP outside a silo: an Orleans CLIENT process cannot host a grain, so Attach
         // never lands locally, the retries give up, and that hub keeps the stream permanently. That
         // is correct rather than degraded — and it is why the fallback is not a temporary scaffold.
-        var podHub = AttachPodHub(address);
+        // #7888: the release marker this registration's disposal sets BEFORE removing its route, and
+        // the settle that clears exactly this registration's marker once its release has landed.
+        var releaseToken = new object();
+        void MarkReleaseInFlight() => releasesInFlight[address] = releaseToken;
+        void ReleaseSettled() =>
+            releasesInFlight.TryRemove(new KeyValuePair<Address, object>(address, releaseToken));
+        var podHub = AttachPodHub(address, ReleaseSettled);
 
         // 🚨 NO MEMORY STREAM ON THIS HOST — #4802. A multi-silo host registers none: the pod-hub
         // claim above is this hub's ONLY cross-process transport there, for forward traffic and NACKs
@@ -1220,6 +1252,8 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             return Disposable.Create(() =>
             {
                 // The same value-matched removal and claim-first release as the stream case below.
+                // Marked BEFORE the route goes, so no delivery can see "no route, no release" (#7888).
+                MarkReleaseInFlight();
                 streams.TryRemove(new KeyValuePair<Address, AsyncDelivery>(address, callback));
                 podHub.Dispose();
             });
@@ -1284,6 +1318,9 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // (The pod-hub claim below is the OTHER half and is NOT claim-aware: `Detach` stamps a
             // 10-minute terminal `Released` tombstone on the address, which a successor's `Attach`
             // clears only if it runs after. See Doc/Architecture/DisposedScopeAndDyingHubs.)
+            // #7888: mark the release in flight BEFORE the route goes, so a delivery reaching the
+            // owner's activation between the two is answered Released, not "claim stranded".
+            MarkReleaseInFlight();
             streams.TryRemove(new KeyValuePair<Address, AsyncDelivery>(address, callback));
             subscriptionReady.TryRemove(new KeyValuePair<Address, Task>(address, readyGate));
             // Release the cluster-wide claim FIRST: a hub that MOVES pods (a portal/{user} circuit
@@ -1777,7 +1814,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     ///
     /// <para>See <c>Doc/Architecture/DurableStreamsViaMeshNodes</c>.</para>
     /// </summary>
-    private IDisposable AttachPodHub(Address address)
+    private IDisposable AttachPodHub(Address address, Action releaseSettled)
     {
         // 🚨 NO GRAIN FACTORY, NO GRAIN TRANSPORT — and that is a supported host, not a broken one.
         // A routing service can legitimately be constructed without one (the shutdown-classification
@@ -1785,8 +1822,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // Orleans client: this hub keeps the stream. Degrade, never throw — RegisterStream's local
         // route is already live and the caller is holding a disposable it will dispose later, so an
         // exception here would surface at TEARDOWN, arbitrarily far from its cause.
+        // No claim is ever made here, so there is no release to wait for: the marker set at disposal
+        // is cleared by the same disposal.
         if (grainFactory is null || disposed)
-            return Disposable.Empty;
+            return Disposable.Create(releaseSettled);
 
         var addressPath = address.ToString();
         // Claim-level, spanning every round: a hub that cannot claim its own address is named ONCE,
@@ -1861,17 +1900,26 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         "Pod-hub claim for {Address} not released — the host has begun stopping, so the "
                         + "activation is going away regardless and announcing it would only create one.",
                         addressPath);
+                    releaseSettled();
                     return;
                 }
 
+                // The marker is cleared only once Detach has RETURNED: by then the grain has stamped
+                // its Released tombstone, so there is no moment with neither (#7888).
                 grain.Detach().ToObservable()
                     .Subscribe(
                         _ => { },
-                        ex => logger.LogDebug(ex, "Failed to release the pod-hub claim for {Address}", addressPath));
+                        ex =>
+                        {
+                            logger.LogDebug(ex, "Failed to release the pod-hub claim for {Address}", addressPath);
+                            releaseSettled();
+                        },
+                        releaseSettled);
             }
             catch (Exception ex)
             {
                 logger.LogDebug(ex, "Failed to release the pod-hub claim for {Address}", addressPath);
+                releaseSettled();
             }
         }
 
@@ -1887,6 +1935,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                     "Pod-hub claim for {Address} not released — its registration ended before Orleans "
                     + "reached Active, so no claim was ever attempted.",
                     addressPath);
+                releaseSettled();
                 return;
             }
 
