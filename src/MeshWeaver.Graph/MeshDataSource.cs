@@ -617,15 +617,17 @@ public static class MeshDataSourceExtensions
                 },
                 ex =>
                 {
-                    // Error, not Warning: an acknowledged own-node state is NOT durable. It stays
-                    // pending (un-marked below) and is re-attempted — see the summary.
+                    // Error for a store fault: an acknowledged own-node state is NOT durable. It stays
+                    // pending (un-marked below) and is re-attempted — see the summary. A refusal by an
+                    // in-flight deletion is the guard doing its job, and is logged lower — see
+                    // SaveFailureLevel.
                     var reattempted = pending is not null
                         && (ex is SubtreeDeletionInFlightException && sealRegistry is not null
                             // A delete seal's row guard refused it (#6856): pending again, and if
                             // the seal already lifted the sampler is nudged to post it.
                             ? OnSealRefusedSave(pending, sampled, () => SealStillHolds(sealRegistry, node.Path))
                             : pending.MarkWriteFailed(sampled));
-                    logger?.LogError(ex,
+                    logger?.Log(SaveFailureLevel(ex), ex,
                         "[SaveMeshNode] the store write of {Path} (version={Version}) FAILED — the state is "
                         + "not durable. {Disposition}",
                         node.Path, node.Version,
@@ -1059,6 +1061,26 @@ public static class MeshDataSourceExtensions
             pending.MarkWriteFailed(node);
         return accepted;
     }
+
+    /// <summary>
+    /// The level a failed own-node store write is logged at.
+    /// <para>A store fault (an outage, a timeout, a constraint) is <see cref="LogLevel.Error"/>: an
+    /// acknowledged state is not durable, and nothing else reports it.</para>
+    /// <para>A <see cref="SubtreeDeletionInFlightException"/> is <see cref="LogLevel.Information"/>.
+    /// The write was refused because the node, or a subtree that contains it, is being deleted. That
+    /// refusal is the designed outcome of a delete racing a save (Doc/Architecture/RecursiveDeleteDrain),
+    /// and the guard that raised it already logs it at Warning
+    /// (<c>[SubtreeDeletionGuard] REFUSED write</c>). If the delete commits, the node is gone and the
+    /// pending state is moot. If the delete aborts, the save is still pending and is re-attempted by the
+    /// next sampled save or the dispose flush, whose own failure is reported as a dispose-action fault.
+    /// At Error, every delete of a space that holds an active hub — an agent thread asked to delete the
+    /// space it lives in is the everyday case — raised an incident and a ticket for a correct outcome
+    /// (#7887, and #6953 before it).</para>
+    /// </summary>
+    /// <param name="ex">The exception the store write failed with.</param>
+    /// <returns>The level to log the failure at.</returns>
+    internal static LogLevel SaveFailureLevel(Exception ex)
+        => ex is SubtreeDeletionInFlightException ? LogLevel.Information : LogLevel.Error;
 
     /// <summary>
     /// A save refused by a delete seal's row guard (#6856). It becomes pending again — and when the
