@@ -203,8 +203,11 @@ public enum LockFreeReadStep
 /// </summary>
 public sealed class LockFreeReadException(LockFreeReadStep step, string path, Exception inner)
     : IOException(
-        $"{inner.Message} [step: {step.ToString().ToUpperInvariant()} (lock-free: no advisory lock is "
-        + $"taken); path: '{path}'; error number (HResult): {inner.HResult} (0x{inner.HResult:X8})]",
+        $"{inner.Message} [step: {step.ToString().ToUpperInvariant()} ("
+        + (OperatingSystem.IsWindows()
+            ? "Windows: kernel share modes apply, a handle held without sharing can refuse it"
+            : "lock-free: no advisory lock is taken")
+        + $"); path: '{path}'; error number (HResult): {inner.HResult} (0x{inner.HResult:X8})]",
         inner)
 {
     /// <summary>The step that failed.</summary>

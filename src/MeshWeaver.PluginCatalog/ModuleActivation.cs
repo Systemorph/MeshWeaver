@@ -2505,14 +2505,35 @@ public static class ModuleActivationSidecar
     /// first, so every existing search for it still matches, then the step, the path and the error
     /// number. The original exception rides as the inner one.</summary>
     internal static IOException RecordReadFault(MeshWeaver.Utils.LockFreeReadException fault) =>
-        new($"{fault.InnerException?.Message} [step: "
-            + (fault.Step == MeshWeaver.Utils.LockFreeReadStep.Open
-                ? "OPEN (open(2) only — no advisory lock is taken)"
-                : "READ (the file was already open)")
-            + $"; path: '{fault.Path}'; error number (HResult): {fault.ErrorNumber} "
-            + $"(0x{fault.ErrorNumber:X8}). No lock is taken on a record, so neither step can be "
-            + "refused by another holder of the file: on Linux, 11 (EAGAIN) at either step is the SMB "
-            + "transport (MeshWeaver#7689, #7690).]", fault);
+        RecordReadFault(fault, OperatingSystem.IsWindows());
+
+    /// <summary>
+    /// <see cref="RecordReadFault(MeshWeaver.Utils.LockFreeReadException)"/> for a NAMED platform —
+    /// the seam that pins both platforms' wording on any host.
+    ///
+    /// <para>🚨 <b>What a refusal can mean differs by platform (Copilot's review of #7873).</b> On
+    /// Unix the open is <c>open(2)</c> with no advisory lock, so no other holder of the file can
+    /// refuse it, and on Linux 11 (<c>EAGAIN</c>) is the SMB transport. On Windows the open is
+    /// <c>File.OpenHandle</c> with full sharing, and Windows enforces share modes in the kernel: a
+    /// handle held elsewhere WITHOUT sharing (<c>FileShare.None</c>) can still refuse it, as a
+    /// sharing violation.</para>
+    /// </summary>
+    internal static IOException RecordReadFault(MeshWeaver.Utils.LockFreeReadException fault, bool windows)
+    {
+        var step = fault.Step == MeshWeaver.Utils.LockFreeReadStep.Open
+            ? windows
+                ? "OPEN (File.OpenHandle with full sharing)"
+                : "OPEN (open(2) only — no advisory lock is taken)"
+            : "READ (the file was already open)";
+        var meaning = windows
+            ? "On Windows a share mode is enforced by the kernel, so a refusal at OPEN may be a sharing "
+              + "violation — another handle holding the record without sharing it — or the volume itself"
+            : "No advisory lock is taken on a record, so neither step can be refused by another holder "
+              + "of the file: on Linux, 11 (EAGAIN) at either step is the SMB transport";
+        return new($"{fault.InnerException?.Message} [step: {step}; path: '{fault.Path}'; error number "
+            + $"(HResult): {fault.ErrorNumber} (0x{fault.ErrorNumber:X8}). {meaning} "
+            + "(MeshWeaver#7689, #7690).]", fault);
+    }
 
     /// <summary>Reads a file, answering null for "not there" — including the ENOENT a concurrent
     /// rename produces on SMB, which is genuinely absence and never corruption. Lock-free, like
