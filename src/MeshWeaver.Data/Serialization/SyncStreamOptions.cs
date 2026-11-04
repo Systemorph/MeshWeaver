@@ -5,6 +5,18 @@ namespace MeshWeaver.Data.Serialization;
 /// </summary>
 public class SyncStreamOptions
 {
+    /// <summary>The default for <see cref="UpdateBacklogWarningDepth"/>.</summary>
+    public const int DefaultUpdateBacklogWarningDepth = 1000;
+
+    /// <summary>
+    /// The number of not-yet-started writes (<c>UpdateStreamRequest</c>s) on ONE stream at which
+    /// the stream logs a Warning naming the writer that crossed it, and again at each tenfold of it
+    /// (MeshWeaver#5799 — a read stream reached 408,637 queued writes with nothing naming who posted
+    /// them). Observation only: no write is dropped, refused or delayed. Default:
+    /// <see cref="DefaultUpdateBacklogWarningDepth"/>.
+    /// </summary>
+    public int UpdateBacklogWarningDepth { get; set; } = DefaultUpdateBacklogWarningDepth;
+
     /// <summary>
     /// Interval between HeartBeatEvents posted to the owner hub to keep its grain alive. The
     /// heartbeat also detects a PERMANENTLY-gone owner: a recycled/idle grain REACTIVATES on the
