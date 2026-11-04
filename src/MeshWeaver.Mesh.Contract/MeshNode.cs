@@ -449,6 +449,27 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public object? Content { get; init; }
 
     /// <summary>
+    /// 🚨 What <c>ToString()</c> prints — the node's IDENTITY, never its content. The compiler's
+    /// record printer prints every member, and <see cref="Content"/> prints through its own
+    /// <c>ToString()</c>: a content record prints every field, a <c>JsonElement</c> prints its raw
+    /// JSON. So <c>$"{node}"</c> in a log line or an exception text carried the whole content —
+    /// including <see cref="MeshWeaver.Messaging.SensitiveDataAttribute"/> values, which only the
+    /// logging serializer redacts (Doc/Architecture/SensitiveContentInLogs). Content is named by its
+    /// type; render it with <c>hub.RenderForLog(node)</c> when a log genuinely needs it.
+    /// </summary>
+    /// <param name="builder">The record printer's builder.</param>
+    /// <returns><c>true</c>: members were printed.</returns>
+    protected virtual bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Path = ").Append(Path)
+            .Append(", NodeType = ").Append(NodeType)
+            .Append(", Version = ").Append(Version)
+            .Append(", State = ").Append(State)
+            .Append(", Content = ").Append(Content?.GetType().Name ?? "null");
+        return true;
+    }
+
+    /// <summary>
     /// Hub configuration function that configures the message hub for this node.
     /// </summary>
     [JsonIgnore, NotMapped]
