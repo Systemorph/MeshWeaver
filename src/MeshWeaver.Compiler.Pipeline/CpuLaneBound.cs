@@ -120,7 +120,7 @@ internal static class CpuLaneBound
 }
 
 /// <summary>Which phase of <see cref="CpuLaneBound"/> expired. Never persisted as a value of its own:
-/// it names the catalog key of the activity line (<c>activity.compile.laneExpired.{phase}</c>).</summary>
+/// it selects the catalog key of the activity line (<see cref="CpuLaneExpiredException.MessageKey"/>).</summary>
 internal static class CpuLaneExpiryPhase
 {
     /// <summary>The IO prefix did not reach the CPU lane within the bound.</summary>
@@ -191,8 +191,16 @@ internal sealed class CpuLaneExpiredException(
     /// <summary>The process's GC state at the expiry.</summary>
     public GcReading Gc { get; } = gc;
 
-    /// <summary>The catalog key of this expiry's activity line.</summary>
-    public string MessageKey => $"activity.compile.laneExpired.{Phase}";
+    /// <summary>
+    /// The catalog key of this expiry's line. Spelled out per phase, never assembled: every
+    /// <c>activity.*</c> key must be NAMED in source (<c>UnkeyedActivityLogMessageRatchetGuard</c>).
+    /// </summary>
+    public string MessageKey => Phase switch
+    {
+        CpuLaneExpiryPhase.Prefix => "activity.compile.laneExpired.prefix",
+        CpuLaneExpiryPhase.Stalled => "activity.compile.laneExpired.stalled",
+        _ => "activity.compile.laneExpired.emit",
+    };
 
     /// <summary>
     /// The activity line: the English sentence as fallback text, the key, and every reading as a named
