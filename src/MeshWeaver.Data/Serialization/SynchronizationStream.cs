@@ -723,6 +723,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     private int queuedUpdates;
     // The backlog depth last reported — see UpdateBacklog.ReportAt.
     private int reportedBacklog;
+    // SyncStreamOptions.UpdateBacklogWarningDepth, resolved once in the constructor.
+    private readonly int updateBacklogFloor;
 
     /// <summary>The last backlog report this stream made — the reporting depth and the writer it
     /// named — or null. What the Warning says, readable by a test.</summary>
@@ -740,11 +742,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// </summary>
     private void ReportUpdateBacklog(int depth, Delegate origin)
     {
-        var floor = Host.ServiceProvider
-            .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
-            ?.Value.UpdateBacklogWarningDepth ?? SyncStreamOptions.DefaultUpdateBacklogWarningDepth;
         var last = Volatile.Read(ref reportedBacklog);
-        if (UpdateBacklog.ReportAt(depth, last, floor) is not { } threshold
+        if (UpdateBacklog.ReportAt(depth, last, updateBacklogFloor) is not { } threshold
             || Interlocked.CompareExchange(ref reportedBacklog, threshold, last) != last)
             return;
         var writer = UpdateBacklog.Describe(origin);
@@ -837,10 +836,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // into _creationContext (which stays real-user only, never System).
         if (capturedContext is null && Configuration.RunsAsInfrastructure)
             capturedContext = InfrastructureContext;
-        ReportUpdateBacklog(Interlocked.Increment(ref queuedUpdates), origin);
+        // Counted BEFORE the post, so a handler that runs before Post returns cannot drive the
+        // count below zero; rolled back when the post did not carry the write (a throw, or a
+        // Failed / Ignored delivery), because only an admitted write ever reaches the handler that
+        // takes it out of the backlog (review of #7877). Reported only once admitted, outside
+        // the rollback.
+        var depth = Interlocked.Increment(ref queuedUpdates);
+        IMessageDelivery? posted;
         try
         {
-            hub.Post(
+            posted = hub.Post(
                 new UpdateStreamRequest(update, exceptionCallback, applied),
                 opt =>
                 {
@@ -851,10 +856,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         }
         catch
         {
-            // Never queued, so it never leaves the backlog through the handler.
             Interlocked.Decrement(ref queuedUpdates);
             throw;
         }
+        if (posted is null or { State: MessageDeliveryState.Failed or MessageDeliveryState.Ignored })
+        {
+            Interlocked.Decrement(ref queuedUpdates);
+            return;
+        }
+        ReportUpdateBacklog(depth, origin);
     }
 
     /// <summary>
@@ -1443,6 +1453,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // with `ArgumentNullException … (Parameter 'logger')`, leaving each hub FAILED and every
         // observable emitting nothing. 34 of 34 DataTest cases went from green to timing out.
         logger = ResolveLogger(Host);
+        updateBacklogFloor = ResolveUpdateBacklogFloor(Host);
 
         logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
@@ -1578,6 +1589,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// constructor is still executing. A null there faults the buildup and leaves the hub FAILED —
     /// a whole-suite outage produced by a missing log line.</para>
     /// </summary>
+    // Resolved ONCE, at construction, where the host's container is live: a lookup per write could
+    // meet a container that host teardown closed after TryGetActiveHub succeeded and throw
+    // ObjectDisposedException into the producer (review of #7877).
+    private static int ResolveUpdateBacklogFloor(IMessageHub host)
+    {
+        try
+        {
+            return host.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
+                ?.Value.UpdateBacklogWarningDepth ?? SyncStreamOptions.DefaultUpdateBacklogWarningDepth;
+        }
+        catch (ObjectDisposedException)
+        {
+            // Same race as ResolveLogger; the caller is about to be refused anyway.
+            return SyncStreamOptions.DefaultUpdateBacklogWarningDepth;
+        }
+    }
+
     private static ILogger<SynchronizationStream<TStream>> ResolveLogger(IMessageHub host)
     {
         try
