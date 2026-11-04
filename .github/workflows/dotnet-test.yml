@@ -4835,7 +4835,9 @@ jobs:
     - name: Fail if CI's own shell gate failed
       # `!= 'success'` rather than `== 'failure'`: a gate that was skipped or cancelled has
       # produced no verdict, and "no verdict" must never read as "passed".
-      if: needs.workflow-shell.result != 'success'
+      # always(): a red half also fails stage-gate, and the 'Stage 2 held?' step above has then
+      # already failed this job — without it this verdict would be skipped instead of naming the half.
+      if: always() && needs.workflow-shell.result != 'success'
       run: |
         echo "::error::The 'CI's own shell' gate concluded '${{ needs.workflow-shell.result }}' — see that job. It shellchecks every workflow \`run:\` block, refuses a captured command substitution that swallows BOTH stderr and its exit status (the #2642 shape: a failed call becomes an empty answer that is then read as authoritative), refuses an az \`--query\` that throws on a null field, runs actionlint over every workflow so a STRUCTURAL defect (#3228: a duplicate key PyYAML silently accepts and GitHub refuses) is named here instead of landing as a job-less \`startup_failure\` on a satellite that pins these lanes, and EXECUTES main-cd's release-version recovery against a fixture. main-cd.yml is exercised by no other check on this PR."
         exit 1
@@ -4844,7 +4846,9 @@ jobs:
     - name: Fail if CI's own shell gate failed (executions half)
       # `!= 'success'` rather than `== 'failure'`: a gate that was skipped or cancelled has
       # produced no verdict, and "no verdict" must never read as "passed".
-      if: needs.workflow-shell-executions.result != 'success'
+      # always(): a red half also fails stage-gate, and the 'Stage 2 held?' step above has then
+      # already failed this job — without it this verdict would be skipped instead of naming the half.
+      if: always() && needs.workflow-shell-executions.result != 'success'
       run: |
         echo "::error::The 'CI's own shell (executions)' gate concluded '${{ needs.workflow-shell-executions.result }}' — see that job. It EXECUTES the lanes' and scripts' real code against fixtures — main-cd's decision steps, the publish-bake overlap harness, the module publication and pack lanes, the compile-check reference set, the seal and carry-forward scripts — none of which any other check on this PR runs."
         exit 1

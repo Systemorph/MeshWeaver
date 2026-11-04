@@ -362,8 +362,12 @@ def self_test() -> int:
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / ".github" / "workflows" / "node-repo-validate.yml").write_text(
             _PREFIX + guarded, encoding="utf-8")
+        # Only the FIRST half is broken: replacing the condition across `_SHELL_OK` would break both
+        # halves, and the executions job would supply the violation even if `workflow-shell` were no
+        # longer checked at all (review on #7875).
         (root / ".github" / "workflows" / "dotnet-test.yml").write_text(
-            _SHELL_OK.replace("      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}\n", ""),
+            "on: {push: {}}\njobs:\n" + _shell_job("workflow-shell", guard_if="")
+            + _shell_job("workflow-shell-executions"),
             encoding="utf-8")
         violations, _, _ = check_tree(root)
         fired = bool(violations)

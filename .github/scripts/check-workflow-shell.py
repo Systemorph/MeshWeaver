@@ -63,6 +63,10 @@ from pathlib import Path
 # ── what is scanned ─────────────────────────────────────────────────────────────────────────
 WORKFLOW_GLOBS = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 SHELL_GLOBS = [".github/scripts/*.sh"]
+# A composite action's `run:` steps are workflow shell too — they run inside the calling job — so
+# they get the same checks as a workflow's (review on #7875: moving a job's tool step into
+# `.github/actions/workflow-shell-tools` would otherwise have taken it out of this gate).
+ACTION_GLOBS = [".github/actions/*/action.yml", ".github/actions/*/action.yaml"]
 
 # shellcheck severity. Matches the level memex-local's Linux gate runs at (MeshWeaver.Deploy
 # homebrew.yml) and the operator scripts' gate (MeshWeaver.Plugins), so the fleet does not carry two
@@ -201,7 +205,7 @@ def run_blocks(path: Path) -> list[dict]:
 def sources(root: Path) -> list[tuple[str, int, str, str | None]]:
     """(path, first-line-of-body, shell text, step-name) for everything this gate reads."""
     out = []
-    for g in WORKFLOW_GLOBS:
+    for g in WORKFLOW_GLOBS + ACTION_GLOBS:
         for p in sorted(root.glob(g)):
             rel = str(p.relative_to(root))
             for blk in run_blocks(p):
@@ -216,7 +220,7 @@ def sources(root: Path) -> list[tuple[str, int, str, str | None]]:
 def check_shellcheck(root: Path) -> list[Finding]:
     findings: list[Finding] = []
     for rel, base, body, step in sources(root):
-        if not rel.startswith(".github/workflows/"):
+        if not rel.startswith((".github/workflows/", ".github/actions/")):
             continue  # .sh files on disk are shellchecked where they live, not re-extracted
         neutral = GHA_EXPR.sub(GHA_PLACEHOLDER, body)
         # Two prologue lines: the shebang, and a definition so the placeholder is a real
@@ -566,6 +570,33 @@ def self_test(root: Path) -> int:
         got = check_shellcheck(tmp)
         case("shellcheck does not misread a ${{ }} expression as a constant",
              len(got) == 0, f"got {[f.message for f in got]}")
+
+        # ── a composite action's run: steps are scanned too (review on #7875) ──────────
+        # The workflow is left clean, so a finding can only come from the action.
+        wf.write_text(SELF_TEST_FIXED)
+        action = tmp / ".github" / "actions" / "fixture-tools" / "action.yml"
+        action.parent.mkdir(parents=True)
+        action.write_text(
+            "name: fixture\ndescription: d\nruns:\n  using: composite\n  steps:\n"
+            "  - shell: bash\n    run: |\n      unused=1\n"
+            '      tags=$(az acr repository list -o tsv 2>/dev/null || true)\n      echo "$tags"\n'
+        )
+        got = check_shellcheck(tmp)
+        case("shellcheck FIRES on a dead variable in a composite action's run: step",
+             len(got) == 1 and "SC2034" in got[0].message and got[0].path.startswith(".github/actions/"),
+             f"got {[(f.path, f.message) for f in got]}")
+        got = check_swallow(tmp)
+        case("swallow FIRES on a captured `2>/dev/null || true` in a composite action",
+             len(got) == 1 and got[0].path.startswith(".github/actions/"),
+             f"got {[(f.path, f.code) for f in got]}")
+        action.write_text(
+            "name: fixture\ndescription: d\nruns:\n  using: composite\n  steps:\n"
+            '  - shell: bash\n    run: |\n      tags=$(az acr repository list -o tsv)\n      echo "$tags"\n'
+        )
+        got = check_shellcheck(tmp) + check_swallow(tmp)
+        case("…and both are SILENT on the fixed composite action", len(got) == 0,
+             f"got {[(f.path, f.message) for f in got]}")
+        action.unlink()
 
         # ── script-needs-tree: the #2857 Promote break ─────────────────────────────────
         wf.write_text(
