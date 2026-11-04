@@ -564,6 +564,22 @@ Minting happens only AFTER the caller authenticates, so an anonymous request can
 write; the verify path reads without minting (a token cannot verify against a key created after it
 was signed anyway).
 
+🚨 **The key is HELD, never re-read per request (MeshWeaver#7354).** Every instance-key and
+sync-token check verifies against this node, so it is the hottest read on `/api/plugins` — and it
+changes about once a month. It used to be a one-shot `GetMeshNode` behind a one-minute TTL, so once a
+minute a request paid a cross-silo round-trip to the key's owning per-node hub; whenever that hub sat
+on a degraded silo (routing pool saturated, hub shutting down, host shutting down) the round-trip
+went unanswered for the full ten-second budget and the request was answered 503. Measured on the
+registry over 43 h: 13 of 18 auth-leg 503s were this read; at the 13:19Z instance the reader logged
+`NO LOCAL HUB … owned by another silo` and the owner's silo logged routing back-pressure with the
+oldest leg `→ Admin/SyncTokenSigningKey/current` and 63 dispatches waiting for a pool slot.
+`SyncTokenSigningKeyService` now takes ONE standing subscription to the node's mirror
+(`GetMeshNodeStream`, as System) on its first successful read or write, and answers every later
+request from memory; a rotation written on any replica arrives through the change feed. The
+one-shot read remains only for a cold process, or after a hold terminated AND its last key is older
+than `CacheDuration` — a terminated hold is re-taken by the next request without waiting for it.
+Pinned by `SyncTokenSigningKeyIsHeldTest`.
+
 **Rotation keeps the outgoing key.** `RotateAfter` on the node is the due date — data, so it is
 visible and adjustable without a deploy. A rotation writes a fresh key and moves the old one to
 `ProtectedPrevious`, verifiable until `PreviousValidUntil`; verification tries current, then
