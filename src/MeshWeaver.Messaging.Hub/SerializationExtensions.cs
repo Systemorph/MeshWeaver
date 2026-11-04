@@ -161,14 +161,22 @@ public static class SerializationExtensions
     /// <summary>
     /// Creates a JsonSerializerOptions configured for logging purposes.
     /// This wraps the hub's standard serializer options with a LoggingTypeInfoResolver
-    /// that filters out properties marked with [PreventLogging] attribute.
+    /// that filters out properties marked with [PreventLogging] attribute and redacts the values of
+    /// properties marked [SensitiveData]. Prefer the cached
+    /// <see cref="SensitiveDataRedaction.GetLoggingSerializerOptions"/>: building options is not cheap.
+    /// 🚨 Write-only and for rendering only — never hand these to persistence or the wire.
     /// </summary>
     public static JsonSerializerOptions CreateLoggingSerializerOptions(this IMessageHub hub)
     {
         var baseOptions = hub.JsonSerializerOptions;
 
         // Create new options that copy settings from base options
-        var loggingOptions = new JsonSerializerOptions(baseOptions);
+        var loggingOptions = new JsonSerializerOptions(baseOptions)
+        {
+            // A log line is text, not HTML: keep the redaction placeholder ("‹redacted›") and other
+            // non-ASCII readable instead of \u-escaping it.
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        };
 
         // Wrap the existing TypeInfoResolver with LoggingTypeInfoResolver
         loggingOptions.TypeInfoResolver = new LoggingTypeInfoResolver(
@@ -185,6 +193,18 @@ public static class SerializationExtensions
         // this outranks the RawJsonConverter copied from the base options. Only these options are
         // affected; the wire options must still round-trip a payload verbatim.
         loggingOptions.Converters.Insert(0, new LoggingRawJsonConverter());
+
+        // [SensitiveData] in UNTYPED JSON and object-typed members (a node's content before it is
+        // materialised, a NodeType content type compiled live): walked and redacted via each object's
+        // $type. Inserted ahead of the copied ObjectPolymorphicConverter / JsonNodeConverter, which
+        // would write a JsonElement verbatim. See SensitiveDataRedaction.
+        var redactor = SensitiveDataRedaction.Redactor(hub);
+        var objectConverter = baseOptions.Converters.OfType<ObjectPolymorphicConverter>().FirstOrDefault();
+        loggingOptions.Converters.Insert(0, new SensitiveJsonNodeConverter(redactor));
+        loggingOptions.Converters.Insert(0, new SensitiveJsonElementConverter(redactor));
+        loggingOptions.Converters.Insert(0, new SensitiveJsonDocumentConverter(redactor));
+        loggingOptions.Converters.Insert(0, new SensitiveObjectConverter(redactor, objectConverter));
+        loggingOptions.Converters.Insert(0, new SensitiveOpaqueTypeConverterFactory(baseOptions));
 
         return loggingOptions;
     }
