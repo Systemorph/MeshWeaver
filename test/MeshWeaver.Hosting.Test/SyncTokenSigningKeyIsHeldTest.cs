@@ -296,4 +296,100 @@ public class SyncTokenSigningKeyIsHeldTest(ITestOutputHelper output) : MonolithM
         answered!.Current.Should().Equal(stored, "the read answers with what the store holds");
         answered.Current.SequenceEqual(KeyBytes(7)).Should().BeFalse("the superseded key is gone");
     }
+
+    /// <summary>Review of #7889, P1: two cold requests. The SECOND read answers first and takes the
+    /// hold, the hold delivers rotated key B, and only then does the FIRST read's answer A arrive. A
+    /// result issued before B was applied must not replace B.</summary>
+    [Fact]
+    public async Task AReadIssuedBeforeANewerFrame_DoesNotReplaceItWhenItsAnswerArrivesLate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reads = new List<AsyncSubject<MeshNode?>>();
+        IObservable<MeshNode?> Read()
+        {
+            var answer = new AsyncSubject<MeshNode?>();
+            lock (reads)
+                reads.Add(answer);
+            return answer;
+        }
+        var mirrors = new Mirrors();
+        using var registry = new SyncTokenSigningKeyService(Mesh, NullLogger<SyncTokenSigningKeyService>.Instance)
+        {
+            Now = () => clock,
+            HoldOverride = mirrors.Open,
+            ReadOverride = Read,
+        };
+
+        var first = new ReplaySubject<SyncTokenSigningMaterial?>();
+        using var firstRequest = registry.Existing().Subscribe(first);   // read A issued
+        var second = new ReplaySubject<SyncTokenSigningMaterial?>();
+        using var secondRequest = registry.Existing().Subscribe(second); // a later read issued
+        lock (reads)
+            reads.Should().HaveCount(2, "two cold requests each issued a read");
+
+        void Answer(int read, byte seed)
+        {
+            AsyncSubject<MeshNode?> subject;
+            lock (reads)
+                subject = reads[read];
+            subject.OnNext(KeyNode(seed));
+            subject.OnCompleted();
+        }
+
+        Answer(1, 7);                          // the later read answers first and takes the hold
+        mirrors.Count.Should().Be(1, "the answered read took the hold");
+        mirrors.Last.OnNext(KeyNode(9));       // the hold delivers rotated key B
+        Answer(0, 7);                          // the earlier read's answer A arrives late
+
+        (await first.Should().Within(TestTimeouts.Convergence)
+            .Emit("the late request is answered", cancellationToken: ct)).Should().NotBeNull();
+        registry.IsHeld.Should().BeTrue("the hold is still delivering");
+
+        clock += SyncTokenSigningKeyService.CacheDuration * 3;
+        (await registry.Existing().Should().Within(TestTimeouts.Convergence)
+                .Emit("the held key answers", cancellationToken: ct))!
+            .Current.Should().Equal(KeyBytes(9), "a result issued before B was applied cannot replace B");
+        lock (reads)
+            reads.Should().HaveCount(2, "the held key answers without a read");
+    }
+
+    /// <summary>Review of #7889: a materialisation in flight when a newer frame lands must not write
+    /// its (older) material back — the next request serves the newer frame's key.</summary>
+    [Fact]
+    public async Task AMaterialisationInFlightAcrossANewerFrame_DoesNotWriteBack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var mirrors = new Mirrors();
+        var injected = 0;
+        var writer = NewService();
+        await writer.Resolve().Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("the key is minted", cancellationToken: ct);
+        writer.Dispose();
+        using var registry = new SyncTokenSigningKeyService(Mesh, NullLogger<SyncTokenSigningKeyService>.Instance)
+        {
+            Now = () => clock,
+            HoldOverride = mirrors.Open,
+            // While the request below is between its decrypt and its write-back, rotated key B lands.
+            AfterMaterialize = () =>
+            {
+                if (Interlocked.Exchange(ref injected, 1) == 0)
+                    mirrors.Last.OnNext(KeyNode(9));
+            },
+        };
+        (await registry.Existing().Should().Within(TestTimeouts.Convergence)
+            .Emit("a cold registry reads once", cancellationToken: ct)).Should().NotBeNull();
+        mirrors.Last.OnNext(KeyNode(7));
+        registry.IsHeld.Should().BeTrue();
+
+        var inFlight = await registry.Existing().Should().Within(TestTimeouts.Convergence)
+            .Emit("the request materialises A", cancellationToken: ct);
+        inFlight!.Current.Should().Equal(KeyBytes(7), "it was in flight when B landed");
+        Volatile.Read(ref injected).Should().Be(1, "the frame landed mid-materialisation");
+        registry.CachedRecord?.ProtectedCurrent.Should().NotBe(Convert.ToBase64String(KeyBytes(7)),
+            "the in-flight materialisation of A must not be written back once the newer frame B landed");
+
+        (await registry.Existing().Should().Within(TestTimeouts.Convergence)
+                .Emit("the next request answers", cancellationToken: ct))!
+            .Current.Should().Equal(KeyBytes(9), "the in-flight write-back of A must not have displaced B");
+    }
 }
