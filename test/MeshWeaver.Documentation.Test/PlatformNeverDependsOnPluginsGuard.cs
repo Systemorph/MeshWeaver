@@ -90,7 +90,11 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "MeshWeaver.Plugins, so it checks out the Plugins commit a SEALED set was built from "
                 + "(main-cd's promotion record), exactly as the image legs do. It runs after CD as its "
                 + "own workflow_run: on no pull request, never a need of any platform delivery job, and "
-                + "its red lands on its own ledger label, never on the platform release"),
+                + "its red lands on its own ledger label, never on the platform release. Run here it packs "
+                + "and verifies only: the PUSH runs when MeshWeaver.Plugins (private) calls it through "
+                + "workflow_call, because a package a public repository's token creates is public, "
+                + "irreversibly (MeshWeaver#7660). That call is the satellite consuming a core lane, "
+                + "the direction every node-repo-* workflow already runs"),
         ]);
 
     /// <summary>
