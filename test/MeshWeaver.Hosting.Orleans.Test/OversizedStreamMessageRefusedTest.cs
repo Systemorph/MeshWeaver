@@ -159,7 +159,9 @@ public class OversizedStreamMessageRefusedTest
 
         refusal.Split('\n').Should().HaveCount(1,
             "an unescaped newline in the payload would open what reads as a fresh `fail:` burst");
-        refusal.Should().Contain("\\n", "the newline is escaped, not dropped — the head stays legible");
+        refusal.Should().NotContain("Forged",
+            "the payload is identified by its root $type and never quoted — its content may be node content "
+            + "(Doc/Architecture/SensitiveContentInLogs), so nothing of it can forge a record either");
         refusal.Should().Contain("Evil", "…and the $type is still identifiable");
     }
 
