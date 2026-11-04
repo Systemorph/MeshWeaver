@@ -20,11 +20,13 @@ namespace MeshWeaver.Graph.Test;
 /// could not be read changes nothing that is listed. The faulted reading went on answering every
 /// later probe until something unrelated landed.</para>
 ///
-/// <para><b>What makes this able to fail.</b> The fault is real, not mocked: the test holds the
-/// record open with <see cref="FileShare.None"/>, which on Unix is an exclusive advisory lock and on
-/// Windows a sharing violation, so the reader's own open is refused. The test first asserts that
-/// the reading DID fault, then releases the record without touching its name, length or write time,
-/// so the fingerprint is byte-identical, and asserts that the next reading is whole.</para>
+/// <para><b>What makes this able to fail.</b> The fault is real, not mocked: the test makes the
+/// record unreadable (<see cref="UnreadableRecord"/> — its permissions removed on Unix, held with
+/// <see cref="FileShare.None"/> on Windows), so the reader's own open is refused. The test first
+/// asserts that the reading DID fault, then restores the record without touching its name, length
+/// or write time, so the fingerprint is byte-identical, and asserts that the next reading is whole.
+/// (An exclusive advisory lock no longer faults a read on Unix — the readers take none, see
+/// <see cref="AnActivationRecordHeldUnderAnExclusiveLock_StillReadsWhole"/>.)</para>
 /// </summary>
 public class FaultedActivationReadIsNeverReusedTest : IDisposable
 {
@@ -62,7 +64,7 @@ public class FaultedActivationReadIsNeverReusedTest : IDisposable
         var reader = new PendingModuleActivations(root);
 
         ModuleActivationReport faulted;
-        using (new FileStream(recordPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        using (UnreadableRecord.Hold(recordPath))
             faulted = reader.Read(NothingLoaded);
 
         // The precondition: the reading genuinely faulted on THIS record, so what follows cannot
@@ -93,7 +95,7 @@ public class FaultedActivationReadIsNeverReusedTest : IDisposable
         var setRecord = Assert.Single(Directory.GetFiles(ModuleSetStore.SetsDirectory(root), "*.json"));
         var reader = new PendingModuleActivations(root);
 
-        using (new FileStream(setRecord, FileMode.Open, FileAccess.Read, FileShare.None))
+        using (UnreadableRecord.Hold(setRecord))
         {
             // The precondition: the set store itself reports this record as unreadable right now.
             var faults = ImmutableList.CreateBuilder<string>();
@@ -132,12 +134,89 @@ public class FaultedActivationReadIsNeverReusedTest : IDisposable
     public void ARefusedRecordRead_NamesTheStepThePathAndTheErrorNumber()
     {
         var reasons = ImmutableList.CreateBuilder<string>();
-        using (new FileStream(recordPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        using (UnreadableRecord.Hold(recordPath))
             ModuleActivationSidecar.Read(root, reasons.Add);
 
         var reason = Assert.Single(reasons, r => r.StartsWith("Module record '", StringComparison.Ordinal));
         Assert.Contains("step: OPEN", reason);
         Assert.Contains(recordPath, reason);
         Assert.Contains("error number (HResult):", reason);
+    }
+
+    /// <summary>
+    /// 🚨 <b>The incident shape (MeshWeaver#7690, #7797): another handle holds the record under an
+    /// EXCLUSIVE advisory lock while the activation is read.</b> On Unix that is
+    /// <c>flock(LOCK_EX)</c> — what a <see cref="FileShare.None"/> open takes — and the BCL reader's
+    /// <c>flock(LOCK_SH | LOCK_NB)</c> answered <c>EWOULDBLOCK</c> (error 11 at OPEN), so the read
+    /// dropped the whole module. A record is immutable once published, so the reader takes no lock and
+    /// the module reads whole. The negative control is measured first, in the same window: the BCL
+    /// open of the very same file IS refused, so a pass cannot come from a lock that was never held.
+    /// Unix only — on Windows a share mode is not advisory, and no publisher holds a published record
+    /// without sharing it.
+    /// </summary>
+    [Fact]
+    public void AnActivationRecordHeldUnderAnExclusiveLock_StillReadsWhole()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "advisory flock semantics are Unix-only");
+        var faults = ImmutableList.CreateBuilder<string>();
+        ModuleActivationList list;
+        using (new FileStream(recordPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var refused = Assert.ThrowsAny<IOException>(() =>
+                new FileStream(recordPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)
+                    .Dispose());
+            Assert.Contains("being used by another process", refused.Message);
+
+            list = ModuleActivationSidecar.Read(root, faults.Add);
+        }
+
+        Assert.Empty(faults);
+        Assert.Contains(list.Entries, e => string.Equals(e.Name, Module, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>The same for the SET records, which <see cref="ModuleSetStore"/> reads: an exclusive
+    /// holder of a published set record does not make it unreadable.</summary>
+    [Fact]
+    public void ASetRecordHeldUnderAnExclusiveLock_StillReads()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "advisory flock semantics are Unix-only");
+        Assert.NotNull(ModuleSetStore.Propose(root, ModuleActivationSidecar.Read(root), proposedBy: "test"));
+        var setRecord = Assert.Single(Directory.GetFiles(ModuleSetStore.SetsDirectory(root), "*.json"));
+
+        var faults = ImmutableList.CreateBuilder<string>();
+        using (new FileStream(setRecord, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.ThrowsAny<IOException>(() =>
+                new FileStream(setRecord, FileMode.Open, FileAccess.Read, FileShare.ReadWrite).Dispose());
+            ModuleSetStore.Read(root, faults.Add, onNotice: null);
+        }
+
+        Assert.Empty(faults);
+    }
+}
+
+/// <summary>
+/// Makes a file genuinely unreadable for the life of the returned handle and restores it untouched —
+/// same name, length and write time. Unix: every permission removed (a <c>chmod</c> moves only the
+/// change time). Windows: held with <see cref="FileShare.None"/>, a kernel-enforced share mode.
+/// </summary>
+internal static class UnreadableRecord
+{
+    public static IDisposable Hold(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+        var mode = File.GetUnixFileMode(path);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        return new Restore(() =>
+        {
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(path, mode);
+        });
+    }
+
+    private sealed class Restore(Action restore) : IDisposable
+    {
+        public void Dispose() => restore();
     }
 }
