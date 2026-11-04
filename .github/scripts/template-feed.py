@@ -342,6 +342,9 @@ def push_guard(source: str) -> None:
 
 
 LANE_TOOL = "lane/.github/scripts/template-feed.py"
+# The lane's own commit: under workflow_call github.sha is the CALLER's commit in another repository.
+LANE_REF = "ref: ${{ steps.lane.outputs.sha }}"
+PRIVATE_PUBLISHER_GUARD = 'if [ "$vis" != private ] || [ "$PUBLISHER" != private ]; then'
 
 
 def workflow_findings(text: str) -> list[str]:
@@ -371,9 +374,18 @@ def workflow_findings(text: str) -> list[str]:
     if "$FEED_TOOL" in text and (not bindings or any(b != LANE_TOOL for b in bindings)):
         out.append(f"FEED_TOOL is bound to {bindings or 'nothing'}, not {LANE_TOOL} — the calls through it "
                    "would run the set's copy (or none)")
-    if "ref: ${{ github.sha }}" not in text or "path: lane" not in text:
-        out.append("the publish job does not check out the lane's own tooling at github.sha into "
-                   "`lane` — the script it runs would come from the set's tree")
+    if LANE_REF not in text or "path: lane" not in text:
+        out.append("the publish job does not check out the lane's own tooling at the commit that defines "
+                   "the workflow into `lane` — the script it runs would come from the set's tree")
+    # WHO PUBLISHES decides every new id's visibility: a package created with a workflow's GITHUB_TOKEN
+    # takes the publishing repository's visibility, and a public package can never be made private
+    # again (MeshWeaver#7660 — the public core repository created 40 of 43 ids public).
+    if "nuget push" in text and PRIVATE_PUBLISHER_GUARD not in text:
+        out.append("the lane pushes without refusing a non-private publisher — a package created from a "
+                   "public repository is public, irreversibly")
+    if re.search(r"RepositoryUrl=https://github\.com/", text):
+        out.append("RepositoryUrl names a literal repository — it must name the PUBLISHING repository "
+                   "($GITHUB_SERVER_URL/$GITHUB_REPOSITORY), the one whose visibility a new package takes")
     return out
 
 
@@ -544,8 +556,11 @@ def self_test() -> int:
     # 8. The workflow decides 'sealed' from job results, never from the run's conclusion. Every
     #    fixture starts from the CORRECT lane shape, so each control is red only for its own rule.
     lane_ok = ("      FEED_TOOL: lane/.github/scripts/template-feed.py\n"
-               "          ref: ${{ github.sha }}\n          path: lane\n"
-               '        run: python3 "$FEED_TOOL" --self-test\n')
+               "          ref: ${{ steps.lane.outputs.sha }}\n          path: lane\n"
+               '        run: python3 "$FEED_TOOL" --self-test\n'
+               '          -p:RepositoryUrl="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"\n'
+               '          if [ "$vis" != private ] || [ "$PUBLISHER" != private ]; then exit 1; fi\n'
+               '            dotnet nuget push "$f" --source "$FEED"\n')
     if workflow_findings(lane_ok):
         failures.append(f"workflow_findings refused the lane-tool shape: {workflow_findings(lane_ok)}")
 
@@ -566,6 +581,13 @@ def self_test() -> int:
          "FEED_TOOL", "FEED_TOOL re-bound to the set's tree")
     only(lane_ok.replace("          path: lane\n", ""), "does not check out the lane's own tooling",
          "a publish job with no lane checkout")
+    only(lane_ok.replace("${{ steps.lane.outputs.sha }}", "${{ github.sha }}"),
+         "does not check out the lane's own tooling", "the lane checked out at github.sha (the caller's commit under workflow_call)")
+    # 8c. … and pushes only from a private repository, linked to it (#7660).
+    only(lane_ok.replace('          if [ "$vis" != private ] || [ "$PUBLISHER" != private ]; then exit 1; fi\n', ""),
+         "non-private publisher", "a push with no private-publisher refusal")
+    only(lane_ok.replace('"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"', "https://github.com/Systemorph/MeshWeaver"),
+         "RepositoryUrl names a literal", "a RepositoryUrl hard-coded to the public repository")
     wf = Path(__file__).resolve().parents[1] / "workflows" / "template-feed.yml"
     if wf.is_file():
         for f in workflow_findings(wf.read_text(encoding="utf-8")):
