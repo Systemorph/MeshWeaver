@@ -1182,6 +1182,11 @@ internal static class NodeTypeCompilationHelpers
         //     package skips it: its compile would be refused before Roslyn, so the flip would only
         //     move the shared record through Pending for nothing. The kickoff of an owner that
         //     MEETS the floor is what rebuilds a type a below-floor replica left Unavailable.
+        // 🚨 #6195 review — set once the one-shot kickoff below has ACTED (rebuild committed, skipped,
+        // or restamped). From then on it will never look at this type again in this hub, so an
+        // Unavailable settle on a stale build passes to the failed-verdict re-drive instead of being
+        // left to an owner that has unsubscribed.
+        var staleBuildKickoffSpent = 0;
         var frameworkStaleKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && IsSettledOnAStaleBuild(def, guards)
@@ -1220,11 +1225,13 @@ internal static class NodeTypeCompilationHelpers
             {
                 if (outcome.Action is StaleBuildAction.RestampDependencyRecord)
                 {
+                    Volatile.Write(ref staleBuildKickoffSpent, 1);
                     RestampCarriedForwardBuild(hub, workspace, hubPath, guards, outcome.Detail, logger);
                     return;
                 }
                 if (outcome.Action is StaleBuildAction.Skip)
                 {
+                    Volatile.Write(ref staleBuildKickoffSpent, 1);
                     // The pre-lane behaviour, preserved exactly: the store holds bytes for the
                     // live framework, so nothing is rebuilt — and nothing is restamped either.
                     logger?.LogInformation(
@@ -1271,9 +1278,13 @@ internal static class NodeTypeCompilationHelpers
                     // framework and module set — which is precisely what makes it different from
                     // the build it is replacing, so the token is the honest record of it.
                     return curr with { Content = DispatchPending(def, guards.ModulesHash) };
-                }).Subscribe(_ => { },
-                    ex => logger?.LogWarning(ex,
-                        "Framework-stale kickoff: Update failed for {HubPath}", hubPath));
+                }).Subscribe(_ => Volatile.Write(ref staleBuildKickoffSpent, 1),
+                    ex =>
+                    {
+                        Volatile.Write(ref staleBuildKickoffSpent, 1);
+                        logger?.LogWarning(ex,
+                            "Framework-stale kickoff: Update failed for {HubPath}", hubPath);
+                    });
             });
 
 
@@ -1341,17 +1352,15 @@ internal static class NodeTypeCompilationHelpers
         var redriveGivenUp = false;
         var failedVerdictKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
-                && (HasStaleFailureVerdict(def, guards.ModulesHash, hubPath)
+                && (HasStaleFailureVerdict(def, guards.ModulesHash, hubPath, guards,
+                        Volatile.Read(ref staleBuildKickoffSpent) == 1)
                     || HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath, redriveClosedTypeSet))
                 && !IsStaticOnlyNodeType(node, def))
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
-            .DistinctUntilChanged(node =>
-            {
-                var d = (NodeTypeDefinition)node!.Content!;
-                return (d.CompilationStatus, BuildInputsToken(guards.ModulesHash, d.CurrentSourceVersions),
-                    d.FailedPlatformVersion);
-            })
+            //
+            // 🚨 #6195 review — the key carries the ATTEMPT, not only the state: see RedriveDedupeKey.
+            .DistinctUntilChanged(node => RedriveDedupeKey((NodeTypeDefinition)node!.Content!, guards.ModulesHash))
             .Subscribe(
                 node =>
                 {
@@ -1366,7 +1375,7 @@ internal static class NodeTypeCompilationHelpers
                     var (forTheseInputs, total) =
                         parkRegistry?.RecordFailureRedrive(hubPath, liveInputs) ?? (1, 1);
 
-                    if (forTheseInputs > 1)
+                    if (IsNonConvergingRedrive(def, forTheseInputs))
                         logger?.LogError(
                             "Failed-verdict re-drive DID NOT CONVERGE for NodeType {HubPath}: this process has "
                             + "already re-driven it for EXACTLY these compile inputs ({Inputs}) — attempt "
@@ -1407,7 +1416,7 @@ internal static class NodeTypeCompilationHelpers
                     workspace.GetMeshNodeStream()
                         .Update(curr => ApplyFailedVerdictRedrive(
                             curr, hubPath, guards.ModulesHash, parkRegistry, livePlatformVersion,
-                            redriveClosedTypeSet))
+                            redriveClosedTypeSet, guards, Volatile.Read(ref staleBuildKickoffSpent) == 1))
                         .Subscribe(_ => { },
                             ex => logger?.LogWarning(ex,
                                 "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
@@ -1433,7 +1442,8 @@ internal static class NodeTypeCompilationHelpers
                 // snapshot the re-drive is merely WAITING, not declining, and reporting that as
                 // "stuck" would cry wolf on every cold activation of a broken type.
                 && def.CurrentSourceVersions is not null
-                && !HasStaleFailureVerdict(def, guards.ModulesHash, hubPath)
+                && !HasStaleFailureVerdict(def, guards.ModulesHash, hubPath, guards,
+                    Volatile.Read(ref staleBuildKickoffSpent) == 1)
                 && !HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath, redriveClosedTypeSet))
             .Take(1)
             .Subscribe(
@@ -4477,13 +4487,31 @@ internal static class NodeTypeCompilationHelpers
     /// is answered NO — the re-drive then behaves exactly as it did before, which is the safe
     /// direction: an extra attempt costs one compile, a wrongly-declined one strands a type.
     /// </param>
+    /// <param name="guards">
+    /// The FULL build guards the framework-stale kickoff judges with (modules hash, dependency ids,
+    /// toolchain), so the two kickoffs decide ownership of one state with the same question (#6195
+    /// review). <c>null</c> falls back to the modules hash alone — a caller with no guards.
+    /// </param>
+    /// <param name="staleBuildKickoffSpent">
+    /// Whether this hub's one-shot framework-stale kickoff has already ACTED. Until it has, an
+    /// <c>Unavailable</c> settle on a stale build is that kickoff's to rebuild (it runs the
+    /// dependency-floor and content-key checks first); once it has, nothing else would ever retry it,
+    /// so this re-drive takes it over (#6195 review).
+    /// </param>
     internal static bool HasStaleFailureVerdict(
-        NodeTypeDefinition def, string? modulesHash, string? nodeTypePath = null) =>
+        NodeTypeDefinition def, string? modulesHash, string? nodeTypePath = null,
+        BuildGuards? guards = null, bool staleBuildKickoffSpent = false) =>
         def.CompilationStatus is CompilationStatus.Error or CompilationStatus.Unavailable
         // NO usable build was ever recorded — the complement of HasStaleFrameworkBuild, which
-        // owns every case where coordinates DO exist.
-        && string.IsNullOrEmpty(def.LatestAssemblyCollection)
-        && string.IsNullOrEmpty(def.LatestAssemblyPath)
+        // owns every case where coordinates DO exist and the build is stale. 🚨 #6195: an
+        // UNAVAILABLE settle on a type that HAS a build is nobody else's case when the build is not
+        // stale — so before this it was retried by nothing: three Hosting types whose compile ran
+        // out of its CPU-lane bound kept their last good build and sat red for about 7 h. A STALE
+        // build stays the twin's until its one-shot kickoff has acted (it consumed its Take(1));
+        // after that this re-drive is the only thing left that can retry it.
+        && (NoRecordedBuild(def)
+            || (def.CompilationStatus is CompilationStatus.Unavailable
+                && (staleBuildKickoffSpent || !HasStaleFrameworkBuild(def, GuardsOrHash(guards, modulesHash)))))
         // The source set must be ESTABLISHED before it can be compared — see above.
         && def.CurrentSourceVersions is not null
         // 🚨 …and the failure must be one a fresh attempt could possibly answer differently
@@ -4508,6 +4536,47 @@ internal static class NodeTypeCompilationHelpers
                 def.FailedBuildInputs,
                 BuildInputsToken(modulesHash, def.CurrentSourceVersions),
                 StringComparison.Ordinal));
+
+    /// <summary>
+    /// The failed-verdict re-drive's de-duplication key: the settled STATE plus the ATTEMPT that
+    /// produced it (#6195 review). The re-drive's filter drops the Pending/Compiling emissions between
+    /// two settles, so a retry that settles <c>Unavailable</c> again under unchanged inputs arrives
+    /// with the same (status, inputs, platform) — keyed on the state alone it was swallowed, and the
+    /// type stayed Unavailable without reaching the retry cap or its give-up line. Two stamps tell the
+    /// attempts apart: <see cref="NodeTypeDefinition.LastCompileStartedAt"/>, which the Pending →
+    /// Compiling claim stamps for EVERY attempt, and the activity path, which is null when the
+    /// activity could not be created. An unrelated edit of a settled record changes neither, so it is
+    /// still de-duplicated. Pure.
+    /// </summary>
+    /// <param name="d">The settled definition.</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the live inputs.</param>
+    /// <returns>The key.</returns>
+    internal static (CompilationStatus?, string, string?, string?, DateTimeOffset?) RedriveDedupeKey(
+        NodeTypeDefinition d, string? modulesHash) =>
+        (d.CompilationStatus, BuildInputsToken(modulesHash, d.CurrentSourceVersions),
+            d.FailedPlatformVersion, d.LastCompilationActivityPath, d.LastCompileStartedAt);
+
+    /// <summary>
+    /// Whether a second re-drive for the very same inputs means the re-drive is feeding itself — the
+    /// write-cycle diagnosis. True only for an <c>Error</c>: its flip stamps the live inputs, so the
+    /// trigger cannot legitimately fire twice for them. An <c>Unavailable</c> verdict is re-asked
+    /// under unchanged inputs BY DESIGN (it formed no verdict — a recycling read, a CPU-lane expiry),
+    /// so repeated retries of it are the recovery working, bounded by the retry cap, and are never
+    /// reported as a write cycle (#6195 review). Pure.
+    /// </summary>
+    /// <param name="def">The definition being re-driven.</param>
+    /// <param name="forTheseInputs">How often this process has re-driven it for these inputs.</param>
+    /// <returns>True when the diagnosis applies.</returns>
+    internal static bool IsNonConvergingRedrive(NodeTypeDefinition def, int forTheseInputs) =>
+        forTheseInputs > 1 && def.CompilationStatus is not CompilationStatus.Unavailable;
+
+    // The guards ownership is judged with: the caller's full set, else the modules hash alone.
+    private static BuildGuards? GuardsOrHash(BuildGuards? guards, string? modulesHash) =>
+        guards ?? (modulesHash is null ? null : new BuildGuards(modulesHash, null, ""));
+
+    // No assembly coordinates were ever recorded — what only a successful compile writes.
+    private static bool NoRecordedBuild(NodeTypeDefinition def) =>
+        string.IsNullOrEmpty(def.LatestAssemblyCollection) && string.IsNullOrEmpty(def.LatestAssemblyPath);
 
     /// <summary>
     /// 🚨 True when a NodeType is sitting on a COMPILE FAILURE formed on an OLDER platform build than
@@ -4667,10 +4736,14 @@ internal static class NodeTypeCompilationHelpers
     /// older-platform one (<see cref="HasFailureFromOlderPlatform"/>) never fires.</param>
     /// <param name="closedTypeSet">Whether this process serves a closed type set — handed to
     /// <see cref="HasFailureFromOlderPlatform"/>, which then never retries a closed-set refusal (#6627).</param>
+    /// <param name="guards">The full build guards, handed to <see cref="HasStaleFailureVerdict"/> so
+    /// this commit-time re-check decides ownership exactly as the trigger did.</param>
+    /// <param name="staleBuildKickoffSpent">Whether the hub's one-shot framework-stale kickoff has
+    /// already acted — see <see cref="HasStaleFailureVerdict"/>.</param>
     internal static MeshNode ApplyFailedVerdictRedrive(
         MeshNode curr, string hubPath, string? modulesHash,
         NodeTypeCompileParkRegistry? parkRegistry, string? livePlatformVersion = null,
-        bool closedTypeSet = false)
+        bool closedTypeSet = false, BuildGuards? guards = null, bool staleBuildKickoffSpent = false)
     {
         if (curr?.Content is not NodeTypeDefinition d) return curr!;
         // Never clobber an in-flight compile (a concurrent release request or
@@ -4680,7 +4753,7 @@ internal static class NodeTypeCompilationHelpers
             return curr;
         // Re-check against the state being committed — a genuine compile may have settled, or a
         // fresh terminal failure may have re-parked, between the outer Where and this write.
-        if (!HasStaleFailureVerdict(d, modulesHash, hubPath)
+        if (!HasStaleFailureVerdict(d, modulesHash, hubPath, guards, staleBuildKickoffSpent)
             && !HasFailureFromOlderPlatform(d, livePlatformVersion, hubPath, closedTypeSet))
             return curr;
         // 🅿️ Committing the flip — and ONLY now — claim the one-shot admission, so the compile
@@ -5176,7 +5249,12 @@ internal static class NodeTypeCompilationHelpers
         // declares it needs, so the compile was never run — a fact about the replica, which a
         // replica that meets the floor answers differently. Stamping it Error put one replica's
         // module generation onto the record every replica reads.
+        // 🚨 CpuLaneExpiredException (#6195): the compile leg ran out of its CPU-lane bound and was
+        // cancelled, so Roslyn formed no verdict. Stamping it Error said "this code does not
+        // compile" for a type that compiles in about 240 s on a healthy replica, and an Error under
+        // the live inputs is never retried: three Hosting types stayed red for about 7 h until a roll.
         error is SourceDiscoveryUnavailableException or AddressRecyclingException or DependencyFloorUnmetException
+            or CpuLaneExpiredException
         || (error is not null
             && EmitPipeline.IsProcessEmitFailure(error.Data[EmitPipeline.EmitCanaryDataKey]));
 
@@ -5356,8 +5434,17 @@ internal static class NodeTypeCompilationHelpers
             // through module surfaces that never carried them (measured: rbuergi/OperationRequest,
             // four days). Prefixed rather than replacing: the diagnostics are still the evidence.
             CompilationError = lead is null
-                ? SummarizeCompileError(result, error)
+                ? (error is CpuLaneExpiredException expiredSummary
+                    ? expiredSummary.EnglishSummary
+                    : SummarizeCompileError(result, error))
                 : $"{lead}\n{SummarizeCompileError(result, error)}",
+            // 🚨 #6195 review — a CPU-lane expiry is a platform sentence, so its keyed form rides
+            // beside the English text and every status page renders it in the VIEWER's language
+            // (KeyedTexts.Localize). Only when it is the whole error: a source-coverage lead in front
+            // is not keyed, and then the English text renders verbatim, as for any unkeyed error.
+            CompilationErrorText = lead is null && error is CpuLaneExpiredException expiredText
+                ? System.Collections.Immutable.ImmutableList.Create(expiredText.ToKeyedText())
+                : null,
             CompilationDiagnostics = result?.Diagnostics is { Count: > 0 } ds
                 ? System.Collections.Immutable.ImmutableList.CreateRange(ds)
                 : null,
@@ -5919,15 +6006,24 @@ internal static class NodeTypeCompilationHelpers
                         // The LEAD is the sentence this code owns, so it carries the catalog key;
                         // the detail after the colon is Roslyn's own text, which no catalog can hold
                         // and which therefore rides as an ARGUMENT (#3236).
-                        var (failureLead, failureLeadKey) = CompileFailureLead(outcome.Error);
-                        var failureDetail = outcome.Error?.Message
-                            ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
-                                ? string.Join("; ", errs.Select(m => m.Message))
-                                : "Compilation produced no assembly");
-                        activityMessages.Add(new LogMessage(
-                            $"{failureLead}: {failureDetail}",
-                            LogLevel.Error)
-                            .WithKey(failureLeadKey, ("detail", failureDetail)));
+                        // 🚨 #6195 review — a CPU-lane expiry is platform prose end to end (no Roslyn
+                        // text in it), so it is one keyed sentence per phase with every reading as a
+                        // named argument; splicing its English Message into {detail} handed a German
+                        // viewer a German lead and an English explanation.
+                        if (outcome.Error is CpuLaneExpiredException laneExpired)
+                            activityMessages.Add(laneExpired.ToActivityMessage());
+                        else
+                        {
+                            var (failureLead, failureLeadKey) = CompileFailureLead(outcome.Error);
+                            var failureDetail = outcome.Error?.Message
+                                ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
+                                    ? string.Join("; ", errs.Select(m => m.Message))
+                                    : "Compilation produced no assembly");
+                            activityMessages.Add(new LogMessage(
+                                $"{failureLead}: {failureDetail}",
+                                LogLevel.Error)
+                                .WithKey(failureLeadKey, ("detail", failureDetail)));
+                        }
                         // 🚨 Non-Roslyn abort (an infrastructure exception escaping the compile
                         // pipeline — NOT a CompilationException, whose message already carries the
                         // full diagnostics): record the exception TYPE + STACK on the activity log.
@@ -5936,7 +6032,9 @@ internal static class NodeTypeCompilationHelpers
                         // (#612, PR-884 run 31153582625) UNDIAGNOSABLE — no sink anywhere carried
                         // the throw site. The activity log is THE official diagnosis surface;
                         // faults must reach it whole (wedges-to-zero).
-                        if (outcome.Error is not null and not CompilationException)
+                        // A lane expiry is a timer, not a throw site: its stack says nothing, and its
+                        // readings are already on the keyed line above.
+                        if (outcome.Error is not null and not CompilationException and not CpuLaneExpiredException)
                             activityMessages.Add(new LogMessage(
                                 $"Compile aborted by {outcome.Error.GetType().FullName}:\n{outcome.Error}",
                                 LogLevel.Error)
