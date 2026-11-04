@@ -166,6 +166,18 @@ answers. Telling them apart is what keeps the undeliverable-NACK line honest:
 | a pod-process hub whose claim is NOT held, not released | `PodHubNotHereException { Released = false }` | **Error, windowed.** This is the stranded-claim shape (#2938): the sender may be alive and is burning its budget. |
 | a per-node hub whose address names no node | the sender resolves to "neither a pod-process hub nor a node" | **Error, windowed.** The sender is ALIVE (it is the one sending), so dropping its NACK would hide a fan-out to a corpse. |
 
+**The release gap (#7888).** A registration's disposal removes its local route synchronously and
+releases the claim with a fire-and-forget `Detach`. Until that call lands, the owner's activation has
+no route and no tombstone, and it used to answer a delivery in that window with the TRANSIENT refusal,
+the second row's shape. Measured on memex-cloud: a closed circuit's hub was disposed, and the NotFound
+reply to its last message arrived 17 ms later and was logged as an undeliverable NACK at Error. The
+disposal now marks the address *release in flight* (`OrleansRoutingService.IsReleaseInFlight`, set
+BEFORE the route is removed, cleared once `Detach` has returned or was skipped), and
+`PodHubGrain.Deliver` answers that window with the `Released` verdict the tombstone is about to give.
+So the reply takes the first row. An address no registration in the process is releasing still gets
+the transient refusal and stays loud. Pinned by `AReplyInTheReleaseGapIsAnsweredReleasedTest`
+(MeshWeaver.FaultInjection.Test), which holds the `Detach` with an outgoing grain-call filter.
+
 The last row was the visible end of a lifecycle defect, not a routing one (#7171): a **move**
 removed the source rows but, unlike a delete, neither invalidated the node-stream cache nor
 disposed the per-node hub activated under the source address. That activation went on serving
