@@ -141,8 +141,12 @@ internal sealed class OwnershipTransferObserver(ModuleInstanceOwners owners) : I
 /// <see cref="ModuleScopeOwnership"/>): records who owns each shared instance it builds, and reports a
 /// SCOPED instance that no caller owns, or one served to a caller that does not own it. Held by the
 /// container as an instance, never static; its entries are weak.
+/// <para>🚨 Its logger is READ when a diagnostic is written, never resolved when the container is created
+/// (MeshWeaver.Plugins#4964): a module's logging setup (<c>PostConfigure&lt;LoggerFilterOptions&gt;</c>) is
+/// served from this container, so the container can be created INSIDE the root logger factory's construction,
+/// where resolving that factory asks for the service being built.</para>
 /// </summary>
-internal sealed class ModuleScopeDiagnostics(ILogger logger, ModuleInstanceOwners? owners) : IActivationObserver
+internal sealed class ModuleScopeDiagnostics(Func<ILogger> logger, ModuleInstanceOwners? owners) : IActivationObserver
 {
     private readonly ConditionalWeakTable<object, ScopedOwner> scoped = new();
     private ImmutableHashSet<string> reported = ImmutableHashSet<string>.Empty;
@@ -175,7 +179,7 @@ internal sealed class ModuleScopeDiagnostics(ILogger logger, ModuleInstanceOwner
             || ModuleServiceProvider.CallerOfModuleScope(scope) is not null
             || !FirstReport($"root|{RuntimeHelpers.GetHashCode(registration.Identity)}|{service.FullName}"))
             return;
-        logger.LogWarning(
+        logger().LogWarning(
             "{Marker} Module scoped service {Service} ({Implementation}) is being built in the module container's "
             + "root scope, which no caller owns — every circuit, request and hub resolving it there shares one "
             + "instance, built against no caller's NavigationManager or IJSRuntime (MeshWeaver#6584). "
@@ -207,7 +211,7 @@ internal sealed class ModuleScopeDiagnostics(ILogger logger, ModuleInstanceOwner
             return;
         if (!FirstReport($"served|{instance.GetType().FullName}"))
             return;
-        logger.LogWarning(
+        logger().LogWarning(
             "{Marker} Module scoped service {Instance} built in the module scope owned by {Owner} was served to "
             + "{Caller}, which does not own that scope — one caller is sharing another's instance (MeshWeaver#6584). "
             + "Reported once per service type.",

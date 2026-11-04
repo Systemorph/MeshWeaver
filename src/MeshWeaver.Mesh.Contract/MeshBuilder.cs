@@ -53,9 +53,13 @@ public partial record MeshBuilder
             services.TryAddSingleton(sp =>
             {
                 installedModules.Attach(sp);
+                // 🚨 No ILoggerFactory here (MeshWeaver.Plugins#4964): a module's logging setup is served
+                // through a forwarder that resolves THIS registry, so the root logger factory can be the
+                // service under construction when this factory runs. The registry resolves its logger on
+                // first use instead.
                 return modules.Attach(
                     sp.GetService<CollectibleContextUnloads>(),
-                    sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>(),
+                    null,
                     sp).PublishOnce();
             });
             // The layout client re-reads held modules' views from their current generations.

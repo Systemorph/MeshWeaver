@@ -480,6 +480,21 @@ built and before the root provider is handed to anyone (`IRootContainerBuilt`,
 after every staged generation has loaded, materialised and prepared its services and before
 `CommitAll` (`ModuleServices.BuildBeforePublish`, `ModuleServiceProvider.BuildRootReachableSingletons`).
 
+**A module may configure the root's LOGGING, so nothing on this path resolves the root logger factory
+(MeshWeaver.Plugins#4964).** A module's `PostConfigure<LoggerFilterOptions>` is one of the setups the root
+`ILoggerFactory` is built from, and the root reaches it through a forwarder that resolves the module
+registry and the module's container. When `SetupModules` resolved the logger factory first, and the
+`ModuleContexts` factory and each module container resolved it again to name a logger, the factory asked
+for itself: `A circular dependency was detected for the service of type 'ILoggerFactory'`, at every boot
+that loaded such a module — the Mcp module's payload-log ceiling (Plugins#4955) crash-looped every new
+pod on three instances, because the module set kept pinning that generation. Three rules now hold: the
+build callbacks (`IRootContainerBuilt`) run BEFORE the root's own logging is bound, so the boot build of
+module instances never runs inside the logger factory's construction; `ModuleContexts` resolves its
+logger on first use; and a module container's ownership diagnostics read their logger when they write,
+from the registry the root binds once built. Pinned by
+`AModuleLoggingOptionsRegistrationDoesNotCycleTheRootLoggerFactoryTest` (the module's filter rule reaches
+the root factory; its logger-taking singleton is built and served, the module not withdrawn).
+
 **What belongs to a circuit is never built here (MeshWeaver#6556).** A SCOPED registration is one
 instance per scope — a Blazor circuit, a request — so the one a boot would build is an instance no
 scope asked for, made against scoped state no scope initialised. The first version of this section
