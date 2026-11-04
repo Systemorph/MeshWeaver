@@ -207,9 +207,14 @@ public static class LayoutClientExtensions
         }
         catch (Exception ex)
         {
+            // 🚨 Neither the bound VALUE nor the exception is logged: the value is node content,
+            // possibly [SensitiveData], and a parse failure's message quotes its input ("The input
+            // string '…' was not in a correct format"). The types diagnose the mismatch
+            // (Doc/Architecture/SensitiveContentInLogs).
             stream?.Hub?.ServiceProvider?.GetService<ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Layout.GetDataBoundValue")
-                .LogDebug(ex, "GetDataBoundValue<{Type}> could not convert value '{Value}' — using default", typeof(T).Name, value);
+                .LogDebug("GetDataBoundValue<{Type}> could not convert a value of type {ValueType} ({Exception}) — using default",
+                    typeof(T).Name, value?.GetType().Name ?? "null", ex.GetType().Name);
             return default;
         }
     }
@@ -487,28 +492,28 @@ public static class LayoutClientExtensions
         return Type.GetTypeCode(targetType) switch
         {
             TypeCode.Int32 => value > int.MaxValue || value < int.MinValue
-                ? throw new OverflowException($"Value {value} is out of range for Int32")
+                ? throw new OverflowException("The value is out of range for Int32")
                 : (T)(object)(int)Math.Truncate(value),
             TypeCode.Int16 => value > short.MaxValue || value < short.MinValue
-                ? throw new OverflowException($"Value {value} is out of range for Int16")
+                ? throw new OverflowException("The value is out of range for Int16")
                 : (T)(object)(short)Math.Truncate(value),
             TypeCode.Int64 => value > long.MaxValue || value < long.MinValue
-                ? throw new OverflowException($"Value {value} is out of range for Int64")
+                ? throw new OverflowException("The value is out of range for Int64")
                 : (T)(object)(long)Math.Truncate(value),
             TypeCode.Byte => value > byte.MaxValue || value < byte.MinValue
-                ? throw new OverflowException($"Value {value} is out of range for Byte")
+                ? throw new OverflowException("The value is out of range for Byte")
                 : (T)(object)(byte)Math.Truncate(value),
             TypeCode.SByte => value > sbyte.MaxValue || value < sbyte.MinValue
-                ? throw new OverflowException($"Value {value} is out of range for SByte")
+                ? throw new OverflowException("The value is out of range for SByte")
                 : (T)(object)(sbyte)Math.Truncate(value),
             TypeCode.UInt16 => value > ushort.MaxValue || value < ushort.MinValue
-                ? throw new OverflowException($"Value {value} is out of range for UInt16")
+                ? throw new OverflowException("The value is out of range for UInt16")
                 : (T)(object)(ushort)Math.Truncate(value),
             TypeCode.UInt32 => value > uint.MaxValue || value < uint.MinValue
-                ? throw new OverflowException($"Value {value} is out of range for UInt32")
+                ? throw new OverflowException("The value is out of range for UInt32")
                 : (T)(object)(uint)Math.Truncate(value),
             TypeCode.UInt64 => value > ulong.MaxValue || value < 0
-                ? throw new OverflowException($"Value {value} is out of range for UInt64")
+                ? throw new OverflowException("The value is out of range for UInt64")
                 : (T)(object)(ulong)Math.Truncate(value),
             _ => throw new InvalidOperationException($"Unsupported integer type: {targetType.Name}")
         };
@@ -670,8 +675,9 @@ public static class LayoutClientExtensions
     /// </remarks>
     private static T? Unreadable<T>(IMessageHub hub, string s, T? defaultValue)
     {
+        // The string is never echoed — it is bound node content (SensitiveContentInLogs).
         hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Layout.ConvertString")
-            .LogDebug("ConvertString<{Type}> could not read '{Value}' — using default", typeof(T).Name, s);
+            .LogDebug("ConvertString<{Type}> could not read a string of {Length} chars — using default", typeof(T).Name, s.Length);
         return defaultValue;
     }
 

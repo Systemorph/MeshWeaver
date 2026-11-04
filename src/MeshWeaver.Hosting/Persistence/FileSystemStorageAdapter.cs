@@ -1037,7 +1037,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
         {
             var stack = new System.Diagnostics.StackTrace(skipFrames: 1, fNeedFileInfo: true);
             System.Console.Error.WriteLine(
-                $"[FileSystemStorageAdapter.WriteAtomic] EMPTY/TINY WRITE — file='{filePath}' len={content?.Length ?? -1} content='{content}'\nStack:\n{stack}");
+                $"[FileSystemStorageAdapter.WriteAtomic] EMPTY/TINY WRITE — file='{filePath}' len={content?.Length ?? -1}\nStack:\n{stack}");
         }
 
         return AtomicFileWrite.WriteAllTextAsync(filePath, content, ct);
