@@ -368,6 +368,34 @@ def marker_seen(runs: list, version: str) -> bool:
     return False
 
 
+def feed_verdict(pre: str, candidate: str, already: str, publish: str, dry: str,
+                 publisher: str) -> tuple[bool, str]:
+    """The lane's verdict: (published — closes the ledger, the sentence to print), or Red.
+
+    `already` (an earlier fully green run's marker for this exact set) IS a publication proof: a
+    run that found it after a transient red must close that red, or the ledger stays open for as
+    long as the set is unchanged (#7660 review). A genuine "no sealed set" closes nothing.
+    """
+    if pre != "success":
+        raise Red(f"preflight did not succeed ({pre})")
+    if candidate != "true":
+        if already == "true":
+            return True, ("an earlier fully green run published this set (its marker is in the run "
+                          "history) — publication proven, nothing to push")
+        return False, "no sealed set in that CD run — nothing to publish"
+    if publish != "success":
+        raise Red(f"a sealed set exists and publish did not succeed ({publish}) — generated templates "
+                  "cannot restore it")
+    # A public publisher's run is dry BY CONSTRUCTION (#7660): the pack and its closure proof are all
+    # it can owe, so they close ITS ledger; the publication is the private caller's.
+    if publisher == "public":
+        return True, "packed and verified; publication is the private caller's"
+    # An operator's dry run on the private publisher proves the pack, not the feed.
+    if dry == "true":
+        return False, "dry run: packed and verified, nothing published"
+    return True, "published, every package private, and the template restores and builds"
+
+
 _JOB_HEADER = re.compile(r"^  ([A-Za-z_][\w-]*):\s*$", re.M)
 
 
@@ -644,6 +672,25 @@ def self_test() -> int:
             ("the marker in an older run", [[{"name": "x", "conclusion": "success"}], [ok_job]], True)]:
         if marker_seen(runs, "3.1.12") != want:
             failures.append(f"marker_seen, {label}: expected {want}")
+    # 8f. The verdict: a found marker closes the ledger; a genuine no-candidate leaves it alone.
+    for label, args, want in [
+            ("marker found after a transient red", ("success", "false", "true", "skipped", "false", "private"), True),
+            ("no sealed set", ("success", "false", "", "skipped", "false", "private"), False),
+            ("no sealed set, public publisher", ("success", "false", "", "skipped", "true", "public"), False),
+            ("private publication", ("success", "true", "", "success", "false", "private"), True),
+            ("operator dry run on the private publisher", ("success", "true", "", "success", "true", "private"), False),
+            ("public publisher's forced dry run", ("success", "true", "", "success", "true", "public"), True)]:
+        if feed_verdict(*args)[0] != want:
+            failures.append(f"feed_verdict, {label}: expected published={want}")
+    for label, args in [("preflight failed", ("failure", "", "", "skipped", "", "")),
+                        ("publish failed", ("success", "true", "", "failure", "false", "private")),
+                        ("publish failed beside a stale marker", ("success", "true", "true", "failure", "false", "private"))]:
+        try:
+            feed_verdict(*args)
+            failures.append(f"feed_verdict, {label}: expected RED")
+        except Red:
+            pass
+
     wf = Path(__file__).resolve().parents[1] / "workflows" / "template-feed.yml"
     if wf.is_file():
         real = wf.read_text(encoding="utf-8")
@@ -672,7 +719,7 @@ def self_test() -> int:
             print(f"  ✗ {f}")
         return 1
     print("template-feed self-test: 9 scenarios, all held (derive, unknown id RED, own-line pin RED, "
-          "empty/odd version RED, verify both ways, push guard, slnx, sealed-by-job-results, lane tool from the lane's commit, private publisher, durable marker, "
+          "empty/odd version RED, verify both ways, push guard, slnx, sealed-by-job-results, lane tool from the lane's commit, private publisher, durable marker, verdict, "
           "every shape + the template package)")
     return 0
 
@@ -700,6 +747,10 @@ def main(argv: list[str]) -> int:
     v.add_argument("--nupkgs", required=True, type=Path)
     g = sub.add_parser("push-guard")
     g.add_argument("--source", required=True)
+    fv = sub.add_parser("verdict")
+    for k in ("pre", "candidate", "already", "publish", "dry", "publisher"):
+        fv.add_argument(f"--{k}", default="")
+    fv.add_argument("--out", type=Path)
     m = sub.add_parser("marker")
     m.add_argument("--runs", required=True, type=Path)
     m.add_argument("--version", required=True)
@@ -728,6 +779,12 @@ def main(argv: list[str]) -> int:
                 return 1
             print(f"verify: every planned package is in {a.nupkgs} at its planned version, and every "
                   f"{PREFIX}* dependency is published by this lane")
+        elif a.cmd == "verdict":
+            published, why = feed_verdict(a.pre, a.candidate, a.already, a.publish, a.dry, a.publisher)
+            print(why)
+            if a.out:
+                with a.out.open("a", encoding="utf-8") as fh:
+                    fh.write(f"published={'true' if published else 'false'}\n")
         elif a.cmd == "marker":
             print("seen" if marker_seen(json.loads(a.runs.read_text()), a.version) else "absent")
         elif a.cmd == "push-guard":

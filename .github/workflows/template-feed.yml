@@ -485,30 +485,46 @@ jobs:
     timeout-minutes: 5
     outputs:
       published: ${{ steps.v.outputs.published }}
+    env:
+      FEED_TOOL: lane/.github/scripts/template-feed.py
     steps:
+      - name: This lane's own commit
+        id: lane
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          sha="$(jq -r '.workflow_sha // empty' <<< "$JOB_CONTEXT")"
+          [ -n "$sha" ] || sha="${GITHUB_WORKFLOW_SHA:-}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::neither job.workflow_sha nor GITHUB_WORKFLOW_SHA names this lane's commit ('$sha')"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out the lane's own tooling
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ steps.lane.outputs.sha }}
+          path: lane
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/scripts/
+      # The decision is `template-feed.py verdict` (pinned by its self-test): a found marker for this
+      # set closes the ledger after a transient red; a genuine "no sealed set" leaves it untouched; a
+      # public publisher's forced dry run closes only its pack-proof ledger; an operator's dry run on
+      # the private publisher closes nothing.
       - id: v
         env:
           PRE: ${{ needs.preflight.result }}
           CANDIDATE: ${{ needs.preflight.outputs.candidate }}
+          ALREADY: ${{ needs.preflight.outputs.already }}
           PUB: ${{ needs.publish.result }}
           DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
           PUBLISHER: ${{ needs.preflight.outputs.publisher }}
         run: |
           set -euo pipefail
-          echo "preflight=$PRE candidate=${CANDIDATE:-} publish=$PUB publisher=${PUBLISHER:-}"
-          [ "$PRE" = success ] || { echo "::error::preflight did not succeed ($PRE)"; exit 1; }
-          if [ "$CANDIDATE" != true ]; then
-            echo "No sealed set in that CD run, or a set an earlier fully green run already published — nothing to publish."
-            echo "published=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          [ "$PUB" = success ] || { echo "::error::a sealed set exists and publish did not succeed ($PUB) — generated templates cannot restore it"; exit 1; }
-          # A public publisher's run is dry BY CONSTRUCTION (#7660): the pack and its closure proof are all
-          # it can owe, so they close ITS ledger. The publication — push, visibility, restore — is the
-          # private caller's, and files on the caller's own ledger.
-          if [ "$PUBLISHER" = public ]; then echo "packed and verified; publication is the private caller's"; echo "published=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-          # An operator's dry run on the private publisher proves the pack, not the feed: it must never close the ledger.
-          if [ "$DRY_RUN" = true ]; then echo "dry run: packed and verified, nothing published"; echo "published=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-          echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "preflight=$PRE candidate=${CANDIDATE:-} already=${ALREADY:-} publish=$PUB publisher=${PUBLISHER:-}"
+          python3 "$FEED_TOOL" verdict --pre "$PRE" --candidate "${CANDIDATE:-}" --already "${ALREADY:-}" \
+            --publish "$PUB" --dry "${DRY_RUN:-}" --publisher "${PUBLISHER:-}" --out "$GITHUB_OUTPUT"
 
   # 🚨 THE DURABLE "PUBLISHED" MARKER (#7660 review). A private publisher's run records this job ONLY
   # when push, visibility and restore all succeeded (publish's own steps fail it otherwise), and
@@ -520,8 +536,7 @@ jobs:
     needs: [preflight, verdict]
     if: >-
       always() && needs.verdict.result == 'success' && needs.preflight.outputs.publisher == 'private'
-      && ((needs.verdict.outputs.published == 'true' && needs.preflight.outputs.dry_run != 'true')
-          || needs.preflight.outputs.already == 'true')
+      && needs.verdict.outputs.published == 'true'
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
