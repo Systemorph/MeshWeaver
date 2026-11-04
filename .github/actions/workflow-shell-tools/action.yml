@@ -1,0 +1,27 @@
+name: CI's own shell — the tools its guards need
+description: >-
+  The ONE tool assertion both halves of "CI's own shell" (dotnet-test.yml: workflow-shell and
+  workflow-shell-executions) run, so the two jobs cannot drift onto different pins. Asserts
+  shellcheck, builds the pinned venv and puts it on PATH; a missing tool fails RED rather than
+  quietly reducing the gate to the checks it happened to be able to run.
+# jmespath is PINNED, and the pin is the fidelity claim: it is the engine the azure-cli itself
+# evaluates `--query` with, so "this query throws on a null field" is reproduced rather than
+# asserted about. A venv keeps it off the runner's externally-managed python.
+#
+# The two Azure SDK pins are the SAME pins publish-bake-bundles.sh installs for its bulk helper
+# (SDK_PINS in that script — the overlap harness reads them from there and holds this venv to them
+# through `sdk-check`), so the harness constructs the real clients the helper uses and a moved SDK
+# surface goes red in CI rather than in a production publish.
+runs:
+  using: composite
+  steps:
+  - shell: bash
+    run: |
+      set -euo pipefail
+      command -v shellcheck >/dev/null || { echo "::error::shellcheck is not on this runner"; exit 1; }
+      shellcheck --version | head -2
+      python3 -m venv "$RUNNER_TEMP/wfshell"
+      "$RUNNER_TEMP/wfshell/bin/pip" install --quiet --disable-pip-version-check \
+        'jmespath==1.0.1' 'PyYAML==6.0.2' \
+        'azure-storage-file-share==12.26.0' 'azure-identity==1.25.3'
+      echo "$RUNNER_TEMP/wfshell/bin" >> "$GITHUB_PATH"
