@@ -462,7 +462,7 @@ release) and, when that run SEALED a set — `Promote`, `Verify every image ship
    dependency of every package is itself published by the lane (`template-feed.py verify`);
 6. pushes with the workflow's `GITHUB_TOKEN` (`packages: write`) and `--skip-duplicate`, so a
    version already on the feed is skipped rather than an error — **only from a private repository**
-   (see *Who publishes* below), the `dotnet new` template package last; and
+   (see *Who publishes* below); and
 7. reads every package's visibility back and is RED unless each is `private`; and
 8. **proves a user can restore**: with an empty package cache and the job's own token as the
    credential, it installs `MeshWeaver.MemexTemplate` from the feed at the set's version,
@@ -501,10 +501,13 @@ points with one body:
 - **MeshWeaver.Plugins `template-feed.yml`** (private) calls it through `workflow_call` on a
   schedule — a private repository cannot hear this one's `workflow_run` — and that run pushes. Its
   `GITHUB_TOKEN` creates every new id **private** and linked to MeshWeaver.Plugins, because the
-  pack's `RepositoryUrl` names the PUBLISHING repository, never a literal. The run takes the newest
-  sealed set and does nothing when `MeshWeaver.MemexTemplate` is already on the feed at that version
-  (pushed last, so its presence means the whole set landed). Its reds file on MeshWeaver.Plugins'
-  own `ci-template-feed` ledger.
+  pack's `RepositoryUrl` names the PUBLISHING repository, never a literal. A scheduled run takes
+  the newest sealed set and does nothing when one of the caller's own recent successful runs holds a
+  successful `Published to the private feed: <version>` job. That job runs only after the push, the
+  visibility check and the restore proof all succeeded, so a package left on the feed by a push that
+  failed a later check never counts as published (`template-feed.py marker`, pinned by the
+  self-test). A dispatch always republishes and re-proves, which is how a deleted package is
+  restored. Its reds file on MeshWeaver.Plugins' own `ci-template-feed` ledger.
 
 The push step refuses a non-private publisher a second time, reading the repository's visibility
 itself, and `template-feed.py --self-test` reds a workflow that pushes without that refusal or

@@ -103,9 +103,6 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # Read only: whether the set's template package is already on the feed (the scheduled caller's
-      # skip, below). Inherited as `read` by a caller that grants `packages: write`.
-      packages: read
     outputs:
       candidate: ${{ steps.set.outputs.candidate }}
       version: ${{ steps.set.outputs.version }}
@@ -114,7 +111,31 @@ jobs:
       run_id: ${{ steps.run.outputs.run_id }}
       dry_run: ${{ steps.run.outputs.dry_run }}
       publisher: ${{ steps.run.outputs.publisher }}
+      already: ${{ steps.set.outputs.already }}
+    env:
+      # The lane's OWN tool (the marker decision), from the lane's commit — never the set's.
+      FEED_TOOL: lane/.github/scripts/template-feed.py
     steps:
+      - name: This lane's own commit
+        id: lane
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          sha="$(jq -r '.workflow_sha // empty' <<< "$JOB_CONTEXT")"
+          [ -n "$sha" ] || sha="${GITHUB_WORKFLOW_SHA:-}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::neither job.workflow_sha nor GITHUB_WORKFLOW_SHA names this lane's commit ('$sha')"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out the lane's own tooling
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ steps.lane.outputs.sha }}
+          path: lane
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/scripts/
       - name: Every external input, or a red build naming what to provision
         env:
           PLUGINS_REPO_SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
@@ -181,6 +202,7 @@ jobs:
           RUN_ID: ${{ steps.run.outputs.run_id }}
           PUBLISHER: ${{ steps.run.outputs.publisher }}
           DRY: ${{ steps.run.outputs.dry_run }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           gh api "repos/$CORE_REPO/actions/runs/$RUN_ID/jobs?per_page=100" --paginate \
@@ -203,18 +225,22 @@ jobs:
           [[ "$plugins" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the promotion record's plugins_sha '$plugins' is not a commit"; exit 1; }
           echo "sealed set $version = core $core + plugins $plugins"
           # The private caller runs on a SCHEDULE (it cannot hear this repository's workflow_run), so most
-          # of its runs find a set it already published. The template package is pushed LAST, so its
-          # presence at this version means the whole set reached the feed: nothing to do, printed.
-          # A 404 is "not there yet"; any other answer is RED, never read as absent.
-          if [ "$PUBLISHER" = private ] && [ "$DRY" != true ]; then
-            if have=$(gh api "orgs/Systemorph/packages/nuget/MeshWeaver.MemexTemplate/versions?per_page=100" --paginate --jq '.[].name' 2>"$RUNNER_TEMP/v.err"); then
-              if grep -qx "$version" <<< "$have"; then
-                echo "candidate=false" >> "$GITHUB_OUTPUT"
-                echo "### Set $version is already on the feed (MeshWeaver.MemexTemplate $version) — nothing to publish" >> "$GITHUB_STEP_SUMMARY"
-                exit 0
-              fi
-            elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/v.err"; then
-              echo "::error::cannot read MeshWeaver.MemexTemplate's versions on the feed: $(cat "$RUNNER_TEMP/v.err")"; exit 1
+          # of its runs find a set it already published. "Already published" is the caller's own run
+          # history: a SUCCESSFUL `Published to the private feed: <version>` job, which runs only after
+          # push, visibility and restore all succeeded — never a package's presence on the feed, which a
+          # push that failed its later checks leaves behind too. Only a SCHEDULED run skips: a dispatch
+          # always republishes and re-proves (e.g. after a package was deleted).
+          if [ "$PUBLISHER" = private ] && [ "$DRY" != true ] && [ "$EVENT" = schedule ]; then
+            wf="${GITHUB_WORKFLOW_REF%%@*}"; wf="${wf##*/}"
+            echo '[]' > "$RUNNER_TEMP/runs.json"
+            for rid in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$wf/runs?branch=main&status=completed&per_page=20" --jq '[.workflow_runs[] | select(.conclusion == "success") | .id][:5][]'); do
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$rid/jobs?per_page=100" --jq '[.jobs[] | {name, conclusion}]' > "$RUNNER_TEMP/jobs-$rid.json"
+              jq --slurpfile j "$RUNNER_TEMP/jobs-$rid.json" '. + $j' "$RUNNER_TEMP/runs.json" > "$RUNNER_TEMP/runs.next" && mv "$RUNNER_TEMP/runs.next" "$RUNNER_TEMP/runs.json"
+            done
+            if [ "$(python3 "$FEED_TOOL" marker --runs "$RUNNER_TEMP/runs.json" --version "$version")" = seen ]; then
+              { echo "candidate=false"; echo "already=true"; echo "version=$version"; } >> "$GITHUB_OUTPUT"
+              echo "### Set $version was published by an earlier fully green run of $wf — nothing to publish" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
             fi
           fi
           { echo "candidate=true"; echo "version=$version"; echo "core_sha=$core"; echo "plugins_sha=$plugins"; } >> "$GITHUB_OUTPUT"
@@ -356,17 +382,10 @@ jobs:
             echo "::error::refusing to push from $GITHUB_REPOSITORY ($vis): every id this push created would be $vis, and GitHub cannot make a public package private again. Publish through MeshWeaver.Plugins' template-feed.yml, which calls this lane from a private repository."
             exit 1
           fi
-          # The template package LAST: its presence at a version is how the scheduled caller knows the
-          # whole set reached the feed (preflight's skip).
-          tmpl=()
           for f in "$RUNNER_TEMP"/nupkgs/*.nupkg; do
-            case "$f" in *.symbols.nupkg) continue ;; */MeshWeaver.MemexTemplate.*) tmpl+=("$f"); continue ;; esac
+            case "$f" in *.symbols.nupkg) continue ;; esac
             dotnet nuget push "$f" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate || {
               echo "::error::pushing $(basename "$f") from $GITHUB_REPOSITORY failed. A package that ALREADY exists on the feed and is linked to another repository accepts a push from this one only once the package grants it Write: https://github.com/orgs/Systemorph/packages → the package → Package settings → Manage Actions access → Add repository → $GITHUB_REPOSITORY (Write)."; exit 1; }
-          done
-          [ ${#tmpl[@]} -gt 0 ] || { echo "::error::the plan packed no MeshWeaver.MemexTemplate package — nothing marks this set as published"; exit 1; }
-          for f in "${tmpl[@]}"; do
-            dotnet nuget push "$f" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate
           done
 
       # A package the push CREATED must be private. A package created with a workflow's GITHUB_TOKEN
@@ -479,7 +498,7 @@ jobs:
           echo "preflight=$PRE candidate=${CANDIDATE:-} publish=$PUB publisher=${PUBLISHER:-}"
           [ "$PRE" = success ] || { echo "::error::preflight did not succeed ($PRE)"; exit 1; }
           if [ "$CANDIDATE" != true ]; then
-            echo "No sealed set in that CD run — nothing to publish."
+            echo "No sealed set in that CD run, or a set an earlier fully green run already published — nothing to publish."
             echo "published=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           [ "$PUB" = success ] || { echo "::error::a sealed set exists and publish did not succeed ($PUB) — generated templates cannot restore it"; exit 1; }
@@ -490,6 +509,25 @@ jobs:
           # An operator's dry run on the private publisher proves the pack, not the feed: it must never close the ledger.
           if [ "$DRY_RUN" = true ]; then echo "dry run: packed and verified, nothing published"; echo "published=false" >> "$GITHUB_OUTPUT"; exit 0; fi
           echo "published=true" >> "$GITHUB_OUTPUT"
+
+  # 🚨 THE DURABLE "PUBLISHED" MARKER (#7660 review). A private publisher's run records this job ONLY
+  # when push, visibility and restore all succeeded (publish's own steps fail it otherwise), and
+  # carries it forward on a scheduled run that found it. The scheduled caller's preflight reads its
+  # own successful runs for this job (`template-feed.py marker`) — never a package's presence on the
+  # feed. Its NAME is the record: `Published to the private feed: <version>`.
+  published:
+    name: "Published to the private feed: ${{ needs.preflight.outputs.version }}"
+    needs: [preflight, verdict]
+    if: >-
+      always() && needs.verdict.result == 'success' && needs.preflight.outputs.publisher == 'private'
+      && ((needs.verdict.outputs.published == 'true' && needs.preflight.outputs.dry_run != 'true')
+          || needs.preflight.outputs.already == 'true')
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: echo "set $VERSION is on the private feed, every package private, and a template installed from it restores and builds"
 
   # The red has an audience: this lane runs on no pull request, so its failure goes onto ONE
   # ledger issue under its OWN label in the repository the run belongs to — here for the pack proof,

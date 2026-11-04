@@ -345,6 +345,27 @@ LANE_TOOL = "lane/.github/scripts/template-feed.py"
 # The lane's own commit: under workflow_call github.sha is the CALLER's commit in another repository.
 LANE_REF = "ref: ${{ steps.lane.outputs.sha }}"
 PRIVATE_PUBLISHER_GUARD = 'if [ "$vis" != private ] || [ "$PUBLISHER" != private ]; then'
+# The job a private publisher's run records ONLY after push, visibility and restore all succeeded
+# (and carries forward on a run that found it). Its run history is the scheduled caller's durable
+# "this set is published" marker — never a package's presence on the feed, which an upload that
+# failed its later checks also leaves behind (#7660).
+MARKER_JOB = "Published to the private feed"
+
+
+def marker_seen(runs: list, version: str) -> bool:
+    """True when one of the caller's runs holds a SUCCESSFUL `MARKER_JOB: <version>` job.
+
+    `runs` is a list of job lists (`[{"name", "conclusion"}]`) from the caller's own successful
+    runs. A job of a called workflow is reported as `<caller job> / <name>`, so the leaf is compared,
+    and EXACTLY: `3.1.12` is not `3.1.123`.
+    """
+    want = f"{MARKER_JOB}: {version}"
+    for jobs in runs:
+        for job in jobs or []:
+            leaf = str(job.get("name") or "").rsplit(" / ", 1)[-1].strip()
+            if leaf == want and job.get("conclusion") == "success":
+                return True
+    return False
 
 
 def workflow_findings(text: str) -> list[str]:
@@ -383,6 +404,10 @@ def workflow_findings(text: str) -> list[str]:
     if "nuget push" in text and PRIVATE_PUBLISHER_GUARD not in text:
         out.append("the lane pushes without refusing a non-private publisher — a package created from a "
                    "public repository is public, irreversibly")
+    if "packages/nuget/MeshWeaver.MemexTemplate/versions" in text:
+        out.append("the lane decides 'already published' from the template package's PRESENCE on the feed — "
+                   "a push whose visibility or restore check failed leaves it there too; skip only on the "
+                   f"`{MARKER_JOB}` job a fully green run records")
     if re.search(r"RepositoryUrl=https://github\.com/", text):
         out.append("RepositoryUrl names a literal repository — it must name the PUBLISHING repository "
                    "($GITHUB_SERVER_URL/$GITHUB_REPOSITORY), the one whose visibility a new package takes")
@@ -588,6 +613,20 @@ def self_test() -> int:
          "non-private publisher", "a push with no private-publisher refusal")
     only(lane_ok.replace('"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"', "https://github.com/Systemorph/MeshWeaver"),
          "RepositoryUrl names a literal", "a RepositoryUrl hard-coded to the public repository")
+    only(lane_ok + 'gh api "orgs/Systemorph/packages/nuget/MeshWeaver.MemexTemplate/versions"\n',
+         "PRESENCE on the feed", "a skip decided by the template package's presence on the feed")
+    # 8d. The durable marker: only a SUCCESSFUL marker job for EXACTLY this version counts.
+    ok_job = {"name": f"feed / {MARKER_JOB}: 3.1.12", "conclusion": "success"}
+    for label, runs, want in [
+            ("a successful marker for the version", [[ok_job]], True),
+            ("a marker job that did not succeed", [[{**ok_job, "conclusion": "failure"}]], False),
+            ("a skipped marker job", [[{**ok_job, "conclusion": "skipped"}]], False),
+            ("a marker for a longer version", [[{**ok_job, "name": f"feed / {MARKER_JOB}: 3.1.123"}]], False),
+            ("another job naming the version", [[{"name": "feed / Template feed verdict 3.1.12", "conclusion": "success"}]], False),
+            ("no runs at all", [], False),
+            ("the marker in an older run", [[{"name": "x", "conclusion": "success"}], [ok_job]], True)]:
+        if marker_seen(runs, "3.1.12") != want:
+            failures.append(f"marker_seen, {label}: expected {want}")
     wf = Path(__file__).resolve().parents[1] / "workflows" / "template-feed.yml"
     if wf.is_file():
         for f in workflow_findings(wf.read_text(encoding="utf-8")):
@@ -601,7 +640,7 @@ def self_test() -> int:
             print(f"  ✗ {f}")
         return 1
     print("template-feed self-test: 9 scenarios, all held (derive, unknown id RED, own-line pin RED, "
-          "empty/odd version RED, verify both ways, push guard, slnx, sealed-by-job-results, lane tool from the lane's commit, "
+          "empty/odd version RED, verify both ways, push guard, slnx, sealed-by-job-results, lane tool from the lane's commit, private publisher, durable marker, "
           "every shape + the template package)")
     return 0
 
@@ -629,6 +668,9 @@ def main(argv: list[str]) -> int:
     v.add_argument("--nupkgs", required=True, type=Path)
     g = sub.add_parser("push-guard")
     g.add_argument("--source", required=True)
+    m = sub.add_parser("marker")
+    m.add_argument("--runs", required=True, type=Path)
+    m.add_argument("--version", required=True)
     a = ap.parse_args(argv)
     try:
         if a.cmd == "plan":
@@ -654,6 +696,8 @@ def main(argv: list[str]) -> int:
                 return 1
             print(f"verify: every planned package is in {a.nupkgs} at its planned version, and every "
                   f"{PREFIX}* dependency is published by this lane")
+        elif a.cmd == "marker":
+            print("seen" if marker_seen(json.loads(a.runs.read_text()), a.version) else "absent")
         elif a.cmd == "push-guard":
             push_guard(a.source)
             print(f"push source {a.source} is the private org feed")
