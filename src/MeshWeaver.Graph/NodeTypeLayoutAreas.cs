@@ -951,8 +951,26 @@ public static class NodeTypeLayoutAreas
 
     private static UiControl SourceLine(LayoutAreaHost host, CodeSourceOrigin origin)
         => Controls.Markdown(host.Localize("ui.code.github.source",
-                origin.FilePath, origin.BrowseUrl, origin.RefLabel))
+                MarkdownText(origin.FilePath), origin.BrowseUrl, origin.RefLabel.Replace("`", "")))
             .WithStyle("margin: 8px 0;");
+
+    /// <summary>
+    /// A repository-supplied string as literal Markdown text: every character with Markdown meaning
+    /// is backslash-escaped, so a crafted file path cannot break the line or inject a link. (The URL
+    /// half is already safe — <see cref="CodeSourceOrigin.BrowseUrl"/> percent-escapes each segment,
+    /// parentheses included.) Pure.
+    /// </summary>
+    internal static string MarkdownText(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if ("\\`*_{}[]()<>#+-.!|~".IndexOf(c) >= 0)
+                sb.Append('\\');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
 
     /// <summary>The editor language for a repository file, by extension.</summary>
     internal static string LanguageOf(string filePath)

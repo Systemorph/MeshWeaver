@@ -150,7 +150,9 @@ public sealed class GitHubCodeSourceFiles(IMessageHub hub, ILogger<GitHubCodeSou
             .OrderBy(key => key.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(key => key, StringComparer.Ordinal)
             .FirstOrDefault();
-        return file is null ? null : new CodeSourceOrigin(record.RepositoryUrl!, record.InstalledFromRef!, file);
+        return file is null || NodeRepoPackageSource.HostedRepositoryUrl(record.RepositoryUrl) is not { } repository
+            ? null
+            : new CodeSourceOrigin(repository, record.InstalledFromRef!, file);
     }
 
     /// <summary>
@@ -167,10 +169,14 @@ public sealed class GitHubCodeSourceFiles(IMessageHub hub, ILogger<GitHubCodeSou
         var gitRef = string.IsNullOrWhiteSpace(config.LastSyncCommitSha) ? config.Branch : config.LastSyncCommitSha;
         if (string.IsNullOrWhiteSpace(gitRef))
             return null;
+        // 🚨 Normalized like a listed package's URL: a sync entry may hold a clone URL carrying a
+        // credential or a query, and this value is rendered to the viewer.
+        if (NodeRepoPackageSource.HostedRepositoryUrl(config.RepositoryUrl) is not { } repository)
+            return null;
         var folder = config.Subdirectory?.Trim().Trim('/');
         var file = NodeFileMapper.ToRepoPath(codeNodePath, partition, extension, hasChildren);
         return new CodeSourceOrigin(
-            config.RepositoryUrl!.Trim().TrimEnd('/'),
+            repository,
             gitRef!,
             string.IsNullOrEmpty(folder) ? file : $"{folder}/{file}");
     }

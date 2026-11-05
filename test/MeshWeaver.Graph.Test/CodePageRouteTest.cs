@@ -109,6 +109,22 @@ public class CodePageRouteTest
         Assert.Equal("/" + SideMenuHref(), returnPath);
     }
 
+    /// <summary>A crafted repository path renders as literal text — it cannot close the link or inject one.</summary>
+    [Fact]
+    public void ARepositoryPath_IsLiteralMarkdown()
+    {
+        var escaped = NodeTypeLayoutAreas.MarkdownText("a](https://evil.example)`b");
+        Assert.Equal(@"a\]\(https://evil\.example\)\`b", escaped);
+    }
+
+    /// <summary>The area segment is a NAME and is never decoded into a path.</summary>
+    [Fact]
+    public void TheMcpAreaRoute_LeavesTheAreaAsWritten()
+    {
+        Assert.True(MeshOperations.TryParseAreaRoute($"{TypePath}/area/A%2FB/x", out _, out var area, out _));
+        Assert.Equal("A%2FB", area);
+    }
+
     [Theory]
     [InlineData("Acme/Type/Source/A.cs", "csharp")]
     [InlineData("Acme/Type.json", "json")]

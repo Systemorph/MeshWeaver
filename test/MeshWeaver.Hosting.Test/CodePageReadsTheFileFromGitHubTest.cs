@@ -142,7 +142,9 @@ public class CodePageReadsTheFileFromGitHubTest(ITestOutputHelper output) : Mono
         Assert.Single(repoClient.Reads);
 
         repoClient.Refuse = true;
-        var refused = await Files.Read(codePath, TestUsers.Admin).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        // The credential stream may emit its pre-sync empty state first; wait past it.
+        var refused = await Files.Read(codePath, TestUsers.Admin)
+            .Where(r => r.Outcome != CodeSourceOutcomes.SignInRequired).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(CodeSourceOutcomes.Refused, refused.Outcome);
         Assert.Equal(404, refused.StatusCode);
         Assert.Null(refused.Text);
@@ -256,6 +258,16 @@ public class CodePageReadsTheFileFromGitHubTest(ITestOutputHelper output) : Mono
         Assert.Equal("main", GitHubCodeSourceFiles.FromSyncEntry(config, "Acme", "Acme/X", ".cs", false)!.Ref);
         Assert.Null(GitHubCodeSourceFiles.FromSyncEntry(
             config with { RepositoryUrl = "https://dev.azure.com/acme/_git/modules" }, "Acme", "Acme/X", ".cs", false));
+    }
+
+    /// <summary>A sync entry's clone URL carrying a credential never reaches the page.</summary>
+    [Fact]
+    public void ASyncEntrysCredential_NeverReachesTheOrigin()
+    {
+        var config = new GitHubSyncConfig { RepositoryUrl = "https://user:ghp_secret@github.com/acme/modules.git?x=1", Branch = "main" };
+        var origin = GitHubCodeSourceFiles.FromSyncEntry(config, "Acme", "Acme/X", ".cs", false)!;
+        Assert.Equal("https://github.com/acme/modules", origin.RepositoryUrl);
+        Assert.DoesNotContain("ghp_secret", origin.BrowseUrl);
     }
 
     /// <summary>A failure keeps the origin; only an ACCESS refusal offers the sign-in.</summary>
