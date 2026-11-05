@@ -470,44 +470,52 @@ def workflow_findings(text: str) -> list[str]:
 
 
 def push_loop_findings(text: str) -> list[str]:
-    """EXECUTE the workflow's push loop (between the markers) against a fake dotnet, in three cases.
+    """EXECUTE the workflow's push loop (between the markers) against a fake dotnet.
 
     Behaviour, not text: the template package is pushed LAST and never when a library failed, every
-    failed id is named in one run, and only a feed refusal (403) is reported with the ownership
-    remedies (MeshWeaver.Plugins#4981)."""
+    failed id gets its OWN diagnostic and is named in the summary in one run, and only a feed refusal
+    (403) is reported with the ownership remedies and that id's settings URL (MeshWeaver.Plugins#4981)."""
     m = re.search(re.escape(PUSH_LOOP_BEGIN) + r"\n(.*?)\n[ \t]*" + re.escape(PUSH_LOOP_END), text, re.S)
     if not m:
         return [f"no `{PUSH_LOOP_BEGIN}` … `{PUSH_LOOP_END}` block to execute"]
     body = textwrap.dedent(m.group(1))
-    libs = ["MeshWeaver.Aspire.Hosting.Memex.3.1.0", "MeshWeaver.Blazor.3.1.9", "MeshWeaver.Mesh.Contract.3.1.9"]
+    libs = {"MeshWeaver.Aspire.Hosting.Memex": "3.1.0", "MeshWeaver.Blazor": "3.1.9", "MeshWeaver.Mesh.Contract": "3.1.9"}
     tmpl = "MeshWeaver.MemexTemplate.3.1.9.nupkg"
     out: list[str] = []
-    # (label, how the fake dotnet answers MeshWeaver.Blazor: "" = accepted)
-    for label, blazor in [("all accepted", ""), ("a library refused 403", "403"),
-                          ("a library failed on the network", "net")]:
+    # (label, {id: how the fake dotnet answers its push — "403" refused, "net" network failure})
+    scenarios = [("all accepted", {}),
+                 ("a library refused 403", {"MeshWeaver.Blazor": "403"}),
+                 ("a library failed on the network", {"MeshWeaver.Blazor": "net"}),
+                 ("two libraries refused 403", {"MeshWeaver.Blazor": "403", "MeshWeaver.Mesh.Contract": "403"}),
+                 ("one refused, one network failure", {"MeshWeaver.Aspire.Hosting.Memex": "403", "MeshWeaver.Blazor": "net"})]
+    for label, fail in scenarios:
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             (root / "nupkgs").mkdir()
             (root / "bin").mkdir()
-            for n in libs + ["MeshWeaver.MemexTemplate.3.1.9", "MeshWeaver.Utils.3.1.9.symbols"]:
+            for pkg_id, ver in libs.items():
+                (root / "nupkgs" / f"{pkg_id}.{ver}.nupkg").write_text("")
+            for n in ["MeshWeaver.MemexTemplate.3.1.9", "MeshWeaver.Utils.3.1.9.symbols"]:
                 (root / "nupkgs" / f"{n}.nupkg").write_text("")
             fake = root / "bin" / "dotnet"
             fake.write_text(
                 "#!/bin/bash\n"
                 f'echo "$(basename "$3")" >> "{root}/pushed"\n'
-                'case "$(basename "$3")" in MeshWeaver.Blazor.3*)\n'
-                '  case "$FAKE_BLAZOR" in\n'
-                '    403) echo "error: Response status code does not indicate success: 403 (Forbidden)."; exit 1;;\n'
-                '    net) echo "error: Unable to connect to the remote server"; exit 1;;\n'
-                "  esac;;\nesac\nexit 0\n")
+                'for rule in $FAKE_FAIL; do\n'
+                '  case "$(basename "$3")" in "${rule%=*}".[0-9]*)\n'
+                '    case "${rule#*=}" in\n'
+                '      403) echo "error: Response status code does not indicate success: 403 (Forbidden)."; exit 1;;\n'
+                '      net) echo "error: Unable to connect to the remote server"; exit 1;;\n'
+                "    esac;;\n  esac\ndone\nexit 0\n")
             fake.chmod(0o755)
             env = {**os.environ, "PATH": f"{root / 'bin'}:{os.environ.get('PATH', '')}", "RUNNER_TEMP": str(root),
-                   "FEED": "x", "GH_TOKEN": "x", "GITHUB_REPOSITORY": "Systemorph/Example", "FAKE_BLAZOR": blazor}
+                   "FEED": "x", "GH_TOKEN": "x", "GITHUB_REPOSITORY": "Systemorph/Example",
+                   "FAKE_FAIL": " ".join(f"{k}={v}" for k, v in fail.items())}
             r = subprocess.run(["bash", "-euo", "pipefail", "-c", body], env=env, capture_output=True, text=True)
             pushed_file = root / "pushed"
             pushed = pushed_file.read_text().split() if pushed_file.is_file() else []
-            log = r.stdout + r.stderr
-            if not blazor:
+            errors = [ln for ln in (r.stdout + r.stderr).splitlines() if ln.startswith("::error::")]
+            if not fail:
                 if r.returncode != 0 or pushed[-1:] != [tmpl] or len(pushed) != len(libs) + 1:
                     out.append(f"push loop, {label}: expected every library then the template package LAST, "
                                f"exit 0 — got exit {r.returncode}, pushed {pushed}")
@@ -520,12 +528,22 @@ def push_loop_findings(text: str) -> list[str]:
             if len([p for p in pushed if p != tmpl]) != len(libs):
                 out.append(f"push loop, {label}: the loop stopped at the failure (pushed {pushed}) — one run "
                            "must name every failed id")
-            remedy = "Manage Actions access" in log
-            if blazor == "403" and not remedy:
-                out.append(f"push loop, {label}: a feed refusal was not reported with the ownership remedies")
-            if blazor == "net" and remedy:
-                out.append(f"push loop, {label}: a non-permission failure was reported as an ownership problem — "
-                           "it would send the owner to delete packages that are not the cause")
+            summary = [e for e in errors if "push(es) failed" in e]
+            for pkg_id, mode in fail.items():
+                pkg = f"{pkg_id}.{libs[pkg_id]}"
+                own = [e for e in errors if f"pushing {pkg} " in e]
+                if len(own) != 1:
+                    out.append(f"push loop, {label}: {pkg} has {len(own)} diagnostics — every failed id needs exactly its own one")
+                    continue
+                remedy = "Manage Actions access" in own[0] and f"/package/{pkg_id}/settings" in own[0]
+                if mode == "403" and not remedy:
+                    out.append(f"push loop, {label}: the refusal of {pkg} was not reported with the ownership "
+                               f"remedies and its own settings URL")
+                if mode == "net" and "Manage Actions access" in own[0]:
+                    out.append(f"push loop, {label}: a non-permission failure of {pkg} was reported as an ownership "
+                               "problem — it would send the owner to delete packages that are not the cause")
+                if len(summary) != 1 or pkg not in summary[0]:
+                    out.append(f"push loop, {label}: the summary does not name {pkg} (summary: {summary})")
     return out
 
 
@@ -771,14 +789,23 @@ def self_test() -> int:
         for f in workflow_findings(real):
             failures.append(f"template-feed.yml: {f}")
         # 8f. The push loop, EXECUTED (MeshWeaver.Plugins#4981): the real one holds, and each broken
-        #     variant is red for its own rule — a template pushed early, every failure called a refusal.
+        #     variant is red for its own rule — a template pushed early, every failure called a refusal,
+        #     the remedy only for the first of two refusals, a summary naming only the first id.
         for f in push_loop_findings(real):
             failures.append(f"template-feed.yml: {f}")
         early = real.replace('          template=""\n', '          template=""\n'
                              '          push_one "$(ls "$RUNNER_TEMP"/nupkgs/MeshWeaver.MemexTemplate.*.nupkg)" || true\n', 1)
         blanket = real.replace("grep -qiE '403|forbidden|permission'", "true", 1)
+        grep_line = "if grep -qiE '403|forbidden|permission' <<< \"$out\"; then"
+        first_only = real.replace(grep_line, "if [ -z \"${_seen:-}\" ] && grep -qiE '403|forbidden|permission' "
+                                             "<<< \"$out\"; then _seen=1;", 1)
+        dropped = real.replace('push_one "$f" || failed+=("$(basename "$f" .nupkg)")',
+                               'push_one "$f" || { [ "${#failed[@]}" -gt 0 ] || failed+=("$(basename "$f" .nupkg)"); }', 1)
         for label, broken, needle in [("template pushed before the libraries", early, "template package was pushed"),
-                                      ("every failure called a refusal", blanket, "non-permission failure")]:
+                                      ("every failure called a refusal", blanket, "non-permission failure"),
+                                      ("the remedy given only for the first refusal", first_only,
+                                       "was not reported with the ownership remedies"),
+                                      ("the summary names only the first failed id", dropped, "the summary does not name")]:
             if broken == real:
                 failures.append(f"8f, {label}: nothing to break in the real workflow — the control checked nothing")
                 continue
