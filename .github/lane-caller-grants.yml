@@ -177,6 +177,15 @@ repos:
         lane: node-repo-module-publish.yml
         grants: {contents: read}
         pending: Systemorph/MeshWeaver.Plugins#4842 lands the caller (MeshWeaver.Plugins#4478 slice 2)
+      # ── Template feed, private publisher (MeshWeaver#7660) — ARRIVING. A scheduled caller of the
+      # template-feed lane: the PUSH must run on a PRIVATE repository's GITHUB_TOKEN, because a package
+      # a public repository's token creates is public, irreversibly. `packages: write` is the push,
+      # `issues: write` the lane's ledger filed in the caller, `actions: read` core's CD runs.
+      - workflow: template-feed.yml
+        job: feed
+        lane: template-feed.yml
+        grants: {contents: read, actions: read, packages: write, issues: write}
+        pending: Systemorph/MeshWeaver.Plugins#4970 lands the caller (MeshWeaver#7660)
 
   # ── MeshWeaver.Education ──────────────────────────────────────────────────────────────────────
   # The ONE satellite that still pins its lanes to a platform sha rather than `@main`, so a core
