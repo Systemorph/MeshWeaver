@@ -76,7 +76,7 @@ public record GrantRule
     public string? ContentValue { get; init; }
 
     /// <summary>The subject — a user id or a group path. <c>Public</c> and <c>Anonymous</c> are never honoured.</summary>
-    [MeshNode(AccessSubjectQueries.Users, AccessSubjectQueries.GroupsTemplate)]
+    [MeshNode(AccessSubjectQueries.UsersTemplate, AccessSubjectQueries.GroupsTemplate)]
     public string AccessObject { get; init; } = "";
 
     /// <summary>The role granted at each matching partition root (e.g. <c>Editor</c>, <c>Admin</c>).</summary>
