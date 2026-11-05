@@ -323,6 +323,10 @@ internal sealed record GitHubWireNewTree(IReadOnlyList<GitHubWireNewTreeItem> Tr
 
 internal sealed record GitHubWireBlob(string Content, string? Encoding);
 
+/// <summary>A contents-API file answer: base64 <c>content</c> up to 1 MB; above that <c>encoding</c>
+/// <c>none</c>, empty content, and the blob <c>sha</c> to read the bytes by.</summary>
+internal sealed record GitHubWireContent(string? Content, string? Encoding, string? Sha);
+
 internal sealed record GitHubWireNewBlob(string Content, string Encoding);
 
 internal sealed record GitHubWireCreated(string Sha);

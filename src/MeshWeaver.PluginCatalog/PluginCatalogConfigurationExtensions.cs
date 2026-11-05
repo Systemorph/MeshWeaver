@@ -219,6 +219,11 @@ public static class PluginCatalogConfigurationExtensions
                 // service: it is a pull-on-demand READER — it starts nothing, subscribes to nothing,
                 // and writes nothing, so it costs an instance that never calls it exactly nothing.
                 .AddSingleton<InstanceComboReader>()
+                // The NodeType page's Code area reads a source file FROM ITS REPOSITORY, as the viewer
+                // (their own connected GitHub account, never a server credential). Placed here because
+                // the file's coordinate comes from the records this catalog writes (Plugins/{id}) and
+                // the {Space}/_GitSync entries beside them. Pull-on-demand, like the reader above.
+                .AddSingleton<MeshWeaver.Graph.ICodeSourceFiles, GitHubCodeSourceFiles>()
                 // Every instance reports what it runs (Doc/Architecture/DeploymentInventory): the
                 // platform build, framework identity, update policy and the combo above, to the
                 // control instance's fleet inbox once the default install settles and hourly after.

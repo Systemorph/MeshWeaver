@@ -827,16 +827,164 @@ public static class NodeTypeLayoutAreas
 
     private static IObservable<UiControl?> CodeContent(LayoutAreaHost host, RenderingContext ctx)
     {
-        var codePath = host.Reference.Id?.ToString();
+        var codePath = CodeNodePathOf(host.Reference);
         if (string.IsNullOrEmpty(codePath))
             return Observable.Return<UiControl?>(Controls.Markdown(
                     "*No source file selected — pick one from the Sources or Tests tree.*")
                 .WithStyle("padding: 24px;"));
 
-        return Observable.Return<UiControl?>(
-            new LayoutAreaControl(new Address(codePath!), new LayoutAreaReference(CodeLayoutAreas.ContentArea))
-                .WithStyle("width: 100%;"));
+        // Without a repository reader the mesh copy is all this instance can show.
+        if (host.Hub.ServiceProvider.GetService<ICodeSourceFiles>() is not { } files)
+            return Observable.Return<UiControl?>(MeshCopy(codePath));
+
+        // The file FROM ITS REPOSITORY, as the viewer (ICodeSourceFiles: the viewer's own GitHub
+        // credential, never a server one). Live: a new answer when the viewer connects GitHub.
+        return files.Read(codePath, host.ViewerContext)
+            .Select(read => (UiControl?)CodeSourceView(host, codePath, read))
+            .StartWith(Controls.Markdown($"*{host.Localize("ui.code.github.loading")}*")
+                .WithStyle("padding: 24px;"));
     }
+
+    /// <summary>
+    /// The Code node path a <c>{type}/Code/{id}</c> reference names. The id is decoded ONCE at the
+    /// URL entry points (ApplicationPage, AreaPage, <c>MeshOperations</c>), but a shell that splits
+    /// the remainder itself hands the area the raw <see cref="WorkspaceReference.Encode"/> form
+    /// (<c>Acme%2FType%2FTest%2FTypeTests</c>) — and that string, used as an address, names no node:
+    /// the page answered "not found" (measured on a client instance, 2026-11-05). A mesh path never
+    /// contains <c>%</c>, so decoding an already-decoded path changes nothing; decoding an encoded
+    /// one restores it. Pure.
+    /// <para>The id's query part is not the path: the portal appends the page URL's query to the id
+    /// (the GitHub connect flow returns to <c>…/Code/{id}?connect=github-ok</c>), and it is dropped
+    /// before decoding, as <c>SettingsLayoutArea</c> drops it.</para>
+    /// </summary>
+    internal static string? CodeNodePathOf(LayoutAreaReference reference)
+    {
+        if (reference.Id?.ToString() is not { Length: > 0 } id)
+            return null;
+        var query = id.IndexOf('?');
+        var path = WorkspaceReference.DecodeAreaId(query < 0 ? id : id[..query]).Trim('/');
+        return path.Length > 0 ? path : null;
+    }
+
+    /// <summary>The Code node's own Content area — the mesh copy of the file.</summary>
+    private static UiControl MeshCopy(string codePath)
+        => new LayoutAreaControl(new Address(codePath), new LayoutAreaReference(CodeLayoutAreas.ContentArea))
+            .WithStyle("width: 100%;");
+
+    /// <summary>
+    /// Renders one <see cref="ICodeSourceFiles.Read"/> answer. Pure apart from the data write for
+    /// the read file's text.
+    /// <list type="bullet">
+    ///   <item><b>Read</b> — where the file lives (a link to it on GitHub at the exact ref) and the
+    ///     text in a read-only editor.</item>
+    ///   <item><b>Sign-in required / refused</b> — a message bar whose action starts the platform's
+    ///     per-user GitHub connect flow and returns to THIS page, then the mesh copy underneath, so
+    ///     the reader is asked for the login without being left with nothing.</item>
+    ///   <item><b>No origin</b> — the node was authored in the mesh: the mesh copy.</item>
+    /// </list>
+    /// </summary>
+    internal static UiControl CodeSourceView(LayoutAreaHost host, string codePath, CodeSourceRead read)
+    {
+        if (read.Outcome == CodeSourceOutcomes.Read && read.Origin is { } origin)
+        {
+            var dataId = "codeSource";
+            host.UpdateData(dataId, read.Text ?? "");
+            return Controls.Stack.WithWidth("100%")
+                .WithView(SourceLine(host, origin))
+                .WithView(new CodeEditorControl()
+                    .WithLanguage(LanguageOf(origin.FilePath))
+                    .WithReadonly(true)
+                    .WithLineNumbers(true)
+                    .WithMinimap(false)
+                    .WithHeight("calc(100vh - 220px)") with
+                {
+                    Value = new JsonPointerReference(LayoutAreaReference.GetDataPointer(dataId)),
+                });
+        }
+
+        if (read.Outcome == CodeSourceOutcomes.NoOrigin)
+            return MeshCopy(codePath);
+        if (read.Origin is not { } known)
+            // A failure before the origin was known (the provenance itself was unreadable): say so,
+            // never pass it off as a file authored in the mesh.
+            return Controls.Stack.WithWidth("100%")
+                .WithView(Controls.MessageBar(host.Localize("ui.code.github.failed", read.Outcome)))
+                .WithView(Controls.Markdown($"*{host.Localize("ui.code.github.meshCopy")}*")
+                    .WithStyle("margin: 8px 0;"))
+                .WithView(MeshCopy(codePath));
+
+        var message = read.Outcome switch
+        {
+            CodeSourceOutcomes.SignInRequired => host.Localize("ui.code.github.notConnected", known.RepositoryUrl),
+            CodeSourceOutcomes.Refused => host.Localize("ui.code.github.refused",
+                read.StatusCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?", known.RepositoryUrl),
+            _ => host.Localize("ui.code.github.failed",
+                read.StatusCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? read.Outcome),
+        };
+        var bar = Controls.MessageBar(message);
+        // A failure that is not about the viewer's access (rate limit, network) offers no sign-in:
+        // signing in again would not change it.
+        if (read.Outcome is CodeSourceOutcomes.SignInRequired or CodeSourceOutcomes.Refused)
+            // 🚨 A FULL browser navigation (target _top): /connect/github is a server endpoint, and
+            // an in-app link is intercepted by the portal router and resolved as a mesh path.
+            bar = bar.WithAction(Controls.Link(host.Localize("ui.code.github.signIn"),
+                    GitHubSignInHref(host.Hub.Address, codePath))
+                .WithTarget("_top"));
+        return Controls.Stack.WithWidth("100%")
+            .WithView(bar)
+            .WithView(SourceLine(host, known))
+            .WithView(Controls.Markdown($"*{host.Localize("ui.code.github.meshCopy")}*")
+                .WithStyle("margin: 8px 0;"))
+            .WithView(MeshCopy(codePath));
+    }
+
+    /// <summary>
+    /// The platform's per-user GitHub connect flow (<c>/connect/github</c>), returning to this very
+    /// Code page — the href the NodeType side menu builds for the file, so the round trip lands
+    /// where the reader was. Pure.
+    /// </summary>
+    internal static string GitHubSignInHref(object nodeTypeAddress, string codePath)
+    {
+        var returnPath = "/" + new LayoutAreaReference(CodeArea) { Id = codePath }.ToHref(nodeTypeAddress).TrimStart('/');
+        return $"/connect/github?returnPath={Uri.EscapeDataString(returnPath)}";
+    }
+
+    private static UiControl SourceLine(LayoutAreaHost host, CodeSourceOrigin origin)
+        => Controls.Markdown(host.Localize("ui.code.github.source",
+                MarkdownText(origin.FilePath), origin.BrowseUrl, origin.RefLabel.Replace("`", "")))
+            .WithStyle("margin: 8px 0;");
+
+    /// <summary>
+    /// A repository-supplied string as literal Markdown text: every character with Markdown meaning
+    /// is backslash-escaped, so a crafted file path cannot break the line or inject a link. (The URL
+    /// half is already safe — <see cref="CodeSourceOrigin.BrowseUrl"/> percent-escapes each segment,
+    /// parentheses included.) Pure.
+    /// </summary>
+    internal static string MarkdownText(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if ("\\`*_{}[]()<>#+-.!|~".IndexOf(c) >= 0)
+                sb.Append('\\');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>The editor language for a repository file, by extension.</summary>
+    internal static string LanguageOf(string filePath)
+        => Path.GetExtension(filePath).ToLowerInvariant() switch
+        {
+            ".cs" or ".csx" => "csharp",
+            ".json" or ".jsonc" => "json",
+            ".md" => "markdown",
+            ".py" => "python",
+            ".ts" or ".tsx" => "typescript",
+            ".js" => "javascript",
+            ".yml" or ".yaml" => "yaml",
+            _ => "plaintext",
+        };
 
     /// <summary>
     /// Builds the NodeType side menu — the one navigation surface every NodeType area

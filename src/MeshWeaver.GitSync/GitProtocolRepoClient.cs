@@ -427,6 +427,10 @@ public sealed class GitProtocolRepoClient(
         => octokit.GetCanonicalRepository(repositoryUrl, accessToken);
 
     /// <inheritdoc />
+    public IObservable<string> GetFileText(string repositoryUrl, string filePath, string commitish, string accessToken)
+        => octokit.GetFileText(repositoryUrl, filePath, commitish, accessToken);
+
+    /// <inheritdoc />
     public IObservable<GitHubPullRequestInfo> OpenPullRequest(GitHubOpenPullRequestRequest request)
         => octokit.OpenPullRequest(request);
 

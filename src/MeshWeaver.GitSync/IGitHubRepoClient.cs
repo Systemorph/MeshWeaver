@@ -135,6 +135,28 @@ public interface IGitHubRepoClient
         => Observable.Return<RepoIdentity?>(null);
 
     /// <summary>
+    /// The text of ONE file at <paramref name="commitish"/>, read with <paramref name="accessToken"/>
+    /// — what the NodeType page's <c>Code</c> area shows a reader (MeshWeaver: "the Code page shows
+    /// the file from GitHub"). The token is the READER's own connected credential there, so the read
+    /// answers exactly what that person may see on GitHub.
+    ///
+    /// <para>Faults with the typed <see cref="GitHubApiException"/> GitHub's answer maps to — 401
+    /// <see cref="GitHubAuthorizationException"/>, 403 <see cref="GitHubForbiddenException"/>, 404
+    /// <see cref="GitHubNotFoundException"/> (also GitHub's answer for a private repository the token
+    /// cannot see) — so a caller can tell "sign in" from "it failed". The default implementation
+    /// faults with <see cref="NotSupportedException"/>: an implementer that cannot read single files
+    /// is never mistaken for one that found the file empty.</para>
+    /// </summary>
+    /// <param name="repositoryUrl">The repository.</param>
+    /// <param name="filePath">The repo-relative path, slash-separated.</param>
+    /// <param name="commitish">A commit sha, branch or tag.</param>
+    /// <param name="accessToken">The token to read with; empty = anonymous (public repositories only).</param>
+    /// <returns>One emission: the file's text (UTF-8).</returns>
+    IObservable<string> GetFileText(string repositoryUrl, string filePath, string commitish, string accessToken)
+        => Observable.Throw<string>(new NotSupportedException(
+            $"{GetType().Name} cannot read a single file ({filePath})."));
+
+    /// <summary>
     /// Creates <see cref="GitHubCreateBranchRequest.NewBranch"/> from
     /// <see cref="GitHubCreateBranchRequest.BaseRef"/> (resolving the base ref to its
     /// commit SHA first), and emits the new branch + the SHA it points at. Surfaces a

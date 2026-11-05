@@ -74,6 +74,26 @@ public sealed class NodeRepoPackageSource : IPackageSource
     public Func<string, string, string?, string, Func<string, bool>, IObservable<RepoSnapshot>>?
         NarrowFetch { get; init; }
 
+    /// <summary>The repository URL a listed package records (<see cref="PackageManifest.RepositoryUrl"/>):
+    /// an http(s) URL with a trailing <c>.git</c> or slash removed; null for anything else (a local
+    /// path). Pure.
+    /// <para>🚨 Rebuilt from scheme, host, port and path only: a clone URL may carry a credential
+    /// (<c>https://user:token@github.com/…</c>) or a query, and this value is PUBLISHED — in every
+    /// listed manifest, through the registry, on every consumer's install record and Code page.</para>
+    /// </summary>
+    internal static string? HostedRepositoryUrl(string? repoUrl)
+    {
+        if (string.IsNullOrWhiteSpace(repoUrl)
+            || !Uri.TryCreate(repoUrl.Trim(), UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+            return null;
+        var path = uri.AbsolutePath.TrimEnd('/');
+        if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            path = path[..^4];
+        var authority = uri.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped);
+        return path.Length == 0 ? null : authority + path;
+    }
+
     /// <summary>
     /// 🚨 The ONLY files <see cref="ListPackages"/> reads: each plugin folder's
     /// <c>&lt;Plugin&gt;/index.json</c> root and its <c>&lt;Plugin&gt;/manifest.lock</c> sidecar.
@@ -178,6 +198,10 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         // InstalledFiles to produce the added/modified/removed list; null when the
                         // module ships no manifest.lock (legacy commit-sha comparison applies).
                         ManifestFiles = mm?.Files,
+                        // WHERE the files live — what the NodeType page's Code area reads a file
+                        // from, as the viewer. Only a hosted repository: a local checkout's path
+                        // names nothing a reader's browser or GitHub credential can reach.
+                        RepositoryUrl = HostedRepositoryUrl(repoUrl),
                         Requires = peeked.Requires,
                         License = peeked.License ?? defaultLicense,
                         Category = peeked.Category,
