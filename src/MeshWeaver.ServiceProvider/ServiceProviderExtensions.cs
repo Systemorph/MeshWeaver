@@ -60,15 +60,14 @@ public static class ServiceProviderExtensions
             .ToArray();
         var root = MeshServiceProvider.Build(descriptors, sources,
             rootOwners is null ? null : [new OwnershipTransferObserver(rootOwners)]);
-        // The ownership diagnostics and the late-disposal faults write through the root's own logging
-        // (MeshWeaver#6584, #6588).
-        var loggerFactory = root.GetService<Microsoft.Extensions.Logging.ILoggerFactory>();
-        rootOwners?.UseLoggerFactory(loggerFactory);
-        root.UseFaultLogger(loggerFactory is null ? null
-            : loggerFactory.CreateLogger(typeof(MeshServiceProvider).FullName!));
-        // Then every build callback registered as an instance, on THIS thread, before the provider is
+        // First every build callback registered as an instance, on THIS thread, before the provider is
         // handed to anyone — how a mesh's module registry builds its modules' shared instances before
         // they can be reached (MeshWeaver#6542).
+        // 🚨 The callbacks run BEFORE the root logger factory is first resolved (MeshWeaver.Plugins#4964):
+        // a module's logging setup (PostConfigure<LoggerFilterOptions>) is one of that factory's inputs and
+        // is served through the module registry, so resolving the factory first built the registry — and
+        // with it every module's shared instances — INSIDE the factory's own construction, where any
+        // instance that takes a logger asks for the service being built.
         try
         {
             foreach (var callback in descriptors
@@ -77,11 +76,17 @@ public static class ServiceProviderExtensions
                          .OfType<IRootContainerBuilt>()
                          .ToArray())
                 callback.Built(root);
+            // The ownership diagnostics and the late-disposal faults write through the root's own logging
+            // (MeshWeaver#6584, #6588); this flushes what the callbacks reported while it was not bound yet.
+            var loggerFactory = root.GetService<Microsoft.Extensions.Logging.ILoggerFactory>();
+            rootOwners?.UseLoggerFactory(loggerFactory);
+            root.UseFaultLogger(loggerFactory is null ? null
+                : loggerFactory.CreateLogger(typeof(MeshServiceProvider).FullName!));
         }
         catch
         {
-            // Nobody else holds this root: a callback that throws leaves no caller who could dispose
-            // it, or the shared instances the callbacks before it already built.
+            // Nobody else holds this root: a callback or the logger binding that throws leaves no caller who
+            // could dispose it, or the shared instances the callbacks before it already built.
             root.Dispose();
             throw;
         }
