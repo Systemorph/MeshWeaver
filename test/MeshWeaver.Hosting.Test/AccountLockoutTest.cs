@@ -56,6 +56,9 @@ public class AccountLockoutTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>A shared space both people can edit.</summary>
     private const string SharedSpace = "LockShared";
 
+    /// <summary>A User profile — readable by every signed-in person through the User type's own rule.</summary>
+    private const string Profile = "lock-profile";
+
     /// <summary>Holds Editor on the Admin partition — a writer there, but NOT a platform administrator.</summary>
     private const string AdminEditor = "lock-admin-editor";
 
@@ -69,6 +72,7 @@ public class AccountLockoutTest(ITestOutputHelper output) : MonolithMeshTestBase
                 new MeshNode(Leaver) { Name = "Leaver", NodeType = "Markdown" },
                 new MeshNode(Stayer) { Name = "Stayer", NodeType = "Markdown" },
                 new MeshNode(SharedSpace) { Name = "Shared", NodeType = "Markdown" },
+                new MeshNode(Profile) { Name = "Profile", NodeType = "User" },
                 new MeshNode("Note", SharedSpace) { Name = "A shared note", NodeType = "Markdown" },
                 AssignmentNodeFactory.UserRole(PlatformAdmin, "Admin", AdminPartition),
                 AssignmentNodeFactory.UserRole(OtherAdmin, "Admin", AdminPartition),
@@ -208,6 +212,29 @@ public class AccountLockoutTest(ITestOutputHelper output) : MonolithMeshTestBase
         await changes.Skip(1).Should().Within(Budget).Match(
             c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0,
             "an unlock serves the listing again", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// A read a type's rule grants every signed-in person (a User profile) — decided by the live
+    /// point-read path without the fold — is withdrawn from a locked person on the SAME subscription,
+    /// and stays open for everyone else.
+    /// </summary>
+    [Fact]
+    public async Task ALockedPerson_LosesTheProfileReadEverySignedInPersonHas_Live()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var verdicts = new System.Reactive.Subjects.ReplaySubject<bool>();
+        using var follow = DeclaredPointRead.ObservePointRead(Mesh, Profile, Identity(Leaver)).Subscribe(verdicts);
+        await verdicts.Should().Within(Budget).Match(v => v,
+            "control: the User type's rule lets a signed-in person read a profile", cancellationToken: ct);
+
+        (await Outcome(AccountLocks.Lock(Mesh, Identity(PlatformAdmin), Leaver, "left"), "the lock must answer"))
+            .Should().BeNull();
+        await verdicts.Should().Within(Budget).Match(v => !v,
+            "the lock withdraws the profile read on the open subscription", cancellationToken: ct);
+
+        await DeclaredPointRead.ObservePointRead(Mesh, Profile, Identity(Stayer)).Where(v => v).Take(1)
+            .Should().Within(Budget).Emit("the bystander still reads the profile", cancellationToken: ct);
     }
 
     /// <summary>

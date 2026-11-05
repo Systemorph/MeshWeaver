@@ -361,6 +361,9 @@ public static class AccessControlPipeline
                 AccessContext? trustedCaller = null;
                 var hubPath = string.Empty;
                 var pendingChecks = ImmutableList<(string Path, Permission Permission)>.Empty;
+                // Checks a hub-level rule grants, held back only because the caller's lock verdict was
+                // not yet a DETERMINED "unlocked" — decided below as the rule's grant unless locked.
+                var hubGrantedPendingLock = ImmutableHashSet<(string Path, Permission Permission)>.Empty;
                 try
                 {
                     rlsDisabled = hub.Configuration.Get<EffectivePermissionsDelegate>() is null;
@@ -444,7 +447,17 @@ public static class AccessControlPipeline
                             if (hubPermissions != null
                                 && ApiTokenScope.AllowsPermission(trustedCaller, check.Permission)
                                 && hubPermissions.HasPermission(check.Permission, delivery, userId))
-                                continue;
+                            {
+                                // 🔒 …nor reaches a LOCKED account (AccountLock): a hub rule such as the
+                                // User hub's "any signed-in id reads" never asks the fold. Skipped on
+                                // this turn only on a DETERMINED unlocked verdict (the steady state);
+                                // otherwise held, and decided below as the rule's grant unless the
+                                // live lock verdict says locked.
+                                if (!AccountLocks.IsLockable(userId)
+                                    || hub.ServiceProvider.GetService<AccountLockCatalog>()?.IsLocked(userId) == false)
+                                    continue;
+                                hubGrantedPendingLock = hubGrantedPendingLock.Add(check);
+                            }
                             pendingChecks = pendingChecks.Add(check);
                         }
                     }
@@ -623,7 +636,13 @@ public static class AccessControlPipeline
                     // fix the cache, don't ceiling-block here. If the
                     // cache genuinely never emits, that's a framework
                     // bug to surface, not paper over with a deny.
-                    .Select(check => hub.CheckPermissionOutcome(check.Path, effectiveUserId, check.Permission)
+                    .Select(check => (hubGrantedPendingLock.Contains(check)
+                            ? AccountLocks.ObserveLocked(hub, effectiveUserId)
+                                .Select(locked => locked ? PermissionCheckOutcome.Denied : PermissionCheckOutcome.FromVerdict(true))
+                                // A lock register that cannot be read reaches no verdict — fail closed, named.
+                                .Catch((Exception ex) => Observable.Return(PermissionCheckOutcome.Undetermined(
+                                    $"whether the account '{effectiveUserId}' is locked could not be read ({ex.GetType().Name})")))
+                            : hub.CheckPermissionOutcome(check.Path, effectiveUserId, check.Permission))
                         // 🚨 TakeDecisionOutsideGate, NOT a bare Take(1) — issue #899. This is
                         // the BROADEST generator of the Rx lock-order inversion in the repo:
                         // the all-granted branch below invokes `next`, i.e. the ENTIRE
