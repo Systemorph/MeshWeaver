@@ -194,6 +194,21 @@ internal sealed class PodHubGrain(
         }
 
         var route = localRoutes?.TryGetLocalRoute(address);
+        if (route is null && localRoutes?.IsReleaseInFlight(address) == true)
+        {
+            // #7888: the owner on THIS process disposed its registration and its Detach has not
+            // landed yet: the route is gone, the tombstone is not stamped. That is a release, not a
+            // stranded claim, so answer what Detach is about to make true. The transient refusal below
+            // made the router report a reply to a just-closed circuit as an undeliverable NACK at
+            // Error; the Released verdict is dropped at Debug (AnswerNackToPodHubSenderRefused).
+            // No pin change: the Detach that follows sets the tombstone's lifetime.
+            logger.LogDebug(
+                "[POD-HUB] {Address} is being released by its owner on this silo — answering the TERMINAL "
+                + "refusal ahead of the Detach ({MessageType} {Id})",
+                AddressPath, delivery.Message?.GetType().Name, delivery.Id);
+            throw new PodHubNotHereException(AddressPath, SiloIdentity, released: true) { RespondingPod = PodName };
+        }
+
         if (route is null)
         {
             // Not an Orleans transient rejection, on purpose: DeliverToGrainWithRetry would retry
