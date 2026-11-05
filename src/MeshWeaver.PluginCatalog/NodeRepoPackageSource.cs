@@ -80,6 +80,20 @@ public sealed class NodeRepoPackageSource : IPackageSource
     /// This predicate and the two loops below must name the same set — a file the predicate omits
     /// is a package the listing silently loses, so they are written against each other on purpose.
     /// </summary>
+    /// <summary>The repository URL a listed package records (<see cref="PackageManifest.RepositoryUrl"/>):
+    /// an http(s) URL with a trailing <c>.git</c> or slash removed; null for anything else (a local
+    /// path). Pure.</summary>
+    internal static string? HostedRepositoryUrl(string? repoUrl)
+    {
+        var url = repoUrl?.Trim();
+        if (string.IsNullOrEmpty(url)
+            || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+            return null;
+        url = url.TrimEnd('/');
+        return url.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? url[..^4] : url;
+    }
+
     internal static bool IsListingInput(string path)
     {
         var slash = path.IndexOf('/');
@@ -178,6 +192,10 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         // InstalledFiles to produce the added/modified/removed list; null when the
                         // module ships no manifest.lock (legacy commit-sha comparison applies).
                         ManifestFiles = mm?.Files,
+                        // WHERE the files live — what the NodeType page's Code area reads a file
+                        // from, as the viewer. Only a hosted repository: a local checkout's path
+                        // names nothing a reader's browser or GitHub credential can reach.
+                        RepositoryUrl = HostedRepositoryUrl(repoUrl),
                         Requires = peeked.Requires,
                         License = peeked.License ?? defaultLicense,
                         Category = peeked.Category,

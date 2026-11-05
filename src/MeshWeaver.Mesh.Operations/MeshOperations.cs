@@ -872,9 +872,14 @@ public partial class MeshOperations
                 return false; // no node path before the marker — not the area route
 
             var rest = segments.Skip(i + 1).ToImmutableList();
-            area = rest.Count > 0 && rest[0].Length > 0 ? rest[0] : null;
+            // 🚨 Decoded ONCE here, exactly as the URL-shaped form (SplitAreaRemainder) and the
+            // portal pages decode theirs: a link the platform builds carries the id in
+            // WorkspaceReference.Encode form (`Acme%2FType%2FTest%2FTypeTests` — one segment), and
+            // handed on raw that string reached the area as the id and named no node (the NodeType
+            // Code page, measured 2026-11-05). An id given with raw slashes has no escape to decode.
+            area = rest.Count > 0 && rest[0].Length > 0 ? WorkspaceReference.DecodeAreaId(rest[0]) : null;
             var restId = rest.Count > 1 ? string.Join('/', rest.Skip(1)).Trim('/') : string.Empty;
-            id = restId.Length > 0 ? restId : null;
+            id = restId.Length > 0 ? WorkspaceReference.DecodeAreaId(restId) : null;
             return true;
         }
 

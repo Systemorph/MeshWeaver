@@ -144,6 +144,21 @@ public record PackageManifest
     public string? Origin { get; init; }
 
     /// <summary>
+    /// The REPOSITORY the package's files come from (<c>https://github.com/{owner}/{repo}</c>) —
+    /// stamped by a repository-backed source while listing (<see cref="NodeRepoPackageSource"/>),
+    /// carried through a registry to its consumers, and kept on the install record. With
+    /// <see cref="InstalledFromRef"/> and the <see cref="InstalledFiles"/> keys it names where each
+    /// installed file lives, which is how the NodeType page's <c>Code</c> area reads a file from
+    /// its repository as the viewer (<c>ICodeSourceFiles</c>). Not authored in a repo; null for a
+    /// source with no repository (a local checkout, a hand-built catalog) and on records written
+    /// before the field existed, which then show the mesh copy.
+    ///
+    /// <para>🚨 Naming the repository grants nothing: a private repository answers only a reader
+    /// whose own GitHub account can see it.</para>
+    /// </summary>
+    public string? RepositoryUrl { get; init; }
+
+    /// <summary>
     /// The licence this package is offered under, as an SPDX id or expression
     /// (<c>Apache-2.0</c>, <c>Apache-2.0 OR MIT</c>). Authored on the plugin root's
     /// <c>content.license</c>; when absent it is filled from the SOURCE's declared default (a

@@ -125,6 +125,21 @@ public sealed class OctokitGitHubRepoClient(
                 repositoryUrl, id?.ToString() ?? "(unknown)"));
     }
 
+    /// <inheritdoc />
+    /// <remarks>The contents API (<c>GET /repos/{o}/{r}/contents/{path}?ref=…</c>): ONE request,
+    /// the file base64-encoded in the JSON answer. A non-success status faults with its typed
+    /// <see cref="GitHubApiException"/> (see <see cref="GitHubRestApi.Failure"/>).</remarks>
+    public IObservable<string> GetFileText(string repositoryUrl, string filePath, string commitish, string accessToken)
+    {
+        var (owner, repo) = ParseRepoUrl(repositoryUrl);
+        var path = $"{RepoPath(owner, repo)}/contents/{GitHubRestApi.EscapePath(filePath.Trim('/'))}"
+                   + $"?ref={GitHubRestApi.Escape(commitish)}";
+        return Call<GitHubWireBlob>(HttpMethod.Get, path, accessToken)
+            .Select(blob => string.Equals(blob.Encoding, "base64", StringComparison.OrdinalIgnoreCase)
+                ? System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(blob.Content))
+                : blob.Content);
+    }
+
     /// <summary>
     /// Mirrors the request's files into the repo as a single commit (blob → tree → commit →
     /// update ref), creating the repo and/or branch when missing per the request flags.

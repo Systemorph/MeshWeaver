@@ -895,6 +895,45 @@ names it, never in the platform.
 
 ---
 
+## 9. The Code page shows the file from GitHub — read as you
+
+A NodeType page's side menu lists its **Sources** and **Tests**; each opens the NodeType's `Code`
+area (`/{Type}/Code/{file}`). That page shows the file **from its repository**, read with **your own
+connected GitHub account** (maintainer, 2026-11-05: *"it's just about getting the file from github
+and displaying on gui"*, *"if i am not authorized, ask for login"*).
+
+**Where the file lives** comes from the module's own provenance, never a guess
+(`GitHubCodeSourceFiles`, `ICodeSourceFiles` in `MeshWeaver.Graph`):
+
+| The module reached the instance as … | Repository | Ref | File |
+|---|---|---|---|
+| a package install (`Plugins/{id}`) | `repositoryUrl` on the install record — stamped by the listing source (`NodeRepoPackageSource`) and carried through a registry | `installedFromRef` (the exact commit) | the `installedFiles` entry whose path is the node path plus an extension |
+| a GitSync Space (`{Space}/_GitSync`) | `repositoryUrl` | `lastSyncCommitSha`, else the branch | `{subdirectory}/{node path inside the Space}.cs` |
+
+**As whom**: only the viewer's credential (`{you}/_Provider/GitHub`, section 1), read in the
+viewer's identity. Never the instance's App installation token, never a source's configured token —
+so the page cannot show you a private file you could not open on GitHub yourself. The token is not
+logged and not written anywhere.
+
+| You … | The page shows |
+|---|---|
+| have connected a GitHub account that can read the repository | the file at the recorded ref, read-only, with a link to it on GitHub |
+| are signed out, or have connected no GitHub account | **Sign in with GitHub →** (the connect flow of section 1, returning to this page) and, under it, the mesh copy |
+| are refused by GitHub (401 / 403 / 404 — a private repository you cannot see answers 404) | the same sign-in prompt, naming the status |
+| view a file whose module records no GitHub repository (authored in the mesh, a local checkout, an install record written before `repositoryUrl` existed) | the mesh copy — the Code node's own content |
+
+The mesh copy is what the instance COMPILES; it can differ from GitHub when someone edited it in the
+mesh after the sync. An install record gains `repositoryUrl` the next time its package is installed
+or updated from a source running this platform version.
+
+🚨 **The link is one encoded segment and is decoded once.** The side menu writes the file's node
+path with `WorkspaceReference.Encode` (`Acme%2FType%2FTest%2FTypeTests`); the URL entry points decode
+it, and the area itself (`NodeTypeLayoutAreas.CodeNodePathOf`) tolerates a shell that handed it the
+raw segment. Before 2026-11-05 the MCP route `get {Type}/area/Code/{id}` passed the encoded id on,
+and the page embedded `Acme%2FType%2F…` as an address — "not found" (`CodePageRouteTest`).
+
+---
+
 ## See also
 
 - [Sensitive Content Stays Out of Logs](/Doc/Architecture/SensitiveContentInLogs) — the deployment's limits on GitSync: `GitSync:AllowedPartitions` (which partitions may sync) and `GitSync:Export:Enabled` (whether this instance exports at all).
