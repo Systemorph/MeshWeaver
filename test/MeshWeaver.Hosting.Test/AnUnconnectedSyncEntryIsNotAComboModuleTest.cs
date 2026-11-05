@@ -74,6 +74,61 @@ public sealed class AnUnconnectedSyncEntryIsNotAComboModuleTest
         fold.Unconnected.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// REGRESSION (review on #7906): <c>GitHubSyncService.SaveConfig</c> can clear the URL after an
+    /// import and keep the sync history. Such a space DID import from git, so it stays in the
+    /// combo, and the assembler refuses it by name. It is not silently relabelled as authored in
+    /// the mesh.
+    /// </summary>
+    [Fact]
+    public void AUrlClearedAfterAnImport_StaysACoordinate_NotUnconnected()
+    {
+        var cleared = new InstanceComboReader.SyncEntry("Space", GitHubSyncService.ConfigId,
+            $"Space/{GitHubSyncService.ConfigId}", new GitHubSyncConfig
+            {
+                RepositoryUrl = null,
+                LastSyncCommitSha = new string('a', 40),
+                LastSyncedAt = System.DateTimeOffset.Parse("2026-10-01T00:00:00Z"),
+            });
+
+        var fold = InstanceComboReader.FoldSyncEntries([cleared]);
+
+        fold.Coordinates.Should().ContainKey("Space",
+            "an entry with sync history imported content, so a blank URL does not make it mesh-authored");
+        fold.Coordinates["Space"].LastSyncCommitSha.Should().Be(new string('a', 40));
+        fold.Unconnected.Should().BeEmpty();
+    }
+
+    /// <summary>A recorded attempt alone counts as history: an attempt can import part of the content.</summary>
+    [Fact]
+    public void ARecordedAttemptAlone_CountsAsHistory()
+    {
+        InstanceComboReader.HasSyncHistory(new GitHubSyncConfig
+        {
+            LastSyncAttemptAt = System.DateTimeOffset.Parse("2026-10-01T00:00:00Z"),
+        }).Should().BeTrue();
+        InstanceComboReader.HasSyncHistory(new GitHubSyncConfig()).Should().BeFalse(
+            "NEGATIVE CONTROL: an entry with no field set has no history");
+    }
+
+    /// <summary>A historical entry with no URL never displaces a connected source.</summary>
+    [Fact]
+    public void AHistoricalPrimaryWithoutUrl_DoesNotDisplaceAConnectedSource()
+    {
+        const string Repo = "https://github.com/Systemorph/ComboFixture";
+        var historical = new InstanceComboReader.SyncEntry("Space", GitHubSyncService.ConfigId,
+            $"Space/{GitHubSyncService.ConfigId}", new GitHubSyncConfig
+            {
+                RepositoryUrl = null,
+                LastSyncCommitSha = new string('a', 40),
+            });
+
+        var fold = InstanceComboReader.FoldSyncEntries(
+            [historical, Entry("Space", Repo, id: "_GitSync/docs")]);
+
+        fold.Coordinates["Space"].RepositoryUrl.Should().Be(Repo);
+    }
+
     /// <summary>The primary entry still wins when both entries are connected.</summary>
     [Fact]
     public void TwoConnectedEntries_ThePrimaryWins()

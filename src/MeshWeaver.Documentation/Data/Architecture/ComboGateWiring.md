@@ -899,9 +899,14 @@ combo. The combo reader still listed it as a module. The assembler then refused 
 Measured on run 42007094661: the company instance read `NotVerifiable` with 0 of 83 modules
 verified, on every run, because of one such space.
 
-- `InstanceComboReader.FoldSyncEntries` drops every sync entry with a blank `repositoryUrl`. A
-  space where another source does name a repository is still a module, with its coordinate taken
-  from that source.
+- `InstanceComboReader.FoldSyncEntries` drops a sync entry only when its `repositoryUrl` is
+  blank **and** it has no sync history (`HasSyncHistory`: no last-synced commit or time, no
+  recorded attempt, outcome or module outcomes). A blank URL alone proves nothing, because
+  `GitHubSyncService.SaveConfig` can clear the URL and keep the history. An entry with history
+  stays a coordinate, and the assembler refuses it by name, because its content came from a
+  repository the record no longer names.
+- Precedence: a connected entry first, then a historical one, with the primary entry first within
+  each rank. A historical entry never displaces a connected source.
 - A space whose every entry is unconnected, and which has no install record, is named on the
   combo's caveats. It is never dropped silently, and a verdict over the combo says nothing about it.
 - A space with no repository that has an install record whose source cannot be resolved is

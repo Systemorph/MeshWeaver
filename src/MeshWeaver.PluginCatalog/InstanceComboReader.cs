@@ -234,15 +234,23 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
     /// Folds sync entries into one coordinate per module. Pure, so the rule is pinned by a unit test
     /// without a mesh.
     ///
-    /// <para>🚨 <b>A sync entry that names NO repository is not a coordinate</b>
-    /// (MeshWeaver#4413). Such an entry has never imported anything: there is no repository
-    /// to sync from, so the space's content was authored in the mesh. A space with no
-    /// <c>_GitSync</c> node at all is not in the combo. Before this rule, a space whose sync was
-    /// created but never connected was treated as a module, and the assembler refused it as
-    /// "names no repository in either shape". That one refusal stopped the gate for the whole
-    /// root, so every other module on that instance was left unverified on every run. Such a
-    /// module is still NAMED, through <see cref="SyncEntryFold.Unconnected"/> and a caveat on the combo, and is
-    /// never silently dropped.</para>
+    /// <para>🚨 <b>A sync entry that names NO repository AND has never synced is not a
+    /// coordinate</b> (MeshWeaver#4413). Such an entry was created and never connected. Nothing was
+    /// imported from git, so the space's content was authored in the mesh, and a space with no
+    /// <c>_GitSync</c> node at all is not in the combo either. Before this rule, such a space was
+    /// treated as a module, and the assembler refused it as "names no repository in either
+    /// shape". That one refusal stopped the gate for the whole root, so every other module on that
+    /// instance was left unverified on every run. Such a module is still NAMED, through
+    /// <see cref="SyncEntryFold.Unconnected"/> and a caveat on the combo, and is never silently
+    /// dropped.</para>
+    ///
+    /// <para>🚨 <b>A blank URL alone does NOT prove that nothing was imported.</b>
+    /// <c>GitHubSyncService.SaveConfig</c> can clear <c>RepositoryUrl</c> and keep the recorded
+    /// sync history. An entry with any history (<see cref="HasSyncHistory"/>) therefore stays,
+    /// and the assembler refuses it by name as before, because its content came from somewhere
+    /// the record no longer names. A historical entry never displaces a connected one. The
+    /// precedence is a connected entry, then a historical one, with the primary entry first within
+    /// each rank.</para>
     /// </summary>
     internal static SyncEntryFold FoldSyncEntries(IEnumerable<SyncEntry> entries)
     {
@@ -250,9 +258,14 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
             .GroupBy(x => x.Module, StringComparer.OrdinalIgnoreCase)
             .ToImmutableList();
         var coordinates = byModule
-            .Select(g => (Module: g.Key, Entries: g
-                .Where(x => !string.IsNullOrWhiteSpace(x.Config.RepositoryUrl))
-                .ToImmutableList()))
+            .Select(g =>
+            {
+                var connected = g.Where(x => !string.IsNullOrWhiteSpace(x.Config.RepositoryUrl))
+                    .ToImmutableList();
+                return (Module: g.Key, Entries: connected.Count > 0
+                    ? connected
+                    : g.Where(x => HasSyncHistory(x.Config)).ToImmutableList());
+            })
             .Where(g => g.Entries.Count > 0)
             .ToImmutableDictionary(
                 g => g.Module,
@@ -282,12 +295,27 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
         return new SyncEntryFold(coordinates, unconnected);
     }
 
-    /// <summary>The caveat for a space whose sync entry names no repository. It is not part of the
-    /// combo, because nothing was ever imported from git, and the combo says so.</summary>
+    /// <summary>
+    /// True when the entry has ever synced or attempted to. A recorded attempt counts, because an
+    /// attempt can have imported part of the content before it failed. Only an entry with none of
+    /// these fields set is known to have imported nothing.
+    /// </summary>
+    internal static bool HasSyncHistory(GitHubSyncConfig config) =>
+        !string.IsNullOrWhiteSpace(config.LastSyncCommitSha)
+        || config.LastSyncedAt is not null
+        || config.LastSyncAttemptAt is not null
+        || !string.IsNullOrWhiteSpace(config.LastAttemptedCommitSha)
+        || !string.IsNullOrWhiteSpace(config.LastSyncOutcome)
+        || config.ModuleOutcomes is { Count: > 0 };
+
+    /// <summary>The caveat for a space whose sync entry names no repository and has never synced.
+    /// It is not part of the combo, because nothing was ever imported from git, and the combo says
+    /// so.</summary>
     internal static string UnconnectedSyncCaveat(string module) =>
-        $"'{module}' has a sync entry that names no repository, so nothing was ever imported from "
-        + "git and its content is authored in the mesh. It is not part of this combo, like any "
-        + "space without a sync entry, and a verdict over this combo says nothing about it.";
+        $"'{module}' has a sync entry that names no repository and has never synced, so nothing "
+        + "was imported from git and its content is authored in the mesh. It is not part of this "
+        + "combo, like any space without a sync entry, and a verdict over this combo says nothing "
+        + "about it.";
 
     /// <summary>
     /// The install records, keyed by the partition each installed INTO — which is what a sync entry
