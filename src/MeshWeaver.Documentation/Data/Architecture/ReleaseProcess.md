@@ -515,7 +515,18 @@ whose `RepositoryUrl` is a literal. An id created before this rule, public, cann
 delete it (package settings → Danger Zone → Delete this package) and the next private run
 recreates it. An id that already exists and is linked to another repository accepts the private
 caller's push only once its *Manage Actions access* grants MeshWeaver.Plugins **Write**; the push
-step names that fix when it is refused.
+step names that fix when it is refused. A failed push does not stop the step: it tries every
+library, then names EVERY failed id in one run, so the owner clears them in one pass instead of one
+id per scheduled run (MeshWeaver.Plugins#4981 — the first private run was refused on the first id it
+tried, one of the 40 the public run had created). Only a push the feed REFUSED (403 / Forbidden /
+permission) is reported with the ownership remedies (delete it if public, grant Write if private);
+any other failure is reported as a push failure, because deleting a package fixes no network or
+server error. The `dotnet new` template package is set aside and pushed LAST, and only when every
+library landed, so the feed never offers a template whose closure it does not hold. The push loop
+sits between `# push-loop:begin` and `# push-loop:end`, and `template-feed.py --self-test` EXECUTES
+it against a fake `dotnet` — all accepted, a library refused, a library failing on the network — so
+the ordering and the classification are proven by behaviour, with negative controls for an early
+template push and a blanket "refused" report.
 
 **Inputs from the set, the instrument from the lane.** What is packed comes from the set: core at
 its `core_sha`, Plugins at its `plugins_sha`. The lane's own tool, `template-feed.py`, comes from the
