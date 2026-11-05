@@ -831,7 +831,9 @@ publish:                 # unchanged lane, reading THROUGH the host-publication 
   pack lane's `select` step *A host run builds the caller's build extension* reads the caller's
   `.github/build-stages.json` from the tree under test and lets `executor: host` through only when it
   declares a `modules` stage and exactly one prepared input with `env: MW_BUILD_EXTENSIONS` (a
-  `name`, a `key` and a `build` command — the prepared-input contract above). Anything else is RED,
+  `name`, a `key` and a `build` command — the prepared-input contract above — plus the `project` it
+  builds, which must equal the call's `build-extensions-project`, so a declaration for one extension
+  never admits a request for another; the host runner ignores the extra key). Anything else is RED,
   naming the input and both ways out: declare the extension, or run the call on `actions`. The lift is
   a declaration in the tree the host builds, never an input a caller could simply set
   (`test-module-pack-host.py` executes the step over the declared shape and each missing part).

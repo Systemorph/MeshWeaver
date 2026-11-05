@@ -114,8 +114,9 @@ def structure_problems(doc: dict) -> list[str]:
         problems.append("`select` has no declaration step for a host run's build extension — a host run would compile without it")
     else:
         decl = step(jobs["select"], "A host run builds the caller's build extension")
+        # ANY `if:` key disqualifies — `if: false` loads as the boolean False, which a truthiness test would let pass.
         if (decl.get("env") or {}).get("EXTENSIONS_PROJECT") != "${{ inputs.build-extensions-project }}" or \
-                (decl.get("env") or {}).get("EXECUTOR") != "${{ inputs.executor }}" or decl.get("if"):
+                (decl.get("env") or {}).get("EXECUTOR") != "${{ inputs.executor }}" or "if" in decl:
             problems.append("the build-extension declaration step must run unconditionally on the lane's own executor and extension inputs")
     ledger = step(jobs["select"], "Consult the module build ledger")
     if 'if [ "$EXECUTOR" = "host" ]' not in ledger["run"] or ledger["env"].get("EXECUTOR") != "${{ inputs.executor }}":
@@ -149,6 +150,9 @@ def mutations(doc: dict) -> list[tuple[str, dict]]:
     m = copy.deepcopy(doc)
     step(m["jobs"]["select"], "A host run builds the caller's build extension")["if"] = "inputs.executor == 'actions'"
     out.append(("the build-extension declaration step skipped on a host run", m))
+    m = copy.deepcopy(doc)
+    step(m["jobs"]["select"], "A host run builds the caller's build extension")["if"] = False
+    out.append(("the build-extension declaration step carries `if: false` (YAML boolean)", m))
     m = copy.deepcopy(doc)
     led = step(m["jobs"]["select"], "Consult the module build ledger")
     led["env"].pop("EXECUTOR", None)
@@ -216,13 +220,17 @@ def behaviour(doc: dict, hostpub: dict) -> None:
               str(decl.get("env")))
         good = {"stages": [{"name": "modules"}, {"name": "compile-check"}],
                 "prepared": [{"name": "shelf", "env": "MW_BUILD_MODULE_LIBS", "key": "k", "build": "b"},
-                             {"name": "extension", "env": "MW_BUILD_EXTENSIONS", "key": "k", "build": "b"}]}
+                             {"name": "extension", "env": "MW_BUILD_EXTENSIONS", "key": "k", "build": "b", "project": ext}]}
         cases = [
             ("declared: a modules stage and a prepared MW_BUILD_EXTENSIONS input", "host", ext, good, 0),
             ("NEGATIVE CONTROL — no prepared extension", "host", ext, {**good, "prepared": good["prepared"][:1]}, 1),
             ("NEGATIVE CONTROL — no modules stage", "host", ext, {**good, "stages": [{"name": "compile-check"}]}, 1),
             ("NEGATIVE CONTROL — the extension entry names no build", "host", ext,
              {**good, "prepared": [{"name": "extension", "env": "MW_BUILD_EXTENSIONS", "key": "k"}]}, 1),
+            ("NEGATIVE CONTROL — the declared extension is ANOTHER project", "host", ext,
+             {**good, "prepared": [{**good["prepared"][1], "project": "tools/Other.Razor/Other.Razor.csproj"}]}, 1),
+            ("NEGATIVE CONTROL — the extension entry names no project", "host", ext,
+             {**good, "prepared": [{k: v for k, v in good["prepared"][1].items() if k != "project"}]}, 1),
             ("NEGATIVE CONTROL — two prepared MW_BUILD_EXTENSIONS inputs", "host", ext,
              {**good, "prepared": good["prepared"] + good["prepared"][1:]}, 1),
             ("NEGATIVE CONTROL — no declaration at all", "host", ext, None, 1),

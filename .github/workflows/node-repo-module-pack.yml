@@ -1268,7 +1268,8 @@ jobs:
       # from this lane; it builds the extension from the caller's own source as a PREPARED input of its
       # `.github/build-stages.json` (`prepared[].env == MW_BUILD_EXTENSIONS`, keyed and installed by the
       # build host's runner; MeshWeaver.Plugins scripts/host-in-mesh-modules.py `prepare extension`) and
-      # its `modules` stage packs with it. So the refusal is lifted only by that DECLARATION, read from the
+      # its `modules` stage packs with it. The entry names the extension it builds (`project`), which must equal this
+      # call's `build-extensions-project`. So the refusal is lifted only by that DECLARATION, read from the
       # tree the host builds — never by an input a caller could simply set. A declaration without a
       # `modules` stage, or without a prepared extension, keeps the refusal (Doc/Architecture/BuildHosts §5).
       - name: A host run builds the caller's build extension
@@ -1288,8 +1289,8 @@ jobs:
           def refuse(why):
               print(f"::error title=Build executor::executor is 'host' and build-extensions-project is '{project}', but {why}. "
                     "The build host would compile WITHOUT the caller's build extension and publish a wrong bundle. Declare the "
-                    "extension as a prepared input of the host's stages (env MW_BUILD_EXTENSIONS, with a name, a key and a build "
-                    "command) beside a `modules` stage, or run this call with executor: actions (Doc/Architecture/BuildHosts §5).")
+                    "extension as a prepared input of the host's stages (env MW_BUILD_EXTENSIONS, with a name, a key, a build "
+                    "command and the `project` it builds, equal to build-extensions-project) beside a `modules` stage, or run this call with executor: actions (Doc/Architecture/BuildHosts §5).")
               sys.exit(1)
           try:
               with open(path, encoding="utf-8") as fh:
@@ -1305,9 +1306,13 @@ jobs:
           if len(prepared) != 1:
               refuse(f"{path} declares {len(prepared)} prepared input(s) with env MW_BUILD_EXTENSIONS, not exactly one")
           entry = prepared[0]
-          missing = [k for k in ("name", "key", "build") if not isinstance(entry.get(k), str) or not entry[k].strip()]
+          missing = [k for k in ("name", "key", "build", "project") if not isinstance(entry.get(k), str) or not entry[k].strip()]
           if missing:
               refuse(f"its prepared MW_BUILD_EXTENSIONS input names no {', '.join(missing)}")
+          # The declaration must be FOR the extension this call asks for: a prepared ExtensionA never admits a request
+          # for ExtensionB. `project` is the repository-relative path, compared exactly as this call's input.
+          if entry["project"].strip() != project.strip():
+              refuse(f"its prepared MW_BUILD_EXTENSIONS input builds '{entry['project']}', not the requested project")
           print(f"executor: host with build-extensions-project '{project}': the host builds it as the prepared input "
                 f"'{entry['name']}' ({path}) and its `modules` stage packs with it.")
           PY
