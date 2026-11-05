@@ -93,14 +93,14 @@ public static class DeclaredPointRead
             // A stored existence probe first, so a path with nothing stored opens no live read (a
             // point read of an absent node terminates NotFound). A stale NEGATIVE refuses — the
             // closed direction; content is never decided from this snapshot.
-            return hub.ReadStoredNode(path)
+            return UnlessLocked(hub, userId, hub.ReadStoredNode(path)
                 .Take(1)
                 .DefaultIfEmpty(null)
                 .SelectMany(stored => stored is null
                     ? Observable.Return(false)
                     : OwnerCurrent(hub, access, path, undecidedIsError)
                         .Select(node => Decide(hub, access, node, userId, caller, options, area, undecidedIsError))
-                        .Switch())
+                        .Switch()))
                 .DistinctUntilChanged()
                 .Catch((Exception ex) =>
                 {
@@ -110,6 +110,19 @@ public static class DeclaredPointRead
                 });
         });
     }
+
+    /// <summary>
+    /// <paramref name="verdict"/>, unless a lock applies to <paramref name="userId"/>
+    /// (<see cref="AccountLocks.ObserveLocked(IMessageHub,string?)"/>) — then <c>false</c>, live: a
+    /// lock landing while the read is followed withdraws the admission on the same subscription. A
+    /// declaration's audience (the public, the matching user) never admits a locked account.
+    /// </summary>
+    private static IObservable<bool> UnlessLocked(IMessageHub hub, string? userId, IObservable<bool> verdict)
+        => !AccountLocks.IsLockable(userId)
+            ? verdict
+            : AccountLocks.ObserveLocked(hub, userId)
+                .Select(locked => locked ? Observable.Return(false) : verdict)
+                .Switch();
 
     /// <summary>
     /// The live Read verdict of a POINT read of <paramref name="path"/> for <paramref name="viewer"/>,
@@ -260,6 +273,21 @@ public static class DeclaredPointRead
 
     /// <summary>The live standing Read with its pending marker and no bound on a pending period; see <see cref="ObserveStandingRead"/>.</summary>
     private static IObservable<PermissionCheckOutcome?> StandingReadWithPendingMarker(IMessageHub hub, string path, AccessContext? viewer)
+    {
+        // 🔒 A locked account (AccountLock) is DENIED here, live: the type's rule (a profile readable by
+        // every signed-in user) would otherwise admit it without asking the fold, and a lock that lands
+        // while the read is open withdraws it on the same subscription.
+        var subject = SubjectOf(viewer);
+        if (AccountLocks.IsLockable(subject))
+            return AccountLocks.ObserveLocked(hub, subject)
+                .Select(locked => locked
+                    ? Observable.Return<PermissionCheckOutcome?>(PermissionCheckOutcome.Denied)
+                    : StandingReadUnlocked(hub, path, viewer))
+                .Switch();
+        return StandingReadUnlocked(hub, path, viewer);
+    }
+
+    private static IObservable<PermissionCheckOutcome?> StandingReadUnlocked(IMessageHub hub, string path, AccessContext? viewer)
     {
         return Observable.Defer(() =>
         {
@@ -686,7 +714,8 @@ public static class DeclaredPointRead
             var userId = SubjectOf(caller);
             if (revision is null || string.IsNullOrEmpty(revision.Path) || RefusedOutright(hub, userId, caller))
                 return Observable.Return(false);
-            return Decide(hub, hub.ServiceProvider.GetService<AccessService>(), revision, userId, caller, hub.JsonSerializerOptions, area, undecidedIsError)
+            return UnlessLocked(hub, userId,
+                    Decide(hub, hub.ServiceProvider.GetService<AccessService>(), revision, userId, caller, hub.JsonSerializerOptions, area, undecidedIsError))
                 .DistinctUntilChanged()
                 .Catch((Exception ex) =>
                 {

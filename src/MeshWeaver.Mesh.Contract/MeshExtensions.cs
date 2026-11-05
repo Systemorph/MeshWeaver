@@ -7001,7 +7001,7 @@ public static class MeshExtensions
         // rule used to be written out HERE, which is exactly how this seam and the DELIVERY gate
         // came to answer the same question two ways. Both now call the same evaluation; the only
         // thing that stays local is the projection onto this method's own vocabulary.
-        return NodeTypeAccessRuleGate.Evaluate(accessRule, context, userId, logger)
+        return NodeTypeAccessRuleGate.EvaluateUnlessLocked(hub, accessRule, context, userId, logger)
             .Do(outcome =>
             {
                 if (!outcome.IsGranted && !outcome.IsUndetermined)

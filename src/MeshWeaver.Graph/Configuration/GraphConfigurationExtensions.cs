@@ -120,6 +120,8 @@ public static class GraphConfigurationExtensions
                 .AddServiceIdentityType()
                 // Declared type-scoped grants (Admin/_GrantRule) — Doc/Architecture/AccessControl.
                 .AddGrantRuleType()
+                // Account locks (Admin/_AccountLock) — Doc/Architecture/AccountLockout.
+                .AddAccountLockType()
                 .AddLicenseType()
                 .AddMeshWeaverInstanceType()
                 .AddMeshDataSourceType()
@@ -482,6 +484,10 @@ public static class GraphConfigurationExtensions
                 // A service principal never holds platform administration: no Admin-partition grant
                 // may name one, and a service caller writes nothing in the Admin partition.
                 services.AddScoped<INodeValidator, Security.ServicePrincipalAdminGuard>();
+
+                // An account lock names a person at its own path, and a lock in force never names a
+                // platform administrator nor its own writer — Doc/Architecture/AccountLockout.
+                services.AddScoped<INodeValidator, Security.AccountLockWriteGuard>();
 
                 // Delivery for the compile pipeline's parked-failure bell. The pipeline lives in
                 // MeshWeaver.Compiler and cannot reference NotificationService (it reads the

@@ -237,7 +237,7 @@ internal static class PermissionEvaluator
     /// only the address and options carrier.
     /// </summary>
     private static IObservable<Permission> GetEffectivePermissionsCore(
-        IMessageHub hub, string nodePath, string userId, FoldServices services)
+        IMessageHub hub, string nodePath, string userId, FoldServices services, bool honourLock = true)
     {
         var (cache, logger, options, staticNodes, staticPolicies, gates, staticGatedNodes,
             capturedContext, capturedCircuitContext) = services;
@@ -309,7 +309,12 @@ internal static class PermissionEvaluator
                 ObserveGatedNodes(hub, cache, gates, staticGatedNodes),
                 ObserveRepositoryOwnedContent(cache, options, nodePath),
                 ObserveRuleGrants(cache, options, nodePath),
-                (nodes, policies, memberships, gatedNodes, repositoryOwned, ruleGrants) =>
+                // 🔒 The account lock (AccountLock, Admin/_AccountLock): a locked subject holds
+                // NOTHING — applied after every other leg, the public grant included. NOT seeded:
+                // it subtracts, so an optimistic "unlocked" before the register answers would be an
+                // admission window (the monotonicity rule above). Doc/Architecture/AccountLockout.
+                honourLock ? ObserveEffectiveLock(hub, userId, services) : Observable.Return(false),
+                (nodes, policies, memberships, gatedNodes, repositoryOwned, ruleGrants, locked) =>
                 {
                     // Match grants to the viewer OR any group they belong to (transitively). A group
                     // grant's subject is the group path, and memberships live UNDER the group node —
@@ -325,7 +330,7 @@ internal static class PermissionEvaluator
                     // ordinary roles they are.
                     granted = AddRuleGrants(granted, subjects, ruleGrants);
                     return (Granted: granted, Denied: denied, RuntimePolicies: policies, GatedNodes: gatedNodes,
-                        RepositoryOwned: repositoryOwned);
+                        RepositoryOwned: repositoryOwned, Locked: locked);
                 })
             .Select(snap =>
             {
@@ -343,13 +348,18 @@ internal static class PermissionEvaluator
                 // like PartitionAccessPolicy.PublicRead — so a declared public surface needs no
                 // role and no AccessAssignment row of any kind. It only ever ADDS Read.
                 return (state.RoleIds, PermissionCap: cap,
-                    state.PublicGrant | GateGrant(gates, snap.GatedNodes, nodePath));
+                    state.PublicGrant | GateGrant(gates, snap.GatedNodes, nodePath), snap.Locked);
             });
 
         return enriched
             .SelectMany(state =>
             {
-                var (roleIds, permissionCap, publicGrant) = state;
+                var (roleIds, permissionCap, publicGrant, locked) = state;
+
+                // 🔒 A locked account holds no effective permission anywhere — its own home partition
+                // and every public surface included. Nothing else needs evaluating.
+                if (locked)
+                    return Observable.Return(Permission.None);
 
                 // Fast path: every role is built-in → resolve synchronously.
                 Permission rolePermsValue = Permission.None;
@@ -1438,6 +1448,28 @@ internal static class PermissionEvaluator
     private static IObservable<MeshNode[]> ObserveAllRoleNodes(IMeshNodeStreamCache cache, JsonSerializerOptions options)
         => SecurityQuery(cache, RoleQueryId, options, SecurityQueries.Roles)
             .Select(arr => arr.ToArray());
+
+    /// <summary>
+    /// Whether the account lock (<see cref="AccountLock"/>) APPLIES to <paramref name="userId"/>: a lock
+    /// is in force on them AND they do not hold platform administration (<see cref="Permission.All"/> at
+    /// scope <c>Admin</c>, evaluated WITHOUT the lock). A lock never removes an administrator — their
+    /// Admin grant is removed by another administrator first — and this makes that invariant hold
+    /// whatever wrote the record: a raw patch, a retype, an import, a validator that did not run. So
+    /// no lock record can lock the last administrator out, nor a platform administrator themselves.
+    ///
+    /// <para>The administrator question is asked only while a lock is in force on the subject, so an
+    /// unlocked subject pays nothing for it. Not seeded, like the register it starts from.</para>
+    /// </summary>
+    private static IObservable<bool> ObserveEffectiveLock(IMessageHub hub, string userId, FoldServices services)
+        => !AccountLocks.IsLockable(userId)
+            ? Observable.Return(false)
+            : AccountLocks.ObserveRecordInForce(services.Cache, services.Options, userId)
+                .Select(locked => locked
+                    ? GetEffectivePermissionsCore(hub, AdminScope, userId, services, honourLock: false)
+                        .Select(adminScope => !adminScope.HasFlag(Permission.All))
+                    : Observable.Return(false))
+                .Switch()
+                .DistinctUntilChanged();
 
     /// <summary>
     /// Every <c>GroupMembership</c> node in the mesh, cached process-wide and read as System (like

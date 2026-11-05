@@ -331,6 +331,18 @@ The tab lets an admin enter an email + optional note and **Invite** (which creat
 hosted `InvitationEmailSender` sends the mail), lists all invitations with their status, and
 **Revoke**s a Pending one.
 
+**Delete** removes a **Revoked** invitation of a person who never signed in
+(`InvitationService.DeleteRevoked`, MeshWeaver.Plugins#4998). Nothing reads such a record any more, but
+it still holds the address, the inviter and the note: personal data of someone who never became a user.
+A Space, group or tier invite to an address without an account also leaves a pending deferred grant
+(`Admin/EventSubscription/grant_{email}_{space}`, a node-change trigger on a new `User` whose `email`
+matches). The delete retires every pending deferred grant for that address in the same act. Otherwise
+the grant would keep the address and still fire on the day the person signs up by some other route.
+The verb authorizes the caller as a platform administrator, then runs as System. A Pending invitation
+is revoked first. An **Accepted** invitation cannot be deleted, because it documents how an existing
+account came to be; it belongs with that account. To stop that person using the instance, lock the
+account in the **Accounts** tab ([Account Lockout](../AccountLockout)).
+
 ---
 
 ## Sending email (Microsoft Graph)
