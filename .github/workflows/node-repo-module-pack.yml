@@ -1126,12 +1126,13 @@ jobs:
             actions) echo "executor: actions — every job of this lane runs here." ;;
             host)
               # 🚨 The build extension is published and handed to `build-project --extensions` by
-              # THIS lane's build-workspace job, which a host run skips; the build host neither
-              # receives the input nor publishes it. A host run would compile with the tester image's
-              # own extensions and publish a different bundle under a green verdict, so refuse it.
+              # THIS lane's build-workspace job, which a host run skips. A host that does not build the
+              # caller's extension itself would compile with the tester image's own extensions and
+              # publish a different bundle under a green verdict. Whether it does is DECLARED in the
+              # caller's .github/build-stages.json, which is not checked out yet: the step "A host run
+              # builds the caller's build extension" below reads it and refuses a host run without it.
               if [ -n "${EXTENSIONS_PROJECT:-}" ]; then
-                echo "::error title=Build executor::executor is 'host' and build-extensions-project is '$EXTENSIONS_PROJECT'. The build host does not publish or load a caller's build extension, so it would compile WITHOUT it and publish a wrong bundle. Run this call with executor: actions until the build host carries build-extensions-project (Doc/Architecture/BuildHosts)."
-                exit 1
+                echo "executor: host with build-extensions-project '$EXTENSIONS_PROJECT' — held to the caller's declaration once it is checked out (step 'A host run builds the caller's build extension')."
               fi
               if [ "$PUBLISH" = "true" ] && [ "$MODE" != "staged" ]; then
                 echo "::error title=Build executor::executor is 'host' and this run publishes with publish-mode '$MODE'. A build host holds no publication credential and no pack leg runs here, so an in-leg (direct) publication would hand the registry NOTHING. Publish a host run with publish-mode: staged through build-host-publication.yml and node-repo-module-publish.yml (Doc/Architecture/BuildHosts §5)."
@@ -1263,6 +1264,58 @@ jobs:
           path: repo
           main-sha: ${{ inputs.merge-main-sha }}
           content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
+      # 🏗️ H7: a host run with a build extension. The host never receives `build-extensions-project`
+      # from this lane; it builds the extension from the caller's own source as a PREPARED input of its
+      # `.github/build-stages.json` (`prepared[].env == MW_BUILD_EXTENSIONS`, keyed and installed by the
+      # build host's runner; MeshWeaver.Plugins scripts/host-in-mesh-modules.py `prepare extension`) and
+      # its `modules` stage packs with it. The entry names the extension it builds (`project`), which must equal this
+      # call's `build-extensions-project`. So the refusal is lifted only by that DECLARATION, read from the
+      # tree the host builds — never by an input a caller could simply set. A declaration without a
+      # `modules` stage, or without a prepared extension, keeps the refusal (Doc/Architecture/BuildHosts §5).
+      - name: A host run builds the caller's build extension
+        env:
+          EXECUTOR: ${{ inputs.executor }}
+          EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+          DECLARATION: repo/.github/build-stages.json
+        run: |
+          set -euo pipefail
+          if [ "$EXECUTOR" != "host" ] || [ -z "${EXTENSIONS_PROJECT:-}" ]; then
+            echo "nothing to hold: executor '$EXECUTOR', build-extensions-project '${EXTENSIONS_PROJECT:-<none>}'."
+            exit 0
+          fi
+          python3 - "$DECLARATION" "$EXTENSIONS_PROJECT" <<'PY'
+          import json, sys
+          path, project = sys.argv[1], sys.argv[2]
+          def refuse(why):
+              print(f"::error title=Build executor::executor is 'host' and build-extensions-project is '{project}', but {why}. "
+                    "The build host would compile WITHOUT the caller's build extension and publish a wrong bundle. Declare the "
+                    "extension as a prepared input of the host's stages (env MW_BUILD_EXTENSIONS, with a name, a key, a build "
+                    "command and the `project` it builds, equal to build-extensions-project) beside a `modules` stage, or run this call with executor: actions (Doc/Architecture/BuildHosts §5).")
+              sys.exit(1)
+          try:
+              with open(path, encoding="utf-8") as fh:
+                  doc = json.load(fh)
+          except (OSError, ValueError) as e:
+              refuse(f"{path} cannot be read ({e})")
+          if not isinstance(doc, dict):
+              refuse(f"{path} is not an object")
+          stages = [s.get("name") for s in doc.get("stages") or [] if isinstance(s, dict)]
+          if "modules" not in stages:
+              refuse(f"{path} declares no `modules` stage (stages: {stages or 'none'}) — nothing on the host packs with it")
+          prepared = [p for p in doc.get("prepared") or [] if isinstance(p, dict) and p.get("env") == "MW_BUILD_EXTENSIONS"]
+          if len(prepared) != 1:
+              refuse(f"{path} declares {len(prepared)} prepared input(s) with env MW_BUILD_EXTENSIONS, not exactly one")
+          entry = prepared[0]
+          missing = [k for k in ("name", "key", "build", "project") if not isinstance(entry.get(k), str) or not entry[k].strip()]
+          if missing:
+              refuse(f"its prepared MW_BUILD_EXTENSIONS input names no {', '.join(missing)}")
+          # The declaration must be FOR the extension this call asks for: a prepared ExtensionA never admits a request
+          # for ExtensionB. `project` is the repository-relative path, compared exactly as this call's input.
+          if entry["project"].strip() != project.strip():
+              refuse(f"its prepared MW_BUILD_EXTENSIONS input builds '{entry['project']}', not the requested project")
+          print(f"executor: host with build-extensions-project '{project}': the host builds it as the prepared input "
+                f"'{entry['name']}' ({path}) and its `modules` stage packs with it.")
+          PY
       # A reusable workflow's `github` context belongs to its CALLER. The job context is the
       # identity of the reusable workflow that actually defines this job. Read the whole context
       # here because actionlint 1.7.x predates the workflow_* members and rejects direct property
