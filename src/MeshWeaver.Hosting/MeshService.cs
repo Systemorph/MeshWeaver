@@ -484,6 +484,12 @@ internal sealed class MeshService(
         var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
         return Catalog.ObserveLocked(viewer)
+            // 🚨 Every verdict leaves the register's gate before anything acts on it (#899): the
+            // register is a shared security query that emits synchronously while holding its replay
+            // gate, and what follows a verdict is a PROVIDER SUBSCRIPTION — never run that inside the
+            // gate. In order (Concat), so a lock and the unlock after it are never seen reversed.
+            .Select(locked => Observable.Return(locked, System.Reactive.Concurrency.Scheduler.Default))
+            .Concat()
             .Timeout(Observable.Timer(budget), _ => Observable.Never<long>())
             .Catch((TimeoutException ex) => Observable.Throw<bool>(new TimeoutException(
                 $"Whether the account '{viewer}' is locked could not be established within "

@@ -202,7 +202,16 @@ public static class AccountLocks
     /// <param name="hub">The hub whose node-stream cache serves the register.</param>
     /// <returns>The locked accounts, live.</returns>
     public static IObservable<ImmutableHashSet<string>> ObserveEffectivelyLocked(IMessageHub hub)
-        => ObserveAll(hub)
+        => EffectivelyLocked(hub, ObserveAll(hub));
+
+    /// <summary>
+    /// The accounts a lock APPLIES to, from <paramref name="register"/> — the in-force records less
+    /// every platform administrator. Shared by <see cref="ObserveEffectivelyLocked"/> and
+    /// <see cref="AccountLockCatalog"/>'s standing platform-only read.
+    /// </summary>
+    internal static IObservable<ImmutableHashSet<string>> EffectivelyLocked(
+        IMessageHub hub, IObservable<ImmutableDictionary<string, AccountLock>> register)
+        => register
             .Select(locks => locks.Values.Where(l => l.IsInForce).Select(l => l.UserId).ToArray())
             .Select(inForce => inForce.Length == 0
                 ? Observable.Return(ImmutableHashSet.Create<string>(IdComparer))

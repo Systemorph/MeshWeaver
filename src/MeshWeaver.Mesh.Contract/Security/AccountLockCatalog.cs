@@ -1,31 +1,37 @@
 using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh.Security;
 
 /// <summary>
-/// The mesh-scoped view of the account-lock register (<see cref="AccountLocks.ObserveAll(IMessageHub)"/>)
-/// for the seams that decide outside the permission fold: the query boundary (<c>MeshService</c>,
-/// whose SQL-backed providers filter rows in the database and never consult the fold) and the
-/// portal's request middleware. Everything here reads the SAME shared subscription the fold reads,
-/// so the enforcement points never disagree about who is locked.
+/// The mesh-scoped, STANDING view of who a lock applies to — for the seams that decide outside the
+/// permission fold: the query boundary (<c>MeshService</c>, whose SQL-backed providers filter rows in
+/// the database and never consult the fold) and the portal's request middleware.
+///
+/// <para><b>One standing read, from the platform's providers only.</b> The catalog holds ONE live read
+/// of the register for the process's lifetime, issued with
+/// <see cref="MeshQueryRequest.PlatformProvidersOnly"/>: a fan-out leases every module query provider
+/// for the life of its subscription, so a standing read that reached the modules would pin every module
+/// generation for as long as the process runs (no update could retire one) and would let module code
+/// contribute or withhold platform security data. The register is platform data in the Admin partition;
+/// the platform's own providers serve it.</para>
 ///
 /// <para><b>Two shapes.</b> <see cref="IsLocked"/> is the SYNCHRONOUS read: <c>true</c>/<c>false</c>
-/// once the register has answered, <c>null</c> before that or after its read faulted — "not known
-/// yet" is never "not locked". It reads an immutable snapshot published with
-/// <see cref="Volatile"/>, never a notification subject, so a caller holding a gate of its own can
-/// never meet a subject's gate held by a replay (the lock-order shape
-/// <c>CatalogLoadedSignalLockOrderTest</c> documents). <see cref="ObserveLocked"/> and
-/// <see cref="WhenDetermined"/> are the REACTIVE reads, built straight on the shared register query:
-/// they wait for its answer and receive its FAULT, so a waiter is never left without either.</para>
+/// once the register has answered, <c>null</c> before that or after its read faulted — "not known yet"
+/// is never "not locked". It reads an immutable snapshot published with <see cref="Volatile"/>, never a
+/// subject's state. <see cref="ObserveLocked"/> and <see cref="WhenDetermined"/> are the REACTIVE reads
+/// of the same standing read: they wait for its answer and receive its FAULT, so a waiter is never left
+/// without either.</para>
 ///
-/// <para>Registered as a singleton per mesh (its lifetime IS the mesh's; no static state). The
-/// snapshot read opens on first use; a faulted read is released and re-opened by the next use, never
-/// by a timer. Each read is a GENERATION: only the generation that is current may publish or clear the
-/// snapshot, so the terminal of an old read can never erase what a newer one published.</para>
+/// <para>Each standing read is a GENERATION: only the current one may publish or clear the snapshot, so
+/// an old read's terminal never erases a newer one's answer. A faulted generation is released, and the
+/// next use opens a new one — never a timer. Registered as a singleton per mesh (no static state).</para>
 /// </summary>
 public sealed class AccountLockCatalog : IDisposable
 {
@@ -33,10 +39,10 @@ public sealed class AccountLockCatalog : IDisposable
     private readonly ILogger<AccountLockCatalog>? logger;
     private readonly object gate = new();
     private ImmutableHashSet<string>? snapshot;
-    private SingleAssignmentDisposable? generation;
+    private Generation? current;
     private bool disposed;
 
-    /// <summary>Creates the catalog over the mesh hub's node-stream cache.</summary>
+    /// <summary>Creates the catalog over the mesh hub.</summary>
     /// <param name="hub">The mesh hub.</param>
     /// <param name="logger">Operator log for a faulted read.</param>
     public AccountLockCatalog(IMessageHub hub, ILogger<AccountLockCatalog>? logger = null)
@@ -48,8 +54,8 @@ public sealed class AccountLockCatalog : IDisposable
     /// <summary>
     /// Whether a lock APPLIES to <paramref name="userId"/> (in force, and they are not a platform
     /// administrator — <see cref="AccountLocks.ObserveLocked(IMessageHub,string?)"/>):
-    /// <c>true</c>/<c>false</c> once the register has answered, <c>null</c> while it has not. An id no lock can name (<see cref="AccountLocks.IsLockable"/>)
-    /// is <c>false</c> at once.
+    /// <c>true</c>/<c>false</c> once the register has answered, <c>null</c> while it has not. An id no
+    /// lock can name (<see cref="AccountLocks.IsLockable"/>) is <c>false</c> at once.
     /// </summary>
     /// <param name="userId">The subject.</param>
     /// <returns>The verdict, or null when not yet known.</returns>
@@ -57,21 +63,24 @@ public sealed class AccountLockCatalog : IDisposable
     {
         if (!AccountLocks.IsLockable(userId))
             return false;
-        EnsureSubscribed();
+        Current();
         return Volatile.Read(ref snapshot) is { } locked ? locked.Contains(userId!) : null;
     }
 
     /// <summary>
-    /// The live verdict for <paramref name="userId"/>: emits once the register has answered and on every
-    /// change of the verdict; faults when the register's read faults. Never seeded.
+    /// The live verdict for <paramref name="userId"/> from the standing read: emits once the register
+    /// has answered and on every change of the verdict; faults when the read faults. Never seeded.
     /// </summary>
     /// <param name="userId">The subject.</param>
-    /// <returns>True while locked.</returns>
-    public IObservable<bool> ObserveLocked(string? userId) => AccountLocks.ObserveLocked(hub, userId);
+    /// <returns>True while a lock applies.</returns>
+    public IObservable<bool> ObserveLocked(string? userId)
+        => !AccountLocks.IsLockable(userId)
+            ? Observable.Return(false)
+            : Observable.Defer(() => Current()).Select(locked => locked.Contains(userId!)).DistinctUntilChanged();
 
     /// <summary>
-    /// The verdict for <paramref name="userId"/> as soon as the register has answered — at once when
-    /// the snapshot already has. Emits once and completes, or FAULTS with the register's read fault.
+    /// The verdict for <paramref name="userId"/> as soon as the register has answered — at once when the
+    /// snapshot already has. Emits once and completes, or FAULTS with the read's fault.
     /// </summary>
     /// <param name="userId">The subject.</param>
     /// <returns>True when locked.</returns>
@@ -80,27 +89,62 @@ public sealed class AccountLockCatalog : IDisposable
             ? Observable.Return(known)
             : ObserveLocked(userId).TakeDecisionOutsideGate();
 
-    /// <summary>The live register — every record, lifted ones included — once it has answered.</summary>
-    public IObservable<ImmutableDictionary<string, AccountLock>> Register => AccountLocks.ObserveAll(hub);
+    /// <summary>The accounts a lock applies to, live, from the standing read.</summary>
+    public IObservable<ImmutableHashSet<string>> Locked => Observable.Defer(() => Current());
 
-    private void EnsureSubscribed()
+    /// <summary>
+    /// The register as the platform's providers serve it, live — read as System, folded from the
+    /// query's changes. Leases no module provider (<see cref="MeshQueryRequest.PlatformProvidersOnly"/>).
+    /// </summary>
+    private IObservable<ImmutableDictionary<string, AccountLock>> PlatformRegister()
+    {
+        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var options = hub.JsonSerializerOptions;
+        var request = MeshQueryRequest.FromQuery(AccountLocks.Query).AsSystem() with { PlatformProvidersOnly = true };
+        return mesh.Query<MeshNode>(request)
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.Ordinal), (byPath, change) =>
+            {
+                switch (change.ChangeType)
+                {
+                    case QueryChangeType.Initial:
+                    case QueryChangeType.Reset:
+                        return change.Items.Where(n => n.Path is not null)
+                            .ToImmutableDictionary(n => n.Path!, n => n, StringComparer.Ordinal);
+                    case QueryChangeType.Added:
+                    case QueryChangeType.Updated:
+                        return change.Items.Where(n => n.Path is not null)
+                            .Aggregate(byPath, (acc, n) => acc.SetItem(n.Path!, n));
+                    case QueryChangeType.Removed:
+                        return change.Items.Where(n => n.Path is not null)
+                            .Aggregate(byPath, (acc, n) => acc.Remove(n.Path!));
+                    default:
+                        return byPath;
+                }
+            })
+            .Select(byPath => AccountLocks.Read(byPath.Values, options));
+    }
+
+    /// <summary>The current generation's live set, opening one when there is none.</summary>
+    private IObservable<ImmutableHashSet<string>> Current()
     {
         lock (gate)
         {
-            if (generation is not null || disposed)
-                return;
-            // The generation is current BEFORE Subscribe, so a synchronous first answer (or fault)
-            // finds itself current.
-            var current = new SingleAssignmentDisposable();
-            generation = current;
-            current.Disposable = AccountLocks.ObserveEffectivelyLocked(hub).Subscribe(
-                locks =>
+            if (disposed)
+                return Observable.Empty<ImmutableHashSet<string>>();
+            if (current is not null)
+                return current.Answers;
+            var generation = new Generation();
+            current = generation;
+            generation.Subscription.Disposable = AccountLocks.EffectivelyLocked(hub, PlatformRegister()).Subscribe(
+                locked =>
                 {
                     lock (gate)
                     {
-                        if (ReferenceEquals(generation, current))
-                            Volatile.Write(ref snapshot, locks);
+                        if (!ReferenceEquals(current, generation))
+                            return;
+                        Volatile.Write(ref snapshot, locked);
                     }
+                    generation.Answers.OnNext(locked);
                 },
                 ex =>
                 {
@@ -108,9 +152,9 @@ public sealed class AccountLockCatalog : IDisposable
                     {
                         // Only the current generation may clear: an old read's terminal must never
                         // erase what a newer read has already published.
-                        if (disposed || !ReferenceEquals(generation, current))
+                        if (!ReferenceEquals(current, generation))
                             return;
-                        generation = null;
+                        current = null;
                         Volatile.Write(ref snapshot, null);
                     }
                     if (ex is ObjectDisposedException)
@@ -119,20 +163,33 @@ public sealed class AccountLockCatalog : IDisposable
                         logger?.LogWarning(ex,
                             "The account-lock register could not be read — admission seams wait for it, "
                             + "and the next use re-opens the read");
+                    // Every current waiter receives the fault; the next use opens a new generation.
+                    generation.Answers.OnError(ex);
                 });
+            return generation.Answers;
         }
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
+        Generation? closing;
         lock (gate)
         {
             if (disposed)
                 return;
             disposed = true;
-            generation?.Dispose();
-            generation = null;
+            closing = current;
+            current = null;
         }
+        closing?.Subscription.Dispose();
+        closing?.Answers.OnCompleted();
+    }
+
+    /// <summary>One standing read and the latest answer it gave, replayed to every later observer.</summary>
+    private sealed class Generation
+    {
+        public SingleAssignmentDisposable Subscription { get; } = new();
+        public ReplaySubject<ImmutableHashSet<string>> Answers { get; } = new(1);
     }
 }

@@ -93,6 +93,16 @@ permission-establishment budget and otherwise fails the read as unavailable; the
 answers 503 + Retry-After; and a register read that faults reaches every waiter as a fault, never as
 silence.
 
+### The standing read leases no module
+
+`AccountLockCatalog` holds ONE read of the register for the process's lifetime, and issues it with
+`MeshQueryRequest.PlatformProvidersOnly`. A query fan-out leases every module's query provider for as
+long as its subscription lives, and that lease keeps the module's generation loaded. A standing
+platform read that reached the modules would therefore pin every module generation until the process
+stops, so no update could retire one. It would also let module code contribute or withhold platform
+security data. `ModuleLeasesAtMeshTeardownTest` pins the observable half: while a live autocomplete
+holds its lease, it is the module's ONLY lease.
+
 ## What a lock does not do
 
 - It deletes nothing and moves nothing. Data the person created anywhere stays, attributed to them.
