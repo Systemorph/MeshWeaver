@@ -27,8 +27,9 @@ namespace MeshWeaver.Graph.Security;
 /// check that reached no verdict (logged), which fails closed.</para>
 ///
 /// <para><b>Why a provider, not a wider read rule.</b> The raw directory read answers differently
-/// per backend when run as a viewer: PostgreSQL answers nothing to every signed-in caller (the
-/// <c>auth</c> mirror carries no read grant), the in-memory provider lists every user (it applies
+/// per backend when run as a viewer: PostgreSQL answers nothing to a signed-in caller holding no read
+/// grant on the <c>auth</c> mirror (core's <c>Auth</c> partition declares none, so that is every
+/// caller unless a deployment added one), the in-memory provider lists every user (it applies
 /// the User type's C# read rule). Widening the Postgres access clause would let every signed-in
 /// user enumerate every account. Instead, this provider decides who may list users — the same way
 /// on every backend — and nothing is stored under the reserved namespace, so every storage

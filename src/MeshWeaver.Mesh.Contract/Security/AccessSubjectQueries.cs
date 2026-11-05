@@ -27,7 +27,9 @@ public static class AccessSubjectQueries
     /// lookup mirror via <c>UserNodeType</c>'s routing rule. Usable in attributes (const).
     ///
     /// <para>🚨 NOT a picker query. Run as a viewer, its answer depends on the backend: PostgreSQL
-    /// answers zero rows for every signed-in caller (the mirror schema carries no read grant), while
+    /// answers zero rows to a signed-in caller holding no read grant on the <c>auth</c> mirror schema
+    /// (core's <c>Auth</c> partition declares none, so that is every caller unless a deployment
+    /// added one), while
     /// the in-memory provider applies the User type's C# read rule and lists every user. Pickers bind
     /// <see cref="UsersAt"/>, which decides who may list users the same way everywhere; this string is
     /// what the provider behind it reads as System.</para>
