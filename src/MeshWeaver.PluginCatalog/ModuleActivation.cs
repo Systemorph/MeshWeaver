@@ -706,12 +706,29 @@ public static class ModuleActivationSidecar
                 + "sees its records whole restores it.");
         }
 
-        var (names, listed) = ListRecordDirectories(baseDirectory, onCorrupt, cancellationToken);
-        if (!listed)
+        var (names, listingFault) = TryListRecordDirectories(baseDirectory, cancellationToken);
+        if (listingFault is not null)
+        {
             // Which modules have records is unknown, so no PROJECTION can be trusted: a current
             // image's per-module file is a decision some record or tombstone may have overtaken.
-            foreach (var projected in stored.List.Entries.Where(e => e.ProjectionOf is not null).ToImmutableList())
-                Drop(projected.Name, "the record directories under activation.d could not be listed");
+            // 🚨 ONE fault, ONE line (MeshWeaver#7909, #7910): every drop here is a consequence of
+            // this single listing, so the dropped modules are named IN its line. One line per
+            // module made one transient fault 43 Error lines, filed as two incidents.
+            var projections = stored.List.Entries.Where(e => e.ProjectionOf is not null)
+                .Select(e => e.Name).ToImmutableList();
+            foreach (var name in projections)
+            {
+                byName = byName.Remove(name);
+                order = order.RemoveAll(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
+            }
+            onCorrupt?.Invoke(projections.IsEmpty
+                ? listingFault
+                : $"{listingFault} So {projections.Count} module(s) are NOT loaded from this read: "
+                  + $"[{string.Join(", ", projections)}]. Which modules have records is unknown, and a "
+                  + "projection some record may have overtaken would change which generation runs — "
+                  + "or whether it runs at all — so each is dropped whole; the next read that lists "
+                  + "the record directories restores them.");
+        }
 
         var present = GenerationPresence(baseDirectory, cancellationToken);
         foreach (var moduleName in names)
@@ -1227,6 +1244,21 @@ public static class ModuleActivationSidecar
     private static (ImmutableList<string> Names, bool Listed) ListRecordDirectories(
         string baseDirectory, Action<string>? onCorrupt, CancellationToken cancellationToken)
     {
+        var (names, fault) = TryListRecordDirectories(baseDirectory, cancellationToken);
+        if (fault is not null)
+            onCorrupt?.Invoke(fault);
+        return (names, fault is null);
+    }
+
+    /// <summary>
+    /// The record directories, or the sentence saying why they could not be listed — left to the
+    /// caller to report, so a caller that drops modules because of it says so in the SAME line
+    /// (MeshWeaver#7909, #7910). A cancel escapes the catch, as in
+    /// <see cref="ListRecordDirectories(string, Action{string}?, CancellationToken)"/>.
+    /// </summary>
+    internal static (ImmutableList<string> Names, string? Fault) TryListRecordDirectories(
+        string baseDirectory, CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         var directory = EntriesDirectory(baseDirectory);
         try
@@ -1238,14 +1270,12 @@ public static class ModuleActivationSidecar
                     .Where(IsValidModuleName)
                     .Select(name => name!)
                     .OrderBy(name => name, StringComparer.Ordinal)]
-                : [], true);
+                : [], null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            onCorrupt?.Invoke(
-                $"Module record directories under '{directory}' could not be listed "
+            return ([], $"Module record directories under '{directory}' could not be listed "
                 + $"({ex.GetType().Name}: {ex.Message}).");
-            return ([], false);
         }
     }
 

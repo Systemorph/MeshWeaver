@@ -140,7 +140,10 @@ proposed that as the mesh's module set. Now:
   outranks the aggregate's row by name, so the aggregate cannot hide it — and the aggregate is never
   rewritten, so an unreadable one could otherwise drop every store module for good;
 - if the record directories cannot even be listed, every current-image projection is dropped — it is
-  a decision some record may have overtaken;
+  a decision some record may have overtaken. The drops are reported in the SAME line as the listing
+  fault, which names every dropped module (#7909, #7910): one fault is one line. One line per module
+  turned a single `IOException: Host is down` (the SMB client mid-reconnect, on one pod, healed by
+  the next read) into 43 Error lines, and the log watcher filed them as two incidents;
 - `ProposeModuleSet` **refuses** to propose from a read with any fault (it throws; every caller
   already logs and leaves the mesh on its current set), and a landing or an uninstall writes nothing
   derived from a partial read — its record is on the volume, and the next whole read derives it;
