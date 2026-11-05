@@ -3032,7 +3032,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // delivered it (the shared stream's privileged identity), so without the switch a token
         // reader was decided as someone else. The same scope DeclaredPointRead's standard read uses.
         return meshHub.ServiceProvider.GetService<AccessService>()
-            .RunAs(captured, () => NodeTypeAccessRuleGate.Evaluate(rule, context, captured.ObjectId, logger))
+            .RunAs(captured, () => NodeTypeAccessRuleGate.EvaluateUnlessLocked(meshHub, rule, context, captured.ObjectId, logger))
             .Select(outcome => outcome.IsGranted ? true : outcome.IsUndetermined ? (bool?)null : false);
     }
 

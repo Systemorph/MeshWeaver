@@ -115,6 +115,25 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
                 context.Node.Path)));
         }
 
+        // 🔒 A LOCKED account (AccountLock) holds nothing — ahead of the own-scope shortcut, which grants a
+        // person their own home without asking the fold, and of the per-type rules, which may grant
+        // where the fold would not. The fold refuses a locked subject too; this is the seam that
+        // answers before it. An unreadable lock register is not a decision: fail closed, named.
+        if (AccountLocks.IsLockable(userId))
+            return AccountLocks.ObserveLocked(_hub, userId)
+                .TakeDecisionOutsideGate()
+                .SelectMany(locked => locked
+                    ? Observable.Return(NodeValidationResult.Unauthorized(
+                        LocalizationCatalog.Get("auth.accountLocked", context.AccessContext?.Locale)))
+                    : ValidateUnlocked(context, userId))
+                .Catch((Exception ex) => Observable.Return(
+                    UnestablishedCheck(context, userId, context.Node.Path ?? string.Empty, ex)));
+        return ValidateUnlocked(context, userId);
+    }
+
+    /// <summary>The ownership shortcuts and the ordinary chain, for a subject that is not locked.</summary>
+    private IObservable<NodeValidationResult> ValidateUnlocked(NodeValidationContext context, string? userId)
+    {
         // 🚨 AUTHENTICATED, never "non-empty": a pseudo-identity owns nothing. The logged-out caller
         // arrives NAMED (WellKnownUsers.Anonymous), so the old `!IsNullOrEmpty(userId)` gate let an
         // anonymous caller create a root named `Anonymous` — matching `nodePath == userId` below —

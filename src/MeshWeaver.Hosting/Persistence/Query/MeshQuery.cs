@@ -450,7 +450,7 @@ public partial class MeshQuery : IMeshQueryCore
         return QueryPool.SubscribeThroughPool(WithMembers(matched =>
             MergeProviderObservables(
                 matched.Select(p => (p.Query<T>(request, Options), p.Name)).ToList(),
-                request)));
+                request), request.PlatformProvidersOnly));
     }
 
     /// <summary>
@@ -792,7 +792,7 @@ public partial class MeshQuery : IMeshQueryCore
                     // Real user: ALWAYS hit the secured provider surface
                     // (validators apply per-result RLS for request.UserId).
                     : p.Query<T>(request, options), p.Name)).ToList(),
-                request)));
+                request), request.PlatformProvidersOnly));
     }
 
     /// <summary>
@@ -818,8 +818,14 @@ public partial class MeshQuery : IMeshQueryCore
     /// <see cref="ModuleRetiredException"/> erroring the whole merged query. The leases are released when
     /// the subscription terminates or is unsubscribed.</para>
     /// </remarks>
-    private IObservable<TResult> WithMembers<TResult>(Func<IReadOnlyList<IMeshQueryProvider>, IObservable<TResult>> fanOut)
-        => Observable.Using(() => new QueryMembers(providers), members => fanOut(members.Providers));
+    /// <param name="fanOut">Runs the fan-out over the members.</param>
+    /// <param name="platformOnly">Leave every module provider out — no module lease is taken
+    /// (<see cref="MeshQueryRequest.PlatformProvidersOnly"/>).</param>
+    private IObservable<TResult> WithMembers<TResult>(
+        Func<IReadOnlyList<IMeshQueryProvider>, IObservable<TResult>> fanOut, bool platformOnly = false)
+        => Observable.Using(
+            () => new QueryMembers(platformOnly ? providers.Where(p => p is not ModuleQueryProvider).ToList() : providers),
+            members => fanOut(members.Providers));
 
     private IObservable<QueryResultChange<T>> MergeProviderObservables<T>(
         List<(IObservable<QueryResultChange<T>> Stream, string Provider)> observables,

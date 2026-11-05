@@ -883,6 +883,14 @@ Access control uses these shipped node types:
 - A non-person principal (integration, bot, CI job) with its own `mw_` tokens; granted like any
   subject, audited under its own id, never a global admin. See [Service Identities](../ServiceIdentities).
 
+## Account lock
+
+- **NodeType**: `"AccountLock"`, one record per person at `Admin/_AccountLock/{userId}`
+- While a lock is in force the person holds **no effective permission anywhere** — their own home
+  included — and the fold answers `Permission.None` for them before any grant is looked at. Their
+  data is untouched; an unlock gives the account back as it was. Written only by a platform
+  administrator, never naming an administrator or its writer. See [Account Lockout](../AccountLockout).
+
 ## Group
 
 - **NodeType**: `"Group"`

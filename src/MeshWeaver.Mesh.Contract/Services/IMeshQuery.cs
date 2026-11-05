@@ -274,6 +274,19 @@ public record MeshQueryRequest
     public bool ReportPartialReads { get; init; }
 
     /// <summary>
+    /// Serve this read from the PLATFORM's providers only — never from a module's
+    /// <see cref="IMeshQueryProvider"/>. For a platform read that must hold for the process's lifetime
+    /// over platform-owned data, such as the account-lock register (<c>AccountLockCatalog</c>).
+    ///
+    /// <para>Every module provider of a fan-out is LEASED for the life of the subscription, and its
+    /// lease keeps the module's generation loaded. A standing platform read that fanned out to the
+    /// modules would therefore pin every module generation for as long as the process runs, which no
+    /// update could then retire. It would also let module code contribute or withhold platform security
+    /// data. A read setting this leases no module provider at all.</para>
+    /// </summary>
+    public bool PlatformProvidersOnly { get; init; }
+
+    /// <summary>
     /// Creates a new request with the specified query string.
     /// </summary>
     public static MeshQueryRequest FromQuery(string query) => new() { Query = query };
