@@ -384,27 +384,40 @@ jobs:
           fi
           # Every library first, the dotnet-new template package LAST and only when every library
           # landed: a template on the feed whose closure is not would install and fail to restore.
-          # A refused push does not stop the loop, so ONE run names EVERY id that refuses this
-          # publisher (MeshWeaver.Plugins#4981: stopping at the first cost one hourly run per id).
+          # A failed push does not stop the loop, so ONE run names EVERY failed id (MeshWeaver.Plugins#4981:
+          # stopping at the first cost one hourly run per id). Only a push the feed REFUSED (403 /
+          # Forbidden / permission) is reported as an ownership problem with its two remedies; any other
+          # failure (network, server error) is reported as what it is. Between the markers, this block is
+          # EXECUTED by `template-feed.py --self-test` against a fake dotnet — keep it self-contained.
+          # push-loop:begin
+          push_one() {  # $1 = nupkg; prints the classified error and returns 1 on failure
+            local f="$1" p id out
+            p="$(basename "$f" .nupkg)"; id="${p%%.[0-9]*}"
+            if out="$(dotnet nuget push "$f" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate 2>&1)"; then
+              printf '%s\n' "$out"; return 0
+            fi
+            printf '%s\n' "$out"
+            if grep -qiE '403|forbidden|permission' <<< "$out"; then
+              echo "::error::pushing $p from $GITHUB_REPOSITORY was REFUSED by the feed (403). The id $id most likely already exists and is linked to another repository. If it is public, delete it (https://github.com/orgs/Systemorph/packages/nuget/package/$id/settings → Danger Zone → Delete this package) and the next run recreates it private; if it is private, grant this repository Write on that page → Manage Actions access → Add repository → $GITHUB_REPOSITORY (Write)."
+            else
+              echo "::error::pushing $p from $GITHUB_REPOSITORY failed, and the feed did not refuse it on permission — read the dotnet output above (network, server error, invalid package). No ownership change is indicated."
+            fi
+            return 1
+          }
           template=""
-          refused=()
+          failed=()
           for f in "$RUNNER_TEMP"/nupkgs/*.nupkg; do
             case "$f" in *.symbols.nupkg) continue ;; esac
             case "$(basename "$f")" in MeshWeaver.MemexTemplate.[0-9]*) template="$f"; continue ;; esac
-            dotnet nuget push "$f" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate \
-              || refused+=("$(basename "$f" .nupkg)")
+            push_one "$f" || failed+=("$(basename "$f" .nupkg)")
           done
-          if [ "${#refused[@]}" -gt 0 ]; then
-            for p in "${refused[@]}"; do
-              id="${p%%.[0-9]*}"
-              echo "::error::pushing $p from $GITHUB_REPOSITORY was refused. The id $id ALREADY exists on the feed and is linked to another repository. If it is public, delete it (https://github.com/orgs/Systemorph/packages/nuget/package/$id/settings → Danger Zone → Delete this package) and the next run recreates it private; if it is private, grant this repository Write on that page → Manage Actions access → Add repository → $GITHUB_REPOSITORY (Write)."
-            done
-            echo "::error::${#refused[@]} package(s) refused this publisher: ${refused[*]}. The template package was NOT pushed."
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::${#failed[@]} package push(es) failed: ${failed[*]} — each is classified above. The template package was NOT pushed."
             exit 1
           fi
           [ -n "$template" ] || { echo "::error::no MeshWeaver.MemexTemplate package in $RUNNER_TEMP/nupkgs"; exit 1; }
-          dotnet nuget push "$template" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate || {
-            echo "::error::pushing $(basename "$template") from $GITHUB_REPOSITORY was refused: https://github.com/orgs/Systemorph/packages/nuget/package/MeshWeaver.MemexTemplate/settings → Manage Actions access → Add repository → $GITHUB_REPOSITORY (Write), or delete it if it is public."; exit 1; }
+          push_one "$template" || exit 1
+          # push-loop:end
 
       # A package the push CREATED must be private. A package created with a workflow's GITHUB_TOKEN
       # takes the PUBLISHING repository's visibility (#7660) — this reads it back rather than trusting
