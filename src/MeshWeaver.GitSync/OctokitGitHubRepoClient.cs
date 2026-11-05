@@ -126,19 +126,36 @@ public sealed class OctokitGitHubRepoClient(
     }
 
     /// <inheritdoc />
-    /// <remarks>The contents API (<c>GET /repos/{o}/{r}/contents/{path}?ref=…</c>): ONE request,
-    /// the file base64-encoded in the JSON answer. A non-success status faults with its typed
-    /// <see cref="GitHubApiException"/> (see <see cref="GitHubRestApi.Failure"/>).</remarks>
+    /// <remarks>The contents API (<c>GET /repos/{o}/{r}/contents/{path}?ref=…</c>) answers the file
+    /// base64-encoded in its JSON — but only up to 1 MB. Above that it answers
+    /// <c>"encoding": "none"</c> with an EMPTY <c>content</c> and the blob's <c>sha</c>, which must
+    /// never read as an empty file: the bytes are then read from the git blob API
+    /// (<c>/git/blobs/{sha}</c>, up to 100 MB), on the same pooled transport. A non-success status
+    /// faults with its typed <see cref="GitHubApiException"/> (see <see cref="GitHubRestApi.Failure"/>);
+    /// an answer carrying neither the bytes nor a blob sha faults too.</remarks>
     public IObservable<string> GetFileText(string repositoryUrl, string filePath, string commitish, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
         var path = $"{RepoPath(owner, repo)}/contents/{GitHubRestApi.EscapePath(filePath.Trim('/'))}"
                    + $"?ref={GitHubRestApi.Escape(commitish)}";
-        return Call<GitHubWireBlob>(HttpMethod.Get, path, accessToken)
-            .Select(blob => string.Equals(blob.Encoding, "base64", StringComparison.OrdinalIgnoreCase)
-                ? System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(blob.Content))
-                : blob.Content);
+        return Call<GitHubWireContent>(HttpMethod.Get, path, accessToken)
+            .SelectMany(file =>
+            {
+                if (string.Equals(file.Encoding, "base64", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrEmpty(file.Content))
+                    return Observable.Return(DecodeText(file.Content));
+                if (!string.IsNullOrEmpty(file.Sha))
+                    return Call<GitHubWireBlob>(HttpMethod.Get,
+                            $"{RepoPath(owner, repo)}/git/blobs/{GitHubRestApi.Escape(file.Sha)}", accessToken)
+                        .Select(blob => string.Equals(blob.Encoding, "base64", StringComparison.OrdinalIgnoreCase)
+                            ? DecodeText(blob.Content)
+                            : blob.Content);
+                return Observable.Throw<string>(new InvalidOperationException(
+                    $"GitHub answered {filePath} without its content or a blob sha (encoding '{file.Encoding}')."));
+            });
     }
+
+    private static string DecodeText(string base64) => Encoding.UTF8.GetString(Convert.FromBase64String(base64));
 
     /// <summary>
     /// Mirrors the request's files into the repo as a single commit (blob → tree → commit →

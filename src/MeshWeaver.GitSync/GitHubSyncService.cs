@@ -235,9 +235,11 @@ public sealed class GitHubSyncService
     /// segment after the partition root — <c>_GitSync</c>, <c>_Access</c>, <c>_Activity</c>,
     /// threads, notifications, …), honours <see cref="SyncBehavior"/>, and applies the Space's
     /// gitignore-style <paramref name="ignore"/> rules (<see cref="GitHubSyncConfig.Ignore"/> /
-    /// <see cref="SyncIgnore.Default"/>) to the path relative to the partition root.
+    /// <see cref="SyncIgnore.Default"/>) to the path relative to the partition root. Public because the
+    /// NodeType Code page names a file the way the exporter writes it, which depends on which nodes it
+    /// exports.
     /// </summary>
-    internal static IReadOnlyList<MeshNode> Filter(List<MeshNode> all, string partition, SyncIgnore ignore)
+    public static IReadOnlyList<MeshNode> Filter(List<MeshNode> all, string partition, SyncIgnore ignore)
     {
         var excludedRoots = all
             .Where(n => n.SyncBehavior == SyncBehavior.ExcludeThisAndChildren)

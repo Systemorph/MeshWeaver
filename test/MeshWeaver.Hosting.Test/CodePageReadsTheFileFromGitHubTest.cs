@@ -260,6 +260,24 @@ public class CodePageReadsTheFileFromGitHubTest(ITestOutputHelper output) : Mono
             config with { RepositoryUrl = "https://dev.azure.com/acme/_git/modules" }, "Acme", "Acme/X", ".cs", false));
     }
 
+    /// <summary>
+    /// <c>X/index.*</c> only when the EXPORTER writes children under X: a satellite (<c>_Thread</c>),
+    /// an ignored path or an excluded subtree under the node does not make it a folder.
+    /// </summary>
+    [Fact]
+    public void OnlyExportedDescendants_MakeANodeAFolder()
+    {
+        var config = new GitHubSyncConfig { RepositoryUrl = RepoUrl, Branch = "main", Ignore = ["**/Scratch"] };
+        var self = new MeshNode("T", "Acme/W/Test");
+        MeshNode Child(string path, SyncBehavior behavior = SyncBehavior.Include)
+            => MeshNode.FromPath(path) with { SyncBehavior = behavior };
+
+        Assert.False(GitHubCodeSourceFiles.HasExportedChildren(self,
+            [Child("Acme/W/Test/T/_Thread/x"), Child("Acme/W/Test/T/Scratch"), Child("Acme/W/Test/T/Hidden", SyncBehavior.ExcludeThisAndChildren)],
+            "Acme", config, "Acme/W/Test/T"));
+        Assert.True(GitHubCodeSourceFiles.HasExportedChildren(self, [Child("Acme/W/Test/T/Part")], "Acme", config, "Acme/W/Test/T"));
+    }
+
     /// <summary>A sync entry's clone URL carrying a credential never reaches the page.</summary>
     [Fact]
     public void ASyncEntrysCredential_NeverReachesTheOrigin()

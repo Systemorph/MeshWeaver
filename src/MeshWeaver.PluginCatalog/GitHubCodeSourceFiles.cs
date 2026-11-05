@@ -77,7 +77,7 @@ public sealed class GitHubCodeSourceFiles(IMessageHub hub, ILogger<GitHubCodeSou
                     $"path:{PackageInstaller.InstalledPartition} scope:children "
                     + $"nodeType:{PackageInstaller.PackageNodeType} select:path,id,name,nodeType,content"),
                 SystemQuery($"codesrc-sync:{partition}",
-                    $"path:{partition}/{GitHubSyncService.ConfigId} select:path,id,name,nodeType,content"),
+                    $"path:{QueryParser.PathLiteral($"{partition}/{GitHubSyncService.ConfigId}")} select:path,id,name,nodeType,content"),
                 (installs, syncs) => (installs, syncs))
             .SelectMany(found =>
             {
@@ -101,16 +101,19 @@ public sealed class GitHubCodeSourceFiles(IMessageHub hub, ILogger<GitHubCodeSou
                     return Observable.Return<CodeSourceOrigin?>(null);
                 // The exporter's file name needs the node itself (its serializer's extension) and
                 // whether it has children (leaf `X.ext` vs `X/index.ext`).
+                // Paths are QUOTED (QueryParser.PathLiteral): a node id may carry a space, and a bare
+                // one splits the query term. Full nodes, no select: the export filter reads
+                // SyncBehavior, and a node's serializer may read its content.
+                var literal = QueryParser.PathLiteral(codeNodePath);
                 return Observable.Zip(
-                    SystemQuery($"codesrc-node:{codeNodePath}",
-                        $"path:{codeNodePath} select:path,id,name,nodeType,content"),
-                    SystemQuery($"codesrc-children:{codeNodePath}",
-                        $"namespace:{codeNodePath} select:path,id"),
-                    (node, children) =>
+                    SystemQuery($"codesrc-node:{codeNodePath}", $"path:{literal}"),
+                    SystemQuery($"codesrc-descendants:{codeNodePath}", $"path:{literal} scope:descendants"),
+                    (node, descendants) =>
                     {
                         var self = node.FirstOrDefault(n => string.Equals(n.Path, codeNodePath, StringComparison.OrdinalIgnoreCase));
                         var extension = self is null ? ".cs" : NodeFileMapper.Extension(self, parsers);
-                        return FromSyncEntry(config, partition, codeNodePath, extension, hasChildren: children.Count > 0);
+                        return FromSyncEntry(config, partition, codeNodePath, extension,
+                            hasChildren: HasExportedChildren(self, descendants, partition, config, codeNodePath));
                     });
             });
 
@@ -179,6 +182,22 @@ public sealed class GitHubCodeSourceFiles(IMessageHub hub, ILogger<GitHubCodeSou
             repository,
             gitRef!,
             string.IsNullOrEmpty(folder) ? file : $"{folder}/{file}");
+    }
+
+    /// <summary>
+    /// Whether the EXPORTER writes this node as <c>X/index.*</c>: only descendants it actually exports
+    /// count (<see cref="GitHubSyncService.Filter"/> — satellites, ignore rules, excluded subtrees
+    /// dropped), exactly as <see cref="NodeFileMapper.HasChildren"/> runs over the exported set. Pure.
+    /// </summary>
+    public static bool HasExportedChildren(
+        MeshNode? self, IReadOnlyList<MeshNode> descendants, string partition, GitHubSyncConfig config, string codeNodePath)
+    {
+        var all = new List<MeshNode>();
+        if (self is not null) all.Add(self);
+        all.AddRange(descendants);
+        var exported = GitHubSyncService.Filter(all, partition, SyncIgnore.For(config));
+        return NodeFileMapper.HasChildren(codeNodePath,
+            exported.Select(n => n.Path).Where(p => !string.Equals(p, codeNodePath, StringComparison.OrdinalIgnoreCase)));
     }
 
     private static bool IsGitHub(string? repositoryUrl)
