@@ -1,6 +1,8 @@
 ﻿using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -22,6 +24,11 @@ public static class AccessAssignmentNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
+        // The subject pickers' users half (Auth/_GrantSubjects/{scope}) — listed only to a viewer
+        // who may grant at the scope (policy user-listing-needs-grant-right). A plain AddSingleton,
+        // never TryAdd: providers are an enumerable fan-in.
+        builder.ConfigureServices(services => services
+            .AddSingleton<IMeshQueryProvider>(sp => new Security.GrantSubjectsQueryProvider(sp)));
         return builder;
     }
 

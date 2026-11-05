@@ -74,8 +74,9 @@ public static class AccessControlLayoutArea
             ["role"] = ""
         });
 
-        // Canonical subject queries (users at root via the auth mirror + groups in the
-        // partition subtree) — never resolve the attribute template with a PATH here: the
+        // Canonical subject queries (users — listed only to a viewer who may grant at this scope,
+        // policy user-listing-needs-grant-right — + groups in the partition subtree) — never
+        // resolve the attribute template with a PATH here: the
         // previous ResolveQueries(queries, nodePath, nodePath) substituted the node's path
         // into {node.namespace}, scoping the group search to the node instead of its partition.
         var subjectQueries = AccessSubjectQueries.ForScope(nodePath);

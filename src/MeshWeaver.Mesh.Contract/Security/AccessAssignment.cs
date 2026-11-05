@@ -15,7 +15,7 @@ namespace MeshWeaver.Mesh.Security;
 public record AccessAssignment
 {
     /// <summary>Subject identifier (User or Group path) for this assignment.</summary>
-    [MeshNode(AccessSubjectQueries.Users, AccessSubjectQueries.GroupsTemplate)]
+    [MeshNode(AccessSubjectQueries.UsersTemplate, AccessSubjectQueries.GroupsTemplate)]
     public string AccessObject { get; init; } = "";
 
     /// <summary>Optional display name for the subject.</summary>

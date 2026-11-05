@@ -298,9 +298,11 @@ until N stops being a floor.
   (MeshWeaver.Plugins#712) use. Stamping the REQUEST keeps the identity on the read alone; the
   grant composed on its result still runs as the inviter. The rest of the corpus was already
   system-side (`UserIdentityCache`, `DeviceSeed`, the inbound mail/Teams processors) or is a
-  listing that is genuinely the caller's own view (the recipient picker in `SendDocumentLayoutArea`,
-  the Access Control subject picker's `AccessSubjectQueries.Users`), where 0 means "not visible to
-  you" and the grant-by-email path is the way to reach a person the picker does not show. 🚨 The
+  listing that is genuinely the caller's own view (the recipient picker in `SendDocumentLayoutArea`),
+  where 0 means "not visible to you". The Access Control subject picker no longer runs this read as
+  its viewer: it lists users only to someone who may grant at the scope, read as System behind that
+  check (policy [`user-listing-needs-grant-right`](../PolicyNotProse), [Granting
+  Access](../GrantingAccess) → *Who may list users*). 🚨 The
   in-memory provider cannot reproduce this zero — it re-decides each row through the type's C#
   access rule, which the mirror's SQL filter never consults — which is why the identical code was
   green on every unit test and is why `InviteResolvesTheInviteeAsSystemTest` pins the lookup's
