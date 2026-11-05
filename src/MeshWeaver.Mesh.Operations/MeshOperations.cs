@@ -4869,7 +4869,7 @@ public partial class MeshOperations
                     "{Verb}: Update on {Path} was denied by the standard check — re-deciding "
                     + "through the {NodeType} access rule, which governs this node type",
                     verb, resolvedPath, node.NodeType);
-                return NodeTypeAccessRuleGate.Evaluate(rule, context, UserIdOf(caller), logger);
+                return NodeTypeAccessRuleGate.EvaluateUnlessLocked(hub, rule, context, UserIdOf(caller), logger);
             })
             .Catch((Exception ex) =>
             {

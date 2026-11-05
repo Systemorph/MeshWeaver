@@ -309,7 +309,12 @@ internal static class PermissionEvaluator
                 ObserveGatedNodes(hub, cache, gates, staticGatedNodes),
                 ObserveRepositoryOwnedContent(cache, options, nodePath),
                 ObserveRuleGrants(cache, options, nodePath),
-                (nodes, policies, memberships, gatedNodes, repositoryOwned, ruleGrants) =>
+                // 🔒 The account lock (AccountLock, Admin/_AccountLock): a locked subject holds
+                // NOTHING — applied after every other leg, the public grant included. NOT seeded:
+                // it subtracts, so an optimistic "unlocked" before the register answers would be an
+                // admission window (the monotonicity rule above). Doc/Architecture/AccountLockout.
+                AccountLocks.ObserveLocked(cache, options, userId),
+                (nodes, policies, memberships, gatedNodes, repositoryOwned, ruleGrants, locked) =>
                 {
                     // Match grants to the viewer OR any group they belong to (transitively). A group
                     // grant's subject is the group path, and memberships live UNDER the group node —
@@ -325,7 +330,7 @@ internal static class PermissionEvaluator
                     // ordinary roles they are.
                     granted = AddRuleGrants(granted, subjects, ruleGrants);
                     return (Granted: granted, Denied: denied, RuntimePolicies: policies, GatedNodes: gatedNodes,
-                        RepositoryOwned: repositoryOwned);
+                        RepositoryOwned: repositoryOwned, Locked: locked);
                 })
             .Select(snap =>
             {
@@ -343,13 +348,18 @@ internal static class PermissionEvaluator
                 // like PartitionAccessPolicy.PublicRead — so a declared public surface needs no
                 // role and no AccessAssignment row of any kind. It only ever ADDS Read.
                 return (state.RoleIds, PermissionCap: cap,
-                    state.PublicGrant | GateGrant(gates, snap.GatedNodes, nodePath));
+                    state.PublicGrant | GateGrant(gates, snap.GatedNodes, nodePath), snap.Locked);
             });
 
         return enriched
             .SelectMany(state =>
             {
-                var (roleIds, permissionCap, publicGrant) = state;
+                var (roleIds, permissionCap, publicGrant, locked) = state;
+
+                // 🔒 A locked account holds no effective permission anywhere — its own home partition
+                // and every public surface included. Nothing else needs evaluating.
+                if (locked)
+                    return Observable.Return(Permission.None);
 
                 // Fast path: every role is built-in → resolve synchronously.
                 Permission rolePermsValue = Permission.None;

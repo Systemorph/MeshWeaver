@@ -358,7 +358,7 @@ internal sealed class MeshService(
         var stamped = StampViewer(request);
         // The reader scope covers BOTH answers: the refusal's empty Initial is delivered on the
         // SUBSCRIBING turn, which need not be the reader's.
-        return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
+        return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesLockedViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
             // One definitive, empty Initial read from NO partition — an answer, not silence, so a
             // consumer waiting on the Initial is released rather than parked.
             ? Observable.Return(new QueryResultChange<T>
@@ -371,14 +371,14 @@ internal sealed class MeshService(
     }
 
     public IObservable<T?> Select<T>(string path, string property)
-        => RefusesAnonymousViewer(AmbientViewer()) || RefusesScopedReader()
+        => RefusesAnonymousViewer(AmbientViewer()) || RefusesLockedViewer(AmbientViewer()) || RefusesScopedReader()
             ? Observable.Return(default(T))
             : _query.Select<T>(path, property);
 
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
     {
         var stamped = StampViewer(request);
-        return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
+        return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesLockedViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
             ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
             : _query.Query(stamped)).CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
     }
@@ -423,6 +423,27 @@ internal sealed class MeshService(
         => viewer is not null
            && AnonymousAccess.IsAnonymousSubject(viewer)
            && AnonymousAccess.IsDenied(hub.ServiceProvider);
+
+    /// <summary>
+    /// 🔒 The READ half of the account lock (<see cref="AccountLock"/>): a viewer whose account is
+    /// locked reads NOTHING through a query. The permission half sits in <c>PermissionEvaluator</c>
+    /// (a locked subject folds to <see cref="Permission.None"/>), but — exactly as for the anonymous
+    /// switch above — the SQL-backed providers filter rows in the database against the viewer's
+    /// projected grants and never consult the C# fold, so an existing circuit or an agent run of a
+    /// locked person would still list everything their grants reach. Refusing here, at the one call
+    /// boundary every secured read passes, closes that path for every backend at once.
+    ///
+    /// <para>Decided off the shared register (<see cref="AccountLockCatalog"/>) on the calling thread.
+    /// Before the register has answered — the first moments of a process — the verdict is unknown and
+    /// the read is NOT refused here; the portal's admission waits for the register, so a locked person
+    /// is not admitted in that window, and every node read still passes the fold, which never answers
+    /// before the register has. See Doc/Architecture/AccountLockout.</para>
+    /// </summary>
+    /// <param name="viewer">The viewer the read resolved to, or null when unresolved.</param>
+    /// <returns><c>true</c> when the read must answer "nothing".</returns>
+    private bool RefusesLockedViewer(string? viewer)
+        => viewer is not null
+           && hub.ServiceProvider.GetRequiredService<AccountLockCatalog>().IsLocked(viewer) == true;
 
     /// <summary>
     /// 🛡️ The READ half of the API-token scope cap (<see cref="ApiTokenScope"/>): a caller whose
@@ -521,7 +542,7 @@ internal sealed class MeshService(
         int limit = 10,
         string? contextPath = null,
         string? context = null)
-        => RefusesAnonymousViewer(AmbientViewer()) || RefusesScopedReader()
+        => RefusesAnonymousViewer(AmbientViewer()) || RefusesLockedViewer(AmbientViewer()) || RefusesScopedReader()
             ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
             : _query.Autocomplete(basePath, prefix, mode, limit, contextPath, context);
 

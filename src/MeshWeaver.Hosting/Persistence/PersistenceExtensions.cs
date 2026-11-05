@@ -905,6 +905,9 @@ public static class PersistenceExtensions
         // upstream subscription per path serves every consumer.
         services.TryAddSingleton<MeshNodeStreamCache>();
         services.TryAddSingleton<IMeshNodeStreamCache>(sp => sp.GetRequiredService<MeshNodeStreamCache>());
+        // The synchronous view of the account-lock register (Admin/_AccountLock), read through the
+        // cache above by the query boundary and the portal's admission — Doc/Architecture/AccountLockout.
+        services.TryAddSingleton<MeshWeaver.Mesh.Security.AccountLockCatalog>();
         // What the cache could not TYPE, kept so /health can name it (2026-09-08): a mesh-scoped
         // instance, registered beside the seam that records into it.
         services.TryAddSingleton<ContentDegradationRegistry>();

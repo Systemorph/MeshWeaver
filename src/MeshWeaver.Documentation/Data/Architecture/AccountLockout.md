@@ -1,0 +1,87 @@
+---
+Name: Account Lockout
+Category: Architecture
+Description: How a platform administrator locks a person out of an instance — sign-in, tokens, open sessions and agent runs refused, no effective permission anywhere — without touching the person's data, and how an unlock gives the account back unchanged. Where the record lives, the four places it is enforced, and the guards that keep a lock from removing an administrator.
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+---
+
+# Account Lockout
+
+When a person must no longer use an instance — a consultant whose engagement ended, an employee who
+left — the platform administrator **locks the account**. A lock is not a deletion: the person's home
+partition, their threads, their contributions elsewhere and their grants stay exactly where they are,
+so an **unlock** gives the account back as it was. Removing data is a separate, deliberate step that
+a lock never takes.
+
+## The record
+
+| | |
+|---|---|
+| **Path** | `Admin/_AccountLock/{userId}` — one node per person, node type `AccountLock` |
+| **Content** | `UserId`, `LockedAt`, `LockedBy`, `Reason`, `UnlockedAt`, `UnlockedBy` |
+| **In force** | while `LockedAt` is set and `UnlockedAt` is not |
+| **Register** | `search path:Admin/_AccountLock scope:descendants nodeType:AccountLock` |
+
+The record lives in the **Admin partition**, not on the person's `User` node. The User node is the
+root of the person's own partition, where they hold Admin — a lock there would sit inside the reach
+of the person it locks out, and a platform administrator has no standing access to it (a global admin
+is not a data superuser, see [Access Control](../AccessControl)). The Admin partition is the one
+partition only a platform administrator can write; invitations, service identities and declared grant
+rules live there for the same reason.
+
+An unlock **keeps** the record and stamps `UnlockedAt`/`UnlockedBy`, so the version history of that one
+node answers the operator's question — who locked, when, why, and who gave the account back.
+
+## Locking and unlocking
+
+`AccountLocks.Lock(hub, caller, userId, reason)` and `AccountLocks.Unlock(hub, caller, userId)` follow
+policy `authorize-as-caller-execute-as-system` ([Authorize as the caller, execute as System](../AuthorizeAsCallerExecuteAsSystem)):
+the caller is passed explicitly, must be a platform administrator (`hub.IsGlobalAdmin(caller)`), and
+only then is the record written as System. The portal's **Accounts** tab under Admin → Settings is the
+human surface for both verbs (MeshWeaver.Plugins).
+
+A lock is refused, by name, when it would:
+
+1. name something that is not a person — a reserved principal (`System`, `Anonymous`, `Public`, a hub),
+   a service principal (those are *revoked*, see [Service Identities](../ServiceIdentities)), an email or
+   a path;
+2. lock the caller themselves;
+3. lock a **platform administrator**. Another administrator removes their `Admin/_Access` grant first.
+   This is what keeps a lock from ever leaving an instance without a human administrator, which would
+   hand the next sign-in the first-user bootstrap.
+
+The same three rules hold for a record written any other way (an MCP `create`, an import): the
+`AccountLockWriteGuard` validator refuses a lock in force that names an administrator or its own writer,
+and a record whose node id is not the user it names.
+
+Unlocking an account that is not locked writes nothing: the register decides, never a point read of a
+path that may not exist.
+
+## Where it is enforced
+
+All four seams read the **same** live register (`AccountLocks.ObserveAll`, one shared, Admin-anchored
+read per process), so they never disagree about who is locked.
+
+| Seam | What a locked person gets |
+|---|---|
+| **The permission fold** (`PermissionEvaluator`) | `Permission.None` on every path — their home, every space, every public surface. Every node read, write, delivery and agent tool call passes this fold, so an open Blazor session and an agent run on the person's behalf are refused at their next check. |
+| **Node-type access rules** (`NodeTypeAccessRuleGate.EvaluateUnlessLocked`) | Denied before the rule runs. A rule may grant where the fold does not — a profile readable by every signed-in user, a submitter reading their own submission — and a locked account holds nothing. Declared point reads are refused the same way. |
+| **The query boundary** (`MeshService`) | One empty answer, read from no partition. The SQL-backed providers filter rows in the database and never consult the fold, so this is what keeps a locked person's listing empty there. |
+| **The portal's admission** (request middleware, MeshWeaver.Plugins) | A 403 at sign-in and for every bearer token, including MCP and API tokens. |
+
+The fold's lock leg is **not seeded**: a lock subtracts everything, so an optimistic "unlocked" before
+the register has answered would be an admission window (the monotonicity rule in
+[Access Control](../AccessControl) → "The convergence contract"). The synchronous view
+(`AccountLockCatalog`) answers *locked*, *not locked* or *not known yet*; the admission waits for an
+answer, and the query boundary refuses only on *locked* — before the register has answered in a fresh
+process, the fold remains the authority.
+
+## What a lock does not do
+
+- It deletes nothing and moves nothing. Data the person created anywhere stays, attributed to them.
+- It does not revoke their grants or group memberships; they simply confer nothing while the lock is in
+  force, and confer them again after an unlock.
+- It does not stop sign-in at the identity provider. On an invitation-only instance the platform's
+  refusal is enough; an operator who also wants the identity provider to refuse disables the account
+  there.
+- It does not reach a person's data on **another** instance.
