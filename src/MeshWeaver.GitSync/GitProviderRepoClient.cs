@@ -84,6 +84,10 @@ public sealed class GitProviderRepoClient : IGitHubRepoClient
             : github.GetCanonicalRepository(repositoryUrl, accessToken));
 
     /// <inheritdoc />
+    public IObservable<string> GetFileText(string repositoryUrl, string filePath, string commitish, string accessToken)
+        => Route(repositoryUrl, c => c.GetFileText(repositoryUrl, filePath, commitish, accessToken));
+
+    /// <inheritdoc />
     public IObservable<GitHubBranchResult> CreateBranch(GitHubCreateBranchRequest request)
         => Route(request.RepositoryUrl, c => c.CreateBranch(request));
 

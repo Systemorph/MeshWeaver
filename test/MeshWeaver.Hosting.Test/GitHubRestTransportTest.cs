@@ -675,6 +675,49 @@ public class GitHubRestTransportTest
 
     // ── harness ──────────────────────────────────────────────────────────────
 
+    // ── single-file reads (the NodeType Code page) ───────────────────────────
+
+    [Fact]
+    public async Task AFileUpToOneMegabyte_IsDecodedFromTheContentsAnswer()
+    {
+        var text = "public static class A { }\n";
+        var gh = new FakeGitHub().On("GET", R + "/contents/Acme/T/A.cs?ref=abc1234",
+            Json($$"""{"content":"{{Convert.ToBase64String(Encoding.UTF8.GetBytes(text))}}","encoding":"base64","sha":"b1"}"""));
+        using var pools = new IoPoolRegistry();
+
+        Assert.Equal(text, await Run(Client(pools, gh).GetFileText(Repo, "Acme/T/A.cs", "abc1234", "s3cret")));
+        Assert.Equal("token s3cret", Assert.Single(gh.Requests).Authorization);
+    }
+
+    /// <summary>
+    /// 🚨 Above 1 MB the contents API answers <c>encoding: none</c> with EMPTY content. Read as text
+    /// that was an empty file, replacing the page's mesh copy with a blank editor; the bytes come
+    /// from the blob the answer names.
+    /// </summary>
+    [Fact]
+    public async Task AFileAboveOneMegabyte_IsReadFromItsBlob_NeverAsAnEmptyFile()
+    {
+        var text = new string('x', 1_200_000);
+        var gh = new FakeGitHub()
+            .On("GET", R + "/contents/Acme/T/Big.cs?ref=abc1234", Json("""{"content":"","encoding":"none","sha":"blob42"}"""))
+            .On("GET", R + "/git/blobs/blob42",
+                Json($$"""{"content":"{{Convert.ToBase64String(Encoding.UTF8.GetBytes(text))}}","encoding":"base64"}"""));
+        using var pools = new IoPoolRegistry();
+
+        Assert.Equal(text, await Run(Client(pools, gh).GetFileText(Repo, "Acme/T/Big.cs", "abc1234", "s3cret")));
+        Assert.Equal(2, gh.Requests.Count);
+    }
+
+    [Fact]
+    public async Task AnAnswerWithoutBytesOrABlob_Faults()
+    {
+        var gh = new FakeGitHub().On("GET", R + "/contents/Acme/T/X.cs?ref=abc1234", Json("""{"content":"","encoding":"none"}"""));
+        using var pools = new IoPoolRegistry();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Run(Client(pools, gh).GetFileText(Repo, "Acme/T/X.cs", "abc1234", "s3cret")));
+    }
+
     private static OctokitGitHubRepoClient Client(IoPoolRegistry pools, FakeGitHub gh)
         => new(pools, logger: null, httpClient: new HttpClient(gh));
 
