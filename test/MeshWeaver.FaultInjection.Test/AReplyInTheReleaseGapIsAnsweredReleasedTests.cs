@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -108,6 +110,79 @@ public class AReplyInTheReleaseGapIsAnsweredReleasedTest(AReplyInTheReleaseGapIs
             + "its NACK must stay on the loud path");
     }
 
+    /// <summary>
+    /// Copilot thread 4473255558: two registrations of ONE address disposed concurrently. The
+    /// successor marks its release and, before it removes its route, the predecessor is disposed too.
+    /// With a single marker slot the predecessor's mark overwrote the successor's, and the
+    /// predecessor's settle then cleared the address while the SUCCESSOR's release was still in flight.
+    /// In production the predecessor's Detach can find the successor's live route and stamp no
+    /// tombstone (#5136), so that cleared marker is the only cover, and the gap reopens.
+    ///
+    /// <para>Deterministic: the routing service's <c>AfterReleaseMarked</c> seam runs the
+    /// predecessor's disposal inside exactly that window, the release hold holds both Detach calls,
+    /// and <c>AfterReleaseSettled</c> is the positive signal that the predecessor's settle ran.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task APredecessorsSettle_NeverClearsASuccessorsReleaseInFlight()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var routing = mesh.Hub(Owner).ServiceProvider.GetRequiredService<IRoutingService>()
+            .Should().BeOfType<OrleansRoutingService>().Subject;
+        var address = new Address(OrleansTestMeshExtensions.SiloHostedStreamRoutedType, $"overlap-{Guid.NewGuid():N}");
+
+        var predecessor = routing.RegisterStream(address, (d, _) => Observable.Return(d.Processed()));
+        await (routing.PodHubClaimSettled(address) ?? Observable.Return(Unit.Default))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var successor = routing.RegisterStream(address, (d, _) => Observable.Return(d.Processed()));
+        await (routing.PodHubClaimSettled(address) ?? Observable.Return(Unit.Default))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // The predecessor is disposed INSIDE the successor's disposal, so its Detach is issued first:
+        // the first queued switch is the predecessor's, the second the successor's.
+        var hold = mesh.Silo(Owner).GetRequiredService<ReleaseHold>();
+        using var predecessorRelease = hold.Hold(address.ToString());
+        using var successorRelease = hold.Hold(address.ToString());
+        var settled = new ReplaySubject<Address>();
+        var interleaved = 0;
+        routing.AfterReleaseMarked = marked =>
+        {
+            if (marked == address && Interlocked.Exchange(ref interleaved, 1) == 0)
+                predecessor.Dispose();
+        };
+        routing.AfterReleaseSettled = settled.OnNext;
+        try
+        {
+            successor.Dispose();
+            interleaved.Should().Be(1, "PRECONDITION: the predecessor was disposed inside the successor's window");
+            await predecessorRelease.Arrivals.Should().Within(TestTimeouts.Convergence)
+                .Emit("the predecessor's Detach must be held, or this case injected nothing", ct);
+            await successorRelease.Arrivals.Should().Within(TestTimeouts.Convergence)
+                .Emit("the successor's Detach must be held, or its release could settle on its own", ct);
+
+            predecessorRelease.Release();
+            await settled.Where(a => a == address).FirstAsync().Should().Within(TestTimeouts.Convergence)
+                .Emit("the predecessor's release settles once its Detach has returned", ct);
+
+            routing.IsReleaseInFlight(address).Should().BeTrue(
+                "the SUCCESSOR's release is still held: a predecessor's settle must take out only its own "
+                + "token, never the successor's mark (Copilot thread 4473255558)");
+        }
+        finally
+        {
+            routing.AfterReleaseMarked = null;
+            routing.AfterReleaseSettled = null;
+            predecessorRelease.Release();
+            successorRelease.Release();
+        }
+
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => routing.IsReleaseInFlight(address))
+            .Where(inFlight => !inFlight)
+            .FirstAsync()
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("with both releases settled the address is no longer in flight — the marker is bounded", ct);
+    }
+
     private static IMessageDelivery Delivery(Address address, string payload) =>
         new MessageDelivery<string>(payload, new PostOptions(address).WithTarget(address),
             JsonSerializerOptions.Default);
@@ -140,24 +215,31 @@ public class MultiSiloReleaseHoldConfigurator : FaultInjectionSiloConfigurator
 }
 
 /// <summary>
-/// Holds the pod-hub release (<c>IPodHubGrain.Detach</c>) of ONE address leaving this silo until the
-/// returned switch is released. One instance per silo (a DI singleton), never static.
+/// Holds pod-hub releases (<c>IPodHubGrain.Detach</c>) of ONE address leaving this silo. Each
+/// <see cref="Hold"/> queues one switch, and each Detach call of the address takes the next queued
+/// switch, in call order, so two releases of the same address are held and let go independently.
+/// One instance per silo (a DI singleton), never static.
 /// </summary>
 public sealed class ReleaseHold
 {
-    private FaultSwitch? _hold;
+    private ImmutableQueue<FaultSwitch> _queued = ImmutableQueue<FaultSwitch>.Empty;
     private string? _addressPath;
 
-    /// <summary>Holds the release of <paramref name="addressPath"/> until the returned switch is released.</summary>
+    /// <summary>Holds the next release of <paramref name="addressPath"/> until the returned switch is released.</summary>
     public FaultSwitch Hold(string addressPath)
     {
-        Volatile.Write(ref _addressPath, addressPath);
-        var fault = new FaultSwitch($"hold the pod-hub release of {addressPath}");
-        Volatile.Write(ref _hold, fault);
+        // A new address starts a new queue: a switch a failed earlier case left unconsumed must not
+        // be handed to this address's Detach.
+        if (Interlocked.Exchange(ref _addressPath, addressPath) != addressPath)
+            Volatile.Write(ref _queued, ImmutableQueue<FaultSwitch>.Empty);
+        var fault = new FaultSwitch($"hold a pod-hub release of {addressPath}");
+        ImmutableInterlocked.Enqueue(ref _queued, fault);
         return fault;
     }
 
-    internal FaultSwitch? Current => Volatile.Read(ref _hold);
+    /// <summary>The switch the next Detach of the held address takes, or null when none is queued.</summary>
+    internal FaultSwitch? TakeNext()
+        => ImmutableInterlocked.TryDequeue(ref _queued, out var next) ? next : null;
 
     internal string? AddressPath => Volatile.Read(ref _addressPath);
 }
@@ -171,11 +253,11 @@ internal sealed class ReleaseHoldFilter(ReleaseHold hold) : IOutgoingGrainCallFi
 {
     public async Task Invoke(IOutgoingGrainCallContext context)
     {
-        if (hold.Current is { IsClosed: true } fault
-            && hold.AddressPath is { } held
+        if (hold.AddressPath is { } held
             && context.InterfaceName.Contains(nameof(IPodHubGrain), StringComparison.Ordinal)
             && context.MethodName == nameof(IPodHubGrain.Detach)
-            && context.TargetId.Key.ToString() == held)
+            && context.TargetId.Key.ToString() == held
+            && hold.TakeNext() is { IsClosed: true } fault)
             await fault.Gate(Observable.Return(Unit.Default), $"release of {held}").Await();
         await context.Invoke();
     }

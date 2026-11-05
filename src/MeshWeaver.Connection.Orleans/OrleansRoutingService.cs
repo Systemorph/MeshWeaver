@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Sockets;
@@ -102,11 +103,55 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// refusal, the shape that means "a live claim is stranded", so a reply to a hub that had just
     /// been disposed was logged at Error as an undeliverable NACK. With this marker
     /// <c>PodHubGrain.Deliver</c> answers the TERMINAL Released refusal it would give a moment later,
-    /// and the router drops that NACK at Debug. Value-matched by a per-registration token, so a
-    /// predecessor's settle never clears a successor's marker. Instance field, never static; entries
-    /// live only for the duration of one release call.
+    /// and the router drops that NACK at Debug.
+    /// <para>🚨 <b>A SET of tokens per address, never one slot.</b> Each registration owns one token,
+    /// adds it on its disposal and removes only that token once its own release settles, both as a
+    /// compare-and-swap of the immutable set. A single slot let a predecessor's disposal OVERWRITE a
+    /// successor's mark: the successor marks and has not yet removed its route, the predecessor marks
+    /// over it, its Detach finds the successor's live route and is (rightly) not honoured, and its
+    /// settle then clears the only mark while the successor's release is still in flight, which
+    /// reopens the gap. With a set, the address reads "release in flight" while ANY registration's
+    /// release is pending. Instance field, never static; a token lives for one release call.</para>
     /// </summary>
-    private readonly ConcurrentDictionary<Address, object> releasesInFlight = new();
+    private readonly ConcurrentDictionary<Address, ImmutableHashSet<object>> releasesInFlight = new();
+
+    /// <summary>
+    /// Test seam (<c>InternalsVisibleTo</c>): invoked by a registration's disposal right after it
+    /// marks its release in flight and BEFORE it removes its local route — the one window a racing
+    /// disposal of the same address can interleave into (#7888). Null in every real use.
+    /// </summary>
+    internal Action<Address>? AfterReleaseMarked { get; set; }
+
+    /// <summary>
+    /// Test seam (<c>InternalsVisibleTo</c>): invoked once a registration's release has settled and its
+    /// token was removed. The positive signal a test waits on instead of guessing when a Detach's
+    /// continuation ran. Null in every real use.
+    /// </summary>
+    internal Action<Address>? AfterReleaseSettled { get; set; }
+
+    private void MarkReleaseInFlight(Address address, object token)
+    {
+        releasesInFlight.AddOrUpdate(
+            address, _ => ImmutableHashSet.Create(token), (_, pending) => pending.Add(token));
+        AfterReleaseMarked?.Invoke(address);
+    }
+
+    private void SettleRelease(Address address, object token)
+    {
+        // Compare-and-swap on the exact set read: a concurrent mark or settle of the same address makes
+        // the swap fail, and the loop re-reads. Only THIS token is ever taken out.
+        while (releasesInFlight.TryGetValue(address, out var pending) && pending.Contains(token))
+        {
+            var remaining = pending.Remove(token);
+            var swapped = remaining.IsEmpty
+                ? releasesInFlight.TryRemove(new KeyValuePair<Address, ImmutableHashSet<object>>(address, pending))
+                : releasesInFlight.TryUpdate(address, remaining, pending);
+            if (!swapped)
+                continue;
+            AfterReleaseSettled?.Invoke(address);
+            return;
+        }
+    }
     private readonly CompositeDisposable inFlight = new();
     // Mesh-scoped IO pool for the genuinely-async stream UnsubscribeAsync. The hub's
     // RegisterForDisposal(IDisposable) is synchronous; the async unsubscribe is bridged
@@ -1194,7 +1239,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// <param name="address">The address a delivery is for.</param>
     /// <returns>True while this process is releasing a registration of the address.</returns>
     public bool IsReleaseInFlight(Address address) =>
-        releasesInFlight.ContainsKey(GetHostAddress(address));
+        releasesInFlight.TryGetValue(GetHostAddress(address), out var pending) && !pending.IsEmpty;
 
     /// <summary>
     /// Registers a local delivery callback for an address: the local route goes live at once, and the
@@ -1235,9 +1280,8 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // #7888: the release marker this registration's disposal sets BEFORE removing its route, and
         // the settle that clears exactly this registration's marker once its release has landed.
         var releaseToken = new object();
-        void MarkReleaseInFlight() => releasesInFlight[address] = releaseToken;
-        void ReleaseSettled() =>
-            releasesInFlight.TryRemove(new KeyValuePair<Address, object>(address, releaseToken));
+        void MarkThisRelease() => MarkReleaseInFlight(address, releaseToken);
+        void ReleaseSettled() => SettleRelease(address, releaseToken);
         var podHub = AttachPodHub(address, ReleaseSettled);
 
         // 🚨 NO MEMORY STREAM ON THIS HOST — #4802. A multi-silo host registers none: the pod-hub
@@ -1253,7 +1297,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             {
                 // The same value-matched removal and claim-first release as the stream case below.
                 // Marked BEFORE the route goes, so no delivery can see "no route, no release" (#7888).
-                MarkReleaseInFlight();
+                MarkThisRelease();
                 streams.TryRemove(new KeyValuePair<Address, AsyncDelivery>(address, callback));
                 podHub.Dispose();
             });
@@ -1320,7 +1364,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // clears only if it runs after. See Doc/Architecture/DisposedScopeAndDyingHubs.)
             // #7888: mark the release in flight BEFORE the route goes, so a delivery reaching the
             // owner's activation between the two is answered Released, not "claim stranded".
-            MarkReleaseInFlight();
+            MarkThisRelease();
             streams.TryRemove(new KeyValuePair<Address, AsyncDelivery>(address, callback));
             subscriptionReady.TryRemove(new KeyValuePair<Address, Task>(address, readyGate));
             // Release the cluster-wide claim FIRST: a hub that MOVES pods (a portal/{user} circuit
