@@ -148,6 +148,66 @@ public static class NodeTypeAccessRuleGate
     }
 
     /// <summary>
+    /// <see cref="Evaluate(INodeTypeAccessRule,NodeValidationContext,string,ILogger?)"/>, refused
+    /// first for a LOCKED account (<see cref="AccountLock"/>). A type's rule may grant where the
+    /// permission fold would not (a profile readable by every signed-in user, a submitter reading
+    /// their own submission), and a locked account holds nothing — so the lock is decided here,
+    /// before the rule runs, exactly as the API-token scope cap is. Every seam that has a hub calls
+    /// this overload. Doc/Architecture/AccountLockout.
+    /// </summary>
+    /// <param name="hub">The hub whose node-stream cache serves the lock register.</param>
+    /// <param name="rule">The governing rule.</param>
+    /// <param name="context">The validation context.</param>
+    /// <param name="userId">The identity being decided for.</param>
+    /// <param name="logger">Operator log for a faulting rule; optional.</param>
+    /// <returns>Exactly one outcome, always.</returns>
+    public static IObservable<PermissionCheckOutcome> EvaluateUnlessLocked(
+        IMessageHub hub,
+        INodeTypeAccessRule rule,
+        NodeValidationContext context,
+        string userId,
+        ILogger? logger = null)
+        => UnlessLocked(hub, userId, () => Evaluate(rule, context, userId, logger));
+
+    /// <summary>
+    /// <see cref="EvaluatePermission(INodeTypePermissionRule,MeshNode,AccessContext?,string,Permission,ILogger?)"/>,
+    /// refused first for a LOCKED account — see <see cref="EvaluateUnlessLocked"/>.
+    /// </summary>
+    /// <param name="hub">The hub whose node-stream cache serves the lock register.</param>
+    /// <param name="rule">The governing rule.</param>
+    /// <param name="node">The node the rule governs.</param>
+    /// <param name="accessContext">The caller's captured context; may be null.</param>
+    /// <param name="userId">The identity being decided for.</param>
+    /// <param name="permission">The permission being decided.</param>
+    /// <param name="logger">Operator log for a faulting rule; optional.</param>
+    /// <returns>Exactly one outcome, always.</returns>
+    public static IObservable<PermissionCheckOutcome> EvaluatePermissionUnlessLocked(
+        IMessageHub hub,
+        INodeTypePermissionRule rule,
+        MeshNode node,
+        AccessContext? accessContext,
+        string userId,
+        Permission permission,
+        ILogger? logger = null)
+        => UnlessLocked(hub, userId, () => EvaluatePermission(rule, node, accessContext, userId, permission, logger));
+
+    /// <summary>
+    /// <paramref name="then"/>, unless <paramref name="userId"/> is a locked account — then
+    /// <see cref="PermissionCheckOutcome.Denied"/>. A lock register that cannot be read faults, and
+    /// every caller reports a fault as Undetermined (fail closed), never as a grant.
+    /// </summary>
+    private static IObservable<PermissionCheckOutcome> UnlessLocked(
+        IMessageHub hub, string? userId, Func<IObservable<PermissionCheckOutcome>> then)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return !AccountLocks.IsLockable(userId)
+            ? Observable.Defer(then)
+            : AccountLocks.ObserveLocked(hub, userId)
+                .TakeDecisionOutsideGate()
+                .SelectMany(locked => locked ? Observable.Return(PermissionCheckOutcome.Denied) : then());
+    }
+
+    /// <summary>
     /// A write PRE-FLIGHT for <paramref name="caller"/>: the raw <c>(path, permission)</c> fold, and a
     /// DEFINITIVE denial re-decided through the node's own <see cref="INodeTypeAccessRule"/> — the
     /// same two questions the owner's write gate asks, so a verb that has to decide BEFORE it causes
@@ -211,7 +271,7 @@ public static class NodeTypeAccessRuleGate
         return ReadSubjectNode(hub, path)
             .SelectMany(node => node is null || Find(hub, node.NodeType, operation) is not { } rule
                 ? Observable.Return(PermissionCheckOutcome.Denied)
-                : Evaluate(rule, new NodeValidationContext
+                : EvaluateUnlessLocked(hub, rule, new NodeValidationContext
                 {
                     Operation = operation,
                     Node = node,
@@ -252,10 +312,14 @@ public static class NodeTypeAccessRuleGate
         // admission answers Undetermined — fail closed, and never a denial nobody established.
         var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
-        return DeclaredPointRead.Admits(hub, path, caller, request.Area)
-            .TakeDecisionOutsideGate()
-            .DefaultIfEmpty(false)
-            .Select(admitted => admitted ? PermissionCheckOutcome.FromVerdict(true) : outcome)
+        // 🔒 A locked account is never admitted by a declaration either.
+        var subject = string.IsNullOrEmpty(caller?.ObjectId) || caller.IsVirtual
+            ? WellKnownUsers.Anonymous
+            : caller.ObjectId;
+        return UnlessLocked(hub, subject, () => DeclaredPointRead.Admits(hub, path, caller, request.Area)
+                .TakeDecisionOutsideGate()
+                .DefaultIfEmpty(false)
+                .Select(admitted => admitted ? PermissionCheckOutcome.FromVerdict(true) : outcome))
             .Timeout(budget)
             .Catch((TimeoutException _) => Observable.Return(PermissionCheckOutcome.Undetermined(
                 $"the declared point read of '{path}' reached no verdict within {budget.TotalSeconds:0.#}s")));

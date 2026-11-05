@@ -89,10 +89,17 @@ public static class DeclaredReadSubscriptionFollow
             || string.Equals(caller.ObjectId, MeshNodeCacheIdentity.Address, StringComparison.Ordinal))
             return null;
         // A hub-level rule (WithPublicRead) short-circuits the gate before any fold: static, so it
-        // stands for the subscription's life.
+        // stands for the subscription's life — for every caller but a PERSON, whose account can be
+        // locked (AccountLock) while the subscription is open. Such a subscription follows the lock
+        // alone: every revision is forwarded while no lock applies, and a lock ends it.
         if (owner.Configuration.Get<HubPermissionRuleSet>() is { } hubRules
             && hubRules.HasPermission(Permission.Read, delivery, caller.ObjectId))
-            return null;
+            return !AccountLocks.IsLockable(caller.ObjectId)
+                ? null
+                : new ClientReadFollow(
+                    _ => AccountLocks.ObserveLocked(owner, caller.ObjectId).Select(locked => !locked),
+                    (owner.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+                        .PermissionEstablishmentBudget);
 
         var logger = owner.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(DeclaredReadSubscriptionFollow));
         var budget = (owner.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
