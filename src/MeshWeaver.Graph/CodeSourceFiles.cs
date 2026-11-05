@@ -80,9 +80,11 @@ public sealed record CodeSourceRead(
 public interface ICodeSourceFiles
 {
     /// <summary>
-    /// The file behind <paramref name="codeNodePath"/>, read as <paramref name="viewer"/>. Cold;
-    /// emits ONE answer and completes. Never faults: a failed read is a
-    /// <see cref="CodeSourceOutcomes.Failed"/> answer the page can render.
+    /// The file behind <paramref name="codeNodePath"/>, read as <paramref name="viewer"/>. Cold and
+    /// LIVE: emits an answer, and a new one whenever the viewer's GitHub connection changes (a page
+    /// returning from the sign-in shows the file without a reload). Never faults: a failed read is a
+    /// <see cref="CodeSourceOutcomes.Failed"/> answer the page can render, carrying the origin when it
+    /// was known.
     /// </summary>
     /// <param name="codeNodePath">The Code node's mesh path.</param>
     /// <param name="viewer">The identity the page renders for; null or virtual = signed out.</param>

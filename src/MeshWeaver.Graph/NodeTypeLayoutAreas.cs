@@ -838,7 +838,7 @@ public static class NodeTypeLayoutAreas
             return Observable.Return<UiControl?>(MeshCopy(codePath));
 
         // The file FROM ITS REPOSITORY, as the viewer (ICodeSourceFiles: the viewer's own GitHub
-        // credential, never a server one). One answer per render — a read, not a binding.
+        // credential, never a server one). Live: a new answer when the viewer connects GitHub.
         return files.Read(codePath, host.ViewerContext)
             .Select(read => (UiControl?)CodeSourceView(host, codePath, read))
             .StartWith(Controls.Markdown($"*{host.Localize("ui.code.github.loading")}*")
@@ -853,11 +853,18 @@ public static class NodeTypeLayoutAreas
     /// the page answered "not found" (measured on a client instance, 2026-11-05). A mesh path never
     /// contains <c>%</c>, so decoding an already-decoded path changes nothing; decoding an encoded
     /// one restores it. Pure.
+    /// <para>The id's query part is not the path: the portal appends the page URL's query to the id
+    /// (the GitHub connect flow returns to <c>…/Code/{id}?connect=github-ok</c>), and it is dropped
+    /// before decoding, as <c>SettingsLayoutArea</c> drops it.</para>
     /// </summary>
     internal static string? CodeNodePathOf(LayoutAreaReference reference)
-        => reference.Id?.ToString() is { Length: > 0 } id
-            ? WorkspaceReference.DecodeAreaId(id).Trim('/')
-            : null;
+    {
+        if (reference.Id?.ToString() is not { Length: > 0 } id)
+            return null;
+        var query = id.IndexOf('?');
+        var path = WorkspaceReference.DecodeAreaId(query < 0 ? id : id[..query]).Trim('/');
+        return path.Length > 0 ? path : null;
+    }
 
     /// <summary>The Code node's own Content area — the mesh copy of the file.</summary>
     private static UiControl MeshCopy(string codePath)
@@ -895,8 +902,16 @@ public static class NodeTypeLayoutAreas
                 });
         }
 
-        if (read.Origin is not { } known || read.Outcome == CodeSourceOutcomes.NoOrigin)
+        if (read.Outcome == CodeSourceOutcomes.NoOrigin)
             return MeshCopy(codePath);
+        if (read.Origin is not { } known)
+            // A failure before the origin was known (the provenance itself was unreadable): say so,
+            // never pass it off as a file authored in the mesh.
+            return Controls.Stack.WithWidth("100%")
+                .WithView(Controls.MessageBar(host.Localize("ui.code.github.failed", read.Outcome)))
+                .WithView(Controls.Markdown($"*{host.Localize("ui.code.github.meshCopy")}*")
+                    .WithStyle("margin: 8px 0;"))
+                .WithView(MeshCopy(codePath));
 
         var message = read.Outcome switch
         {

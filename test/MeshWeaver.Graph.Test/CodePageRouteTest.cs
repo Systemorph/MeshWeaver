@@ -53,6 +53,17 @@ public class CodePageRouteTest
             new LayoutAreaReference(NodeTypeLayoutAreas.CodeArea) { Id = raw }));
     }
 
+    /// <summary>The GitHub connect flow returns to <c>…/Code/{id}?connect=github-ok</c>; the query is not the path.</summary>
+    [Fact]
+    public void TheOAuthReturnQuery_IsNotPartOfThePath()
+    {
+        var raw = SideMenuHref()[(TypePath + "/Code/").Length..];
+        Assert.Equal(CodePath, NodeTypeLayoutAreas.CodeNodePathOf(
+            new LayoutAreaReference(NodeTypeLayoutAreas.CodeArea) { Id = raw + "?connect=github-ok" }));
+        Assert.Equal(CodePath, NodeTypeLayoutAreas.CodeNodePathOf(
+            new LayoutAreaReference(NodeTypeLayoutAreas.CodeArea) { Id = CodePath + "?connect=github-ok" }));
+    }
+
     [Fact]
     public void NoId_NamesNoFile()
         => Assert.Null(NodeTypeLayoutAreas.CodeNodePathOf(new LayoutAreaReference(NodeTypeLayoutAreas.CodeArea)));

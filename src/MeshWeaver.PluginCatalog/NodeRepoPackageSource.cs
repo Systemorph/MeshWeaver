@@ -74,26 +74,32 @@ public sealed class NodeRepoPackageSource : IPackageSource
     public Func<string, string, string?, string, Func<string, bool>, IObservable<RepoSnapshot>>?
         NarrowFetch { get; init; }
 
+    /// <summary>The repository URL a listed package records (<see cref="PackageManifest.RepositoryUrl"/>):
+    /// an http(s) URL with a trailing <c>.git</c> or slash removed; null for anything else (a local
+    /// path). Pure.
+    /// <para>🚨 Rebuilt from scheme, host, port and path only: a clone URL may carry a credential
+    /// (<c>https://user:token@github.com/…</c>) or a query, and this value is PUBLISHED — in every
+    /// listed manifest, through the registry, on every consumer's install record and Code page.</para>
+    /// </summary>
+    internal static string? HostedRepositoryUrl(string? repoUrl)
+    {
+        if (string.IsNullOrWhiteSpace(repoUrl)
+            || !Uri.TryCreate(repoUrl.Trim(), UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+            return null;
+        var path = uri.AbsolutePath.TrimEnd('/');
+        if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            path = path[..^4];
+        var authority = uri.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped);
+        return path.Length == 0 ? null : authority + path;
+    }
+
     /// <summary>
     /// 🚨 The ONLY files <see cref="ListPackages"/> reads: each plugin folder's
     /// <c>&lt;Plugin&gt;/index.json</c> root and its <c>&lt;Plugin&gt;/manifest.lock</c> sidecar.
     /// This predicate and the two loops below must name the same set — a file the predicate omits
     /// is a package the listing silently loses, so they are written against each other on purpose.
     /// </summary>
-    /// <summary>The repository URL a listed package records (<see cref="PackageManifest.RepositoryUrl"/>):
-    /// an http(s) URL with a trailing <c>.git</c> or slash removed; null for anything else (a local
-    /// path). Pure.</summary>
-    internal static string? HostedRepositoryUrl(string? repoUrl)
-    {
-        var url = repoUrl?.Trim();
-        if (string.IsNullOrEmpty(url)
-            || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
-            return null;
-        url = url.TrimEnd('/');
-        return url.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? url[..^4] : url;
-    }
-
     internal static bool IsListingInput(string path)
     {
         var slash = path.IndexOf('/');

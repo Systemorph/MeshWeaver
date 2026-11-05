@@ -10,6 +10,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
@@ -113,18 +114,22 @@ public class CodePageReadsTheFileFromGitHubTest(ITestOutputHelper output) : Mono
         var codePath = $"{space}/Widget/Test/WidgetTests";
         var expectedFile = $"modules/{space}/Widget/Test/WidgetTests.cs";
 
-        var signedOut = await Files.Read(codePath, viewer: null).Timeout(TestTimeouts.Convergence).Await(ct);
+        var signedOut = await Files.Read(codePath, viewer: null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(CodeSourceOutcomes.SignInRequired, signedOut.Outcome);
         Assert.Equal(new CodeSourceOrigin(RepoUrl, SyncedSha, expectedFile), signedOut.Origin);
 
-        var noAccount = await Files.Read(codePath, TestUsers.Admin).Timeout(TestTimeouts.Convergence).Await(ct);
+        var noAccount = await Files.Read(codePath, TestUsers.Admin).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(CodeSourceOutcomes.SignInRequired, noAccount.Outcome);
         Assert.Empty(repoClient.Reads);
 
+        // ONE live read, opened BEFORE the account is connected: it answers SignInRequired, then —
+        // with no re-open and no reload — the file once the credential lands.
+        var live = Files.Read(codePath, TestUsers.Admin).Replay();
+        using var liveConnection = live.Connect();
+        await live.Where(r => r.Outcome == CodeSourceOutcomes.SignInRequired)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         await SaveViewerCredential();
-        var read = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-            .SelectMany(_ => Files.Read(codePath, TestUsers.Admin))
-            .Where(r => r.Outcome != CodeSourceOutcomes.SignInRequired)
+        var read = await live.Where(r => r.Outcome != CodeSourceOutcomes.SignInRequired)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(CodeSourceOutcomes.Read, read.Outcome);
         Assert.Equal(FileText, read.Text);
@@ -132,12 +137,12 @@ public class CodePageReadsTheFileFromGitHubTest(ITestOutputHelper output) : Mono
         Assert.Equal((RepoUrl, expectedFile, SyncedSha, ViewerToken), call);
 
         // Another person never reads with this viewer's account.
-        var someoneElse = await Files.Read(codePath, TestUsers.TestUser).Timeout(TestTimeouts.Convergence).Await(ct);
+        var someoneElse = await Files.Read(codePath, TestUsers.TestUser).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(CodeSourceOutcomes.SignInRequired, someoneElse.Outcome);
         Assert.Single(repoClient.Reads);
 
         repoClient.Refuse = true;
-        var refused = await Files.Read(codePath, TestUsers.Admin).Timeout(TestTimeouts.Convergence).Await(ct);
+        var refused = await Files.Read(codePath, TestUsers.Admin).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(CodeSourceOutcomes.Refused, refused.Outcome);
         Assert.Equal(404, refused.StatusCode);
         Assert.Null(refused.Text);
@@ -148,7 +153,7 @@ public class CodePageReadsTheFileFromGitHubTest(ITestOutputHelper output) : Mono
     public async Task ANodeWithoutARepositoryOrigin_ShowsTheMeshCopy()
     {
         var read = await Files.Read($"{TestPartition}/Widget/Test/WidgetTests", TestUsers.Admin)
-            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(CodeSourceOutcomes.NoOrigin, read.Outcome);
         Assert.Empty(repoClient.Reads);
     }
@@ -172,7 +177,8 @@ public class CodePageReadsTheFileFromGitHubTest(ITestOutputHelper output) : Mono
         }).Timeout(TestTimeouts.Convergence).Await(ct));
         var typePath = $"{space}/Widget";
         var codePath = $"{typePath}/Test/WidgetTests";
-        var encodedId = (string)WorkspaceReference.Encode(codePath);
+        // Exactly as the connect flow returns to the page: the encoded id plus the callback's query.
+        var encodedId = (string)WorkspaceReference.Encode(codePath) + "?connect=github-ok";
 
         IObservable<UiControl?> Page() => GetClient().GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -180,25 +186,18 @@ public class CodePageReadsTheFileFromGitHubTest(ITestOutputHelper output) : Mono
             .WalkTree(NodeTypeLayoutAreas.CodeArea);
 
         var page = Page().Replay();
-        using (page.Connect())
-        {
-            await page.OfType<MessageBarControl>()
-                .Where(bar => bar.Body?.ToString()?.Contains(RepoUrl, StringComparison.Ordinal) == true)
-                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-            var meshCopy = await page.OfType<LayoutAreaControl>()
-                .Where(c => c.Reference.Area == CodeLayoutAreas.ContentArea)
-                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-            Assert.Equal(codePath, meshCopy.Address.ToString());
-        }
-
-        await SaveViewerCredential();
-        // The credential is read through a synced query: wait until the reader sees it, then open
-        // the page once (each render reads once — a read, not a binding).
-        await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-            .SelectMany(_ => Files.Read(codePath, TestUsers.Admin))
-            .Where(r => r.Outcome == CodeSourceOutcomes.Read)
+        using var connection = page.Connect();
+        await page.OfType<MessageBarControl>()
+            .Where(bar => bar.Body?.ToString()?.Contains(RepoUrl, StringComparison.Ordinal) == true)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-        var editor = await Page().OfType<CodeEditorControl>()
+        var meshCopy = await page.OfType<LayoutAreaControl>()
+            .Where(c => c.Reference.Area == CodeLayoutAreas.ContentArea)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Assert.Equal(codePath, meshCopy.Address.ToString());
+
+        // Connect GitHub while the page is OPEN: it follows, no reload.
+        await SaveViewerCredential();
+        var editor = await page.OfType<CodeEditorControl>()
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.True(editor.Readonly is true or JsonElement { ValueKind: JsonValueKind.True });
         Assert.Contains(repoClient.Reads, r => r.Token == ViewerToken && r.Path.EndsWith("Widget/Test/WidgetTests.cs"));
@@ -222,13 +221,57 @@ public class CodePageReadsTheFileFromGitHubTest(ITestOutputHelper output) : Mono
             }),
         };
 
+        var parsers = Parsers();
         Assert.Equal(new CodeSourceOrigin(RepoUrl, SyncedSha, "Acme/Widget/Test/WidgetTests.cs"),
-            GitHubCodeSourceFiles.FromInstallRecord(record, "Acme/Widget/Test/WidgetTests"));
-        Assert.Null(GitHubCodeSourceFiles.FromInstallRecord(record, "Acme/Widget/Test/Missing"));
-        Assert.Null(GitHubCodeSourceFiles.FromInstallRecord(record with { RepositoryUrl = null }, "Acme/Widget/Test/WidgetTests"));
+            GitHubCodeSourceFiles.FromInstallRecord(record, "Acme/Widget/Test/WidgetTests", parsers));
+        Assert.Null(GitHubCodeSourceFiles.FromInstallRecord(record, "Acme/Widget/Test/Missing", parsers));
+        Assert.Null(GitHubCodeSourceFiles.FromInstallRecord(record with { RepositoryUrl = null }, "Acme/Widget/Test/WidgetTests", parsers));
+
+        // A node with children installs from `X/index.*` — matched the way the INSTALLER maps it,
+        // and requested from GitHub under its own key.
+        var withIndex = record with
+        {
+            InstalledFiles = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal, new Dictionary<string, string>
+            {
+                ["Acme/Widget/Source/Model/index.cs"] = "h3",
+            }),
+        };
+        Assert.Equal(new CodeSourceOrigin(RepoUrl, SyncedSha, "Acme/Widget/Source/Model/index.cs"),
+            GitHubCodeSourceFiles.FromInstallRecord(withIndex, "Acme/Widget/Source/Model", parsers));
+    }
+
+    private FileFormatParserRegistry Parsers()
+        => new(Mesh.JsonSerializerOptions, Mesh.ServiceProvider.GetServices<IFileFormatParser>());
+
+    /// <summary>The exporter's naming: a node with children is <c>X/index.ext</c>, the serializer picks the extension.</summary>
+    [Fact]
+    public void ASyncEntry_NamesTheFileTheWayTheExporterDoes()
+    {
+        var config = new GitHubSyncConfig { RepositoryUrl = RepoUrl, Branch = "main", Subdirectory = "/modules/Acme/" };
+
+        Assert.Equal("modules/Acme/Widget/Test/T.cs",
+            GitHubCodeSourceFiles.FromSyncEntry(config, "Acme", "Acme/Widget/Test/T", ".cs", hasChildren: false)!.FilePath);
+        Assert.Equal("modules/Acme/Widget/Cell/index.json",
+            GitHubCodeSourceFiles.FromSyncEntry(config, "Acme", "Acme/Widget/Cell", ".json", hasChildren: true)!.FilePath);
+        Assert.Equal("main", GitHubCodeSourceFiles.FromSyncEntry(config, "Acme", "Acme/X", ".cs", false)!.Ref);
+        Assert.Null(GitHubCodeSourceFiles.FromSyncEntry(
+            config with { RepositoryUrl = "https://dev.azure.com/acme/_git/modules" }, "Acme", "Acme/X", ".cs", false));
+    }
+
+    /// <summary>A failure keeps the origin; only an ACCESS refusal offers the sign-in.</summary>
+    [Fact]
+    public void AFailedRead_KeepsItsOrigin()
+    {
+        var origin = new CodeSourceOrigin(RepoUrl, SyncedSha, "a.cs");
+        Assert.Equal(CodeSourceOutcomes.Refused, GitHubCodeSourceFiles.Classify(origin, new GitHubNotFoundException()).Outcome);
+        var network = GitHubCodeSourceFiles.Classify(origin, new System.Net.Http.HttpRequestException("down"));
+        Assert.Equal(CodeSourceOutcomes.Failed, network.Outcome);
+        Assert.Equal(origin, network.Origin);
     }
 
     [Theory]
+    [InlineData("https://user:ghp_secret@github.com/acme/modules.git", "https://github.com/acme/modules")]
+    [InlineData("https://github.com/acme/modules?token=x#frag", "https://github.com/acme/modules")]
     [InlineData("https://github.com/acme/modules.git", "https://github.com/acme/modules")]
     [InlineData("https://github.com/acme/modules/", "https://github.com/acme/modules")]
     [InlineData("/srv/checkout/modules", null)]
