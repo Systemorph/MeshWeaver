@@ -238,6 +238,26 @@ public class AccountLockoutTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// The boundary decides per SUBSCRIPTION, not when the read is composed: a snapshot query composed
+    /// while the account was unlocked and subscribed after the lock answers nothing.
+    /// </summary>
+    [Fact]
+    public async Task AReadComposedBeforeTheLock_AndSubscribedAfterIt_AnswersNothing()
+    {
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await WaitForCatalog(Leaver, locked: false);
+        var composed = mesh.Query(MeshQueryRequest.FromQuery($"path:{SharedSpace} scope:children") with { UserId = Leaver });
+
+        (await Outcome(AccountLocks.Lock(Mesh, Identity(PlatformAdmin), Leaver, "left"), "the lock must answer"))
+            .Should().BeNull();
+        await WaitForCatalog(Leaver, locked: true);
+
+        (await composed.Take(1).Should().Within(Budget).Emit("the composed read must answer",
+                cancellationToken: TestContext.Current.CancellationToken))
+            .Should().BeEmpty("the verdict is taken when the read is subscribed, after the lock");
+    }
+
+    /// <summary>
     /// The RLS validator's own-home shortcut answers before the fold — so it must refuse a locked
     /// person too: their agent run cannot write into their own home.
     /// </summary>

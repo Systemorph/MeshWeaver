@@ -362,22 +362,23 @@ internal sealed class MeshService(
             // One definitive, empty Initial read from NO partition — an answer, not silence, so a
             // consumer waiting on the Initial is released rather than parked.
             ? Observable.Return(EmptyChange<T>(QueryChangeType.Initial))
-            : LiveUnlessLocked(ViewerOf(request, stamped), _query.Query<T>(stamped)))
+            : UnlessLocked(ViewerOf(request, stamped), _query.Query<T>(stamped),
+                index => EmptyChange<T>(index == 0 ? QueryChangeType.Initial : QueryChangeType.Reset), live: true))
             .CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
     }
 
     public IObservable<T?> Select<T>(string path, string property)
         => RefusesAnonymousViewer(AmbientViewer()) || RefusesScopedReader()
             ? Observable.Return(default(T))
-            : OnceUnlessLocked(AmbientViewer(), _query.Select<T>(path, property), default(T));
+            : UnlessLocked(AmbientViewer(), _query.Select<T>(path, property), _ => default(T));
 
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
     {
         var stamped = StampViewer(request);
         return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
             ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
-            : OnceUnlessLocked(ViewerOf(request, stamped), _query.Query(stamped),
-                (IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>()))
+            : UnlessLocked(ViewerOf(request, stamped), _query.Query(stamped),
+                _ => (IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>()))
             .CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
     }
 
@@ -423,52 +424,55 @@ internal sealed class MeshService(
            && AnonymousAccess.IsDenied(hub.ServiceProvider);
 
     /// <summary>
-    /// 🔒 The READ half of the account lock (<see cref="AccountLock"/>) for a LIVE query: a viewer whose
-    /// account is locked reads NOTHING. The permission half sits in <c>PermissionEvaluator</c> (a locked
-    /// subject folds to <see cref="Permission.None"/>), but the SQL-backed providers filter rows in the
-    /// database against the viewer's projected grants and never consult the C# fold — so this boundary,
-    /// which every secured read passes, is what closes that path for every backend at once.
+    /// 🔒 The READ half of the account lock (<see cref="AccountLock"/>) for every secured read the
+    /// boundary serves — live query, snapshot query, select, autocomplete: a viewer whose account is
+    /// locked reads NOTHING. The permission half sits in <c>PermissionEvaluator</c> (a locked subject
+    /// folds to <see cref="Permission.None"/>), but the SQL-backed providers filter rows in the database
+    /// against the viewer's projected grants and never consult the C# fold — so this boundary, which
+    /// every secured read passes, is what closes that path for every backend at once.
     ///
-    /// <para><b>For the whole lifetime of the subscription, not just its start.</b> The provider's
-    /// stream is subscribed only while the live verdict says "not locked"; the moment a lock applies it
-    /// is DISPOSED and replaced by an empty answer read from no partition (an <c>Initial</c> when the
-    /// viewer was locked from the start, a <c>Reset</c> that clears every row held so far otherwise). An
-    /// unlock re-subscribes the provider, which answers with a fresh <c>Initial</c>.</para>
+    /// <para><b>Decided per SUBSCRIPTION, for its whole lifetime.</b> Nothing is decided when the
+    /// observable is composed: each subscription follows the live verdict, the provider's stream is
+    /// subscribed only while no lock applies, and the moment one does it is DISPOSED and replaced by
+    /// <paramref name="whenLocked"/> (for a change stream: an empty <c>Initial</c> when locked from the
+    /// start, a <c>Reset</c> read from no partition that clears every row held so far otherwise). An
+    /// unlock re-subscribes the provider. The snapshot shapes are live too (a provider forwards later
+    /// frames), so they are gated the same way.</para>
+    ///
+    /// <para><b>As the reader, whatever thread the verdict arrives on.</b> The provider's stream is
+    /// constructed by the caller (its call-time capture intact) and subscribed under the reader's
+    /// identity captured here, so a provider that resolves the ambient viewer at subscribe time sees
+    /// the reader — never the register's System read that produced the verdict.</para>
     ///
     /// <para><b>"Not known yet" is not "not locked".</b> Before the register has answered (a fresh
     /// process) the provider is not subscribed; the verdict is awaited within
     /// <see cref="MeshOperationOptions.PermissionEstablishmentBudget"/>, and a register that cannot
-    /// answer in that budget, or faults, faults the query — an availability failure, never a read.</para>
+    /// answer in that budget, or faults, faults the read — an availability failure, never a read.</para>
     /// </summary>
     /// <param name="viewer">The viewer the read resolved to, or null when unresolved.</param>
-    /// <param name="served">The provider's stream, constructed by the caller (its call-time capture intact).</param>
-    private IObservable<QueryResultChange<T>> LiveUnlessLocked<T>(string? viewer, IObservable<QueryResultChange<T>> served)
-        => !AccountLocks.IsLockable(viewer)
-            ? served
-            : LockVerdict(viewer!)
-                .Select((locked, index) => locked
-                    ? Observable.Return(EmptyChange<T>(index == 0 ? QueryChangeType.Initial : QueryChangeType.Reset))
-                    : served)
-                .Switch();
-
-    /// <summary>
-    /// The one-shot twin of <see cref="LiveUnlessLocked{T}"/> (a snapshot query, a select, an
-    /// autocomplete): <paramref name="whenLocked"/> for a locked viewer, the provider's answer otherwise.
-    /// Decided on the calling thread when the register has already answered — the steady state, so the
-    /// provider is subscribed exactly as before — and awaited within the budget when it has not.
-    /// </summary>
-    private IObservable<T> OnceUnlessLocked<T>(string? viewer, IObservable<T> served, T whenLocked)
+    /// <param name="served">The provider's stream, constructed by the caller.</param>
+    /// <param name="whenLocked">What a locked viewer receives, given the index of the verdict.</param>
+    /// <param name="live">True for a change stream, which stays open while locked (an unlock re-opens
+    /// the provider); false for the snapshot shapes, whose answer completes — as the provider's does.</param>
+    private IObservable<T> UnlessLocked<T>(string? viewer, IObservable<T> served, Func<int, T> whenLocked, bool live = false)
     {
         if (!AccountLocks.IsLockable(viewer))
             return served;
-        return Catalog.IsLocked(viewer) switch
-        {
-            true => Observable.Return(whenLocked),
-            false => served,
-            null => LockVerdict(viewer!)
-                .TakeDecisionOutsideGate()
-                .SelectMany(locked => locked ? Observable.Return(whenLocked) : served),
-        };
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var reader = CaptureContext();
+        var servedAsReader = access.RunAs(reader, () => served);
+        // Materialized, so the selected branch's COMPLETION completes the read: the verdict stream is
+        // live and never completes, and a snapshot read (an autocomplete awaited to its last frame)
+        // must still end when its provider does.
+        return LockVerdict(viewer!)
+            .Select((locked, index) => (locked
+                    ? live
+                        ? Observable.Return(whenLocked(index)).Concat(Observable.Never<T>())
+                        : Observable.Return(whenLocked(index))
+                    : servedAsReader)
+                .Materialize())
+            .Switch()
+            .Dematerialize();
     }
 
     /// <summary>
@@ -594,8 +598,8 @@ internal sealed class MeshService(
         string? context = null)
         => RefusesAnonymousViewer(AmbientViewer()) || RefusesScopedReader()
             ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
-            : OnceUnlessLocked(AmbientViewer(), _query.Autocomplete(basePath, prefix, mode, limit, contextPath, context),
-                (IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
+            : UnlessLocked(AmbientViewer(), _query.Autocomplete(basePath, prefix, mode, limit, contextPath, context),
+                _ => (IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
 
     public IObservable<string?> GetPreRenderedHtml(string path)
         // This is an exact-node read for a page, not discovery. The query index can trail a

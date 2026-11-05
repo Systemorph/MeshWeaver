@@ -189,7 +189,7 @@ public static class AccountLocks
             : ObserveAll(hub).Select(locks => IsLockedIn(locks, userId!)).DistinctUntilChanged()
                 // The administrator question only while a record is in force — an unlocked subject pays nothing.
                 .Select(inForce => inForce
-                    ? hub.IsGlobalAdmin(userId!).Select(isAdmin => !isAdmin)
+                    ? IsAdministrator(hub, userId!).Select(isAdmin => !isAdmin)
                     : Observable.Return(false))
                 .Switch()
                 .DistinctUntilChanged();
@@ -206,10 +206,19 @@ public static class AccountLocks
             .Select(locks => locks.Values.Where(l => l.IsInForce).Select(l => l.UserId).ToArray())
             .Select(inForce => inForce.Length == 0
                 ? Observable.Return(ImmutableHashSet.Create<string>(IdComparer))
-                : inForce.Select(id => hub.IsGlobalAdmin(id).Select(isAdmin => (Id: id, IsAdmin: isAdmin)))
+                : inForce.Select(id => IsAdministrator(hub, id).Select(isAdmin => (Id: id, IsAdmin: isAdmin)))
                     .CombineLatest()
                     .Select(verdicts => verdicts.Where(v => !v.IsAdmin).Select(v => v.Id).ToImmutableHashSet(IdComparer)))
             .Switch();
+
+    /// <summary>
+    /// Whether <paramref name="userId"/> holds platform administration — the exemption question —
+    /// asked as a CONTAINED System read with the subject explicit. It is a fact about the subject, never
+    /// about whoever happens to be ambient: under a caller's scoped API token the fold would cap the
+    /// answer by THAT token's scope and could make an administrator read as locked.
+    /// </summary>
+    private static IObservable<bool> IsAdministrator(IMessageHub hub, string userId)
+        => hub.ServiceProvider.GetService<AccessService>().RunAsSystem(() => hub.IsGlobalAdmin(userId));
 
     /// <summary>
     /// Whether a lock RECORD is in force on <paramref name="userId"/>, live — without the administrator
