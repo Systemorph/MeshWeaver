@@ -7,8 +7,8 @@ namespace MeshWeaver.Mesh.Security;
 ///
 /// <para>Users live at the ROOT namespace (path = userId, namespace = "") — the post-v10
 /// placement. A path-less <c>nodeType:User</c> query is pinned to the central <c>auth</c>
-/// lookup mirror by <c>UserNodeType</c>'s query-routing rule, so one query covers every user
-/// in the mesh. The legacy <c>namespace:User</c> shape targets the pre-V27 <c>user</c> schema,
+/// lookup mirror by <c>UserNodeType</c>'s query-routing rule, which holds every user in the
+/// mesh — what a VIEWER reads from it depends on the backend (see <see cref="Users"/>). The legacy <c>namespace:User</c> shape targets the pre-V27 <c>user</c> schema,
 /// which no longer exists — it silently returns ZERO rows (the 2026-07 "cannot select a user
 /// in the Subject dropdown" bug, issue #213). Never hand-roll these queries again; reference
 /// the members of this class.</para>
@@ -18,6 +18,14 @@ public static class AccessSubjectQueries
     /// <summary>
     /// All users in the mesh: root-namespace <c>User</c> nodes, served by the <c>auth</c>
     /// lookup mirror via <c>UserNodeType</c>'s routing rule. Usable in attributes (const).
+    ///
+    /// <para>🚨 Run as the VIEWER (every picker does), this answers ZERO rows on PostgreSQL for every
+    /// signed-in caller, a platform admin included: the mirror schema carries no read policy, so
+    /// the per-schema <c>partition_access</c> test fails for each row, and the type's C# public-read
+    /// rule is not part of the SQL fold. The in-memory provider applies that rule and lists every
+    /// user. Who may enumerate users is an open access decision — see
+    /// <c>Doc/Architecture/GrantingAccess</c> → "The users half lists nobody on Postgres" (#7908).
+    /// Never resolve a person from this query as the caller; look the account up as System.</para>
     /// </summary>
     public const string Users = "nodeType:User namespace:\"\"";
 

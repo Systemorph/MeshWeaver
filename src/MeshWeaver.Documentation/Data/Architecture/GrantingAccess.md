@@ -62,10 +62,27 @@ Open a node you administer → **Settings → Access Control**. The page shows t
 
 The **Subject (User or Group)** picker is bound to the canonical queries in `AccessSubjectQueries` (`src/MeshWeaver.Mesh.Contract/Security/AccessSubjectQueries.cs`):
 
-- **Users** — `nodeType:User namespace:""`. Users live at the ROOT namespace (path = userId); the path-less query is pinned to the central `auth` lookup mirror by `UserNodeType`'s routing rule, so one query covers every user in the mesh. 🚨 The legacy `namespace:User` shape targets the pre-V27 `user` schema, which no longer exists — it silently returns **zero** rows. Never hand-roll subject queries; reference `AccessSubjectQueries`.
+- **Users** — `nodeType:User namespace:""`. Users live at the ROOT namespace (path = userId); the path-less query is pinned to the central `auth` lookup mirror by `UserNodeType`'s routing rule. That mirror holds every user in the mesh, but the picker runs the query **as the viewer**, and what the viewer gets back depends on the storage backend — see *The users half lists nobody on Postgres* below. 🚨 The legacy `namespace:User` shape targets the pre-V27 `user` schema, which no longer exists — it silently returns **zero** rows. Never hand-roll subject queries; reference `AccessSubjectQueries`.
 - **Groups** — `nodeType:Group namespace:{partition} scope:subtree`: every group defined in the scope's partition.
 
 The picker loads the subject set once (capped at 500 nodes) and filters **in-memory, diacritic- and case-insensitively** (`SearchText.Fold`): typing "Burgi" finds "Bürgi". On installations with more subjects than the cap, typed text additionally runs the normal server-side search and the union is shown, so users beyond the cap remain findable (that path matches by substring, without diacritic folding).
+
+**The users half lists nobody on Postgres (#7908).** On a PostgreSQL-backed instance the users query answers **zero rows for every signed-in viewer, a platform administrator included** — the viewer's own account too. The cause is not the query shape, and not a missing grant on other people's homes:
+
+1. `UserNodeType`'s routing rule pins a path-less `nodeType:User` read to the `auth` mirror schema.
+2. Every row a non-System caller reads from a Postgres schema passes the per-schema access clause (`PostgreSqlSqlGenerator.BuildPerSchemaAccessClause`, MeshWeaver.Plugins). Its first half is a `public.partition_access` membership test for that schema.
+3. Core's `Auth` partition (`DefaultPartitionProvider`) declares no read policy, so nobody holds `partition_access` on `auth`, and every row fails the test.
+4. `UserNodeType` declares that a root User node is readable by every signed-in user (`WithUserNodePublicRead`, `UserAccessRule`). That rule is C#, and the SQL fold never consults it — the type-keyed `public_read` term it would need was removed in #953.
+
+The in-memory provider re-decides each row through the C# rule, so it lists every user, and every unit test of the picker is green. The two providers disagree, and [Search Coverage and Refusal](../SearchCoverageAndRefusal) records the Postgres zero as intended: enumerating people is a disclosure surface. Measured on a Postgres instance as a global admin: `nodeType:User namespace:""` returned `count: 0`, `coverage: {scope: routed, partitions: [auth], partial: [auth]}`.
+
+Making the picker list users on Postgres means **someone may enumerate the user directory who cannot today**. Who that should be is an access decision, not a defect fix. The candidates are:
+
+- every signed-in user, which matches the C# rule but publishes the directory instance-wide;
+- whoever may grant at the scope;
+- a global admin only, which would be a third standing exception in [Access Control](../AccessControl).
+
+Until that is decided, **grant by email** (below) is the way to reach an existing account on Postgres, and it resolves the address as System (`SpaceInviteService.AccountLookup`). The **Groups** half is unaffected: it is anchored to the scope's partition.
 
 **Not-yet-provisioned users — grant by email.** A `User` node is created at first login/onboarding, so a person who has never signed in has no node to *pick*. The **Add** row therefore also takes an **email**: leave the subject picker empty and type the address instead. If an account already exists it is granted the selected role immediately; otherwise the person is invited and a durable deferred grant — an `EventSubscription` (see [EventSubscriptions](/Doc/Architecture/EventSubscriptions)) — lands the **same role at this exact `{scope}/_Access`** the moment they sign up. The scheduled grant is byte-identical to the immediate one, so the invitee ends up with exactly the assignment an already-provisioned subject would. (You can still grant by principal via MCP — Recipe 3 below with the exact login userId — for a fully headless setup.)
 
