@@ -382,11 +382,29 @@ jobs:
             echo "::error::refusing to push from $GITHUB_REPOSITORY ($vis): every id this push created would be $vis, and GitHub cannot make a public package private again. Publish through MeshWeaver.Plugins' template-feed.yml, which calls this lane from a private repository."
             exit 1
           fi
+          # Every library first, the dotnet-new template package LAST and only when every library
+          # landed: a template on the feed whose closure is not would install and fail to restore.
+          # A refused push does not stop the loop, so ONE run names EVERY id that refuses this
+          # publisher (MeshWeaver.Plugins#4981: stopping at the first cost one hourly run per id).
+          template=""
+          refused=()
           for f in "$RUNNER_TEMP"/nupkgs/*.nupkg; do
             case "$f" in *.symbols.nupkg) continue ;; esac
-            dotnet nuget push "$f" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate || {
-              echo "::error::pushing $(basename "$f") from $GITHUB_REPOSITORY failed. A package that ALREADY exists on the feed and is linked to another repository accepts a push from this one only once the package grants it Write: https://github.com/orgs/Systemorph/packages → the package → Package settings → Manage Actions access → Add repository → $GITHUB_REPOSITORY (Write)."; exit 1; }
+            case "$(basename "$f")" in MeshWeaver.MemexTemplate.[0-9]*) template="$f"; continue ;; esac
+            dotnet nuget push "$f" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate \
+              || refused+=("$(basename "$f" .nupkg)")
           done
+          if [ "${#refused[@]}" -gt 0 ]; then
+            for p in "${refused[@]}"; do
+              id="${p%%.[0-9]*}"
+              echo "::error::pushing $p from $GITHUB_REPOSITORY was refused. The id $id ALREADY exists on the feed and is linked to another repository. If it is public, delete it (https://github.com/orgs/Systemorph/packages/nuget/package/$id/settings → Danger Zone → Delete this package) and the next run recreates it private; if it is private, grant this repository Write on that page → Manage Actions access → Add repository → $GITHUB_REPOSITORY (Write)."
+            done
+            echo "::error::${#refused[@]} package(s) refused this publisher: ${refused[*]}. The template package was NOT pushed."
+            exit 1
+          fi
+          [ -n "$template" ] || { echo "::error::no MeshWeaver.MemexTemplate package in $RUNNER_TEMP/nupkgs"; exit 1; }
+          dotnet nuget push "$template" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate || {
+            echo "::error::pushing $(basename "$template") from $GITHUB_REPOSITORY was refused: https://github.com/orgs/Systemorph/packages/nuget/package/MeshWeaver.MemexTemplate/settings → Manage Actions access → Add repository → $GITHUB_REPOSITORY (Write), or delete it if it is public."; exit 1; }
 
       # A package the push CREATED must be private. A package created with a workflow's GITHUB_TOKEN
       # takes the PUBLISHING repository's visibility (#7660) — this reads it back rather than trusting

@@ -345,6 +345,9 @@ LANE_TOOL = "lane/.github/scripts/template-feed.py"
 # The lane's own commit: under workflow_call github.sha is the CALLER's commit in another repository.
 LANE_REF = "ref: ${{ steps.lane.outputs.sha }}"
 PRIVATE_PUBLISHER_GUARD = 'if [ "$vis" != private ] || [ "$PUBLISHER" != private ]; then'
+# The push loop sets the dotnet-new template package aside and pushes it only after every library
+# landed: a template on the feed whose closure is not installs and then cannot restore.
+TEMPLATE_LAST = 'MeshWeaver.MemexTemplate.[0-9]*) template="$f"; continue ;;'
 # The job a private publisher's run records ONLY after push, visibility and restore all succeeded
 # (and carries forward on a run that found it). Its run history is the scheduled caller's durable
 # "this set is published" marker — never a package's presence on the feed, which an upload that
@@ -449,6 +452,10 @@ def workflow_findings(text: str) -> list[str]:
     if "nuget push" in text and PRIVATE_PUBLISHER_GUARD not in text:
         out.append("the lane pushes without refusing a non-private publisher — a package created from a "
                    "public repository is public, irreversibly")
+    if "nuget push" in text and TEMPLATE_LAST not in text:
+        out.append("the push loop does not set the template package aside to push it LAST — a glob pushes "
+                   "MeshWeaver.MemexTemplate before MeshWeaver.Mesh.*, so a refused library leaves a template "
+                   "on the feed whose closure is not")
     if "packages/nuget/MeshWeaver.MemexTemplate/versions" in text:
         out.append("the lane decides 'already published' from the template package's PRESENCE on the feed — "
                    "a push whose visibility or restore check failed leaves it there too; skip only on the "
@@ -630,6 +637,7 @@ def self_test() -> int:
                '        run: python3 "$FEED_TOOL" --self-test\n'
                '          -p:RepositoryUrl="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"\n'
                '          if [ "$vis" != private ] || [ "$PUBLISHER" != private ]; then exit 1; fi\n'
+               '            case "$(basename "$f")" in MeshWeaver.MemexTemplate.[0-9]*) template="$f"; continue ;; esac\n'
                '            dotnet nuget push "$f" --source "$FEED"\n')
     if workflow_findings(lane_ok):
         failures.append(f"workflow_findings refused the lane-tool shape: {workflow_findings(lane_ok)}")
@@ -660,6 +668,8 @@ def self_test() -> int:
          "RepositoryUrl names a literal", "a RepositoryUrl hard-coded to the public repository")
     only(lane_ok + 'gh api "orgs/Systemorph/packages/nuget/MeshWeaver.MemexTemplate/versions"\n',
          "PRESENCE on the feed", "a skip decided by the template package's presence on the feed")
+    only(lane_ok.replace(TEMPLATE_LAST, ""), "template package aside",
+         "a push loop that pushes the template package in glob order")
     # 8d. The durable marker: only a SUCCESSFUL marker job for EXACTLY this version counts.
     ok_job = {"name": f"feed / {MARKER_JOB}: 3.1.12", "conclusion": "success"}
     for label, runs, want in [
