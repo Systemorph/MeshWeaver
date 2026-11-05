@@ -79,6 +79,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     private long sequence;
     private CollectibleContextUnloads? unloads;
     private ILogger? logger;
+
     private IServiceProvider? root;
     private int disposed;
 
@@ -171,12 +172,20 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         unloads ??= collectibleUnloads;
         logger ??= log;
         root ??= rootProvider;
+        // 🚨 The registry NEVER resolves a logger factory (MeshWeaver.Plugins#4964). A module that configures
+        // logging (PostConfigure<LoggerFilterOptions>) puts a forwarder that resolves THIS registry among the
+        // setups of the root logger factory, so the registry can be built inside that factory's construction;
+        // and its last diagnostics are written while the root is being disposed, where a resolve throws and takes
+        // the teardown's fault records with it. The mesh's owners registry hands out a logger, bound here while
+        // the root answers, that holds what is written until the root is built.
+        logger ??= RootService<MeshWeaver.ServiceProvider.ModuleInstanceOwners>()?.LoggerFor(typeof(ModuleContexts).FullName!);
         return this;
     }
 
     /// <summary>A service of the mesh's root container, or null when it has none or the registry is not
     /// attached to it yet.</summary>
     internal T? RootService<T>() where T : class => root?.GetService<T>();
+
 
     private IServiceProvider Root => root ?? throw new InvalidOperationException(
         "The module registry is not attached to its mesh's container yet — a module service was resolved before the mesh was built.");
