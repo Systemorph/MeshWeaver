@@ -825,6 +825,16 @@ publish:                 # unchanged lane, reading THROUGH the host-publication 
   name, every record stamped with ANOTHER lane and its bundle (`module-publication.py partition`): two
   pack calls sharing a host stage each publish their own. A record with no lane stays, and the check
   refuses it.
+- **A host run with a build extension is held to the caller's DECLARATION.** The pack call's
+  `build-extensions-project` is published and handed to `build-project --extensions` by its own
+  `build-workspace` job, which a host run skips, so the host must build the extension itself. The
+  pack lane's `select` step *A host run builds the caller's build extension* reads the caller's
+  `.github/build-stages.json` from the tree under test and lets `executor: host` through only when it
+  declares a `modules` stage and exactly one prepared input with `env: MW_BUILD_EXTENSIONS` (a
+  `name`, a `key` and a `build` command — the prepared-input contract above). Anything else is RED,
+  naming the input and both ways out: declare the extension, or run the call on `actions`. The lift is
+  a declaration in the tree the host builds, never an input a caller could simply set
+  (`test-module-pack-host.py` executes the step over the declared shape and each missing part).
 - **The selection is the pack call's `select`, never the host's records.** A selection read off what
   the host staged would accept whatever the host staged.
 - **What a run OWES is the pack call's `select` too — the publication plan** (MeshWeaver.Plugins#4478,

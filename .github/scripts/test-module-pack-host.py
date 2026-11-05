@@ -110,6 +110,13 @@ def structure_problems(doc: dict) -> list[str]:
         problems.append("`select` has no executor step — an unknown executor would fall through to an arm")
     elif names.index("The executor is one this lane knows") > names.index("Read the publication mode"):
         problems.append("the executor step must run before the publication mode is read")
+    if "A host run builds the caller's build extension" not in names:
+        problems.append("`select` has no declaration step for a host run's build extension — a host run would compile without it")
+    else:
+        decl = step(jobs["select"], "A host run builds the caller's build extension")
+        if (decl.get("env") or {}).get("EXTENSIONS_PROJECT") != "${{ inputs.build-extensions-project }}" or \
+                (decl.get("env") or {}).get("EXECUTOR") != "${{ inputs.executor }}" or decl.get("if"):
+            problems.append("the build-extension declaration step must run unconditionally on the lane's own executor and extension inputs")
     ledger = step(jobs["select"], "Consult the module build ledger")
     if 'if [ "$EXECUTOR" = "host" ]' not in ledger["run"] or ledger["env"].get("EXECUTOR") != "${{ inputs.executor }}":
         problems.append("the ledger step does not pass a host run through — a claim no leg of the run finishes")
@@ -136,6 +143,12 @@ def mutations(doc: dict) -> list[tuple[str, dict]]:
     m = copy.deepcopy(doc)
     m["jobs"]["select"]["steps"] = [s for s in m["jobs"]["select"]["steps"] if s.get("name") != "The executor is one this lane knows"]
     out.append(("the executor step dropped", m))
+    m = copy.deepcopy(doc)
+    m["jobs"]["select"]["steps"] = [s for s in m["jobs"]["select"]["steps"] if s.get("name") != "A host run builds the caller's build extension"]
+    out.append(("the build-extension declaration step dropped", m))
+    m = copy.deepcopy(doc)
+    step(m["jobs"]["select"], "A host run builds the caller's build extension")["if"] = "inputs.executor == 'actions'"
+    out.append(("the build-extension declaration step skipped on a host run", m))
     m = copy.deepcopy(doc)
     led = step(m["jobs"]["select"], "Consult the module build ledger")
     led["env"].pop("EXECUTOR", None)
@@ -186,12 +199,48 @@ def behaviour(doc: dict, hostpub: dict) -> None:
             rc, out, _ = run_bash(body, {"EXECUTOR": executor, "PUBLISH": publish, "MODE": mode}, tmp)
             check(f"executor={executor!r} publish={publish} mode={mode} -> {'green' if want == 0 else 'RED'}",
                   rc == want, out)
-        # A build extension the host would never load: refused on a host run, by name.
+        # A build extension: the executor step no longer decides it (the declaration is not checked out yet) —
+        # it defers, by name, to the declaration step below.
         ext = "tools/Acme.Razor/Acme.Razor.csproj"
         rc, out, _ = run_bash(body, {"EXECUTOR": "host", "PUBLISH": "true", "MODE": "staged",
                                      "EXTENSIONS_PROJECT": ext}, tmp)
-        check("executor=host WITH build-extensions-project -> RED, naming the input and the fix",
-              rc == 1 and "build-extensions-project" in out and "executor: actions" in out, out)
+        check("executor=host WITH build-extensions-project -> deferred to the declaration step, by name",
+              rc == 0 and "A host run builds the caller's build extension" in out, out)
+
+        print("== select: a host run builds the caller's build extension (declared in .github/build-stages.json)")
+        names = [s.get("name") for s in sel["steps"]]
+        decl = step(sel, "A host run builds the caller's build extension")
+        check("the declaration step reads the caller's checked-out declaration, after the fresh merge",
+              decl["env"].get("DECLARATION") == "repo/.github/build-stages.json"
+              and names.index("A host run builds the caller's build extension") > names.index("Merge the head onto the current base tip (the keys below hash the tested tree)"),
+              str(decl.get("env")))
+        good = {"stages": [{"name": "modules"}, {"name": "compile-check"}],
+                "prepared": [{"name": "shelf", "env": "MW_BUILD_MODULE_LIBS", "key": "k", "build": "b"},
+                             {"name": "extension", "env": "MW_BUILD_EXTENSIONS", "key": "k", "build": "b"}]}
+        cases = [
+            ("declared: a modules stage and a prepared MW_BUILD_EXTENSIONS input", "host", ext, good, 0),
+            ("NEGATIVE CONTROL — no prepared extension", "host", ext, {**good, "prepared": good["prepared"][:1]}, 1),
+            ("NEGATIVE CONTROL — no modules stage", "host", ext, {**good, "stages": [{"name": "compile-check"}]}, 1),
+            ("NEGATIVE CONTROL — the extension entry names no build", "host", ext,
+             {**good, "prepared": [{"name": "extension", "env": "MW_BUILD_EXTENSIONS", "key": "k"}]}, 1),
+            ("NEGATIVE CONTROL — two prepared MW_BUILD_EXTENSIONS inputs", "host", ext,
+             {**good, "prepared": good["prepared"] + good["prepared"][1:]}, 1),
+            ("NEGATIVE CONTROL — no declaration at all", "host", ext, None, 1),
+            ("NEGATIVE CONTROL — an unreadable declaration", "host", ext, "{not json", 1),
+            ("actions with an extension and no declaration -> nothing to hold", "actions", ext, None, 0),
+            ("host with NO extension and no declaration -> nothing to hold", "host", "", None, 0),
+        ]
+        for label, executor, project, declaration, want in cases:
+            target = tmp / "repo" / ".github" / "build-stages.json"
+            if target.exists():
+                target.unlink()
+            if declaration is not None:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(declaration if isinstance(declaration, str) else json.dumps(declaration), encoding="utf-8")
+            rc, out, _ = run_bash(decl["run"], {"EXECUTOR": executor, "EXTENSIONS_PROJECT": project,
+                                                "DECLARATION": "repo/.github/build-stages.json"}, tmp)
+            check(f"{label} -> {'green' if want == 0 else 'RED'}",
+                  rc == want and (want == 0 or ("build-extensions-project" in out and "executor: actions" in out)), out)
         rc, out, _ = run_bash(body, {"EXECUTOR": "actions", "PUBLISH": "true", "MODE": "direct",
                                      "EXTENSIONS_PROJECT": ext}, tmp)
         check("NEGATIVE CONTROL — executor=actions WITH build-extensions-project -> green", rc == 0, out)
