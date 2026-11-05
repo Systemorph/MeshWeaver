@@ -483,13 +483,20 @@ internal sealed class MeshService(
     {
         var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
-        return Catalog.ObserveLocked(viewer)
-            // 🚨 Every verdict leaves the register's gate before anything acts on it (#899): the
-            // register is a shared security query that emits synchronously while holding its replay
-            // gate, and what follows a verdict is a PROVIDER SUBSCRIPTION — never run that inside the
-            // gate. In order (Concat), so a lock and the unlock after it are never seen reversed.
+        var catalog = Catalog;
+        // 🚨 Every LATER verdict leaves the register's emission before anything acts on it (#899):
+        // what follows a verdict is a PROVIDER SUBSCRIPTION, never run inside the read that produced
+        // it. In order (Concat), so a lock and the unlock after it are never seen reversed.
+        var changes = catalog.ObserveLocked(viewer)
             .Select(locked => Observable.Return(locked, System.Reactive.Concurrency.Scheduler.Default))
-            .Concat()
+            .Concat();
+        return Observable.Defer(() => catalog.IsLocked(viewer) is { } known
+                // 🚨 …but the FIRST verdict, when the standing read already holds it, is decided on the
+                // SUBSCRIBING thread, off an immutable snapshot: the provider is then subscribed inside
+                // the caller's own Subscribe — deterministically, never on a hop that a teardown or the
+                // caller's next step could overtake. Later changes follow, de-duplicated.
+                ? changes.StartWith(known).DistinctUntilChanged()
+                : changes)
             .Timeout(Observable.Timer(budget), _ => Observable.Never<long>())
             .Catch((TimeoutException ex) => Observable.Throw<bool>(new TimeoutException(
                 $"Whether the account '{viewer}' is locked could not be established within "

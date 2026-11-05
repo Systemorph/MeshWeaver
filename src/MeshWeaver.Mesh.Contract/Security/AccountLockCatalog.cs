@@ -204,6 +204,18 @@ public sealed class AccountLockCatalog : IDisposable
                         current = null;
                         Volatile.Write(ref snapshot, null);
                     }
+                    // 🚨 The MESH going away ends the read — the teardown drain completes every pooled
+                    // query — and that is not a verdict about anyone. It ENDS the verdict streams
+                    // instead of faulting them: a fault would make every live read gated on the lock
+                    // tear its provider down mid-teardown, ahead of the module teardown that owns those
+                    // subscriptions (ModuleLeasesAtMeshTeardownTest). Nothing new is admitted on an
+                    // ended verdict; what is already served ends with the mesh, by its own teardown.
+                    if (hub.IsDisposing)
+                    {
+                        logger?.LogDebug(ex, "The account-lock register read ended with the mesh");
+                        generation.Answers.OnCompleted();
+                        return;
+                    }
                     if (ex is ObjectDisposedException)
                         logger?.LogDebug(ex, "The account-lock register read ended with its hub");
                     else
