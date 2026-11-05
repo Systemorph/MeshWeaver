@@ -358,29 +358,27 @@ internal sealed class MeshService(
         var stamped = StampViewer(request);
         // The reader scope covers BOTH answers: the refusal's empty Initial is delivered on the
         // SUBSCRIBING turn, which need not be the reader's.
-        return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesLockedViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
+        return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
             // One definitive, empty Initial read from NO partition — an answer, not silence, so a
             // consumer waiting on the Initial is released rather than parked.
-            ? Observable.Return(new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Initial,
-                Items = [],
-                Partitions = [],
-            })
-            : _query.Query<T>(stamped)).CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
+            ? Observable.Return(EmptyChange<T>(QueryChangeType.Initial))
+            : LiveUnlessLocked(ViewerOf(request, stamped), _query.Query<T>(stamped)))
+            .CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
     }
 
     public IObservable<T?> Select<T>(string path, string property)
-        => RefusesAnonymousViewer(AmbientViewer()) || RefusesLockedViewer(AmbientViewer()) || RefusesScopedReader()
+        => RefusesAnonymousViewer(AmbientViewer()) || RefusesScopedReader()
             ? Observable.Return(default(T))
-            : _query.Select<T>(path, property);
+            : OnceUnlessLocked(AmbientViewer(), _query.Select<T>(path, property), default(T));
 
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
     {
         var stamped = StampViewer(request);
-        return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesLockedViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
+        return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
             ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
-            : _query.Query(stamped)).CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
+            : OnceUnlessLocked(ViewerOf(request, stamped), _query.Query(stamped),
+                (IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>()))
+            .CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
     }
 
     /// <summary>
@@ -425,25 +423,77 @@ internal sealed class MeshService(
            && AnonymousAccess.IsDenied(hub.ServiceProvider);
 
     /// <summary>
-    /// 🔒 The READ half of the account lock (<see cref="AccountLock"/>): a viewer whose account is
-    /// locked reads NOTHING through a query. The permission half sits in <c>PermissionEvaluator</c>
-    /// (a locked subject folds to <see cref="Permission.None"/>), but — exactly as for the anonymous
-    /// switch above — the SQL-backed providers filter rows in the database against the viewer's
-    /// projected grants and never consult the C# fold, so an existing circuit or an agent run of a
-    /// locked person would still list everything their grants reach. Refusing here, at the one call
-    /// boundary every secured read passes, closes that path for every backend at once.
+    /// 🔒 The READ half of the account lock (<see cref="AccountLock"/>) for a LIVE query: a viewer whose
+    /// account is locked reads NOTHING. The permission half sits in <c>PermissionEvaluator</c> (a locked
+    /// subject folds to <see cref="Permission.None"/>), but the SQL-backed providers filter rows in the
+    /// database against the viewer's projected grants and never consult the C# fold — so this boundary,
+    /// which every secured read passes, is what closes that path for every backend at once.
     ///
-    /// <para>Decided off the shared register (<see cref="AccountLockCatalog"/>) on the calling thread.
-    /// Before the register has answered — the first moments of a process — the verdict is unknown and
-    /// the read is NOT refused here; the portal's admission waits for the register, so a locked person
-    /// is not admitted in that window, and every node read still passes the fold, which never answers
-    /// before the register has. See Doc/Architecture/AccountLockout.</para>
+    /// <para><b>For the whole lifetime of the subscription, not just its start.</b> The provider's
+    /// stream is subscribed only while the live verdict says "not locked"; the moment a lock applies it
+    /// is DISPOSED and replaced by an empty answer read from no partition (an <c>Initial</c> when the
+    /// viewer was locked from the start, a <c>Reset</c> that clears every row held so far otherwise). An
+    /// unlock re-subscribes the provider, which answers with a fresh <c>Initial</c>.</para>
+    ///
+    /// <para><b>"Not known yet" is not "not locked".</b> Before the register has answered (a fresh
+    /// process) the provider is not subscribed; the verdict is awaited within
+    /// <see cref="MeshOperationOptions.PermissionEstablishmentBudget"/>, and a register that cannot
+    /// answer in that budget, or faults, faults the query — an availability failure, never a read.</para>
     /// </summary>
     /// <param name="viewer">The viewer the read resolved to, or null when unresolved.</param>
-    /// <returns><c>true</c> when the read must answer "nothing".</returns>
-    private bool RefusesLockedViewer(string? viewer)
-        => viewer is not null
-           && hub.ServiceProvider.GetRequiredService<AccountLockCatalog>().IsLocked(viewer) == true;
+    /// <param name="served">The provider's stream, constructed by the caller (its call-time capture intact).</param>
+    private IObservable<QueryResultChange<T>> LiveUnlessLocked<T>(string? viewer, IObservable<QueryResultChange<T>> served)
+        => !AccountLocks.IsLockable(viewer)
+            ? served
+            : LockVerdict(viewer!)
+                .Select((locked, index) => locked
+                    ? Observable.Return(EmptyChange<T>(index == 0 ? QueryChangeType.Initial : QueryChangeType.Reset))
+                    : served)
+                .Switch();
+
+    /// <summary>
+    /// The one-shot twin of <see cref="LiveUnlessLocked{T}"/> (a snapshot query, a select, an
+    /// autocomplete): <paramref name="whenLocked"/> for a locked viewer, the provider's answer otherwise.
+    /// Decided on the calling thread when the register has already answered — the steady state, so the
+    /// provider is subscribed exactly as before — and awaited within the budget when it has not.
+    /// </summary>
+    private IObservable<T> OnceUnlessLocked<T>(string? viewer, IObservable<T> served, T whenLocked)
+    {
+        if (!AccountLocks.IsLockable(viewer))
+            return served;
+        return Catalog.IsLocked(viewer) switch
+        {
+            true => Observable.Return(whenLocked),
+            false => served,
+            null => LockVerdict(viewer!)
+                .TakeDecisionOutsideGate()
+                .SelectMany(locked => locked ? Observable.Return(whenLocked) : served),
+        };
+    }
+
+    /// <summary>
+    /// The live lock verdict for <paramref name="viewer"/>, its FIRST answer bounded by the
+    /// permission-establishment budget; no answer in time faults as an availability failure.
+    /// </summary>
+    private IObservable<bool> LockVerdict(string viewer)
+    {
+        var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+            .PermissionEstablishmentBudget;
+        return Catalog.ObserveLocked(viewer)
+            .Timeout(Observable.Timer(budget), _ => Observable.Never<long>())
+            .Catch((TimeoutException ex) => Observable.Throw<bool>(new TimeoutException(
+                $"Whether the account '{viewer}' is locked could not be established within "
+                + $"{budget.TotalSeconds:0.#}s; the read is refused as unavailable, not answered.", ex)));
+    }
+
+    private AccountLockCatalog Catalog => hub.ServiceProvider.GetRequiredService<AccountLockCatalog>();
+
+    private static QueryResultChange<T> EmptyChange<T>(QueryChangeType changeType) => new()
+    {
+        ChangeType = changeType,
+        Items = [],
+        Partitions = [],
+    };
 
     /// <summary>
     /// 🛡️ The READ half of the API-token scope cap (<see cref="ApiTokenScope"/>): a caller whose
@@ -542,9 +592,10 @@ internal sealed class MeshService(
         int limit = 10,
         string? contextPath = null,
         string? context = null)
-        => RefusesAnonymousViewer(AmbientViewer()) || RefusesLockedViewer(AmbientViewer()) || RefusesScopedReader()
+        => RefusesAnonymousViewer(AmbientViewer()) || RefusesScopedReader()
             ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
-            : _query.Autocomplete(basePath, prefix, mode, limit, contextPath, context);
+            : OnceUnlessLocked(AmbientViewer(), _query.Autocomplete(basePath, prefix, mode, limit, contextPath, context),
+                (IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
 
     public IObservable<string?> GetPreRenderedHtml(string path)
         // This is an exact-node read for a page, not discovery. The query index can trail a

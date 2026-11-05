@@ -112,25 +112,35 @@ public static class AccountLocks
            && string.Equals(userId.Trim(), userId, StringComparison.Ordinal);
 
     /// <summary>
+    /// How account ids are compared everywhere a lock is looked up: case-INSENSITIVELY, the way home
+    /// ownership (<c>RlsNodeValidator</c>'s own-scope shortcut) and the user directory identify an
+    /// account. A lock written as <c>JDOE</c> therefore applies to the account <c>jdoe</c>.
+    /// </summary>
+    public static StringComparer IdComparer => StringComparer.OrdinalIgnoreCase;
+
+    /// <summary>
     /// Every lock record among <paramref name="nodes"/>, by user id — typed or raw content, only
     /// records that sit directly in <see cref="AccountLock.Namespace"/> and whose node id is the user
     /// id they name (a record placed anywhere else, or naming someone other than its own id, is
     /// inert). Lifted locks are kept: the map is the whole register, <see cref="AccountLock.IsInForce"/>
-    /// says which apply.
+    /// says which apply. Keyed by <see cref="IdComparer"/>; when two records differ only in casing,
+    /// the one IN FORCE wins, so a stale lifted twin can never hide a lock.
     /// </summary>
     /// <param name="nodes">The candidate nodes.</param>
     /// <param name="options">Serializer options for raw content.</param>
     /// <returns>The register.</returns>
     public static ImmutableDictionary<string, AccountLock> Read(IEnumerable<MeshNode> nodes, JsonSerializerOptions options)
     {
-        var builder = ImmutableDictionary.CreateBuilder<string, AccountLock>(StringComparer.Ordinal);
+        var builder = ImmutableDictionary.CreateBuilder<string, AccountLock>(IdComparer);
         foreach (var node in nodes)
         {
             if (!string.Equals(node.NodeType, AccountLock.NodeTypeName, StringComparison.Ordinal)
                 || !string.Equals(node.Namespace, AccountLock.Namespace, StringComparison.Ordinal))
                 continue;
             var record = node.Content.As<AccountLock>(options, what: AccountLock.Namespace);
-            if (record is null || !string.Equals(record.UserId, node.Id, StringComparison.Ordinal))
+            if (record is null || !IdComparer.Equals(record.UserId, node.Id))
+                continue;
+            if (builder.TryGetValue(record.UserId, out var twin) && twin.IsInForce && !record.IsInForce)
                 continue;
             builder[record.UserId] = record;
         }
@@ -159,34 +169,80 @@ public static class AccountLocks
         => cache.GetQuery(QueryId, options, Query).Select(nodes => Read(nodes, options));
 
     /// <summary>
-    /// Whether <paramref name="userId"/> is locked, live. An id that cannot be locked
-    /// (<see cref="IsLockable"/>) answers <c>false</c> at once, without opening the read.
+    /// Whether the lock APPLIES to <paramref name="userId"/>, live: a lock is in force on them and they
+    /// do not hold platform administration. A lock never removes an administrator — whatever wrote the
+    /// record — which is what keeps a lock from ever leaving an instance without one (the permission
+    /// fold applies the same rule, <c>PermissionEvaluator.ObserveEffectiveLock</c>). An id that cannot
+    /// be locked (<see cref="IsLockable"/>) answers <c>false</c> at once, without opening the read.
     ///
     /// <para>🚨 <b>Not seeded.</b> A lock SUBTRACTS everything, so an optimistic <c>false</c> before
     /// the register has answered would be an admission window — the monotonicity rule of the fold
-    /// (<c>Doc/Architecture/AccessControl</c> → "The convergence contract").</para>
+    /// (<c>Doc/Architecture/AccessControl</c> → "The convergence contract"). A register fault faults
+    /// this stream.</para>
     /// </summary>
     /// <param name="hub">The hub whose node-stream cache serves the register.</param>
     /// <param name="userId">The subject.</param>
-    /// <returns>True while a lock on <paramref name="userId"/> is in force.</returns>
+    /// <returns>True while a lock applies to <paramref name="userId"/>.</returns>
     public static IObservable<bool> ObserveLocked(IMessageHub hub, string? userId)
         => !IsLockable(userId)
             ? Observable.Return(false)
-            : ObserveAll(hub).Select(locks => IsLockedIn(locks, userId!)).DistinctUntilChanged();
+            : ObserveAll(hub).Select(locks => IsLockedIn(locks, userId!)).DistinctUntilChanged()
+                // The administrator question only while a record is in force — an unlocked subject pays nothing.
+                .Select(inForce => inForce
+                    ? hub.IsGlobalAdmin(userId!).Select(isAdmin => !isAdmin)
+                    : Observable.Return(false))
+                .Switch()
+                .DistinctUntilChanged();
 
-    /// <summary>The cache-taking twin of <see cref="ObserveLocked(IMessageHub,string?)"/>, for the fold.</summary>
-    internal static IObservable<bool> ObserveLocked(
+    /// <summary>
+    /// Every account a lock APPLIES to (<see cref="ObserveLocked(IMessageHub,string?)"/>), as one live
+    /// set compared with <see cref="IdComparer"/> — what <see cref="AccountLockCatalog"/> keeps as its
+    /// synchronous snapshot. Faults when the register's read faults.
+    /// </summary>
+    /// <param name="hub">The hub whose node-stream cache serves the register.</param>
+    /// <returns>The locked accounts, live.</returns>
+    public static IObservable<ImmutableHashSet<string>> ObserveEffectivelyLocked(IMessageHub hub)
+        => ObserveAll(hub)
+            .Select(locks => locks.Values.Where(l => l.IsInForce).Select(l => l.UserId).ToArray())
+            .Select(inForce => inForce.Length == 0
+                ? Observable.Return(ImmutableHashSet.Create<string>(IdComparer))
+                : inForce.Select(id => hub.IsGlobalAdmin(id).Select(isAdmin => (Id: id, IsAdmin: isAdmin)))
+                    .CombineLatest()
+                    .Select(verdicts => verdicts.Where(v => !v.IsAdmin).Select(v => v.Id).ToImmutableHashSet(IdComparer)))
+            .Switch();
+
+    /// <summary>
+    /// Whether a lock RECORD is in force on <paramref name="userId"/>, live — without the administrator
+    /// exemption, which the fold applies itself (it cannot ask <c>IsGlobalAdmin</c>, which IS the fold).
+    /// </summary>
+    internal static IObservable<bool> ObserveRecordInForce(
         IMeshNodeStreamCache cache, JsonSerializerOptions options, string? userId)
         => !IsLockable(userId)
             ? Observable.Return(false)
             : ObserveAll(cache, options).Select(locks => IsLockedIn(locks, userId!)).DistinctUntilChanged();
 
-    /// <summary>Whether <paramref name="locks"/> holds a lock in force on <paramref name="userId"/>.</summary>
+    /// <summary>Whether <paramref name="locks"/> holds a lock in force on <paramref name="userId"/>,
+    /// compared with <see cref="IdComparer"/> whatever comparer the dictionary carries.</summary>
     /// <param name="locks">The register.</param>
     /// <param name="userId">The subject.</param>
     /// <returns>True when locked.</returns>
     public static bool IsLockedIn(IReadOnlyDictionary<string, AccountLock> locks, string userId)
-        => locks.TryGetValue(userId, out var record) && record.IsInForce;
+        => RecordOf(locks, userId) is { IsInForce: true };
+
+    /// <summary>The record naming <paramref name="userId"/> (by <see cref="IdComparer"/>), or null.</summary>
+    /// <param name="locks">The register.</param>
+    /// <param name="userId">The subject.</param>
+    /// <returns>The record, lifted or in force, or null when there is none.</returns>
+    public static AccountLock? RecordOf(IReadOnlyDictionary<string, AccountLock> locks, string userId)
+    {
+        if (locks.TryGetValue(userId, out var exact))
+            return exact;
+        AccountLock? found = null;
+        foreach (var (key, record) in locks)
+            if (IdComparer.Equals(key, userId) && (found is null || record.IsInForce))
+                found = record;
+        return found;
+    }
 
     /// <summary>
     /// Locks <paramref name="userId"/>'s account. Authorize as the caller — <paramref name="caller"/>
@@ -206,32 +262,36 @@ public static class AccountLocks
         ArgumentNullException.ThrowIfNull(hub);
         var target = userId?.Trim() ?? "";
         var callerId = caller?.ObjectId;
+        var locale = caller?.Locale;
         if (!IsLockable(target))
             return Observable.Throw<AccountLock>(new InvalidOperationException(
-                $"'{target}' is not a person's account and cannot be locked."));
-        if (string.Equals(callerId, target, StringComparison.Ordinal))
+                LocalizationCatalog.Get("accountLock.refused.notAPerson", locale, target)));
+        if (IdComparer.Equals(callerId, target))
             return Observable.Throw<AccountLock>(new InvalidOperationException(
-                "You cannot lock your own account."));
+                LocalizationCatalog.Get("accountLock.refused.self", locale)));
 
-        return AuthorizeGlobalAdmin(hub, callerId, "lock an account")
+        return AuthorizeGlobalAdmin(hub, caller)
             .SelectMany(_ => hub.IsGlobalAdmin(target).TakeDecisionOutsideGate())
-            .SelectMany(targetIsAdmin =>
+            .SelectMany(targetIsAdmin => targetIsAdmin
+                ? Observable.Throw<ImmutableDictionary<string, AccountLock>>(new InvalidOperationException(
+                    LocalizationCatalog.Get("accountLock.refused.administrator", locale, target)))
+                // The register only DISCOVERS an existing record's casing, so a re-lock lands on it
+                // rather than beside it; it decides nothing about the lock itself.
+                : ObserveAll(hub).TakeDecisionOutsideGate())
+            .SelectMany(locks =>
             {
-                if (targetIsAdmin)
-                    return Observable.Throw<AccountLock>(new InvalidOperationException(
-                        $"'{target}' is a platform administrator. Another administrator removes their "
-                        + "Admin grant first; a lock never removes an administrator."));
+                var id = RecordOf(locks, target)?.UserId ?? target;
                 var record = new AccountLock
                 {
-                    UserId = target,
+                    UserId = id,
                     LockedAt = DateTimeOffset.UtcNow,
                     LockedBy = callerId,
                     Reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim(),
                 };
-                var node = new MeshNode(target, AccountLock.Namespace)
+                var node = new MeshNode(id, AccountLock.Namespace)
                 {
                     NodeType = AccountLock.NodeTypeName,
-                    Name = target,
+                    Name = id,
                     Content = record,
                 };
                 var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
@@ -243,10 +303,15 @@ public static class AccountLocks
 
     /// <summary>
     /// Lifts the lock on <paramref name="userId"/>: authorize as the caller (a global admin), then
-    /// stamp <see cref="AccountLock.UnlockedAt"/> on the existing record as System. The record is
-    /// kept, so its history still says who locked and who unlocked. An account that is not locked
-    /// is answered with an <see cref="InvalidOperationException"/> and nothing is written — the
-    /// register (not a point read of a path that may not exist) decides.
+    /// stamp <see cref="AccountLock.UnlockedAt"/> on the record as System. The record is kept, so its
+    /// history still says who locked and who unlocked.
+    ///
+    /// <para>The register only DISCOVERS whether a record exists (a point read of a path that may not
+    /// exist is never issued); whether the lock is still in force is decided INSIDE the update, on the
+    /// owner's authoritative node — so a lift that another replica already wrote is not stamped twice,
+    /// and a lock the register has not caught up with yet is still lifted. An account with no record,
+    /// or whose record is no longer in force, is answered with an <see cref="InvalidOperationException"/>
+    /// and nothing is written.</para>
     /// </summary>
     /// <param name="hub">The hub to act on.</param>
     /// <param name="caller">The person asking, captured at the verb's entry.</param>
@@ -257,32 +322,49 @@ public static class AccountLocks
         ArgumentNullException.ThrowIfNull(hub);
         var target = userId?.Trim() ?? "";
         var callerId = caller?.ObjectId;
-        return AuthorizeGlobalAdmin(hub, callerId, "unlock an account")
-            .SelectMany(_ => ObserveAll(hub).Take(1))
+        var locale = caller?.Locale;
+        var notLocked = new InvalidOperationException(
+            LocalizationCatalog.Get("accountLock.refused.notLocked", locale, target));
+        return AuthorizeGlobalAdmin(hub, caller)
+            .SelectMany(_ => ObserveAll(hub).TakeDecisionOutsideGate())
             .SelectMany(locks =>
             {
-                if (!IsLockedIn(locks, target))
-                    return Observable.Throw<MeshNode>(new InvalidOperationException(
-                        $"'{target}' is not locked."));
+                if (RecordOf(locks, target) is not { } existing)
+                    return Observable.Throw<MeshNode>(notLocked);
                 var now = DateTimeOffset.UtcNow;
+                var options = hub.JsonSerializerOptions;
                 // Typed Update: a record that is present but unreadable FAULTS (never a defaulted
-                // record written over it); the register said it exists, so absent leaves it be.
+                // record written over it); one that is absent or already lifted is left as it is.
                 return hub.ServiceProvider.GetService<AccessService>()
-                    .RunAsSystem(() => hub.GetMeshNodeStream(AccountLock.PathOf(target))
-                        .Update<AccountLock>((node, record) => record is null
-                            ? node
-                            : node with { Content = record with { UnlockedAt = now, UnlockedBy = callerId } }));
+                    .RunAsSystem(() => hub.GetMeshNodeStream(AccountLock.PathOf(existing.UserId))
+                        .Update<AccountLock>((node, record) =>
+                        {
+                            if (record is not { IsInForce: true })
+                                return node;
+                            return node with { Content = record with { UnlockedAt = now, UnlockedBy = callerId } };
+                        }))
+                    // Lifted by THIS write exactly when the committed record carries this write's stamp.
+                    .SelectMany(node => node.ContentAs<AccountLock>(options) is { } written
+                                        && written.UnlockedAt is { } at
+                                        && Math.Abs((at - now).TotalMilliseconds) < 1
+                                        && string.Equals(written.UnlockedBy, callerId, StringComparison.Ordinal)
+                        ? Observable.Return(node)
+                        : Observable.Throw<MeshNode>(notLocked));
             });
     }
 
-    private static IObservable<bool> AuthorizeGlobalAdmin(IMessageHub hub, string? callerId, string what)
-        => string.IsNullOrEmpty(callerId)
+    private static IObservable<bool> AuthorizeGlobalAdmin(IMessageHub hub, AccessContext? caller)
+    {
+        var callerId = caller?.ObjectId;
+        var locale = caller?.Locale;
+        return string.IsNullOrEmpty(callerId)
             ? Observable.Throw<bool>(new UnauthorizedAccessException(
-                $"Only a platform administrator can {what}; the request carried no caller."))
+                LocalizationCatalog.Get("accountLock.refused.noCaller", locale)))
             : hub.IsGlobalAdmin(callerId)
                 .TakeDecisionOutsideGate()
                 .SelectMany(isAdmin => isAdmin
                     ? Observable.Return(true)
                     : Observable.Throw<bool>(new UnauthorizedAccessException(
-                        $"Only a platform administrator can {what}; '{callerId}' is not one.")));
+                        LocalizationCatalog.Get("accountLock.refused.notAdmin", locale, callerId))));
+    }
 }

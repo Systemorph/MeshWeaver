@@ -56,6 +56,9 @@ public class AccountLockoutTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>A shared space both people can edit.</summary>
     private const string SharedSpace = "LockShared";
 
+    /// <summary>Holds Editor on the Admin partition — a writer there, but NOT a platform administrator.</summary>
+    private const string AdminEditor = "lock-admin-editor";
+
     private static TimeSpan Budget => TestTimeouts.Convergence;
 
     /// <inheritdoc />
@@ -72,7 +75,8 @@ public class AccountLockoutTest(ITestOutputHelper output) : MonolithMeshTestBase
                 AssignmentNodeFactory.UserRole(Leaver, "Admin", Leaver),
                 AssignmentNodeFactory.UserRole(Stayer, "Admin", Stayer),
                 AssignmentNodeFactory.UserRole(Leaver, "Editor", SharedSpace),
-                AssignmentNodeFactory.UserRole(Stayer, "Editor", SharedSpace));
+                AssignmentNodeFactory.UserRole(Stayer, "Editor", SharedSpace),
+                AssignmentNodeFactory.UserRole(AdminEditor, "Editor", AdminPartition));
 
     private static AccessContext Identity(string userId) => new() { ObjectId = userId, Name = userId };
 
@@ -96,13 +100,142 @@ public class AccountLockoutTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Catch((Exception e) => Observable.Return<Exception?>(e))
             .Should().Within(Budget).Emit(because, cancellationToken: TestContext.Current.CancellationToken);
 
-    private async Task WaitForCatalog(string user, bool locked)
+    /// <summary>Waits until the catalog's SYNCHRONOUS verdict (what the query boundary and the portal
+    /// read) says <paramref name="locked"/> — a re-query, so it polls the snapshot.</summary>
+    private Task<bool?> WaitForCatalog(string user, bool locked)
     {
         var catalog = Mesh.ServiceProvider.GetRequiredService<AccountLockCatalog>();
-        await catalog.Register.Where(r => AccountLocks.IsLockedIn(r, user) == locked).Take(1)
-            .Should().Within(Budget).Emit($"the register must say {user} is {(locked ? "" : "not ")}locked",
+        return Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => catalog.IsLocked(user))
+            .Where(v => v == locked).Take(1)
+            .Should().Within(Budget).Emit($"the catalog must say {user} is {(locked ? "" : "not ")}locked",
                 cancellationToken: TestContext.Current.CancellationToken);
-        catalog.IsLocked(user).Should().Be(locked);
+    }
+
+    private IStorageAdapter Storage => Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+
+    /// <summary>A lock record written straight into storage — past every validator and verb.</summary>
+    private Task<MeshNode?> WriteRawLock(string userId)
+        => Storage.Write(new MeshNode(userId, AccountLock.Namespace)
+            {
+                NodeType = AccountLock.NodeTypeName,
+                Name = userId,
+                Content = new AccountLock { UserId = userId, LockedAt = DateTimeOffset.UtcNow, LockedBy = "raw" },
+            }, Mesh.JsonSerializerOptions)
+            .Should().Within(Budget).Emit($"the raw lock on {userId} must be stored",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// A lock record naming a platform administrator is INERT however it was written — the read side
+    /// holds the invariant, so a write path no validator sees cannot lock an administrator out. The
+    /// control: the same raw write naming a person is honoured.
+    /// </summary>
+    [Fact]
+    public async Task ALockOnAnAdministrator_IsInert_HoweverItWasWritten()
+    {
+        await WriteRawLock(OtherAdmin);
+        await WriteRawLock(Leaver);
+
+        await Settle(Leaver, Leaver, p => p == Permission.None, "control: a raw lock on a person is honoured");
+        await WaitForCatalog(Leaver, locked: true);
+
+        (await Settle(AdminPartition, OtherAdmin, p => p.HasFlag(Permission.All),
+            "an administrator keeps the Admin partition whatever a lock record says")).HasFlag(Permission.All).Should().BeTrue();
+        await Mesh.IsGlobalAdmin(OtherAdmin).Should().Within(Budget).Match(a => a,
+            "the administrator is still one", cancellationToken: TestContext.Current.CancellationToken);
+        await WaitForCatalog(OtherAdmin, locked: false);
+    }
+
+    /// <summary>A grant on the Admin partition short of platform administration writes no lock.</summary>
+    [Fact]
+    public async Task AWriterWhoIsNotAPlatformAdmin_CannotWriteALock_EvenWithAnAdminPartitionGrant()
+    {
+        await Mesh.IsGlobalAdmin(AdminEditor).Should().Within(Budget).Match(a => !a,
+            "the premise: Editor on the Admin partition is not platform administration",
+            cancellationToken: TestContext.Current.CancellationToken);
+        var node = new MeshNode(Leaver, AccountLock.Namespace)
+        {
+            NodeType = AccountLock.NodeTypeName,
+            Name = Leaver,
+            Content = new AccountLock { UserId = Leaver, LockedAt = DateTimeOffset.UtcNow, LockedBy = AdminEditor },
+        };
+        var response = await ObserveNodeOperation(
+                new CreateNodeRequest(node) { CreatedBy = AdminEditor },
+                o => o.WithAccessContext(Identity(AdminEditor)))
+            .Select(d => d.Message).Take(1)
+            .Should().Within(Budget).Emit("the create must answer", cancellationToken: TestContext.Current.CancellationToken);
+        response.Success.Should().BeFalse("only a platform administrator writes a lock record");
+        await Settle(Leaver, Leaver, CanEdit, "the refused write left the person's access as it was");
+    }
+
+    /// <summary>Lock ids compare the way account ids do: case-insensitively.</summary>
+    [Fact]
+    public async Task ALockWrittenInAnotherCasing_StillLocksTheAccount()
+    {
+        (await Outcome(AccountLocks.Lock(Mesh, Identity(PlatformAdmin), Leaver.ToUpperInvariant(), "casing"),
+            "the lock must answer")).Should().BeNull();
+        await Settle(Leaver, Leaver, p => p == Permission.None, "the lock applies to the account in any casing");
+        await WaitForCatalog(Leaver, locked: true);
+        (await Outcome(AccountLocks.Unlock(Mesh, Identity(PlatformAdmin), Leaver), "the unlock must answer"))
+            .Should().BeNull("an unlock finds the record whatever casing it was written in");
+        await Settle(Leaver, Leaver, CanEdit, "unlocked again");
+    }
+
+    /// <summary>
+    /// A LIVE query opened before the lock stops delivering at the lock: the provider is released and
+    /// a Reset read from no partition clears what the subscriber held; an unlock serves rows again.
+    /// </summary>
+    [Fact]
+    public async Task ALiveQueryOpenedBeforeTheLock_IsClearedByIt_AndResumesAfterAnUnlock()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var changes = new System.Reactive.Subjects.ReplaySubject<QueryResultChange<MeshNode>>();
+        using var live = mesh.Query<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{SharedSpace} scope:children") with { UserId = Leaver })
+            .Subscribe(changes);
+        await changes.Should().Within(Budget).Match(c => c.Items.Count > 0,
+            "control: the live listing serves rows before the lock", cancellationToken: ct);
+
+        (await Outcome(AccountLocks.Lock(Mesh, Identity(PlatformAdmin), Leaver, "left"), "the lock must answer"))
+            .Should().BeNull();
+        await changes.Should().Within(Budget).Match(
+            c => c.ChangeType == QueryChangeType.Reset && c.Items.Count == 0 && c.Partitions is { Count: 0 },
+            "the lock clears the live listing from no partition", cancellationToken: ct);
+
+        (await Outcome(AccountLocks.Unlock(Mesh, Identity(PlatformAdmin), Leaver), "the unlock must answer"))
+            .Should().BeNull();
+        await changes.Skip(1).Should().Within(Budget).Match(
+            c => c.ChangeType == QueryChangeType.Initial && c.Items.Count > 0,
+            "an unlock serves the listing again", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// The RLS validator's own-home shortcut answers before the fold — so it must refuse a locked
+    /// person too: their agent run cannot write into their own home.
+    /// </summary>
+    [Fact]
+    public async Task ALockedPerson_CannotWriteTheirOwnHome()
+    {
+        (await Outcome(AccountLocks.Lock(Mesh, Identity(PlatformAdmin), Leaver, "left"), "the lock must answer"))
+            .Should().BeNull();
+        await Settle(Leaver, Leaver, p => p == Permission.None, "locked");
+        var response = await ObserveNodeOperation(
+                new CreateNodeRequest(new MeshNode("Diary", Leaver) { NodeType = "Markdown", Name = "Diary" })
+                    { CreatedBy = Leaver },
+                o => o.WithAccessContext(Identity(Leaver)))
+            .Select(d => d.Message).Take(1)
+            .Should().Within(Budget).Emit("the create must answer", cancellationToken: TestContext.Current.CancellationToken);
+        response.Success.Should().BeFalse("a locked person writes nothing, not even in their own home");
+
+        // Control: the bystander still writes into theirs.
+        var control = await ObserveNodeOperation(
+                new CreateNodeRequest(new MeshNode("Diary", Stayer) { NodeType = "Markdown", Name = "Diary" })
+                    { CreatedBy = Stayer },
+                o => o.WithAccessContext(Identity(Stayer)))
+            .Select(d => d.Message).Take(1)
+            .Should().Within(Budget).Emit("the create must answer", cancellationToken: TestContext.Current.CancellationToken);
+        control.Success.Should().BeTrue("the bystander's own home is untouched");
     }
 
     [Fact]

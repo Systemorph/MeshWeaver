@@ -50,12 +50,24 @@ A lock is refused, by name, when it would:
    This is what keeps a lock from ever leaving an instance without a human administrator, which would
    hand the next sign-in the first-user bootstrap.
 
-The same three rules hold for a record written any other way (an MCP `create`, an import): the
-`AccountLockWriteGuard` validator refuses a lock in force that names an administrator or its own writer,
-and a record whose node id is not the user it names.
+The same rules hold for a record written any other way (an MCP `create`/`update`/`delete`, an import,
+an upsert that retypes a node into a lock): the `AccountLockWriteGuard` validator accepts a lock write
+only from a platform administrator or from System executing a verb that already checked one (an Editor
+grant on the Admin partition is not enough), and refuses a lock in force that names an administrator
+or its own writer, and a record whose node id is not the user it names.
 
-Unlocking an account that is not locked writes nothing: the register decides, never a point read of a
-path that may not exist.
+🚨 **A lock never applies to a platform administrator, however its record was written.** This is held
+at READ time, not only by the validator: the fold asks whether a locked subject holds `Permission.All`
+on the Admin partition (evaluated without the lock) and, if so, ignores the lock. Every other seam reads
+the same effective verdict (`AccountLocks.ObserveLocked`). So no write path — one a validator does not
+see included — can lock the last administrator out.
+
+Account ids are compared **case-insensitively** (`AccountLocks.IdComparer`), as home ownership and the
+user directory compare them: a lock written as `JDOE` locks `jdoe`, and an unlock finds it.
+
+Unlocking an account that is not locked writes nothing. The register only discovers whether a record
+exists; whether it is still in force is decided inside the update, on the owner's authoritative node, so
+a lift another replica already wrote is not stamped twice.
 
 ## Where it is enforced
 
@@ -65,16 +77,19 @@ read per process), so they never disagree about who is locked.
 | Seam | What a locked person gets |
 |---|---|
 | **The permission fold** (`PermissionEvaluator`) | `Permission.None` on every path — their home, every space, every public surface. Every node read, write, delivery and agent tool call passes this fold, so an open Blazor session and an agent run on the person's behalf are refused at their next check. |
+| **The RLS node validator** (`RlsNodeValidator`) | Refused before the own-home shortcut and the per-type rules, which answer without asking the fold. |
 | **Node-type access rules** (`NodeTypeAccessRuleGate.EvaluateUnlessLocked`) | Denied before the rule runs. A rule may grant where the fold does not — a profile readable by every signed-in user, a submitter reading their own submission — and a locked account holds nothing. Declared point reads are refused the same way. |
-| **The query boundary** (`MeshService`) | One empty answer, read from no partition. The SQL-backed providers filter rows in the database and never consult the fold, so this is what keeps a locked person's listing empty there. |
+| **The query boundary** (`MeshService`) | One empty answer, read from no partition. A LIVE query is gated for its whole lifetime: the moment a lock applies, the provider's subscription is released and a `Reset` read from no partition clears every row the subscriber held; an unlock re-subscribes it. The SQL-backed providers filter rows in the database and never consult the fold, so this is what keeps a locked person's listing empty there. |
 | **The portal's admission** (request middleware, MeshWeaver.Plugins) | A 403 at sign-in and for every bearer token, including MCP and API tokens. |
 
 The fold's lock leg is **not seeded**: a lock subtracts everything, so an optimistic "unlocked" before
 the register has answered would be an admission window (the monotonicity rule in
-[Access Control](../AccessControl) → "The convergence contract"). The synchronous view
-(`AccountLockCatalog`) answers *locked*, *not locked* or *not known yet*; the admission waits for an
-answer, and the query boundary refuses only on *locked* — before the register has answered in a fresh
-process, the fold remains the authority.
+[Access Control](../AccessControl) → "The convergence contract"). **"Not known yet" is never "not
+locked"** anywhere: the synchronous view (`AccountLockCatalog.IsLocked`) answers *locked*, *not locked*
+or *not known yet* from an immutable snapshot; the query boundary waits for a verdict within the
+permission-establishment budget and otherwise fails the read as unavailable; the admission waits and
+answers 503 + Retry-After; and a register read that faults reaches every waiter as a fault, never as
+silence.
 
 ## What a lock does not do
 
