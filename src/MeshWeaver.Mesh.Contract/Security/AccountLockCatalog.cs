@@ -41,14 +41,24 @@ public sealed class AccountLockCatalog : IDisposable
     private ImmutableHashSet<string>? snapshot;
     private Generation? current;
     private bool disposed;
+    // Test seam: the register read the catalog opens. Null in production (PlatformRegisterQuery).
+    private readonly Func<IObservable<QueryResultChange<MeshNode>>>? openRegister;
 
     /// <summary>Creates the catalog over the mesh hub.</summary>
     /// <param name="hub">The mesh hub.</param>
     /// <param name="logger">Operator log for a faulted read.</param>
     public AccountLockCatalog(IMessageHub hub, ILogger<AccountLockCatalog>? logger = null)
+        : this(hub, logger, openRegister: null)
+    {
+    }
+
+    /// <summary>The seam a test drives: the register read the catalog opens.</summary>
+    internal AccountLockCatalog(
+        IMessageHub hub, ILogger<AccountLockCatalog>? logger, Func<IObservable<QueryResultChange<MeshNode>>>? openRegister)
     {
         this.hub = hub;
         this.logger = logger;
+        this.openRegister = openRegister;
     }
 
     /// <summary>
@@ -93,15 +103,24 @@ public sealed class AccountLockCatalog : IDisposable
     public IObservable<ImmutableHashSet<string>> Locked => Observable.Defer(() => Current());
 
     /// <summary>
-    /// The register as the platform's providers serve it, live — read as System, folded from the
-    /// query's changes. Leases no module provider (<see cref="MeshQueryRequest.PlatformProvidersOnly"/>).
+    /// The register as the platform's providers serve it, live — folded from the query's changes.
+    /// Leases no module provider (<see cref="MeshQueryRequest.PlatformProvidersOnly"/>).
+    ///
+    /// <para>🚨 <b>Only a COMPLETE answer is ever folded.</b> An <c>Initial</c>/<c>Reset</c> whose
+    /// providers did not all answer (<see cref="QueryResultChange{T}.SilentProviders"/>) or that a
+    /// provider read only in part (<see cref="QueryResultChange{T}.SnapshotIncomplete"/>) is a FLOOR,
+    /// and folding it would publish every lock it is missing as "not locked" — fail open. Such a frame
+    /// FAULTS the read instead, which clears the snapshot (the verdict is "not known", which every seam
+    /// refuses on) and lets the next use open a fresh read. A read that COMPLETES is the same defect
+    /// wearing a quieter face — the register stops learning — and faults likewise.</para>
     /// </summary>
     private IObservable<ImmutableDictionary<string, AccountLock>> PlatformRegister()
     {
-        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var options = hub.JsonSerializerOptions;
-        var request = MeshQueryRequest.FromQuery(AccountLocks.Query).AsSystem() with { PlatformProvidersOnly = true };
-        return mesh.Query<MeshNode>(request)
+        return (openRegister?.Invoke() ?? PlatformRegisterQuery())
+            .SelectMany(RejectIncomplete)
+            .Concat(Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                "the account-lock register read completed; a standing read must not end")))
             .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.Ordinal), (byPath, change) =>
             {
                 switch (change.ChangeType)
@@ -122,6 +141,34 @@ public sealed class AccountLockCatalog : IDisposable
                 }
             })
             .Select(byPath => AccountLocks.Read(byPath.Values, options));
+    }
+
+    /// <summary>
+    /// The production register read: the anchored register query, platform providers only, constructed
+    /// AND subscribed as System (<c>RunAsSystem</c>). Stamping the request alone is not enough: the
+    /// query boundary also refuses on the AMBIENT caller — a token whose scopes allow no Read is
+    /// answered with an empty Initial — so a catalog first opened during such a caller's request would
+    /// otherwise publish "nobody is locked" for every person, for good.
+    /// </summary>
+    private IObservable<QueryResultChange<MeshNode>> PlatformRegisterQuery()
+    {
+        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var request = MeshQueryRequest.FromQuery(AccountLocks.Query).AsSystem() with { PlatformProvidersOnly = true };
+        return hub.ServiceProvider.GetService<AccessService>().RunAsSystem(() => mesh.Query<MeshNode>(request));
+    }
+
+    /// <summary>A frame that is a complete answer, or a fault naming why it is not one.</summary>
+    internal static IObservable<QueryResultChange<MeshNode>> RejectIncomplete(QueryResultChange<MeshNode> change)
+    {
+        if (change.SilentProviders is { Count: > 0 } silent)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"the account-lock register answer is INCOMPLETE: query provider(s) [{string.Join(", ", silent)}] "
+                + "did not answer, so a lock missing from it cannot be read as \"not locked\""));
+        if (change.SnapshotIncomplete)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                "the account-lock register answer is INCOMPLETE: a provider read it only in part, so a lock "
+                + "missing from it cannot be read as \"not locked\""));
+        return Observable.Return(change);
     }
 
     /// <summary>The current generation's live set, opening one when there is none.</summary>
