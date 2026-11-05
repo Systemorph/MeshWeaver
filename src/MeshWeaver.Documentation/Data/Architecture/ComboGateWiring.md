@@ -889,6 +889,32 @@ Pinned by `ComboVerifiesTheRecordedCommitTest` (the assembler and verifier over 
 repository whose `HEAD` has moved) and `InstallRecordsTheServedCommitTest` (the registry's answer
 and the install record). Each test file carries its own negative controls.
 
+### A sync entry that names no repository is not a module (#4413)
+
+A space can carry a `_GitSync` node that was created and never connected: no `repositoryUrl`,
+never synced. Nothing in that space came from git. Its content is authored in the mesh, the same
+as a space that has no `_GitSync` node at all, and that kind of space was never part of the
+combo. The combo reader still listed it as a module. The assembler then refused it with
+`names no repository in either shape`, and that one refusal stopped the gate for the whole root.
+Measured on run 42007094661: the company instance read `NotVerifiable` with 0 of 83 modules
+verified, on every run, because of one such space.
+
+- `InstanceComboReader.FoldSyncEntries` drops a sync entry only when its `repositoryUrl` is
+  blank **and** it has no sync history (`HasSyncHistory`: no last-synced commit or time, no
+  recorded attempt, outcome or module outcomes). A blank URL alone proves nothing, because
+  `GitHubSyncService.SaveConfig` can clear the URL and keep the history. An entry with history
+  stays a coordinate, and the assembler refuses it by name, because its content came from a
+  repository the record no longer names.
+- Precedence: a connected entry first, then a historical one, with the primary entry first within
+  each rank. A historical entry never displaces a connected source.
+- A space whose every entry is unconnected, and which has no install record, is named on the
+  combo's caveats. It is never dropped silently, and a verdict over the combo says nothing about it.
+- A space with no repository that has an install record whose source cannot be resolved is
+  still refused. That record claims a package that came from somewhere.
+
+Pinned by `AnUnconnectedSyncEntryIsNotAComboModuleTest`. Its negative control is that the test
+fails without the filter.
+
 ## The module half of the combo is composed too (#4413)
 
 An instance runs two halves of every installed package: its **content** (node definitions, at the

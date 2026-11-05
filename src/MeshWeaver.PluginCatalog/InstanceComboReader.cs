@@ -160,9 +160,12 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
             if (failure is not null)
                 caveats.Add(failure);
 
-        var syncByModule = ReadSyncEntries(sync.Items);
+        var syncFold = ReadSyncEntries(sync.Items);
+        var syncByModule = syncFold.Coordinates;
         var packagesByModule = ReadInstallRecords(installs.Items);
         var records = ReadDiscoveryRecords(discovery.Items);
+        foreach (var unconnected in syncFold.Unconnected.Where(m => !packagesByModule.ContainsKey(m)))
+            caveats.Add(UnconnectedSyncCaveat(unconnected));
 
         // The module SET is the union of what the instance demonstrably HAS. Discovery contributes
         // names and gaps, never membership — it is absent on real portals.
@@ -209,32 +212,74 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
     /// both resolve to the owning partition through their namespace's first segment. The primary
     /// wins when a Space has several — it is the one the module itself is imported through.
     /// </summary>
-    private ImmutableDictionary<string, GitSyncCoordinate> ReadSyncEntries(
-        IReadOnlyList<MeshNode> nodes) =>
-        nodes
+    private SyncEntryFold ReadSyncEntries(IReadOnlyList<MeshNode> nodes) =>
+        FoldSyncEntries(nodes
             .Select(node => (
                 Module: AccessAssignmentGuard.PartitionOf(node.Namespace ?? ""),
                 Node: node,
                 Config: node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)))
             .Where(x => x.Module.Length > 0 && x.Config is not null)
+            .Select(x => new SyncEntry(x.Module, x.Node.Id, x.Node.Path, x.Config!)));
+
+    /// <summary>One sync config node, resolved to the partition (module) it belongs to.</summary>
+    internal sealed record SyncEntry(string Module, string NodeId, string Path, GitHubSyncConfig Config);
+
+    /// <summary>The sync entries folded per module, plus the modules whose every entry names no
+    /// repository (<see cref="UnconnectedSyncCaveat"/>).</summary>
+    internal sealed record SyncEntryFold(
+        ImmutableDictionary<string, GitSyncCoordinate> Coordinates,
+        ImmutableList<string> Unconnected);
+
+    /// <summary>
+    /// Folds sync entries into one coordinate per module. Pure, so the rule is pinned by a unit test
+    /// without a mesh.
+    ///
+    /// <para>🚨 <b>A sync entry that names NO repository AND has never synced is not a
+    /// coordinate</b> (MeshWeaver#4413). Such an entry was created and never connected. Nothing was
+    /// imported from git, so the space's content was authored in the mesh, and a space with no
+    /// <c>_GitSync</c> node at all is not in the combo either. Before this rule, such a space was
+    /// treated as a module, and the assembler refused it as "names no repository in either
+    /// shape". That one refusal stopped the gate for the whole root, so every other module on that
+    /// instance was left unverified on every run. Such a module is still NAMED, through
+    /// <see cref="SyncEntryFold.Unconnected"/> and a caveat on the combo, and is never silently
+    /// dropped.</para>
+    ///
+    /// <para>🚨 <b>A blank URL alone does NOT prove that nothing was imported.</b>
+    /// <c>GitHubSyncService.SaveConfig</c> can clear <c>RepositoryUrl</c> and keep the recorded
+    /// sync history. An entry with any history (<see cref="HasSyncHistory"/>) therefore stays,
+    /// and the assembler refuses it by name as before, because its content came from somewhere
+    /// the record no longer names. A historical entry never displaces a connected one. The
+    /// precedence is a connected entry, then a historical one, with the primary entry first within
+    /// each rank.</para>
+    /// </summary>
+    internal static SyncEntryFold FoldSyncEntries(IEnumerable<SyncEntry> entries)
+    {
+        var byModule = entries
             .GroupBy(x => x.Module, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableList();
+        var coordinates = byModule
+            .Select(g =>
+            {
+                var connected = g.Where(x => !string.IsNullOrWhiteSpace(x.Config.RepositoryUrl))
+                    .ToImmutableList();
+                return (Module: g.Key, Entries: connected.Count > 0
+                    ? connected
+                    : g.Where(x => HasSyncHistory(x.Config)).ToImmutableList());
+            })
+            .Where(g => g.Entries.Count > 0)
             .ToImmutableDictionary(
-                g => g.Key,
+                g => g.Module,
                 g =>
                 {
-                    var entries = g.ToImmutableList();
                     // The PRIMARY entry ({Space}/_GitSync) is the one the module itself is imported
                     // through; an additional source ({Space}/_GitSync/{sourceId}) mirrors a subtree.
-                    // Index rather than FirstOrDefault: these are value tuples, whose default is a
-                    // silently-empty entry rather than a null the ?? could catch.
-                    var index = entries.FindIndex(
-                        x => string.Equals(x.Node.Id, GitHubSyncService.ConfigId,
-                            StringComparison.OrdinalIgnoreCase));
-                    var primary = entries[index >= 0 ? index : 0];
+                    var primary = g.Entries.FirstOrDefault(
+                        x => string.Equals(x.NodeId, GitHubSyncService.ConfigId,
+                            StringComparison.OrdinalIgnoreCase)) ?? g.Entries[0];
                     return new GitSyncCoordinate
                     {
-                        ConfigPath = primary.Node.Path,
-                        RepositoryUrl = primary.Config!.RepositoryUrl,
+                        ConfigPath = primary.Path,
+                        RepositoryUrl = primary.Config.RepositoryUrl,
                         Branch = primary.Config.Branch,
                         Subdirectory = primary.Config.Subdirectory,
                         LastSyncCommitSha = primary.Config.LastSyncCommitSha,
@@ -242,6 +287,35 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
                     };
                 },
                 StringComparer.OrdinalIgnoreCase);
+        var unconnected = byModule
+            .Select(g => g.Key)
+            .Where(module => !coordinates.ContainsKey(module))
+            .OrderBy(module => module, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableList();
+        return new SyncEntryFold(coordinates, unconnected);
+    }
+
+    /// <summary>
+    /// True when the entry has ever synced or attempted to. A recorded attempt counts, because an
+    /// attempt can have imported part of the content before it failed. Only an entry with none of
+    /// these fields set is known to have imported nothing.
+    /// </summary>
+    internal static bool HasSyncHistory(GitHubSyncConfig config) =>
+        !string.IsNullOrWhiteSpace(config.LastSyncCommitSha)
+        || config.LastSyncedAt is not null
+        || config.LastSyncAttemptAt is not null
+        || !string.IsNullOrWhiteSpace(config.LastAttemptedCommitSha)
+        || !string.IsNullOrWhiteSpace(config.LastSyncOutcome)
+        || config.ModuleOutcomes is { Count: > 0 };
+
+    /// <summary>The caveat for a space whose sync entry names no repository and has never synced.
+    /// It is not part of the combo, because nothing was ever imported from git, and the combo says
+    /// so.</summary>
+    internal static string UnconnectedSyncCaveat(string module) =>
+        $"'{module}' has a sync entry that names no repository and has never synced, so nothing "
+        + "was imported from git and its content is authored in the mesh. It is not part of this "
+        + "combo, like any space without a sync entry, and a verdict over this combo says nothing "
+        + "about it.";
 
     /// <summary>
     /// The install records, keyed by the partition each installed INTO — which is what a sync entry
