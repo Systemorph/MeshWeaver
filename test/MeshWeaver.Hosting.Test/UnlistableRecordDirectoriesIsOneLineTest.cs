@@ -11,7 +11,8 @@ namespace MeshWeaver.Hosting.Test;
 /// 🚨 <b>One listing fault is ONE line (MeshWeaver#7909, #7910).</b>
 ///
 /// <para><b>The incident.</b> On one memex pod, listing the record directories under
-/// <c>activation.d</c> failed once (<c>IOException: Host is down</c>, the SMB client mid-reconnect).
+/// <c>activation.d</c> failed once (<c>IOException: Host is down</c>; its cause was not established, and the next read listed
+/// the directories whole).
 /// The fail-closed rule then dropped every current-image projection from that read, which is the
 /// designed answer — but it reported each drop as its own Error line. One transient fault became 43
 /// Error lines within 4 ms, and the log watcher filed them as two incidents (the cause, and the 42
@@ -26,7 +27,7 @@ namespace MeshWeaver.Hosting.Test;
 /// </summary>
 public class UnlistableRecordDirectoriesIsOneLineTest : IDisposable
 {
-    private static readonly string[] Modules = ["Acme.Gadgets", "Acme.Widgets"];
+    private static readonly ImmutableArray<string> Modules = ["Acme.Gadgets", "Acme.Widgets"];
 
     private readonly string root =
         Path.Combine(Path.GetTempPath(), "mw-unlistable-" + Guid.NewGuid().ToString("N"));
