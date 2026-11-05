@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Apps;
 using MeshWeaver.Graph.Security;
+using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -38,11 +39,29 @@ public class GrantSubjectsQueryPureTest
     [Fact]
     public void ThePickersUsersHalf_IsTheGatedQuery_NeverTheRawDirectoryRead()
     {
-        AccessSubjectQueries.ForScope("acme/Docs")[0].Should().Be("namespace:Auth/_GrantSubjects/acme/Docs nodeType:User");
+        AccessSubjectQueries.ForScope("acme/Docs")[0].Should().Be("namespace:\"Auth/_GrantSubjects/acme/Docs\" nodeType:User");
         AccessSubjectQueries.ForScope("acme/Docs").Should().NotContain(AccessSubjectQueries.Users);
-        AccessSubjectQueries.ForScope(null)[0].Should().Be("namespace:Auth/_GrantSubjects nodeType:User");
+        AccessSubjectQueries.ForScope(null)[0].Should().Be("namespace:\"Auth/_GrantSubjects\" nodeType:User");
         MeshWeaver.Domain.MeshNodeAttribute.ResolveQueries([AccessSubjectQueries.UsersTemplate], "acme/_Access")[0]
-            .Should().Be("namespace:Auth/_GrantSubjects/acme/_Access nodeType:User");
+            .Should().Be("namespace:\"Auth/_GrantSubjects/acme/_Access\" nodeType:User");
+    }
+
+    /// <summary>A scope with whitespace or a quote stays ONE value, so the right is checked at the
+    /// scope the picker grants on — never at a truncated prefix of it.</summary>
+    [Theory]
+    [InlineData("acme/Shared Documents")]
+    [InlineData("acme/Bob's Team")]
+    [InlineData("acme/The \"Q\" Team")]
+    public void TheScope_RoundTripsThroughTheQuery(string scope)
+    {
+        var parsed = new QueryParser().Parse(AccessSubjectQueries.UsersAt(scope));
+        AccessSubjectQueries.GrantScopeOf(parsed.Path).Should().Be(scope);
+        parsed.ExtractNodeType().Should().Be("User");
+
+        var template = MeshWeaver.Domain.MeshNodeAttribute.ResolveQueries(
+            [AccessSubjectQueries.UsersTemplate], "acme/Shared Documents/_Access")[0];
+        AccessSubjectQueries.GrantScopeOf(new QueryParser().Parse(template).Path)
+            .Should().Be("acme/Shared Documents");
     }
 
     [Fact]
@@ -54,6 +73,12 @@ public class GrantSubjectsQueryPureTest
             .Should().Be($"{AccessSubjectQueries.Users} burgi sort:name");
         GrantSubjectsQueryProvider.DirectoryQuery("namespace:Auth/_GrantSubjects/acme nodeType:User name:\"Max Muster\"")
             .Should().Be($"{AccessSubjectQueries.Users} name:\"Max Muster\"");
+        // Cut by the parser's own tokenizer: tabs and single-quoted values parse as they do anywhere.
+        GrantSubjectsQueryProvider.DirectoryQuery("namespace:Auth/_GrantSubjects/acme\tnodeType:User\tname:Max")
+            .Should().Be($"{AccessSubjectQueries.Users} name:Max", "the name filter survives a tab-delimited query");
+        var quoted = GrantSubjectsQueryProvider.DirectoryQuery(
+            "namespace:'Auth/_GrantSubjects/acme/Shared Documents' nodeType:User");
+        quoted.Should().Be(AccessSubjectQueries.Users, "no stray text is left from a single-quoted namespace");
     }
 }
 
@@ -140,6 +165,49 @@ public class GrantSubjectsQueryTest(ITestOutputHelper output) : MonolithMeshTest
         (await Listing(Granter, AccessSubjectQueries.UsersAt(null)).FirstAsync()
                 .Timeout(TestTimeouts.Convergence).Await(ct))
             .Should().BeEmpty("no grant is ever made at the root (AccessAssignmentGuard.CanGrantAt)");
+    }
+
+    /// <summary>
+    /// The shared query cache (<c>GetQuery</c>) loads its queries AS SYSTEM and filters rows per
+    /// subscriber; a root User profile is readable by every signed-in viewer, so the provider must
+    /// refuse System outright — a non-granter subscribing there sees nobody. The granter's direct
+    /// query beside it is the positive control.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task TheSharedQueryCache_ListsNobody_ToANonGranter()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Listing(Granter, AccessSubjectQueries.UsersAt(Space)).Where(ListsThePeople)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var viewer = new AccessContext { ObjectId = Viewer, Name = Viewer };
+        foreach (var query in new[] { AccessSubjectQueries.UsersAt(Space), AccessSubjectQueries.UsersAt(null) })
+        {
+            var rows = await access.RunAs(viewer, () => Mesh.GetWorkspace().GetQuery($"gs-cache:{query}", query))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            rows.Should().BeEmpty($"'{query}' through the System-loaded cache must not list users to a non-granter");
+        }
+    }
+
+    /// <summary>A revoked right withdraws the rows on the SAME live subscription.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task ARevokedRight_WithdrawsTheUsers_OnTheSameSubscription()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        const string revoked = "gs-revoked";
+        var seen = new System.Reactive.Subjects.ReplaySubject<IReadOnlyList<MeshNode>>();
+        using var subscription = Listing(revoked, AccessSubjectQueries.UsersAt(Space)).Subscribe(seen);
+
+        var grant = AssignmentNodeFactory.UserRole(revoked, "Admin", Space);
+        await access.RunAsSystem(() => mesh.CreateNode(grant)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await seen.Where(ListsThePeople).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        await access.RunAsSystem(() => mesh.DeleteNode(grant.Path)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await seen.SkipWhile(rows => !ListsThePeople(rows)).Where(rows => rows.Count == 0)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
     }
 
     [Fact(Timeout = 60000)]

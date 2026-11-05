@@ -46,9 +46,11 @@ public static class AccessSubjectQueries
     /// <summary>
     /// Template form of the users query for <c>[MeshNode]</c> attributes — <c>{node.namespace}</c>
     /// is substituted by the generic property editor, and the provider derives the scope from it
-    /// (<see cref="ScopeOfAssignment"/>: <c>acme/_Access</c> → <c>acme</c>).
+    /// (<see cref="ScopeOfAssignment"/>: <c>acme/_Access</c> → <c>acme</c>). The value is
+    /// double-quoted so a namespace with whitespace stays one value; the generic editor substitutes
+    /// verbatim, so a namespace containing a double quote cannot be expressed here.
     /// </summary>
-    public const string UsersTemplate = "namespace:" + GrantSubjectsNamespace + "/{node.namespace} nodeType:User";
+    public const string UsersTemplate = "namespace:\"" + GrantSubjectsNamespace + "/{node.namespace}\" nodeType:User";
 
     /// <summary>
     /// The users a viewer may pick as subjects when granting at <paramref name="scopePath"/>: every
@@ -59,9 +61,10 @@ public static class AccessSubjectQueries
     public static string UsersAt(string? scopePath)
     {
         var scope = (scopePath ?? "").Trim('/');
-        return scope.Length == 0
-            ? $"namespace:{GrantSubjectsNamespace} nodeType:User"
-            : $"namespace:{GrantSubjectsNamespace}/{scope} nodeType:User";
+        // ONE query value whatever the scope holds — a space in "acme/Shared Documents" must not end
+        // the namespace at "acme/Shared" (QueryParser.PathLiteral quotes it).
+        var ns = scope.Length == 0 ? GrantSubjectsNamespace : $"{GrantSubjectsNamespace}/{scope}";
+        return $"namespace:{QueryParser.PathLiteral(ns)} nodeType:User";
     }
 
     /// <summary>

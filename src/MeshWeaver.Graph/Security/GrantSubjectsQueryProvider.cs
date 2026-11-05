@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Text;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -61,30 +60,100 @@ public sealed class GrantSubjectsQueryProvider(IServiceProvider services) : IMes
         {
             Query = DirectoryQuery(query),
             Queries = null,
+            // The directory read is GLOBAL: a caller's default or context path must not be
+            // substituted for its empty path, which would exclude the root-level User nodes.
+            DefaultPath = null,
+            ContextPath = null,
         };
-        var mesh = services.GetRequiredService<IMeshService>();
         var viewer = request.UserId;
-        if (string.Equals(viewer, WellKnownUsers.System, StringComparison.Ordinal))
-            return mesh.Query<T>(directoryRequest.AsSystem());
-        if (!WellKnownUsers.IsAuthenticated(viewer) || !AccessAssignmentGuard.CanGrantAt(scope))
+        // 🚨 Only a real, signed-in person is answered. A System request is refused, not served:
+        // the shared query cache (workspace/hub GetQuery) loads its queries AS SYSTEM and re-applies
+        // only the per-row Read rule for each subscriber — and a root User profile is readable by
+        // every signed-in viewer, so serving System here would hand the directory to anyone who
+        // subscribed through that cache. System never needs this namespace: it reads
+        // AccessSubjectQueries.Users directly.
+        if (!WellKnownUsers.IsAuthenticated(viewer)
+            || string.Equals(viewer, WellKnownUsers.System, StringComparison.Ordinal)
+            || !AccessAssignmentGuard.CanGrantAt(scope))
             return Observable.Return(Empty<T>(parsed));
 
+        var mesh = services.GetRequiredService<IMeshService>();
         var hub = services.GetRequiredService<IMessageHub>();
         var logger = services.GetService<ILogger<GrantSubjectsQueryProvider>>();
+        var none = ImmutableList<MeshNode>.Empty;
+        // LIVE: the decision follows the viewer's permission at the scope, so a revoked right
+        // withdraws the rows (and stops the System directory read) on the same subscription.
         return hub.CheckPermissionOutcome(scope, viewer!, Permission.Delete)
-            // The continuation SUBSCRIBES a query: it must not run inside the permission fold's gate.
-            .TakeDecisionOutsideGate()
-            .SelectMany(outcome =>
+            .Do(outcome =>
             {
-                if (outcome.IsGranted)
-                    return mesh.Query<T>(directoryRequest.AsSystem());
                 if (outcome.IsUndetermined)
                     logger?.LogWarning(
                         "Grant subjects at '{Scope}' for {Viewer}: the permission check reached no verdict ({Reason}) — no users listed",
                         scope, viewer, outcome.UndeterminedReason);
-                return Observable.Return(Empty<T>(parsed));
-            });
+            })
+            .Select(outcome => outcome.IsGranted)
+            .DistinctUntilChanged()
+            // The continuation SUBSCRIBES a query: it must not run on the permission fold's gate.
+            .Select(granted => Observable.Return(granted, System.Reactive.Concurrency.Scheduler.Default))
+            .Concat()
+            .Select(granted => granted
+                ? Rows(mesh.Query<MeshNode>(directoryRequest.AsSystem()))
+                : Observable.Return(none))
+            .Switch()
+            .Scan((Previous: (ImmutableList<MeshNode>?)null, Changes: (IReadOnlyList<QueryResultChange<T>>)[]),
+                (state, rows) => (rows, Diff<T>(state.Previous, rows, parsed)))
+            .SelectMany(state => state.Changes);
     }
+
+    /// <summary>
+    /// A query's change feed folded into its current rows, in the order they arrived
+    /// (Initial/Reset restart, Removed drops, Added/Updated replace in place or append). Pure.
+    /// </summary>
+    private static IObservable<ImmutableList<MeshNode>> Rows(IObservable<QueryResultChange<MeshNode>> changes)
+        => changes.Scan(ImmutableList<MeshNode>.Empty, (rows, change) =>
+        {
+            if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                rows = ImmutableList<MeshNode>.Empty;
+            if (change.ChangeType == QueryChangeType.Removed)
+                return rows.RemoveAll(r => change.Items.Any(i => SamePath(i, r)));
+            foreach (var item in change.Items)
+            {
+                var at = rows.FindIndex(r => SamePath(r, item));
+                rows = at >= 0 ? rows.SetItem(at, item) : rows.Add(item);
+            }
+            return rows;
+        });
+
+    private static bool SamePath(MeshNode a, MeshNode b)
+        => string.Equals(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The first snapshot is the <c>Initial</c>; every later one the deltas against the last —
+    /// removals, additions and updates, and nothing when the rows did not change. Pure.
+    /// </summary>
+    internal static IReadOnlyList<QueryResultChange<T>> Diff<T>(
+        ImmutableList<MeshNode>? previous, ImmutableList<MeshNode> current, ParsedQuery parsed)
+    {
+        if (previous is null)
+            return [Change<T>(QueryChangeType.Initial, current, parsed)];
+        var removed = previous.Where(p => !current.Any(c => SamePath(c, p))).ToList();
+        var added = current.Where(c => !previous.Any(p => SamePath(c, p))).ToList();
+        var updated = current.Where(c => previous.Any(p => SamePath(c, p) && !ReferenceEquals(c, p) && !Equals(c, p))).ToList();
+        var changes = ImmutableList.CreateBuilder<QueryResultChange<T>>();
+        if (removed.Count > 0) changes.Add(Change<T>(QueryChangeType.Removed, removed, parsed));
+        if (added.Count > 0) changes.Add(Change<T>(QueryChangeType.Added, added, parsed));
+        if (updated.Count > 0) changes.Add(Change<T>(QueryChangeType.Updated, updated, parsed));
+        return changes.ToImmutable();
+    }
+
+    private static QueryResultChange<T> Change<T>(QueryChangeType type, IEnumerable<MeshNode> nodes, ParsedQuery parsed) =>
+        new()
+        {
+            ChangeType = type,
+            Items = nodes.Cast<T>().ToList(),
+            Query = parsed,
+            Timestamp = DateTimeOffset.UtcNow,
+        };
 
     /// <inheritdoc />
     public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
@@ -135,38 +204,14 @@ public sealed class GrantSubjectsQueryProvider(IServiceProvider services) : IMes
     /// <returns>The query to run against the user directory.</returns>
     public static string DirectoryQuery(string query)
     {
-        var kept = Terms(query).Where(term =>
-            !StartsWith(term, "namespace:") && !StartsWith(term, "path:")
-            && !StartsWith(term, "scope:") && !StartsWith(term, "nodeType:"));
-        var rest = string.Join(' ', kept);
+        // Cut by THE parser's own tokenizer, so quoted values (single or double), tabs and other
+        // whitespace are removed or kept exactly as they parse.
+        var parser = new QueryParser();
+        var rest = query ?? "";
+        foreach (var qualifier in new[] { "namespace", "path", "scope", "nodeType" })
+            rest = parser.RemoveQualifier(rest, qualifier);
+        rest = parser.RemoveEmptyGroups(rest).Trim();
         return rest.Length == 0 ? AccessSubjectQueries.Users : $"{AccessSubjectQueries.Users} {rest}";
-    }
-
-    private static bool StartsWith(string term, string key)
-        => term.StartsWith(key, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>The query's terms: split on spaces that are not inside a double-quoted value. Pure.</summary>
-    private static ImmutableList<string> Terms(string query)
-    {
-        var terms = ImmutableList.CreateBuilder<string>();
-        var term = new StringBuilder();
-        var quoted = false;
-        foreach (var c in query ?? string.Empty)
-        {
-            if (c == '"')
-                quoted = !quoted;
-            if (c == ' ' && !quoted)
-            {
-                if (term.Length > 0)
-                    terms.Add(term.ToString());
-                term.Clear();
-                continue;
-            }
-            term.Append(c);
-        }
-        if (term.Length > 0)
-            terms.Add(term.ToString());
-        return terms.ToImmutable();
     }
 
     private static QueryResultChange<T> Empty<T>(ParsedQuery parsed) =>
