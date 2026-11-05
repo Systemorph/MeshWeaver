@@ -76,20 +76,20 @@ public static class ServiceProviderExtensions
                          .OfType<IRootContainerBuilt>()
                          .ToArray())
                 callback.Built(root);
+            // The ownership diagnostics and the late-disposal faults write through the root's own logging
+            // (MeshWeaver#6584, #6588); this flushes what the callbacks reported while it was not bound yet.
+            var loggerFactory = root.GetService<Microsoft.Extensions.Logging.ILoggerFactory>();
+            rootOwners?.UseLoggerFactory(loggerFactory);
+            root.UseFaultLogger(loggerFactory is null ? null
+                : loggerFactory.CreateLogger(typeof(MeshServiceProvider).FullName!));
         }
         catch
         {
-            // Nobody else holds this root: a callback that throws leaves no caller who could dispose
-            // it, or the shared instances the callbacks before it already built.
+            // Nobody else holds this root: a callback or the logger binding that throws leaves no caller who
+            // could dispose it, or the shared instances the callbacks before it already built.
             root.Dispose();
             throw;
         }
-        // The ownership diagnostics and the late-disposal faults write through the root's own logging
-        // (MeshWeaver#6584, #6588).
-        var loggerFactory = root.GetService<Microsoft.Extensions.Logging.ILoggerFactory>();
-        rootOwners?.UseLoggerFactory(loggerFactory);
-        root.UseFaultLogger(loggerFactory is null ? null
-            : loggerFactory.CreateLogger(typeof(MeshServiceProvider).FullName!));
         return root;
     }
 

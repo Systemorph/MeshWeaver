@@ -55,8 +55,8 @@ public partial record MeshBuilder
                 installedModules.Attach(sp);
                 // 🚨 No ILoggerFactory here (MeshWeaver.Plugins#4964): a module's logging setup is served
                 // through a forwarder that resolves THIS registry, so the root logger factory can be the
-                // service under construction when this factory runs. The registry resolves its logger on
-                // first use instead.
+                // service under construction when this factory runs. The registry takes
+                // the mesh's deferred logger instead, which resolves nothing.
                 return modules.Attach(
                     sp.GetService<CollectibleContextUnloads>(),
                     null,
@@ -105,6 +105,9 @@ public partial record MeshBuilder
             // (MeshWeaver#6584, #6588; MeshWeaver.ServiceProvider.ModuleScopeOwnership). Mesh-scoped, never static.
             if (!services.Any(d => d.ImplementationInstance is MeshWeaver.ServiceProvider.ModuleInstanceOwners))
                 services.AddSingleton(new MeshWeaver.ServiceProvider.ModuleInstanceOwners());
+            // The root container binds that registry's logging when it is built; a host on plain Microsoft DI
+            // never runs that path, so the generic host binds it at start (MeshWeaver.Plugins#4964).
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<Microsoft.Extensions.Hosting.IHostedService, ModuleLoggingBinding>());
             if (!services.Any(d => d.ImplementationInstance is ModulesBuiltBeforePublished))
                 services.AddSingleton<MeshWeaver.ServiceProvider.IRootContainerBuilt>(new ModulesBuiltBeforePublished(modules));
             return services;

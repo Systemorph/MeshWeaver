@@ -87,8 +87,8 @@ public static class ModuleServiceProvider
         // MeshWeaver#6584/#6588: who owns each shared instance this container builds, and the warning a
         // scoped instance built for no caller — or served to a caller that does not own it — writes.
         var owners = root.GetService<ModuleInstanceOwners>();
-        // The logger is read when a diagnostic is written (MeshWeaver.Plugins#4964): the mesh's registry is
-        // bound to the root's logger factory once the root is built; without one, the factory is resolved then.
+        // No logger factory is resolved here (MeshWeaver.Plugins#4964): the mesh's registry holds a logger that
+        // is bound once the root is built; a root without a registry resolves its factory when it reports.
         var diagnostics = new ModuleScopeDiagnostics(
             () => owners?.Logger
                   ?? ModuleScopeOwnership.LoggerFrom(root.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()),

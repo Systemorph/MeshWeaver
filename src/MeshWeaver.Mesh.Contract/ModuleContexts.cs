@@ -80,15 +80,6 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     private CollectibleContextUnloads? unloads;
     private ILogger? logger;
 
-    /// <summary>
-    /// 🚨 The registry's logger, resolved from the root on FIRST USE — never while the registry itself is
-    /// being built (MeshWeaver.Plugins#4964). A module that configures logging
-    /// (<c>PostConfigure&lt;LoggerFilterOptions&gt;</c>) puts a forwarder that resolves THIS registry among the
-    /// setups of the root <see cref="ILoggerFactory"/>; a registry factory that resolved the logger factory to
-    /// name its logger asked for the service being built, and every boot that loaded the module died in the
-    /// container. Null until the registry is attached and the root can answer.
-    /// </summary>
-    private ILogger? Logger => logger ??= root?.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>();
     private IServiceProvider? root;
     private int disposed;
 
@@ -181,12 +172,20 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         unloads ??= collectibleUnloads;
         logger ??= log;
         root ??= rootProvider;
+        // 🚨 The registry NEVER resolves a logger factory (MeshWeaver.Plugins#4964). A module that configures
+        // logging (PostConfigure<LoggerFilterOptions>) puts a forwarder that resolves THIS registry among the
+        // setups of the root logger factory, so the registry can be built inside that factory's construction;
+        // and its last diagnostics are written while the root is being disposed, where a resolve throws and takes
+        // the teardown's fault records with it. The mesh's owners registry hands out a logger, bound here while
+        // the root answers, that holds what is written until the root is built.
+        logger ??= RootService<MeshWeaver.ServiceProvider.ModuleInstanceOwners>()?.LoggerFor(typeof(ModuleContexts).FullName!);
         return this;
     }
 
     /// <summary>A service of the mesh's root container, or null when it has none or the registry is not
     /// attached to it yet.</summary>
     internal T? RootService<T>() where T : class => root?.GetService<T>();
+
 
     private IServiceProvider Root => root ?? throw new InvalidOperationException(
         "The module registry is not attached to its mesh's container yet — a module service was resolved before the mesh was built.");
@@ -496,7 +495,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
                      + "the options it configures) — the module's feature is ABSENT, the rest of the mesh keeps serving — "
                      + "until a new generation of the module is installed or the process restarts.";
         Console.Error.WriteLine($"[MeshWeaver.Mesh.UnservableModuleService] {report}");
-        Logger?.LogError("[MeshWeaver.Mesh.UnservableModuleService] {Report} {Detail}", report, detail);
+        logger?.LogError("[MeshWeaver.Mesh.UnservableModuleService] {Report} {Detail}", report, detail);
     }
 
     // A construction fault that is THIS lease's alone (review of #6854): one caller's scope, or one attempt
@@ -507,7 +506,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     {
         if (!services.MarkReported(index, InnermostOf(exception).GetType().FullName ?? ""))
             return;
-        Logger?.LogError(exception,
+        logger?.LogError(exception,
             "[MeshWeaver.Mesh.UnservableModuleService] {Registration} of module {Module} (generation '{Generation}') could not be "
             + "constructed for {Caller}: {Cause}. Only this use goes without the module's feature; nothing is recorded, the next "
             + "use resolves it afresh. Reported once per registration and exception type.",
@@ -645,13 +644,13 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
                 $"its shared instances could not be built before it was published, so it was withdrawn: {why}", null);
             ImmutableInterlocked.Update(ref notBuilt, list => list.Add(record));
             Console.Error.WriteLine($"[MeshWeaver.Mesh.IncompatibleModule] {record.Report()}");
-            Logger?.LogError("[MeshWeaver.Mesh.IncompatibleModule] {Report}", record.Report());
+            logger?.LogError("[MeshWeaver.Mesh.IncompatibleModule] {Report}", record.Report());
         }
     }
 
     internal Task StartAllModuleHosted(ModuleGeneration generation, CancellationToken ct, ILogger? log) =>
         generation.Services is { } services
-            ? services.StartAllHosted(Root, ct, log ?? Logger)
+            ? services.StartAllHosted(Root, ct, log ?? logger)
             : Task.CompletedTask;
 
     /// <summary>
@@ -733,10 +732,10 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// </summary>
     public Task HandOverHosted(ModuleGeneration from, ModuleGeneration to, CancellationToken ct)
     {
-        var stopping = from.Services?.StopHosted(ct, Logger) ?? Task.CompletedTask;
+        var stopping = from.Services?.StopHosted(ct, logger) ?? Task.CompletedTask;
         return stopping.ContinueWith(
                 _ => to.Services is { } fresh
-                    ? fresh.StartAllHosted(Root, ct, Logger)
+                    ? fresh.StartAllHosted(Root, ct, logger)
                     : Task.CompletedTask,
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default)
             .Unwrap();
@@ -935,7 +934,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
             // disposal then runs when the last lease is released (MeshWeaver#6715).
             generation.Services?.Dispose();
             var retirement = RetireCore(generation.Context);
-            return Leases.UnloadWhenQuiesced(generation.Context, budget, Logger, generation.Context.Name)
+            return Leases.UnloadWhenQuiesced(generation.Context, budget, logger, generation.Context.Name)
                 .Do(unloaded =>
                 {
                     if (!unloaded)
@@ -1169,7 +1168,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
             if (inFlight > 0)
             {
                 var holders = string.Join(", ", Leases.Holders(generation.Context));
-                Logger?.LogError(
+                logger?.LogError(
                     "NOT unloading module generation {Context} at mesh teardown: {InFlight} lease(s) still held, by {Holders}.",
                     generation.Context.Name, inFlight, holders);
                 retirement?.Faulted(new InvalidOperationException(

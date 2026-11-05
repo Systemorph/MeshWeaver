@@ -19,17 +19,40 @@ public sealed class ModuleInstanceOwners
 {
     private readonly ConditionalWeakTable<object, Owner> owners = new();
     private ImmutableHashSet<string> reported = ImmutableHashSet<string>.Empty;
-    private ILogger logger = NullLogger.Instance;
+    private readonly DeferredLogger logger = new(ModuleScopeOwnership.Category);
+    private ImmutableDictionary<string, DeferredLogger> named = ImmutableDictionary<string, DeferredLogger>.Empty;
+    private ILoggerFactory? bound;
 
-    /// <summary>Where the ownership diagnostics are written — bound by the root container once it is built
-    /// (<see cref="ServiceProviderExtensions.SetupModules"/>), so no diagnostic ever has to RESOLVE a logger
-    /// in the middle of a resolve (in a module container that resolve goes through the module's fallback,
-    /// and from there back into the very registration being diagnosed).</summary>
+    /// <summary>Where the mesh's module diagnostics are written — bound once the root container is built
+    /// (<see cref="ServiceProviderExtensions.SetupModules"/>, or at host start on a plain Microsoft DI host), so
+    /// no diagnostic ever has to RESOLVE a logger in the middle of a resolve (in a module container that resolve
+    /// goes through the module's fallback, and from there back into the very registration being diagnosed; at
+    /// boot it asks for a root logger factory that may be under construction, MeshWeaver.Plugins#4964).
+    /// What is written before then is held and flushed here.</summary>
     /// <param name="factory">The root's logger factory, or null for none.</param>
-    public void UseLoggerFactory(ILoggerFactory? factory) =>
-        Volatile.Write(ref logger, ModuleScopeOwnership.LoggerFrom(factory));
+    public void UseLoggerFactory(ILoggerFactory? factory)
+    {
+        Volatile.Write(ref bound, factory);
+        logger.Bind(ModuleScopeOwnership.LoggerFrom(factory));
+        foreach (var (category, deferred) in Volatile.Read(ref named))
+            deferred.Bind(factory?.CreateLogger(category) ?? NullLogger.Instance);
+    }
 
-    internal ILogger Logger => Volatile.Read(ref logger);
+    internal ILogger Logger => logger;
+
+    /// <summary>A logger of <paramref name="category"/> that needs no logger factory yet: it holds what is
+    /// written until <see cref="UseLoggerFactory"/> binds it, and resolves nothing — so it is safe to take while
+    /// the root is being built and to write through while it is being disposed.</summary>
+    /// <param name="category">The log category.</param>
+    /// <returns>The category's one logger.</returns>
+    public ILogger LoggerFor(string category)
+    {
+        var deferred = ImmutableInterlocked.GetOrAdd(ref named, category, c => new DeferredLogger(c));
+        // A factory bound while this category was being added must still reach it; Bind is first-wins.
+        if (Volatile.Read(ref bound) is { } factory)
+            deferred.Bind(factory.CreateLogger(category));
+        return deferred;
+    }
 
     /// <summary>Records that <paramref name="owner"/> owns <paramref name="instance"/> and is the only
     /// scope that may dispose it.</summary>
@@ -91,6 +114,68 @@ public static class ModuleScopeOwnership
 }
 
 /// <summary>
+/// A logger that holds what is written until it is bound, then forwards (MeshWeaver.Plugins#4964). The module
+/// registry and the ownership diagnostics run while the root container is being built — where the root logger
+/// factory can be the service under construction — and again while it is being disposed, so neither may resolve
+/// a logger when it writes; and a diagnostic reported once must not be spent on a logger that drops it.
+/// Bounded: a host that never binds it (no generic host, no <see cref="ServiceProviderExtensions.SetupModules"/>)
+/// holds the first <see cref="Capacity"/> entries and no more.
+/// </summary>
+internal sealed class DeferredLogger(string category) : ILogger
+{
+    internal const int Capacity = 256;
+
+    private sealed record State(ILogger? Target, ImmutableQueue<Action<ILogger>> Held, int Count);
+
+    private State state = new(null, ImmutableQueue<Action<ILogger>>.Empty, 0);
+
+    public string Category { get; } = category;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        Action<ILogger> entry = target => target.Log(logLevel, eventId, state, exception, formatter);
+        while (true)
+        {
+            var current = Volatile.Read(ref this.state);
+            if (current.Target is { } target)
+            {
+                entry(target);
+                return;
+            }
+            if (current.Count >= Capacity)
+                return;
+            var held = current with { Held = current.Held.Enqueue(entry), Count = current.Count + 1 };
+            if (ReferenceEquals(Interlocked.CompareExchange(ref this.state, held, current), current))
+                return;
+        }
+    }
+
+    public bool IsEnabled(LogLevel logLevel) =>
+        Volatile.Read(ref state).Target?.IsEnabled(logLevel) ?? logLevel != LogLevel.None;
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull =>
+        Volatile.Read(ref this.state).Target?.BeginScope(state);
+
+    /// <summary>Binds the logger and flushes what it held, in order. The first binding wins.</summary>
+    public void Bind(ILogger target)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref state);
+            if (current.Target is not null)
+                return;
+            var open = new State(target, ImmutableQueue<Action<ILogger>>.Empty, 0);
+            if (!ReferenceEquals(Interlocked.CompareExchange(ref state, open, current), current))
+                continue;
+            foreach (var entry in current.Held)
+                entry(target);
+            return;
+        }
+    }
+}
+
+/// <summary>
 /// MeshWeaver#6588: watches every registration of a level that hands out a FACTORY's result owned by the
 /// resolving scope. When such a factory returns an instance a module owns (<see cref="ModuleInstanceOwners"/>),
 /// the resolving scope will dispose it when it ends — under the owner — and the diagnostic is written as that
@@ -141,10 +226,11 @@ internal sealed class OwnershipTransferObserver(ModuleInstanceOwners owners) : I
 /// <see cref="ModuleScopeOwnership"/>): records who owns each shared instance it builds, and reports a
 /// SCOPED instance that no caller owns, or one served to a caller that does not own it. Held by the
 /// container as an instance, never static; its entries are weak.
-/// <para>🚨 Its logger is READ when a diagnostic is written, never resolved when the container is created
-/// (MeshWeaver.Plugins#4964): a module's logging setup (<c>PostConfigure&lt;LoggerFilterOptions&gt;</c>) is
-/// served from this container, so the container can be created INSIDE the root logger factory's construction,
-/// where resolving that factory asks for the service being built.</para>
+/// <para>🚨 Its logger is never resolved when the container is created (MeshWeaver.Plugins#4964): a module's
+/// logging setup (<c>PostConfigure&lt;LoggerFilterOptions&gt;</c>) is served from this container, so the
+/// container can be created INSIDE the root logger factory's construction, where resolving that factory asks
+/// for the service being built. <see cref="ModuleInstanceOwners.Logger"/> holds what is reported before the root
+/// is bound.</para>
 /// </summary>
 internal sealed class ModuleScopeDiagnostics(Func<ILogger> logger, ModuleInstanceOwners? owners) : IActivationObserver
 {
