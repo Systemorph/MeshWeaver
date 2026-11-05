@@ -480,6 +480,26 @@ built and before the root provider is handed to anyone (`IRootContainerBuilt`,
 after every staged generation has loaded, materialised and prepared its services and before
 `CommitAll` (`ModuleServices.BuildBeforePublish`, `ModuleServiceProvider.BuildRootReachableSingletons`).
 
+**A module may configure the root's LOGGING, so nothing on this path resolves the root logger factory
+(MeshWeaver.Plugins#4964).** A module's `PostConfigure<LoggerFilterOptions>` is one of the setups the root
+`ILoggerFactory` is built from, and the root reaches it through a forwarder that resolves the module
+registry and the module's container. When `SetupModules` resolved the logger factory first, and the
+`ModuleContexts` factory and each module container resolved it again to name a logger, the factory asked
+for itself: `A circular dependency was detected for the service of type 'ILoggerFactory'`, at every boot
+that loaded such a module — the Mcp module's payload-log ceiling (Plugins#4955) crash-looped every new
+pod on three instances, because the module set kept pinning that generation. Three rules now hold: the
+build callbacks (`IRootContainerBuilt`) run BEFORE the root's own logging is bound, so the boot build of
+module instances never runs inside the logger factory's construction; `ModuleContexts` and a module
+container's ownership diagnostics write through a deferred logger from `ModuleInstanceOwners`, which resolves
+nothing, holds up to 256 entries and flushes them when the root is bound (and a resolve at teardown would
+throw on the disposed root and lose the retirement fault, so none happens there either); and that binding
+sits inside the guard that disposes an unpublished root. A host on plain Microsoft DI never runs
+`SetupModules`, so `ModuleLoggingBinding` binds the same logger when the generic host starts. Pinned by
+`AModuleLoggingOptionsRegistrationDoesNotCycleTheRootLoggerFactoryTest` (the module's filter rule reaches
+the root factory; its logger-taking singleton is built and served, the module not withdrawn) and
+`ModuleDiagnosticsLoggerBindingTest` (held entries flush in order; bounded; the first binding wins; the
+host start binds a plain host).
+
 **What belongs to a circuit is never built here (MeshWeaver#6556).** A SCOPED registration is one
 instance per scope — a Blazor circuit, a request — so the one a boot would build is an instance no
 scope asked for, made against scoped state no scope initialised. The first version of this section
