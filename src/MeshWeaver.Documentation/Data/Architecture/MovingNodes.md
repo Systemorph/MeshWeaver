@@ -217,7 +217,12 @@ there:
   `Deleted` marked a path that another writable store still held. A `Deleted` delivered after a durable
   re-create also marked the replacement absent.
 
-The verdict counts only paths that no writable store still holds. The leg applies it inside the
+The verdict counts only paths that no writable store still holds. Of those, a path is marked only
+when the persistence layer's whole-store `Exists` says no provider serves it any more, read-only
+providers included. Moving a writable override of shipped content removes the override, while the
+read-only original goes on being served at the same path, so that path stays unmarked. (A recursive
+DELETE of such an override still marks the path ahead of its fan-out and never withdraws the mark;
+that is tracked separately.) The leg applies it inside the
 source's subtree-deletion scope, whose write guard refuses every in-process write under the source, so
 no re-create or resurrecting save can come between a removal and its mark. A batch disposed before its
 verdict marks nothing. A removal that commits after that point stays unknown to the leg, which never

@@ -10456,7 +10456,7 @@ public static class MeshExtensions
                             // is TOMBSTONED, as the delete tombstones what it removes, and nothing
                             // else (TombstonedBatchDelete). Pinned by AMovedAwayAddressIsGoneForGoodTest
                             // and ACancelledMoveDeleteLeavesNoTombstoneTest.
-                            return TombstonedBatchDelete(storage, registry, ordered)
+                            return TombstonedBatchDelete(storage, registry, ordered, logger)
                                 // 🚨 A delete leg that fails PART-WAY retires what it removed too
                                 // (#7396): the rows the batch names as gone are gone whatever the
                                 // verdict, so their hubs and cache entries go with them, and the
@@ -10521,7 +10521,9 @@ public static class MeshExtensions
     /// </list>
     /// <para>The batch's verdict has neither defect: the composite unions per-store results and names
     /// only the paths no writable store still holds (<see cref="BatchDeletePartiallyAppliedException.RemovedBy"/>
-    /// on a part-way failure, #7396), and it is applied synchronously on the verdict, inside the source's
+    /// on a part-way failure, #7396). Of those, only the paths no provider SERVES any more are marked —
+    /// a removed writable override of read-only content is still served
+    /// (<see cref="TombstoneWhatNoProviderServes"/>). Both are applied on the verdict, inside the source's
     /// subtree-deletion scope — whose write guard refuses every in-process write under the source until
     /// the move has finished, so no re-create can be ordered between the removal and its mark, and no
     /// save can slip in to resurrect a row before it is marked.</para>
@@ -10534,20 +10536,59 @@ public static class MeshExtensions
     internal static IObservable<IReadOnlyList<string>> TombstonedBatchDelete(
         IStorageAdapter storage,
         RecentlyDeletedRegistry registry,
-        IReadOnlyList<string> ordered)
+        IReadOnlyList<string> ordered,
+        ILogger logger)
         => storage.DeleteMany(ordered)
             .Take(1)
-            .Do(
-                removed =>
-                {
-                    foreach (var path in removed)
-                        registry.MarkDeleted(path);
-                },
-                error =>
-                {
-                    foreach (var path in BatchDeletePartiallyAppliedException.RemovedBy(error))
-                        registry.MarkDeleted(path);
-                });
+            .Select(removed => (Removed: removed, Error: (Exception?)null))
+            .Catch((Exception error) => Observable.Return(
+                (Removed: BatchDeletePartiallyAppliedException.RemovedBy(error), Error: (Exception?)error)))
+            .SelectMany(verdict => TombstoneWhatNoProviderServes(storage, registry, verdict.Removed, logger)
+                .Select(_ => verdict))
+            .SelectMany(verdict => verdict.Error is { } error
+                ? Observable.Throw<IReadOnlyList<string>>(error)
+                : Observable.Return(verdict.Removed));
+
+    /// <summary>
+    /// Tombstones each of <paramref name="removed"/> that NO provider serves any more — the
+    /// persistence layer's own whole-store verdict, <see cref="IStorageAdapter.Exists"/>, which a
+    /// composite answers across every provider that serves reads, read-only ones included.
+    ///
+    /// <para>🚨 "Its writable copies were removed" is not "it is gone". A writable OVERRIDE of
+    /// read-only content (a db-synced copy of a shipped node) is deletable —
+    /// <c>PersistenceService.FindDeleteBlockingProvider</c> allows it on purpose — and the batch then
+    /// removes only the override, while the read-only original goes on being served at the same path.
+    /// Tombstoning it would make the dying owner answer <see cref="ErrorType.NotFound"/> and every read
+    /// answer <c>DeleteInProgress</c> for a node that is still served (review of #7930). A path whose
+    /// verdict cannot be had is left unmarked and named at Warning: an unmarked removed path is the
+    /// conservative direction, a marked served one hides a node.</para>
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> TombstoneWhatNoProviderServes(
+        IStorageAdapter storage,
+        RecentlyDeletedRegistry registry,
+        IReadOnlyList<string> removed,
+        ILogger logger)
+        => removed.Count == 0
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : removed
+                .Select(path => storage.Exists(path)
+                    .Take(1)
+                    .DefaultIfEmpty(true)
+                    .Catch((Exception ex) =>
+                    {
+                        logger.LogWarning(ex,
+                            "[MoveNode] whether '{Path}' is still served after its removal could not be "
+                            + "established; it is left without a delete tombstone", path);
+                        return Observable.Return(true);
+                    })
+                    .Do(served =>
+                    {
+                        if (!served)
+                            registry.MarkDeleted(path);
+                    }))
+                .Concat()
+                .LastOrDefaultAsync()
+                .Select(_ => System.Reactive.Unit.Default);
 
     /// <summary>
     /// Sync handler for <see cref="CopyNodeRequest"/>. Implements copy as

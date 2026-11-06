@@ -8,6 +8,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -160,7 +161,7 @@ public class ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest
         // Driven through the MOVE's delete leg, which tombstones what the batch removed (#7930).
         var registry = new RecentlyDeletedRegistry();
         var error = await Assert.ThrowsAsync<BatchDeletePartiallyAppliedException>(
-            () => MeshExtensions.TombstonedBatchDelete(composite, registry, ["S/B", "S/A"]).FirstAsync().Await());
+            () => MeshExtensions.TombstonedBatchDelete(composite, registry, ["S/B", "S/A"], NullLogger.Instance).FirstAsync().Await());
 
         Assert.Equal(["S/B"], error.Removed.ToArray());
         Assert.NotNull(await composite.Read("S/A", Options).FirstAsync().Await());
@@ -170,6 +171,60 @@ public class ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest
         // that is still served. The control: the path no store holds any more IS tombstoned.
         Assert.False(registry.IsRecentlyDeleted("S/A"));
         Assert.True(registry.IsRecentlyDeleted("S/B"));
+    }
+
+    /// <summary>
+    /// 🚨 A writable OVERRIDE of read-only content: the move's delete leg removes the override (the
+    /// batch reports it removed — it was, from every WRITABLE store), but the read-only original goes
+    /// on being served at the same path. That path must NOT be tombstoned: a tombstone makes the dying
+    /// owner answer NotFound and every read answer DeleteInProgress for a node that is still served
+    /// (review of #7930). The leg asks the persistence layer's whole-store verdict
+    /// (<see cref="IStorageAdapter.Exists"/>, every provider that serves reads) before it marks.
+    /// Control: a path only the writable store held IS tombstoned. On the unfixed leg the override's
+    /// path was tombstoned because its writable copy was removed.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AMovedOverrideOfReadOnlyContent_LeavesTheOriginalServedAndUntombstoned(bool partWay)
+    {
+        var shipped = new InMemoryStorageAdapter();
+        await ((IStorageAdapter)shipped).Write(Node("S/A") with { Name = "shipped" }, Options)
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
+        var writable = await Seeded("S/B", "S/A", "S/C");
+        IStorageAdapter composite = new PersistenceService(
+        [
+            new WritableProvider("db", partWay ? new SingleRowFaultAdapter(writable, failAt: "S/C") : writable),
+            new ReadOnlyProvider("shipped", shipped),
+        ]);
+        var registry = new RecentlyDeletedRegistry();
+
+        // Children-first order is irrelevant here; S/C (part-way variant) is where the store refuses.
+        var leg = MeshExtensions.TombstonedBatchDelete(composite, registry, ["S/B", "S/A", "S/C"], NullLogger.Instance)
+            .FirstAsync();
+        if (partWay)
+        {
+            var error = await Assert.ThrowsAsync<BatchDeletePartiallyAppliedException>(() => leg.Await());
+            Assert.Equal(["S/B", "S/A"], error.Removed.ToArray());
+        }
+        else
+            Assert.Equal(["S/B", "S/A", "S/C"], (await leg.Await()).ToArray());
+
+        // The read-only original is still served at the override's path, and is not tombstoned.
+        Assert.Equal("shipped", (await composite.Read("S/A", Options).FirstAsync().Await())?.Name);
+        Assert.False(registry.IsRecentlyDeleted("S/A"));
+        // The control: a path only the writable store held is gone for good, and tombstoned.
+        Assert.Null(await composite.Read("S/B", Options).FirstAsync().Await());
+        Assert.True(registry.IsRecentlyDeleted("S/B"));
+        // A path the failed store still holds is neither reported removed nor tombstoned.
+        Assert.Equal(!partWay, registry.IsRecentlyDeleted("S/C"));
+    }
+
+    private sealed class ReadOnlyProvider(string name, IStorageAdapter adapter) : IPartitionStorageProvider
+    {
+        public string Name => name;
+        public bool IsReadOnly => true;
+        public IStorageAdapter Adapter => adapter;
     }
 
     private sealed class WritableProvider(string name, IStorageAdapter adapter) : IPartitionStorageProvider
