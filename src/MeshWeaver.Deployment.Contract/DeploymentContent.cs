@@ -2,6 +2,7 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System;
+using System.Text.Json.Serialization;
 
 namespace MeshWeaver.Deployment;
 
@@ -122,6 +123,54 @@ public record DeploymentContent
     /// </summary>
     [Description("Instance id at the plugin registry — blank means the deployment id")]
     public string? RegistryInstanceId { get; init; }
+
+    // ───────────────────────────── the deployment KIND and the host joins ─────────────────────────────
+    // Plugins Hosting/MacStudioFleet §2: a Mac Studio is ONE record in the control instance's registry
+    // (Deployments/<mac>, kind mac-host), and its id is the key every satellite (execution queue, module
+    // inventory, status) is filed under. The joins below carry what were free-text slugs kept equal by
+    // hand; RegistryInstanceId above is the registry join. All are INIT PROPERTIES on purpose: an
+    // optional primary-constructor parameter would replace the record's signature and break every
+    // module compiled against it.
+
+    /// <summary>The <see cref="Kind"/> of a Mac Studio host record (Plugins Hosting/MacStudioFleet §2).</summary>
+    public const string MacHostKind = "mac-host";
+
+    /// <summary>
+    /// What KIND of deployment this record describes. Null — every record before this field — is an
+    /// AKS instance: a namespace on a cluster, observed through the cluster's metrics, exactly as
+    /// before. <c>mac-host</c> (<see cref="MacHostKind"/>) is a Mac Studio host: the fleet watch does
+    /// not sample it from the cluster, and its status is written by the authenticated heartbeat path.
+    /// </summary>
+    [Description("Deployment kind — blank is an AKS instance, mac-host a Mac Studio host")]
+    public string? Kind { get; init; }
+
+    /// <summary>
+    /// True when <see cref="Kind"/> names a Mac Studio host (<see cref="MacHostKind"/>, trimmed,
+    /// case-insensitive). A derivation, never a field: not serialized, so a record at rest carries
+    /// only <see cref="Kind"/>.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsMacHost => string.Equals(Kind?.Trim(), MacHostKind, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The machine this record IS — a hardware serial or a stable machine id. Set on a
+    /// <see cref="MacHostKind"/> record; null on an AKS instance, which is a namespace, not a
+    /// machine. An identifier, never a credential.
+    /// </summary>
+    [Description("Machine id of a host record (hardware serial or stable machine id)")]
+    public string? Machine { get; init; }
+
+    /// <summary>The host's node name on the private network. Null when the record is not on it.</summary>
+    [Description("Node name on the private network")]
+    public string? NetworkName { get; init; }
+
+    /// <summary>
+    /// The instances that live ON this host — their deployment ids, the host's local control
+    /// instance first. Null states nothing (an AKS instance, or a host whose instances are not listed
+    /// yet); an empty list says the host runs none.
+    /// </summary>
+    [Description("Instances on this host (deployment ids, the local control instance first)")]
+    public ImmutableList<string>? Instances { get; init; }
 
     /// <summary>Lifecycle: Planned, Live, Suspended, Decommissioned. Null is treated as Live.</summary>
     public string? Status { get; init; }
