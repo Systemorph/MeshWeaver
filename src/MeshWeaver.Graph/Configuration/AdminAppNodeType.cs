@@ -285,7 +285,7 @@ public static class AdminAppNodeType
     public static MeshNode CreateRootNode() => new(Path)
     {
         NodeType = NodeType,
-        Name = "Administration",
+        Name = "Admin",
         State = MeshNodeState.Active,
         ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
     };
