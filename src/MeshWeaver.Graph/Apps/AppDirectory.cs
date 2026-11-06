@@ -275,9 +275,21 @@ public sealed class AppDirectory
     public AppDirectory(IMessageHub hub)
         : this(hub,
             hub.ServiceProvider.GetService<ModuleContexts>()?.VersionChanged ?? Observable.Never<long>(),
-            () => hub.ServiceProvider.GetServices<DeclaredApp>().ToImmutableList())
+            () => ReadDeclarations(hub.ServiceProvider))
     {
     }
+
+    /// <summary>
+    /// The declarations as they stand NOW, ABSENCE-AWARE: through <see cref="InstalledModules.CurrentSet{T}"/>,
+    /// so a declaration whose module was withdrawn at boot or retired is simply absent — never the
+    /// root forwarder that can only throw, which made <c>GetServices</c> fail every viewer's whole
+    /// directory (Settings and Inbox included) for good. A host without the module registry has no
+    /// held modules, so its plain registrations are the set.
+    /// </summary>
+    internal static ImmutableList<DeclaredApp> ReadDeclarations(IServiceProvider services) =>
+        services.GetService<InstalledModules>() is { } installed
+            ? installed.CurrentSet<DeclaredApp>(services).ToImmutableList()
+            : services.GetServices<DeclaredApp>().ToImmutableList();
 
     /// <summary>
     /// Seam constructor (unit tests via InternalsVisibleTo): <paramref name="moduleVersions"/> says
@@ -306,11 +318,48 @@ public sealed class AppDirectory
     /// request — resolving once would pin the generation the launcher first saw.</para>
     /// </summary>
     public IObservable<ImmutableList<DeclaredApp>> Declarations() =>
-        moduleVersions
-            .Select(_ => 0L)
-            .StartWith(0L)
-            .Select(_ => FirstPerId(readDeclarations()))
+        Observable.Create<ImmutableList<DeclaredApp>>(observer =>
+            {
+                // 🚨 SUBSCRIBE FIRST, then take the initial snapshot: VersionChanged is a plain,
+                // non-replaying subject, so a swap between an initial read and the subscription would
+                // be lost and an open launcher would keep the old tile for good.
+                // Reads are SERIALIZED by a drain loop rather than a lock: one reader at a time, a
+                // signal that arrives during a read (on any thread, or re-entrantly from the read
+                // itself) makes the reader read AGAIN, so the last emission always comes from a read
+                // that started after the last swap — and two reads never emit out of order.
+                var pending = 0;
+                void Signal()
+                {
+                    if (Interlocked.Increment(ref pending) != 1)
+                        return;
+                    do
+                    {
+                        Interlocked.Exchange(ref pending, 1);
+                        observer.OnNext(FirstPerId(SafeRead()));
+                    }
+                    while (Interlocked.Decrement(ref pending) != 0);
+                }
+                var subscription = moduleVersions.Subscribe(_ => Signal(), observer.OnError);
+                Signal();
+                return subscription;
+            })
             .DistinctUntilChanged(DeclarationListComparer.Instance);
+
+    // A read that fails is "no declared tiles this time", logged — never a fault that would take the
+    // built-ins (Settings, Inbox) down with it; the next module swap reads again.
+    private ImmutableList<DeclaredApp> SafeRead()
+    {
+        try
+        {
+            return readDeclarations();
+        }
+        catch (Exception exception)
+        {
+            logger?.LogError(exception,
+                "[AppDirectory] the declared apps could not be read; the launcher serves without them until the next module change");
+            return ImmutableList<DeclaredApp>.Empty;
+        }
+    }
 
     /// <summary>One declaration per id, the FIRST registration winning — whatever its visibility, so a
     /// later declaration of the same id can never stand in for one the viewer may not see. Pure.</summary>

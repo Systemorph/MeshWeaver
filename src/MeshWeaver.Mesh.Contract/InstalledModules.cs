@@ -183,6 +183,32 @@ public sealed class InstalledModules
             ? factory(services)
             : ActivatorUtilities.CreateInstance(services, descriptor.ImplementationType!);
 
+    /// <summary>
+    /// The members of a SET a module may contribute to — a platform class marked
+    /// <see cref="AbsentWhenModuleGoneAttribute"/> — NOW, in declaration order: a member a held module
+    /// registered is answered from that module's CURRENT generation, and is ABSENT once the module is
+    /// withdrawn at boot or retired; every other member is activated as its declaration asks. Never
+    /// throws for a module that is gone, which <c>GetServices&lt;T&gt;()</c> would: its root forwarder
+    /// can only throw once there is no generation to forward to, and one throwing member fails the
+    /// whole enumeration — and every reader of it (the app directory's declared launcher tiles).
+    /// </summary>
+    /// <typeparam name="T">A platform class marked <see cref="AbsentWhenModuleGoneAttribute"/>.</typeparam>
+    /// <param name="services">The provider a declared factory or type is activated against.</param>
+    public IReadOnlyList<T> CurrentSet<T>(IServiceProvider services) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        if (!AbsentWhenModuleGoneAttribute.IsDeclaredOn(typeof(T)))
+            throw new InvalidOperationException(
+                $"{typeof(T).FullName} is not marked [{nameof(AbsentWhenModuleGoneAttribute)}]; read it with GetServices.");
+        Published(services);
+        return Declared<T>()
+            .Select(descriptor => descriptor.ImplementationFactory?.Target is ModuleServiceSlot slot
+                ? slot.Current(services)
+                : Activate(descriptor, services))
+            .OfType<T>()
+            .ToImmutableList();
+    }
+
     private ServiceDescriptor[] Declared<T>() =>
         Declared().Where(d => d.ServiceType == typeof(T)).ToArray();
 
@@ -195,7 +221,8 @@ public sealed class InstalledModules
         var found = Volatile.Read(ref declarations)?
                         .Where(d => !d.IsKeyedService
                                     && (d.ServiceType == typeof(InstalledModuleAssembly)
-                                        || d.ServiceType == typeof(IncompatibleModule)))
+                                        || d.ServiceType == typeof(IncompatibleModule)
+                                        || AbsentWhenModuleGoneAttribute.IsDeclaredOn(d.ServiceType)))
                         .ToArray()
                     ?? [];
         return Interlocked.CompareExchange(ref declared, found, null) ?? found;
@@ -229,6 +256,49 @@ internal sealed class InstalledModuleSlot
 
     /// <summary>The member now, or null once it is gone.</summary>
     internal InstalledModuleAssembly? Current(IServiceProvider services) => current(services);
+
+    private object Create(IServiceProvider services) =>
+        current(services) ?? throw new InvalidOperationException(gone);
+}
+
+/// <summary>
+/// Marks a platform CLASS whose registrations form a SET that modules contribute to and that is read
+/// through <see cref="InstalledModules.CurrentSet{T}"/> — so a member whose module is withdrawn at boot
+/// or retired is ABSENT rather than a root forwarder that can only throw and fail the whole read. The
+/// root holds a <see cref="ModuleServiceSlot"/> for each such registration a held module makes
+/// (<c>ModuleServiceForwarders.AddForwarders</c>). Read the set with
+/// <see cref="InstalledModules.CurrentSet{T}"/>, never <c>GetServices&lt;T&gt;()</c>.
+/// </summary>
+[AttributeUsage(AttributeTargets.Class, Inherited = false)]
+public sealed class AbsentWhenModuleGoneAttribute : Attribute
+{
+    /// <summary>Whether <paramref name="type"/> carries the mark. Pure.</summary>
+    public static bool IsDeclaredOn(Type type) => type.IsDefined(typeof(AbsentWhenModuleGoneAttribute), inherit: false);
+}
+
+/// <summary>
+/// One registration of an <see cref="AbsentWhenModuleGoneAttribute"/> set made by a held module: the
+/// set reader (<see cref="InstalledModules.CurrentSet{T}"/>) recognises it by its factory's target and
+/// asks <see cref="Current"/>, so a gone member is absent; a single resolve through the factory still
+/// names the module it can no longer answer for. The same shape as <see cref="InstalledModuleSlot"/>.
+/// </summary>
+internal sealed class ModuleServiceSlot
+{
+    private readonly Func<IServiceProvider, object?> current;
+    private readonly string gone;
+
+    private ModuleServiceSlot(Func<IServiceProvider, object?> current, string gone)
+    {
+        this.current = current;
+        this.gone = gone;
+    }
+
+    /// <summary>A transient declaration of <paramref name="serviceType"/> served by a slot.</summary>
+    internal static ServiceDescriptor Declare(Type serviceType, Func<IServiceProvider, object?> current, string gone) =>
+        ServiceDescriptor.Transient(serviceType, new ModuleServiceSlot(current, gone).Create);
+
+    /// <summary>The member now, or null once it is gone.</summary>
+    internal object? Current(IServiceProvider services) => current(services);
 
     private object Create(IServiceProvider services) =>
         current(services) ?? throw new InvalidOperationException(gone);

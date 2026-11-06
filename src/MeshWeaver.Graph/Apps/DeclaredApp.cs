@@ -21,6 +21,10 @@ namespace MeshWeaver.Graph.Apps;
 /// <param name="Icon">The tile icon.</param>
 /// <param name="OpenPath">Where the tile opens. <see cref="ViewerToken"/> stands for the viewer's
 /// own partition (<c>{user}/Chat</c>).</param>
+/// <remarks>A SET modules contribute to, read through <see cref="InstalledModules.CurrentSet{T}"/>
+/// (<see cref="AbsentWhenModuleGoneAttribute"/>): a declaration whose module is withdrawn at boot or
+/// retired is absent — never a forwarder that throws and takes every viewer's launcher down.</remarks>
+[AbsentWhenModuleGone]
 public sealed record DeclaredApp(string Id, string Name, string Icon, string OpenPath)
 {
     /// <summary>The placeholder for the viewer's own partition in <see cref="OpenPath"/> and

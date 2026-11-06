@@ -1350,6 +1350,40 @@ public class DeclaredAppDirectoryTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// A swap that lands WHILE the initial declarations are being read is not lost: the module-version
+    /// signal is a non-replaying subject, so the directory subscribes to it BEFORE the initial read
+    /// and re-reads after a signal that arrived mid-read — the last list it emits is generation 2.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ASwapDuringTheInitialRead_IsNotLost()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var swaps = new Subject<long>();
+        var generation1 = ImmutableList.Create(new DeclaredApp("Raced", "gen 1", "r.svg", "DeclDocs"));
+        var generation2 = ImmutableList.Create(new DeclaredApp("Raced", "gen 2", "r.svg", "DeclDocs/Reference"));
+        var current = generation1;
+        var reads = 0;
+        var directory = new AppDirectory(Mesh, swaps, () =>
+        {
+            var snapshot = current;
+            if (Interlocked.Increment(ref reads) == 1)
+            {
+                // The module is replaced while the FIRST read is in flight.
+                current = generation2;
+                swaps.OnNext(2);
+            }
+            return snapshot;
+        });
+
+        var seen = new ReplaySubject<ImmutableList<DeclaredApp>>();
+        using var subscription = directory.Declarations().Subscribe(seen);
+        var last = await seen.Where(l => l.Single().Name == "gen 2")
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        last.Single().OpenPath.Should().Be("DeclDocs/Reference");
+        reads.Should().Be(2, "the mid-read signal makes exactly one more read, serialized after the first");
+    }
+
+    /// <summary>
     /// First registration wins BEFORE the probe: a first declaration the viewer cannot read is not
     /// replaced by a later declaration of the same id that they can.
     /// </summary>
