@@ -192,6 +192,21 @@ source row the batch did not remove keeps its hub (#7396; pinned by
 `APartWayBatchDeleteRetiresWhatItRemovedTest`, see
 [Recursive Delete Drain](../RecursiveDeleteDrain) for the storage contract).
 
+Before it removes anything, the delete leg also **tombstones** every source path in the mesh's
+`RecentlyDeletedRegistry`, exactly as a delete does. That tombstone marks a path as gone for good, and three things read it:
+
+- the dying source owner's NACK (`IAddressTombstones`), which then answers `NotFound`, not the
+  transient `ShuttingDown`;
+- the per-node read path, which answers `DeleteInProgress`;
+- every "delete wins" guard that drops a resurrecting save.
+
+Without the tombstone, a read that reached the source's owner while the move was retiring it was
+told "shutting down, ask again" about an address that never comes back, so the reader spent its whole budget
+(the [Riding Out a Shutting-Down Address](../RidingOutAShuttingDownAddress) contract, #1029,
+re-entered through the move). A row the batch did NOT remove loses its tombstone again, so a part-way
+failure never hides a row that is still stored. Pinned by `AMovedAwayAddressIsGoneForGoodTest`, with
+a DELETE under the identical forced interleaving as its control.
+
 `HandleMoveNodeRequest` now runs the source through the **same pre-flight a recursive delete runs**,
 before the copy writes anything:
 

@@ -10452,15 +10452,36 @@ public static class MeshExtensions
                             // authoritative and already committed to, so there is nothing to gain
                             // from paying a round-trip per row (IStorageAdapter.DeleteMany).
                             var ordered = paths.OrderByDescending(p => p.Length).ToList();
+                            // 🚨 "DELETE WINS" — TOMBSTONE every path BEFORE it is removed, exactly
+                            // as the delete does (RunDeletePass). The registry is what tells the
+                            // mesh a path is gone FOR GOOD: the dying source owner NACKs a read
+                            // NotFound instead of the transient ShuttingDown (IAddressTombstones),
+                            // the per-node read path answers DeleteInProgress, and every "delete
+                            // wins" guard drops a resurrecting save. This leg removed the rows and
+                            // marked nothing, so a read that reached the source's owner while the
+                            // move retired it was told "shutting down, ask again" about an address
+                            // that never comes back, and spent its whole budget (#1029, re-entered
+                            // through the move; Plugins CI run 42223717088). Pinned by
+                            // AMovedAwayAddressIsGoneForGoodTest.
+                            foreach (var p in ordered)
+                                registry.MarkDeleted(p);
                             return storage.DeleteMany(ordered)
                                 .Take(1)
                                 // 🚨 A delete leg that fails PART-WAY retires what it removed too
                                 // (#7396): the rows the batch names as gone are gone whatever the
                                 // verdict, so their hubs and cache entries go with them, and the
-                                // rows it did not remove keep theirs. The failure itself still
-                                // reaches the move's verdict unchanged.
-                                .Do(RetireMovedAway, error => RetireMovedAway(
-                                    BatchDeletePartiallyAppliedException.RemovedBy(error)))
+                                // rows it did not remove keep theirs — and lose the tombstone set
+                                // above, which would otherwise hide a row that is still stored.
+                                // The failure itself still reaches the move's verdict unchanged.
+                                .Do(RetireMovedAway, error =>
+                                {
+                                    var removed = BatchDeletePartiallyAppliedException.RemovedBy(error);
+                                    RetireMovedAway(removed);
+                                    var gone = removed.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                                    foreach (var p in ordered)
+                                        if (!gone.Contains(p))
+                                            registry.Clear(p);
+                                })
                                 .Select(_ => copied);
 
                             void RetireMovedAway(IReadOnlyList<string> deleted)
