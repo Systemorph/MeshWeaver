@@ -92,6 +92,13 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     /// a query source, which the root forwards as a platform interface (MeshWeaver#6793).</summary>
     protected virtual bool RegistersQueryProvider => false;
 
+    /// <summary>Whether the module declares a launcher tile (<see cref="MeshWeaver.Graph.Apps.DeclaredApp"/>) —
+    /// a member of a set modules contribute to, read absence-aware by the app directory.</summary>
+    protected virtual bool DeclaresApp => false;
+
+    /// <summary>The id of the launcher tile the module declares when <see cref="DeclaresApp"/>.</summary>
+    public const string DeclaredAppId = "BootBuiltApp";
+
     /// <summary>The path of the node the module's query provider answers with.</summary>
     public const string QueriedProbePath = "BootBuiltQueried/answer";
 
@@ -102,7 +109,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .ConfigureServices(services => services.AddScoped<CircuitBoundState>())
-            .InstallAssemblies(WriteModule(root, Broken, CircuitBound, ShipsReferences, RegistersAccessRule, RegistersQueryProvider));
+            .InstallAssemblies(WriteModule(root, Broken, CircuitBound, ShipsReferences, RegistersAccessRule, RegistersQueryProvider, DeclaresApp));
 
     /// <summary>The mesh's module registry.</summary>
     protected ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
@@ -125,7 +132,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     /// <see cref="ShipsReferences"/> — one no image-bound module of the test mesh installs.</summary>
     public const string ShippedReferenceName = "System.Private.Xml";
 
-    private static string Source(bool broken, bool circuitBound, bool shipsReferences, bool accessRule, bool queryProvider) => $$"""
+    private static string Source(bool broken, bool circuitBound, bool shipsReferences, bool accessRule, bool queryProvider, bool declaresApp) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         [assembly: MeshWeaver.Test.BootBuilt.Module]
         namespace MeshWeaver.Test.BootBuilt;
@@ -189,6 +196,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
                         {{(shipsReferences ? ShippedReferenceRegistration : "")}}
                         {{(accessRule ? AccessRuleRegistration : "")}}
                         {{(queryProvider ? QueryProviderRegistration : "")}}
+                        {{(declaresApp ? DeclaredAppRegistration : "")}}
                         return services;
                     })];
         }
@@ -222,11 +230,17 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     private const string QueryProviderRegistration =
         "services.AddSingleton<MeshWeaver.Mesh.Services.IMeshQueryProvider, QueryProbe>();";
 
+    // A launcher tile the module declares — a platform-class member of a set (the app directory's
+    // declared apps): once the module is withdrawn it must be ABSENT, never a forwarder that throws and
+    // fails every viewer's whole directory.
+    private const string DeclaredAppRegistration =
+        "services.AddSingleton(new MeshWeaver.Graph.Apps.DeclaredApp(\"" + DeclaredAppId + "\", \"Boot built\", \"b.svg\", \"BootBuiltProbe\"));";
+
     /// <summary>Compiles the test module under <paramref name="directoryRoot"/> and returns its entry DLL —
     /// for hosts this base does not build (MeshWeaver#6557's plain MS DI host).</summary>
     internal static string WriteModule(string directoryRoot, bool broken, bool circuitBound, bool shipsReferences = false,
-        bool accessRule = false, bool queryProvider = false) =>
-        Write(directoryRoot, Source(broken, circuitBound, shipsReferences, accessRule, queryProvider));
+        bool accessRule = false, bool queryProvider = false, bool declaresApp = false) =>
+        Write(directoryRoot, Source(broken, circuitBound, shipsReferences, accessRule, queryProvider, declaresApp));
 
     private static string Write(string directoryRoot, string source)
     {
