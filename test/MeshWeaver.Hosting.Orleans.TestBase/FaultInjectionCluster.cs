@@ -63,6 +63,32 @@ public class FaultInjectionCluster : IAsyncLifetime
     /// <summary>The configurator every silo is built with; a module-owning repo supplies a derived one.</summary>
     protected virtual Type SiloConfiguratorType => typeof(FaultInjectionSiloConfigurator);
 
+    /// <summary>
+    /// Whether the silos run Orleans' <c>DistributedGrainDirectory</c> as their default grain directory.
+    ///
+    /// <para>🚨 <b>True is Orleans' TEST default, not production's</b> (#7842). <c>TestClusterBuilder</c>
+    /// adds its own <c>ConfigureDistributedGrainDirectory</c> configurator to every test cluster, so an
+    /// in-process cluster has always run the directory that hands partitions over when a silo leaves,
+    /// while a production silo (<c>ConfigureMeshWeaverServer</c>) runs Orleans' default
+    /// <c>LocalGrainDirectory</c>, which does not. A case about what the DIRECTORY does on a leave must
+    /// therefore say which one it measures; <see cref="DefaultDirectoryIsDistributed"/> reads the
+    /// answer off each silo. False removes the test harness's configurator, so the silos run
+    /// production's directory.</para>
+    /// </summary>
+    protected virtual bool UsesDistributedGrainDirectory => true;
+
+    /// <summary>
+    /// Whether silo <paramref name="index"/>'s DEFAULT grain directory is Orleans'
+    /// <c>DistributedGrainDirectory</c> (registered as the keyed <c>"default"</c> directory) rather than
+    /// the legacy <c>LocalGrainDirectory</c> (no keyed default). Orleans keeps both types internal, so
+    /// the type is compared by name.
+    /// </summary>
+    /// <param name="index">The silo's index at deploy time.</param>
+    /// <returns>True when the silo runs the distributed directory as its default.</returns>
+    public bool DefaultDirectoryIsDistributed(int index) =>
+        Silo(index).GetKeyedService<global::Orleans.GrainDirectory.IGrainDirectory>("default")?.GetType().Name
+        == "DistributedGrainDirectory";
+
     /// <summary>The Orleans test cluster.</summary>
     public TestCluster Cluster => (_host ?? throw new InvalidOperationException(
         "The fault-injection cluster is not deployed yet — InitializeAsync has not run.")).Cluster;
@@ -79,6 +105,9 @@ public class FaultInjectionCluster : IAsyncLifetime
                 builder.Options.InitialSilosCount = (short)SiloCount;
                 builder.Options.SiloBuilderConfiguratorTypes.Add(SiloConfiguratorType.AssemblyQualifiedName
                     ?? throw new InvalidOperationException($"{SiloConfiguratorType} has no assembly-qualified name."));
+                if (!UsesDistributedGrainDirectory)
+                    builder.Options.SiloBuilderConfiguratorTypes.RemoveAll(
+                        t => t?.Contains("ConfigureDistributedGrainDirectory", StringComparison.Ordinal) == true);
                 // TestCluster's only silo-host hook; see TwoSiloCacheUpdateFixture for why the
                 // shared store must be handed in here rather than registered by the configurator.
                 builder.CreateSiloAsync = async (siloName, configuration) =>
@@ -100,6 +129,12 @@ public class FaultInjectionCluster : IAsyncLifetime
             },
             withClient: false);
         _silos = Cluster.Silos.ToImmutableList();
+        // The directory the fixture declared is the directory the silos run — a removal that silently
+        // missed (Orleans renamed its configurator) would leave a "production directory" case measuring
+        // the test default (#7842).
+        for (var i = 0; i < _silos.Count; i++)
+            DefaultDirectoryIsDistributed(i).Should().Be(UsesDistributedGrainDirectory,
+                $"silo {i} must run the grain directory this fixture declares");
         // Resolve each silo's injector now, so every silo has joined the relay before the test's
         // first write — a silo that joined late would miss the commits made before it did.
         // And prove the injector is actually UNDER the silo's store — a fixture whose wrapping
