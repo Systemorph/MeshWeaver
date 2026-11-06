@@ -294,9 +294,10 @@ public sealed class AppDirectory
     /// <summary>
     /// Seam constructor (unit tests via InternalsVisibleTo): <paramref name="moduleVersions"/> says
     /// the module set changed, and <paramref name="readDeclarations"/> reads the declarations as they
-    /// stand THEN — production passes <see cref="ModuleContexts.VersionChanged"/> and the root's
-    /// <c>GetServices&lt;DeclaredApp&gt;()</c>, which serves the CURRENT generation of a class-typed
-    /// module service on every request (<see cref="ModuleServiceRoute.Current"/>).
+    /// stand THEN — production passes <see cref="ModuleContexts.VersionChanged"/> and
+    /// <see cref="ReadDeclarations"/>, the ABSENCE-AWARE read through
+    /// <see cref="InstalledModules.CurrentSet{T}"/>. Never pass a plain <c>GetServices&lt;DeclaredApp&gt;()</c>
+    /// here: it throws for a withdrawn module's forwarder and takes every viewer's directory down.
     /// </summary>
     internal AppDirectory(IMessageHub hub, IObservable<long> moduleVersions, Func<ImmutableList<DeclaredApp>> readDeclarations)
     {
