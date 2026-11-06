@@ -177,6 +177,11 @@ public static class OrleansServerRegistryExtensions
             // deployment's or a test fixture's explicit ClusterMembershipOptions still wins.
             // Pinned by ClusterMembershipToleranceTest.
             services.AddMeshWeaverClusterMembershipTolerance();
+            // #7842: the per-silo carrier that tells the ASKER of a refused reply, addressed by silo
+            // and alive through ShuttingDown — see ISiloLocalDeliveryService. Silo-only: a grain
+            // service and its client exist only where Orleans runs system targets.
+            services.AddGrainService<SiloLocalDeliveryService>();
+            services.AddSingleton<SiloLocalDeliveryClient>();
         });
 
         // 🚨 INSTEAD of, never in addition to. Two providers under the same name leave the
