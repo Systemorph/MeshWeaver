@@ -374,23 +374,30 @@ public partial class QueryParser
             }
         }
 
-        // Check for quoted string (bare text search)
+        // Check for quoted string (bare text search). 🚨 A quote opens a phrase only when it CLOSES
+        // (#7918): an unbalanced quote — typed text such as `Ann's b` spliced into
+        // `*Ann's b* scope:descendants … partitions:all` — used to run to the end of the input and
+        // swallow every qualifier after it, so the planner judged a declared fan-out UNANCHORED and
+        // the scope, the declaration and the filters were searched for as text. An unclosed quote is
+        // data: it is skipped as the unknown character it is, and the terms after it parse.
         if (input[i] == '"' || input[i] == '\'')
         {
             var quoteChar = input[i];
-            i++;
-            var textStart = i;
-            while (i < input.Length && input[i] != quoteChar)
-                i++;
-            var text = input[textStart..i];
-            if (i < input.Length)
-                i++; // consume closing quote
+            var close = input.IndexOf(quoteChar, i + 1);
+            if (close < 0)
+            {
+                i = start;
+                return null;
+            }
+            var text = input[(i + 1)..close];
+            i = close + 1; // consume closing quote
             return new Token(TokenType.TextSearch, text);
         }
 
-        // Parse field name
+        // Parse field name. An apostrophe INSIDE a word (`Ann's`) is part of the word, never a
+        // quote: only a quote at the start of a term opens a phrase (#7918).
         var fieldStart = i;
-        while (i < input.Length && IsValidFieldChar(input[i]))
+        while (i < input.Length && (IsValidFieldChar(input[i]) || IsInWordApostrophe(input, i, fieldStart)))
             i++;
 
         if (i == fieldStart)
@@ -1286,6 +1293,18 @@ public partial class QueryParser
 
         return null;
     }
+
+    /// <summary>
+    /// Whether the <c>'</c> at <paramref name="i"/> sits between two letters or digits of the term
+    /// that started at <paramref name="termStart"/> — an apostrophe of natural language
+    /// (<c>Ann's</c>, <c>don't</c>), not the opening quote of a phrase (#7918).
+    /// </summary>
+    private static bool IsInWordApostrophe(string input, int i, int termStart) =>
+        input[i] == '\''
+        && i > termStart
+        && char.IsLetterOrDigit(input[i - 1])
+        && i + 1 < input.Length
+        && char.IsLetterOrDigit(input[i + 1]);
 
     private static bool IsValidFieldChar(char c) =>
         char.IsLetterOrDigit(c) || c == '_' || c == '.' || c == '-' || c == '/' || c == '$';
