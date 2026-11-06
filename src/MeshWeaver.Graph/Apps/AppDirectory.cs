@@ -155,6 +155,8 @@ public sealed record InstallEvidence(
 /// <item><b>Visible</b> — per root, Read on its <see cref="AppRoot.ProbePath"/> for the viewer.
 /// The check is the live security fold, so a grant or a revoke re-emits.</item>
 /// <item><b>Built-ins</b> — Settings and Inbox for everyone, Administration for a global admin.</item>
+/// <item><b>Declared apps</b> — the tiles modules declare for what they serve (<see cref="DeclaredApp"/>:
+/// Documentation, the Threads fallback), behind their own read probe, unless an app root covers them.</item>
 /// </list>
 /// Display (name, icon, description, category) comes straight from the root. Core knows nothing of
 /// the Store's content types: the root's content is read by property name, in whatever shape it
@@ -265,12 +267,109 @@ public sealed class AppDirectory
     private readonly IMessageHub hub;
     private readonly ILogger<AppDirectory>? logger;
 
+    // When the module set changes, and what the modules declare now (DeclaredApp). Instance state.
+    private readonly IObservable<long> moduleVersions;
+    private readonly Func<ImmutableList<DeclaredApp>> readDeclarations;
+
     /// <summary>Creates the directory over the mesh hub.</summary>
     public AppDirectory(IMessageHub hub)
+        : this(hub,
+            hub.ServiceProvider.GetService<ModuleContexts>()?.VersionChanged ?? Observable.Never<long>(),
+            () => ReadDeclarations(hub.ServiceProvider))
+    {
+    }
+
+    /// <summary>
+    /// The declarations as they stand NOW, ABSENCE-AWARE: through <see cref="InstalledModules.CurrentSet{T}"/>,
+    /// so a declaration whose module was withdrawn at boot or retired is simply absent — never the
+    /// root forwarder that can only throw, which made <c>GetServices</c> fail every viewer's whole
+    /// directory (Settings and Inbox included) for good. A host without the module registry has no
+    /// held modules, so its plain registrations are the set.
+    /// </summary>
+    internal static ImmutableList<DeclaredApp> ReadDeclarations(IServiceProvider services) =>
+        services.GetService<InstalledModules>() is { } installed
+            ? installed.CurrentSet<DeclaredApp>(services).ToImmutableList()
+            : services.GetServices<DeclaredApp>().ToImmutableList();
+
+    /// <summary>
+    /// Seam constructor (unit tests via InternalsVisibleTo): <paramref name="moduleVersions"/> says
+    /// the module set changed, and <paramref name="readDeclarations"/> reads the declarations as they
+    /// stand THEN — production passes <see cref="ModuleContexts.VersionChanged"/> and
+    /// <see cref="ReadDeclarations"/>, the ABSENCE-AWARE read through
+    /// <see cref="InstalledModules.CurrentSet{T}"/>. Never pass a plain <c>GetServices&lt;DeclaredApp&gt;()</c>
+    /// here: it throws for a withdrawn module's forwarder and takes every viewer's directory down.
+    /// </summary>
+    internal AppDirectory(IMessageHub hub, IObservable<long> moduleVersions, Func<ImmutableList<DeclaredApp>> readDeclarations)
     {
         this.hub = hub;
+        this.moduleVersions = moduleVersions;
+        this.readDeclarations = readDeclarations;
         logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<AppDirectory>();
     }
+
+    /// <summary>
+    /// The modules' declarations — live: read now, and RE-READ whenever the module set changes
+    /// (<see cref="ModuleContexts.VersionChanged"/>), so a live module replacement that changes a
+    /// declaration's target, label or probe reaches a launcher that is already open; the warm cache
+    /// keeps a computation alive for as long as anyone watches, so a snapshot taken once would serve
+    /// the replaced generation's tile indefinitely. Deduplicated first-registration-wins
+    /// (<see cref="FirstPerId"/>) BEFORE any probe or admin filter sees them.
+    /// <para>The read is a service RESOLUTION inside a selector, deliberately: the declarations are a
+    /// class-typed module service, which the root resolves to the current generation on every
+    /// request — resolving once would pin the generation the launcher first saw.</para>
+    /// </summary>
+    public IObservable<ImmutableList<DeclaredApp>> Declarations() =>
+        Observable.Create<ImmutableList<DeclaredApp>>(observer =>
+            {
+                // 🚨 SUBSCRIBE FIRST, then take the initial snapshot: VersionChanged is a plain,
+                // non-replaying subject, so a swap between an initial read and the subscription would
+                // be lost and an open launcher would keep the old tile for good.
+                // Reads are SERIALIZED by a drain loop rather than a lock: one reader at a time, a
+                // signal that arrives during a read (on any thread, or re-entrantly from the read
+                // itself) makes the reader read AGAIN, so the last emission always comes from a read
+                // that started after the last swap — and two reads never emit out of order.
+                var pending = 0;
+                void Signal()
+                {
+                    if (Interlocked.Increment(ref pending) != 1)
+                        return;
+                    do
+                    {
+                        Interlocked.Exchange(ref pending, 1);
+                        observer.OnNext(FirstPerId(SafeRead()));
+                    }
+                    while (Interlocked.Decrement(ref pending) != 0);
+                }
+                var subscription = moduleVersions.Subscribe(_ => Signal(), observer.OnError);
+                Signal();
+                return subscription;
+            })
+            .DistinctUntilChanged(DeclarationListComparer.Instance);
+
+    // A read that fails is "no declared tiles this time", logged — never a fault that would take the
+    // built-ins (Settings, Inbox) down with it; the next module swap reads again.
+    private ImmutableList<DeclaredApp> SafeRead()
+    {
+        try
+        {
+            return readDeclarations();
+        }
+        catch (Exception exception)
+        {
+            logger?.LogError(exception,
+                "[AppDirectory] the declared apps could not be read; the launcher serves without them until the next module change");
+            return ImmutableList<DeclaredApp>.Empty;
+        }
+    }
+
+    /// <summary>One declaration per id, the FIRST registration winning — whatever its visibility, so a
+    /// later declaration of the same id can never stand in for one the viewer may not see. Pure.</summary>
+    public static ImmutableList<DeclaredApp> FirstPerId(IEnumerable<DeclaredApp> declared) =>
+        declared
+            .Where(d => !string.IsNullOrWhiteSpace(d.Id))
+            .GroupBy(d => d.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToImmutableList();
 
     /// <summary>The app roots on the instance — live, shared process-wide.</summary>
     public IObservable<ImmutableList<AppRoot>> Roots()
@@ -405,9 +504,41 @@ public sealed class AppDirectory
         // language). It is COSMETIC: the list never waits for it (StartWith) and a failed read
         // falls back to the plain "Settings" tile rather than taking the launcher down.
         var person = PersonOf(viewer);
+        // The apps modules DECLARE (DeclaredApp — the platform documentation, the Threads fallback),
+        // each behind its own read probe — re-read on every module swap, and the probes SWITCHED to
+        // the fresh declarations, so an open launcher follows a live module replacement.
+        var declared = Declarations()
+            .Select(apps => VisibleDeclared(apps, viewer))
+            .Switch();
         return visible
-            .CombineLatest(admin, person, (apps, isAdmin, who) => Compose(viewer, apps, isAdmin, who))
+            .CombineLatest(admin, person, declared,
+                (apps, isAdmin, who, modules) => Compose(viewer, apps, isAdmin, who, modules))
             .DistinctUntilChanged(EntryListComparer.Instance);
+    }
+
+    /// <summary>
+    /// The declared apps the viewer may see — live: a declaration with a <see cref="DeclaredApp.ProbePath"/>
+    /// needs Read on it, exactly like an app root's entry point (an undetermined check FAILS the
+    /// computation rather than latching the tile off); one without is the viewer's own surface.
+    /// </summary>
+    private IObservable<ImmutableList<DeclaredApp>> VisibleDeclared(ImmutableList<DeclaredApp> apps, string viewer)
+    {
+        if (apps.Count == 0)
+            return Observable.Return(ImmutableList<DeclaredApp>.Empty);
+        var checks = apps.Select(app => app.ProbePathFor(viewer) is { Length: > 0 } probe
+            ? hub.CheckPermissionOutcome(probe, viewer, Permission.Read)
+                .Select(outcome =>
+                {
+                    if (outcome.IsUndetermined)
+                        throw new InvalidOperationException(
+                            $"[AppDirectory] read check on declared app '{app.Id}' ('{probe}') for '{viewer}' reached no verdict: {outcome.UndeterminedReason}");
+                    return outcome.IsGranted;
+                })
+                .DistinctUntilChanged()
+                .Select(allowed => (app, allowed))
+            : Observable.Return((app, allowed: true)));
+        return Observable.CombineLatest(checks)
+            .Select(results => results.Where(r => r.allowed).Select(r => r.app).ToImmutableList());
     }
 
     /// <summary>The viewer's own user node, read as <see cref="PersonTile"/> — live, never blocking:
@@ -506,20 +637,56 @@ public sealed class AppDirectory
     /// </summary>
     public static ImmutableList<AppDirectoryEntry> Compose(
         string viewer, IEnumerable<AppRoot> visibleRoots, bool isGlobalAdmin, PersonTile? person = null)
+        => Compose(viewer, visibleRoots, isGlobalAdmin, person, declared: null);
+
+    /// <summary>
+    /// <see cref="Compose(string, IEnumerable{AppRoot}, bool, PersonTile?)"/> plus the apps modules
+    /// DECLARE (<see cref="DeclaredApp"/>, already filtered to the ones the viewer may read): each is
+    /// a tile among the apps, by name, UNLESS a visible app root covers it — the root's path is the
+    /// declared id, or it opens the same target — or a built-in has its id or target. A root always
+    /// wins, so a portal that shows the AI package's Threads tile never shows the engine's fallback
+    /// beside it. Two declarations of one id keep the first. Pure.
+    /// </summary>
+    public static ImmutableList<AppDirectoryEntry> Compose(
+        string viewer, IEnumerable<AppRoot> visibleRoots, bool isGlobalAdmin, PersonTile? person,
+        IEnumerable<DeclaredApp>? declared)
     {
         var builtIns = BuiltIns(viewer, isGlobalAdmin, person);
         var builtInIds = builtIns.Select(b => b.Id).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-        var apps = visibleRoots
+        var roots = visibleRoots
             .Where(r => !builtInIds.Contains(r.Path))
             .Where(r => isGlobalAdmin || !r.AdminOnly)
-            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.Path, StringComparer.OrdinalIgnoreCase)
-            .Select(r => new AppDirectoryEntry(
-                r.Path, r.Name, r.Icon, r.Description, r.LauncherGroup ?? r.Category, r.OpenPath)
+            .ToImmutableList();
+        // What a root or a built-in already puts on the launcher — two SEPARATE sets: a declaration's
+        // id is compared only with existing ids, its target only with existing targets (a root `Handbook`
+        // opening `Doc` must not hide a declaration `Doc` opening `Doc/Reference`).
+        var coveredIds = roots.Select(r => r.Path)
+            .Concat(builtIns.Select(b => b.Id))
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var coveredTargets = roots.Select(r => r.OpenPath)
+            .Concat(builtIns.Select(b => b.OpenPath))
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var rootEntries = roots.Select(r => new AppDirectoryEntry(
+            r.Path, r.Name, r.Icon, r.Description, r.LauncherGroup ?? r.Category, r.OpenPath)
+        {
+            GroupDeclared = r.LauncherGroup is not null,
+            GroupOrder = r.LauncherGroupOrder,
+        });
+        // First registration per id wins BEFORE the admin filter, so an admin-only first declaration
+        // is never replaced by a later unrestricted one of the same id.
+        var declaredEntries = FirstPerId(declared ?? [])
+            .Where(d => isGlobalAdmin || !d.AdminOnly)
+            .Where(d => !coveredIds.Contains(d.Id) && !coveredTargets.Contains(d.OpenPathFor(viewer)))
+            .Select(d => new AppDirectoryEntry(
+                d.Id, d.Name, d.Icon, d.Description, d.LauncherGroup, d.OpenPathFor(viewer),
+                LabelKey: d.LabelKey, BuiltIn: true)
             {
-                GroupDeclared = r.LauncherGroup is not null,
-                GroupOrder = r.LauncherGroupOrder,
+                GroupDeclared = d.LauncherGroup is not null,
+                GroupOrder = d.LauncherGroupOrder,
             });
+        var apps = rootEntries.Concat(declaredEntries)
+            .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(e => e.Id, StringComparer.OrdinalIgnoreCase);
         return builtIns.AddRange(apps);
     }
 
@@ -651,6 +818,14 @@ public sealed class AppDirectory
         public bool Equals(ImmutableList<AppRoot>? x, ImmutableList<AppRoot>? y) =>
             ReferenceEquals(x, y) || (x is not null && y is not null && x.SequenceEqual(y));
         public int GetHashCode(ImmutableList<AppRoot> obj) => obj.Count;
+    }
+
+    private sealed class DeclarationListComparer : IEqualityComparer<ImmutableList<DeclaredApp>>
+    {
+        public static readonly DeclarationListComparer Instance = new();
+        public bool Equals(ImmutableList<DeclaredApp>? x, ImmutableList<DeclaredApp>? y) =>
+            ReferenceEquals(x, y) || (x is not null && y is not null && x.SequenceEqual(y));
+        public int GetHashCode(ImmutableList<DeclaredApp> obj) => obj.Count;
     }
 
     private sealed class PathListComparer : IEqualityComparer<ImmutableList<string>>
