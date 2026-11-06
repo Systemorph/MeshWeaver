@@ -2648,6 +2648,7 @@
   "auth.accountStatusUnavailable": "Your account status could not be established yet. Retry shortly.",
   "invitations.deleteRefused.noCaller": "Only a platform administrator can delete an invitation; the request named no caller.",
   "invitations.deleteRefused.notAdmin": "Only a platform administrator can delete an invitation; '{0}' is not one.",
+  "invitations.deleteRefused.listingIncomplete": "The invitation for {0} was not deleted: the pending grants it may have scheduled could not be read completely, so some of them could still fire. Nothing was deleted; try again.",
   "privacy.loadFailed": "_Could not load the privacy statement: {0}_",
   "privacy.placeholder": "Write the privacy statement in markdown…",
   "ui.updateStatusUnavailable": "_The update status could not be read: {0}_",
