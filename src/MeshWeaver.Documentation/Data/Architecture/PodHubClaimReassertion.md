@@ -234,6 +234,48 @@ The third is not decoration. A "fix" that merely re-triggered the round would sa
 pins and reintroduce the claim storm `Switch` exists to bound: every attempt makes the owning silo
 log a line, which is the log-storm shape #2426/#2546 exist to remove.
 
+## #7842: replies refused while ANOTHER silo leaves — what is established
+
+During a memex roll a cache hub's replies were refused by two routers ("no silo in this cluster is
+currently serving that hub", both naming the same third silo) 200–400 ms after the OLD silo began its
+stop, while the cache hub's own pod was alive; its requests timed out after 60 s. #7907 repeated the
+shape on another instance. This section records what an in-process reproduction did and did not show,
+so the next investigation starts from it.
+
+**Two candidate mechanisms were tested and NOT reproduced** (Orleans 10.4.2, a three-silo
+`FaultInjectionCluster`, the silo holding the pod hub's grain-directory partition held in
+`ShuttingDown` by a lifecycle participant one stage below `BecomeActive`):
+
+| Candidate | What was measured |
+|---|---|
+| Orleans DEACTIVATES the owner's pinned activation when the silo holding its directory partition leaves (`LocalGrainDirectory.OnSiloStatusChange` deactivates activations whose registration lived on a terminating silo) | The owner's activation survived the whole `ShuttingDown` window: the same activation instance was in the owner silo's catalog for 15 s after both remaining silos had re-partitioned the address away from the leaving silo. |
+| The re-partition loses the directory entry (the DHT hands nothing over on a leave), so a router that looks the hub up before the owner re-asserts its claim finds nothing and refuses | With the owner's re-assertion HELD at its outgoing `Attach` and both directories re-partitioned, a post from the third silo — which had never addressed the hub — was delivered to the live hub. |
+
+`ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest` pins the second row as a regression
+guard; `ADeliveryToAPodHubWithNoSiloLeavingArrivesTest` is its negative control.
+
+**What the in-process runs also showed.** The membership-change re-assertion's `Attach` lands on the
+owner's still-live local activation in about a millisecond and never touches the directory: a
+re-assertion cannot re-register an entry that a re-partition dropped. That it did not matter here is
+the open question below, not a reason to trust it.
+
+**Not established.**
+
+- Why the third silo's lookup found the entry at the new partition owner although the leaving silo
+  had not handed its partition over. One diagnostic lookup at the new owner did return no entry, and a
+  later one returned an activation on a non-owner silo, which suggests a throw-away activation was
+  placed and then migrated home by the claim's step-aside — in-process that settles inside the few
+  milliseconds before the post; on a loaded production pod it may not. This was not pinned down.
+- Whether production's refusals came from that window at all. The asker pod's own membership
+  notification time and its `[POD-HUB]` claim lines for 18:16:21Z are not in the shipped logs.
+- The reply side is a real gap whatever the trigger: a transient pod-hub refusal NACKs the REPLIER
+  (`RoutingGrain.AnswerPodHubNotHere`), which has nothing to retry, and the asker is never told. Any
+  directory gap of any length therefore loses the replies sent inside it silently. Closing that is a
+  design decision, not a local fix: re-deliver a refused delivery once the claim lands (bounded and
+  event-driven), or move pod-hub grains to a directory that hands partitions over (Orleans'
+  `DistributedGrainDirectory`, which needs a mixed-version roll plan because each silo resolves the
+  directory for itself).
+
 ## The diagnosability that was missing
 
 For twelve hours the production line read:
