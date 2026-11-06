@@ -267,12 +267,59 @@ public sealed class AppDirectory
     private readonly IMessageHub hub;
     private readonly ILogger<AppDirectory>? logger;
 
+    // When the module set changes, and what the modules declare now (DeclaredApp). Instance state.
+    private readonly IObservable<long> moduleVersions;
+    private readonly Func<ImmutableList<DeclaredApp>> readDeclarations;
+
     /// <summary>Creates the directory over the mesh hub.</summary>
     public AppDirectory(IMessageHub hub)
+        : this(hub,
+            hub.ServiceProvider.GetService<ModuleContexts>()?.VersionChanged ?? Observable.Never<long>(),
+            () => hub.ServiceProvider.GetServices<DeclaredApp>().ToImmutableList())
+    {
+    }
+
+    /// <summary>
+    /// Seam constructor (unit tests via InternalsVisibleTo): <paramref name="moduleVersions"/> says
+    /// the module set changed, and <paramref name="readDeclarations"/> reads the declarations as they
+    /// stand THEN — production passes <see cref="ModuleContexts.VersionChanged"/> and the root's
+    /// <c>GetServices&lt;DeclaredApp&gt;()</c>, which serves the CURRENT generation of a class-typed
+    /// module service on every request (<see cref="ModuleServiceRoute.Current"/>).
+    /// </summary>
+    internal AppDirectory(IMessageHub hub, IObservable<long> moduleVersions, Func<ImmutableList<DeclaredApp>> readDeclarations)
     {
         this.hub = hub;
+        this.moduleVersions = moduleVersions;
+        this.readDeclarations = readDeclarations;
         logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<AppDirectory>();
     }
+
+    /// <summary>
+    /// The modules' declarations — live: read now, and RE-READ whenever the module set changes
+    /// (<see cref="ModuleContexts.VersionChanged"/>), so a live module replacement that changes a
+    /// declaration's target, label or probe reaches a launcher that is already open; the warm cache
+    /// keeps a computation alive for as long as anyone watches, so a snapshot taken once would serve
+    /// the replaced generation's tile indefinitely. Deduplicated first-registration-wins
+    /// (<see cref="FirstPerId"/>) BEFORE any probe or admin filter sees them.
+    /// <para>The read is a service RESOLUTION inside a selector, deliberately: the declarations are a
+    /// class-typed module service, which the root resolves to the current generation on every
+    /// request — resolving once would pin the generation the launcher first saw.</para>
+    /// </summary>
+    public IObservable<ImmutableList<DeclaredApp>> Declarations() =>
+        moduleVersions
+            .Select(_ => 0L)
+            .StartWith(0L)
+            .Select(_ => FirstPerId(readDeclarations()))
+            .DistinctUntilChanged(DeclarationListComparer.Instance);
+
+    /// <summary>One declaration per id, the FIRST registration winning — whatever its visibility, so a
+    /// later declaration of the same id can never stand in for one the viewer may not see. Pure.</summary>
+    public static ImmutableList<DeclaredApp> FirstPerId(IEnumerable<DeclaredApp> declared) =>
+        declared
+            .Where(d => !string.IsNullOrWhiteSpace(d.Id))
+            .GroupBy(d => d.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToImmutableList();
 
     /// <summary>The app roots on the instance — live, shared process-wide.</summary>
     public IObservable<ImmutableList<AppRoot>> Roots()
@@ -408,8 +455,11 @@ public sealed class AppDirectory
         // falls back to the plain "Settings" tile rather than taking the launcher down.
         var person = PersonOf(viewer);
         // The apps modules DECLARE (DeclaredApp — the platform documentation, the Threads fallback),
-        // each behind its own read probe. Resolved ONCE, on the caller's thread.
-        var declared = VisibleDeclared(hub.ServiceProvider.GetServices<DeclaredApp>().ToImmutableList(), viewer);
+        // each behind its own read probe — re-read on every module swap, and the probes SWITCHED to
+        // the fresh declarations, so an open launcher follows a live module replacement.
+        var declared = Declarations()
+            .Select(apps => VisibleDeclared(apps, viewer))
+            .Switch();
         return visible
             .CombineLatest(admin, person, declared,
                 (apps, isAdmin, who, modules) => Compose(viewer, apps, isAdmin, who, modules))
@@ -557,10 +607,13 @@ public sealed class AppDirectory
             .Where(r => !builtInIds.Contains(r.Path))
             .Where(r => isGlobalAdmin || !r.AdminOnly)
             .ToImmutableList();
-        // What a root or a built-in already puts on the launcher — by id and by target.
-        var covered = roots.Select(r => r.Path)
-            .Concat(roots.Select(r => r.OpenPath))
+        // What a root or a built-in already puts on the launcher — two SEPARATE sets: a declaration's
+        // id is compared only with existing ids, its target only with existing targets (a root `Handbook`
+        // opening `Doc` must not hide a declaration `Doc` opening `Doc/Reference`).
+        var coveredIds = roots.Select(r => r.Path)
             .Concat(builtIns.Select(b => b.Id))
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var coveredTargets = roots.Select(r => r.OpenPath)
             .Concat(builtIns.Select(b => b.OpenPath))
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
         var rootEntries = roots.Select(r => new AppDirectoryEntry(
@@ -569,12 +622,11 @@ public sealed class AppDirectory
             GroupDeclared = r.LauncherGroup is not null,
             GroupOrder = r.LauncherGroupOrder,
         });
-        var declaredEntries = (declared ?? [])
-            .Where(d => !string.IsNullOrWhiteSpace(d.Id))
+        // First registration per id wins BEFORE the admin filter, so an admin-only first declaration
+        // is never replaced by a later unrestricted one of the same id.
+        var declaredEntries = FirstPerId(declared ?? [])
             .Where(d => isGlobalAdmin || !d.AdminOnly)
-            .GroupBy(d => d.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.First())
-            .Where(d => !covered.Contains(d.Id) && !covered.Contains(d.OpenPathFor(viewer)))
+            .Where(d => !coveredIds.Contains(d.Id) && !coveredTargets.Contains(d.OpenPathFor(viewer)))
             .Select(d => new AppDirectoryEntry(
                 d.Id, d.Name, d.Icon, d.Description, d.LauncherGroup, d.OpenPathFor(viewer),
                 LabelKey: d.LabelKey, BuiltIn: true)
@@ -716,6 +768,14 @@ public sealed class AppDirectory
         public bool Equals(ImmutableList<AppRoot>? x, ImmutableList<AppRoot>? y) =>
             ReferenceEquals(x, y) || (x is not null && y is not null && x.SequenceEqual(y));
         public int GetHashCode(ImmutableList<AppRoot> obj) => obj.Count;
+    }
+
+    private sealed class DeclarationListComparer : IEqualityComparer<ImmutableList<DeclaredApp>>
+    {
+        public static readonly DeclarationListComparer Instance = new();
+        public bool Equals(ImmutableList<DeclaredApp>? x, ImmutableList<DeclaredApp>? y) =>
+            ReferenceEquals(x, y) || (x is not null && y is not null && x.SequenceEqual(y));
+        public int GetHashCode(ImmutableList<DeclaredApp> obj) => obj.Count;
     }
 
     private sealed class PathListComparer : IEqualityComparer<ImmutableList<string>>

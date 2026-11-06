@@ -192,7 +192,9 @@ roots:
 |---|---|
 | The module that SERVES the target declares the tile | the tile exists exactly where its target does — a host without the module has neither; no list in core says which apps exist |
 | A visible app ROOT wins over a declaration it covers — its path is the declared id, or it opens the same target | a portal shows the `AI` package's Threads tile (`AI/AiThreads`) and never the engine's fallback beside it; the fallback carries the id `AI` so the viewer's arrangement (group, order, hidden) is one key whichever is shown |
-| A declaration never repeats a built-in (by id or target), and two declarations of one id keep the first | every app exactly once |
+| Coverage compares id with id and target with target, never across: a root `Handbook` opening `Doc` does not hide a declaration `Doc` opening `Doc/Reference` | two distinct tiles stay two tiles |
+| A declaration never repeats a built-in (by id or target), and two declarations of one id keep the FIRST registration — decided before any probe or `AdminOnly` filter | a later declaration can never stand in for a first one the viewer may not see |
+| Declarations are re-read on every module swap (`ModuleContexts.VersionChanged`) and the probes switched to the fresh ones | an OPEN launcher follows a live module replacement; the warm cache would otherwise serve the replaced generation's tile for as long as anyone watches |
 | `ProbePath` is the same Read check an entry point gets; null = no check | an undetermined check FAILS the computation (evicted, recomputed) rather than latching the tile off |
 | `{user}` in `OpenPath` / `ProbePath` is the viewer | one declaration serves every viewer |
 

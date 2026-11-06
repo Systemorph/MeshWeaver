@@ -234,6 +234,35 @@ public class AppDirectoryPureTest
     }
 
     [Fact]
+    public void TheFirstRegistration_Wins_BeforeTheAdminFilter_SoALaterOpenTwinNeverStandsIn()
+    {
+        var restricted = new DeclaredApp("Ops", "Ops (admin)", "o.svg", "Ops") { AdminOnly = true };
+        var open = new DeclaredApp("Ops", "Ops (everyone)", "o.svg", "Ops/Public");
+
+        AppDirectory.Compose("alice", [], isGlobalAdmin: false, person: null, [restricted, open])
+            .Select(e => e.Id).Should().NotContain("Ops", "the first registration is admin-only; its later twin must not replace it");
+        AppDirectory.Compose("root", [], isGlobalAdmin: true, person: null, [restricted, open])
+            .Single(e => e.Id == "Ops").Name.Should().Be("Ops (admin)");
+        AppDirectory.FirstPerId([open, restricted]).Should().Equal(open);
+    }
+
+    [Fact]
+    public void IdsAndTargets_AreCoveredSeparately_ACrossMatchHidesNothing()
+    {
+        // A root `Handbook` opening `Doc`, and a declaration `Doc` opening `Doc/Reference`: neither
+        // the ids nor the targets match, so both are tiles.
+        var handbook = new AppRoot("Handbook", "Handbook", "h.svg", null, null, "Doc");
+        var reference = new DeclaredApp("Doc", "Reference", "r.svg", "Doc/Reference");
+        AppDirectory.Compose("alice", [handbook], isGlobalAdmin: false, person: null, [reference])
+            .Select(e => e.Id).Should().Equal("Settings", "Inbox", "Handbook", "Doc");
+
+        // …and the reverse cross-match: a declaration whose TARGET is another root's id.
+        var crm = new AppRoot("Crm", "Crm", "c.svg", null, null, "Crm/Pipeline");
+        AppDirectory.Compose("alice", [crm], isGlobalAdmin: false, person: null, [new DeclaredApp("Leads", "Leads", "l.svg", "Crm")])
+            .Select(e => e.Id).Should().Contain("Leads");
+    }
+
+    [Fact]
     public void ADeclaredApp_ResolvesTheViewerToken_InTargetAndProbe()
     {
         var own = new DeclaredApp("Mine", "Mine", "m.svg", "{user}/Notes/") { ProbePath = "{USER}/Notes" };
@@ -1285,5 +1314,60 @@ public class DeclaredAppDirectoryTest(ITestOutputHelper output) : MonolithMeshTe
         var list = await Directory.Compute(viewer).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         list.Select(e => e.Id).Should().Equal(expected);
         list.Single(e => e.Id == "DeclThreads").OpenPath.Should().Be($"{viewer}/Chat");
+    }
+
+    /// <summary>
+    /// A live module replacement reaches a launcher that is ALREADY OPEN: the subscription stays held
+    /// across the swap, the declarations are re-read on the module-version signal, and the visibility
+    /// checks are switched to the fresh ones — a new target shows, and a new probe the viewer cannot
+    /// read removes the tile, without anyone re-subscribing.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AnOpenLauncher_FollowsALiveModuleReplacement_OfADeclaration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var swaps = new Subject<long>();
+        var current = ImmutableList.Create(new DeclaredApp("Swapped", "Swapped", "s.svg", "DeclDocs") { ProbePath = "DeclDocs" });
+        var directory = new AppDirectory(Mesh, swaps, () => current);
+        var seen = new ReplaySubject<ImmutableList<AppDirectoryEntry>>();
+        using var subscription = directory.Compute(Reader).Subscribe(seen);
+
+        await seen.Where(l => l.Any(e => e.Id == "Swapped" && e.OpenPath == "DeclDocs"))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // Generation 2: the same declaration opens elsewhere.
+        current = [new DeclaredApp("Swapped", "Swapped v2", "s.svg", "DeclDocs/Reference") { ProbePath = "DeclDocs" }];
+        swaps.OnNext(2);
+        await seen.Where(l => l.Any(e => e.Id == "Swapped" && e.OpenPath == "DeclDocs/Reference" && e.Name == "Swapped v2"))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // Generation 3: its probe moves to a node the reader cannot read — the tile leaves.
+        current = [new DeclaredApp("Swapped", "Swapped v3", "s.svg", "DeclSecret") { ProbePath = "DeclSecret" }];
+        swaps.OnNext(3);
+        await seen.SkipWhile(l => l.All(e => e.Id != "Swapped" || e.Name != "Swapped v2"))
+            .Where(l => l.All(e => e.Id != "Swapped"))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+    }
+
+    /// <summary>
+    /// First registration wins BEFORE the probe: a first declaration the viewer cannot read is not
+    /// replaced by a later declaration of the same id that they can.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ADuplicateId_KeepsTheFirstRegistration_EvenWhenOnlyTheSecondIsReadable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var directory = new AppDirectory(Mesh, Observable.Never<long>(), () =>
+        [
+            new DeclaredApp("Twin", "Twin (gated)", "t.svg", "DeclDocs") { ProbePath = "DeclDocs" },
+            new DeclaredApp("Twin", "Twin (open)", "t.svg", "{user}/Twin"),
+        ]);
+
+        var stranger = await directory.Compute(Stranger).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        stranger.Select(e => e.Id).Should().NotContain("Twin", "the first registration is gated for the stranger");
+
+        var reader = await directory.Compute(Reader).Where(l => l.Any(e => e.Id == "Twin"))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        reader.Single(e => e.Id == "Twin").Name.Should().Be("Twin (gated)");
     }
 }
