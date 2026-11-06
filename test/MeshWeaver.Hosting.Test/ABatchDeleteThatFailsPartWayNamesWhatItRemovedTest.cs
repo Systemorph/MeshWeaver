@@ -8,6 +8,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -141,7 +142,8 @@ public class ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest
     /// its own. The node is still readable from the second store, so it must not be reported as
     /// removed: a caller would publish <c>Deleted</c> for it and retire the hub of a node that
     /// exists. On unfixed code the union named it because ONE store had removed it. A path the
-    /// failing store removed itself, and one no store still holds, are still reported.
+    /// failing store removed itself, and one no store still holds, are still reported. The move's
+    /// delete leg tombstones from this verdict, so the still-held path is never tombstoned either.
     /// </summary>
     [Fact]
     public async Task TheComposite_APathAFailedStoreStillHolds_IsNotReportedRemoved()
@@ -156,12 +158,78 @@ public class ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest
             new WritableProvider("two", two),
         ]);
 
+        // Driven through the MOVE's delete leg, which tombstones what the batch removed (#7930).
+        var registry = new RecentlyDeletedRegistry();
         var error = await Assert.ThrowsAsync<BatchDeletePartiallyAppliedException>(
-            () => composite.DeleteMany(["S/B", "S/A"]).FirstAsync().Await());
+            () => MeshExtensions.TombstonedBatchDelete(composite, registry, ["S/B", "S/A"], Options, _ => { }, NullLogger.Instance).FirstAsync().Await());
 
         Assert.Equal(["S/B"], error.Removed.ToArray());
         Assert.NotNull(await composite.Read("S/A", Options).FirstAsync().Await());
         Assert.Null(await composite.Read("S/B", Options).FirstAsync().Await());
+        // 🚨 The path store one still holds carries NO tombstone, although store two removed its copy
+        // and published Deleted for it on the composite's merged feed — a tombstone would hide a row
+        // that is still served. The control: the path no store holds any more IS tombstoned.
+        Assert.False(registry.IsRecentlyDeleted("S/A"));
+        Assert.True(registry.IsRecentlyDeleted("S/B"));
+    }
+
+    /// <summary>
+    /// 🚨 A writable OVERRIDE of read-only content: the move's delete leg removes the override (the
+    /// batch reports it removed — it was, from every WRITABLE store), but the read-only original goes
+    /// on being served at the same path. That path must NOT be tombstoned: a tombstone makes the dying
+    /// owner answer NotFound and every read answer DeleteInProgress for a node that is still served
+    /// (review of #7930). The leg asks the persistence layer's whole-store verdict
+    /// (<see cref="IStorageAdapter.Exists"/>, every provider that serves reads) before it marks.
+    /// Control: a path only the writable store held IS tombstoned. On the unfixed leg the override's
+    /// path was tombstoned because its writable copy was removed.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AMovedOverrideOfReadOnlyContent_LeavesTheOriginalServedAndUntombstoned(bool partWay)
+    {
+        var shipped = new InMemoryStorageAdapter();
+        await ((IStorageAdapter)shipped).Write(Node("S/A") with { Name = "shipped" }, Options)
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
+        var writable = await Seeded("S/B", "S/A", "S/C");
+        IStorageAdapter composite = new PersistenceService(
+        [
+            new WritableProvider("db", partWay ? new SingleRowFaultAdapter(writable, failAt: "S/C") : writable),
+            new ReadOnlyProvider("shipped", shipped),
+        ]);
+        var registry = new RecentlyDeletedRegistry();
+
+        // Children-first order is irrelevant here; S/C (part-way variant) is where the store refuses.
+        IReadOnlyList<string>? retired = null;
+        var leg = MeshExtensions.TombstonedBatchDelete(
+                composite, registry, ["S/B", "S/A", "S/C"], Options, removed => retired = removed, NullLogger.Instance)
+            .FirstAsync();
+        if (partWay)
+        {
+            var error = await Assert.ThrowsAsync<BatchDeletePartiallyAppliedException>(() => leg.Await());
+            Assert.Equal(["S/B", "S/A"], error.Removed.ToArray());
+        }
+        else
+            Assert.Equal(["S/B", "S/A", "S/C"], (await leg.Await()).ToArray());
+
+        // Retirement follows the batch's verdict — the override's path included, since its served node
+        // changed — whatever the tombstone decides.
+        Assert.Equal(partWay ? ["S/B", "S/A"] : ["S/B", "S/A", "S/C"], retired!.ToArray());
+        // The read-only original is still served at the override's path, and is not tombstoned.
+        Assert.Equal("shipped", (await composite.Read("S/A", Options).FirstAsync().Await())?.Name);
+        Assert.False(registry.IsRecentlyDeleted("S/A"));
+        // The control: a path only the writable store held is gone for good, and tombstoned.
+        Assert.Null(await composite.Read("S/B", Options).FirstAsync().Await());
+        Assert.True(registry.IsRecentlyDeleted("S/B"));
+        // A path the failed store still holds is neither reported removed nor tombstoned.
+        Assert.Equal(!partWay, registry.IsRecentlyDeleted("S/C"));
+    }
+
+    private sealed class ReadOnlyProvider(string name, IStorageAdapter adapter) : IPartitionStorageProvider
+    {
+        public string Name => name;
+        public bool IsReadOnly => true;
+        public IStorageAdapter Adapter => adapter;
     }
 
     private sealed class WritableProvider(string name, IStorageAdapter adapter) : IPartitionStorageProvider

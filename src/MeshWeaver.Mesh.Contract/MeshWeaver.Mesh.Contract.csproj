@@ -36,6 +36,10 @@
          stream.Update ships (MeshNodeStreamHandle.ComputeMergePatchDiff / ToJsonObject), never a
          hand-rolled stand-in that could drift from it. -->
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+    <!-- The move's delete leg (MeshExtensions.TombstonedBatchDelete) is proven against a REAL composite
+         store whose second writable provider fails part-way: only that composite's verdict may
+         tombstone, and the regression drives the leg over it directly (review of #7930). -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
   </ItemGroup>
 
   <ItemGroup>

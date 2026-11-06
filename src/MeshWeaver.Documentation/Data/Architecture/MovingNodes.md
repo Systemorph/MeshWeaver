@@ -192,6 +192,46 @@ source row the batch did not remove keeps its hub (#7396; pinned by
 `APartWayBatchDeleteRetiresWhatItRemovedTest`, see
 [Recursive Delete Drain](../RecursiveDeleteDrain) for the storage contract).
 
+The delete leg also **tombstones** every source path it removes in the mesh's
+`RecentlyDeletedRegistry`, as a delete does. That tombstone marks a path as gone for good, and three things read it:
+
+- the dying source owner's NACK (`IAddressTombstones`), which then answers `NotFound`, not the
+  transient `ShuttingDown`;
+- the per-node read path, which answers `DeleteInProgress`;
+- every "delete wins" guard that drops a resurrecting save.
+
+Without the tombstone, a read that reached the source's owner while the move was retiring it was
+told "shutting down, ask again" about an address that never comes back, so the reader spent its whole budget
+(the [Riding Out a Shutting-Down Address](../RidingOutAShuttingDownAddress) contract, #1029,
+re-entered through the move).
+
+A mark is set **only from the batch's own verdict**: the removed set on success, or `RemovedBy` on a
+part-way failure. It is never set ahead of the batch, and never from the store's change feed. A
+tombstone on a row that is still stored hides the row and drops its saves, and the hubs that meet it
+latch that verdict, so a wrong mark cannot be undone by withdrawing it. Each weaker signal put one
+there:
+
+- **Marking ahead:** the move's deadline disposes a held batch without an error, so the marks stood on
+  rows that were never removed.
+- **Marking from the feed:** a composite store merges its providers' raw feeds, so one store's
+  `Deleted` marked a path that another writable store still held. A `Deleted` delivered after a durable
+  re-create also marked the replacement absent.
+
+The verdict counts only paths that no writable store still holds. Of those, a path is marked only
+when no provider serves it any more, read-only providers included. That is asked in ONE batched
+`ReadMany`, which the composite answers across every provider. Retirement of the confirmed removals
+(their hubs and stream-cache entries) runs on the verdict itself, before that read. So a read that
+the move's deadline cancels decides only the tombstone, never retirement. Moving a writable override of shipped content removes the override, while the
+read-only original goes on being served at the same path, so that path stays unmarked. (A recursive
+DELETE of such an override still marks the path ahead of its fan-out and never withdraws the mark;
+that is tracked separately.) The leg applies it inside the
+source's subtree-deletion scope, whose write guard refuses every in-process write under the source, so
+no re-create or resurrecting save can come between a removal and its mark. A batch disposed before its
+verdict marks nothing. A removal that commits after that point stays unknown to the leg, which never
+hides a stored row. Pinned by `AMovedAwayAddressIsGoneForGoodTest`, with a DELETE under the identical
+forced interleaving as its control, by `ACancelledMoveDeleteLeavesNoTombstoneTest`, and by
+`ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest`.
+
 `HandleMoveNodeRequest` now runs the source through the **same pre-flight a recursive delete runs**,
 before the copy writes anything:
 
