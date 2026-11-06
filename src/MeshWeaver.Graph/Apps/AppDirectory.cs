@@ -550,7 +550,7 @@ public sealed class AppDirectory
             new AppDirectoryEntry(InboxId, "Inbox", UserActivityLayoutAreas.InboxIcon, null, null,
                 $"{viewer}/{InboxLayoutArea.AreaName}", LabelKey: UserActivityLayoutAreas.InboxLabelKey, BuiltIn: true));
         return isGlobalAdmin
-            ? list.Add(new AppDirectoryEntry(AdminId, "Administration", SettingsIcon, null, SettingsGroup,
+            ? list.Add(new AppDirectoryEntry(AdminId, "Admin", SettingsIcon, null, SettingsGroup,
                 AdminAppNodeType.Path, LabelKey: "adminApp.title", BuiltIn: true)
             { GroupDeclared = true, GroupOrder = LastGroupOrder, GroupLabelKey = SettingsGroupLabelKey })
             : list;
