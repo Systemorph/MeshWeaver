@@ -14,7 +14,7 @@ namespace MeshWeaver.Graph.Test;
 /// The home's Catalog region (<see cref="UserActivityLayoutAreas.BuildHome"/>) — two icon grids,
 /// <b>Apps</b> (the viewer's own app records or the app directory, single partition, painted from
 /// the query rows) then <b>Spaces</b> (the profile's space manifest plus the spaces the viewer was
-/// invited into), and nothing else (maintainer, 2026-11-06). <see cref="HomeStyle.Catalog"/>
+/// invited into), and nothing else (policy <c>home-is-composer-apps-spaces</c>). <see cref="HomeStyle.Catalog"/>
 /// switches back to the legacy single list (covered by <see cref="HomeCatalogTest"/>).
 /// </summary>
 public class HomeTabsTest
@@ -26,7 +26,7 @@ public class HomeTabsTest
     [Fact]
     public void Home_IsAppsThenSpaces_TwoIconGrids()
     {
-        // Maintainer, 2026-11-06: "we want plain message input, apps and then spaces". The message
+        // Policy home-is-composer-apps-spaces: the message box, apps, then spaces. The message
         // box is the welcome template's Composer region; this is the Catalog region below it.
         var home = UserActivityLayoutAreas.BuildHome(NodePath, sharedTargets: ["OrgA/Module"]);
 
@@ -162,7 +162,7 @@ public class HomeTabsTest
     public void Spaces_AreAnIconGridOfTheViewersSpaces_RecentlyUsedFirst()
     {
         // "can we also integrate spaces in this? recently used? show an icon for each space?" — and
-        // since 2026-11-06 in a band of their own, below the apps.
+        // now in a band of their own, below the apps (policy home-is-composer-apps-spaces).
         var band = UserActivityLayoutAreas.BuildSpacesBand(NodePath, null, ["Globex", "Initech"], ["Acme", "Contoso"]);
 
         band.Title!.ToString().Should().Be("Spaces");

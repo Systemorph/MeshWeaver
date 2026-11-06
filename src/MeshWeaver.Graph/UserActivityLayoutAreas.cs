@@ -296,8 +296,7 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// The default home page shown until the owner authors their own <see cref="User.Body"/> — and
     /// nothing else: the message box (start a thread right away), then the <b>Apps</b> grid, then the
-    /// <b>Spaces</b> grid (maintainer, 2026-11-06: <i>"we want plain message input, apps and then
-    /// spaces"</i>). No heading, no contributed cards, no content list, no footer note. The regions
+    /// <b>Spaces</b> grid (policy <c>home-is-composer-apps-spaces</c>). No heading, no contributed cards, no content list, no footer note. The regions
     /// that are no longer on it (<c>area/HomeCards</c>, <c>area/Threads</c>) stay registered, so an
     /// authored body embedding them keeps working. This is the single source of truth for "the
     /// default", shared by the render path and the unit tests.
@@ -900,8 +899,8 @@ public static class UserActivityLayoutAreas
             return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy, spacePaths);
 
         // TWO GRIDS, apps first, then spaces — both launchers, both painted from query rows. The
-        // searchable content list that used to sit below them is gone from the home (maintainer,
-        // 2026-11-06: "plain message input, apps and then spaces"); content is reached by opening a
+        // searchable content list that used to sit below them is gone from the home (policy
+        // home-is-composer-apps-spaces); content is reached by opening a
         // space and through search. Spaces is its own band rather than a filter inside the apps
         // grid: a viewer should see where they work without choosing a filter first.
         var shared = privacy.Retain(sharedTargets);
@@ -987,7 +986,8 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// The <b>Spaces</b> band, below the Apps grid: the workspaces the viewer can reach, as an icon
     /// grid, most recently used first. Its own band (it used to be a second filter inside the Apps
-    /// grid) because the home is "message box, apps, then spaces" (maintainer, 2026-11-06). The
+    /// grid) because the home is the message box, apps, then spaces (policy
+    /// <c>home-is-composer-apps-spaces</c>). The
     /// query is <see cref="SpacesQuery"/>: the profile's space manifest plus the spaces the viewer
     /// was invited into (#385), never a mesh-wide read. Not sortable: the drag-and-drop arrangement
     /// lives on app records, and a space has none. Painted from query rows. Pure, for tests.

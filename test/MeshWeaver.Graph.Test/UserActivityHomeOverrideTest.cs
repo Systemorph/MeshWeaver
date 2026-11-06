@@ -38,7 +38,7 @@ public class UserActivityHomeOverrideTest
     [Fact]
     public void OwnerHome_WelcomeTemplate_IsTheMessageBoxThenTheLauncher_AndNothingElse()
     {
-        // Maintainer, 2026-11-06: "we want plain message input, apps and then spaces". The Catalog
+        // Policy home-is-composer-apps-spaces: the message box, apps, then spaces. The Catalog
         // region is the Apps grid followed by the Spaces grid (BuildHome); the template carries
         // only the composer and that region — no heading, no cards, no footer note.
         var md = UserActivityLayoutAreas.UserWelcomeMarkdown();

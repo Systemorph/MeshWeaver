@@ -1,8 +1,8 @@
 # The Apps Home
 
 The default user home is three things, top to bottom: the **message box** (start a thread), the
-**Apps** grid, then the **Spaces** grid — and nothing else (maintainer, 2026-11-06: *"we want plain
-message input, apps and then spaces"*). The welcome template is `@@("area/Composer")` followed by
+**Apps** grid, then the **Spaces** grid — and nothing else (policy
+[`home-is-composer-apps-spaces`](../PolicyNotProse)). The welcome template is `@@("area/Composer")` followed by
 `@@("area/Catalog")`; there is no greeting, no contributed card, no searchable content list and no
 footer note. Content is reached by opening a space, or through search.
 
@@ -240,9 +240,8 @@ The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reload
   group; `Render: Grouped` stays the admin's explicit choice. Location order stays in the Sort
   control either way.
 
-**The dedup rule:** an app is represented exactly once. The Spaces band and the legacy list's Shared-with-me band
-exclude `-nodeType:Store/Plugin -nodeType:Store/Catalog`; Shared-with-me also excludes
-`-nodeType:User` — a grant that resolves to another user's home partition must not list that
+**The dedup rule:** an app is represented exactly once. The Spaces band's invitation leg
+excludes `-nodeType:Store/Plugin -nodeType:Store/Catalog` and `-nodeType:User` — a grant that resolves to another user's home partition must not list that
 person's space as shared content. **The Store itself is an app** (a config default); only the
 anonymous header keeps a Store link.
 
