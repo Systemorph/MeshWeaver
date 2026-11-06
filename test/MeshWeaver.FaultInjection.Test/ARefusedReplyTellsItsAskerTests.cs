@@ -259,9 +259,11 @@ public class ARefusedReplyReachesAnAskerOnAShuttingDownSiloTest(ARefusedReplyRea
         {
             await held.Arrivals.Should().Within(TestTimeouts.CrossSilo).Emit(
                 $"silo {Asker} has written ShuttingDown and is held there", ct);
-            mesh.Silo(Responder).GetRequiredService<IClusterMembershipService>().CurrentSnapshot
-                .GetSiloStatus(askerSilo).Should().Be(SiloStatus.ShuttingDown,
-                    "the router's own view must have the asker's silo leaving when the reply is refused");
+            // The hold proves the asker's OWN lifecycle reached this stage; gossip reaches the router in
+            // its own time (Orleans tolerates a slow status update), so wait for the router's view.
+            await PodHubRoles.SeesStatus(mesh, Responder, askerSilo, SiloStatus.ShuttingDown)
+                .Should().Within(TestTimeouts.CrossSilo).Emit(
+                    "the router's OWN membership view must have the asker's silo ShuttingDown when the reply is refused", ct);
             askerRouting.TryGetLocalRoute(asker).Should().NotBeNull(
                 "the asker must still be live on its draining silo — otherwise there is nobody to tell");
 

@@ -102,6 +102,8 @@ public abstract class APodHubDeliveryAcrossItsDirectoryPartitionLeaving(FaultInj
             mesh.DefaultDirectoryIsDistributed(i).Should().Be(DistributedDirectory,
                 $"silo {i} must run the directory this case claims to measure (#7842)");
         using var roles = await PodHubRoles.Claim(mesh, ct);
+        roles.Directory.Should().Be(DistributedDirectory ? PodHubRoles.DistributedDirectory : PodHubRoles.LocalDirectory,
+            "the roles must be placed by the directory the silos route by, or the leave is not the hub's partition");
 
         // The owner has not heard of the change yet: its re-assertion is held until the case ends.
         using var reassertion = mesh.Silo(roles.Owner).GetRequiredService<ClaimHold>().Hold(roles.Hub.ToString());
@@ -119,11 +121,11 @@ public abstract class APodHubDeliveryAcrossItsDirectoryPartitionLeaving(FaultInj
             await reassertion.Arrivals.Should().Within(TestTimeouts.CrossSilo).Emit(
                 $"the owner's re-assertion of '{roles.Hub}' for this membership change is in flight and held — "
                 + "the moment before the owner's claim lands", ct);
-            // The window is real at the moment of the post: the replier's own membership view has the
-            // directory-partition silo leaving — a positive reading, not "the steps returned".
-            mesh.Silo(roles.Replier).GetRequiredService<IClusterMembershipService>().CurrentSnapshot
-                .GetSiloStatus(roles.LeavingAddress).Should().Be(SiloStatus.ShuttingDown,
-                    $"silo {roles.Leaving} must still be ShuttingDown (held) when the post is made");
+            // The window is real at the moment of the post: the replier's OWN membership view has the
+            // directory-partition silo leaving — a positive reading, waited for, not "the steps returned".
+            await PodHubRoles.SeesStatus(mesh, roles.Replier, roles.LeavingAddress, SiloStatus.ShuttingDown)
+                .Should().Within(TestTimeouts.CrossSilo).Emit(
+                    $"silo {roles.Replier}'s own view must have silo {roles.Leaving} ShuttingDown (held) when the post is made", ct);
 
             roles.Post(mesh);
             await roles.Received.Should().Within(Prompt).Emit(
@@ -178,6 +180,8 @@ public class ALocalDirectoryLosesAPodHubEntryUntilItsClaimIsReassertedTest(
             mesh.DefaultDirectoryIsDistributed(i).Should().BeFalse(
                 $"silo {i} must run production's LocalGrainDirectory, or this case measures the test default");
         using var roles = await PodHubRoles.Claim(mesh, ct);
+        roles.Directory.Should().Be(PodHubRoles.LocalDirectory,
+            "the roles must be placed by the directory the silos route by");
         using var reassertion = mesh.Silo(roles.Owner).GetRequiredService<ClaimHold>().Hold(roles.Hub.ToString());
         var hold = mesh.Silo(roles.Leaving).GetRequiredService<ShutdownHold>();
         using var held = hold.Arm();
@@ -273,6 +277,8 @@ internal sealed class PodHubRoles : IDisposable
     private const int Silos = 3;
     private static readonly Type LocalGrainDirectoryType = Type.GetType(
         "Orleans.Runtime.GrainDirectory.LocalGrainDirectory, Orleans.Runtime", throwOnError: true)!;
+    private static readonly Type DirectoryMembershipServiceType = Type.GetType(
+        "Orleans.Runtime.GrainDirectory.DirectoryMembershipService, Orleans.Runtime", throwOnError: true)!;
 
     private readonly ReplaySubject<IMessageDelivery> received = new();
     private IDisposable? registration;
@@ -305,27 +311,73 @@ internal sealed class PodHubRoles : IDisposable
     /// <summary>The leaving silo's address.</summary>
     public SiloAddress LeavingAddress { get; }
 
+    /// <summary>Which directory placed the roles (<see cref="LocalDirectory"/> or <see cref="DistributedDirectory"/>).</summary>
+    public string Directory { get; private init; } = string.Empty;
+
     /// <summary>Emits the first delivery that reaches the pod hub's local route.</summary>
     public IObservable<IMessageDelivery> Received => received.Take(1);
 
+    /// <summary>The name <see cref="DirectoryPartition"/> reports for Orleans' legacy DHT directory.</summary>
+    internal const string LocalDirectory = "LocalGrainDirectory";
+
+    /// <summary>The name <see cref="DirectoryPartition"/> reports for Orleans' distributed directory.</summary>
+    internal const string DistributedDirectory = "DistributedGrainDirectory";
+
     /// <summary>
-    /// The silo whose directory partition holds <paramref name="grain"/>, as <paramref name="silo"/>'s own
-    /// <c>LocalGrainDirectory</c> computes it — Orleans keeps the type internal, hence the reflection.
+    /// The silo whose directory partition holds <paramref name="grain"/>, as silo <paramref name="silo"/>'s
+    /// EFFECTIVE default directory computes it, and which directory answered (#7842 review).
+    ///
+    /// <para>The two directories keep separate ownership views: <c>LocalGrainDirectory</c> its own ring
+    /// (<c>CalculateGrainDirectoryPartition</c>), <c>DistributedGrainDirectory</c> the
+    /// <c>DirectoryMembershipService</c>'s current view (<c>TryGetOwner</c>). Asking the wrong one would let a
+    /// case place its fault, and wait for the hand-off, against a directory the silo does not route by.
+    /// Orleans keeps all of these types internal, hence the reflection.</para>
     /// </summary>
-    internal static SiloAddress? DirectoryPartition(IServiceProvider silo, GrainId grain)
+    internal static (SiloAddress? Owner, string Directory) DirectoryPartition(
+        FaultInjectionCluster mesh, int silo, GrainId grain)
     {
-        var directory = silo.GetRequiredService(LocalGrainDirectoryType);
-        var calculate = LocalGrainDirectoryType.GetMethod("CalculateGrainDirectoryPartition", [typeof(GrainId)])
-                        ?? throw new InvalidOperationException(
-                            "Orleans' LocalGrainDirectory no longer exposes CalculateGrainDirectoryPartition(GrainId) — "
-                            + "the #7842 cases cannot place their fault without it.");
-        return (SiloAddress?)calculate.Invoke(directory, [grain]);
+        var services = mesh.Silo(silo);
+        if (!mesh.DefaultDirectoryIsDistributed(silo))
+        {
+            var directory = services.GetRequiredService(LocalGrainDirectoryType);
+            var calculate = LocalGrainDirectoryType.GetMethod("CalculateGrainDirectoryPartition", [typeof(GrainId)])
+                            ?? throw new InvalidOperationException(
+                                "Orleans' LocalGrainDirectory no longer exposes CalculateGrainDirectoryPartition(GrainId) — "
+                                + "the #7842 cases cannot place their fault without it.");
+            return ((SiloAddress?)calculate.Invoke(directory, [grain]), LocalDirectory);
+        }
+
+        var membership = services.GetRequiredService(DirectoryMembershipServiceType);
+        var view = DirectoryMembershipServiceType.GetProperty("CurrentView")?.GetValue(membership)
+                   ?? throw new InvalidOperationException(
+                       "Orleans' DirectoryMembershipService no longer exposes CurrentView — "
+                       + "the #7842 cases cannot place their fault without it.");
+        var tryGetOwner = view.GetType().GetMethods()
+                              .SingleOrDefault(m => m.Name == "TryGetOwner"
+                                                    && m.GetParameters() is { Length: 3 } p
+                                                    && p[0].ParameterType == typeof(GrainId))
+                          ?? throw new InvalidOperationException(
+                              "Orleans' DirectoryMembershipSnapshot no longer exposes TryGetOwner(GrainId, out, out) — "
+                              + "the #7842 cases cannot place their fault without it.");
+        object?[] args = [grain, null, null];
+        return ((bool)tryGetOwner.Invoke(view, args)! ? (SiloAddress?)args[1] : null, DistributedDirectory);
     }
 
-    /// <summary>Emits once <paramref name="silo"/>'s directory places <paramref name="grain"/> anywhere but <paramref name="leaving"/>.</summary>
+    /// <summary>Emits once <paramref name="silo"/>'s effective directory places <paramref name="grain"/> anywhere but <paramref name="leaving"/>.</summary>
     internal static IObservable<long> PartitionMovedOff(FaultInjectionCluster mesh, int silo, GrainId grain, SiloAddress leaving) =>
         Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .Where(_ => DirectoryPartition(mesh.Silo(silo), grain) is { } owner && !owner.Equals(leaving))
+            .Where(_ => DirectoryPartition(mesh, silo, grain).Owner is { } owner && !owner.Equals(leaving))
+            .Take(1);
+
+    /// <summary>
+    /// Emits once silo <paramref name="observer"/>'s OWN membership view reports <paramref name="silo"/> as
+    /// <paramref name="status"/> — gossip reaches each silo in its own time, so a hold on the leaving silo
+    /// proves nothing about another silo's view until this has emitted.
+    /// </summary>
+    internal static IObservable<long> SeesStatus(FaultInjectionCluster mesh, int observer, SiloAddress silo, SiloStatus status) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => mesh.Silo(observer).GetRequiredService<IClusterMembershipService>().CurrentSnapshot
+                .GetSiloStatus(silo) == status)
             .Take(1);
 
     /// <summary>
@@ -341,15 +393,16 @@ internal sealed class PodHubRoles : IDisposable
         Address hub;
         GrainId grain;
         int leaving;
+        string directory;
         do
         {
             hub = new Address("cache", $"leave-{Guid.NewGuid():N}");
             grain = factory.GetGrain<IPodHubGrain>(hub.ToString()).GetGrainId();
-            var partition = DirectoryPartition(mesh.Silo(owner), grain);
+            (var partition, directory) = DirectoryPartition(mesh, owner, grain);
             leaving = Array.FindIndex(addresses, a => a.Equals(partition));
         } while (leaving < 0 || leaving == owner);
 
-        var roles = new PodHubRoles(owner, leaving, hub, grain, addresses[leaving]);
+        var roles = new PodHubRoles(owner, leaving, hub, grain, addresses[leaving]) { Directory = directory };
         var routing = (OrleansRoutingService)mesh.Hub(owner).ServiceProvider.GetRequiredService<IRoutingService>();
         roles.registration = routing.RegisterStream(hub, (delivery, _) =>
         {
