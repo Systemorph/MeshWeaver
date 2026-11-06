@@ -22,14 +22,21 @@
 # control module was loaded from the image's modules/, and the module's seed finished with no
 # failure. Leg (b) further reads the database: the broken row is byte-identical after the boot.
 #
+# The image under test must also REPORT the commit it was built from (--expect-commit, the gate's
+# target): legs (a) and (b) read `/api/version` off the booted process (check-reported-commit.sh).
+# The registry-side identity check sees only the image config, and the commit is assembly metadata,
+# so this boot is the one place it can be asserted (#7913). Leg (c) boots the PREVIOUS image, which
+# reports its own older commit by design, and is not compared.
+#
 # usage:
-#   control-image-acceptance.sh --control IMG --migration IMG (--previous IMG | --first-run)
-#                               [--postgres IMG] [--budget SECONDS]
+#   control-image-acceptance.sh --control IMG --migration IMG --expect-commit SHA
+#                               (--previous IMG | --first-run) [--postgres IMG] [--budget SECONDS]
 #
 # Needs only docker. Every container and the network are removed on exit.
 set -euo pipefail
 
-CONTROL="" MIGRATION="" PREVIOUS="" FIRST_RUN=false
+CONTROL="" MIGRATION="" PREVIOUS="" FIRST_RUN=false EXPECT_COMMIT=""
+SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POSTGRES_IMAGE="pgvector/pgvector:pg17"
 # The chart's startupProbe window: periodSeconds 5 × failureThreshold 60 (MeshWeaver.Deploy deploy/helm/values.yaml).
 BUDGET=300
@@ -39,6 +46,7 @@ while [ $# -gt 0 ]; do
     --control) CONTROL="$2"; shift 2 ;;
     --migration) MIGRATION="$2"; shift 2 ;;
     --previous) PREVIOUS="$2"; shift 2 ;;
+    --expect-commit) EXPECT_COMMIT="$2"; shift 2 ;;
     --first-run) FIRST_RUN=true; shift ;;
     --postgres) POSTGRES_IMAGE="$2"; shift 2 ;;
     --budget) BUDGET="$2"; shift 2 ;;
@@ -47,6 +55,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$CONTROL" ] || { echo "::error::--control is required"; exit 2; }
 [ -n "$MIGRATION" ] || { echo "::error::--migration is required"; exit 2; }
+[[ "$EXPECT_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::--expect-commit must be the full 40-character sha the control image was built from (got '$EXPECT_COMMIT') — the commit the image reports is part of what is under test"; exit 2; }
 if [ -z "$PREVIOUS" ] && [ "$FIRST_RUN" != true ]; then
   echo "::error::neither --previous nor --first-run: leg (c) must either run or be declared not applicable — never skipped by omission"
   exit 2
@@ -70,7 +79,7 @@ trap cleanup EXIT
 
 psql_exec() { docker exec -i "$PG" psql -v ON_ERROR_STOP=1 -U postgres -d "$DB" -qAt "$@"; }
 
-echo "== acceptance: control=$CONTROL migration=$MIGRATION previous=${PREVIOUS:-<first run>} budget=${BUDGET}s"
+echo "== acceptance: control=$CONTROL (commit $EXPECT_COMMIT) migration=$MIGRATION previous=${PREVIOUS:-<first run>} budget=${BUDGET}s"
 docker network create "$NET" >/dev/null
 
 echo "== postgres ($POSTGRES_IMAGE)"
@@ -106,13 +115,13 @@ if ! grep -q 'Database migration completed' "$MIGLOG"; then
 fi
 grep 'Database migration completed' "$MIGLOG" | tail -n 1
 
-# boot_and_wait <leg> <image>: start the image, wait for /health then /ready inside the budget,
+# boot_and_wait <leg> <image> [<expected-commit>]: start the image, wait for /health then /ready inside the budget,
 # then stop it. The environment is the chart's self-host minimum (MeshWeaver.Plugins'
 # src/MeshWeaver.Testcontainers MemexBuilder): Postgres for nodes, the filesystem backend, single-node Localhost clustering, no
 # dev login. Nothing control-specific is passed: the closed type set, the seeded module and the
 # disabled sweep are properties of the IMAGE, which is exactly what is under test.
 boot_and_wait() {
-  local leg="$1" image="$2" name="$RUN-$1" port started status
+  local leg="$1" image="$2" expect_commit="${3:-}" name="$RUN-$1" port started status
   echo "== leg $leg: $image"
   # /data is a writable tmpfs, standing in for the chart's data PVC: the image runs as a non-root
   # user and cannot create it (measured: UnauthorizedAccessException on '/data').
@@ -192,13 +201,16 @@ boot_and_wait() {
     echo "::error::leg $leg: the control module's seed could not create node(s) — see the NOT created lines above"
     return 1
   fi
+  if [ -n "$expect_commit" ]; then
+    "$SCRIPTS/check-reported-commit.sh" "http://127.0.0.1:$port" "$expect_commit" "leg $leg" || return 1
+  fi
   echo "leg $leg: evidence — $adopt"
   echo "leg $leg: evidence — mesh composed; $(grep -c '\[FleetControlSeed\] .*: Created' <<<"$log") seed node(s) created, $(grep -c '\[FleetControlSeed\] .*: AlreadyPresent' <<<"$log") already present; control module loaded from modules/"
   echo "leg $leg: READY after $(( $(date +%s) - started ))s"
   docker rm -f "$name" >/dev/null
 }
 
-boot_and_wait a-empty-db "$CONTROL"
+boot_and_wait a-empty-db "$CONTROL" "$EXPECT_COMMIT"
 
 # (c) BEFORE the broken-row fixture: N−1 is judged against exactly what THIS image's migration and
 # first boot produced — never against a fixture another leg planted afterwards.
@@ -232,7 +244,7 @@ SQL
 ROW_SQL="select md5(content::text) || ' v' || version || ' ' || last_modified from acceptanceuser.mesh_nodes where id='BrokenToggle'"
 before="$(psql_exec -c "$ROW_SQL")"
 
-boot_and_wait b-broken-nodetype "$CONTROL"
+boot_and_wait b-broken-nodetype "$CONTROL" "$EXPECT_COMMIT"
 # P1 in the database: a closed image never compiles, adopts or otherwise writes a database NodeType.
 after="$(psql_exec -c "$ROW_SQL")"
 if [ "$after" != "$before" ]; then
