@@ -61,7 +61,7 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones, IActiveDeletio
     // under CI load (the resurrecting save fires ~200 ms after the delete; the guard must outlive
     // the slowest activation), short enough that a stale entry only ever blocks one save that would
     // itself be a no-op. A re-create clears the entry explicitly, so the TTL is only a backstop.
-    internal static readonly TimeSpan Ttl = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// One delete on record. <see cref="SupersededAtVersion"/> is <c>null</c> while the tombstone is

@@ -141,7 +141,8 @@ public class ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest
     /// its own. The node is still readable from the second store, so it must not be reported as
     /// removed: a caller would publish <c>Deleted</c> for it and retire the hub of a node that
     /// exists. On unfixed code the union named it because ONE store had removed it. A path the
-    /// failing store removed itself, and one no store still holds, are still reported.
+    /// failing store removed itself, and one no store still holds, are still reported. The move's
+    /// delete leg tombstones from this verdict, so the still-held path is never tombstoned either.
     /// </summary>
     [Fact]
     public async Task TheComposite_APathAFailedStoreStillHolds_IsNotReportedRemoved()
@@ -156,12 +157,19 @@ public class ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest
             new WritableProvider("two", two),
         ]);
 
+        // Driven through the MOVE's delete leg, which tombstones what the batch removed (#7930).
+        var registry = new RecentlyDeletedRegistry();
         var error = await Assert.ThrowsAsync<BatchDeletePartiallyAppliedException>(
-            () => composite.DeleteMany(["S/B", "S/A"]).FirstAsync().Await());
+            () => MeshExtensions.TombstonedBatchDelete(composite, registry, ["S/B", "S/A"]).FirstAsync().Await());
 
         Assert.Equal(["S/B"], error.Removed.ToArray());
         Assert.NotNull(await composite.Read("S/A", Options).FirstAsync().Await());
         Assert.Null(await composite.Read("S/B", Options).FirstAsync().Await());
+        // 🚨 The path store one still holds carries NO tombstone, although store two removed its copy
+        // and published Deleted for it on the composite's merged feed — a tombstone would hide a row
+        // that is still served. The control: the path no store holds any more IS tombstoned.
+        Assert.False(registry.IsRecentlyDeleted("S/A"));
+        Assert.True(registry.IsRecentlyDeleted("S/B"));
     }
 
     private sealed class WritableProvider(string name, IStorageAdapter adapter) : IPartitionStorageProvider

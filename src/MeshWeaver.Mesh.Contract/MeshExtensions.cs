@@ -10452,12 +10452,11 @@ public static class MeshExtensions
                             // authoritative and already committed to, so there is nothing to gain
                             // from paying a round-trip per row (IStorageAdapter.DeleteMany).
                             var ordered = paths.OrderByDescending(p => p.Length).ToList();
-                            // 🚨 "DELETE WINS" — every path the batch removes is TOMBSTONED, as the
-                            // delete tombstones what it removes, at the moment the removal is known
-                            // and never ahead of it (TombstonedBatchDelete). Pinned by
-                            // AMovedAwayAddressIsGoneForGoodTest and
-                            // ACancelledMoveDeleteLeavesNoTombstoneTest.
-                            return TombstonedBatchDelete(storage, registry, ordered, logger)
+                            // 🚨 "DELETE WINS" — every path the batch's own verdict names as removed
+                            // is TOMBSTONED, as the delete tombstones what it removes, and nothing
+                            // else (TombstonedBatchDelete). Pinned by AMovedAwayAddressIsGoneForGoodTest
+                            // and ACancelledMoveDeleteLeavesNoTombstoneTest.
+                            return TombstonedBatchDelete(storage, registry, ordered)
                                 // 🚨 A delete leg that fails PART-WAY retires what it removed too
                                 // (#7396): the rows the batch names as gone are gone whatever the
                                 // verdict, so their hubs and cache entries go with them, and the
@@ -10494,8 +10493,8 @@ public static class MeshExtensions
 
     /// <summary>
     /// The move's delete leg: one <see cref="IStorageAdapter.DeleteMany"/> of <paramref name="ordered"/>
-    /// (children first), with every path it removes TOMBSTONED in <paramref name="registry"/> — and only
-    /// the paths it removes, at the moment they are removed.
+    /// (children first), TOMBSTONING in <paramref name="registry"/> exactly the paths the batch's own
+    /// verdict says it removed — and nothing else, and never ahead of that verdict.
     ///
     /// <para><b>Why the tombstone.</b> The registry is what tells the mesh a path is gone FOR GOOD: the
     /// dying source owner NACKs a read <see cref="ErrorType.NotFound"/> instead of the transient
@@ -10505,79 +10504,50 @@ public static class MeshExtensions
     /// move retired it was told "ask again" about an address that never comes back, and spent its whole
     /// budget (#1029, re-entered through the move; MeshWeaver.Plugins CI run 42223717088).</para>
     ///
-    /// <para><b>🚨 No tombstone may exist on a row that is still stored.</b> A tombstone on a stored row
-    /// hides it and drops every save to it — and the hubs that meet it LATCH that verdict (the save
-    /// guard marks its own-node cache deleted), so withdrawing the mark later does not undo it. So the
-    /// marks are never set ahead of the commit, as the recursive delete sets them (review of #7930: the
-    /// move's deadline DISPOSES a held batch with no error passing through, and marks set ahead stood on
-    /// rows that were never removed). A mark is set when a removal is KNOWN:</para>
+    /// <para><b>🚨 Only the batch's verdict may tombstone, because it is the only signal that is both
+    /// complete and ordered.</b> A tombstone on a row that is still stored hides it, drops its saves,
+    /// and is LATCHED by the hubs that meet it (the save guard marks its own-node cache deleted), so a
+    /// wrong mark is not undone by withdrawing it. Two weaker signals were tried on #7930 and each put a
+    /// mark on a stored row:</para>
     /// <list type="bullet">
-    ///   <item><description>from the store's change feed, which publishes a row's <c>Deleted</c> inside
-    ///     its commit — watched from before the batch starts;</description></item>
-    ///   <item><description>from the batch's own report: the removed set on success, and
-    ///     <see cref="BatchDeletePartiallyAppliedException.RemovedBy"/> on a part-way failure (#7396) —
-    ///     both BEFORE the leg's caller retires the source hubs or answers;</description></item>
-    ///   <item><description>and when the batch is DISPOSED before it ended (the move's deadline, a
-    ///     teardown), the feed watch outlives it for a tombstone's lifetime, so a delete that was already
-    ///     on its way and commits after the cancellation is still marked.</description></item>
+    ///   <item><description>Marking AHEAD of the batch: the move's deadline (<c>Timeout(moveDeadline, …)</c>)
+    ///     disposes a held batch with no error passing through, and the marks stood on rows never
+    ///     removed.</description></item>
+    ///   <item><description>Marking from the store's CHANGE FEED: a composite store merges its providers'
+    ///     raw feeds, so one store's <c>Deleted</c> marked a path another writable store had failed to
+    ///     remove and still served; and a <c>Deleted</c> delivered late — after a durable re-create had
+    ///     superseded the tombstone — marked the replacement absent, because nothing orders a feed event
+    ///     against the registry's supersede.</description></item>
     /// </list>
-    /// <para>Marking at the commit rather than ahead of it opens no resurrection window here, unlike the
-    /// recursive delete's fan-out: the leg runs inside the source's subtree-deletion scope, whose storage
-    /// write guard refuses every in-process write at or under the source until the move has finished.</para>
+    /// <para>The batch's verdict has neither defect: the composite unions per-store results and names
+    /// only the paths no writable store still holds (<see cref="BatchDeletePartiallyAppliedException.RemovedBy"/>
+    /// on a part-way failure, #7396), and it is applied synchronously on the verdict, inside the source's
+    /// subtree-deletion scope — whose write guard refuses every in-process write under the source until
+    /// the move has finished, so no re-create can be ordered between the removal and its mark, and no
+    /// save can slip in to resurrect a row before it is marked.</para>
+    ///
+    /// <para><b>What it deliberately does not mark:</b> a batch DISPOSED before its verdict (the move's
+    /// deadline, a teardown) marks nothing. A removal that commits anyway after that is unknown to this
+    /// leg — which also leaves its hub un-retired, exactly as before this method — and its row carries
+    /// no tombstone: the conservative direction, which never hides a stored row.</para>
     /// </summary>
-    private static IObservable<IReadOnlyList<string>> TombstonedBatchDelete(
+    internal static IObservable<IReadOnlyList<string>> TombstonedBatchDelete(
         IStorageAdapter storage,
         RecentlyDeletedRegistry registry,
-        IReadOnlyList<string> ordered,
-        ILogger logger)
-        => Observable.Create<IReadOnlyList<string>>(observer =>
-        {
-            var batchPaths = ordered.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-            void Mark(IEnumerable<string> removed)
-            {
-                foreach (var path in removed)
-                    registry.MarkDeleted(path);
-            }
-
-            var watch = storage.Changes
-                .Where(n => n.Kind == DataChangeKind.Deleted && batchPaths.Contains(n.Path.Trim('/')))
-                .Subscribe(
-                    n => registry.MarkDeleted(n.Path.Trim('/')),
-                    ex => logger.LogWarning(ex,
-                        "[MoveNode] the change feed failed while the delete leg watched it; a source row "
-                        + "removed without a report from the batch carries no tombstone"));
-            var ended = 0;
-            var batch = storage.DeleteMany(ordered)
-                .Take(1)
-                .Subscribe(
-                    removed =>
-                    {
-                        System.Threading.Interlocked.Exchange(ref ended, 1);
-                        Mark(removed);
-                        observer.OnNext(removed);
-                    },
-                    error =>
-                    {
-                        System.Threading.Interlocked.Exchange(ref ended, 1);
-                        Mark(BatchDeletePartiallyAppliedException.RemovedBy(error));
-                        observer.OnError(error);
-                    },
-                    () =>
-                    {
-                        System.Threading.Interlocked.Exchange(ref ended, 1);
-                        observer.OnCompleted();
-                    });
-            return System.Reactive.Disposables.Disposable.Create(() =>
-            {
-                batch.Dispose();
-                if (System.Threading.Interlocked.Exchange(ref ended, 1) == 0)
-                    // Disposed before it ended: keep hearing a commit already on its way, for as long
-                    // as the tombstone it earns would live.
-                    Observable.Timer(RecentlyDeletedRegistry.Ttl).Subscribe(_ => watch.Dispose());
-                else
-                    watch.Dispose();
-            });
-        });
+        IReadOnlyList<string> ordered)
+        => storage.DeleteMany(ordered)
+            .Take(1)
+            .Do(
+                removed =>
+                {
+                    foreach (var path in removed)
+                        registry.MarkDeleted(path);
+                },
+                error =>
+                {
+                    foreach (var path in BatchDeletePartiallyAppliedException.RemovedBy(error))
+                        registry.MarkDeleted(path);
+                });
 
     /// <summary>
     /// Sync handler for <see cref="CopyNodeRequest"/>. Implements copy as

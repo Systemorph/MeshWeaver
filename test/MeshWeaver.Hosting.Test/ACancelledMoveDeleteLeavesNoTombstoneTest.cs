@@ -24,8 +24,8 @@ namespace MeshWeaver.Hosting.Test;
 /// held before it deleted, every mark stood on rows that were still stored: reads answered
 /// <c>DeleteInProgress</c> and saves were dropped — and the source's hub LATCHED that verdict in its
 /// own-node cache, so even withdrawing the mark did not bring the row back (measured while fixing the
-/// review of #7930). A mark is now set only once a removal is known: from the store's change feed at the
-/// commit, or from the batch's own report.</para>
+/// review of #7930). A mark is now set only from the batch's own verdict (see
+/// <c>MeshExtensions.TombstonedBatchDelete</c> for why the change feed cannot be the signal).</para>
 ///
 /// <para><b>The forced interleaving:</b> <see cref="FaultInjectingStorageAdapter.HoldDeletes"/> holds
 /// the source's delete after every check and before the commit, and the move's budget is short, so the
@@ -34,8 +34,8 @@ namespace MeshWeaver.Hosting.Test;
 /// would otherwise pass once the stale mark simply expired).</para>
 ///
 /// <para><b>Controls:</b> the same hold RELEASED inside the budget lets the move finish, and the source
-/// reads absent — a real delete keeps its tombstone. And a delete that lands AFTER the
-/// cancellation is tombstoned again from the change feed.</para>
+/// reads absent — a real delete keeps its tombstone. And a removal that lands after the
+/// cancellation, followed by a re-create, leaves the replacement readable and unmarked.</para>
 /// </summary>
 public class ACancelledMoveDeleteLeavesNoTombstoneTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -100,29 +100,53 @@ public class ACancelledMoveDeleteLeavesNoTombstoneTest(ITestOutputHelper output)
         Registry.IsRecentlyDeleted(source).Should().BeTrue("a removed source keeps its tombstone");
     }
 
-    /// <summary>A delete that lands AFTER the cancellation is tombstoned again, from the change feed.</summary>
+    /// <summary>
+    /// A removal the cancelled leg never heard of, followed by a durable RE-CREATE, while the change feed
+    /// is held so the late <c>Deleted</c> is delivered only after the re-create superseded any tombstone.
+    /// The replacement must read as present and carry no mark. When the leg tombstoned from the change
+    /// feed, that late <c>Deleted</c> marked the replacement absent (review of #7930): nothing ordered a
+    /// feed event against the registry's supersede. The leg now tombstones only from its batch's verdict,
+    /// which a disposed batch never delivers.
+    /// </summary>
     [Fact(Timeout = 60_000)]
-    public async Task ADeleteLandingAfterTheCancellation_IsTombstoned()
+    public async Task ALateDeleteThenARecreate_LeavesTheReplacementReadable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (source, target) = await Seed("late", ct);
+        var (source, target) = await Seed("recreated", ct);
 
-        using (var hold = Storage.HoldDeletes(source))
+        using (Storage.HoldDeletes(source))
         {
             var response = await Move(source, target, ct);
             response.Success.Should().BeFalse("the source's delete is held past the move's deadline");
-            await ReadUntil(source, NodeReadStatus.Present, ct);
         }
 
-        // The commit that was already on its way lands now, beneath every guard.
-        (await Storage.Inner.DeleteIfExists(source).Should().Within(TestTimeouts.Convergence)
-            .Emit("the late delete commits", ct)).Should().BeTrue();
-        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .Select(_ => Registry.IsRecentlyDeleted(source))
-            .Where(marked => marked)
-            .FirstAsync()
-            .Should().Within(ReconcileBound).Emit(
-                "a source row removed after the cancellation is gone for good, and is marked so", ct);
+        var feed = Storage.HoldChangeFeed();
+        try
+        {
+            // A removal that commits after the cancellation, beneath every guard…
+            (await Storage.Inner.DeleteIfExists(source).Should().Within(TestTimeouts.Convergence)
+                .Emit("the late delete commits", ct)).Should().BeTrue();
+            // …and then a durable re-create of the same path, which supersedes any tombstone.
+            await Access.RunAsSystem(() => NodeFactory.CreateNode(MeshNode.FromPath(source) with
+                {
+                    NodeType = "Markdown", Name = "replacement", State = MeshNodeState.Active,
+                }))
+                .Should().Within(TestTimeouts.Convergence).Emit("the replacement is created", ct);
+            await feed.Arrivals.Where(a => a.Contains("Deleted", StringComparison.Ordinal))
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit("the premise: the late Deleted is queued in the held feed, behind the re-create", ct);
+        }
+        finally
+        {
+            // Delivers the queued notifications, in order and synchronously: the late Deleted
+            // reaches every feed subscriber only now, after the re-create's supersede.
+            feed.Release();
+        }
+
+        Registry.IsRecentlyDeleted(source).Should().BeFalse(
+            "an older delete must never tombstone a newer write over it");
+        (await Storage.Read(source, Mesh.JsonSerializerOptions).Should().Within(TestTimeouts.Convergence)
+            .Emit("the store answers", ct))!.Name.Should().Be("replacement", "the replacement is what is stored");
     }
 
     private async Task<(string Source, string Target)> Seed(string name, CancellationToken ct)

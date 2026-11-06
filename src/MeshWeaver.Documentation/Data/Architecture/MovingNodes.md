@@ -205,19 +205,25 @@ told "shutting down, ask again" about an address that never comes back, so the r
 (the [Riding Out a Shutting-Down Address](../RidingOutAShuttingDownAddress) contract, #1029,
 re-entered through the move).
 
-A mark is set only once a removal is known, never ahead of the commit. The leg learns of a removal in two ways:
+A mark is set **only from the batch's own verdict**: the removed set on success, or `RemovedBy` on a
+part-way failure. It is never set ahead of the batch, and never from the store's change feed. A
+tombstone on a row that is still stored hides the row and drops its saves, and the hubs that meet it
+latch that verdict, so a wrong mark cannot be undone by withdrawing it. Each weaker signal put one
+there:
 
-- the store's change feed, which publishes each row's `Deleted` inside its commit;
-- the batch's own report: the removed set on success, `RemovedBy` on a part-way failure.
+- **Marking ahead:** the move's deadline disposes a held batch without an error, so the marks stood on
+  rows that were never removed.
+- **Marking from the feed:** a composite store merges its providers' raw feeds, so one store's
+  `Deleted` marked a path that another writable store still held. A `Deleted` delivered after a durable
+  re-create also marked the replacement absent.
 
-A tombstone on a row that is still stored would hide it and drop its saves, and the hubs that meet it
-latch that verdict. Marking ahead would put one there whenever the move's deadline disposes a held
-batch, which passes no error through the leg. When the batch is disposed before it ends, the
-feed watch outlives it for a tombstone's lifetime, so a delete already on its way is still marked.
-Marking at the commit opens no resurrection window: the leg runs inside the source's
-subtree-deletion scope, whose write guard refuses every in-process write under the source. Pinned
-by `AMovedAwayAddressIsGoneForGoodTest`, with a DELETE under the identical forced interleaving as its
-control, and by `ACancelledMoveDeleteLeavesNoTombstoneTest`.
+The verdict counts only paths that no writable store still holds. The leg applies it inside the
+source's subtree-deletion scope, whose write guard refuses every in-process write under the source, so
+no re-create or resurrecting save can come between a removal and its mark. A batch disposed before its
+verdict marks nothing. A removal that commits after that point stays unknown to the leg, which never
+hides a stored row. Pinned by `AMovedAwayAddressIsGoneForGoodTest`, with a DELETE under the identical
+forced interleaving as its control, by `ACancelledMoveDeleteLeavesNoTombstoneTest`, and by
+`ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest`.
 
 `HandleMoveNodeRequest` now runs the source through the **same pre-flight a recursive delete runs**,
 before the copy writes anything:
