@@ -10452,15 +10452,19 @@ public static class MeshExtensions
                             // authoritative and already committed to, so there is nothing to gain
                             // from paying a round-trip per row (IStorageAdapter.DeleteMany).
                             var ordered = paths.OrderByDescending(p => p.Length).ToList();
-                            return storage.DeleteMany(ordered)
-                                .Take(1)
-                                // 🚨 A delete leg that fails PART-WAY retires what it removed too
-                                // (#7396): the rows the batch names as gone are gone whatever the
-                                // verdict, so their hubs and cache entries go with them, and the
-                                // rows it did not remove keep theirs. The failure itself still
-                                // reaches the move's verdict unchanged.
-                                .Do(RetireMovedAway, error => RetireMovedAway(
-                                    BatchDeletePartiallyAppliedException.RemovedBy(error)))
+                            // 🚨 "DELETE WINS" — every path the batch's own verdict names as removed
+                            // is TOMBSTONED, as the delete tombstones what it removes, and nothing
+                            // else (TombstonedBatchDelete). Pinned by AMovedAwayAddressIsGoneForGoodTest
+                            // and ACancelledMoveDeleteLeavesNoTombstoneTest.
+                            // 🚨 RETIREMENT runs on the batch's verdict itself, inside the leg and
+                            // BEFORE the tombstone's presence probe — so a probe the move's deadline
+                            // cancels can never cost the confirmed removals their retirement. A delete
+                            // leg that fails PART-WAY retires what it removed too (#7396): the rows
+                            // the batch names as gone are gone whatever the verdict, so their hubs and
+                            // cache entries go with them, and the rows it did not remove keep theirs.
+                            // The failure itself still reaches the move's verdict unchanged.
+                            return TombstonedBatchDelete(storage, registry, ordered, hub.JsonSerializerOptions,
+                                    RetireMovedAway, logger)
                                 .Select(_ => copied);
 
                             void RetireMovedAway(IReadOnlyList<string> deleted)
@@ -10487,6 +10491,113 @@ public static class MeshExtensions
                             }
                         }));
     }
+
+    /// <summary>
+    /// The move's delete leg: one <see cref="IStorageAdapter.DeleteMany"/> of <paramref name="ordered"/>
+    /// (children first), TOMBSTONING in <paramref name="registry"/> exactly the paths the batch's own
+    /// verdict says it removed — and nothing else, and never ahead of that verdict.
+    ///
+    /// <para><b>Why the tombstone.</b> The registry is what tells the mesh a path is gone FOR GOOD: the
+    /// dying source owner NACKs a read <see cref="ErrorType.NotFound"/> instead of the transient
+    /// <see cref="ErrorType.ShuttingDown"/> (<see cref="IAddressTombstones"/>), the per-node read path
+    /// answers <c>DeleteInProgress</c>, and every "delete wins" guard drops a resurrecting save. This leg
+    /// used to remove the rows and mark nothing, so a read that reached the source's owner while the
+    /// move retired it was told "ask again" about an address that never comes back, and spent its whole
+    /// budget (#1029, re-entered through the move; MeshWeaver.Plugins CI run 42223717088).</para>
+    ///
+    /// <para><b>🚨 Only the batch's verdict may tombstone, because it is the only signal that is both
+    /// complete and ordered.</b> A tombstone on a row that is still stored hides it, drops its saves,
+    /// and is LATCHED by the hubs that meet it (the save guard marks its own-node cache deleted), so a
+    /// wrong mark is not undone by withdrawing it. Two weaker signals were tried on #7930 and each put a
+    /// mark on a stored row:</para>
+    /// <list type="bullet">
+    ///   <item><description>Marking AHEAD of the batch: the move's deadline (<c>Timeout(moveDeadline, …)</c>)
+    ///     disposes a held batch with no error passing through, and the marks stood on rows never
+    ///     removed.</description></item>
+    ///   <item><description>Marking from the store's CHANGE FEED: a composite store merges its providers'
+    ///     raw feeds, so one store's <c>Deleted</c> marked a path another writable store had failed to
+    ///     remove and still served; and a <c>Deleted</c> delivered late — after a durable re-create had
+    ///     superseded the tombstone — marked the replacement absent, because nothing orders a feed event
+    ///     against the registry's supersede.</description></item>
+    /// </list>
+    /// <para>The batch's verdict has neither defect: the composite unions per-store results and names
+    /// only the paths no writable store still holds (<see cref="BatchDeletePartiallyAppliedException.RemovedBy"/>
+    /// on a part-way failure, #7396). Of those, only the paths no provider SERVES any more are marked —
+    /// a removed writable override of read-only content is still served
+    /// (<see cref="TombstoneWhatNoProviderServes"/>, one batched read). The source hubs of the confirmed
+    /// removals are retired on the verdict itself, before that read, so a read the move's deadline
+    /// cancels decides only whether a tombstone is set — never whether a removed path is retired. Both
+    /// are applied on the verdict, inside the source's
+    /// subtree-deletion scope — whose write guard refuses every in-process write under the source until
+    /// the move has finished, so no re-create can be ordered between the removal and its mark, and no
+    /// save can slip in to resurrect a row before it is marked.</para>
+    ///
+    /// <para><b>What it deliberately does not mark:</b> a batch DISPOSED before its verdict (the move's
+    /// deadline, a teardown) marks nothing. A removal that commits anyway after that is unknown to this
+    /// leg — which also leaves its hub un-retired, exactly as before this method — and its row carries
+    /// no tombstone: the conservative direction, which never hides a stored row.</para>
+    /// </summary>
+    internal static IObservable<IReadOnlyList<string>> TombstonedBatchDelete(
+        IStorageAdapter storage,
+        RecentlyDeletedRegistry registry,
+        IReadOnlyList<string> ordered,
+        JsonSerializerOptions options,
+        Action<IReadOnlyList<string>> retire,
+        ILogger logger)
+        => storage.DeleteMany(ordered)
+            .Take(1)
+            .Select(removed => (Removed: removed, Error: (Exception?)null))
+            .Catch((Exception error) => Observable.Return(
+                (Removed: BatchDeletePartiallyAppliedException.RemovedBy(error), Error: (Exception?)error)))
+            // The confirmed removals are retired HERE, synchronously on the verdict — never behind the
+            // presence probe below, which decides the TOMBSTONE and nothing else.
+            .Do(verdict => retire(verdict.Removed))
+            .SelectMany(verdict => TombstoneWhatNoProviderServes(storage, registry, verdict.Removed, options, logger)
+                .Select(_ => verdict))
+            .SelectMany(verdict => verdict.Error is { } error
+                ? Observable.Throw<IReadOnlyList<string>>(error)
+                : Observable.Return(verdict.Removed));
+
+    /// <summary>
+    /// Tombstones each of <paramref name="removed"/> that NO provider serves any more, asked in ONE
+    /// batched read: <see cref="IStorageAdapter.ReadMany"/>, which a composite answers across every
+    /// provider that serves reads, read-only ones included (Postgres answers it in one statement).
+    ///
+    /// <para>🚨 "Its writable copies were removed" is not "it is gone". A writable OVERRIDE of
+    /// read-only content (a db-synced copy of a shipped node) is deletable —
+    /// <c>PersistenceService.FindDeleteBlockingProvider</c> allows it on purpose — and the batch then
+    /// removes only the override, while the read-only original goes on being served at the same path.
+    /// Tombstoning it would make the dying owner answer <see cref="ErrorType.NotFound"/> and every read
+    /// answer <c>DeleteInProgress</c> for a node that is still served (review of #7930). When the batched
+    /// read fails, nothing is marked and the failure is named at Warning: an unmarked removed path is the
+    /// conservative direction, a marked served one hides a node.</para>
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> TombstoneWhatNoProviderServes(
+        IStorageAdapter storage,
+        RecentlyDeletedRegistry registry,
+        IReadOnlyList<string> removed,
+        JsonSerializerOptions options,
+        ILogger logger)
+        => removed.Count == 0
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : Observable.Defer(() => storage.ReadMany(removed, options))
+                .Select(node => node.Path.Trim('/'))
+                .ToList()
+                .Select(served =>
+                {
+                    var stillServed = served.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                    foreach (var path in removed)
+                        if (!stillServed.Contains(path.Trim('/')))
+                            registry.MarkDeleted(path);
+                    return System.Reactive.Unit.Default;
+                })
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "[MoveNode] whether the {Count} removed path(s) are still served could not be "
+                        + "established; none of them is given a delete tombstone", removed.Count);
+                    return Observable.Return(System.Reactive.Unit.Default);
+                });
 
     /// <summary>
     /// Sync handler for <see cref="CopyNodeRequest"/>. Implements copy as
