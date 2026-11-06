@@ -120,7 +120,9 @@ public class ACancelledMoveDeleteLeavesNoTombstoneTest(ITestOutputHelper output)
             response.Success.Should().BeFalse("the source's delete is held past the move's deadline");
         }
 
-        var feed = Storage.HoldChangeFeed();
+        // `using var` so a failing or cancelled assertion can never leave the hold registered; the
+        // explicit Release below stays the ordered, early one (Release is idempotent).
+        using var feed = Storage.HoldChangeFeed();
         try
         {
             // A removal that commits after the cancellation, beneath every guard…
@@ -147,6 +149,48 @@ public class ACancelledMoveDeleteLeavesNoTombstoneTest(ITestOutputHelper output)
             "an older delete must never tombstone a newer write over it");
         (await Storage.Read(source, Mesh.JsonSerializerOptions).Should().Within(TestTimeouts.Convergence)
             .Emit("the store answers", ct))!.Name.Should().Be("replacement", "the replacement is what is stored");
+    }
+
+    /// <summary>
+    /// 🚨 The removals the batch CONFIRMED are retired even when the tombstone's presence probe outlives the
+    /// move's deadline (review of #7930). The probe is a batched read held past the deadline
+    /// (<see cref="FaultInjectingStorageAdapter.DelayNextBatchReadAnswer"/>, armed while the delete itself is
+    /// held, so it captures the probe that follows the delete). The source row is gone, so the hub
+    /// activated at the source must be retired — on the leg's own verdict, not behind the probe the
+    /// deadline cancels. The probe never answered, so no tombstone is set (the conservative direction).
+    /// Fails when retirement runs downstream of the probe, as it did on a9e375572b (measured with the
+    /// leg's retirement moved behind the probe: the source's hub was never retired).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AProbeOutlastingTheDeadline_StillRetiresWhatTheBatchRemoved()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (source, target) = await Seed("probed", ct);
+        await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(source)).Where(n => n?.Name == "source")
+            .Should().Within(TestTimeouts.Convergence).Emit("reading the source activates its hub", ct);
+        var owner = Mesh.GetHostedHub(new Address(source), HostedHubCreation.Never);
+        owner.Should().NotBeNull("the premise: the source has a live hub for the move to retire");
+
+        using var deletes = Storage.HoldDeletes(source);
+        var answered = Move(source, target, ct);
+        await deletes.Arrivals.FirstAsync().Should().Within(TestTimeouts.Convergence)
+            .Emit("the delete leg reached the store", ct);
+        // Armed while the delete is held, so the next batch read naming the source is the probe that
+        // follows the delete; it is answered only after the move's deadline (never, within this test).
+        using var probe = Storage.DelayNextBatchReadAnswer(source);
+        deletes.Release();
+
+        var response = await answered;
+        response.Success.Should().BeFalse("the presence probe is held past the move's deadline");
+        await probe.Arrivals.FirstAsync().Should().Within(TestTimeouts.Convergence)
+            .Emit("the premise: the held read was the leg's presence probe", ct);
+        (await Storage.Read(source, Mesh.JsonSerializerOptions).Should().Within(TestTimeouts.Convergence)
+            .Emit("the store answers", ct)).Should().BeNull("the premise: the batch removed the source row");
+
+        await owner!.DisposalCompleted.FirstOrDefaultAsync().Should().Within(TestTimeouts.Convergence)
+            .Emit("the batch confirmed the removal, so the source's hub is retired whatever the probe does", ct);
+        Registry.IsRecentlyDeleted(source).Should().BeFalse(
+            "the probe never answered, so the leg does not know nothing serves the path: no tombstone");
     }
 
     private async Task<(string Source, string Target)> Seed(string name, CancellationToken ct)

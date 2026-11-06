@@ -218,8 +218,10 @@ there:
   re-create also marked the replacement absent.
 
 The verdict counts only paths that no writable store still holds. Of those, a path is marked only
-when the persistence layer's whole-store `Exists` says no provider serves it any more, read-only
-providers included. Moving a writable override of shipped content removes the override, while the
+when no provider serves it any more, read-only providers included. That is asked in ONE batched
+`ReadMany`, which the composite answers across every provider. Retirement of the confirmed removals
+(their hubs and stream-cache entries) runs on the verdict itself, before that read. So a read that
+the move's deadline cancels decides only the tombstone, never retirement. Moving a writable override of shipped content removes the override, while the
 read-only original goes on being served at the same path, so that path stays unmarked. (A recursive
 DELETE of such an override still marks the path ahead of its fan-out and never withdraws the mark;
 that is tracked separately.) The leg applies it inside the

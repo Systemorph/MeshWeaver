@@ -161,7 +161,7 @@ public class ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest
         // Driven through the MOVE's delete leg, which tombstones what the batch removed (#7930).
         var registry = new RecentlyDeletedRegistry();
         var error = await Assert.ThrowsAsync<BatchDeletePartiallyAppliedException>(
-            () => MeshExtensions.TombstonedBatchDelete(composite, registry, ["S/B", "S/A"], NullLogger.Instance).FirstAsync().Await());
+            () => MeshExtensions.TombstonedBatchDelete(composite, registry, ["S/B", "S/A"], Options, _ => { }, NullLogger.Instance).FirstAsync().Await());
 
         Assert.Equal(["S/B"], error.Removed.ToArray());
         Assert.NotNull(await composite.Read("S/A", Options).FirstAsync().Await());
@@ -200,7 +200,9 @@ public class ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest
         var registry = new RecentlyDeletedRegistry();
 
         // Children-first order is irrelevant here; S/C (part-way variant) is where the store refuses.
-        var leg = MeshExtensions.TombstonedBatchDelete(composite, registry, ["S/B", "S/A", "S/C"], NullLogger.Instance)
+        IReadOnlyList<string>? retired = null;
+        var leg = MeshExtensions.TombstonedBatchDelete(
+                composite, registry, ["S/B", "S/A", "S/C"], Options, removed => retired = removed, NullLogger.Instance)
             .FirstAsync();
         if (partWay)
         {
@@ -210,6 +212,9 @@ public class ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest
         else
             Assert.Equal(["S/B", "S/A", "S/C"], (await leg.Await()).ToArray());
 
+        // Retirement follows the batch's verdict — the override's path included, since its served node
+        // changed — whatever the tombstone decides.
+        Assert.Equal(partWay ? ["S/B", "S/A"] : ["S/B", "S/A", "S/C"], retired!.ToArray());
         // The read-only original is still served at the override's path, and is not tombstoned.
         Assert.Equal("shipped", (await composite.Read("S/A", Options).FirstAsync().Await())?.Name);
         Assert.False(registry.IsRecentlyDeleted("S/A"));
