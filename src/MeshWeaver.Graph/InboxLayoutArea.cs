@@ -1379,7 +1379,7 @@ public static class InboxLayoutArea
                     {
                         // The rows are gone from the grid; so are their ticks.
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
-                        ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes));
+                        ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes, targets));
                         acts.Reread();
                     })
                     .Select(_ => Unit.Default)));
@@ -1414,7 +1414,7 @@ public static class InboxLayoutArea
                     .Do(outcomes =>
                     {
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
-                        var summary = Summary(host, approve ? "inbox.summary.approved" : "inbox.summary.rejected", outcomes);
+                        var summary = Summary(host, approve ? "inbox.summary.approved" : "inbox.summary.rejected", outcomes, targets);
                         // The rest of a selection larger than one step-up covers is left untouched — said.
                         if (targets.Count > outcomes.Count)
                             summary += " " + host.Localize("inbox.decide.capped", targets.Count - outcomes.Count, StepUpPaths.MaxTargets);
@@ -1544,8 +1544,15 @@ public static class InboxLayoutArea
     internal static ImmutableList<StepUpTarget> StepUpOf(IEnumerable<InboxItemOutcome> outcomes)
         => [.. outcomes.Select(o => o.StepUp).OfType<StepUpTarget>().DistinctBy(t => t.Key)];
 
-    /// <summary>The outcome line: how many, and every item that was not done with its reason.</summary>
-    internal static string Summary(LayoutAreaHost host, string key, IReadOnlyCollection<InboxItemOutcome> outcomes)
+    /// <summary>
+    /// The outcome line: how many, and every item that was not done with its reason — each item
+    /// named the way the viewer saw it in the list (its title and who it is from), never by its
+    /// node path, which tells a person nothing (owner, 2026-11-06: "can you put from whom it is,
+    /// title"). <paramref name="rows"/> are the rows the act ran over; an item without one falls
+    /// back to its path.
+    /// </summary>
+    internal static string Summary(LayoutAreaHost host, string key, IReadOnlyCollection<InboxItemOutcome> outcomes,
+        IReadOnlyCollection<InboxRow>? rows = null)
     {
         var failed = outcomes.Where(o => !o.Done).ToImmutableList();
         var line = host.Localize(key, outcomes.Count - failed.Count);
@@ -1553,7 +1560,23 @@ public static class InboxLayoutArea
             ? line
             : line + " " + host.Localize("inbox.summary.failed", failed.Count,
                 string.Join("; ", failed.Select(o =>
-                    $"{o.Path}: {(string.IsNullOrWhiteSpace(o.Reason) ? host.Localize("inbox.failed.generic") : o.Reason)}")));
+                    $"{ItemLabel(rows, o.Path)}: {(string.IsNullOrWhiteSpace(o.Reason) ? host.Localize("inbox.failed.generic") : o.Reason)}")));
+    }
+
+    /// <summary>
+    /// How the outcome line names one item: <c>“title” (from)</c> from the row the viewer saw, the
+    /// sender left out when it is empty or merely repeats the title; the node path only when no row
+    /// is known. Pure.
+    /// </summary>
+    internal static string ItemLabel(IReadOnlyCollection<InboxRow>? rows, string path)
+    {
+        var row = rows?.FirstOrDefault(r => string.Equals(r.Path, path, StringComparison.Ordinal));
+        if (row is null || string.IsNullOrWhiteSpace(row.Title))
+            return path;
+        var from = row.From?.Trim() ?? "";
+        return from.Length == 0 || string.Equals(from, row.Title.Trim(), StringComparison.Ordinal)
+            ? $"“{row.Title.Trim()}”"
+            : $"“{row.Title.Trim()}” ({from})";
     }
 
     /// <summary>
