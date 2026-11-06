@@ -129,6 +129,27 @@ contains no quote character of the same kind, which still ends the value. Both e
 in-memory evaluator and the SQL backends, compare a quoted value literally; the shared
 `NegationCorpus` pins it for both (#6634).
 
+### Free text: a quote opens a phrase only when it closes
+
+In free text, a quote at the start of a term opens a phrase that runs to the matching quote:
+`"Ann's budget" partitions:all` searches for the phrase `Ann's budget`. Two things are **not**
+phrase quotes (#7918):
+
+- **An apostrophe inside a word** — between two letters or digits, as in `Ann's` or `don't` — is
+  part of the word.
+- **A quote that never closes** is ignored as a stray character; the terms after it still parse.
+
+```
+*Ann's b* scope:descendants partitions:all   # text "Ann's b"; the scope and the declaration hold
+'Ann partitions:all                          # text "Ann"; still declared mesh-wide
+Ann 'partitions:all'                         # a CLOSED quote: the declaration is search text
+```
+
+Before this, a search box that spliced the typed text `Ann's b` in front of its own qualifiers
+lost all of them: the apostrophe opened a phrase that ran to the end of the input, so a declared
+`partitions:all` read was judged unanchored and its scope, context and exclusions were searched
+for as text.
+
 ### Comparison Operators
 
 ```
