@@ -11,165 +11,45 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// The home surface (<see cref="UserActivityLayoutAreas.BuildHome"/>) — ONE
-/// <see cref="MeshSearchControl"/> whose SCOPE TABS are the phone-home tabs: Pinned (only with
-/// pins) · Apps (the viewer's OWN <c>{owner}/_App</c> records — a SINGLE-PARTITION query, which is
-/// why it loads fast; records are materialized from config defaults + install manifests, Threads
-/// is an ordinary record, and the grid paints icon tiles straight from the query rows) · Spaces
-/// (catalog without store items) · All (everything, every depth). Shared with me is its OWN band
-/// below the search (only with grants; store items and User roots excluded). The scopes share one
-/// search bar by construction. <see cref="HomeStyle.Catalog"/> switches back to the legacy single
-/// list (covered by <see cref="HomeCatalogTest"/>).
+/// The home's Catalog region (<see cref="UserActivityLayoutAreas.BuildHome"/>) — two icon grids,
+/// <b>Apps</b> (the viewer's own app records or the app directory, single partition, painted from
+/// the query rows) then <b>Spaces</b> (the profile's space manifest plus the spaces the viewer was
+/// invited into), and nothing else (policy <c>home-is-composer-apps-spaces</c>). <see cref="HomeStyle.Catalog"/>
+/// switches back to the legacy single list (covered by <see cref="HomeCatalogTest"/>).
 /// </summary>
 public class HomeTabsTest
 {
     private const string NodePath = "rbuergi";
 
-    private static MeshSearchControl Content(UiControl home, string? locale = null) =>
-        UserActivityLayoutAreas.BuildContentSection(NodePath, null, null, locale, null);
-
-    private static string[] ScopeLabels(MeshSearchControl search) =>
-        search.ScopeTabs!.Select(t => t.Label).ToArray();
-
-    // ── Structure: TWO sections, apps first ────────────────────────────────────────────────────
+    // ── Structure: Apps, then Spaces — and nothing else ─────────────────────────────────────────
 
     [Fact]
-    public void Home_IsAppsThenContent_TwoSections()
+    public void Home_IsAppsThenSpaces_TwoIconGrids()
     {
-        // "separate content from apps in two section … apps first, then content": launching an app
-        // and searching for content are different acts, so they are different sections — not two
-        // lenses on one tab strip.
-        var home = UserActivityLayoutAreas.BuildHome(NodePath);
-
-        var stack = home.Should().BeOfType<StackControl>().Subject;
-        stack.Areas.Should().HaveCount(2, "apps on top, content below");
-    }
-
-    [Fact]
-    public void Home_WithShares_StaysTwoSections_AndFoldsThemIntoAll()
-    {
-        // "Shared with me is not required" — but the items are. Cross-partition invitations
-        // (#385) are unreachable by the scope queries, so dropping the band without folding them
-        // into All would have silently lost every invitation.
+        // Policy home-is-composer-apps-spaces: the message box, apps, then spaces. The message
+        // box is the welcome template's Composer region; this is the Catalog region below it.
         var home = UserActivityLayoutAreas.BuildHome(NodePath, sharedTargets: ["OrgA/Module"]);
 
-        home.Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(2, "apps and content — no separate shared band any more");
-
-        var all = UserActivityLayoutAreas
-            .BuildContentSection(NodePath, null, null, null, null, ["OrgA/Module"])
-            .ScopeTabs!.Single(t => t.Label == "All");
-        all.Query.Should().Contain("path:OrgA/Module",
-            "a shared module is content the viewer can reach — it belongs IN the list");
+        var stack = home.Should().BeOfType<StackControl>().Subject;
+        // The container keeps its child views protected; read them the way the layout renderer receives them.
+        var bands = ((System.Collections.IEnumerable)typeof(StackControl).BaseType!
+                .GetProperty("Views", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(stack)!)
+            .OfType<MeshSearchControl>().ToArray();
+        bands.Select(b => b.Title!.ToString()).Should().Equal("Apps", "Spaces");
+        bands.Should().OnlyContain(b => Equals(b.RenderMode, MeshSearchRenderMode.Icons), "both are launchers");
+        bands.Should().OnlyContain(b => Equals(b.ShowSearchBox, false), "a launcher, not a search surface");
+        bands[1].HiddenQuery!.ToString().Should().Contain("path:OrgA/Module",
+            "a space someone shared with the viewer is a space they can open (#385)");
     }
 
     [Fact]
-    public void Content_NoPins_LeadsWithAll_AndKeepsMine()
+    public void Apps_NoLongerCarriesTheSpacesFilter()
     {
-        // "tabs below: as discussed, include All, then Pinned, Mine, Shared". Pinned and Shared are
-        // conditional — a pin list with no pins and a path union with no paths both match nothing,
-        // so an always-present tab would be an always-empty one. Mine is unconditional: your own
-        // space is the one tab that is never empty for you.
-        var content = Content(UserActivityLayoutAreas.BuildHome(NodePath));
-
-        ScopeLabels(content).Should().Equal("All", "Mine");
-        content.HiddenQuery!.ToString().Should().Contain("is:main")
-            .And.Contain("is:content", "the home lists content; it is not the search box")
-            .And.Contain("-nodeType:Store/Plugin", "apps live in the Apps section, never twice");
-    }
-
-    [Fact]
-    public void Content_AtTheRootLevel_ListsSpacesAndNothingElse()
-    {
-        // 🚨 THE regression guard for the deny-list this replaced. On memex.meshweaver.cloud the
-        // home listed `Posts` under a "Posts Hubs" heading (a SocialMedia/PostsHub partition root)
-        // and `Event` under "Event Hubs": the root leg excluded Store/Plugin, Store/Catalog and
-        // User, so every OTHER root type leaked in and minted its own type group. A deny-list is
-        // only as complete as the last person who remembered to extend it, so the root leg is an
-        // ALLOW-list now — a new root NodeType has to opt in, not remember to opt out.
-        // The root leg is the viewer's space manifest (User.SpacePaths) — still allow-listed: a
-        // manifest entry that stopped being a Space must not list.
-        var content = UserActivityLayoutAreas.BuildContentSection(
-            NodePath, null, null, null, null, spacePaths: ["Acme", "Posts"]);
-
-        var all = content.ScopeTabs!.Single(t => t.Label == "All");
-        foreach (var sort in all.SortOptions!)
-        {
-            var rootLeg = sort.Query.Split('\n')
-                .Single(leg => leg.StartsWith("path:Acme|Posts ", StringComparison.Ordinal));
-            rootLeg.Should().Contain("nodeType:Space",
-                "the root level of the home list is the workspaces you can reach");
-            rootLeg.Should().NotContain("-nodeType:",
-                "an allow-list subsumes every exclusion; a leftover deny term is dead weight that reads as coverage");
-        }
-    }
-
-    [Fact]
-    public void Content_OwnPartitionLeg_IsNotTypeFiltered()
-    {
-        // The Spaces filter is the ROOT leg's. Your own home partition holds no Spaces at all, so
-        // applying it there would empty the list of everything you ever authored. What keeps app
-        // chrome ("{Package} — my workspace") out of it is `is:content` honouring the node's own
-        // ExcludeFromContext — a property of the node, not a term in this query.
-        var content = UserActivityLayoutAreas.BuildContentSection(NodePath, null, null, null, null);
-        var mine = content.ScopeTabs!.Single(t => t.Label == "Mine");
-
-        mine.Query.Should().Contain($"namespace:{NodePath}").And.Contain("is:content");
-        mine.Query.Should().NotContain("nodeType:Space");
-    }
-
-    [Fact]
-    public void Content_IsOneFlatList_OrderedByLocation()
-    {
-        // Policy explorer-navigation: the home lists its top-level entries as ONE list in path
-        // order, each a folder the viewer opens, never fanned out into per-type sections by default
-        // (which put everything into one "Space (N)").
-        var content = Content(UserActivityLayoutAreas.BuildHome(NodePath));
-
-        content.RenderMode.Should().Be(MeshSearchRenderMode.Flat);
-        content.Grouping.Should().BeNull("no per-type fan-out by default");
-        content.HiddenQuery!.ToString().Should().Contain("sort:path-asc", "location order is the default");
-    }
-
-    [Fact]
-    public void Content_HonoursTheAdminsExplicitGroupedRender_AndDefaultSort()
-    {
-        // HomeConfig.Render / DefaultSort are not silent no-ops on the Tabs home: an admin who asks
-        // for per-type sections or another default order gets them.
-        var cfg = new HomeConfig { Render = HomeCatalogRender.Grouped, DefaultSort = HomeCatalogSort.Alphabetical };
-        var content = UserActivityLayoutAreas.BuildContentSection(NodePath, cfg, null, null, null);
-
-        content.RenderMode.Should().Be(MeshSearchRenderMode.Grouped);
-        content.Grouping!.GroupByProperty.Should().Be("NodeType");
-        content.HiddenQuery!.ToString().Should().Contain("sort:Name-asc");
-        content.SortOptions!.Select(o => o.Label).Should().Contain("Location", "location order stays in the Sort control");
-    }
-
-    [Fact]
-    public void Content_WithPins_AllLeads_PinnedFollows()
-    {
-        // "the pinned i would still keep … as separate tab if we have any".
-        var content = UserActivityLayoutAreas.BuildContentSection(
-            NodePath, null, new User { PinnedPaths = ["Doc/GUI"] }, null, null);
-
-        // "put All first and default tab": the view activates scopes[0], so All leads and the
-        // narrower lenses follow it, in the order asked for — Pinned, Mine, then Shared.
-        ScopeLabels(content).Should().Equal("All", "Pinned", "Mine");
-        content.ScopeTabs![1].Query.Should().Contain("Doc/GUI");
-        content.HiddenQuery!.ToString().Should().Be(content.ScopeTabs![0].Query,
-            "the control-level fallback IS the default tab's query");
-    }
-
-    [Fact]
-    public void Content_HasTheSearchBar_AppsDoesNot()
-    {
-        // The apps section is a LAUNCHER (no search box, no view options); content is where you
-        // search, and its scopes share that one bar.
-        var content = Content(UserActivityLayoutAreas.BuildHome(NodePath));
-        content.ShowSearchBox.Should().Be(true);
-        content.HiddenQuery!.ToString().Should().Be(content.ScopeTabs![0].Query);
-
-        UserActivityLayoutAreas.BuildAppsBand(NodePath, null).ShowSearchBox.Should().Be(false);
+        UserActivityLayoutAreas.BuildAppsBand(NodePath, null).ScopeTabs!.Select(t => t.Label)
+            .Should().Equal(["Apps"], "spaces have their own band below the apps");
+        UserActivityLayoutAreas.BuildAppsBand(NodePath, null, fromDirectory: true).ScopeTabs!.Select(t => t.Label)
+            .Should().Equal("Apps", "Hidden");
     }
 
     [Fact]
@@ -183,8 +63,7 @@ public class HomeTabsTest
         var sections = new[]
         {
             UserActivityLayoutAreas.BuildAppsBand(NodePath, null),
-            UserActivityLayoutAreas.BuildContentSection(
-                NodePath, null, new User { PinnedPaths = ["Doc/GUI"] }, null, null),
+            UserActivityLayoutAreas.BuildSpacesBand(NodePath, null, ["Acme"], ["OrgA/Module"]),
             UserActivityLayoutAreas.BuildSharedBand(["OrgA/Module"], null)!,
         };
 
@@ -280,22 +159,21 @@ public class HomeTabsTest
     }
 
     [Fact]
-    public void Apps_OffersTheViewersSpaces_AsASecondScope()
+    public void Spaces_AreAnIconGridOfTheViewersSpaces_RecentlyUsedFirst()
     {
-        // "can we also integrate spaces in this? recently used? show an icon for each space?" — a
-        // space is something you OPEN, so it belongs on the launcher, and the launcher's filter
-        // offers it after the categories (the GUI renders every scope past the first as one more
-        // filter entry). A different QUERY, hence a scope and not a slice of the app records.
-        var apps = UserActivityLayoutAreas.BuildAppsBand(NodePath, null, ["Acme", "Contoso"], ["Globex", "Initech"]);
+        // "can we also integrate spaces in this? recently used? show an icon for each space?" — and
+        // now in a band of their own, below the apps (policy home-is-composer-apps-spaces).
+        var band = UserActivityLayoutAreas.BuildSpacesBand(NodePath, null, ["Globex", "Initech"], ["Acme", "Contoso"]);
 
-        apps.ScopeTabs.Should().HaveCount(2, "the apps themselves, then the spaces");
-        var spaces = apps.ScopeTabs![1];
-        spaces.Label.Should().Be("Spaces");
+        band.Title!.ToString().Should().Be("Spaces");
+        band.NavigateToMainNode.Should().Be(true);
+        var spaces = band.ScopeTabs!.Should().ContainSingle().Subject;
         spaces.RenderMode.Should().Be(nameof(MeshSearchRenderMode.Icons), "an icon for each space");
         spaces.NavigateToMainNode.Should().BeTrue();
         spaces.SortByAccess.Should().BeTrue("recently used first, from the viewer's own access log");
         spaces.Sortable.Should().BeFalse(
             "the arrangement lives on App records — a space has none, so a drop would have nowhere to write");
+        band.HiddenQuery!.ToString().Should().Be(spaces.Query);
 
         var legs = spaces.Query.Split('\n');
         legs.Should().HaveCount(2, "the viewer's space manifest, then the spaces the viewer was invited into");

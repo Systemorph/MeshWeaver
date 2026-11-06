@@ -26,10 +26,9 @@ public class HomeSpaceManifestTest
 
     private static IEnumerable<string> HomeQueries(IReadOnlyList<string>? spaces, IReadOnlyList<string>? shared)
     {
-        var user = new User { SpacePaths = spaces ?? [], SharedPaths = shared ?? [] };
-        var apps = UserActivityLayoutAreas.BuildAppsBand(Owner, null, shared, spaces);
-        var content = UserActivityLayoutAreas.BuildContentSection(Owner, null, user, null, null, shared, spaces);
-        return new[] { apps, content }
+        var apps = UserActivityLayoutAreas.BuildAppsBand(Owner, null);
+        var spaceBand = UserActivityLayoutAreas.BuildSpacesBand(Owner, null, spaces, shared);
+        return new[] { apps, spaceBand }
             .SelectMany(c => new[] { c.HiddenQuery?.ToString() }
                 .Concat(c.ScopeTabs?.Select(t => t.Query) ?? [])
                 .Concat(c.ScopeTabs?.SelectMany(t => t.SortOptions?.Select(o => o.Query) ?? []) ?? [])
@@ -51,30 +50,18 @@ public class HomeSpaceManifestTest
     }
 
     [Fact]
-    public void The_root_leg_is_the_profiles_space_manifest()
+    public void The_spaces_band_reads_the_profiles_space_manifest()
     {
-        var all = UserActivityLayoutAreas
-            .BuildContentSection(Owner, null, null, null, null, null, ["Acme", "Globex"])
-            .ScopeTabs!.Single(t => t.Label == "All");
-
-        all.Query.Should().Contain("path:Acme|Globex is:main is:content nodeType:Space");
-        all.Query.Should().Contain($"namespace:{Owner} is:main");
-        all.Query.Should().NotContain("namespace: is:main");
+        UserActivityLayoutAreas.BuildSpacesBand(Owner, null, ["Acme", "Globex"])
+            .HiddenQuery!.ToString().Should().Contain("path:Acme|Globex ").And.Contain("nodeType:Space");
     }
 
     [Fact]
-    public void An_empty_manifest_omits_the_root_leg_rather_than_falling_back_to_a_fan_out()
+    public void An_empty_manifest_falls_back_to_the_viewers_own_home_rather_than_a_fan_out()
     {
-        var all = UserActivityLayoutAreas
-            .BuildContentSection(Owner, null, null, null, null, null, [])
-            .ScopeTabs!.Single(t => t.Label == "All");
-
-        all.Query.Split('\n').Should().ContainSingle("only the viewer's own leg is left")
-            .Which.Should().StartWith($"namespace:{Owner} ");
-
         UserActivityLayoutAreas.SpacesQuery(Owner, [], []).Should().Be(
             $"namespace:{Owner} is:main is:content nodeType:Space sort:LastModified-desc",
-            "the Spaces scope falls back to the viewer's own home, never to every partition");
+            "the Spaces band falls back to the viewer's own home, never to every partition");
     }
 
     [Fact]
