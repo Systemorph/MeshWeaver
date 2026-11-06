@@ -602,6 +602,15 @@ internal static class ModuleServiceForwarding
                                 .TryResolveCurrentModuleService(module, index),
                         $"Module {module} is no longer held by this mesh's module registry — the installed module it contributed is gone with it."));
                     break;
+                case ModuleServiceRoute.Current when AbsentWhenModuleGoneAttribute.IsDeclaredOn(type):
+                    // A member of a set modules contribute to (the app directory's declared launcher
+                    // tiles): ABSENT once the module is withdrawn or retired, never a forwarder that
+                    // can only throw and fail every read of the set (InstalledModules.CurrentSet).
+                    // ONE snapshot of the module's generation, as for an installed module above.
+                    root.Add(ModuleServiceSlot.Declare(type, sp =>
+                            sp.GetRequiredService<ModuleContexts>().TryResolveCurrentModuleService(module, index),
+                        $"Module {module} is no longer held by this mesh's module registry — the {type.Name} it registered is gone with it."));
+                    break;
                 case ModuleServiceRoute.Current:
                     // Resolved for the CALLER — the scope this transient forwarder is resolved in — so a
                     // module's scoped registration is that circuit's / request's / hub's instance, built
