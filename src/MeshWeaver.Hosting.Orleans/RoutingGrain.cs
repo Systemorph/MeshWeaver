@@ -78,6 +78,11 @@ internal class RoutingGrain(
     private readonly RoutingQuiescence? quiescence =
         meshHub.ServiceProvider.GetService<RoutingQuiescence>();
 
+    // #7842: the member silos a refused reply's asker may live on — see ReportRefusedReplyToAsker.
+    // Silo-only; null in a container without Orleans membership, where the asker is left untold.
+    private readonly IClusterMembershipService? membership =
+        meshHub.ServiceProvider.GetService<IClusterMembershipService>();
+
     // 🚨 Issue #2897. The bound BOTH forward grain legs measure a delivery against before handing it
     // to Orleans. Read the LIVE option rather than a compiled-in constant: this is the number the
     // transport actually enforces, so a deployment that tuned MaxMessageBodySize is measured against
@@ -427,7 +432,8 @@ internal class RoutingGrain(
                 ? AnswerPodHubNotHere(
                     delivery, addressPath, address.Type, meshConfig,
                     FallBackToStream, PostVerdictToSender, logger, podHubRefusalLog,
-                    RespondingSilo(ex), WasReleased(ex), RespondingPod(ex))
+                    RespondingSilo(ex), WasReleased(ex), RespondingPod(ex),
+                    refusal => ReportRefusedReplyToAsker(delivery, refusal, grainFactory))
                 // A REAL failure of the call, transient retries exhausted (or a non-transient
                 // fault) — the owning silo threw, went away mid-call, or the placement could not
                 // be made. This is the whole gain over a publish: it is OBSERVABLE, so it becomes
@@ -537,6 +543,15 @@ internal class RoutingGrain(
     /// <paramref name="respondingSilo"/> so a reader can tell the owner's own pod from another (#7842).
     /// Null on a peer that predates the field.
     /// </param>
+    /// <param name="reportRefusedReplyToAsker">
+    /// Tells the hub that is WAITING for a refused reply — the reply's target, which asked the
+    /// original request — that its answer is lost, with the refusal as the reason (#7842). Invoked
+    /// ONLY for the transient refusal of a correlated reply (<see cref="IsAwaitedReply"/>): the
+    /// <paramref name="postFailureToSender"/> NACK reaches the REPLIER, which has nothing to retry,
+    /// and without this the asker waited out its whole request budget in silence. Never for a
+    /// released address — its owner said goodbye, so nobody is waiting. Null leaves the asker
+    /// untold, the shape before #7842.
+    /// </param>
     internal static IObservable<Unit> AnswerPodHubNotHere(
         IMessageDelivery delivery,
         string addressPath,
@@ -548,7 +563,8 @@ internal class RoutingGrain(
         DeadTargetRefusalLog? refusalLog = null,
         string? respondingSilo = null,
         bool released = false,
-        string? respondingPod = null)
+        string? respondingPod = null,
+        Action<string>? reportRefusedReplyToAsker = null)
     {
         var answeredBy = DescribeResponder(respondingSilo, respondingPod);
         if (meshConfig.ClientHostedAddressTypes.Contains(addressType))
@@ -621,7 +637,163 @@ internal class RoutingGrain(
         RoutingGrainTrace.Write(
             $"RoutingGrain.RouteMessage POD_HUB_NOT_HERE_REFUSED addr={addressPath} id={delivery.Id} sender={delivery.Sender}");
         postFailureToSender(reason, ErrorType.ShuttingDown, true);
+        // 🚨 #7842: the NACK above reaches the REPLIER. When the refused delivery is a REPLY, the hub
+        // that is waiting for it is its TARGET — the address this router just failed to reach — and
+        // it is told here, over a carrier that does not depend on that address's directory entry.
+        if (reportRefusedReplyToAsker is not null && IsAwaitedReply(delivery))
+            reportRefusedReplyToAsker(reason);
         return Observable.Return(Unit.Default);
+    }
+
+    /// <summary>
+    /// Is <paramref name="delivery"/> a REPLY someone may be waiting for — correlated to a request
+    /// by <see cref="PostOptions.RequestId"/> — and one the routing layer may answer at all
+    /// (<see cref="AnswerPolicy.MayAnswer"/>: never a <see cref="DeliveryFailure"/>, never
+    /// <c>[CanBeIgnored]</c> traffic, so a refused NACK never mints a NACK about a NACK)?
+    /// </summary>
+    /// <param name="delivery">The refused delivery.</param>
+    /// <returns>Whether its target should be told that its answer is lost.</returns>
+    internal static bool IsAwaitedReply(IMessageDelivery delivery) =>
+        delivery.MayAnswer()
+        && delivery.Target is not null
+        && delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
+        && requestId?.ToString() is { Length: > 0 };
+
+    /// <summary>
+    /// The <see cref="DeliveryFailure"/> the ASKER of a refused reply receives (#7842): addressed to
+    /// the reply's target, correlated by the ORIGINAL request's id (the reply's
+    /// <see cref="PostOptions.RequestId"/>), so the asker's <c>hub.Observe(...)</c> callback errors at
+    /// once, naming why, instead of timing out.
+    ///
+    /// <para>🚨 <see cref="ErrorType.ShuttingDown"/>, never <see cref="ErrorType.Failed"/>: the work
+    /// the lost reply reported may well have happened, so the outcome is UNCONFIRMED, not failed —
+    /// the same verdict <c>MessageService</c> gives a reply a disposing hub could not send. It is also
+    /// the verdict the consumers with recovery machinery of their own ride out and re-ask on.</para>
+    ///
+    /// <para>Not stamped <see cref="DeliveryFailure.TargetUnserved"/>: that stamp is the OWNER-side
+    /// eviction gate for the replier, and the asker is not an owner of anything here.</para>
+    /// </summary>
+    /// <param name="reply">The refused reply.</param>
+    /// <param name="refusal">The router's refusal, naming the address and the silo that answered.</param>
+    /// <returns>The failure delivery, or null when <paramref name="reply"/> is not an awaited reply.</returns>
+    internal static IMessageDelivery? RefusedReplyFailure(IMessageDelivery reply, string refusal)
+    {
+        if (!IsAwaitedReply(reply))
+            return null;
+        var requestId = reply.Properties[PostOptions.RequestId].ToString()!;
+        var message =
+            $"The reply {reply.Message?.GetType().Name ?? "(null)"} from '{reply.Sender}' to request {requestId} "
+            + $"was refused on its way back to '{reply.Target}', so it never arrived. The outcome of the request "
+            + $"is UNCONFIRMED — ask again. Router's refusal: {refusal}";
+        return new MessageDelivery<DeliveryFailure>(
+            new DeliveryFailure(MessageSizeGuard.WithoutOversizedPayload(reply), message)
+            {
+                ErrorType = ErrorType.ShuttingDown,
+            },
+            new PostOptions(reply.Sender)
+                .WithTarget(reply.Target!)
+                .WithProperty(PostOptions.RequestId, requestId),
+            System.Text.Json.JsonSerializerOptions.Default);
+    }
+
+    /// <summary>
+    /// Tells the ASKER of a refused reply that its answer is lost (#7842) — see
+    /// <see cref="RefusedReplyFailure"/> for what it receives and
+    /// <see cref="ISiloLocalDeliveryGrain"/> for the carrier.
+    ///
+    /// <para><b>Why every member silo.</b> The reply was refused because the grain directory did not
+    /// lead to the asker's process, so this router does not know where the asker lives, and the
+    /// envelope does not say. Each member silo — Active, or ShuttingDown and still serving its hubs —
+    /// is asked once; exactly the one whose local route table holds the asker's host hands the
+    /// failure over, and every other answers <c>false</c>. A cluster is a handful of silos and this
+    /// runs only on a refused correlated reply, so the fan-out is a few grain calls per lost reply,
+    /// never per message.</para>
+    ///
+    /// <para><b>Never silent.</b> When no silo could take it — the asker's process is gone, or it runs
+    /// a build without this grain (a mixed roll) — that is ONE Warning naming the request and the
+    /// asker, which will then wait out its own budget. Routing work like every NACK: run on the
+    /// routing pool and tracked by the silo-stop quiescence gauge.</para>
+    /// </summary>
+    /// <param name="reply">The refused reply.</param>
+    /// <param name="refusal">The router's refusal, naming the address and the silo that answered.</param>
+    /// <param name="grainFactory">The grain factory, captured on the routing turn.</param>
+    private void ReportRefusedReplyToAsker(IMessageDelivery reply, string refusal, IGrainFactory grainFactory)
+    {
+        if (RefusedReplyFailure(reply, refusal) is not { } failure)
+            return;
+        var requestId = failure.Properties[PostOptions.RequestId].ToString();
+        var asker = reply.Target;
+        var silos = membership?.CurrentSnapshot.Members.Values
+                        .Where(m => m.Status is SiloStatus.Active or SiloStatus.ShuttingDown)
+                        .Select(m => m.SiloAddress)
+                        .ToArray()
+                    ?? [];
+
+        var slot = quiescence?.Track($"refused-reply report → {asker} (request {requestId})");
+        routingPool.SubscribeThroughPool(
+                silos.ToObservable()
+                    .SelectMany(silo => DeliverToSilo(silo).Select(told => (Silo: silo, Told: told)))
+                    .Where(r => r.Told)
+                    .Select(r => (SiloAddress?)r.Silo)
+                    .Take(1)
+                    .DefaultIfEmpty())
+            .Finally(() => slot?.Dispose())
+            .Subscribe(
+                hostedOn =>
+                {
+                    if (hostedOn is not null)
+                    {
+                        RoutingGrainTrace.Write(
+                            $"RoutingGrain.RouteMessage REFUSED_REPLY_ASKER_TOLD id={reply.Id} request={requestId} asker={asker} silo={hostedOn}");
+                        logger.LogDebug(
+                            "[ROUTE] Told {Asker} (on silo {Silo}) that the reply to its request {RequestId} was refused — "
+                            + "its wait errors now instead of timing out",
+                            asker, hostedOn, requestId);
+                        return;
+                    }
+                    logger.LogWarning(
+                        "[ROUTE] The reply {MessageType} ({DeliveryId}) to request {RequestId} was refused on its way to "
+                        + "{Asker}, and NO member silo ({SiloCount} asked) hosts that address locally to be told — the "
+                        + "asker's process is gone, or it runs a build without the local-delivery carrier. It will wait "
+                        + "out its own request budget.",
+                        reply.Message?.GetType().Name ?? "(null)", reply.Id, requestId, asker, silos.Length);
+                },
+                ex => logger.LogWarning(ex,
+                    "[ROUTE] Could not tell {Asker} that the reply to its request {RequestId} was refused",
+                    asker, requestId));
+
+        IObservable<bool> DeliverToSilo(SiloAddress silo) =>
+            Observable.Defer(() =>
+            {
+                var grain = grainFactory.GetGrain<ISiloLocalDeliveryGrain>(silo.ToParsableString());
+                // Placed ON the silo the key names. Orleans snapshots RequestContext synchronously
+                // when the call is issued, so the ambient hint is restored at once — the
+                // AnnounceDrainTo / AttachPodHubOnOwner discipline.
+                var hintKey = global::Orleans.Runtime.Placement.IPlacementDirector.PlacementHintKey;
+                var previous = RequestContext.Get(hintKey);
+                try
+                {
+                    RequestContext.Set(hintKey, silo);
+                    return grain.DeliverToLocalRoute(failure).ToObservable();
+                }
+                finally
+                {
+                    if (previous is null)
+                        RequestContext.Remove(hintKey);
+                    else
+                        RequestContext.Set(hintKey, previous);
+                }
+            })
+            .Catch<bool, Exception>(ex =>
+            {
+                // One silo that cannot be asked (leaving, unreachable, an older generation without
+                // the grain) is not the verdict; whether ANY silo took it is. Named at Debug here,
+                // and the verdict line above is a Warning when nobody took it.
+                logger.LogDebug(ex,
+                    "[ROUTE] Silo {Silo} could not be asked to hand the refused-reply failure for request {RequestId} to {Asker}",
+                    silo, requestId, asker);
+                return Observable.Return(false);
+            });
     }
 
     /// <summary>

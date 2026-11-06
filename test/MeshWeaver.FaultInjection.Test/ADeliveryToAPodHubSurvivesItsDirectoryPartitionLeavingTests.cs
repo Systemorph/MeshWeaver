@@ -37,11 +37,13 @@ namespace MeshWeaver.FaultInjection.Test;
 /// <c>ShuttingDown</c>, the remaining silos drop it from the ring (only <c>Active</c> silos own
 /// partitions), the DHT hands nothing over, and a router looking the hub up before the owner has
 /// re-asserted its claim finds nothing, places a throw-away activation on itself and refuses the
-/// delivery. In this in-process cluster (Orleans 10.4.2) that does NOT happen: with the leaving silo
-/// held in <c>ShuttingDown</c>, both remaining directories re-partitioned, and the owner's re-assertion
-/// HELD, the post from the replier is still delivered to the live hub. So the case is a regression
-/// guard for that window, not a reproduction of #7842 — see <c>Doc/Architecture/PodHubClaimReassertion</c>
-/// for what is and is not established.</para>
+/// delivery. On THIS cluster's directory that does NOT happen: with the leaving silo held in
+/// <c>ShuttingDown</c>, both remaining directories re-partitioned, and the owner's re-assertion HELD, the
+/// post from the replier is still delivered to the live hub — because the cluster runs Orleans'
+/// <c>DistributedGrainDirectory</c> (the test harness's default, asserted by the case), which hands the
+/// leaving silo's partition over. Production runs <c>LocalGrainDirectory</c>, and on it the same case is
+/// refused until the owner re-asserts: <see cref="ALocalDirectoryLosesAPodHubEntryUntilItsClaimIsReassertedTest"/>.
+/// See <c>Doc/Architecture/PodHubClaimReassertion</c> for what is and is not established.</para>
 ///
 /// <para><b>The shape.</b> Three silos. A pod hub (<c>cache/…</c>, the production address type) is
 /// claimed on the OWNER silo under an id whose directory registration lives on a second silo, chosen by
@@ -58,15 +60,47 @@ namespace MeshWeaver.FaultInjection.Test;
 /// </summary>
 public class ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest(
     ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest.Cluster mesh)
-    : IClassFixture<ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest.Cluster>
+    : APodHubDeliveryAcrossItsDirectoryPartitionLeaving(mesh),
+        IClassFixture<ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest.Cluster>
+{
+    /// <inheritdoc />
+    protected override bool DistributedDirectory => true;
+
+    /// <summary>
+    /// Its own cluster: the case stops a silo. 🚨 It runs Orleans' <c>DistributedGrainDirectory</c> —
+    /// the test harness's default, which hands a leaving silo's partitions over — and the case asserts
+    /// it. That is why the leave did not lose the entry in #7917's runs: production runs
+    /// <c>LocalGrainDirectory</c> (#7842).
+    /// </summary>
+    public class Cluster : FaultInjectionCluster
+    {
+        /// <inheritdoc />
+        protected override int SiloCount => 3;
+
+        /// <inheritdoc />
+        protected override Type SiloConfiguratorType => typeof(MultiSiloShutdownHoldConfigurator);
+    }
+}
+
+/// <summary>
+/// The #7842 leave case, run on the directory a cluster declares (<see cref="DistributedDirectory"/>):
+/// see <see cref="ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest"/> for the shape.
+/// </summary>
+public abstract class APodHubDeliveryAcrossItsDirectoryPartitionLeaving(FaultInjectionCluster mesh)
 {
     /// <summary>Far inside the 30 s / 60 s budgets production ran out; a healthy cross-silo post takes milliseconds.</summary>
     private static readonly TimeSpan Prompt = TimeSpan.FromSeconds(10);
+
+    /// <summary>Whether the cluster runs <c>DistributedGrainDirectory</c> (true) or production's <c>LocalGrainDirectory</c>.</summary>
+    protected abstract bool DistributedDirectory { get; }
 
     [Fact(Timeout = 240_000)]
     public async Task APostToAPodHubWhoseDirectoryPartitionIsLeaving_IsDelivered()
     {
         var ct = TestContext.Current.CancellationToken;
+        for (var i = 0; i < 3; i++)
+            mesh.DefaultDirectoryIsDistributed(i).Should().Be(DistributedDirectory,
+                $"silo {i} must run the directory this case claims to measure (#7842)");
         using var roles = await PodHubRoles.Claim(mesh, ct);
 
         // The owner has not heard of the change yet: its re-assertion is held until the case ends.
@@ -85,6 +119,11 @@ public class ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest(
             await reassertion.Arrivals.Should().Within(TestTimeouts.CrossSilo).Emit(
                 $"the owner's re-assertion of '{roles.Hub}' for this membership change is in flight and held — "
                 + "the moment before the owner's claim lands", ct);
+            // The window is real at the moment of the post: the replier's own membership view has the
+            // directory-partition silo leaving — a positive reading, not "the steps returned".
+            mesh.Silo(roles.Replier).GetRequiredService<IClusterMembershipService>().CurrentSnapshot
+                .GetSiloStatus(roles.LeavingAddress).Should().Be(SiloStatus.ShuttingDown,
+                    $"silo {roles.Leaving} must still be ShuttingDown (held) when the post is made");
 
             roles.Post(mesh);
             await roles.Received.Should().Within(Prompt).Emit(
@@ -100,8 +139,87 @@ public class ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest(
             await stopping.WaitAsync(TestTimeouts.CrossSilo, ct);
         }
     }
+}
 
-    /// <summary>Its own cluster: the case stops a silo.</summary>
+/// <summary>
+/// <b>#7842 — the same leave on PRODUCTION's directory (<c>LocalGrainDirectory</c>) loses the pod hub's
+/// entry until the owner re-asserts its claim.</b>
+///
+/// <para>This is the counterpart that makes <see cref="ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest"/>
+/// mean something: the same three roles, the same held leave, the same held re-assertion — and only the
+/// directory differs. <c>TestClusterBuilder</c> configures <c>DistributedGrainDirectory</c> for every test
+/// cluster, which hands a leaving silo's partition over, so #7917's runs could not lose the entry. This
+/// cluster removes that configurator, so its silos run the directory a production silo runs.</para>
+///
+/// <para><b>Measured.</b> (1) While the leave and the re-assertion are both held, a request from the
+/// third silo to the live hub is REFUSED: the router's lookup finds no registration, prefer-local places a
+/// throw-away activation on the asking silo, and it answers <c>PodHubNotHere</c> — the asker hears a
+/// <see cref="DeliveryFailure"/>, the hub hears nothing. (2) Once the owner's membership-change
+/// re-assertion is let go, posts reach the hub again. So on production's directory the window is
+/// exactly "the partition owner has left, the owner has not re-asserted yet" — the 200–400 ms in which
+/// #7842's replies were refused.</para>
+///
+/// <para><c>cache</c> is declared client-hosted in this test rig, so the refusal text here is the
+/// client-hosted one (no memory stream on a multi-silo host); a production router answers the same
+/// lookup miss with "no silo in this cluster is currently serving that hub". Both are reached only after
+/// the pod-hub grain answered <c>PodHubNotHere</c>.</para>
+/// </summary>
+public class ALocalDirectoryLosesAPodHubEntryUntilItsClaimIsReassertedTest(
+    ALocalDirectoryLosesAPodHubEntryUntilItsClaimIsReassertedTest.Cluster mesh)
+    : IClassFixture<ALocalDirectoryLosesAPodHubEntryUntilItsClaimIsReassertedTest.Cluster>
+{
+    private static readonly TimeSpan Prompt = TimeSpan.FromSeconds(10);
+
+    [Fact(Timeout = 240_000)]
+    public async Task APostDuringTheLeaveIsRefused_AndOneAfterTheReassertionArrives()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        for (var i = 0; i < 3; i++)
+            mesh.DefaultDirectoryIsDistributed(i).Should().BeFalse(
+                $"silo {i} must run production's LocalGrainDirectory, or this case measures the test default");
+        using var roles = await PodHubRoles.Claim(mesh, ct);
+        using var reassertion = mesh.Silo(roles.Owner).GetRequiredService<ClaimHold>().Hold(roles.Hub.ToString());
+        var hold = mesh.Silo(roles.Leaving).GetRequiredService<ShutdownHold>();
+        using var held = hold.Arm();
+        var stopping = mesh.Drain(roles.Leaving);
+        try
+        {
+            await held.Arrivals.Should().Within(TestTimeouts.CrossSilo).Emit(
+                $"silo {roles.Leaving} has written ShuttingDown and is held there", ct);
+            foreach (var silo in new[] { roles.Owner, roles.Replier })
+                await PodHubRoles.PartitionMovedOff(mesh, silo, roles.Grain, roles.LeavingAddress)
+                    .Should().Within(TestTimeouts.CrossSilo).Emit(
+                        $"silo {silo}'s directory no longer places '{roles.Hub}' on the leaving silo", ct);
+            await reassertion.Arrivals.Should().Within(TestTimeouts.CrossSilo).Emit(
+                $"the owner's re-assertion of '{roles.Hub}' is in flight and held", ct);
+
+            var verdict = await mesh.Hub(roles.Replier)
+                .Observe<PingResponse>(new PingRequest(), o => o.WithTarget(roles.Hub))
+                .Materialize().Take(1)
+                .Should().Within(Prompt).Emit(
+                    "a request to the hub during the leave is answered — by the router's refusal", ct);
+            verdict.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
+                "on LocalGrainDirectory the leave dropped the hub's registration, so the request is refused");
+            verdict.Exception.Should().BeOfType<DeliveryFailureException>(
+                "the refusal reaches the asker as a named DeliveryFailure");
+            await roles.Received.Should().NotEmit(TimeSpan.FromMilliseconds(500),
+                "the refused request never reached the live hub", ct);
+
+            reassertion.Release();
+            using var reposting = Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
+                .Subscribe(_ => roles.Post(mesh));
+            await roles.Received.Should().Within(TestTimeouts.CrossSilo).Emit(
+                "once the owner's membership-change re-assertion lands, the hub is reachable again", ct);
+        }
+        finally
+        {
+            reassertion.Release();
+            held.Release();
+            await stopping.WaitAsync(TestTimeouts.CrossSilo, ct);
+        }
+    }
+
+    /// <summary>Three silos on production's directory.</summary>
     public class Cluster : FaultInjectionCluster
     {
         /// <inheritdoc />
@@ -109,6 +227,9 @@ public class ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest(
 
         /// <inheritdoc />
         protected override Type SiloConfiguratorType => typeof(MultiSiloShutdownHoldConfigurator);
+
+        /// <inheritdoc />
+        protected override bool UsesDistributedGrainDirectory => false;
     }
 }
 

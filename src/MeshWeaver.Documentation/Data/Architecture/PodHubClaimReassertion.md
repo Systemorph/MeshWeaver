@@ -234,47 +234,132 @@ The third is not decoration. A "fix" that merely re-triggered the round would sa
 pins and reintroduce the claim storm `Switch` exists to bound: every attempt makes the owning silo
 log a line, which is the log-storm shape #2426/#2546 exist to remove.
 
-## #7842: replies refused while ANOTHER silo leaves — what is established
+## #7842: replies refused while ANOTHER silo leaves
 
 During a memex roll a cache hub's replies were refused by two routers ("no silo in this cluster is
 currently serving that hub", both naming the same third silo) 200–400 ms after the OLD silo began its
 stop, while the cache hub's own pod was alive; its requests timed out after 60 s. #7907 repeated the
-shape on another instance. This section records what an in-process reproduction did and did not show,
-so the next investigation starts from it.
+shape on another instance.
 
-**Two candidate mechanisms were tested and NOT reproduced** (Orleans 10.4.2, a three-silo
-`FaultInjectionCluster`, the silo holding the pod hub's grain-directory partition held in
-`ShuttingDown` by a lifecycle participant one stage below `BecomeActive`):
+### The mechanism, reproduced on production's directory
 
-| Candidate | What was measured |
-|---|---|
-| Orleans DEACTIVATES the owner's pinned activation when the silo holding its directory partition leaves (`LocalGrainDirectory.OnSiloStatusChange` deactivates activations whose registration lived on a terminating silo) | The owner's activation survived the whole `ShuttingDown` window: the same activation instance was in the owner silo's catalog for 15 s after both remaining silos had re-partitioned the address away from the leaving silo. |
-| The re-partition loses the directory entry (the DHT hands nothing over on a leave), so a router that looks the hub up before the owner re-asserts its claim finds nothing and refuses | With the owner's re-assertion HELD at its outgoing `Attach` and both directories re-partitioned, a post from the third silo — which had never addressed the hub — was delivered to the live hub. |
+**Every in-process Orleans test cluster runs a different grain directory from production.**
+Orleans' `TestClusterBuilder` adds its own `ConfigureDistributedGrainDirectory` configurator to every
+test cluster, so test silos run `DistributedGrainDirectory`, which hands a leaving silo's directory
+partitions over. A production silo (`ConfigureMeshWeaverServer`) registers no directory and runs Orleans'
+default `LocalGrainDirectory`, which hands nothing over when the partition owner leaves. That is why the
+first in-process attempt (a three-silo `FaultInjectionCluster`; the silo holding the pod hub's
+directory partition held in `ShuttingDown` by a lifecycle participant one stage below `BecomeActive`; the
+owner's re-assertion held at its outgoing `Attach`) delivered the post every time: it was measuring
+the test default.
 
-`ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest` pins the second row as a regression
-guard; `ADeliveryToAPodHubWithNoSiloLeavingArrivesTest` is its negative control.
+`FaultInjectionCluster.UsesDistributedGrainDirectory` now declares which directory a fixture runs, and
+`DefaultDirectoryIsDistributed(i)` reads it off each silo; every fixture asserts the two agree at deploy.
+With the harness's configurator removed, so that the silos run `LocalGrainDirectory`, the same case
+measured (Orleans 10.4.2):
 
-**What the in-process runs also showed.** The membership-change re-assertion's `Attach` lands on the
-owner's still-live local activation in about a millisecond and never touches the directory: a
-re-assertion cannot re-register an entry that a re-partition dropped. That it did not matter here is
-the open question below, not a reason to trust it.
+| Directory | While the leave and the owner's re-assertion are both held | After the re-assertion is released |
+|---|---|---|
+| `DistributedGrainDirectory` (test default) | The post from the third silo is delivered. | — |
+| `LocalGrainDirectory` (production) | The request from the third silo is **refused**: the directory has no registration, prefer-local places a throw-away activation on the asking silo, and it answers `PodHubNotHere`. The hub receives nothing. | Posts reach the hub again. |
 
-**Not established.**
+So on production's directory the gap is exactly the time between the partition owner leaving and the
+owner's membership-change re-assertion landing. That fits the 200–400 ms of #7842. The cases:
 
-- Why the third silo's lookup found the entry at the new partition owner although the leaving silo
-  had not handed its partition over. One diagnostic lookup at the new owner did return no entry, and a
-  later one returned an activation on a non-owner silo, which suggests a throw-away activation was
-  placed and then migrated home by the claim's step-aside — in-process that settles inside the few
-  milliseconds before the post; on a loaded production pod it may not. This was not pinned down.
-- Whether production's refusals came from that window at all. The asker pod's own membership
-  notification time and its `[POD-HUB]` claim lines for 18:16:21Z are not in the shipped logs.
-- The reply side is a real gap whatever the trigger: a transient pod-hub refusal NACKs the REPLIER
-  (`RoutingGrain.AnswerPodHubNotHere`), which has nothing to retry, and the asker is never told. Any
-  directory gap of any length therefore loses the replies sent inside it silently. Closing that is a
-  design decision, not a local fix: re-deliver a refused delivery once the claim lands (bounded and
-  event-driven), or move pod-hub grains to a directory that hands partitions over (Orleans'
-  `DistributedGrainDirectory`, which needs a mixed-version roll plan because each silo resolves the
-  directory for itself).
+- `ADeliveryToAPodHubSurvivesItsDirectoryPartitionLeavingTest`: the distributed directory survives the leave.
+- `ALocalDirectoryLosesAPodHubEntryUntilItsClaimIsReassertedTest`: the local directory loses the entry, and the re-assertion heals it. It is the counterpart that shows the directory is the variable.
+- `ADeliveryToAPodHubWithNoSiloLeavingArrivesTest`: the route with no leave.
+
+The fix had two parts, chosen by the owner. Part 2 shipped; part 1 did not (see below).
+
+### Part 2 (shipped): a refused reply ends in a named failure at its asker
+
+A transient pod-hub refusal used to be answered only to the delivery's SENDER
+(`RoutingGrain.AnswerPodHubNotHere`). For a reply, the sender is the REPLIER, which has nothing to retry,
+while the hub waiting for the reply is the delivery's TARGET, the very address the router could not
+reach. Now, when the refused delivery is a correlated reply (`RoutingGrain.IsAwaitedReply`: it carries
+`PostOptions.RequestId`, and `MayAnswer()` holds, so a NACK never begets a NACK), the router also sends
+that target a `DeliveryFailure` (`RoutingGrain.RefusedReplyFailure`):
+
+- correlated by the ORIGINAL request's id, so the asker's `hub.Observe(...)` callback errors at once;
+- `ErrorType.ShuttingDown`, because the outcome is unconfirmed rather than failed (the same verdict
+  `MessageService` gives a reply a disposing hub could not send), and it is the verdict
+  `SynchronizationStream` and `MeshNodeStreamCache` ride out and re-ask on;
+- with a message that names the reply, the replier, the asker and the router's refusal.
+
+**The carrier does not use the asker's directory entry**, because that entry is the thing that is missing.
+`ISiloLocalDeliveryGrain`, keyed by a silo's address, is placed on that silo by a placement hint (the
+`ISiloDrainNoticeGrain` trick) and hands a delivery to that silo's local route table. The router does
+not know which silo hosts the asker, and the envelope does not say, so it asks each member silo that is
+`Active` or `ShuttingDown`. The one whose local route table holds the asker's host delivers, and every
+other silo answers `false`. That costs a few grain calls per refused reply, never per message. If no
+silo takes it (the asker's process is gone, or it runs a build without the grain), the router logs ONE
+Warning naming the request and the asker, never silence. The work runs on the routing pool and is
+tracked by the silo-stop quiescence gauge, like every NACK.
+
+Tests (`MeshWeaver.FaultInjection.Test`, two multi-silo silos):
+
+- `ARefusedReplyTellsItsAskerByNameTest`. The asker's claim is held by `ClaimHold`, an outgoing Orleans
+  grain-call filter, so its address has no registration. The responder's correlated reply is refused on
+  the other silo, and the asker receives the named, correlated `ShuttingDown` failure in about 0.5 s
+  while its claim is still held.
+- **Negative control 1:** the same case with the router's report call removed is red. Nothing reaches
+  the asker within 10 s. This was measured once, locally, and is not a committed test.
+- **Negative control 2:** `AnUncorrelatedMessageRefusedOnItsWayIsNotReportedTest`. The same refusal of a
+  message that is not a reply produces no failure at its target.
+
+### Part 1 (moving to `DistributedGrainDirectory`): NOT shipped
+
+Part 1 was to move pod-hub grains (or all grains) to Orleans'
+`DistributedGrainDirectory`. Each silo picks its directory itself, so old and new silos run side by
+side during a roll, and a change may not split the directory during a normal roll. The mixed-cluster
+analysis says it cannot be made safe on Orleans 10.4.2, so the directory was not changed:
+
+1. **Per grain type (a named directory) is a split by construction.** `AddDistributedGrainDirectory(name)`
+   plus a per-type resolver (or `[GrainDirectory]`) puts `IPodHubGrain` in a second directory on the new
+   silos only. An old silo looks the hub up in its `LocalGrainDirectory`, finds nothing, places a
+   throw-away on itself and refuses: #7842's failure on every roll, until the last old silo is gone.
+   Orleans' own fix notes say a local-default cluster with a named distributed directory "require[s] a
+   coordinated restart for migration" (dotnet/orleans#11564). A named distributed directory also caused
+   duplicate activations of default-directory grains from 10.2.0 to 10.4.0 (dotnet/orleans#11512). That
+   is fixed in 10.4.2 by dotnet/orleans#11553.
+2. **The default directory (all grains) has a rolling-upgrade path in 10.4.2, and it loses exactly what
+   we need to keep.** 10.x ships the compatibility system targets: `DistributedRemoteGrainDirectory` on
+   new silos, and `LocalGrainDirectoryPartitionCompatibility` and `LocalGrainDirectoryClientCompatibility`
+   on old ones (dotnet/orleans#9881 and follow-ups). Orleans' own description is that the mixed phase
+   "can expose one older local activation alongside one newer distributed activation" (dotnet/orleans#10705).
+   The issue that blocks making the distributed directory the default in Orleans 11 is still OPEN:
+   **"Mixed local/distributed directory rolling upgrade loses registrations when local silos leave"**
+   (dotnet/orleans#11557). Its reproduction is our failure: after an old silo leaves, a live activation
+   has no directory registration. The fix (dotnet/orleans#11564) is on Orleans `main` only. `v10.4.2` and
+   the `10.x` branch do not contain it (the compare `v10.4.2...10.x` was 0 commits ahead, measured
+   2026-11-06).
+3. **A configuration switch on the deployment record does not make it safe.** Flipping a switch is
+   itself a roll: silos pick up the new directory one by one, so the cluster is mixed during the flip,
+   which is exactly the window in (2). "Every silo first runs a build that knows both" does not help,
+   because the defect lies between a silo running the local directory and a silo running the distributed
+   one. Which builds they run does not change it.
+
+**The safe paths, for a later decision.** (a) An Orleans release that contains dotnet/orleans#11564
+(a 10.x backport, or the 11.0 line), followed by the two-rollout procedure Orleans documents: first
+every silo on that release, then a second rollout that calls `AddDistributedGrainDirectory()`.
+(b) On 10.4.2, a coordinated full-cluster restart: every silo stops, then every silo starts on the
+distributed directory. That is downtime and a change to the deploy strategy, so it is a maintainer's
+decision. Until then, part 2 above means a reply lost in the gap shows up as a named, transient error
+at its asker, which its own recovery re-asks on.
+
+### Not established
+
+- That production's #7842 and #7907 refusals came from this window. The mechanism is reproduced
+  in-process on production's directory, and it fits the production timing. The asker pod's membership
+  notification time and its `[POD-HUB]` lines for 18:16:21Z were not in the shipped logs.
+- Whether the re-assertion closes the gap as fast on a loaded production pod as in-process, where it
+  lands within milliseconds of being released.
+- The part 2 carrier in a mixed roll. An old-image silo has no `ISiloLocalDeliveryGrain`, so an asker
+  hosted there is not told, and the router logs the Warning. This was reasoned, not tested.
+- Whether a reply's DeliveryFailure always lands in a callback. If the asker's wait has already ended
+  (its own budget elapsed), the failure arrives uncorrelated and is handled as an ordinary
+  `DeliveryFailure` message.
 
 ## The diagnosability that was missing
 
