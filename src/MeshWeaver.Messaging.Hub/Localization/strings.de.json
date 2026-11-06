@@ -2648,6 +2648,7 @@
   "auth.accountStatusUnavailable": "Ihr Kontostatus konnte noch nicht ermittelt werden. Versuchen Sie es in Kürze erneut.",
   "invitations.deleteRefused.noCaller": "Nur ein Plattform-Administrator kann eine Einladung löschen; die Anfrage nannte keinen Aufrufer.",
   "invitations.deleteRefused.notAdmin": "Nur ein Plattform-Administrator kann eine Einladung löschen; '{0}' ist keiner.",
+  "invitations.deleteRefused.listingIncomplete": "Die Einladung für {0} wurde nicht gelöscht: Die von ihr möglicherweise vorgemerkten ausstehenden Berechtigungen konnten nicht vollständig gelesen werden, sodass einige davon noch wirksam werden könnten. Es wurde nichts gelöscht; versuchen Sie es erneut.",
   "privacy.loadFailed": "_Die Datenschutzerklärung konnte nicht geladen werden: {0}_",
   "privacy.placeholder": "Schreiben Sie die Datenschutzerklärung in Markdown…",
   "ui.updateStatusUnavailable": "_Der Update-Status konnte nicht gelesen werden: {0}_",
