@@ -2117,6 +2117,9 @@ jobs:
           done
           echo "::error::control publish failed on all 3 attempts with no compiler or MSBuild diagnostics — read the last attempt's output."
           exit 1
+      # The VERSION rides the image config, so the registry read below can check it. The COMMIT is
+      # assembly metadata (the core tree checked out above, at the gate's target), invisible in the
+      # config — `control-acceptance` reads it off the booted image's /api/version instead (#7913).
       - name: The published control image must identify itself as this run's version
         run: >
           .github/scripts/check-image-build-identity.sh
@@ -2188,10 +2191,15 @@ jobs:
       # never the script's laptop default `pgvector/pgvector:pg17`: this job is already logged in to
       # ACR, and the anonymous Docker Hub pull is rate-limited per egress IP of the hosted runner
       # pool (Doc/Architecture/DockerHubInCi) — a red on the delivery path no commit could cure.
+      # `--expect-commit` is the gate's TARGET, the tree control-image checked out — never
+      # github.sha: a reconcile run builds the newest VOUCHED commit, which can be older than the
+      # run's head (#7913: run 12472, head a23f340, built and reported 74de6b7). Legs (a) and (b)
+      # read it back from the booted image's /api/version; a mismatch or no commit is RED.
       - name: Acceptance — (a) empty DB, (b) broken NodeType row, (c) N−1 on the migrated DB
         run: >
           bash .github/scripts/control-image-acceptance.sh
           --control "${{ env.ACR }}/memex-control:${{ env.STAGING }}"
+          --expect-commit "${{ needs.gate.outputs.sha }}"
           --migration "${{ env.ACR }}/memex-migration:${{ env.STAGING }}"
           --postgres "${{ env.ACR }}/dockerhub/pgvector/pgvector:pg17"
           ${{ steps.previous.outputs.args }}

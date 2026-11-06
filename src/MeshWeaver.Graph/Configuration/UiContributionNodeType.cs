@@ -166,8 +166,8 @@ public record UiContribution
     /// <summary>
     /// The START-PAGE context (the signed-in person's own home, <c>/</c> → <c>{user}/Activity</c>): a contribution
     /// here EMBEDS the layout area <see cref="Area"/> of the hub at <see cref="Address"/> (unset ⇒ the person's own
-    /// user node) as a CARD under the home's "Welcome back" heading — the default welcome template carries the
-    /// <c>@@("area/HomeCards")</c> region, and an authored home body may embed it too. It is the lane a package uses
+    /// user node) as a CARD in the home's <c>@@("area/HomeCards")</c> region. The DEFAULT home no longer embeds that region
+    /// (it is the message box, apps and spaces only — policy <c>home-is-composer-apps-spaces</c>); an authored home body that embeds it shows the cards. It is the lane a package uses
     /// to put ONE timely prompt on the start page (the Learning app's "build your learning path") without the home
     /// naming the package. Same rules as <see cref="InboxContext"/>: the partition rule of every embedding context,
     /// the closed node-shape gates against the user node (a shape gate narrows while the node is unknown), and the

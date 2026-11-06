@@ -16,8 +16,8 @@ page *is* the layout, and it can embed any live region with the `@@` operator.
 
 ## Default vs. your own
 
-By default `Body` is empty, so the page shows a **welcome template** — a short greeting plus a few
-embedded regions. The moment you write anything into `Body`, your markdown replaces the template
+By default `Body` is empty, so the page shows the **default template** — on the home page that is the
+message box, then your Apps, then your Spaces (`@@("area/Composer")` and `@@("area/Catalog")`). The moment you write anything into `Body`, your markdown replaces the template
 **verbatim**. Two ways to author it:
 
 - **Ask the assistant.** Use the chat on your home page: *"put my open threads at the top and drop
@@ -63,9 +63,9 @@ Some areas exist on **every** node; others are specific to the home page.
 | `@@("area/Search")` | every node | The node's [search catalog](/Doc/GUI/MeshSearch) — group, filter, and drill down via query params |
 | `@@("area/Pinned")` | home page | The items you've pinned (also the Pinned tab of the catalog — embed it separately only if you want it twice) |
 | `@@("area/Threads")` | home page | Your open (not-done) threads, newest first |
-| `@@("area/Catalog")` | home page | The [tabbed home surface](/Doc/Architecture/AppsHome) — Shared with me, Pinned, **Apps** (your installed apps + the platform defaults, incl. the Store), and Spaces |
+| `@@("area/Catalog")` | home page | The [home launcher](/Doc/Architecture/AppsHome) — the **Apps** grid (your apps, incl. the Store), then the **Spaces** grid |
 | `@@("area/Composer")` | home page | The chat composer (start a new thread right from your home) |
-| `@@("area/HomeCards")` | home page | The cards packages contribute to the start page (`UiContribution`, `Context: Home`): one timely prompt each — e.g. the Learning app's "build your learning path" — and nothing while none has anything to say. The default welcome template places it under the heading. |
+| `@@("area/HomeCards")` | home page | The cards packages contribute to the start page (`UiContribution`, `Context: Home`): one timely prompt each — e.g. the Learning app's "build your learning path" — and nothing while none has anything to say. Not on the default home; embed it in your own Body to show the cards. |
 | `@@("area/Chat")` | home page | The [Threads app](/Doc/Architecture/AppsHome) — your open threads as a vertical rail (✕ closes) beside the composer; also a full page at `/{you}/Chat` |
 
 > Generic areas like `Search` are not special to the home — they come from the standard node layout,

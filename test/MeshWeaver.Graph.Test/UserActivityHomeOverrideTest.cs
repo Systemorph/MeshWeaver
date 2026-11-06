@@ -27,56 +27,31 @@ public class UserActivityHomeOverrideTest
     [Fact]
     public void OwnerHome_WithoutBody_ServesTheWelcomeTemplate()
     {
-        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, "Roland", UserNode(new User()), Options);
+        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, UserNode(new User()), Options);
 
         home.Should().BeOfType<MarkdownControl>();
-        Markdown(home).Should().Contain("Welcome back, Roland");
+        Markdown(home).Should().Be(UserActivityLayoutAreas.UserWelcomeMarkdown());
         // NodePath must be set so the welcome's relative @@("area/…") embeds resolve to this user hub.
         ((MarkdownControl)home).NodePath.Should().Be(NodePath);
     }
 
     [Fact]
-    public void OwnerHome_WelcomeTemplate_HeadingOnTop_ComposerThenRegions_TextAtBottom()
+    public void OwnerHome_WelcomeTemplate_IsTheMessageBoxThenTheLauncher_AndNothingElse()
     {
-        var md = UserActivityLayoutAreas.UserWelcomeMarkdown("Roland");
+        // Policy home-is-composer-apps-spaces: the message box, apps, then spaces. The Catalog
+        // region is the Apps grid followed by the Spaces grid (BuildHome); the template carries
+        // only the composer and that region — no heading, no cards, no footer note.
+        var md = UserActivityLayoutAreas.UserWelcomeMarkdown();
 
-        md.Should().Contain("### Welcome back, Roland");
-        md.Should().Contain("@@(\"area/Composer\")");
-        md.Should().Contain("@@(\"area/Catalog\")");
-        // Pinned is a TAB of the Catalog region now (BuildHome) — no separate bottom band, or the
-        // pins would render twice on the default home. And no open-threads band either: the
-        // THREADS APP (an ordinary {owner}/_App record on the Apps grid) replaced it.
-        md.Should().NotContain("@@(\"area/Pinned\")");
-        md.Should().NotContain("@@(\"area/Threads\")");
-
-        var welcome = md.IndexOf("Welcome back", StringComparison.Ordinal);
-        var composer = md.IndexOf("area/Composer", StringComparison.Ordinal);
-        var catalog = md.IndexOf("area/Catalog", StringComparison.Ordinal);
-        var configurable = md.IndexOf("configurable", StringComparison.Ordinal);
-
-        // The welcome heading is back at the very top — above the chat composer.
-        welcome.Should().BeLessThan(composer, "the welcome heading must be at the top of the home page");
-        // Chat composer above the regions.
-        composer.Should().BeLessThan(catalog, "the chat composer sits above the regions");
-        // The configurable note sits at the BOTTOM — after the regions (the only "configurable" text).
-        configurable.Should().BeGreaterThan(catalog, "the configurable text must be at the bottom of the page");
-    }
-
-    [Fact]
-    public void OwnerHome_WelcomeTemplate_LinksToTheConfigGuide()
-    {
-        var md = UserActivityLayoutAreas.UserWelcomeMarkdown("Roland");
-
-        md.Should().Contain("configurable");
-        md.Should().Contain(UserActivityLayoutAreas.ConfigGuideLink);
-        md.Should().Contain("/Doc/GUI/ConfigurablePages");
+        var blocks = md.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        blocks.Should().Equal("@@(\"area/Composer\")", "@@(\"area/Catalog\")");
     }
 
     [Fact]
     public void OwnerHome_WithBody_RespectsTheOverrideVerbatim()
     {
         const string custom = "# My page\n\nJust my own words.\n\n@@(\"area/Search\")";
-        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, "Roland", UserNode(new User { Body = custom }), Options);
+        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, UserNode(new User { Body = custom }), Options);
 
         home.Should().BeOfType<MarkdownControl>();
         Markdown(home).Should().Be(custom);
@@ -90,9 +65,9 @@ public class UserActivityHomeOverrideTest
     [InlineData("\n\t ")]
     public void OwnerHome_WithBlankBody_FallsBackToTheDefault(string blank)
     {
-        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, "Roland", UserNode(new User { Body = blank }), Options);
+        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, UserNode(new User { Body = blank }), Options);
 
-        Markdown(home).Should().Contain("Welcome back, Roland",
+        Markdown(home).Should().Be(UserActivityLayoutAreas.UserWelcomeMarkdown(),
             "blank/whitespace is not an override — the default template must show");
     }
 
@@ -100,9 +75,9 @@ public class UserActivityHomeOverrideTest
     public void OwnerHome_NullContent_StillRendersTheDefault()
     {
         var node = MeshNode.FromPath(NodePath) with { Name = "Roland", NodeType = "User" };
-        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, "Roland", node, Options);
+        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, node, Options);
 
-        Markdown(home).Should().Contain("Welcome back, Roland");
+        Markdown(home).Should().Be(UserActivityLayoutAreas.UserWelcomeMarkdown());
     }
 
     [Fact]

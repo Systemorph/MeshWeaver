@@ -710,17 +710,17 @@ public class AppDirectoryPureTest
     public void DirectorySource_OffersTheHiddenScope_RecordsDoesNot()
     {
         var band = UserActivityLayoutAreas.BuildAppsBand("alice", null, fromDirectory: true);
-        band.ScopeTabs.Should().HaveCount(3, "apps, spaces, hidden");
-        var hidden = band.ScopeTabs![2];
+        band.ScopeTabs.Should().HaveCount(2, "apps, hidden — spaces have their own band below");
+        var hidden = band.ScopeTabs![1];
         hidden.Label.Should().Be("Hidden");
         hidden.Query.Should().Be("path:alice/_Apps scope:children nodeType:InstalledApp content.hidden:true sort:Name-asc");
         hidden.Sortable.Should().BeFalse("a hidden tile has no place on the grid to drag to");
         hidden.NavigateToMainNode.Should().BeTrue("a hidden app still opens");
 
         UserActivityLayoutAreas.BuildAppsBand("alice", null, fromDirectory: false)
-            .ScopeTabs.Should().HaveCount(2, "the legacy records band is unchanged");
+            .ScopeTabs.Should().HaveCount(1, "the legacy records band offers no Hidden filter");
         UserActivityLayoutAreas.BuildAppsBand("alice", "de", fromDirectory: true)
-            .ScopeTabs![2].Label.Should().Be("Ausgeblendet");
+            .ScopeTabs![1].Label.Should().Be("Ausgeblendet");
     }
 
     // ── Hide ─────────────────────────────────────────────────────────────────────────────────
