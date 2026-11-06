@@ -280,20 +280,21 @@ public static class DeploymentRecordExtensions
     /// <summary>The instance id at the plugin registry (blank = the deployment id).</summary>
     public static DeploymentContent WithRegistryInstanceId(this DeploymentContent d, string? instanceId) => d with { RegistryInstanceId = instanceId };
 
-    /// <summary>The deployment kind (null = an AKS instance; <see cref="DeploymentContent.MacHostKind"/> = a Mac Studio host).</summary>
-    public static DeploymentContent WithKind(this DeploymentContent d, string? kind) => d with { Kind = kind };
+    /// <summary>The deployment kind (unset = an AKS instance; <see cref="DeploymentContent.MacHostKind"/> = a Mac Studio host). A null argument leaves it unchanged.</summary>
+    public static DeploymentContent WithKind(this DeploymentContent d, string? kind) => d with { Kind = kind ?? d.Kind };
 
     /// <summary>
     /// This record is a Mac Studio HOST (<see cref="DeploymentContent.MacHostKind"/>): the machine it is,
     /// its node name on the private network, and the instances that live on it (local control instance first).
+    /// An omitted network name keeps the one already declared; instances are APPENDED to the declared list.
     /// </summary>
     public static DeploymentContent AsMacHost(this DeploymentContent d, string machine, string? networkName = null, params string[] instances) =>
         d with
         {
             Kind = DeploymentContent.MacHostKind,
             Machine = machine,
-            NetworkName = networkName,
-            Instances = instances.Length == 0 ? d.Instances : instances.ToImmutableList(),
+            NetworkName = networkName ?? d.NetworkName,
+            Instances = instances.Length == 0 ? d.Instances : (d.Instances ?? ImmutableList<string>.Empty).AddRange(instances),
         };
 
     /// <summary>

@@ -88,7 +88,7 @@ public class MacHostRecordTest
         Assert.Equal(expected, new DeploymentContent().WithKind(kind).IsMacHost);
 
     [Fact]
-    public void AsMacHost_SetsTheKindAndJoins_AndAnEmptyInstanceListKeepsTheDeclaredOne()
+    public void AsMacHost_SetsTheKindAndJoins_AndAnOmittedJoinKeepsTheDeclaredOne()
     {
         var host = new DeploymentContent().AsMacHost("C02XK0AAJGH7", "studio-1", "studio-1-control");
         Assert.True(host.IsMacHost);
@@ -99,6 +99,14 @@ public class MacHostRecordTest
         var renamed = host.AsMacHost("C02XK0AAJGH7", "studio-1b");
         Assert.Equal("studio-1b", renamed.NetworkName);
         Assert.Equal(host.Instances, renamed.Instances);
+
+        var again = renamed.AsMacHost("C02XK0AAJGH7");
+        Assert.Equal("studio-1b", again.NetworkName);
+        Assert.Equal(host.Instances, again.Instances);
+
+        var grown = again.AsMacHost("C02XK0AAJGH7", instances: "studio-1-client-a");
+        Assert.Equal(new[] { "studio-1-control", "studio-1-client-a" }, grown.Instances);
+        Assert.True(grown.WithKind(null).IsMacHost);
     }
 
     [Fact]
