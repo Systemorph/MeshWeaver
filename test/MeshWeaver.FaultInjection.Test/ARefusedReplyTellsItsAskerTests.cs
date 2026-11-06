@@ -12,6 +12,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans;
+using Orleans.Runtime;
 using Xunit;
 
 namespace MeshWeaver.FaultInjection.Test;
@@ -54,6 +55,9 @@ public abstract class ARefusedDeliveryAndItsAsker(FaultInjectionCluster mesh)
     /// <summary>Far inside the 30 s / 60 s budgets production ran out; the report is a few grain calls.</summary>
     protected static readonly TimeSpan Prompt = TimeSpan.FromSeconds(10);
 
+    /// <summary>The catalog key of the asker's sentence (<c>RoutingGrain.RefusedReplyMessageKey</c>, internal there).</summary>
+    internal const string RefusedReplyMessageKey = "error.replyRefusedOnTheWay";
+
     /// <summary>Whether the responder answers with a correlated REPLY (true) or an uncorrelated message.</summary>
     protected abstract bool AnswersWithACorrelatedReply { get; }
 
@@ -68,18 +72,22 @@ public abstract class ARefusedDeliveryAndItsAsker(FaultInjectionCluster mesh)
         askerRouting.HasMemoryStream.Should().BeFalse(
             "with a memory stream a refused pod-hub delivery falls back to the stream and this case would prove nothing");
 
-        // ── The responder on silo 1: answers the ping ────────────────────────────────────────────────
+        // ── The responder on silo 1: answers the ping, and hears its own refusal ─────────────────────
         var responder = new Address(OrleansTestMeshExtensions.SiloHostedStreamRoutedType, $"answer-{Guid.NewGuid():N}");
+        var responderHeard = new ReplaySubject<IMessageDelivery>();
+        var dispatchErrors = new ReplaySubject<Exception>();
         using var responderRegistration = responderRouting.RegisterStream(responder, (d, _) =>
         {
+            responderHeard.OnNext(d);
             if (d.Message is PingRequest && d.Sender is { } back)
             {
                 var options = AnswersWithACorrelatedReply
                     ? new PostOptions(responder).ResponseFor(d)
                     : new PostOptions(responder).WithTarget(back);
+                // PACKAGED, as every production delivery reaches the router: the payload is RawJson.
                 responderRouting.DeliverMessage(new MessageDelivery<PingResponse>(
-                        new PingResponse(), options, System.Text.Json.JsonSerializerOptions.Default))
-                    .Subscribe(_ => { }, _ => { });
+                        new PingResponse(), options, System.Text.Json.JsonSerializerOptions.Default).Package())
+                    .Subscribe(_ => { }, dispatchErrors.OnNext);
             }
             return Observable.Return(d.Processed());
         });
@@ -100,15 +108,27 @@ public abstract class ARefusedDeliveryAndItsAsker(FaultInjectionCluster mesh)
             await claim.Arrivals.Should().Within(TestTimeouts.Convergence)
                 .Emit("the asker's claim must be in flight and held — otherwise this case injected nothing", ct);
 
+            // The asker reads German: the language the reply carries back (ResponseFor copies it).
             var ping = new MessageDelivery<PingRequest>(
                 new PingRequest(), new PostOptions(asker).WithTarget(responder),
-                System.Text.Json.JsonSerializerOptions.Default);
+                System.Text.Json.JsonSerializerOptions.Default)
+                 with { AccessContext = new AccessContext { ObjectId = "asker", Locale = "de" } };
             // Straight to the routing grain: the ungated shape, so the answer overtakes the held claim.
             await mesh.Silo(Asker).GetRequiredService<IGrainFactory>().GetGrain<IRoutingGrain>("default")
                 .RouteMessage(ping).WaitAsync(TestTimeouts.Convergence, ct);
 
-            var answer = heard.Where(d => d.Message is PingResponse);
+            var answer = heard.Where(d => d.Message is PingResponse or RawJson && d.Sender == responder);
             var failure = heard.Where(d => d.Message is DeliveryFailure);
+
+            // POSITIVE: the refusal happened — the router NACKed the responder for its answer. Without
+            // this the asker-side assertions below could pass on an answer that never left.
+            var refusal = await responderHeard.Where(d => d.Message is DeliveryFailure).Take(1)
+                .Should().Within(Prompt).Emit(
+                    $"the answer to '{asker}' must be refused on silo {Responder} and the responder NACKed", ct);
+            refusal.Message.Should().BeOfType<DeliveryFailure>().Which.TargetUnserved.Should().BeTrue(
+                "it is the router's 'no silo serves that hub' verdict, not some other failure");
+            await dispatchErrors.Should().NotEmit(TimeSpan.FromMilliseconds(1),
+                "the answer's dispatch must not have faulted — a faulted dispatch is not a refusal", ct);
 
             if (AnswersWithACorrelatedReply)
             {
@@ -123,9 +143,8 @@ public abstract class ARefusedDeliveryAndItsAsker(FaultInjectionCluster mesh)
                 var verdict = told.Message.Should().BeOfType<DeliveryFailure>().Subject;
                 verdict.ErrorType.Should().Be(ErrorType.ShuttingDown,
                     "the reply's work may have happened: the outcome is unconfirmed, and the asker's own recovery re-asks on it");
-                verdict.Message.Should().Contain("was refused on its way back").And.Contain(asker.ToString())
-                    .And.Contain("no silo in this cluster is currently serving that hub",
-                        "the asker's error names the refusal, so a reader can tell it from a timeout");
+                verdict.Message.Should().Be(LocalizationCatalog.Get(RefusedReplyMessageKey, "de"),
+                    "the asker's error is the catalog's named sentence, in the asker's language, not a timeout");
             }
             else
             {
@@ -176,5 +195,108 @@ public class AnUncorrelatedMessageRefusedOnItsWayIsNotReportedTest(AnUncorrelate
 
         /// <inheritdoc />
         protected override Type SiloConfiguratorType => typeof(MultiSiloClaimHoldConfigurator);
+    }
+}
+
+/// <summary>
+/// <b>#7842 — the asker of a refused reply is told even when ITS silo is <c>ShuttingDown</c>, through a
+/// carrier that was never called before.</b>
+///
+/// <para>Orleans places no new activation on a <c>ShuttingDown</c> silo and is deactivating the ones it
+/// has, so a per-silo GRAIN could not reach an asker there unless an activation happened to exist. The
+/// carrier is a grain SERVICE (a per-silo system target, addressed by the silo, no placement), and this
+/// case pins that it reaches a draining asker cold: silo 1 is held in <c>ShuttingDown</c> by
+/// <see cref="ShutdownHold"/> while its asker's local route is still live, the asker's claim is held so no
+/// registration exists, and the responder's reply is refused on silo 0.</para>
+/// </summary>
+public class ARefusedReplyReachesAnAskerOnAShuttingDownSiloTest(ARefusedReplyReachesAnAskerOnAShuttingDownSiloTest.Cluster mesh)
+    : IClassFixture<ARefusedReplyReachesAnAskerOnAShuttingDownSiloTest.Cluster>
+{
+    private const int Responder = 0;
+    private const int Asker = 1;
+    private static readonly TimeSpan Prompt = TimeSpan.FromSeconds(10);
+
+    [Fact(Timeout = 120_000)]
+    public async Task TheAskerOnAShuttingDownSilo_IsToldByAColdCarrier()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var askerRouting = mesh.Hub(Asker).ServiceProvider.GetRequiredService<IRoutingService>()
+            .Should().BeOfType<OrleansRoutingService>().Subject;
+        var responderRouting = mesh.Hub(Responder).ServiceProvider.GetRequiredService<IRoutingService>()
+            .Should().BeOfType<OrleansRoutingService>().Subject;
+        var askerSilo = mesh.Silo(Asker).GetRequiredService<ILocalSiloDetails>().SiloAddress;
+
+        var responder = new Address(OrleansTestMeshExtensions.SiloHostedStreamRoutedType, $"answer-{Guid.NewGuid():N}");
+        var responderHeard = new ReplaySubject<IMessageDelivery>();
+        var dispatchErrors = new ReplaySubject<Exception>();
+        using var responderRegistration = responderRouting.RegisterStream(responder, (d, _) =>
+        {
+            responderHeard.OnNext(d);
+            if (d.Message is PingRequest)
+                responderRouting.DeliverMessage(new MessageDelivery<PingResponse>(
+                        new PingResponse(), new PostOptions(responder).ResponseFor(d),
+                        System.Text.Json.JsonSerializerOptions.Default).Package())
+                    .Subscribe(_ => { }, dispatchErrors.OnNext);
+            return Observable.Return(d.Processed());
+        });
+        await (responderRouting.PodHubClaimSettled(responder) ?? Observable.Return(Unit.Default))
+            .Take(1).Should().Within(TestTimeouts.Convergence).Emit("the responder's claim lands", ct);
+
+        var asker = new Address(OrleansTestMeshExtensions.SiloHostedStreamRoutedType, $"asker-{Guid.NewGuid():N}");
+        using var claim = mesh.Silo(Asker).GetRequiredService<ClaimHold>().Hold(asker.ToString());
+        var heard = new ReplaySubject<IMessageDelivery>();
+        using var registration = askerRouting.RegisterStream(asker, (d, _) =>
+        {
+            heard.OnNext(d);
+            return Observable.Return(d.Processed());
+        });
+        await claim.Arrivals.Should().Within(TestTimeouts.Convergence)
+            .Emit("the asker's claim is in flight and held, so no registration exists for it", ct);
+
+        using var held = mesh.Silo(Asker).GetRequiredService<ShutdownHold>().Arm();
+        var stopping = mesh.Drain(Asker);
+        try
+        {
+            await held.Arrivals.Should().Within(TestTimeouts.CrossSilo).Emit(
+                $"silo {Asker} has written ShuttingDown and is held there", ct);
+            mesh.Silo(Responder).GetRequiredService<IClusterMembershipService>().CurrentSnapshot
+                .GetSiloStatus(askerSilo).Should().Be(SiloStatus.ShuttingDown,
+                    "the router's own view must have the asker's silo leaving when the reply is refused");
+            askerRouting.TryGetLocalRoute(asker).Should().NotBeNull(
+                "the asker must still be live on its draining silo — otherwise there is nobody to tell");
+
+            var ping = new MessageDelivery<PingRequest>(
+                new PingRequest(), new PostOptions(asker).WithTarget(responder),
+                System.Text.Json.JsonSerializerOptions.Default);
+            // Routed on the responder's (Active) silo: the asker's own silo is the one leaving.
+            await mesh.Silo(Responder).GetRequiredService<IGrainFactory>().GetGrain<IRoutingGrain>("default")
+                .RouteMessage(ping).WaitAsync(TestTimeouts.Convergence, ct);
+
+            await responderHeard.Where(d => d.Message is DeliveryFailure).Take(1).Should().Within(Prompt)
+                .Emit($"the answer to '{asker}' is refused on silo {Responder} — the positive refusal signal", ct);
+            await dispatchErrors.Should().NotEmit(TimeSpan.FromMilliseconds(1), "the answer's dispatch did not fault", ct);
+
+            var told = await heard.Where(d => d.Message is DeliveryFailure).Take(1).Should().Within(Prompt).Emit(
+                $"the asker on ShuttingDown silo {Asker} must be told through its silo's carrier, which needs no placement",
+                ct);
+            told.Properties.TryGetValue(PostOptions.RequestId, out var correlation).Should().BeTrue();
+            correlation?.ToString().Should().Be(ping.Id, "correlated by the original request's id");
+        }
+        finally
+        {
+            claim.Release();
+            held.Release();
+            await stopping.WaitAsync(TestTimeouts.CrossSilo, ct);
+        }
+    }
+
+    /// <summary>Two multi-silo silos with the claim hold and the shutdown hold; its own: the case stops a silo.</summary>
+    public class Cluster : FaultInjectionCluster
+    {
+        /// <inheritdoc />
+        protected override int SiloCount => 2;
+
+        /// <inheritdoc />
+        protected override Type SiloConfiguratorType => typeof(MultiSiloShutdownHoldConfigurator);
     }
 }

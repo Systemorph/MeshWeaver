@@ -270,7 +270,8 @@ owner's membership-change re-assertion landing. That fits the 200–400 ms of #7
 - `ALocalDirectoryLosesAPodHubEntryUntilItsClaimIsReassertedTest`: the local directory loses the entry, and the re-assertion heals it. It is the counterpart that shows the directory is the variable.
 - `ADeliveryToAPodHubWithNoSiloLeavingArrivesTest`: the route with no leave.
 
-The fix had two parts, chosen by the owner. Part 2 shipped; part 1 did not (see below).
+Two fixes were weighed. Part 2 is shipped. Part 1, a move to `DistributedGrainDirectory`, is decided
+against and parked (see below).
 
 ### Part 2 (shipped): a refused reply ends in a named failure at its asker
 
@@ -285,68 +286,104 @@ that target a `DeliveryFailure` (`RoutingGrain.RefusedReplyFailure`):
 - `ErrorType.ShuttingDown`, because the outcome is unconfirmed rather than failed (the same verdict
   `MessageService` gives a reply a disposing hub could not send), and it is the verdict
   `SynchronizationStream` and `MeshNodeStreamCache` ride out and re-ask on;
-- with a message that names the reply, the replier, the asker and the router's refusal.
+- whose message is a sentence a person may read (`PortalErrorReporting.Describe` shows it verbatim):
+  the catalog key `error.replyRefusedOnTheWay`, resolved in the asker's language. The reply carries the
+  asker's `AccessContext`, because `ResponseFor` copies it from the request, so the router reads
+  `reply.AccessContext.Locale`. This follows the pattern core's other user-facing refusals use
+  (`SynchronizationStream`: `LocalizationCatalog.Get(key, delivery.AccessContext?.Locale)` on the
+  failure, with the details in the log).
 
-**The carrier does not use the asker's directory entry**, because that entry is the thing that is missing.
-`ISiloLocalDeliveryGrain`, keyed by a silo's address, is placed on that silo by a placement hint (the
-`ISiloDrainNoticeGrain` trick) and hands a delivery to that silo's local route table. The router does
-not know which silo hosts the asker, and the envelope does not say, so it asks each member silo that is
-`Active` or `ShuttingDown`. The one whose local route table holds the asker's host delivers, and every
-other silo answers `false`. That costs a few grain calls per refused reply, never per message. If no
-silo takes it (the asker's process is gone, or it runs a build without the grain), the router logs ONE
-Warning naming the request and the asker, never silence. The work runs on the routing pool and is
-tracked by the silo-stop quiescence gauge, like every NACK.
+The router's detailed refusal is diagnostic text and goes to the log, never to the viewer
+(`RoutingGrain.DescribeRefusedReply`). It names the reply, the replier, the asker, the request and the
+refusal. A routed reply is packaged as `RawJson`, whose CLR type names only the wrapper, so the payload
+is identified by `DeliveryPayloadBounds.Preview` and JSON-quoted as that reader's contract requires.
 
-Tests (`MeshWeaver.FaultInjection.Test`, two multi-silo silos):
+**The carrier does not use the asker's directory entry**, because that entry is the thing that is
+missing. `ISiloLocalDeliveryService` is an Orleans grain SERVICE: a per-silo system target, addressed by
+the silo itself through `GrainServiceClient.GetGrainService(SiloAddress)`. It hands a delivery to that
+silo's local route table, and it is registered by `ConfigureMeshWeaverServer`.
+
+The carrier is a grain service rather than a grain keyed by the silo because of a draining asker.
+Orleans places no new activation on a `ShuttingDown` silo and is deactivating the ones it has, so a cold
+per-silo grain could not reach an asker there. A grain service exists from silo start to termination
+and needs no placement. Orleans stops grain services first on a graceful stop, but `Stop()` only flips
+their status: the system target keeps answering calls until the silo's message centre goes down.
+
+The router does not know which silo hosts the asker, and the envelope does not say, so it asks each
+member silo that is `Active` or `ShuttingDown`. The one whose local route table holds the asker's host
+delivers, and every other silo answers `false`. That costs a few system-target calls per refused reply,
+never per message. If no silo takes it (the asker's process is gone, or it runs a build without the
+carrier), the router logs ONE Warning with the diagnostic description, never silence. The work runs on
+the routing pool and is tracked by the silo-stop quiescence gauge, like every NACK.
+
+Tests (`MeshWeaver.FaultInjection.Test`, real multi-silo Orleans test clusters):
 
 - `ARefusedReplyTellsItsAskerByNameTest`. The asker's claim is held by `ClaimHold`, an outgoing Orleans
-  grain-call filter, so its address has no registration. The responder's correlated reply is refused on
-  the other silo, and the asker receives the named, correlated `ShuttingDown` failure in about 0.5 s
-  while its claim is still held.
-- **Negative control 1:** the same case with the router's report call removed is red. Nothing reaches
-  the asker within 10 s. This was measured once, locally, and is not a committed test.
-- **Negative control 2:** `AnUncorrelatedMessageRefusedOnItsWayIsNotReportedTest`. The same refusal of a
-  message that is not a reply produces no failure at its target.
+  grain-call filter, so its address has no registration. The responder's correlated reply is packaged as
+  `RawJson`, the shape production routes, and is refused on the other silo. The test awaits the positive
+  refusal signal: the responder receives the router's `TargetUnserved` NACK, and the answer's dispatch
+  did not fault. The asker then receives the correlated `ShuttingDown` failure whose message is the
+  German catalog sentence, because the asker's request carried `Locale = "de"`.
+- `ARefusedReplyReachesAnAskerOnAShuttingDownSiloTest`. The asker's silo is held in `ShuttingDown` by
+  `ShutdownHold`, its local route is still live, and its carrier has never been called. The reply is
+  refused on the Active silo, and the asker is told through its silo's grain service.
+- **Negative control 1:** `ARefusedReplyTellsItsAskerByNameTest` with the router's report call removed is
+  red: nothing reaches the asker within 10 s. This was measured locally and is not a committed test.
+- **Negative control 2:** `AnUncorrelatedMessageRefusedOnItsWayIsNotReportedTest`. The same refusal,
+  with the same positive signal at the responder, of a message that is not a reply produces no failure
+  at its target.
+- `RefusedReplyFailureTest` (`MeshWeaver.Hosting.Orleans.Test`). For a packaged reply, the diagnostic line
+  names the payload's `$type` and never `RawJson`. The asker's sentence is the catalog's in the asker's
+  language, is not English for a German asker, and carries no router diagnostics.
 
-### Part 1 (moving to `DistributedGrainDirectory`): NOT shipped
+### Part 1 (moving to `DistributedGrainDirectory`): DECIDED AGAINST, parked
 
-Part 1 was to move pod-hub grains (or all grains) to Orleans'
-`DistributedGrainDirectory`. Each silo picks its directory itself, so old and new silos run side by
-side during a roll, and a change may not split the directory during a normal roll. The mixed-cluster
-analysis says it cannot be made safe on Orleans 10.4.2, so the directory was not changed:
+**Decision: stay on `LocalGrainDirectory`, ship part 2 only.** There is no directory switch, no
+coordinated restart and no migration that accepts duplicates. The reasons:
 
-1. **Per grain type (a named directory) is a split by construction.** `AddDistributedGrainDirectory(name)`
+- On Orleans, a rolling migration between the directories means **duplicate activations** while old
+  and new silos coexist. For this mesh that is two activations serving one node, i.e. two per-node hubs
+  for one address, during every such roll.
+- The gap the directory leaves is the 200–400 ms between the partition owner leaving and the owner's
+  re-assertion landing. With part 2, a reply lost in that gap fails fast with a named,
+  `ShuttingDown`-classified error, and callers re-ask on that error.
+
+What the analysis found (Orleans 10.4.2, from the decompiled runtime and the upstream repository):
+
+1. **Each silo picks its directory itself**, so old and new silos run side by side during any roll that
+   changes it. A switch on the deployment record does not avoid that, because flipping it is itself a
+   roll, and which builds the silos run does not change it.
+2. **Per grain type (a named directory) is a split by construction.** `AddDistributedGrainDirectory(name)`
    plus a per-type resolver (or `[GrainDirectory]`) puts `IPodHubGrain` in a second directory on the new
    silos only. An old silo looks the hub up in its `LocalGrainDirectory`, finds nothing, places a
-   throw-away on itself and refuses: #7842's failure on every roll, until the last old silo is gone.
-   Orleans' own fix notes say a local-default cluster with a named distributed directory "require[s] a
-   coordinated restart for migration" (dotnet/orleans#11564). A named distributed directory also caused
-   duplicate activations of default-directory grains from 10.2.0 to 10.4.0 (dotnet/orleans#11512). That
-   is fixed in 10.4.2 by dotnet/orleans#11553.
-2. **The default directory (all grains) has a rolling-upgrade path in 10.4.2, and it loses exactly what
-   we need to keep.** 10.x ships the compatibility system targets: `DistributedRemoteGrainDirectory` on
-   new silos, and `LocalGrainDirectoryPartitionCompatibility` and `LocalGrainDirectoryClientCompatibility`
-   on old ones (dotnet/orleans#9881 and follow-ups). Orleans' own description is that the mixed phase
-   "can expose one older local activation alongside one newer distributed activation" (dotnet/orleans#10705).
-   The issue that blocks making the distributed directory the default in Orleans 11 is still OPEN:
-   **"Mixed local/distributed directory rolling upgrade loses registrations when local silos leave"**
-   (dotnet/orleans#11557). Its reproduction is our failure: after an old silo leaves, a live activation
-   has no directory registration. The fix (dotnet/orleans#11564) is on Orleans `main` only. `v10.4.2` and
-   the `10.x` branch do not contain it (the compare `v10.4.2...10.x` was 0 commits ahead, measured
-   2026-11-06).
-3. **A configuration switch on the deployment record does not make it safe.** Flipping a switch is
-   itself a roll: silos pick up the new directory one by one, so the cluster is mixed during the flip,
-   which is exactly the window in (2). "Every silo first runs a build that knows both" does not help,
-   because the defect lies between a silo running the local directory and a silo running the distributed
-   one. Which builds they run does not change it.
+   throw-away activation on itself and refuses. That is #7842's failure on every roll, until the last old
+   silo is gone. Separately, a named distributed directory caused duplicate activations of
+   default-directory grains from 10.2.0 to 10.4.0 (dotnet/orleans#11512, fixed in 10.4.2 by
+   dotnet/orleans#11553).
+3. **The default directory (all grains) has a rolling-upgrade path, and Orleans' own path accepts
+   transient DUPLICATE ACTIVATIONS while it is mixed.** 10.x ships compatibility system targets for a
+   mixed cluster: `DistributedRemoteGrainDirectory` on new silos, and
+   `LocalGrainDirectoryPartitionCompatibility` and `LocalGrainDirectoryClientCompatibility` on old ones
+   (dotnet/orleans#9881). Orleans describes the mixed phase as one that "can expose one older local
+   activation alongside one newer distributed activation", converging once the legacy hosts are gone
+   (dotnet/orleans#10705).
+4. **The upstream proposal that would have tightened the mixed phase was not merged.** dotnet/orleans#11564
+   ("preserve mixed-cluster registration safety") was closed without merging. Its closing comment
+   accepts that duplicate activations can occur while legacy and distributed directory hosts coexist,
+   and says the proposal is not being pursued. The issue it addressed, **"Mixed local/distributed
+   directory rolling upgrade loses registrations when local silos leave"** (dotnet/orleans#11557), is
+   still open, and its reproduction is our failure: after a legacy silo leaves, a live activation has no
+   registration.
 
-**The safe paths, for a later decision.** (a) An Orleans release that contains dotnet/orleans#11564
-(a 10.x backport, or the 11.0 line), followed by the two-rollout procedure Orleans documents: first
-every silo on that release, then a second rollout that calls `AddDistributedGrainDirectory()`.
-(b) On 10.4.2, a coordinated full-cluster restart: every silo stops, then every silo starts on the
-distributed directory. That is downtime and a change to the deploy strategy, so it is a maintainer's
-decision. Until then, part 2 above means a reply lost in the gap shows up as a named, transient error
-at its asker, which its own recovery re-asks on.
+**If this is ever reopened**, the options are, stated neutrally:
+
+- a two-rollout migration that accepts duplicate activations, and therefore duplicate per-node hubs,
+  during the mixed roll;
+- a coordinated full-cluster restart onto the distributed directory, which means downtime;
+- staying on `LocalGrainDirectory` with part 2, the current decision.
+
+A rolling migration should be reconsidered only against a separately verified guarantee that
+registrations are preserved and no duplicates occur in a mixed cluster.
 
 ### Not established
 
@@ -355,8 +392,10 @@ at its asker, which its own recovery re-asks on.
   notification time and its `[POD-HUB]` lines for 18:16:21Z were not in the shipped logs.
 - Whether the re-assertion closes the gap as fast on a loaded production pod as in-process, where it
   lands within milliseconds of being released.
-- The part 2 carrier in a mixed roll. An old-image silo has no `ISiloLocalDeliveryGrain`, so an asker
+- The part 2 carrier in a mixed roll. An old-image silo has no `ISiloLocalDeliveryService`, so an asker
   hosted there is not told, and the router logs the Warning. This was reasoned, not tested.
+- How late in a graceful stop the carrier stays reachable. The test holds the silo in `ShuttingDown`.
+  After the message centre stops, the asker's process is going away and is not told.
 - Whether a reply's DeliveryFailure always lands in a callback. If the asker's wait has already ended
   (its own budget elapsed), the failure arrives uncorrelated and is handled as an ordinary
   `DeliveryFailure` message.
