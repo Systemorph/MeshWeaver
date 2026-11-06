@@ -92,6 +92,19 @@ Two other choices were considered and rejected:
   Measured on the cut-over: main-cd #10351 targeted `c6310ff` (the minter's tip `118dd05` had no
   completed required check yet), composed `3.0.0-ci.10351`, and the first version of the assertion
   refused it.
+- **So the version names the RUN and the commit names the TARGET — compare a build's commit with
+  the gate's target, never with the run's head.** `/api/version` reports the core commit the image
+  was compiled from (assembly metadata, `PlatformBuildInfo.CommitHash`). On a push run that is the
+  run's head; on a reconcile run it is the newest vouched commit, which can be older. #7913 read
+  `memex-control:3.1.12472` answering `74de6b7` as a stale stamp from cancelled run 12468: run 12472
+  was a schedule tick whose head `a23f340` had no completed required check, so its gate logged
+  "targeting 74de6b7", checked that commit out, and staged the image as
+  `staging-74de6b7-<run id>`. The reading was correct. The run's log names its target on the gate's
+  `Target:` line, and the staging tag carries its short sha. The commit is not in the image config,
+  so the registry-side identity check (`check-image-build-identity.sh`) cannot see it. The control
+  lane's acceptance boot now reads it back instead: `control-image-acceptance.sh --expect-commit
+  <gate target>` runs `check-reported-commit.sh` against legs (a) and (b), and it is RED on a
+  mismatch or on no commit at all.
 - **The release.** `release.yml` promotes a `<major>.<minor>.<run>` build by adding `<major>.<minor>.0`,
   moves no pointer for it, and still promotes a retired-notation set the old way.
 
