@@ -1,4 +1,5 @@
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Graph.Apps;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -174,6 +175,28 @@ public static class DocumentationExtensions
                 }
             });
 
+        // The documentation is an APP on every launcher that serves it (Doc/Architecture/AppsHome →
+        // "Declared apps"). Declared HERE, by the module that serves the partition, because the Doc
+        // root is no package root — no `app: true` root can stand for it — and a host without this
+        // module has no /Doc for a tile to open. Top-level, like the Inbox and Threads.
+        builder.AddDeclaredApp(DocumentationApp);
+
         return builder;
     }
+
+    /// <summary>The launcher's catalog key for the Documentation tile.</summary>
+    public const string DocumentationLabelKey = "launcher.documentation";
+
+    /// <summary>
+    /// The Documentation tile: opens the Doc partition's landing page, shown to a viewer who can
+    /// read it (the partition is public-read, so in practice everyone), top-level.
+    /// </summary>
+    public static DeclaredApp DocumentationApp { get; } = new(
+        DocumentationNodeProvider.RootNamespace, "Documentation",
+        DocumentationStaticRepoSource.DocIcon, DocumentationNodeProvider.RootNamespace)
+    {
+        LabelKey = DocumentationLabelKey,
+        LauncherGroup = "",
+        ProbePath = DocumentationNodeProvider.RootNamespace,
+    };
 }
