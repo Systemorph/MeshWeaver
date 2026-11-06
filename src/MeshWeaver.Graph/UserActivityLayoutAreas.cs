@@ -85,9 +85,6 @@ public static class UserActivityLayoutAreas
     /// </summary>
     public const string EditProfileArea = "EditProfile";
 
-    /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
-    internal const string ConfigGuideLink = "/Doc/GUI/ConfigurablePages";
-
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
 
@@ -215,7 +212,7 @@ public static class UserActivityLayoutAreas
                         nodeOwnerId, homeClock.ElapsedMilliseconds, ownerNode is not null);
 
                 if (isOwner)
-                    return (UiControl?)BuildOwnerHome(nodePath, ownerName, ownerNode, options);
+                    return (UiControl?)BuildOwnerHome(nodePath, ownerNode, options);
                 return (UiControl?)BuildProfile(nodePath, nodeOwnerId, ownerName, ownerNode,
                     isOwner: false, canSeeEmail: t.showEmail, options);
             })
@@ -288,35 +285,28 @@ public static class UserActivityLayoutAreas
     /// per-segment override — the page IS the override surface. Kept <c>internal</c> so the
     /// default-vs-override behaviour is unit-testable without standing up a hub.
     /// </summary>
-    internal static UiControl BuildOwnerHome(string nodePath, string ownerName, MeshNode? ownerNode, JsonSerializerOptions options)
+    internal static UiControl BuildOwnerHome(string nodePath, MeshNode? ownerNode, JsonSerializerOptions options)
     {
         // ContentAs (not `as User`): the owner-node stream alternates typed↔JsonElement↔null frames.
         var body = ownerNode.ContentAs<User>(options)?.Body;
-        var markdown = string.IsNullOrWhiteSpace(body) ? UserWelcomeMarkdown(ownerName) : body!;
+        var markdown = string.IsNullOrWhiteSpace(body) ? UserWelcomeMarkdown() : body!;
         return Controls.Markdown(markdown) with { NodePath = nodePath };
     }
 
     /// <summary>
-    /// The default home page shown until the owner authors their own <see cref="User.Body"/> — a
-    /// "Welcome back" heading on top, then the chat composer (start a thread right away) and the home
-    /// catalog embedded as <c>@@("area/…")</c> blocks (the same mechanism as the Space welcome's
-    /// <c>@@("area/Search")</c>), and a small "it's configurable" note at the bottom linking to the
-    /// config guide. No open-threads band: the THREADS APP (an ordinary <c>{owner}/_App</c> record
-    /// on the Apps grid, opening <c>/{owner}/Chat</c>) replaced it — the <c>area/Threads</c> area
-    /// stays registered so authored bodies embedding it keep working. This is the single source of
-    /// truth for "the default", shared by the render path and the unit tests.
+    /// The default home page shown until the owner authors their own <see cref="User.Body"/> — and
+    /// nothing else: the message box (start a thread right away), then the <b>Apps</b> grid, then the
+    /// <b>Spaces</b> grid (maintainer, 2026-11-06: <i>"we want plain message input, apps and then
+    /// spaces"</i>). No heading, no contributed cards, no content list, no footer note. The regions
+    /// that are no longer on it (<c>area/HomeCards</c>, <c>area/Threads</c>) stay registered, so an
+    /// authored body embedding them keeps working. This is the single source of truth for "the
+    /// default", shared by the render path and the unit tests.
     /// </summary>
-    internal static string UserWelcomeMarkdown(string ownerName) =>
-        $$"""
-        ### Welcome back, {{ownerName}}
-
-        @@("area/HomeCards")
-
+    internal static string UserWelcomeMarkdown() =>
+        """
         @@("area/Composer")
 
         @@("area/Catalog")
-
-        _This home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
         """;
 
     /// <summary>
@@ -909,125 +899,17 @@ public static class UserActivityLayoutAreas
         if (cfg.Style == HomeStyle.Catalog)
             return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy, spacePaths);
 
-        // TWO SECTIONS, apps first: the icon grid you launch things from, then the content you
-        // search through. They are different acts — one is "open my app", the other is "find that
-        // thing" — and mixing them into one tab strip made the apps just another lens on a search.
-        //
-        // 🚨 No separate "Shared with me" band any more. It existed because the catalog's scope
-        // queries cannot reach a module living in ANOTHER partition that the viewer was invited
-        // into (#385) — but that is a reason to put those items IN the list, not beside it. The
-        // grants are folded into All as an extra union leg (see BuildContentSection), so a shared
-        // module is simply content the viewer can reach, grouped by its type like everything else.
-        // Deleting the band without folding them in would have silently dropped every invitation.
+        // TWO GRIDS, apps first, then spaces — both launchers, both painted from query rows. The
+        // searchable content list that used to sit below them is gone from the home (maintainer,
+        // 2026-11-06: "plain message input, apps and then spaces"); content is reached by opening a
+        // space and through search. Spaces is its own band rather than a filter inside the apps
+        // grid: a viewer should see where they work without choosing a filter first.
+        var shared = privacy.Retain(sharedTargets);
         return Controls.Stack
             .WithWidth("100%")
             .WithStyle("gap: 24px; width: 100%;")
-            // The launcher's Spaces scope needs the invitations too — the same list the content
-            // section folds into All, screened the same way.
-            .WithView(BuildAppsBand(nodeOwnerId, locale, privacy.Retain(sharedTargets), spacePaths,
-                appsFromDirectory))
-            .WithView(BuildContentSection(
-                nodeOwnerId, config, user, locale, screen, privacy.Retain(sharedTargets), spacePaths));
-    }
-
-    /// <summary>
-    /// The <b>Content</b> section — ONE category of content plus, when the viewer has any, a
-    /// <b>Pinned</b> tab. The category is simply <b>All</b>: the SPACES the viewer can reach plus
-    /// their own home items. Slicing one list into three tabs was navigation the reader had to
-    /// think about before they could look at anything.
-    /// <para>🚨 At the root level the list is Spaces and only Spaces
-    /// (<see cref="RootTypeFilter"/>). Everything else that can sit at a partition root — a
-    /// publishing hub, an event hub, a plugin cover, a course — is something you LAUNCH, and it
-    /// appears exactly once, in the Apps band above.</para>
-    /// <para>Store items are excluded — those are apps, and an app appears exactly once, up in the
-    /// Apps section. The sort dropdown offers location / last accessed / last modified / alphabetical, and the
-    /// search box searches the active tab. <see cref="HomeConfig.Scope"/> can widen the list to the
-    /// full subtree. Pure, for tests.</para>
-    /// </summary>
-    internal static MeshSearchControl BuildContentSection(
-        string nodeOwnerId, HomeConfig? config, User? user, string? locale, PresentationScreen? screen,
-        IReadOnlyList<string>? sharedTargets = null, IReadOnlyList<string>? spacePaths = null)
-    {
-        var cfg = config ?? HomeConfigNodeType.Defaults;
-        var privacy = screen ?? PresentationScreen.Off;
-        var scopes = new List<MeshSearchScopeTab>();
-
-        // All FIRST, and therefore the DEFAULT tab: the view activates the first scope, and the
-        // control-level fallback query is scopes[0] — so "everything I can reach" is what the home
-        // opens on. Pinned is the narrower, opt-in lens and follows it.
-        //
-        // Cross-partition invitations (#385) are an extra UNION LEG here rather than a band of
-        // their own: a module someone shared with you is content you can reach, and the scope
-        // queries structurally cannot see it (they walk the viewer's own partition and the roots).
-        // Folding it in is what let the separate "Shared with me" section go without losing it.
-        var sharedLeg = sharedTargets is { Count: > 0 }
-            ? "\n" + $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions}"
-            : string.Empty;
-        scopes.Add(ContentScope("home.all", locale, cfg.EffectiveSort(),
-            (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions, spacePaths) + sharedLeg));
-
-        // Pinned — the owner's shortcuts, present only when there are pins.
-        // 🚨 The pins are INTERPOLATED INTO the query string, so the presentation screen (#1803)
-        // drops a marked one HERE, before the query exists — not only where its card is painted.
-        // No ItemArea: the inline unpin overlay used to resolve an area on each pinned node's OWN
-        // hub, the per-result foreign-area shape that failed in the distributed portal. Unpinning
-        // lives in the node menu, and the card comes from the query row.
-        var pins = privacy.Retain(user?.PinnedPaths);
-        if (pins.Count > 0)
-        {
-            var pinnedBase = $"path:({string.Join(" OR ", pins)})";
-            scopes.Add(ContentScope("home.pinned", locale, HomeSortBy.LastModified,
-                (sort, suffix) => sort == HomeSortBy.LastAccessed
-                    // source:accessed is an INNER JOIN — alone it would hide a never-opened pin.
-                    ? $"{pinnedBase} {suffix}\n{pinnedBase} {SortSuffixLastModified}"
-                    : $"{pinnedBase} {suffix}"));
-        }
-
-        // Mine — the viewer's OWN partition, which is the second leg of the All union standing on
-        // its own. Unconditional: your own space is the one tab that is never empty for you, and a
-        // tab that appears and disappears is worse than one that is occasionally short.
-        scopes.Add(ContentScope("home.mine", locale, cfg.EffectiveSort(),
-            (_, suffix) => $"namespace:{nodeOwnerId} is:main is:content{SpacesDedupExclusions} {suffix}"));
-
-        // Spaces — the cross-partition invitations (#385), which All folds in as a union leg. As a
-        // TAB it answers a different question, and "Spaces" is what those things ARE from the
-        // viewer's side: the workspaces they can reach but do not own. Present only when there is
-        // something in it, since the query is a path list and an empty list matches nothing at all.
-        if (sharedTargets is { Count: > 0 })
-            scopes.Add(ContentScope("home.spaces", locale, cfg.EffectiveSort(),
-                (_, suffix) =>
-                    $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions} {suffix}"));
-
-        // ONE flat list, ordered by LOCATION by default (policy explorer-navigation): each entry is
-        // a folder the viewer opens and drills into through its page's side index. The per-type
-        // fan-out is no longer the shipped shape — it put every top-level entry into one
-        // "Space (N)" group — and stays available only as the admin's explicit HomeConfig.Render
-        // = Grouped.
-        var content = Controls.MeshSearch
-            .WithTitle(LocalizationCatalog.Get("home.content", locale))
-            .WithScopeTabs(scopes.ToArray())
-            // Fallback for clients without scope support (react renders these): the first scope.
-            .WithHiddenQuery(scopes[0].Query)
-            .WithSortOptions([.. scopes[0].SortOptions!])
-            .WithShowSearchBox(true)
-            .WithViewOptions(true)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(cfg.Render == HomeCatalogRender.Grouped
-                ? MeshSearchRenderMode.Grouped
-                : MeshSearchRenderMode.Flat)
-            .WithMaxColumns(4)
-            // Fill the page. The home is where a viewer looks for something they can already see;
-            // a short list makes them search for what should have been on screen. 200 bounds the
-            // query; MaxRows caps the rows shown (per section when an admin chose Grouped).
-            .WithItemLimit(200)
-            .WithMaxRows(24)
-            .WithReactiveMode(true)
-            .WithCreateHref("/create");
-        // The admin's explicit Grouped: per-type sections, biggest first, with counts.
-        if (cfg.Render == HomeCatalogRender.Grouped)
-            content = content.WithGroupBy("NodeType").WithGroupByFrequency()
-                .WithSectionCounts(true).WithCollapsibleSections(true);
-        return content;
+            .WithView(BuildAppsBand(nodeOwnerId, locale, appsFromDirectory))
+            .WithView(BuildSpacesBand(nodeOwnerId, locale, spacePaths, shared));
     }
 
     /// <summary>
@@ -1048,8 +930,7 @@ public static class UserActivityLayoutAreas
     /// below (groups, order, drag and drop) is unchanged.</para>
     /// </summary>
     internal static MeshSearchControl BuildAppsBand(
-        string nodeOwnerId, string? locale, IReadOnlyList<string>? sharedTargets = null,
-        IReadOnlyList<string>? spacePaths = null, bool fromDirectory = false)
+        string nodeOwnerId, string? locale, bool fromDirectory = false)
     {
         var appsQuery = AppsQuery(nodeOwnerId, fromDirectory);
         return Controls.MeshSearch
@@ -1083,25 +964,7 @@ public static class UserActivityLayoutAreas
                         SortByAccess = true,
                         Sortable = true,
                     },
-                    // 🚨 A SECOND scope, and the launcher's filter offers it after the categories:
-                    // the SPACES the viewer can reach, as icons, most recently used first. A space
-                    // is something you OPEN, which is the launcher's whole subject — and a viewer
-                    // who works in three workspaces was reaching them through the content list
-                    // below, a search surface, because the launcher only knew about app records.
-                    //
-                    // It is a scope rather than a slice because it is a different QUERY: the app
-                    // records are one partition's children, the spaces are the partition roots the
-                    // reader can see (mesh-wide by nature, and the qualifier says so) plus the ones
-                    // they were invited into. NOT Sortable: the arrangement lives on App records,
-                    // and a space has none — a drop here would have nowhere to write.
-                    new MeshSearchScopeTab(LocalizationCatalog.Get("home.spaces", locale), SpacesQuery(nodeOwnerId, spacePaths, sharedTargets))
-                    {
-                        RenderMode = nameof(MeshSearchRenderMode.Icons),
-                        NavigateToMainNode = true,
-                        SortByAccess = true,
-                        Sortable = false,
-                    },
-                    // 🚨 A THIRD scope, directory only: the apps the viewer HID (LauncherEntry.Hidden).
+                    // 🚨 A SECOND scope, directory only: the apps the viewer HID (LauncherEntry.Hidden).
                     // The apps scope above excludes them; this one lists exactly them, so a hidden
                     // tile is always one filter away from its "Show on launcher" menu entry. Hiding
                     // is a launcher preference — the app stays installed and accessible.
@@ -1117,6 +980,47 @@ public static class UserActivityLayoutAreas
                             },
                         }
                         : []),
+                ],
+            };
+    }
+
+    /// <summary>
+    /// The <b>Spaces</b> band, below the Apps grid: the workspaces the viewer can reach, as an icon
+    /// grid, most recently used first. Its own band (it used to be a second filter inside the Apps
+    /// grid) because the home is "message box, apps, then spaces" (maintainer, 2026-11-06). The
+    /// query is <see cref="SpacesQuery"/>: the profile's space manifest plus the spaces the viewer
+    /// was invited into (#385), never a mesh-wide read. Not sortable: the drag-and-drop arrangement
+    /// lives on app records, and a space has none. Painted from query rows. Pure, for tests.
+    /// </summary>
+    internal static MeshSearchControl BuildSpacesBand(
+        string nodeOwnerId, string? locale, IReadOnlyList<string>? spacePaths = null,
+        IReadOnlyList<string>? sharedTargets = null)
+    {
+        var label = LocalizationCatalog.Get("home.spaces", locale);
+        var query = SpacesQuery(nodeOwnerId, spacePaths, sharedTargets);
+        return Controls.MeshSearch
+            .WithTitle(label)
+            .WithHiddenQuery(query)
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(false)
+            .WithRenderMode(MeshSearchRenderMode.Icons)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithItemLimit(50)
+            .WithReactiveMode(true)
+            with
+            {
+                NavigateToMainNode = true,
+                // SortByAccess is a per-scope setting the view reads there, so the one scope carries it.
+                ScopeTabs =
+                [
+                    new MeshSearchScopeTab(label, query)
+                    {
+                        RenderMode = nameof(MeshSearchRenderMode.Icons),
+                        NavigateToMainNode = true,
+                        SortByAccess = true,
+                        Sortable = false,
+                    },
                 ],
             };
     }
@@ -1207,23 +1111,6 @@ public static class UserActivityLayoutAreas
     {
         var sort = (config ?? HomeConfigNodeType.Defaults).EffectiveSort();
         return CatalogSorts.Any(s => string.Equals(s.Sort, sort, StringComparison.Ordinal)) ? null : sort;
-    }
-
-    /// <summary>One content tab: localized label + the four catalog sorts (default first), each
-    /// option's full query produced by <paramref name="query"/>(sort, suffix).</summary>
-    private static MeshSearchScopeTab ContentScope(
-        string labelKey, string? locale, string defaultSort,
-        Func<string, string, string> query)
-    {
-        var sorts = CatalogSorts
-            .OrderByDescending(s => s.Sort == defaultSort)
-            .Select(s => new MeshSearchSortOption(
-                LocalizationCatalog.Get(s.LabelKey, locale), query(s.Sort, s.Suffix)))
-            .ToArray();
-        return new MeshSearchScopeTab(LocalizationCatalog.Get(labelKey, locale), sorts[0].Query)
-        {
-            SortOptions = sorts,
-        };
     }
 
     /// <summary>

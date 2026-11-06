@@ -99,7 +99,7 @@ public class HomeCardsContributionTest
     }
 
     [Fact]
-    public void TheHomeCardsRegion_EmbedsEachCardOnItsOwnAddress_AndTheWelcomeTemplateCarriesIt()
+    public void TheHomeCardsRegion_EmbedsEachCardOnItsOwnAddress_AndTheDefaultHomeLeavesItOut()
     {
         var cards = UserActivityLayoutAreas.HomeCards(new Address("jroe"),
             [("a", "Edu/Courses", "LearningPathNudge", 1, Permission.Read), ("b", null, "Own", 2, Permission.Read)]);
@@ -114,11 +114,7 @@ public class HomeCardsContributionTest
         (shape.NodeType, shape.Path).Should().Be((UserNodeType.NodeType, "jroe"),
             "the gates read the home's shape from registration (a User partition root), never by waiting on the user node");
 
-        var md = UserActivityLayoutAreas.UserWelcomeMarkdown("Roland");
-        md.Should().Contain("@@(\"area/HomeCards\")");
-        md.IndexOf("Welcome back", StringComparison.Ordinal).Should().BeLessThan(md.IndexOf("area/HomeCards", StringComparison.Ordinal),
-            "the cards sit under the heading");
-        md.IndexOf("area/HomeCards", StringComparison.Ordinal).Should().BeLessThan(md.IndexOf("area/Composer", StringComparison.Ordinal),
-            "and above the composer: a timely prompt is the first thing the person reads");
+        UserActivityLayoutAreas.UserWelcomeMarkdown().Should().NotContain("area/HomeCards",
+            "the default home is the message box, apps and spaces only — the region stays registered for authored bodies");
     }
 }

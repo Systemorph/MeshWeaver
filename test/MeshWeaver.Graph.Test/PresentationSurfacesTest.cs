@@ -89,53 +89,28 @@ public class PresentationSurfacesTest
             .Should().Contain("Acme");
     }
 
-    // ── The home's sections: Apps, Content (Pinned + All), Shared with me ──────────────────────
+    // ── The home's sections: Apps, then Spaces ─────────────────────────────────────────────────
 
-    private static string[] ScopeLabels(MeshSearchControl content) =>
-        content.ScopeTabs!.Select(t => t.Label).ToArray();
-
-    private static string ScopeQuery(MeshSearchControl content, string label) =>
-        content.ScopeTabs!.Single(t => t.Label == label).Query;
-
-    private static MeshSearchControl ContentOf(User? user, PresentationScreen? screen) =>
-        UserActivityLayoutAreas.BuildContentSection(Owner, null, user, null, screen);
+    private static string SpacesBandQuery(UiControl home) =>
+        ((System.Collections.IEnumerable)typeof(StackControl).BaseType!
+            .GetProperty("Views", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(home)!)
+        .OfType<MeshSearchControl>().Single(b => b.Title!.ToString() == "Spaces")
+        .HiddenQuery!.ToString()!;
 
     [Fact]
-    public void Content_AScopeWhoseWholeContentIsMarked_Disappears()
+    public void SpacesBand_ScreensMarkedSpacesAndGrants_BeforeTheQueryIsBuilt()
     {
-        var user = new User { PinnedPaths = ["Acme/Q3-Renewal"] };
+        // The space manifest and the grants are interpolated into the Spaces band's query string,
+        // which the search view exposes in its options editor and in the `hq=` URL — so a marked
+        // name must be dropped BEFORE the query exists, not only where its tile is painted.
+        var user = new User { SpacePaths = ["Acme", "Globex"], SharedPaths = ["Acme/Deals", "Northwind/Sales"] };
 
-        // Off: the Pinned tab is there.
-        ScopeLabels(ContentOf(user, null)).Should().Equal("All", "Pinned", "Mine");
+        var marked = SpacesBandQuery(UserActivityLayoutAreas.BuildHome(Owner, user: user, screen: Active("Acme")));
+        marked.Should().NotContain("Acme").And.Contain("Globex").And.Contain("Northwind/Sales");
 
-        // On, with Acme marked: everything pinned is inside the marked space, so the tab goes — an
-        // empty tab labelled "Pinned" would itself say something. Mine is unaffected: it is scoped
-        // to the viewer's own partition, not to the marked one.
-        ScopeLabels(ContentOf(user, Active("Acme"))).Should().Equal("All", "Mine");
-    }
-
-    [Fact]
-    public void Content_AScopeKeepsItsUnmarkedContent()
-    {
-        var content = ContentOf(new User { PinnedPaths = ["Acme", "Doc/Guide"] }, Active("Acme"));
-
-        ScopeLabels(content).Should().Equal("All", "Pinned", "Mine");
-        ScopeQuery(content, "Pinned").Should().NotContain("Acme").And.Contain("Doc/Guide");
-    }
-
-    [Fact]
-    public void SharedGrants_AreScreenedBeforeTheyReachTheAllQuery()
-    {
-        // The grants are now a union leg of All rather than their own band, so the screen still
-        // has to apply BEFORE the query is built: a marked target must not reach the query string
-        // (and therefore the options editor and the `hq=` URL) at all.
-        var marked = UserActivityLayoutAreas.BuildContentSection(
-            Owner, null, null, null, Active("Acme"),
-            Active("Acme").Retain(["Acme/Deals", "Northwind/Sales"]));
-
-        var all = marked.ScopeTabs!.Single(t => t.Label == "All").Query;
-        all.Should().NotContain("Acme");
-        all.Should().Contain("Northwind/Sales");
+        var plain = SpacesBandQuery(UserActivityLayoutAreas.BuildHome(Owner, user: user));
+        plain.Should().Contain("Acme").And.Contain("Acme/Deals");
     }
 
     [Fact]
@@ -220,11 +195,6 @@ public class PresentationSurfacesTest
 
         QueryOf(marked).Should().Be(QueryOf(plain));
         QueryOf(marked).Should().NotContain("Acme");
-
-        // Same for the content section's one category: identical query with and without the screen.
-        var spacesMarked = ScopeQuery(ContentOf(null, Active("Acme")), "All");
-        var spacesPlain = ScopeQuery(ContentOf(null, null), "All");
-        spacesMarked.Should().Be(spacesPlain).And.NotContain("Acme");
     }
 
     // ── The marking affordance ─────────────────────────────────────────────────────────────────

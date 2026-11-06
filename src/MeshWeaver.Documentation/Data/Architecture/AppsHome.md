@@ -1,26 +1,22 @@
 # The Apps Home
 
-The user home's catalog region is ONE search surface whose **scope tabs** are the phone-home tabs —
-what you see first is what you *use*, not everything the mesh can show you. The tabs, in order:
+The default user home is three things, top to bottom: the **message box** (start a thread), the
+**Apps** grid, then the **Spaces** grid — and nothing else (maintainer, 2026-11-06: *"we want plain
+message input, apps and then spaces"*). The welcome template is `@@("area/Composer")` followed by
+`@@("area/Catalog")`; there is no greeting, no contributed card, no searchable content list and no
+footer note. Content is reached by opening a space, or through search.
 
-| Tab | Present when | Contents | Default order |
-|---|---|---|---|
-| **Pinned** | the caller has pins | the owner's content shortcuts (`User.PinnedPaths`) | last modified |
-| **Apps** | always | the APP DIRECTORY (the apps the viewer can see through access, `{owner}/_Apps`) — every app exactly once, as an ICON grid; the viewer's own `{owner}/_App` records only under the explicit `Home:AppSource = Records` compatibility path | last used |
-| **Spaces** | always | the catalog **without** store items | location (path) — `HomeConfig.SortBy` |
-| **All** | always | everything the viewer can read, at every depth | location (path) — `HomeConfig.SortBy` |
+| Band | Contents | Order |
+|---|---|---|
+| **Apps** | the APP DIRECTORY (the apps the viewer can see through access, `{owner}/_Apps`) — every app exactly once, as an ICON grid, grouped and rearrangeable by drag and drop; a **Hidden** filter lists the apps the viewer hid. The viewer's own `{owner}/_App` records only under the explicit `Home:AppSource = Records` compatibility path | last used |
+| **Spaces** | the workspaces the viewer can reach, as an ICON grid: the profile's space manifest (`User.SpacePaths`) plus the spaces the viewer was invited into (`User.SharedPaths`, #385); never a mesh-wide read | last used |
 
-**Shared with me** is not a tab: cross-partition invitations (#385) are a distinct kind of content,
-not another lens on the catalog, so they render as their own titled band BELOW the search surface —
-present only when the caller actually has such grants, minus store items and `User` roots, ordered
-by last accessed.
-
-Because the scopes live INSIDE one `MeshSearchControl` (`MeshSearchScopeTab`), the search bar is
-shared: the typed term survives tab switches and every tab is searchable — including All. The
-search input renders on desktop and hides on mobile (the chrome search covers phones); search box
-and the ordering controls share one header row. The whole surface is built by
-`UserActivityLayoutAreas.BuildHome` (`src/MeshWeaver.Graph`), pure and unit-tested
-(`HomeTabsTest`); the reactive shell is `CatalogAreaView`.
+Both bands are launchers: no search box, painted from the query rows (no per-tile hub). Both are
+built by `UserActivityLayoutAreas.BuildHome` → `BuildAppsBand` / `BuildSpacesBand`
+(`src/MeshWeaver.Graph`), pure and unit-tested (`HomeTabsTest`); the reactive shell is
+`CatalogAreaView`. The presentation screen (#1803) drops a marked space or grant before the Spaces
+query is built. The regions that left the default (`area/HomeCards`, `area/Threads`) stay
+registered, so an authored home `Body` that embeds them keeps working.
 
 ## Installed apps — `{user}/_App/{appId}` records, the `Records` compatibility path
 
@@ -233,8 +229,8 @@ The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reload
   `Doc`, `~/Chat`). Read only when the grid is empty, so editing it changes what new viewers get,
   not what existing viewers have. Until a list-capable edit-form field ships it is
   `[Browsable(false)]` on the generic content editor — admins edit the node content directly.
-- `Scope`, `Render`, `DefaultSort` — apply to the Spaces/All scopes (and the legacy list).
-- **The content list is ONE flat list in LOCATION order by default** (policy
+- `Scope`, `Render`, `DefaultSort` — apply to the legacy single list (`Style: Catalog`).
+- **The legacy list is ONE flat list in LOCATION order by default** (policy
   [`explorer-navigation`](../PolicyNotProse)). The default order is `SortBy`, an open string value
   (`HomeSortBy`: `Location`, `LastAccessed`, `LastModified`, `Alphabetical`). It ships UNSET, which
   means `Location` (`sort:path-asc`), so each space's content stays together. The older
@@ -244,7 +240,7 @@ The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reload
   group; `Render: Grouped` stays the admin's explicit choice. Location order stays in the Sort
   control either way.
 
-**The dedup rule:** an app is represented exactly once. The Spaces scope and the Shared-with-me band
+**The dedup rule:** an app is represented exactly once. The Spaces band and the legacy list's Shared-with-me band
 exclude `-nodeType:Store/Plugin -nodeType:Store/Catalog`; Shared-with-me also excludes
 `-nodeType:User` — a grant that resolves to another user's home partition must not list that
 person's space as shared content. **The Store itself is an app** (a config default); only the
