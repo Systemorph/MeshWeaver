@@ -164,10 +164,48 @@ and its writers switch together.
 | Piece | Where | What it does |
 |---|---|---|
 | `AppDirectory` | `MeshWeaver.Graph/Apps` | ONE process-wide query, `namespace: is:main content.app:true partitions:all` (an enumeration, id `$app-roots`), shared by every viewer through `IMeshNodeStreamCache` and read as System. Per root, `CheckPermission(viewer, entryPoint, Read)` — the ENTRY POINT, because a gated root is everybody's storefront; an `X/area/Y` entry point is probed at `X`. Plan coverage and audience reach it as ordinary grant/deny rows, so Read is the whole ACCESS check. Before it, a root must be a TILE on this instance (`AppDirectory.IsTile`): its package INSTALLED here — three more process-wide System queries (`$app-install-records` = `Plugins/{id}`; `$app-sync-sources` = `{id}/_GitSync`, the evidence for a git-provisioned package, which writes no record; `$app-uninstall-requests` = `Admin/_PackageUninstall` past phase 1), so an app uninstalled with its data retained loses its tile — and no `hostedIn` other than the person app (a hosted package is a section of its host, `Doc/Architecture/InAppExtensions` §4). Live: a grant, a revoke, an install, an uninstall or an admin change re-emits. |
-| Built-ins | `AppDirectory.BuiltIns` | **Settings** (`{viewer}/Settings`) and **Inbox** (`{viewer}/Inbox`) for everyone, **Administration** (`Admin`) for a global admin. Labels are catalog keys (`common.settings`, `inbox.title`, `adminApp.title`) — except the person app's tile once the viewer's own node is read (`PersonTile`, live, never blocking the list): it carries the viewer's **name** and **picture** (the user node's `Name`/`Icon`, else the settings icon) and the description `launcher.personSettingsDescription` in their language, so it reads as *their* settings rather than a generic "Settings". |
+| Built-ins | `AppDirectory.BuiltIns` | **Settings** (`{viewer}/Settings`) and **Inbox** (`{viewer}/Inbox`) for everyone, **Administration** (`Admin`) for a global admin. Labels are catalog keys (`common.settings`, `inbox.title`, `adminApp.title`) — except the person app's tile once the viewer's own node is read (`PersonTile`, live, never blocking the list): it carries the viewer's **name** and **picture** (the user node's `Name`/`Icon`, else the settings icon) and the description `launcher.personSettingsDescription` in their language, so it reads as *their* settings rather than a generic "Settings". Beside them, the apps modules **declare** — Documentation, the Threads fallback (*Declared apps* below). |
 | `AppDirectoryCache` | `MeshWeaver.Graph/Apps` | Per viewer, the `Replay(1)` of the live stream. Shared by concurrent subscribers; when the last leaves, kept warm for **5 minutes, sliding** (a returning subscriber resets the clock), then disposed. A faulted computation is evicted at once, never replayed. Its own scheduler; no `IMemoryCache`. |
 | `AppDirectoryQueryProvider` | `MeshWeaver.Graph/Apps` | Answers the RESERVED virtual namespace `{user}/_Apps` (`path:{user}/_Apps scope:children nodeType:InstalledApp`) with synthetic rows of the same shape as the `_App` records — content `App` (`Plugin` = app id, `OpenPath` = entry point, `Group`, `Order`), `MainNode` = entry point, name, icon and description from the root. The full query predicate applies (`IMeshNodeQueryMatcher`, the in-memory evaluator), and both query surfaces stay live — a revoked app leaves the snapshot surface too. Only the owner is answered and only the owner's own request may seed; the System synced-query channel is side-effect free. Nothing is stored under `_Apps`. |
 | `LauncherArrangement` | `{user}/_Settings/Launcher` | The viewer's placements, `entries: { appId: { group, order, customGroup, hidden } }` (`hidden` absent = visible, so every arrangement written before the flag existed shows every tile). Group comes from here, else the root's `Category`. Seeded ONCE from the viewer's `_App` records the first time the directory renders for them — the rows wait for it, one seed in flight per viewer, never repeated after success, retried after a failure, create-if-absent, as the viewer — then written only when the viewer rearranges. A rearrangement over unreadable content fails loudly rather than starting fresh. |
+
+### Declared apps — Documentation and the Threads fallback (2026-11-06)
+
+Maintainer, 2026-11-06, on the desktop app: *"can you add documentation app by default? … also the
+inbox and the threads"*. The directory listed only package roots with `app: true` plus the
+built-ins, and two surfaces every viewer should have are no package root: the **platform
+documentation** (`Doc` is served by the Documentation module, not installed as a package) and the
+viewer's **Threads** on an instance that runs the AI engine without the `AI` package (the device
+mesh). `HomeConfig.DefaultApps` still names both, but it feeds only the `Records` launcher — so in
+directory mode Documentation was missing on EVERY instance, and Threads on the device mesh.
+
+A module now **declares** the tile for what it serves (`DeclaredApp`, `MeshWeaver.Graph/Apps`,
+registered with `builder.AddDeclaredApp(…)`), and the directory composes the declarations with the
+roots:
+
+| Declaration | Declared by | Opens | Read probe |
+|---|---|---|---|
+| **Documentation** (`Doc`, label `launcher.documentation`, top-level) | `AddDocumentation` (core) | `Doc` | `Doc` (public-read) |
+| **Threads** (id `AI`, label `menu.threads`, top-level) | the AI engine module (MeshWeaver.Plugins) | `{user}/Chat` | none — the viewer's own partition |
+
+| Rule | Why |
+|---|---|
+| The module that SERVES the target declares the tile | the tile exists exactly where its target does — a host without the module has neither; no list in core says which apps exist |
+| A visible app ROOT wins over a declaration it covers — its path is the declared id, or it opens the same target | a portal shows the `AI` package's Threads tile (`AI/AiThreads`) and never the engine's fallback beside it; the fallback carries the id `AI` so the viewer's arrangement (group, order, hidden) is one key whichever is shown |
+| A declaration never repeats a built-in (by id or target), and two declarations of one id keep the first | every app exactly once |
+| `ProbePath` is the same Read check an entry point gets; null = no check | an undetermined check FAILS the computation (evicted, recomputed) rather than latching the tile off |
+| `{user}` in `OpenPath` / `ProbePath` is the viewer | one declaration serves every viewer |
+
+The rows are ordinary directory rows (`BuiltIn`, so `Plugin = ""`): hideable, placeable, grouped like
+any tile. Pinned by `AppDirectoryPureTest` (`DeclaredApps_…`, `AnAppRoot_WinsOverTheDeclaredAppItCovers_…`),
+`DeclaredAppDirectoryTest` (a real mesh, probe and no probe) and `DocumentationIsALauncherAppTest`
+(`AddDocumentation` alone puts the tile on a launcher).
+
+> 🚨 **The desktop app's "Documentation flashes up, then vanishes" was NOT this tile.** The JS shell
+> (MeshWeaver.Plugins `app/react-native`) served same-origin by the device mesh opened the docs home
+> (`/Doc`) as a provisional landing while `/api/mesh/whoami` was in flight, then switched to the
+> viewer's home — the breadcrumb read `Home › Doc` for that moment. The shell now waits for the answer
+> before painting a home (`awaitsViewer`); the docs home remains the landing for an anonymous viewer.
 
 **Rearranging a directory tile** writes the arrangement node, never the virtual row:
 `LauncherArrangementPaths.Place(cache, rowPath, group, order, options)`. The launcher view routes a
@@ -227,7 +265,8 @@ The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reload
 - **`Style`** — `Tabs` (default) or `Catalog`, the escape hatch back to the legacy single flat list.
 - **`DefaultApps`** — the entries a viewer's Apps grid is BOOTSTRAPPED with (shipped: `Store`,
   `Doc`, `~/Chat`). Read only when the grid is empty, so editing it changes what new viewers get,
-  not what existing viewers have. Until a list-capable edit-form field ships it is
+  not what existing viewers have. **`Records` launcher only** — the default directory launcher
+  ignores it; there Documentation and Threads are *declared apps* (above). Until a list-capable edit-form field ships it is
   `[Browsable(false)]` on the generic content editor — admins edit the node content directly.
 - `Scope`, `Render`, `DefaultSort` — apply to the legacy single list (`Style: Catalog`).
 - **The legacy list is ONE flat list in LOCATION order by default** (policy

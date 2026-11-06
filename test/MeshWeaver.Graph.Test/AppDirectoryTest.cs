@@ -169,6 +169,79 @@ public class AppDirectoryPureTest
         list.Single(e => e.Id == "Alpha").OpenPath.Should().Be("Alpha/Go");
     }
 
+    // ── Declared apps ────────────────────────────────────────────────────────────────────────
+
+    // The two declarations the platform ships: the documentation (core) and the Threads fallback
+    // the AI engine declares under the id of the package root it stands in for.
+    private static readonly DeclaredApp Docs = new("Doc", "Documentation", "doc.svg", "Doc")
+    {
+        LabelKey = "launcher.documentation",
+        LauncherGroup = "",
+        ProbePath = "Doc",
+    };
+
+    private static readonly DeclaredApp ThreadsFallback = new("AI", "Threads", "ai.svg", "{user}/Chat")
+    {
+        LabelKey = "menu.threads",
+        LauncherGroup = "",
+    };
+
+    [Fact]
+    public void DeclaredApps_AreTilesAmongTheApps_ByName_TopLevel_WithTheViewersOwnTarget()
+    {
+        var list = AppDirectory.Compose("device-user", [], isGlobalAdmin: true, person: null, [ThreadsFallback, Docs]);
+
+        list.Select(e => e.Id).Should().Equal("Settings", "Inbox", "Admin", "Doc", "AI");
+        var docs = list.Single(e => e.Id == "Doc");
+        docs.OpenPath.Should().Be("Doc");
+        docs.LabelKey.Should().Be("launcher.documentation");
+        docs.BuiltIn.Should().BeTrue("a declared app is no package: its row names no plugin");
+        docs.Category.Should().Be("", "declared top-level");
+        docs.GroupDeclared.Should().BeTrue();
+        list.Single(e => e.Id == "AI").OpenPath.Should().Be("device-user/Chat", "{user} is the viewer's own partition");
+    }
+
+    [Fact]
+    public void AnAppRoot_WinsOverTheDeclaredAppItCovers_ByIdOrByTarget()
+    {
+        // A portal: the AI package's root is a visible tile — the engine's fallback must not stand beside it.
+        var aiRoot = new AppRoot("AI", "Threads", "ai-root.svg", null, "AI & learning", "AI/AiThreads") { LauncherGroup = "" };
+        var list = AppDirectory.Compose("alice", [aiRoot], isGlobalAdmin: false, person: null, [ThreadsFallback, Docs]);
+        list.Where(e => e.Id == "AI").Should().ContainSingle().Which.OpenPath.Should().Be("AI/AiThreads");
+        list.Single(e => e.Id == "AI").BuiltIn.Should().BeFalse("the root's tile, not the fallback");
+        list.Select(e => e.Id).Should().Contain("Doc");
+
+        // A root under another id that opens the SAME target covers the declaration too.
+        var docsRoot = new AppRoot("Handbook", "Handbook", "h.svg", null, null, "Doc");
+        AppDirectory.Compose("alice", [docsRoot], isGlobalAdmin: false, person: null, [Docs])
+            .Select(e => e.Id).Should().Equal("Settings", "Inbox", "Handbook");
+    }
+
+    [Fact]
+    public void ADeclaredApp_NeverDuplicatesABuiltIn_OrItself_AndAnAdminOnlyOneIsForAdmins()
+    {
+        var inboxAgain = new DeclaredApp("Mail", "Mail", "m.svg", "{user}/Inbox");
+        var settingsId = new DeclaredApp(AppDirectory.SettingsId, "Settings", "s.svg", "elsewhere");
+        var ops = new DeclaredApp("Ops", "Ops", "o.svg", "Ops") { AdminOnly = true };
+
+        var user = AppDirectory.Compose("alice", [], isGlobalAdmin: false, person: null,
+            [inboxAgain, settingsId, Docs, Docs with { Name = "Second Docs" }, ops]);
+        user.Select(e => e.Id).Should().Equal("Settings", "Inbox", "Doc");
+        user.Single(e => e.Id == "Doc").Name.Should().Be("Documentation", "two declarations of one id keep the first");
+
+        AppDirectory.Compose("alice", [], isGlobalAdmin: true, person: null, [ops])
+            .Select(e => e.Id).Should().Contain("Ops");
+    }
+
+    [Fact]
+    public void ADeclaredApp_ResolvesTheViewerToken_InTargetAndProbe()
+    {
+        var own = new DeclaredApp("Mine", "Mine", "m.svg", "{user}/Notes/") { ProbePath = "{USER}/Notes" };
+        own.OpenPathFor("bob").Should().Be("bob/Notes");
+        own.ProbePathFor("bob").Should().Be("bob/Notes");
+        ThreadsFallback.ProbePathFor("bob").Should().BeNull("no probe: the viewer's own partition");
+    }
+
     // ── The warm cache, on virtual time ──────────────────────────────────────────────────────
 
     private sealed class CountingSource
@@ -1178,5 +1251,39 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             State = MeshNodeState.Active,
             Content = new User { FullName = path },
         })).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+    }
+}
+
+/// <summary>
+/// Declared apps on a real mesh (<see cref="DeclaredApp"/>, Doc/Architecture/AppsHome → "Declared
+/// apps"): a module's declaration is a tile for every viewer who can read its probe, a probe-less
+/// one (the viewer's own surface) for everyone, and both arrive with no app root, no install record
+/// and no per-user record — the device mesh's Documentation and Threads tiles.
+/// </summary>
+public class DeclaredAppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Reader = "decl-reader";
+    private const string Stranger = "decl-stranger";
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => ConfigureMeshBase(builder)
+            .AddMeshNodes(
+                new MeshNode("DeclDocs") { NodeType = "Markdown", Name = "Docs", State = MeshNodeState.Active },
+                AssignmentNodeFactory.UserRole(Reader, "Viewer", "DeclDocs"))
+            .AddDeclaredApp(new DeclaredApp("DeclDocs", "Documentation", "doc.svg", "DeclDocs") { ProbePath = "DeclDocs", LauncherGroup = "" })
+            .AddDeclaredApp(new DeclaredApp("DeclThreads", "Threads", "ai.svg", "{user}/Chat") { LauncherGroup = "" });
+
+    private AppDirectory Directory => Mesh.ServiceProvider.GetRequiredService<AppDirectory>();
+
+    [Theory(Timeout = 60000)]
+    [InlineData(Reader, new[] { "Settings", "Inbox", "DeclDocs", "DeclThreads" })]
+    [InlineData(Stranger, new[] { "Settings", "Inbox", "DeclThreads" })]
+    public async Task ADeclaredApp_IsATile_ForEveryViewerWhoCanReadItsProbe(string viewer, string[] expected)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var list = await Directory.Compute(viewer).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        list.Select(e => e.Id).Should().Equal(expected);
+        list.Single(e => e.Id == "DeclThreads").OpenPath.Should().Be($"{viewer}/Chat");
     }
 }

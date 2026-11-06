@@ -155,6 +155,8 @@ public sealed record InstallEvidence(
 /// <item><b>Visible</b> — per root, Read on its <see cref="AppRoot.ProbePath"/> for the viewer.
 /// The check is the live security fold, so a grant or a revoke re-emits.</item>
 /// <item><b>Built-ins</b> — Settings and Inbox for everyone, Administration for a global admin.</item>
+/// <item><b>Declared apps</b> — the tiles modules declare for what they serve (<see cref="DeclaredApp"/>:
+/// Documentation, the Threads fallback), behind their own read probe, unless an app root covers them.</item>
 /// </list>
 /// Display (name, icon, description, category) comes straight from the root. Core knows nothing of
 /// the Store's content types: the root's content is read by property name, in whatever shape it
@@ -405,9 +407,38 @@ public sealed class AppDirectory
         // language). It is COSMETIC: the list never waits for it (StartWith) and a failed read
         // falls back to the plain "Settings" tile rather than taking the launcher down.
         var person = PersonOf(viewer);
+        // The apps modules DECLARE (DeclaredApp — the platform documentation, the Threads fallback),
+        // each behind its own read probe. Resolved ONCE, on the caller's thread.
+        var declared = VisibleDeclared(hub.ServiceProvider.GetServices<DeclaredApp>().ToImmutableList(), viewer);
         return visible
-            .CombineLatest(admin, person, (apps, isAdmin, who) => Compose(viewer, apps, isAdmin, who))
+            .CombineLatest(admin, person, declared,
+                (apps, isAdmin, who, modules) => Compose(viewer, apps, isAdmin, who, modules))
             .DistinctUntilChanged(EntryListComparer.Instance);
+    }
+
+    /// <summary>
+    /// The declared apps the viewer may see — live: a declaration with a <see cref="DeclaredApp.ProbePath"/>
+    /// needs Read on it, exactly like an app root's entry point (an undetermined check FAILS the
+    /// computation rather than latching the tile off); one without is the viewer's own surface.
+    /// </summary>
+    private IObservable<ImmutableList<DeclaredApp>> VisibleDeclared(ImmutableList<DeclaredApp> apps, string viewer)
+    {
+        if (apps.Count == 0)
+            return Observable.Return(ImmutableList<DeclaredApp>.Empty);
+        var checks = apps.Select(app => app.ProbePathFor(viewer) is { Length: > 0 } probe
+            ? hub.CheckPermissionOutcome(probe, viewer, Permission.Read)
+                .Select(outcome =>
+                {
+                    if (outcome.IsUndetermined)
+                        throw new InvalidOperationException(
+                            $"[AppDirectory] read check on declared app '{app.Id}' ('{probe}') for '{viewer}' reached no verdict: {outcome.UndeterminedReason}");
+                    return outcome.IsGranted;
+                })
+                .DistinctUntilChanged()
+                .Select(allowed => (app, allowed))
+            : Observable.Return((app, allowed: true)));
+        return Observable.CombineLatest(checks)
+            .Select(results => results.Where(r => r.allowed).Select(r => r.app).ToImmutableList());
     }
 
     /// <summary>The viewer's own user node, read as <see cref="PersonTile"/> — live, never blocking:
@@ -506,20 +537,54 @@ public sealed class AppDirectory
     /// </summary>
     public static ImmutableList<AppDirectoryEntry> Compose(
         string viewer, IEnumerable<AppRoot> visibleRoots, bool isGlobalAdmin, PersonTile? person = null)
+        => Compose(viewer, visibleRoots, isGlobalAdmin, person, declared: null);
+
+    /// <summary>
+    /// <see cref="Compose(string, IEnumerable{AppRoot}, bool, PersonTile?)"/> plus the apps modules
+    /// DECLARE (<see cref="DeclaredApp"/>, already filtered to the ones the viewer may read): each is
+    /// a tile among the apps, by name, UNLESS a visible app root covers it — the root's path is the
+    /// declared id, or it opens the same target — or a built-in has its id or target. A root always
+    /// wins, so a portal that shows the AI package's Threads tile never shows the engine's fallback
+    /// beside it. Two declarations of one id keep the first. Pure.
+    /// </summary>
+    public static ImmutableList<AppDirectoryEntry> Compose(
+        string viewer, IEnumerable<AppRoot> visibleRoots, bool isGlobalAdmin, PersonTile? person,
+        IEnumerable<DeclaredApp>? declared)
     {
         var builtIns = BuiltIns(viewer, isGlobalAdmin, person);
         var builtInIds = builtIns.Select(b => b.Id).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-        var apps = visibleRoots
+        var roots = visibleRoots
             .Where(r => !builtInIds.Contains(r.Path))
             .Where(r => isGlobalAdmin || !r.AdminOnly)
-            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.Path, StringComparer.OrdinalIgnoreCase)
-            .Select(r => new AppDirectoryEntry(
-                r.Path, r.Name, r.Icon, r.Description, r.LauncherGroup ?? r.Category, r.OpenPath)
+            .ToImmutableList();
+        // What a root or a built-in already puts on the launcher — by id and by target.
+        var covered = roots.Select(r => r.Path)
+            .Concat(roots.Select(r => r.OpenPath))
+            .Concat(builtIns.Select(b => b.Id))
+            .Concat(builtIns.Select(b => b.OpenPath))
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var rootEntries = roots.Select(r => new AppDirectoryEntry(
+            r.Path, r.Name, r.Icon, r.Description, r.LauncherGroup ?? r.Category, r.OpenPath)
+        {
+            GroupDeclared = r.LauncherGroup is not null,
+            GroupOrder = r.LauncherGroupOrder,
+        });
+        var declaredEntries = (declared ?? [])
+            .Where(d => !string.IsNullOrWhiteSpace(d.Id))
+            .Where(d => isGlobalAdmin || !d.AdminOnly)
+            .GroupBy(d => d.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .Where(d => !covered.Contains(d.Id) && !covered.Contains(d.OpenPathFor(viewer)))
+            .Select(d => new AppDirectoryEntry(
+                d.Id, d.Name, d.Icon, d.Description, d.LauncherGroup, d.OpenPathFor(viewer),
+                LabelKey: d.LabelKey, BuiltIn: true)
             {
-                GroupDeclared = r.LauncherGroup is not null,
-                GroupOrder = r.LauncherGroupOrder,
+                GroupDeclared = d.LauncherGroup is not null,
+                GroupOrder = d.LauncherGroupOrder,
             });
+        var apps = rootEntries.Concat(declaredEntries)
+            .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(e => e.Id, StringComparer.OrdinalIgnoreCase);
         return builtIns.AddRange(apps);
     }
 
