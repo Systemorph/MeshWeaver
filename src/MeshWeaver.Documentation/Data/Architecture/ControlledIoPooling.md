@@ -667,7 +667,8 @@ So the mesh teardown awaits **all three**, in order, before the scope is dispose
    🚨 **The cancel runs on its own thread, never on the joining one.**
    `CancellationTokenSource.Cancel()` executes every registered callback *synchronously on the
    caller*, and this token's callbacks are not bookkeeping: `SubscribeThroughPool` registers one per
-   live pooled subscription that runs that subscription's whole downstream teardown, and every gated
+   live pooled subscription that tears it down (until #7968 that included the subscriber's whole
+   downstream teardown; it now runs no consumer code), and every gated
    leaf links its subscriber token to the pool's, so cancelling also resumes each leaf's gate wait
    into its observer. Cancelling inline therefore ran arbitrary application teardown on the
    MESH TEARDOWN thread with no budget over it — the drain timeout covers only the gate join that
@@ -711,10 +712,13 @@ says which of the two remaining holds it is: an admission region still open, or 
 not yet out of their loops. A residual is never an anonymous zero. Pinned by
 `IoPoolSiloTeardownTest.WhenTheJoinExpiresOverAParkedCancel_TheReportNamesTheCancelAndTheFrameItIsParkedIn`.
 
-**What parks a cancel.** Cancelling the pool token runs, inline on the `IoPool-cancel` thread, one
-callback per live `SubscribeThroughPool` subscription: `inner.Dispose(); observer.OnCompleted();` —
-that subscription's whole downstream teardown. Two facts about the libraries underneath turn a race
-into a deadlock:
+**What parked a cancel — before #7968.** Cancelling the pool token runs, inline on the `IoPool-cancel`
+thread, one callback per live `SubscribeThroughPool` subscription. Until #7968 that callback was
+`inner.Dispose(); observer.OnCompleted();` — the subscription's whole downstream teardown — and the
+rest of this section is the first deadlock that shape produced. Since #7968 the callback runs no
+consumer code at all (see [the drain runs no consumer code](#-the-drain-runs-no-consumer-code--a-still-attached-subscription-is-an-unowned-leak)),
+so what can still park a cancel is only the pool's own teardown of a source. Two facts about the
+libraries underneath turned a race into a deadlock:
 
 1. **`CancellationTokenRegistration.Dispose()` blocks until a callback executing on another thread has
    finished** (`WaitForCallbackIfNecessary`; only the callback's own thread is exempt).
@@ -804,7 +808,106 @@ first-in-process script-reference build, on the Compile pool) on the strength of
   `ACaptureWithoutTheLocalDac_IsRefusedBeforeAnythingIsDumped`.
 
 Pinned by `IoPoolDrainCancelJoinTest` (deterministic: a `TestScheduler`-driven `Throttle` fired from a
-thread the test owns, with the two interleavings the deadlock needs made explicit).
+thread the test owns, with the two interleavings the deadlock needs made explicit — since #7968 it pins
+that the drain neither enters nor waits on a consumer inside its gate).
+
+### 🚨 The drain runs no consumer code — a still-attached subscription is an UNOWNED LEAK
+
+**The incident (#7968).** A silo stop on a production portal: `IoPoolSiloTeardown: pooled I/O did not
+finish within 00:00:30 … Query=1 [IoPool: the pool token's cancel had not returned …]`. The one-dump
+stack capture printed the canceller, blocking frame on top:
+
+```
+Monitor.Enter_Slowpath
+SelectMany`2+ObservableSelector+_.Final()
+Sink`2.OnCompleted()                          (×5)
+AccessContextCaptureExtensions+RestoringObserver`1.OnCompleted
+AutoDetachObserver`1.OnCompleted
+IoPool+<>c__DisplayClass…<SubscribeThroughPoolCore>b__2()      ← the drain callback
+CancellationTokenSource.ExecuteCallbackHandlers
+IoPool.<StartCanceller>b__118_0()
+```
+
+The drain callback delivered `OnCompleted` into a consumer of `IMeshService.Query` (`CarryAccessContext`
+wraps the pooled query directly), five operators down that completion reached a `SelectMany`, and
+`Final()` waited for the operator's gate, which another thread held. This is not the `Throttle` /
+`Take(1)` shape above — the registration was already unregistered rather than disposed. It is the same
+defect one layer further out: **the pool ran the consumer's code on the pool's thread**, so any lock
+the consumer takes is a lock the pool's cancel can wait on. The other thread could not be identified:
+every generic argument in the dump reads `System.__Canon` and no application frame sits above the Rx
+frames.
+
+**The contract now.** The canceller runs no consumer code, ever:
+
+- **`SubscribeThroughPool`'s drain callback disposes the pool's own resource — its subscription to the
+  source — and delivers NOTHING to the observer.** No `OnCompleted`, no `OnError`, no `.Finally`.
+- **A subscription still attached when the pool is cancelled is an UNOWNED LEAK.** Every legitimate
+  owner disposes its subscriptions before the pool drains: mesh teardown runs `DisposalCompleted` (every
+  hub's disposal, which disposes what it registered) before `DrainAll()`, and on a silo the pool stops
+  LAST (`ServiceLifecycleStage.First`). So a live subscription at the cancel is one nobody owns. The pool
+  records it (`IoPool.UnownedLeaks` / `UnownedLeakSites`, `IoPoolRegistry.UnownedLeaks()`) and the
+  teardown logs it at **Error** — `IoPoolDrain: pool 'Query' was cancelled with N subscription(s) still
+  attached … Unowned: …` (and `IoPoolSiloTeardown: …` on the silo path).
+- **The leak line names the consumer.** Each entry reads `{source site} — subscribed N s when the pool
+  was cancelled, opened by {opener}; subscriber chain: AutoDetachObserver → RestoringObserver → … →
+  SelectMany._ (Consumer+<>c.<Method>b__4_0) → …`. The chain is read by reflection over the observer
+  objects at the moment of the leak — no call into them, no lock — and every delegate held along it is
+  named by its method, so a `SelectMany`'s selector or a `Subscribe`'s handler names the consumer even
+  when `IoPoolOptions.CaptureLeafOpeners` is off. That is what the incident's dump could not give.
+- **A leg cancelled BEFORE its source opened is a refusal, not a leak.** Its setup leaf's gate wait
+  throws (or it sees the cancel right after `source.Subscribe` returns) and the error arm delivers
+  `OnCompleted` from that pool thread, exactly as every refusal is delivered (#4530). The setup leaf
+  publishes "the source is open" with a full fence before reading the pool token, and the drain callback
+  reads it after the token is cancelled, so the two hand the case to exactly one producer through the
+  shared `terminated` latch.
+- **A blocking leaf the cancel finds still QUEUED with a waiting subscriber** is the same case on the
+  other entry point. If its continuation runs on the canceller (the task is dequeued and cancelled inside
+  the token's callback, and the continuation is `ExecuteSynchronously`), it records a leak and delivers
+  nothing. Off the canceller, #4545's terminal stands.
+
+**Who owned the legs #1789 needed terminated.** #1789 (prod 2026-08-17) added the drain's `OnCompleted`
+because `RoutingGrain.Dispatch`'s in-flight decrement and `OrderedRouteDispatcher`'s FIFO advance live
+in a `.Finally` that never ran when the drain merely disposed a leg. That bookkeeping is now released by
+an OWNER. Rx runs `.Finally` on dispose as well as on a terminal, on the disposer's thread:
+
+- `RoutingQuiescence` (the silo-scoped gauge that already tracks every routing leg) **owns** each leg:
+  `RoutingGrain.Dispatch`, its NACKs, its refused-reply reports and `OrderedRouteDispatcher`'s ordered
+  legs hand their subscription to `RoutingQuiescence.Own` (through a `SingleAssignmentDisposable` created
+  before subscribing, so a release that races the subscribe still reaches it).
+- `RoutingQuiescenceSiloParticipant` subscribes a second observer at `ServiceLifecycleStage.First + 1`.
+  It stops after the routing hold and after every grain has deactivated, so each leg had its whole chance
+  to land, and BEFORE `IoPoolSiloTeardown`. It calls `ReleaseOwnedLegs()`, which disposes every leg still
+  owned and refuses new ones (a late `Own` disposes at once). It logs a Warning naming the count.
+- `OrderedRouteDispatcher`, once its owner is releasing, starts nothing more: the channel's queued legs
+  get their completion callback in a loop (no recursion) and are never handed to a pool that is about to
+  be cancelled.
+- The grain is not the owner because a `StatelessWorker` is recycled and its legs are not. A host
+  without `RoutingQuiescence` leaves its legs unowned, and the pool then names them.
+
+Other consumers already had owners: `LayoutAreaHost` registers its render subscriptions for disposal with
+the area, activities are quiesced before teardown (`ActivityTracker`), and a query subscription belongs
+to whichever hub or service subscribed it. One that has no owner is now named instead of being silently
+completed on the wrong thread.
+
+**What this does NOT cover, stated so nobody reads it as covered.** `Invoke` and `InvokeStream` link
+each leaf's token to the pool's. A leaf awaiting I/O whose cancellation completes inline (a
+`Task.Delay(ct)`, some drivers) resumes its async body on the canceller, and the body's fault then
+reaches the subscriber there. The pool cannot change where a library completes a cancelled task without
+inventing its own dispatch thread, which is the thread-model trick ruled out here. No production
+occurrence of that path has been seen. If one is, the fix belongs at that leaf.
+
+**Pinned by** `IoPoolDrainRunsNoConsumerCodeTest` (the incident shape: a pooled query feeding a
+`SelectMany` whose own gate another thread holds until teardown has returned; the drain returns inside
+its budget with no residual, the consumer receives nothing, and the leak names the consumer's selector;
+plus the owned shape, whose `.Finally` runs on the owner's thread). Also pinned by
+`IoPoolTest.Drain_tears_down_an_unowned_SubscribeThroughPool_leg_names_it_and_delivers_nothing`,
+`RoutingLegOwnershipTest` (Orleans' real `SiloLifecycleSubject`, with the hold, the owner's release and
+`IoPoolSiloTeardown` in their real stop order) and
+`OrderedRouteDispatcherDrainRecursionTest`. **The negative control was measured.** With the old callback
+restored (`try { inner.Dispose(); } finally { observer.OnCompleted(); }`), the incident test fails. The
+cancel parks in `SelectMany…Final()` for the whole drain budget, and `DrainAll` returns
+`Query=1 [IoPool: the pool token's cancel had not returned …]`. The cycle breaks only when that budget
+expires.
 
 ### 🚨 `IoPool.Unbounded` is LEDGERLESS — I/O on it does not exist to this drain
 
