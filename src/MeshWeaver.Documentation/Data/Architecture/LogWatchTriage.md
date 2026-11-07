@@ -512,9 +512,10 @@ raises an occurrence count instead of opening another ticket.
 
 ### 🚨 A floored cursor names its WIDTH and its CAUSE, not only the stretch it skips
 
-The skipped stretch is only the OLDEST part of the time the watcher was not reading. With the
-default 6 h cap, a watcher that was absent for 6 h 01 min skips one minute and reads the other six
-hours late. Measured on 2026-11-07 (#7956, #7958): memex and memex-cloud both resumed at 07:18:53Z
+The skipped stretch is only the OLDEST part of the backlog. A floored cursor measures how far
+reading is BEHIND, not why: the watcher may have been absent, its collections may have failed, or a
+running watcher may have been out-read by volume. With the default 6 h cap, a cursor 6 h 01 min
+behind skips one minute and reads the other six hours late. Measured on 2026-11-07 (#7956, #7958): memex and memex-cloud both resumed at 07:18:53Z
 on a cursor left at 01:18:06Z. Each filed `Skipped [01:18:06Z, 01:18:53Z) — 1 minute(s) never read`
 and nothing else. Six hours in which no red line was ticketed therefore read as a sub-minute blip.
 The one fact that separates the causes, a watcher restart or failed collections, was reported
@@ -524,8 +525,12 @@ behind classification was gated on continuity.
 Now the floored pass files that classification too, over the whole unwatched stretch
 `[old cursor, window end)`: `log-watcher-restart-gap-{ns}` when this process did not leave the
 cursor, `log-collection-failed-{ns}` when collections failed since it last moved, otherwise
-`log-pipeline-behind-{ns}`. The skipped report's sample prints a sub-minute stretch in seconds,
-never as "0 minute(s)" or "1 minute(s)", and adds how long the cursor had not moved. Pinned by
+`log-pipeline-behind-{ns}`. Each of those findings keeps three things apart in its evidence: the
+whole stretch, the prefix that was SKIPPED for good, and the range actually queried. Its message
+also says that the oldest part IS lost, instead of its usual "nothing was lost". The skipped
+report's sample prints a sub-minute stretch in seconds, never as "0 minute(s)" or "1 minute(s)",
+and adds how far the cursor was behind and where reading resumes. It does not claim the backlog is
+read in that one pass: a truncated read continues on later passes. Pinned by
 `PipelineLagIsVisibleAndIsolatedTest.ARestartOlderThanMaxCatchUp_FilesTheSkipAndTheRestartOverTheWholeStretch`
 and its siblings in MeshWeaver.Plugins.
 
