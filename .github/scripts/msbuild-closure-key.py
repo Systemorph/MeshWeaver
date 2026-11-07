@@ -93,10 +93,11 @@ def is_path_like(value: str) -> bool:
     return "/" in v or "\\" in v or v.startswith(".") or "$(" in v or os.path.isabs(v)
 
 
-def scan(repo: Path, path: str, owner_dir: str | None) -> tuple[list[str], list[str]]:
-    """(ProjectReferences, Imports) of one MSBuild file, both repo-relative. `owner_dir` is the project
-    directory item paths must stay inside (None for a shared props/targets: its items evaluate in the
-    importing project, so only their form is checked)."""
+def scan(repo: Path, path: str, project_dir: str) -> tuple[list[str], list[str]]:
+    """(ProjectReferences, Imports) of one MSBuild file as evaluated by the project in `project_dir`.
+    MSBuild resolves an <Import Project> against the IMPORTING FILE's directory, but every item path
+    (Include/Update/Remove — ProjectReference included) against the PROJECT's directory, wherever the
+    item is declared; an item path must stay inside that project directory."""
     here = str(PurePosixPath(path).parent)
     refs: list[str] = []
     imports: list[str] = []
@@ -120,7 +121,7 @@ def scan(repo: Path, path: str, owner_dir: str | None) -> tuple[list[str], list[
                 if tag == "ProjectReference":
                     if "$(" in value or "@(" in value or "%(" in value:
                         raise Refused(f"{path}: ProjectReference \"{value}\" uses an expression")
-                    target = resolve(here, value)
+                    target = resolve(project_dir, value)
                     if not target:
                         raise Refused(f"{path}: ProjectReference \"{value}\" points outside the repository")
                     refs.append(target)
@@ -138,68 +139,80 @@ def scan(repo: Path, path: str, owner_dir: str | None) -> tuple[list[str], list[
                     continue   # the project's own directory or its outputs
                 if "$(" in value or "@(" in value or "%(" in value or os.path.isabs(value.strip()):
                     raise Refused(f"{path}: <{tag} {attr}=\"{value}\"> uses an expression or an absolute path")
-                target = resolve(here, value)
-                if owner_dir is not None and (not target or not (target == owner_dir or target.startswith(owner_dir + "/"))):
-                    raise Refused(f"{path}: <{tag} {attr}=\"{value}\"> reaches outside its project directory")
+                target = resolve(project_dir, value)
+                if not target or not (target == project_dir or target.startswith(project_dir + "/")):
+                    raise Refused(f"{path}: <{tag} {attr}=\"{value}\"> reaches outside {project_dir}/")
     return refs, imports
 
 
-def closure(repo: Path, project: str) -> tuple[list[str], list[str]]:
-    """(every project in the ProjectReference closure, every file those projects import)."""
-    seen: set[str] = set()
-    imported: list[str] = []
+def implicit_files(repo: Path, project_dir: str) -> list[str]:
+    """The files MSBuild may pick up for a project without an <Import>: Directory.Build.*,
+    Directory.Packages.props and nuget.config from the root down to the project directory (all of
+    them, conservatively — MSBuild takes the nearest), present at HEAD."""
+    found: list[str] = []
+    parts = PurePosixPath(project_dir).parts
+    for i in range(0, len(parts) + 1):
+        prefix = PurePosixPath(*parts[:i]) if i else PurePosixPath("")
+        listing = subprocess.run(["git", "-C", str(repo), "ls-tree", "--name-only", f"HEAD:{prefix}" if i else "HEAD"],
+                                 capture_output=True, text=True).stdout.split()
+        for n in listing:
+            if n in PATH_FILES or NUGET_CONFIG.match(n):
+                found.append(str(prefix / n) if i else n)
+    return found
+
+
+def evaluate(repo: Path, project: str) -> tuple[list[str], set[str]]:
+    """(every project in the ProjectReference closure, every file any of them EVALUATES).
+
+    A project evaluates its own file, the implicit files on its path, and — recursively, whatever their
+    extension — everything those import. Each evaluated file is scanned AS that project (item paths
+    against the project directory), and a ProjectReference found in ANY of them joins the closure."""
+    projects: set[str] = set()
+    evaluated: set[str] = set()
     stack = [str(PurePosixPath(project))]
     while stack:
         p = stack.pop()
-        if p in seen:
+        if p in projects:
             continue
-        seen.add(p)
-        refs, imports = scan(repo, p, str(PurePosixPath(p).parent))
-        stack.extend(refs)
-        imported.extend(imports)
-    return sorted(seen), imported
+        projects.add(p)
+        pdir = str(PurePosixPath(p).parent)
+        files = [p] + [f for f in implicit_files(repo, pdir) if not NUGET_CONFIG.match(PurePosixPath(f).name)]
+        seen_here: set[str] = set()
+        while files:
+            f = files.pop()
+            if f in seen_here:
+                continue
+            seen_here.add(f)
+            if not object_hash(repo, f):
+                raise Refused(f"{f} (evaluated by {p}) does not exist at HEAD")
+            evaluated.add(f)
+            refs, imports = scan(repo, f, pdir)
+            stack.extend(refs)
+            files.extend(imports)
+    return sorted(projects), evaluated
 
 
 def key(repo: Path, project: str, salt: str = "") -> tuple[str, list[str]]:
     lines = [f"salt {salt}"]
-    projects, imported = closure(repo, project)
+    projects, evaluated = evaluate(repo, project)
     dirs = sorted({str(PurePosixPath(p).parent) for p in projects})
     for d in dirs:
         h = object_hash(repo, d)
         if not h:
             raise Refused(f"{d} is not a directory at HEAD")
         lines.append(f"dir {d} {h}")
-    root_names = git(repo, "ls-tree", "--name-only", "HEAD").split()
-    implicit: set[str] = {f for f in root_names if ROOT_FILE.match(f)}
+    # Hashed besides the project trees: every evaluated file, every implicit file (nuget.config included),
+    # and — conservatively — every root-level *.props/*.targets/global.json/nuget.config.
+    files: set[str] = set(evaluated)
     for d in dirs:
-        parts = PurePosixPath(d).parts
-        for i in range(1, len(parts) + 1):
-            prefix = PurePosixPath(*parts[:i])
-            implicit.update(str(prefix / name) for name in PATH_FILES)
-            listing = subprocess.run(["git", "-C", str(repo), "ls-tree", "--name-only", f"HEAD:{prefix}"],
-                                     capture_output=True, text=True).stdout.split()
-            implicit.update(str(prefix / n) for n in listing if NUGET_CONFIG.match(n))
-    # Every hashed MSBuild file's imports, recursively; an explicit import must exist.
-    files: dict[str, str] = {}
-    queue = [(f, False) for f in sorted(implicit)] + [(f, True) for f in imported]
-    while queue:
-        f, required = queue.pop()
-        if f in files:
-            continue
-        h = object_hash(repo, f)
-        if not h:
-            if required:
-                raise Refused(f"imported file {f} does not exist at HEAD")
-            continue
-        files[f] = h
-        # Scanned wherever it lives: a .targets inside a project directory is hashed with that directory,
-        # but what IT imports from elsewhere is not — follow it.
-        if f.lower().endswith((".props", ".targets")):
-            _, more = scan(repo, f, None)
-            queue.extend((m, True) for m in more)
+        files.update(implicit_files(repo, d))
+    files.update(f for f in git(repo, "ls-tree", "--name-only", "HEAD").split() if ROOT_FILE.match(f))
     for f in sorted(files):
-        if not any(f.startswith(d + "/") for d in dirs):
-            lines.append(f"file {f} {files[f]}")
+        if any(f.startswith(d + "/") for d in dirs):
+            continue   # already in that directory's tree hash
+        h = object_hash(repo, f)
+        if h:
+            lines.append(f"file {f} {h}")
     return hashlib.sha256("\n".join(lines).encode()).hexdigest(), lines
 
 
@@ -280,6 +293,29 @@ def self_test() -> int:
         write("build/deep.props", "<Project><PropertyGroup><Y>2</Y></PropertyGroup></Project>"); g("commit", "-qam", "deep")
         check("an import made by a .targets INSIDE a project directory is followed out of it",
               key(repo, "src/Tool/Tool.csproj", "Linux-X64-sdk10.0")[0] != kn)
+        write("src/Lib/Lib.csproj", '<Project><Import Project="local.targets" /></Project>')
+        write("src/Lib/local.targets", '<Project><ItemGroup><Compile Include="../Shared/S.cs" /></ItemGroup></Project>')
+        g("add", "."); g("commit", "-qm", "imported-item")
+        try:
+            key(repo, "src/Tool/Tool.csproj")
+            check("REFUSED: an IMPORTED file's item outside the importing project's directory", False)
+        except Refused:
+            check("REFUSED: an IMPORTED file's item outside the importing project's directory", True)
+        write("build/inner.props", "<Project/>")
+        write("src/Lib/local.targets", '<Project><Import Project="local.xml" /></Project>')
+        write("src/Lib/local.xml", '<Project><Import Project="../../build/inner.props" /></Project>')
+        g("add", "."); g("commit", "-qm", "xml-import")
+        kx = key(repo, "src/Tool/Tool.csproj", "Linux-X64-sdk10.0")[0]
+        write("build/inner.props", "<Project><PropertyGroup><Z>3</Z></PropertyGroup></Project>"); g("commit", "-qam", "inner")
+        check("an import is followed whatever its extension (local.xml → build/inner.props)",
+              key(repo, "src/Tool/Tool.csproj", "Linux-X64-sdk10.0")[0] != kx)
+        write("src/Extra/Extra.csproj", "<Project/>")
+        write("src/Extra/E.cs", "class E {}")
+        write("src/Lib/local.targets", '<Project><ItemGroup><ProjectReference Include="../Extra/Extra.csproj" /></ItemGroup></Project>')
+        g("add", "."); g("commit", "-qm", "imported-ref")
+        _, lines = key(repo, "src/Tool/Tool.csproj", "Linux-X64-sdk10.0")
+        check("a ProjectReference declared in an IMPORTED file joins the closure", any("dir src/Extra " in l for l in lines))
+        write("src/Lib/local.targets", "<Project/>"); g("commit", "-qam", "reset")
         refused("a property path climbing out of the project dir", '<Project><ItemGroup><None Include="$(MSBuildProjectDirectory)/../S.cs" /></ItemGroup></Project>')
         refused("a file that is not XML", "<Project>")
         write("src/Lib/Lib.csproj", '<Project><ItemGroup><None Include="$(TargetDir)out.manifest" /></ItemGroup></Project>')
