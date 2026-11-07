@@ -1,10 +1,10 @@
 # The Apps Home
 
-The default user home is three things, top to bottom: the **message box** (start a thread), the
-**Apps** grid, then the **Spaces** grid — and nothing else (policy
-[`home-is-composer-apps-spaces`](../PolicyNotProse)). The welcome template is `@@("area/Composer")` followed by
-`@@("area/Catalog")`; there is no greeting, no contributed card, no searchable content list and no
-footer note. Content is reached by opening a space, or through search.
+The default user home is, top to bottom: a heading welcoming the owner by first name
+("Welcome back, Jane"), the **message box** (start a thread), the **Apps** grid, then the **Spaces**
+grid — and nothing else (policy [`home-is-composer-apps-spaces`](../PolicyNotProse)). The welcome
+template is that heading, `@@("area/Composer")`, then `@@("area/Catalog")`; there is no contributed
+card, no searchable content list and no footer note. Content is reached by opening a space, or through search.
 
 | Band | Contents | Order |
 |---|---|---|
