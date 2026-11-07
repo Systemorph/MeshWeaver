@@ -185,6 +185,42 @@ public sealed record InboxRow
     /// with this as its tooltip.
     /// </summary>
     public string BlockedReason { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The beginning of the item's body, as a mail client's message list shows it under the subject:
+    /// the content's <c>preview</c> (a mail provider's <c>bodyPreview</c> or snippet, a chat's last
+    /// message), else the plain text of a stored mail's <c>body</c> — whitespace collapsed, at most
+    /// <see cref="InboxRows.PreviewLength"/> characters. Empty when the source carries neither.
+    /// </summary>
+    public string Preview { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The style of the sender and the subject — <see cref="InboxRows.EmphasisStyle"/> for an unread
+    /// item, else <see cref="InboxRows.LineStyle"/>. Carried on the row (not only as <see cref="RowClass"/>) so every client
+    /// bolds the same two lines, while the preview line under them stays regular.
+    /// </summary>
+    public string Emphasis { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The item's time as the list shows it (<see cref="InboxRows.ShortWhen"/>): the time for an item
+    /// from today, the weekday and time for one from the last week, else the short date. Filled by the
+    /// page (<see cref="InboxRows.ForList"/>); <see cref="When"/> keeps the full time.
+    /// </summary>
+    public string Received { get; init; } = string.Empty;
+
+    /// <summary>
+    /// <see cref="Account"/> as the list shows it: the address when more than one account feeds the
+    /// inbox, else empty — the same address on every row says nothing. Filled by the page
+    /// (<see cref="InboxRows.ForList"/>).
+    /// </summary>
+    public string AccountLabel { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The row's third line: the <see cref="Preview"/>, else the detailed <see cref="Status"/> when it says
+    /// more than the state badge (an approval whose target was refused as stale). Filled by the page
+    /// (<see cref="InboxRows.ForList"/>).
+    /// </summary>
+    public string Detail { get; init; } = string.Empty;
 }
 
 /// <summary>
@@ -354,6 +390,52 @@ public static class InboxRows
     /// <summary>The row property that carries why a row is not selectable.</summary>
     public const string BlockedReasonProperty = "blockedReason";
 
+    /// <summary>The row property that carries the sender (<see cref="InboxRow.From"/>).</summary>
+    public const string FromProperty = "from";
+
+    /// <summary>The row property that carries the subject (<see cref="InboxRow.Title"/>).</summary>
+    public const string TitleProperty = "title";
+
+    /// <summary>The row property that carries the third line (<see cref="InboxRow.Detail"/>).</summary>
+    public const string DetailProperty = "detail";
+
+    /// <summary>The row property that carries the compact time (<see cref="InboxRow.Received"/>).</summary>
+    public const string ReceivedProperty = "received";
+
+    /// <summary>The row property that carries the listed account (<see cref="InboxRow.AccountLabel"/>).</summary>
+    public const string AccountLabelProperty = "accountLabel";
+
+    /// <summary>The row property that carries the sender's and subject's style (<see cref="InboxRow.Emphasis"/>).</summary>
+    public const string EmphasisProperty = "emphasis";
+
+    /// <summary>The row property that carries the tags (<see cref="InboxRow.TagText"/>).</summary>
+    public const string TagTextProperty = "tagText";
+
+    /// <summary>The style of one line of a row — one line, cut with an ellipsis where the column ends, never a horizontal scroll.</summary>
+    public const string LineStyle = "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto;";
+
+    /// <summary>The style of an unread item's sender and subject — <see cref="LineStyle"/>, semibold, as a mail client shows new mail.</summary>
+    public const string EmphasisStyle = LineStyle + " font-weight: 600;";
+
+    /// <summary>
+    /// The style of a SECONDARY part of a line (the account, the tags): it may shrink and is cut with an ellipsis, and it never
+    /// takes more than a third of the line, so a long address or tag list cannot push the sender or subject out.
+    /// </summary>
+    public const string SecondaryStyle = "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; max-width: 33%;";
+
+    /// <summary>
+    /// The standard visually-hidden pattern — in the layout and the accessibility tree, out of sight. The state badge of an
+    /// UNREAD row wears it: the bold says "unread" to the eye, the badge's localized text still says it to a screen reader.
+    /// </summary>
+    public const string VisuallyHiddenStyle =
+        "position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;";
+
+    /// <summary>The style of the preview line — <see cref="LineStyle"/>, regular even on an unread row.</summary>
+    public const string PreviewStyle = LineStyle + " font-weight: 400;";
+
+    /// <summary>The most characters of an item's body its preview line carries.</summary>
+    public const int PreviewLength = 200;
+
     /// <summary>The data id of the grid's selection. No <c>/</c>: a client write into such an id does not reach the owner.</summary>
     public const string SelectionId = "inboxSelection";
 
@@ -499,6 +581,8 @@ public static class InboxRows
             StepNumber = running ? step.Number : string.Empty,
             StepMessage = running ? step.Message : string.Empty,
             RowClass = unread ? UnreadClass : string.Empty,
+            Emphasis = unread ? EmphasisStyle : LineStyle,
+            Preview = PreviewOf(content),
             From = string.IsNullOrWhiteSpace(from) ? sourceLabel ?? section.Source : from,
             Account = StringOf(content, "account")?.Trim() is { Length: > 0 } account ? account : AddressOf(StringOf(content, "to")),
             Link = StringOf(content, "webLink") is { } link && Uri.TryCreate(link, UriKind.Absolute, out var uri)
@@ -558,6 +642,107 @@ public static class InboxRows
             : null;
         return type is null ? NotificationFeatures.Approvals
             : Enum.TryParse<NotificationType>(type, ignoreCase: true, out var parsed) ? parsed.ToFeature() : NotificationFeatures.System;
+    }
+
+    /// <summary>
+    /// The beginning of an item's body for the row's preview line (<see cref="InboxRow.Preview"/>): the content's
+    /// <c>preview</c> when the source wrote one, else its <c>body</c> — a stored mail, HTML or plain text — as plain
+    /// text. The quoted reply and the signature cut (<see cref="InboxPreview.Clean"/>), whitespace collapsed, cut at <see cref="PreviewLength"/> characters with an ellipsis; empty when there
+    /// is neither. Pure.
+    /// </summary>
+    /// <param name="content">The row's content, or null.</param>
+    internal static string PreviewOf(JsonElement? content)
+    {
+        var text = StringOf(content, "preview") is { } preview && !string.IsNullOrWhiteSpace(preview)
+            ? preview
+            : StringOf(content, "body") is { } body && !string.IsNullOrWhiteSpace(body) ? PlainText(body) : string.Empty;
+        // The new text only: the reply it quotes and the signature are cut where a cheap scan sees them
+        // (InboxPreview.Clean — "On … wrote:", "From: … Sent:", "-- ", mid-line too, as Graph's bodyPreview is one line).
+        var collapsed = InboxPreview.Clean(text);
+        if (collapsed.Length <= PreviewLength)
+            return collapsed;
+        // Cut on a character boundary: never between the halves of a surrogate pair (an emoji).
+        var cut = PreviewLength - 1;
+        if (char.IsHighSurrogate(collapsed[cut - 1]))
+            cut--;
+        return collapsed[..cut].TrimEnd() + "…";
+    }
+
+    /// <summary>
+    /// <paramref name="body"/> without markup when it IS HTML (<see cref="LooksLikeHtml"/>) — else exactly as it is, so a plain-text
+    /// <c>cost &lt; 100 and balance &gt; 0</c> keeps its meaning. In HTML the content of <c>style</c>, <c>script</c> and <c>head</c> is
+    /// dropped, a BLOCK boundary (<c>p</c>, <c>div</c>, <c>br</c>, <c>li</c>, a table cell, a heading) becomes a space, an inline tag
+    /// (<c>b</c>, <c>span</c>, <c>a</c>) is removed without one — <c>re&lt;b&gt;view&lt;/b&gt;</c> stays <c>review</c> — and entities are decoded. Pure.
+    /// </summary>
+    private static string PlainText(string body)
+    {
+        if (!LooksLikeHtml(body))
+            return body;
+        const System.Text.RegularExpressions.RegexOptions options =
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline;
+        var bound = TimeSpan.FromMilliseconds(200);
+        var text = System.Text.RegularExpressions.Regex.Replace(body, "<(style|script|head)\\b[^>]*>.*?</\\1\\s*>", " ", options, bound);
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            "</?(p|div|br|li|ul|ol|tr|td|th|table|h[1-6]|blockquote|hr|section|article|header|footer|body|html)\\b[^>]*>", " ", options, bound);
+        text = System.Text.RegularExpressions.Regex.Replace(text, "<!--.*?-->|</?[a-z][a-z0-9]*\\b[^>]*>", string.Empty, options, bound);
+        return System.Net.WebUtility.HtmlDecode(text);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="body"/> is HTML: it carries a closing tag, a self-closing or bare <c>br</c>/<c>hr</c>, or a
+    /// document element (<c>&lt;html</c>, <c>&lt;body</c>, <c>&lt;!DOCTYPE</c>). A plain text with a lone <c>&lt;</c> or <c>&gt;</c> is not. Pure.
+    /// </summary>
+    internal static bool LooksLikeHtml(string body)
+        => body.Contains('<', StringComparison.Ordinal)
+           && System.Text.RegularExpressions.Regex.IsMatch(body,
+               "</[a-z][a-z0-9]*\\s*>|<(br|hr)\\s*/?>|<(html|body|!doctype)\\b",
+               System.Text.RegularExpressions.RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(200));
+
+    /// <summary>
+    /// An item's time as a mail client's message list shows it, where the viewer is: the time for an item
+    /// from the viewer's today (<c>3:42 PM</c>), the weekday and time for one from the six days before
+    /// (<c>Tue 3:42 PM</c>), else the short date (<c>11/2/2026</c>) — each in the viewer's culture. Pure.
+    /// </summary>
+    /// <param name="at">The stored instant.</param>
+    /// <param name="now">The current instant.</param>
+    /// <param name="zone">The viewer's time zone, resolved once on the render turn.</param>
+    /// <param name="culture">The viewer's culture.</param>
+    public static string ShortWhen(DateTimeOffset at, DateTimeOffset now, string? zone, CultureInfo culture)
+    {
+        var local = DisplayTimeExtensions.ToDisplayTime(at, zone);
+        var today = DisplayTimeExtensions.ToDisplayTime(now, zone).Date;
+        return local.Date == today ? local.ToString("t", culture)
+            : local.Date < today && local.Date > today.AddDays(-7) ? local.ToString("ddd ", culture) + local.ToString("t", culture)
+            : local.ToString("d", culture);
+    }
+
+    /// <summary>
+    /// <paramref name="rows"/> as the list shows them: each with its compact time (<see cref="ShortWhen"/>, from
+    /// its <see cref="InboxRow.Stamp"/>), its account named only when <paramref name="accounts"/> is more than one,
+    /// and its third line (<see cref="InboxRow.Detail"/>) — the preview, else a status that says more than the
+    /// badge. Pure.
+    /// </summary>
+    /// <param name="rows">The rows to list.</param>
+    /// <param name="accounts">How many accounts feed the inbox (<c>InboxLayoutArea.AccountsOf</c> of every row).</param>
+    /// <param name="now">The current instant.</param>
+    /// <param name="zone">The viewer's time zone.</param>
+    /// <param name="culture">The viewer's culture.</param>
+    public static ImmutableList<InboxRow> ForList(IEnumerable<InboxRow> rows, int accounts, DateTimeOffset now, string? zone, CultureInfo culture)
+        => [.. rows.Select(row => row with
+        {
+            Received = DateTimeOffset.TryParse(row.Stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at)
+                ? ShortWhen(at, now, zone, culture)
+                : row.When,
+            AccountLabel = accounts > 1 ? row.Account : string.Empty,
+            Detail = row.Preview.Length > 0 ? row.Preview : StatusBeyondBadge(row),
+        })];
+
+    /// <summary>The row's <see cref="InboxRow.Status"/> when it says more than its badge (<see cref="InboxRow.StateText"/> without its mark), else empty. Pure.</summary>
+    private static string StatusBeyondBadge(InboxRow row)
+    {
+        var mark = InboxState.Mark(row.State);
+        var badge = row.StateText.StartsWith(mark, StringComparison.Ordinal) ? row.StateText[mark.Length..] : row.StateText;
+        return row.Status.Length > 0 && !string.Equals(row.Status, badge, StringComparison.Ordinal) ? row.Status : string.Empty;
     }
 
     /// <summary>

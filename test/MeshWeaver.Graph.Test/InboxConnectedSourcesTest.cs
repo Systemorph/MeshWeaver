@@ -140,9 +140,9 @@ public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshT
         await CreateUserAsync(german, ct);
         await CreateUserAsync(english, ct);
 
-        (await ColumnTitles(german, "de", ct)).Should().Contain("Konto",
-            "the account column is titled in the viewer's language, whichever turn the connection read answered on");
-        (await ColumnTitles(english, "en", ct)).Should().Contain("Account").And.NotContain("Konto");
+        (await ColumnTitles(german, "de", ct)).Should().Contain("Eintrag",
+            "the item column is titled in the viewer's language, whichever turn the connection read answered on");
+        (await ColumnTitles(english, "en", ct)).Should().Contain("Item").And.NotContain("Eintrag");
     }
 
     /// <summary>
@@ -205,7 +205,7 @@ public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshT
             new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName));
         var grid = (DataGridControl)(await stream.GetControlStream(InboxLayoutArea.AreaName + "/Main/Grid")
             .Should().Within(TestTimeouts.Convergence).Match(c => c is DataGridControl, "the grid", ct))!;
-        return [.. grid.Columns.OfType<PropertyColumnControl>().Select(c => c.Title?.ToString() ?? string.Empty)];
+        return [.. grid.Columns.OfType<TemplateColumnControl>().Select(c => c.Title?.ToString() ?? string.Empty)];
     }
 
     /// <summary>

@@ -742,6 +742,37 @@ public record PackageManifest
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ImmutableSortedDictionary<string, string>? ManifestFiles { get; init; }
+
+    /// <summary>
+    /// 🚨 Install-record only: the uninstall currently retiring this package — set and cleared ONLY by
+    /// the record's own hub (<see cref="InstallRecordGate.Fold"/>), never by a writer. While it is set
+    /// the owner refuses every unattended stamp (MeshWeaver.Plugins#5055).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PackageRetirement? RetiringBy { get; init; }
+
+    /// <summary>Install-record only: requests that RELEASED their retirement, and when — kept by the
+    /// owner for a retention window so a late Begin of the same request never re-grants it.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableDictionary<string, DateTimeOffset>? EndedRetirements { get; init; }
+
+    /// <summary>Install-record only: facts writers stated under their own keys, pending the owner's
+    /// fold (<see cref="InstallRecordGate"/>). Consumed by the owner, applied or refused.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableDictionary<string, PackageRecordFact>? RecordFacts { get; init; }
+
+    /// <summary>Install-record only: the owner's answer to each fact, under the fact's key, for its
+    /// writer to read and remove.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableDictionary<string, PackageRecordFactOutcome>? FactOutcomes { get; init; }
+
+    /// <summary>
+    /// Transport-only (never serialised): the <see cref="PackageRecordWriteIntent"/> the lane that
+    /// handed this manifest to the install funnel writes its record with — so the funnel's signature
+    /// does not change. Null is <see cref="PackageRecordWriteIntent.CreateAllowed"/>.
+    /// </summary>
+    [JsonIgnore]
+    public string? WriteIntent { get; init; }
 }
 
 /// <summary>

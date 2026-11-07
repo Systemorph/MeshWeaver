@@ -144,6 +144,16 @@ the GO, records a failure, or refuses a superseded builder. Note the third prope
 there: the fold **consumes** every report it sees, applied or refused, so a refusal can never be
 re-judged against a claim it has nothing to do with.
 
+**The install record and an uninstall (MeshWeaver.Plugins#5055).** The boot repair, the
+unattended update lane and an uninstall all wrote `Plugins/{package}` from different hubs. Checking
+"is it being uninstalled?" on each writer's own copy was proposed and rejected for the reason on this
+page. The record also used to be written with a full-replace `CreateOrUpdateNodeRequest`, which
+re-created a record the uninstall had just deleted. The fix follows the recipe exactly:
+`PackageManifest.RecordFacts` are stated under each writer's key, and `InstallRecordGate.Fold`, on the
+record's own hub, grants or releases the retirement and applies or refuses each stamp. Every fact is
+consumed, and every one is answered under its key, so a refusal reaches its writer and is never a
+silent success. See [Package Uninstall](../PackageUninstall).
+
 ## Related
 
 - [Data Access Patterns](/Doc/Architecture/DataAccessPatterns) — the one mutation API and its read counterparts.

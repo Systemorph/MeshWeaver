@@ -185,7 +185,7 @@ roots:
 
 | Declaration | Declared by | Opens | Read probe |
 |---|---|---|---|
-| **Documentation** (`Doc`, label `launcher.documentation`, top-level) | `AddDocumentation` (core) | `Doc` | `Doc` (public-read) |
+| **Docs** (`Doc`, label `launcher.documentation` — "Docs" / "Doku", short enough for one line of an 88px tile; top-level) | `AddDocumentation` (core) | `Doc` | `Doc` (public-read) |
 | **Threads** (id `AI`, label `menu.threads`, top-level) | the AI engine module (MeshWeaver.Plugins) | `{user}/Chat` | none — the viewer's own partition |
 
 | Rule | Why |

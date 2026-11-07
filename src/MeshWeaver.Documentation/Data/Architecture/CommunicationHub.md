@@ -395,11 +395,29 @@ function of the filter and the legs.
 >
 > Kinds, per-kind states, sources and "Show ignorable" are CHECKBOXES bound to the person's own `InboxPreferences` node
 > (`kinds/{key}`, `activityStates/{group}`, `mailStates/{group}`, `chatStates/{group}`, `sources/{key}`, `showIgnorable` — see "What the inbox shows by default" below), the
-> tags a bound list of `InboxTagItem`: the union of the ticked kinds or tags is listed, and none ticked lists all. A **State**
-> column (`InboxState`, read from the node's own status or implied by the leg that found it) badges each row:
-> Awaiting decision / Approved / Rejected / Expired for approvals, Requested / Running / Done / Failed / Cancelled
-> for activities, Unread for mail and notifications. A check mark is reserved for done states; approval requests
-> are symbolised by a gavel (`InboxSourceIcons`), never a tick.
+> tags a bound list of `InboxTagItem`: the union of the ticked kinds or tags is listed, and none ticked lists all.
+>
+> **The row reads like a mail client's message list (2026-11).** After the Source symbol the grid has ONE column,
+> **Item**, a template of platform controls bound to the row (`InboxLayoutArea.ItemCell`): line 1 the sender
+> (`InboxRow.From`, semibold while unread — `InboxRow.Emphasis`, carried on the row so the Blazor and React clients
+> bold the same two lines), the state badge, the account and the compact time (`InboxRows.ShortWhen`: the time today,
+> the weekday and time within the last week, else the short date, in the viewer's zone and culture); line 2 the subject
+> and the tags; line 3 the beginning of the body (`InboxRow.Preview` — the content's `preview`, which the Outlook,
+> Gmail and Teams sources write from the provider's `bodyPreview`/snippet, else a stored mail's `body` as plain text).
+> The preview is the NEW text only (`InboxPreview.Clean`): the reply it quotes and the signature are cut where a cheap
+> scan sees them ("On … wrote:", "From: … Sent:", `-----Original Message-----`, `-- `, quoted `>` lines), mid-line
+> too because Graph collapses `bodyPreview` to one line; zero-width joiners are kept. Nothing fetches a body for it.
+> Each line is one line, cut with an ellipsis, so nothing scrolls sideways. The State badge (`InboxState`, read from
+> the node's own status or implied by the leg that found it) shows Awaiting decision / Approved / Rejected / Expired
+> for approvals and Requested / Running / Done / Failed / Cancelled for activities; it is hidden without a state, and
+> VISUALLY hidden for Unread (the bold says it to the eye; the localized badge still says it to a screen reader). The
+> account and tags shrink and ellipsize within a third of their line; only the compact time never shrinks. A stored
+> mail's body is read as HTML only when it looks like HTML, so a plain text with `<` or `>` keeps its meaning. 🚨 That is also why the separate State and Status columns were blank for
+> every mail: a READ mail has no lifecycle state at all, an unread one only Unread, and Status repeated the badge — so
+> the row now spends no room on either. A status that says MORE than the badge (an approval whose target was refused
+> as stale) is the third line when there is no preview. The account is named only when more than one account feeds
+> the inbox (`InboxRows.ForList`). A check mark is reserved for done states; approval requests are symbolised by a
+> gavel (`InboxSourceIcons`), never a tick.
 
 | Control | Bound to | What it does |
 |---|---|---|
@@ -610,6 +628,13 @@ splitter's own handle hides it and gives the list the width.
 bubble, Mail → an envelope), else the first Fluent glyph among its sources, else the fallback — never a
 full-colour logo, even when the category's first source carries one (Conversations listed WhatsApp
 first and showed its logo). Logos stay in the per-item Source column and on a source's account row.
+A logo sits on a plate (`IconBackplate`). A vendor mark whose solid colours, fill and stroke, read on a dark ground
+(`IconBackplate.ReadsOnDark`, which holds for every channel mark: Outlook, Gmail, iMessage, WhatsApp, Teams) gets a plate
+that follows the theme, white in light mode and `OfficialDarkPlate` (`#2b2b2b`) in dark mode (maintainer, 2026-11-07:
+*"icons for outlook and teams etc => in dark mode can we put dark bg?"*). A near-black mark, or one whose paint the scan
+cannot judge (a `<use>`, an `<image>`), keeps the white plate on both themes, because it would vanish on the dark one.
+The plate carries its own `prefers-color-scheme` rule: every icon reaches the page as an image, where the page's CSS
+variables do not reach but the colour scheme does.
 
 **What a package puts on the inbox page** is declared as data: a `UiContribution` of context
 **`Inbox`** (`UiContribution.InboxContext`) embeds its `Area` of the person's own user node — or of an

@@ -224,7 +224,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         const string owner = "inbox-outlook";
         await CreateUserAsync(owner, ct);
         var mail = $"{owner}/{EmailNodeType.UserEmailSegment}";
-        await CreateAsync(Mail("fresh", mail, owner, new Email { Id = "fresh", Subject = "Fresh one" }), ct);
+        await CreateAsync(Mail("fresh", mail, owner, new Email { Id = "fresh", Subject = "Fresh one", Body = "<p>See you at the <b>workshop</b></p>" }), ct);
         await CreateAsync(Mail("seen", mail, owner, new Email { Id = "seen", Subject = "Seen one", Status = EmailStatus.Read }), ct);
         // Every kind and every state: this test is about how rows look, not about what is listed by default.
         await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
@@ -237,11 +237,24 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         var byTitle = rows.EnumerateArray().ToDictionary(r => r.GetProperty("title").GetString()!);
         byTitle["Fresh one"].GetProperty(InboxRows.RowClassProperty).GetString().Should().Be(InboxRows.UnreadClass, "a new mail is bold");
         byTitle["Seen one"].GetProperty(InboxRows.RowClassProperty).GetString().Should().BeEmpty("a read mail is not");
+        byTitle["Fresh one"].GetProperty(InboxRows.EmphasisProperty).GetString().Should().Be(InboxRows.EmphasisStyle, "its sender and subject are bold in every client");
+        byTitle["Fresh one"].GetProperty(InboxRows.DetailProperty).GetString().Should().Be("See you at the workshop", "the row shows the beginning of the body");
+        byTitle["Fresh one"].GetProperty(InboxRows.ReceivedProperty).GetString().Should().NotBeNullOrEmpty("the row shows its compact time");
         byTitle["Fresh one"].GetProperty(InboxRows.SourceIconProperty).GetString().Should().NotBeNullOrEmpty("each row shows its source's symbol");
 
         var grid = (DataGridControl)(await stream.GetControlStream(GridArea).Should().Within(TestTimeouts.Convergence)
             .Match(c => c is DataGridControl, "the grid", ct))!;
         grid.RowClassProperty.Should().Be(InboxRows.RowClassProperty, "the grid applies each row's own class");
+        // The item as a mail client lists it: ONE template column of platform controls bound to the row.
+        var itemColumn = grid.Columns.OfType<TemplateColumnControl>().ToList();
+        itemColumn.Should().HaveCount(2, "the source's symbol and the item — no blank State, Status or Account columns");
+        grid.Columns.OfType<PropertyColumnControl>().Should().BeEmpty("nothing is spread over columns that cut it to a dozen characters");
+        foreach (var (part, property) in new[] { ("Head/From", InboxRows.FromProperty), ("Head/Received", InboxRows.ReceivedProperty), ("Head/Account", InboxRows.AccountLabelProperty), ("Line/Subject", InboxRows.TitleProperty), ("Preview", InboxRows.DetailProperty) })
+        {
+            var label = await stream.GetControlStream($"{GridArea}/{DataGridControl.TemplateColumnArea(1)}/{part}").Should().Within(TestTimeouts.Convergence)
+                .Match(c => c is LabelControl, $"the item cell's {part}", ct);
+            ((LabelControl)label!).Data.Should().BeOfType<ContextProperty>().Which.Property.Should().Be(property, $"{part} shows the row's {property}");
+        }
         grid.ItemsPerPage?.ToString().Should().Be("50", "the inbox is paged");
         grid.IsClickable.Should().BeTrue("a click on a row opens it");
 

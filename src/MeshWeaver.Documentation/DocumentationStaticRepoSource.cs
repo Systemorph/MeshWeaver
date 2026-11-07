@@ -56,14 +56,20 @@ public sealed class DocumentationStaticRepoSource(IServiceProvider serviceProvid
     /// <summary>
     /// The Doc space icon: a mesh of nodes above an open book — the docs ARE nodes in the mesh.
     /// Inline SVG (renderable wherever a node icon appears; never a bare Fluent icon name).
+    /// <para>Drawn to the app-tile convention the packages follow (a full-bleed rounded tile with
+    /// a white-ish glyph in its middle ~40%, e.g. the Store's bag): the glyph is scaled to 0.7 and
+    /// centred, leaving ~14 units of margin on every side. It used to span the tile almost edge to
+    /// edge, and on the launcher grid it read as a second, oversized box inside the tile.</para>
     /// </summary>
     public const string DocIcon =
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'>"
         + "<rect width='48' height='48' rx='10' fill='#1a2744'/>"
-        + "<path d='M10 33c4-2 9-2 13 0 4-2 9-2 13 0V17c-4-2-9-2-13 0-4-2-9-2-13 0z' fill='none' stroke='#9fb6dd' stroke-width='2' stroke-linejoin='round'/>"
-        + "<path d='M23 17v16' stroke='#9fb6dd' stroke-width='2'/>"
-        + "<path d='M15 12 24 7l9 5' fill='none' stroke='#5c8fd6' stroke-width='1.6'/>"
+        + "<g transform='translate(7.9 10.7) scale(0.7)'>"
+        + "<path d='M10 33c4-2 9-2 13 0 4-2 9-2 13 0V17c-4-2-9-2-13 0-4-2-9-2-13 0z' fill='none' stroke='#9fb6dd' stroke-width='2.6' stroke-linejoin='round'/>"
+        + "<path d='M23 17v16' stroke='#9fb6dd' stroke-width='2.6'/>"
+        + "<path d='M15 12 24 7l9 5' fill='none' stroke='#5c8fd6' stroke-width='2.2'/>"
         + "<circle cx='15' cy='12' r='3' fill='#7cc0ff'/><circle cx='24' cy='7' r='3' fill='#fff'/><circle cx='33' cy='12' r='3' fill='#7cc0ff'/>"
+        + "</g>"
         + "</svg>";
 
     /// <summary>

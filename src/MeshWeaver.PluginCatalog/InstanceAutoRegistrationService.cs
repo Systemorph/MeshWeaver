@@ -3037,8 +3037,12 @@ public sealed class InstanceAutoRegistrationService(
             // terminal for this lane. Record it as a SKIP carrying the refusal's own reason, never
             // as a failure to retry: retrying an authorization refusal re-fails identically every
             // boot, and what changes it is an event (an admin install, changed terms), not a retry.
+            // A record write the install record's OWN hub refused (a retirement holds it, or a
+            // re-stamp found the record removed — MeshWeaver.Plugins#5055) is the same kind of
+            // standing answer: skipped with the owner's words, never retried as a failure.
             .Catch((Exception exception) => exception
                     is not PackageAuthorizationException and not LicenseAcceptanceRequiredException
+                    and not PackageRecordWriteRefusedException
                 ? Observable.Throw<DefaultInstallSummary>(exception)
                 : Observable.Defer(() =>
                 {
@@ -3371,6 +3375,9 @@ public sealed class InstanceAutoRegistrationService(
                         // unauthorized and skipped on every boot. The gate re-verifies it.
                         atRecordedHash.Add(candidate with
                         {
+                            // 🚨 A repair RE-STAMPS an existing record and never re-creates one an
+                            // uninstall removed meanwhile (MeshWeaver.Plugins#5055).
+                            Package = candidate.Package with { WriteIntent = PackageRecordWriteIntent.Restamp },
                             Reconciled = true,
                             // …and the configuration's authority only from the RECORDED source:
                             // another source listing the same id derives none.
