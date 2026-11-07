@@ -510,6 +510,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [Deployment](Deployment) (the router)
 - [AKS](DeploymentAKS)
+- [The Private Network](PrivateNetwork) — one Headscale network between the estate's machines: how laptops, phones and Mac hosts join (sign-in or a one-time key), MagicDNS names, the bridge that publishes a Mac's local portal at a public name, the sign-in gate for non-local hosts, and Mac telemetry over the network
 - [Planning a Database Migration](PlanningADatabaseMigration) — the process (policy `db-migration-planned`): expand-only migrations, the `Db-migration:` declaration and its rehearsal, `ExpectedDbVersion` on the release marker, and every roll path migrating first or refusing — with the operator interlock that does not depend on the build being rolled
 - [Database Migration Procedure](DatabaseMigrationProcedure) — the schema moves before the image, every roll; the 2026-09-03 wedge behind a 200, the recovery, and why a migration deadlocks under load
 - [Container Apps](DeploymentContainerApps)
