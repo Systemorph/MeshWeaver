@@ -1,5 +1,6 @@
 using System.Reactive;
 using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -108,7 +109,9 @@ internal class RoutingGrain(
     private readonly OrderedRouteDispatcher orderedDispatcher = new(
         meshHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Routing)
         ?? IoPool.Unbounded,
-        logger);
+        logger,
+        // #7968: the ordered legs are owned by the silo's routing gauge like every other leg.
+        meshHub.ServiceProvider.GetService<RoutingQuiescence>());
 
     /// <summary>
     /// Windows the KNOWN-dead-target refusal logging (issues #2426/#2546): the first refusal of an
@@ -325,11 +328,17 @@ internal class RoutingGrain(
     {
         SaturationReport.OnDispatched(Interlocked.Increment(ref inFlightRoutes), addressPath);
         var slot = quiescence?.Track($"dispatch → {addressPath} (delivery {deliveryId})");
-        routingPool.SubscribeThroughPool(route)
+        // #7968: OWNED by the silo's routing gauge, so the `.Finally` below runs when the leg lands OR
+        // when its owner disposes it before the pool drains — never because the pool's cancel
+        // completed it on the pool's own thread (which it no longer does).
+        var leg = new SingleAssignmentDisposable();
+        var owned = quiescence?.Own(leg);
+        leg.Disposable = routingPool.SubscribeThroughPool(route)
             .Finally(() =>
             {
                 SaturationReport.OnTerminated(Interlocked.Decrement(ref inFlightRoutes));
                 slot?.Dispose();
+                owned?.Dispose();
             })
             .Subscribe(
                 _ => { },
@@ -762,14 +771,21 @@ internal class RoutingGrain(
                     ?? [];
 
         var slot = quiescence?.Track($"refused-reply report → {asker} (request {requestId})");
-        routingPool.SubscribeThroughPool(
+        // #7968: owned by the routing gauge like every leg — see Dispatch.
+        var leg = new SingleAssignmentDisposable();
+        var owned = quiescence?.Own(leg);
+        leg.Disposable = routingPool.SubscribeThroughPool(
                 silos.ToObservable()
                     .SelectMany(silo => DeliverToSilo(silo).Select(told => (Silo: silo, Told: told)))
                     .Where(r => r.Told)
                     .Select(r => (SiloAddress?)r.Silo)
                     .Take(1)
                     .DefaultIfEmpty())
-            .Finally(() => slot?.Dispose())
+            .Finally(() =>
+            {
+                slot?.Dispose();
+                owned?.Dispose();
+            })
             .Subscribe(
                 hostedOn =>
                 {
@@ -1374,8 +1390,15 @@ internal class RoutingGrain(
         {
             var slot = quiescence?.Track(
                 $"NACK{(string.IsNullOrEmpty(transport) ? string.Empty : $" over {transport}")}");
-            routingPool.SubscribeThroughPool(nack)
-                .Finally(() => slot?.Dispose())
+            // #7968: owned by the routing gauge like every leg — see Dispatch.
+            var leg = new SingleAssignmentDisposable();
+            var owned = quiescence?.Own(leg);
+            leg.Disposable = routingPool.SubscribeThroughPool(nack)
+                .Finally(() =>
+                {
+                    slot?.Dispose();
+                    owned?.Dispose();
+                })
                 .Subscribe(
                     _ => { },
                     ex =>

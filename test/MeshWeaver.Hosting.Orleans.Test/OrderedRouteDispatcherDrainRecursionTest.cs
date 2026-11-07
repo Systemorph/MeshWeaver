@@ -33,9 +33,16 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// reports it at Critical). This test measures the stack, because "it recurses" is otherwise only a
 /// reading of the code.</para>
 ///
-/// <para>The shape is the real one: a head leg in flight, a queue behind it, and a pool drain as the
-/// only thing that ends the head. Nothing is timed, and nothing is swept — the stack depth at each
-/// leg's completion is recorded and compared.</para>
+/// <para>The shape is the real one: a head leg in flight, a queue behind it, and teardown as the only
+/// thing that ends the head. Nothing is timed, and nothing is swept — the stack depth at each leg's
+/// completion is recorded and compared.</para>
+///
+/// <para><b>Since #7968 teardown reaches the head through its OWNER, not the pool.</b> The pool's
+/// drain no longer completes a live leg on its canceller (it runs no consumer code there), so the
+/// head's terminal used to come from a path that no longer exists. Routing legs are owned by
+/// <see cref="RoutingQuiescence"/>, which disposes them before the pools drain; the dispatcher then
+/// releases the rest of the channel WITHOUT subscribing it, in a loop. The recursion property is the
+/// same and is asserted the same way.</para>
 /// </summary>
 public class OrderedRouteDispatcherDrainRecursionTest
 {
@@ -55,10 +62,11 @@ public class OrderedRouteDispatcherDrainRecursionTest
     private const int QueuedBehindHead = 32;
 
     [Fact]
-    public async Task ADrainedQueue_CompletesItsLegs_WithoutRecursingOncePerLeg()
+    public async Task AReleasedQueue_CompletesItsLegs_WithoutRecursingOncePerLeg()
     {
         using var pool = new IoPool(4);
-        var dispatcher = new OrderedRouteDispatcher(pool, NullLogger.Instance);
+        using var owner = new RoutingQuiescence();
+        var dispatcher = new OrderedRouteDispatcher(pool, NullLogger.Instance, owner);
 
         var headSubscribed = new AsyncSubject<Unit>();
         var allCompleted = new AsyncSubject<Unit>();
@@ -107,25 +115,27 @@ public class OrderedRouteDispatcherDrainRecursionTest
         dispatcher.QueueSnapshot().Deepest.Should().Be(QueuedBehindHead,
             "precondition: the whole backlog is queued behind the head leg before anything drains");
 
-        // Teardown. The head leg's terminal comes from the pool's drain registration; every leg
-        // behind it is then BUILT after the drain, so each one is refused.
-        pool.Drain();
+        // Teardown, as a silo stop runs it: the OWNER releases its legs (the head is disposed, its
+        // .Finally runs here), and only then does the pool drain — finding nothing attached.
+        owner.ReleaseOwnedLegs().Should().Be(1, "precondition: exactly the head leg was live and owned");
+        pool.Drain().Should().Be(0);
+        pool.UnownedLeaks.Should().Be(0, "the owner released the head before the pool drained (#7968)");
 
         await allCompleted.Should().Within(TestTimeouts.Quick).Emit(
-            "every queued leg must still terminate — its .Finally is what releases RoutingGrain's "
-            + "in-flight route slot and advances the destination's FIFO (#1789)",
+            "every queued leg must still be released — its completion callback is what releases "
+            + "RoutingGrain's in-flight route slot and the routing gauge's slot (#1789)",
             cancellationToken: TestContext.Current.CancellationToken);
 
-        // Leg 0 ends on the canceller thread and the rest are refusals, so only the refusals are
-        // compared with each other: they all travel the identical path, and the ONLY thing that can
-        // make their stacks differ is one of them running inside another's subscribe.
+        // Leg 0 ends through its dispose and the rest are released by the dispatcher, so only the
+        // released legs are compared with each other: they all travel the identical path, and the
+        // ONLY thing that can make their stacks differ is one of them running inside another's.
         var refused = depthAtCompletion.Skip(1).ToArray();
         var spread = refused.Max() - refused.Min();
 
         spread.Should().BeLessThan(QueuedBehindHead,
-            "a refused leg must not complete inside the subscribe of the leg ahead of it: DrainNext "
-            + "re-enters itself from each terminal, so an inline refusal walks the whole backlog by "
-            + "RECURSION — one frame group per queued leg, on the pool's single cancel thread. "
+            "a released leg must not complete inside the completion of the leg ahead of it: DrainNext "
+            + "re-enters itself from each terminal, so releasing one leg per terminal would walk the "
+            + "whole backlog by RECURSION — one frame group per queued leg. "
             + "Depths {0}..{1} over {2} legs; DrainNext frames under the last completion: [{3}]",
             refused.Min(), refused.Max(), refused.Length, stackAtDeepest);
     }
