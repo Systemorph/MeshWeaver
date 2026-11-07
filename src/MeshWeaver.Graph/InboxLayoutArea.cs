@@ -521,12 +521,18 @@ public static class InboxLayoutArea
             });
     }
 
-    /// <summary>The row with its state spelled for the viewer and its badge coloured; a row without a state keeps the badge hidden.</summary>
+    /// <summary>
+    /// The row with its state spelled for the viewer and its badge coloured; a row without a state keeps the badge hidden,
+    /// and an UNREAD one's is VISUALLY hidden (<see cref="InboxRows.VisuallyHiddenStyle"/>) — its bold sender and subject say it
+    /// to the eye, as in a mail client, while the badge's localized text still says it to a screen reader. The state is still
+    /// the row's (the state filter reads it).
+    /// </summary>
     internal static InboxRow WithStateText(InboxRow row, ImmutableDictionary<string, string> texts, string? stepFormat = null)
         => row.State.Length > 0 && texts.TryGetValue(row.State, out var text)
             ? row with
             {
-                StateText = text + StepSuffix(row, stepFormat), StateColor = InboxState.Color(row.State), StateStyle = string.Empty,
+                StateText = text + StepSuffix(row, stepFormat), StateColor = InboxState.Color(row.State),
+                StateStyle = string.Equals(row.State, InboxState.Unread, StringComparison.Ordinal) ? InboxRows.VisuallyHiddenStyle : string.Empty,
                 Status = text[InboxState.Mark(row.State).Length..] + StepSuffix(row, stepFormat),
             }
             : row;
@@ -1017,7 +1023,8 @@ public static class InboxLayoutArea
                 var asked = WithPreferences(viewFilter, stored ?? expected);
                 if (stored is not null)
                     SeedMissing(hub, viewerAccess, viewerContext, logger, preferencesPath, stored, seedFor, seeded);
-                host.UpdateData(AccountOptionsId, AccountOptions(host.Localize("inbox.account.all"), AccountsOf(rows)));
+                var accounts = AccountsOf(rows);
+                host.UpdateData(AccountOptionsId, AccountOptions(host.Localize("inbox.account.all"), accounts));
                 host.UpdateData(StateStylesId, StateStyles(sections, asked.Kinds));
                 // The tag checkboxes follow the rows; a box the viewer ticked stays ticked while its tag exists.
                 var ticked = items.Where(item => item.Checked).Select(item => item.Key).ToImmutableHashSet(StringComparer.Ordinal);
@@ -1026,7 +1033,8 @@ public static class InboxLayoutArea
                 if (!wanted.SequenceEqual(items))
                     host.UpdateData(TagItemsId, wanted);
                 asked = asked with { TagKeys = [.. wanted.Where(item => item.Checked).Select(item => item.Key)] };
-                var shown = InboxRows.Apply(rows, asked, asked.Category);
+                // As the list shows them: the compact time, the account only when several feed the inbox, the preview line.
+                var shown = InboxRows.ForList(InboxRows.Apply(rows, asked, asked.Category), accounts.Count, DateTimeOffset.UtcNow, zone, culture);
                 var hidden = InboxRows.HiddenObligations(rows, asked, needsYou);
                 host.UpdateData(HiddenId, hidden == 0 ? string.Empty : host.Localize("inbox.hidden", hidden));
                 host.UpdateData(HiddenActionStyleId, hidden == 0 ? HiddenStyle : string.Empty);
@@ -1241,9 +1249,9 @@ public static class InboxLayoutArea
             : null;
 
     /// <summary>
-    /// The grid: the selection column, the source's symbol, what the row is, who brought it, when —
-    /// and Open, which hands off to the item's own page; an unread row is bold (its row class). The inbox lists and hands off; it is not a
-    /// second mail client or chat client.
+    /// The grid: the selection column, the source's symbol, and the item as a mail client lists it (<see cref="ItemCell"/>) —
+    /// sender, state, time; subject; the beginning of the body. A click hands off to the item's reading view; an unread row is
+    /// bold. The inbox lists and hands off; it is not a second mail client or chat client.
     /// </summary>
     private static DataGridControl Grid(LayoutAreaHost host, IObservable<ImmutableList<InboxRow>> rows)
     {
@@ -1256,38 +1264,12 @@ public static class InboxLayoutArea
             // approval: a header and the source's name as the tooltip.
             .WithColumn(new TemplateColumnControl(Controls.Icon(new ContextProperty(InboxRows.SourceIconProperty)).WithWidth("20px"))
                 .WithTitle(host.Localize("inbox.column.channel")).WithWidth("72px").WithSortable(false));
-        // Outlook's columns: what, from whom, when. Ordered by date always: a header sort would be a
-        // second, unbound ordering.
-        foreach (var (property, key, width) in new[]
-                 {
-                     (nameof(InboxRow.Title), "inbox.column.item", "3fr"),
-                     (nameof(InboxRow.StateText), "inbox.column.state", "150px"),
-                     // The detailed status — what the target (or the run) says, beyond the badge.
-                     (nameof(InboxRow.Status), "inbox.column.status", "1.5fr"),
-                     (nameof(InboxRow.From), "inbox.column.source", "1.5fr"),
-                     // Which of the viewer's accounts it reached — several mailboxes in one list.
-                     (nameof(InboxRow.Account), "inbox.column.account", "1.5fr"),
-                     (nameof(InboxRow.TagText), "inbox.column.tags", "1fr"),
-                     (nameof(InboxRow.When), "inbox.column.when", "170px"),
-                 })
-        {
-            // The lifecycle state as a badge — coloured by state, a check only for what is done, and
-            // hidden (not drawn empty) for an item that has none.
-            if (property == nameof(InboxRow.StateText))
-            {
-                grid = grid.WithColumn(new TemplateColumnControl(Controls.Badge(new ContextProperty(InboxRows.StateTextProperty)) with
-                    {
-                        BackgroundColor = new ContextProperty(InboxRows.StateColorProperty),
-                        Color = "#ffffff",
-                        Style = new ContextProperty(InboxRows.StateStyleProperty),
-                    })
-                    .WithTitle(host.Localize(key)).WithWidth(width).WithSortable(false));
-                continue;
-            }
-            grid = grid.WithColumn(new PropertyColumnControl<string> { Property = property.ToCamelCase() }
-                .WithTitle(host.Localize(key)).WithWidth(width).WithSortable(false));
-        }
-        return grid
+        // Outlook's message list: ONE column that reads like a mail client's row — who and when, what, and the
+        // beginning of the body — so nothing is cut to a dozen characters and nothing scrolls sideways. A part a
+        // row lacks takes no room: the state badge is hidden without a state (and for unread, which the bold
+        // says), the account is named only when several accounts feed the inbox. Ordered by date always: a
+        // header sort would be a second, unbound ordering.
+        return grid.WithColumn(new TemplateColumnControl(ItemCell()).WithTitle(host.Localize("inbox.column.item")).WithSortable(false))
             // A click on a row OPENS it, as in a mail client — always INSIDE the portal, in the
             // inbox's reading view (InboxReadingView), never the provider's own client. (Ticking a box
             // and shift/cmd-clicks are selection gestures the grid keeps to itself.) Paged, newest first.
@@ -1296,6 +1278,38 @@ public static class InboxLayoutArea
             .WithItemsPerPage(50)
             .WithShowPageSizeSelector()
             .Resizable();
+    }
+
+    /// <summary>
+    /// The row as a mail client lists a message, built from the platform's controls and bound to the row: the sender
+    /// (bold while unread), the state badge, the account and the compact time on the first line; the subject and
+    /// the tags on the second; the preview (or a status beyond the badge) on the third. Every line is one line,
+    /// cut with an ellipsis.
+    /// </summary>
+    internal static StackControl ItemCell()
+    {
+        static ContextProperty Bound(string property) => new(property);
+        // Only the compact time never shrinks: it is short by construction (InboxRows.ShortWhen).
+        var nowrap = "white-space: nowrap; flex: none;";
+        var sender = Controls.Label(Bound(InboxRows.FromProperty)) with { Style = Bound(InboxRows.EmphasisProperty) };
+        var state = Controls.Badge(Bound(InboxRows.StateTextProperty)) with
+        {
+            BackgroundColor = Bound(InboxRows.StateColorProperty),
+            Color = "#ffffff",
+            Style = Bound(InboxRows.StateStyleProperty),
+        };
+        var head = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8).WithWidth("100%")
+            .WithView(sender, "From")
+            .WithView(state, "State")
+            .WithView(Controls.Hint(Bound(InboxRows.AccountLabelProperty)).WithStyle(InboxRows.SecondaryStyle), "Account")
+            .WithView(Controls.Hint(Bound(InboxRows.ReceivedProperty)).WithStyle(nowrap), "Received");
+        var subject = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8).WithWidth("100%")
+            .WithView(Controls.Label(Bound(InboxRows.TitleProperty)) with { Style = Bound(InboxRows.EmphasisProperty) }, "Subject")
+            .WithView(Controls.Hint(Bound(InboxRows.TagTextProperty)).WithStyle(InboxRows.SecondaryStyle), "Tags");
+        return Controls.Stack.WithVerticalGap(2).WithWidth("100%")
+            .WithView(head, "Head")
+            .WithView(subject, "Line")
+            .WithView(Controls.Hint(Bound(InboxRows.DetailProperty)).WithStyle(InboxRows.PreviewStyle), "Preview");
     }
 
     /// <summary>Opens the clicked row in the owner's reading view.</summary>
