@@ -676,7 +676,7 @@ two-day handoff rule to every named artifact:
 | `modules/<repo>/<module>/<key>/` | the cross-run reuse copy | 14 days |
 | `named/` | named archives and manifests, including cross-run publication inputs | each manifest's expiry; module bundles 7 days |
 | `runs/` | legacy handoffs from the earlier workflow implementation | legacy 2-day rule, never applied to `named/` |
-| `cache/<name>/` | content-addressed build caches (`cache/module-pack-tool/<platform commit>-<os>-<arch>-sdk<line>.tar` + its `.sha256` record, written by `node-repo-module-pack.yml` `prepare`) | 7 days, pruned by the writer on every keep (`ci-artifact-store.py prune` on a `file:` store); an evicted entry is a cache miss |
+| `cache/<name>/` | content-addressed build caches (`cache/module-pack-tool/closure-<msbuild-closure-key>.tar` (fallback `<platform commit>-<os>-<arch>-sdk<line>.tar`) + its `.sha256` record, written by `node-repo-module-pack.yml` `prepare`) | 7 days, pruned by the writer on every keep (`ci-artifact-store.py prune` on a `file:` store); an evicted entry is a cache miss |
 
 ## What the migration still needs (maintainer)
 
