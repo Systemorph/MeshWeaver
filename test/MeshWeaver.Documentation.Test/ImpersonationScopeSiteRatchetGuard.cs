@@ -98,7 +98,7 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     /// to MeshWeaver.Plugins (core slimming). The sites moved with their code; they were not
     /// converted.</para>
     /// </summary>
-    private const int TotalBudget = 44;
+    private const int TotalBudget = 42;
 
     /// <summary>Production roots. <c>test/</c> and <c>samples/</c> are deliberately out of scope —
     /// the leak there costs test isolation, not a user's permissions, and listing 21 more entries

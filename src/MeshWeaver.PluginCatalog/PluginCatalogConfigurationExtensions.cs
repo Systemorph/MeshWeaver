@@ -437,7 +437,10 @@ public static class PluginCatalogConfigurationExtensions
         HubConfiguration = config => config
             .AddDefaultLayoutAreas()
             .AddMeshDataSource(s => s.WithContentType<PackageManifest>())
-            .AddModuleReloadViews(),
+            .AddModuleReloadViews()
+            // 🚨 The install record decides who may write it (MeshWeaver.Plugins#5055): writers state
+            // facts under their own keys and THIS hub folds them against current state.
+            .WithInitialization(InstallRecordGate.Arm),
     };
 
     /// <summary>

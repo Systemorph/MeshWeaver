@@ -670,9 +670,18 @@ public static class PackageInstaller
                 logger?.LogInformation(
                     "Package {Id}: update policy set to {Policy} (was {Previous}).",
                     packageId, policy, manifest.EffectiveUpdatePolicy);
-                // RunAsSystem, never Observable.Using (#1790).
-                return accessService.RunAsSystem(() => hub.NodeOperationIssuingHub()
-                        .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(updated)))
+                // RunAsSystem, never Observable.Using (#1790). A stream Update of the EXISTING record —
+                // the policy fields are plain values, and a delete wins over an update that commits
+                // after it, so an uninstall racing this cannot see its record come back
+                // (MeshWeaver.Plugins#5055; the full-replace CreateOrUpdateNodeRequest could).
+                return accessService.RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
+                        .Update<PackageManifest>(current => current with
+                        {
+                            UpdatePolicy = policy,
+                            AutoUpdate = policy == PackageUpdatePolicy.Auto,
+                            NotifiedModuleVersion = null,
+                            UpdatePolicySetAt = DateTimeOffset.UtcNow,
+                        }))
                     .Take(1)
                     .Select(_ => updated);
             });
@@ -3161,20 +3170,15 @@ public static class PackageInstaller
                     Origin = SeedOrigin(existingRecord, manifest),
                 },
             };
-            // System-impersonated like every installer write (Using — see Upsert): this runs after
-            // barrier scheduler hops, where no ambient context survives.
-            // Off-router issuing: the boot default-install runs with the DI root mesh hub — a
-            // target-less CreateOrUpdateNodeRequest posted there runs on the router (ROUTER_TRAFFIC).
-            return Observable.Using(
-                    () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
-                          ?? System.Reactive.Disposables.Disposable.Empty,
-                    _ => hub.NodeOperationIssuingHub()
-                        .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record)))
-                .FirstAsync().Select(d => d.Message)
-                .SelectMany(resp => resp.Success
-                    ? Observable.Return(resp.Node!)
-                    : Observable.Throw<MeshNode>(new InvalidOperationException(
-                        $"Recording install of '{manifest.Id}' failed: {resp.Error}")));
+            // 🚨 Through the install-record GATE (MeshWeaver.Plugins#5055), never a full-replace
+            // CreateOrUpdateNodeRequest: that request re-created a record an uninstall had just
+            // deleted, and could not ask the record's owner whether the package is being retired.
+            // An existing record gets a STAMP its own hub applies or refuses against current state;
+            // an absent one is created only when the lane's intent allows it (InstallRecordGate).
+            // The gate writes as System and issues off the router.
+            return InstallRecordGate.Write(hub, record,
+                manifest.WriteIntent ?? PackageRecordWriteIntent.CreateAllowed,
+                hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(PackageInstaller)));
         });
     }
 
