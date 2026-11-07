@@ -48,10 +48,18 @@ public class InboxMessageListRowTest
         InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { body = "<html><head><style>p{color:red}</style></head><body><p>Dear&nbsp;Jane,</p><p>the <b>offer</b> &amp; terms.</p></body></html>" }))
             .Should().Be("Dear Jane, the offer & terms.");
         InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { body = "plain\ntext" })).Should().Be("plain text");
+        InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { body = "Approve if cost < 100 and balance > 0." }))
+            .Should().Be("Approve if cost < 100 and balance > 0.", "a plain text with angle brackets is not markup");
+        InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { body = "<p>Please re<b>view</b> the <a href=\"x\">draft</a>.</p><p>Thanks</p>" }))
+            .Should().Be("Please review the draft. Thanks", "an inline tag joins its word; a block boundary is a space");
+        InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { body = "line one<br>line two" })).Should().Be("line one line two");
         InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { preview = "the provider's", body = "<p>the body</p>" }))
             .Should().Be("the provider's", "the source's own preview wins over the body");
         var cut = InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { preview = new string('x', 500) }));
         cut.Should().HaveLength(InboxRows.PreviewLength).And.EndWith("…", "a long body is cut, and says so");
+        var emoji = InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { preview = new string('x', InboxRows.PreviewLength - 2) + "😀 and more text" }));
+        emoji.Should().EndWith("…");
+        emoji.Any(char.IsSurrogate).Should().BeFalse("the cut never splits the emoji's surrogate pair");
         InboxRows.PreviewOf(null).Should().BeEmpty();
     }
 
@@ -79,7 +87,8 @@ public class InboxMessageListRowTest
         var unread = Row(new { isRead = false });
         unread.State.Should().Be(InboxState.Unread);
         unread.StateText.Should().Be("Unread", "the state's label is resolved from the texts");
-        unread.StateStyle.Should().Be(InboxLayoutArea.HiddenStyle, "the bold already says unread");
+        unread.StateStyle.Should().Be(InboxRows.VisuallyHiddenStyle, "the bold says unread to the eye; the badge still says it to a screen reader");
+        unread.StateStyle.Should().NotContain("display: none", "display:none would drop it from the accessibility tree");
 
         var read = Row(new { isRead = true });
         read.State.Should().BeEmpty("a read mail has no lifecycle state");

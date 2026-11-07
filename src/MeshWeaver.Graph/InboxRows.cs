@@ -417,6 +417,19 @@ public static class InboxRows
     /// <summary>The style of an unread item's sender and subject — <see cref="LineStyle"/>, semibold, as a mail client shows new mail.</summary>
     public const string EmphasisStyle = LineStyle + " font-weight: 600;";
 
+    /// <summary>
+    /// The style of a SECONDARY part of a line (the account, the tags): it may shrink and is cut with an ellipsis, and it never
+    /// takes more than a third of the line, so a long address or tag list cannot push the sender or subject out.
+    /// </summary>
+    public const string SecondaryStyle = "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; max-width: 33%;";
+
+    /// <summary>
+    /// The standard visually-hidden pattern — in the layout and the accessibility tree, out of sight. The state badge of an
+    /// UNREAD row wears it: the bold says "unread" to the eye, the badge's localized text still says it to a screen reader.
+    /// </summary>
+    public const string VisuallyHiddenStyle =
+        "position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;";
+
     /// <summary>The style of the preview line — <see cref="LineStyle"/>, regular even on an unread row.</summary>
     public const string PreviewStyle = LineStyle + " font-weight: 400;";
 
@@ -644,25 +657,44 @@ public static class InboxRows
             ? preview
             : StringOf(content, "body") is { } body && !string.IsNullOrWhiteSpace(body) ? PlainText(body) : string.Empty;
         var collapsed = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return collapsed.Length <= PreviewLength ? collapsed : collapsed[..(PreviewLength - 1)].TrimEnd() + "…";
+        if (collapsed.Length <= PreviewLength)
+            return collapsed;
+        // Cut on a character boundary: never between the halves of a surrogate pair (an emoji).
+        var cut = PreviewLength - 1;
+        if (char.IsHighSurrogate(collapsed[cut - 1]))
+            cut--;
+        return collapsed[..cut].TrimEnd() + "…";
     }
 
     /// <summary>
-    /// <paramref name="body"/> without markup when it is HTML — the content of <c>style</c>, <c>script</c> and
-    /// <c>head</c> dropped, every tag a space, entities decoded — else as it is. Pure.
+    /// <paramref name="body"/> without markup when it IS HTML (<see cref="LooksLikeHtml"/>) — else exactly as it is, so a plain-text
+    /// <c>cost &lt; 100 and balance &gt; 0</c> keeps its meaning. In HTML the content of <c>style</c>, <c>script</c> and <c>head</c> is
+    /// dropped, a BLOCK boundary (<c>p</c>, <c>div</c>, <c>br</c>, <c>li</c>, a table cell, a heading) becomes a space, an inline tag
+    /// (<c>b</c>, <c>span</c>, <c>a</c>) is removed without one — <c>re&lt;b&gt;view&lt;/b&gt;</c> stays <c>review</c> — and entities are decoded. Pure.
     /// </summary>
     private static string PlainText(string body)
     {
-        if (!body.Contains('<', StringComparison.Ordinal))
+        if (!LooksLikeHtml(body))
             return body;
-        var stripped = System.Text.RegularExpressions.Regex.Replace(body,
-            "<(style|script|head)\\b[^>]*>.*?</\\1\\s*>", " ",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline,
-            TimeSpan.FromMilliseconds(200));
-        stripped = System.Text.RegularExpressions.Regex.Replace(stripped, "<[^>]*>", " ",
-            System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromMilliseconds(200));
-        return System.Net.WebUtility.HtmlDecode(stripped);
+        const System.Text.RegularExpressions.RegexOptions options =
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline;
+        var bound = TimeSpan.FromMilliseconds(200);
+        var text = System.Text.RegularExpressions.Regex.Replace(body, "<(style|script|head)\\b[^>]*>.*?</\\1\\s*>", " ", options, bound);
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            "</?(p|div|br|li|ul|ol|tr|td|th|table|h[1-6]|blockquote|hr|section|article|header|footer|body|html)\\b[^>]*>", " ", options, bound);
+        text = System.Text.RegularExpressions.Regex.Replace(text, "<!--.*?-->|</?[a-z][a-z0-9]*\\b[^>]*>", string.Empty, options, bound);
+        return System.Net.WebUtility.HtmlDecode(text);
     }
+
+    /// <summary>
+    /// Whether <paramref name="body"/> is HTML: it carries a closing tag, a self-closing or bare <c>br</c>/<c>hr</c>, or a
+    /// document element (<c>&lt;html</c>, <c>&lt;body</c>, <c>&lt;!DOCTYPE</c>). A plain text with a lone <c>&lt;</c> or <c>&gt;</c> is not. Pure.
+    /// </summary>
+    internal static bool LooksLikeHtml(string body)
+        => body.Contains('<', StringComparison.Ordinal)
+           && System.Text.RegularExpressions.Regex.IsMatch(body,
+               "</[a-z][a-z0-9]*\\s*>|<(br|hr)\\s*/?>|<(html|body|!doctype)\\b",
+               System.Text.RegularExpressions.RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(200));
 
     /// <summary>
     /// An item's time as a mail client's message list shows it, where the viewer is: the time for an item

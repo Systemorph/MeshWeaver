@@ -523,15 +523,16 @@ public static class InboxLayoutArea
 
     /// <summary>
     /// The row with its state spelled for the viewer and its badge coloured; a row without a state keeps the badge hidden,
-    /// and so does an UNREAD one — its bold sender and subject already say it, as in a mail client, and a blue "Unread"
-    /// pill on every new mail is noise. The state is still the row's (the state filter reads it).
+    /// and an UNREAD one's is VISUALLY hidden (<see cref="InboxRows.VisuallyHiddenStyle"/>) — its bold sender and subject say it
+    /// to the eye, as in a mail client, while the badge's localized text still says it to a screen reader. The state is still
+    /// the row's (the state filter reads it).
     /// </summary>
     internal static InboxRow WithStateText(InboxRow row, ImmutableDictionary<string, string> texts, string? stepFormat = null)
         => row.State.Length > 0 && texts.TryGetValue(row.State, out var text)
             ? row with
             {
                 StateText = text + StepSuffix(row, stepFormat), StateColor = InboxState.Color(row.State),
-                StateStyle = string.Equals(row.State, InboxState.Unread, StringComparison.Ordinal) ? HiddenStyle : string.Empty,
+                StateStyle = string.Equals(row.State, InboxState.Unread, StringComparison.Ordinal) ? InboxRows.VisuallyHiddenStyle : string.Empty,
                 Status = text[InboxState.Mark(row.State).Length..] + StepSuffix(row, stepFormat),
             }
             : row;
@@ -1288,6 +1289,7 @@ public static class InboxLayoutArea
     internal static StackControl ItemCell()
     {
         static ContextProperty Bound(string property) => new(property);
+        // Only the compact time never shrinks: it is short by construction (InboxRows.ShortWhen).
         var nowrap = "white-space: nowrap; flex: none;";
         var sender = Controls.Label(Bound(InboxRows.FromProperty)) with { Style = Bound(InboxRows.EmphasisProperty) };
         var state = Controls.Badge(Bound(InboxRows.StateTextProperty)) with
@@ -1299,11 +1301,11 @@ public static class InboxLayoutArea
         var head = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8).WithWidth("100%")
             .WithView(sender, "From")
             .WithView(state, "State")
-            .WithView(Controls.Hint(Bound(InboxRows.AccountLabelProperty)).WithStyle(nowrap), "Account")
+            .WithView(Controls.Hint(Bound(InboxRows.AccountLabelProperty)).WithStyle(InboxRows.SecondaryStyle), "Account")
             .WithView(Controls.Hint(Bound(InboxRows.ReceivedProperty)).WithStyle(nowrap), "Received");
         var subject = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8).WithWidth("100%")
             .WithView(Controls.Label(Bound(InboxRows.TitleProperty)) with { Style = Bound(InboxRows.EmphasisProperty) }, "Subject")
-            .WithView(Controls.Hint(Bound(InboxRows.TagTextProperty)).WithStyle(nowrap), "Tags");
+            .WithView(Controls.Hint(Bound(InboxRows.TagTextProperty)).WithStyle(InboxRows.SecondaryStyle), "Tags");
         return Controls.Stack.WithVerticalGap(2).WithWidth("100%")
             .WithView(head, "Head")
             .WithView(subject, "Line")

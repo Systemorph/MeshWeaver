@@ -406,8 +406,10 @@ function of the filter and the legs.
 > Gmail and Teams sources write from the provider's `bodyPreview`/snippet, else a stored mail's `body` as plain text).
 > Each line is one line, cut with an ellipsis, so nothing scrolls sideways. The State badge (`InboxState`, read from
 > the node's own status or implied by the leg that found it) shows Awaiting decision / Approved / Rejected / Expired
-> for approvals and Requested / Running / Done / Failed / Cancelled for activities; it is hidden without a state and
-> for Unread, which the bold already says. 🚨 That is also why the separate State and Status columns were blank for
+> for approvals and Requested / Running / Done / Failed / Cancelled for activities; it is hidden without a state, and
+> VISUALLY hidden for Unread (the bold says it to the eye; the localized badge still says it to a screen reader). The
+> account and tags shrink and ellipsize within a third of their line; only the compact time never shrinks. A stored
+> mail's body is read as HTML only when it looks like HTML, so a plain text with `<` or `>` keeps its meaning. 🚨 That is also why the separate State and Status columns were blank for
 > every mail: a READ mail has no lifecycle state at all, an unread one only Unread, and Status repeated the badge — so
 > the row now spends no room on either. A status that says MORE than the badge (an approval whose target was refused
 > as stale) is the third line when there is no preview. The account is named only when more than one account feeds
