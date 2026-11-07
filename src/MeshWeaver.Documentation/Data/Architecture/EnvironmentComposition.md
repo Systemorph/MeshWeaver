@@ -160,6 +160,11 @@ How it runs (`DeclaredDisabledRetirement`, called by the boot pass before the in
 - **Never phase 2.** The request names no requester, and phase 2 refuses a confirmation for such a
   request — a flag can never drop a partition. Phase 1's own refusals (a shared partition, user data
   in the partition, an unreadable node) still apply and end the request `Failed`, by name.
+- **The boot repair never re-writes it.** `InstalledPackageRepairService` lists the install records
+  before it waits for the default install, so the record it would re-assert can belong to a package
+  phase 1 is removing. `ReassertInstalled` therefore reads the same composition and skips every
+  package the retire's own rule covers (`DeclaredDisabledRetirement.CoveredBy` — the one decision
+  `Decide` uses too), each skip reported on the summary's `Skipped`.
 - **It blocks no re-install.** A flag-issued request (`RetiredByFlag`) is not counted by
   `PackageUninstallExecutor.UninstalledHere`: while the flag stays off its exclusion keeps the package
   out, and once the record stops declaring it off the package's own lanes bring it back.
