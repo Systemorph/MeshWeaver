@@ -26,9 +26,7 @@ public record DataGridControl(object Data)
     protected override DataGridControl PrepareRendering(RenderingContext context)
     => base.PrepareRendering(context) with
     {
-        // A compact grid has no column-derived minimum: on a phone its box must be free to shrink
-        // below CompactBelow, or the stacked layout could never be reached (6 columns = 720px > 640px).
-        Style = Style ?? (CompactBelow is null ? $"min-width: {Columns.Count * 120}px" : null)
+        Style = Style ?? $"min-width: {Columns.Count * 120}px"
     };
 
     /// <summary>
@@ -138,18 +136,6 @@ public record DataGridControl(object Data)
     /// Set by <see cref="WithRowSelection"/>, or alone with <see cref="WithRowKey"/>.
     /// </summary>
     public object? RowKey { get; init; }
-
-    /// <summary>
-    /// The width, in CSS pixels, below which a client draws the grid COMPACT: each row one stacked
-    /// entry laid out by its columns' <see cref="DataColumnControl{TColumn}.Compact"/> placements,
-    /// without a header (the phone layout of a mail list). Measured on the grid's own box, not the
-    /// window. Null: the grid is always a table.
-    /// </summary>
-    public object? CompactBelow { get; init; }
-
-    /// <summary>Returns a copy drawn compact below <paramref name="width"/> CSS pixels — see <see cref="CompactBelow"/>.</summary>
-    /// <param name="width">The breakpoint in CSS pixels.</param>
-    public DataGridControl WithCompactBelow(int width) => This with { CompactBelow = width };
 
     /// <summary>Returns a copy whose rows are identified by <paramref name="keyProperty"/> (see <see cref="RowKey"/>).</summary>
     /// <param name="keyProperty">The row property identifying a row.</param>
@@ -324,28 +310,6 @@ public record DataGridControl(object Data)
 }
 
 /// <summary>
-/// Where a column goes in a grid's COMPACT layout (<see cref="DataColumnControl{TColumn}.Compact"/>) —
-/// the layout a client uses below <see cref="DataGridControl.CompactBelow"/>: no header, no table, each
-/// row one entry. Its first line holds the <see cref="Lead"/> cells on the left and the
-/// <see cref="Trail"/> cells on the right; every <see cref="Body"/> cell follows on its own line, in
-/// column order. String constants, so a client reads them off the wire without a shared enum.
-/// </summary>
-public static class ColumnCompactPlacement
-{
-    /// <summary>On the entry's first line, left — who or what the row is (the sender).</summary>
-    public const string Lead = "Lead";
-
-    /// <summary>On the entry's first line, right-aligned — a short trailing fact (the time).</summary>
-    public const string Trail = "Trail";
-
-    /// <summary>On a line of its own under the first — the default.</summary>
-    public const string Body = "Body";
-
-    /// <summary>Not shown in the compact layout.</summary>
-    public const string Hidden = "Hidden";
-}
-
-/// <summary>
 /// Identifies a property on the row data object to use as a column binding or context reference.
 /// </summary>
 /// <param name="Property">The name of the property on the row type.</param>
@@ -390,17 +354,6 @@ public abstract record DataColumnControl<TColumn>() : UiControl<TColumn>(ModuleS
     public object? CellClass { get; init; }
     /// <summary>Inline CSS style applied to every data cell in this column.</summary>
     public object? CellStyle { get; init; }
-    /// <summary>
-    /// Where the column goes when the grid is shown COMPACT — on a narrow screen (a phone), where a
-    /// client draws each row as one stacked entry instead of a table: a <see cref="ColumnCompactPlacement"/>
-    /// constant. Null is <see cref="ColumnCompactPlacement.Body"/>. A client that does not know compact
-    /// mode ignores it and draws the table as always, so declaring it never changes a wide grid.
-    /// </summary>
-    public object? Compact { get; init; }
-
-    /// <summary>Returns a copy of the column placed at <paramref name="placement"/> in the compact (phone) layout — see <see cref="Compact"/>.</summary>
-    /// <param name="placement">A <see cref="ColumnCompactPlacement"/> constant.</param>
-    public TColumn WithCompact(string placement) => This with { Compact = placement };
     
     /// <summary>Returns a copy of the column with <paramref name="title"/> as the header text.</summary>
     /// <param name="title">The header label to display.</param>

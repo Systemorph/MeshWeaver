@@ -395,12 +395,29 @@ function of the filter and the legs.
 >
 > Kinds, per-kind states, sources and "Show ignorable" are CHECKBOXES bound to the person's own `InboxPreferences` node
 > (`kinds/{key}`, `activityStates/{group}`, `mailStates/{group}`, `chatStates/{group}`, `sources/{key}`, `showIgnorable` — see "What the inbox shows by default" below), the
-> tags a bound list of `InboxTagItem`: the union of the ticked kinds or tags is listed, and none ticked lists all. A **state
-> badge** in the Item cell (`InboxState`, read from the node's own status or implied by the leg that found it; hidden, never
-> drawn empty, for an item without one) marks each row that has a state:
-> Awaiting decision / Approved / Rejected / Expired for approvals, Requested / Running / Done / Failed / Cancelled
-> for activities, Unread for mail and notifications. A check mark is reserved for done states; approval requests
-> are symbolised by a gavel (`InboxSourceIcons`), never a tick.
+> tags a bound list of `InboxTagItem`: the union of the ticked kinds or tags is listed, and none ticked lists all.
+>
+> **The row reads like a mail client's message list (2026-11).** After the Source symbol the grid has ONE column,
+> **Item**, a template of platform controls bound to the row (`InboxLayoutArea.ItemCell`): line 1 the sender
+> (`InboxRow.From`, semibold while unread — `InboxRow.Emphasis`, carried on the row so the Blazor and React clients
+> bold the same two lines), the state badge, the account and the compact time (`InboxRows.ShortWhen`: the time today,
+> the weekday and time within the last week, else the short date, in the viewer's zone and culture); line 2 the subject
+> and the tags; line 3 the beginning of the body (`InboxRow.Preview` — the content's `preview`, which the Outlook,
+> Gmail and Teams sources write from the provider's `bodyPreview`/snippet, else a stored mail's `body` as plain text).
+> The preview is the NEW text only (`InboxPreview.Clean`): the reply it quotes and the signature are cut where a cheap
+> scan sees them ("On … wrote:", "From: … Sent:", `-----Original Message-----`, `-- `, quoted `>` lines), mid-line
+> too because Graph collapses `bodyPreview` to one line; zero-width joiners are kept. Nothing fetches a body for it.
+> Each line is one line, cut with an ellipsis, so nothing scrolls sideways. The State badge (`InboxState`, read from
+> the node's own status or implied by the leg that found it) shows Awaiting decision / Approved / Rejected / Expired
+> for approvals and Requested / Running / Done / Failed / Cancelled for activities; it is hidden without a state, and
+> VISUALLY hidden for Unread (the bold says it to the eye; the localized badge still says it to a screen reader). The
+> account and tags shrink and ellipsize within a third of their line; only the compact time never shrinks. A stored
+> mail's body is read as HTML only when it looks like HTML, so a plain text with `<` or `>` keeps its meaning. 🚨 That is also why the separate State and Status columns were blank for
+> every mail: a READ mail has no lifecycle state at all, an unread one only Unread, and Status repeated the badge — so
+> the row now spends no room on either. A status that says MORE than the badge (an approval whose target was refused
+> as stale) is the third line when there is no preview. The account is named only when more than one account feeds
+> the inbox (`InboxRows.ForList`). A check mark is reserved for done states; approval requests are symbolised by a
+> gavel (`InboxSourceIcons`), never a tick.
 
 | Control | Bound to | What it does |
 |---|---|---|
@@ -434,24 +451,7 @@ Three properties of that binding are load-bearing:
   recognise falls back to newest first.
 
 **The list reads like a mail client's.** Each row starts with its source's symbol; its columns
-are **Source · Item · From · Account · Tags · When** (`InboxLayoutArea.Columns`). There is no State
-or Status column (maintainer, 2026-11-07: *"state and status not useful. i'd prefer to have first
-line of text of email"* — both were empty for every mail and took a third of the width). **Item** is
-the one flexible column and a two-line cell built from framework controls (a `TemplateColumnControl`
-over a `Stack`, bound to the row with `ContextProperty`): the title, the state badge when the item has
-one, and under them the **preview** — the first line of what the item says, muted, cut with an
-ellipsis. The preview is `InboxPreview.Of` over the content's `preview`, the text the source's OWN
-listing already carries — Graph's `bodyPreview`, Gmail's `snippet`, a chat's last message (iMessage,
-WhatsApp, Teams) — with whitespace collapsed and a quoted reply or signature cut where a cheap scan
-sees one ("On … wrote:", "From: … Sent:", `-----Original Message-----`, `-- `), mid-line too, since
-Graph collapses `bodyPreview` to one line. Nothing fetches a body for it and nothing is stored for it.
-**Account** shows only while the rows reached more than one address (its `Visible` is bound to
-`inboxAccountColumn`). **When** is short (`InboxPreview.ShortTime`): the time alone for an item of the
-viewer's today, the short date otherwise, in the viewer's zone and culture resolved once on the render
-turn — so the column (96px) never clips. **On a phone** (the grid's box below 640px,
-`DataGridControl.WithCompactBelow`) the same columns draw as one entry per row by their
-`ColumnCompactPlacement`: symbol and sender lead the first line with the time on the right, the item
-(title, preview) follows; account and tags stay off. A source with read state brings TWO legs — one selecting its unread
+are what, from whom and when. A source with read state brings TWO legs — one selecting its unread
 items (`InboxQueryLeg.Unread`), one the rest — so "unread" is decided by the query, never by
 reading content on the page: unread mail is "not `Read`", an unread notification is "not
 `isRead`". An unread row carries `rowClass: inbox-unread` and the grid applies it per row
@@ -516,8 +516,8 @@ recorded decision: a `status` of approved/rejected, or an `approvedBy`/`approved
 its request as a **closed row**: its State is the outcome — **Stale** for a target retired because what it was planned against
 moved on (a word `stale`/`superseded`, or a refusal whose `error` begins "stale"), else Approved, Rejected, Refused, Failed,
 Cancelled, Expired or Done — and it is listed only under the *Done* state filter, so the default (*Open*) view lists the
-requests that still wait. The state badge in the Item cell carries the text (`Refused · stale`, `Done`, `Awaiting
-decision`; for a running activity `Running · step 3/7`). 🚨 A decision that is recorded but not yet CONFIRMED is not decided: with step-up required ([Approval step-up](/Doc/Architecture/ApprovalStepUp)) a recorded decision with no receipt stamped (`stepUpReceipts`) is HELD, so the request stays until the receipt lands — the approver who walked away from the confirmation still finds it. The target is observed live through its own stream (a decision taken on the approval's own page drops the request from an open inbox; a deleted and recreated approval is picked up again). A target read that fails or times out keeps the
+requests that still wait. The grid's **Status** column carries the detailed text (`Refused · stale`, `Done`, `Awaiting
+decision`; for a running activity `Running · step 3/7`), beside the short State badge. 🚨 A decision that is recorded but not yet CONFIRMED is not decided: with step-up required ([Approval step-up](/Doc/Architecture/ApprovalStepUp)) a recorded decision with no receipt stamped (`stepUpReceipts`) is HELD, so the request stays until the receipt lands — the approver who walked away from the confirmation still finds it. The target is observed live through its own stream (a decision taken on the approval's own page drops the request from an open inbox; a deleted and recreated approval is picked up again). A target read that fails or times out keeps the
 request (logged); a target that answers completely with nothing — gone, or not the approver's to see — has
 nothing left to decide and the request leaves altogether. A **click on the row opens the approval** (`InboxLayoutArea.OpenTarget`),
 and the inbox address of such a notification (`/{user}/Inbox/{item}`, an old link) redirects to it
@@ -627,12 +627,14 @@ splitter's own handle hides it and gives the list the width.
 `InboxSourceIcons.CategoryIcon`: the table's Fluent glyph for the category (Conversations → a chat
 bubble, Mail → an envelope), else the first Fluent glyph among its sources, else the fallback — never a
 full-colour logo, even when the category's first source carries one (Conversations listed WhatsApp
-first and showed its logo). Logos stay in the per-item Source column and on a source's account row. A logo sits on a plate (`IconBackplate`): a vendor mark whose colours read on a
-dark ground (`IconBackplate.ReadsOnDark` — every channel mark: Outlook, Gmail, iMessage, WhatsApp, Teams) gets a plate that
-follows the theme, white in light mode and `OfficialDarkPlate` in dark mode (maintainer, 2026-11-07: *"icons for outlook and
-teams etc => in dark mode can we put dark bg?"*); a near-black mark keeps the white plate on both themes, since it would
-vanish on the dark one. The plate carries its own `prefers-color-scheme` rule because every icon reaches the page as an
-image, where the page's CSS variables do not reach.
+first and showed its logo). Logos stay in the per-item Source column and on a source's account row.
+A logo sits on a plate (`IconBackplate`). A vendor mark whose solid colours, fill and stroke, read on a dark ground
+(`IconBackplate.ReadsOnDark`, which holds for every channel mark: Outlook, Gmail, iMessage, WhatsApp, Teams) gets a plate
+that follows the theme, white in light mode and `OfficialDarkPlate` (`#2b2b2b`) in dark mode (maintainer, 2026-11-07:
+*"icons for outlook and teams etc => in dark mode can we put dark bg?"*). A near-black mark, or one whose paint the scan
+cannot judge (a `<use>`, an `<image>`), keeps the white plate on both themes, because it would vanish on the dark one.
+The plate carries its own `prefers-color-scheme` rule: every icon reaches the page as an image, where the page's CSS
+variables do not reach but the colour scheme does.
 
 **What a package puts on the inbox page** is declared as data: a `UiContribution` of context
 **`Inbox`** (`UiContribution.InboxContext`) embeds its `Area` of the person's own user node — or of an

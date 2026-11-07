@@ -1,13 +1,12 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// The inbox row's PREVIEW line — the first line of what the item says, under its subject — and its
-/// short time. Pure functions of what the source already handed over.
+/// The inbox row's PREVIEW line — the first line of what the item says, under its subject: the reply it
+/// quotes and the signature cut off. Pure functions of what the source already handed over.
 ///
 /// <para>🚨 The text is what the source's OWN listing carries (the content's <c>preview</c>): Graph's
 /// <c>bodyPreview</c>, Gmail's <c>snippet</c>, the last message of a chat. Nothing fetches a body to
@@ -26,7 +25,14 @@ public static partial class InboxPreview
     /// Empty when nothing is left. Cheap: line scans and one regex per line, never a parse of HTML.
     /// </summary>
     /// <param name="text">The source's preview text (plain text), or null.</param>
-    public static string Of(string? text)
+    public static string Of(string? text) => Cut(Clean(text));
+
+    /// <summary>
+    /// <paramref name="text"/> as the new text of the message on one line — <see cref="Of"/> without the
+    /// length cut, for a caller that applies its own (<see cref="InboxRows.PreviewOf"/>).
+    /// </summary>
+    /// <param name="text">The source's preview text (plain text), or null.</param>
+    public static string Clean(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return string.Empty;
@@ -43,31 +49,11 @@ public static partial class InboxPreview
             if (line.Length > 0)
                 kept.Append(line).Append(' ');
         }
-        var collapsed = CutInline(Whitespace().Replace(Clean(kept.ToString()), " ").Trim());
+        var collapsed = CutInline(Whitespace().Replace(Invisible(kept.ToString()), " ").Trim());
         // A preview that was ALL quote (a bare forward) says what the quote says rather than nothing.
         if (collapsed.Length == 0)
-            collapsed = Whitespace().Replace(Clean(text.Replace('>', ' ')), " ").Trim();
-        return Cut(collapsed);
-    }
-
-    /// <summary>
-    /// The row's time as a mail list shows it: the time alone for an item of the viewer's TODAY, the
-    /// short date for anything older — so the column stays narrow and never clips. The instant is
-    /// shown in the viewer's time zone (<paramref name="zone"/>, resolved once on the render turn), and
-    /// "today" is the viewer's today, not the container's.
-    /// </summary>
-    /// <param name="at">The stored instant (UTC).</param>
-    /// <param name="zone">The viewer's time zone id, or null for UTC.</param>
-    /// <param name="culture">The viewer's culture; invariant when null.</param>
-    /// <param name="now">The current instant.</param>
-    public static string ShortTime(DateTimeOffset at, string? zone, CultureInfo? culture, DateTimeOffset now)
-    {
-        var local = DisplayTimeExtensions.ToDisplayTime(at, zone);
-        var today = DisplayTimeExtensions.ToDisplayTime(now, zone);
-        var format = culture ?? CultureInfo.InvariantCulture;
-        return local.Date == today.Date
-            ? local.ToString("t", format)
-            : local.ToString("d", format);
+            collapsed = Whitespace().Replace(Invisible(text.Replace('>', ' ')), " ").Trim();
+        return collapsed;
     }
 
     /// <summary>Whether <paramref name="line"/> starts what is NOT the new text: a quoted reply's header, a forward's header, or a signature.</summary>
@@ -93,7 +79,7 @@ public static partial class InboxPreview
         return match.Success && match.Index > 0 ? text[..match.Index].TrimEnd() : text;
     }
 
-    private static string Clean(string text)
+    private static string Invisible(string text)
         => new([.. text.Where(c => c is not ('\u200B' or '\uFEFF' or '\uFFFC' or '\u034F' or '\u00AD'))]);
 
     private static string Cut(string text)

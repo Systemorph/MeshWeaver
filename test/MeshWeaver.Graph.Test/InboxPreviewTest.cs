@@ -1,16 +1,12 @@
-using System.Collections.Immutable;
-using System.Globalization;
 using System.Text.Json;
-using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Mesh;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// The inbox row's preview line, its short time and the grid's column set (maintainer, 2026-11-07:
-/// "state and status not useful. i'd prefer to have first line of text of email"). Pure functions —
-/// each source's preview arrives in the shape its own listing hands over, and none is fetched.
+/// The inbox row's preview line is the first line of what the message SAYS (maintainer, 2026-11-07:
+/// "i'd prefer to have first line of text of email"): the reply it quotes and the signature are cut.
+/// Pure functions — each source's preview arrives in the shape its own listing hands over, and none is fetched.
 /// </summary>
 public class InboxPreviewTest
 {
@@ -98,97 +94,14 @@ public class InboxPreviewTest
 
     // ---- the row reads the source's preview ------------------------------------------------
 
-    /// <summary>The row takes its preview from the content's <c>preview</c> (the field every channel writes) and hides the line without one.</summary>
+    /// <summary>The row's preview (main's <c>InboxRows.PreviewOf</c>) is the new text only: the quoted reply is cut.</summary>
     [Fact]
-    public void Row_ReadsThePreview_AndHidesTheLineWithoutOne()
+    public void Row_PreviewIsTheNewTextOnly()
     {
-        var section = new InboxSection(InboxBand.Recent, "Outlook", 0, "q") { TimeField = "receivedAt" };
-        var with = Row(new { receivedAt = "2026-11-07T08:00:00Z", preview = "Hello\n\nthere", from = "Jane Roe" }, section);
-        with.Preview.Should().Be("Hello there");
-        with.PreviewStyle.Should().NotBe(InboxLayoutArea.HiddenStyle);
-
-        var without = Row(new { receivedAt = "2026-11-07T08:00:00Z", from = "Jane Roe" }, section);
-        without.Preview.Should().BeEmpty();
-        without.PreviewStyle.Should().Be(InboxLayoutArea.HiddenStyle);
-    }
-
-    private static InboxRow Row(object content, InboxSection section)
-        => InboxRows.Of(new MeshNode("m1", "rbuergi/_Inbox") { Name = "Subject", Content = JsonSerializer.SerializeToElement(content) },
-            section, zone: null, blockedReason: null);
-
-    // ---- the short time --------------------------------------------------------------------
-
-    /// <summary>Today in the viewer's zone shows the time only; an older day shows the date.</summary>
-    [Fact]
-    public void ShortTime_TodayIsTime_OlderIsDate()
-    {
-        var culture = CultureInfo.GetCultureInfo("de-CH");
-        var now = new DateTimeOffset(2026, 11, 7, 15, 0, 0, TimeSpan.Zero);
-        InboxPreview.ShortTime(now.AddHours(-2), "Europe/Zurich", culture, now).Should().Be("14:00");
-        InboxPreview.ShortTime(now.AddDays(-1), "Europe/Zurich", culture, now).Should().Be("06.11.2026");
-        // The viewer's culture writes it: US English puts the month first.
-        InboxPreview.ShortTime(now.AddDays(-1), "Europe/Zurich", CultureInfo.GetCultureInfo("en-US"), now).Should().Be("11/6/2026");
-    }
-
-    /// <summary>"Today" is the VIEWER's day: 23:30 UTC is already tomorrow in Zurich, and still today in New York.</summary>
-    [Fact]
-    public void ShortTime_TodayIsTheViewersDay()
-    {
-        var culture = CultureInfo.GetCultureInfo("de-CH");
-        var now = new DateTimeOffset(2026, 11, 7, 23, 30, 0, TimeSpan.Zero); // 00:30 on the 8th in Zurich
-        var earlier = new DateTimeOffset(2026, 11, 7, 22, 0, 0, TimeSpan.Zero); // 23:00 on the 7th in Zurich
-        InboxPreview.ShortTime(earlier, "Europe/Zurich", culture, now).Should().Be("07.11.2026");
-        InboxPreview.ShortTime(earlier, "America/New_York", culture, now).Should().Be("17:00");
-    }
-
-    /// <summary>Across a DST change the time is the local one on each side.</summary>
-    [Fact]
-    public void ShortTime_AcrossDst_IsLocal()
-    {
-        var culture = CultureInfo.GetCultureInfo("de-CH");
-        // 2026-10-25: Zurich falls back from CEST (+2) to CET (+1) at 03:00 local.
-        var now = new DateTimeOffset(2026, 10, 25, 12, 0, 0, TimeSpan.Zero);
-        InboxPreview.ShortTime(new DateTimeOffset(2026, 10, 25, 0, 30, 0, TimeSpan.Zero), "Europe/Zurich", culture, now).Should().Be("02:30");
-        InboxPreview.ShortTime(new DateTimeOffset(2026, 10, 25, 2, 30, 0, TimeSpan.Zero), "Europe/Zurich", culture, now).Should().Be("03:30");
-    }
-
-    // ---- the column set --------------------------------------------------------------------
-
-    /// <summary>No State or Status column; Item is the one flexible column; the time is narrow; the phone layout is declared.</summary>
-    [Fact]
-    public void Columns_AreSourceItemFromAccountTagsWhen()
-    {
-        InboxLayoutArea.Columns.Select(c => c.Key).Should().Equal(
-            "inbox.column.channel", "inbox.column.item", "inbox.column.source", "inbox.column.account", "inbox.column.tags", "inbox.column.when");
-        InboxLayoutArea.Columns.Select(c => c.Key).Should().NotContain(["inbox.column.state", "inbox.column.status"]);
-        InboxLayoutArea.Columns.Where(c => c.Width.EndsWith("fr", StringComparison.Ordinal)).Select(c => c.Key)
-            .Should().Equal(["inbox.column.item"], "only Item flexes; every other column has a fixed width");
-        InboxLayoutArea.Columns.Single(c => c.Key == "inbox.column.when").Width.Should().Be("96px");
-        InboxLayoutArea.PropertyOf("inbox.column.when").Should().Be("shortWhen");
-        // Phone: symbol and sender lead, the time trails, the item is the body; account and tags stay off.
-        InboxLayoutArea.Columns.Select(c => c.Compact).Should().Equal(
-            ColumnCompactPlacement.Lead, ColumnCompactPlacement.Body, ColumnCompactPlacement.Lead,
-            ColumnCompactPlacement.Hidden, ColumnCompactPlacement.Hidden, ColumnCompactPlacement.Trail);
-    }
-
-    /// <summary>The text columns' properties are the row's serialized property names.</summary>
-    [Fact]
-    public void TextColumns_NameRealRowProperties()
-    {
-        var names = typeof(InboxRow).GetProperties().Select(p => JsonNamingPolicy.CamelCase.ConvertName(p.Name)).ToImmutableHashSet();
-        foreach (var key in new[] { "inbox.column.source", "inbox.column.account", "inbox.column.tags", "inbox.column.when" })
-            names.Should().Contain(InboxLayoutArea.PropertyOf(key));
-        names.Should().Contain([InboxRows.TitleProperty, InboxRows.PreviewProperty, InboxRows.PreviewStyleProperty]);
-    }
-
-    /// <summary>The Account column shows only when the rows reached more than one address.</summary>
-    [Fact]
-    public void AccountColumn_OnlyWithSeveralAccounts()
-    {
-        InboxLayoutArea.AccountColumnShown([new InboxRow { Account = "max@example.com" }, new InboxRow { Account = "MAX@example.com " }])
-            .Should().BeFalse("one address, however spelled, is one account");
-        InboxLayoutArea.AccountColumnShown([new InboxRow { Account = "max@example.com" }, new InboxRow { Account = "max@fabrikam.example" }])
-            .Should().BeTrue();
-        InboxLayoutArea.AccountColumnShown([]).Should().BeFalse();
+        InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { preview = "Agreed. From: Jane Roe <jane@example.com> Sent: Monday, 3 November 2026 To: Max" }))
+            .Should().Be("Agreed.");
+        InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { body = "<p>See you at ten.</p><p>On Mon, 3 Nov 2026 at 10:02, Jane Roe wrote:</p><blockquote>Shall we</blockquote>" }))
+            .Should().Be("See you at ten.");
+        InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { from = "x" })).Should().BeEmpty();
     }
 }
