@@ -238,11 +238,16 @@ public static partial class IconBackplate
     }
 
     /// <summary>
-    /// Whether every SOLID colour <paramref name="svg"/> paints reads on <see cref="OfficialDarkPlate"/>
-    /// (WCAG contrast at least <see cref="MinDarkPlateContrast"/>). Gradient fills (<c>url(#…)</c>) are
-    /// the vendor's shading and are not judged; <c>currentColor</c>, <c>black</c>, an unreadable colour
-    /// and a drawable that sets no fill at all (painted black by default) all count as dark. A mark with
-    /// no drawable is not judged legible. Pure.
+    /// Whether every SOLID colour <paramref name="svg"/> paints — fill AND stroke — reads on
+    /// <see cref="OfficialDarkPlate"/> (WCAG contrast at least <see cref="MinDarkPlateContrast"/>).
+    /// Each drawable's paint is resolved the way SVG resolves it: an inline <c>style</c> wins over the
+    /// presentation attribute, which wins over what the nearest ancestor set, and an unset fill is
+    /// black (an unset stroke is none). Gradient paints (<c>url(#…)</c>) are the vendor's shading and
+    /// are not judged; content of <c>defs</c>, <c>clipPath</c>, <c>mask</c>, <c>symbol</c>,
+    /// <c>pattern</c> and <c>marker</c> is not painted directly and is skipped. <c>currentColor</c>,
+    /// <c>black</c> and anything that is not a well-formed <c>#rgb</c>/<c>#rrggbb</c> or <c>white</c>
+    /// count as unreadable. A mark with no drawable is not judged legible. Pure and total: malformed
+    /// markup answers false, it never throws.
     /// </summary>
     /// <param name="svg">The authored mark.</param>
     public static bool ReadsOnDark(string svg)
@@ -250,44 +255,58 @@ public static partial class IconBackplate
         if (string.IsNullOrWhiteSpace(svg))
             return false;
         var plate = OklchColor.FromHex(OfficialDarkPlate);
-        // A fill inherited from a group or the root covers the drawables under it that set none.
-        var inherited = GroupFill().Matches(svg).Select(m => AttrOf(m.Groups["attrs"].Value, "fill"))
-            .Where(f => f is not null && f != "none").ToList();
-        var drawables = AnyDrawable().Matches(svg);
-        if (drawables.Count == 0)
-            return false;
-        foreach (Match drawable in drawables)
+        // Each open element's resolved (fill, stroke, painted?) — the initial values are SVG's defaults.
+        var stack = new Stack<(string Fill, string Stroke, bool NotPainted)>();
+        stack.Push(("black", "none", false));
+        var drawables = 0;
+        foreach (Match tag in AnyTag().Matches(svg))
         {
-            var fill = AttrOf(drawable.Groups["attrs"].Value, "fill") ?? StyleFill(drawable.Groups["attrs"].Value);
-            if (fill is null && inherited.Count == 0)
-                return false;
-            if (fill is "none" or "transparent" || fill?.StartsWith("url(", StringComparison.OrdinalIgnoreCase) == true)
+            var name = tag.Groups["name"].Value.ToLowerInvariant();
+            if (tag.Groups["close"].Success)
+            {
+                if (stack.Count > 1)
+                    stack.Pop();
                 continue;
-            foreach (var color in fill is null ? inherited! : [fill])
-                if (!ReadsOn(color!, plate))
+            }
+            var attrs = tag.Groups["attrs"].Value;
+            var (inheritedFill, inheritedStroke, notPainted) = stack.Peek();
+            var fill = StylePaint(attrs, "fill") ?? AttrOf(attrs, "fill") ?? inheritedFill;
+            var stroke = StylePaint(attrs, "stroke") ?? AttrOf(attrs, "stroke") ?? inheritedStroke;
+            var skipped = notPainted || name is "defs" or "clippath" or "mask" or "symbol" or "pattern" or "marker";
+            if (!skipped && name is "rect" or "circle" or "ellipse" or "path" or "polygon" or "polyline" or "line" or "text")
+            {
+                drawables++;
+                // A line has no interior: only its stroke paints.
+                if (name != "line" && !Reads(fill, plate))
                     return false;
+                if (!Reads(stroke, plate))
+                    return false;
+            }
+            if (!tag.Groups["self"].Success)
+                stack.Push((fill, stroke, skipped));
         }
-        return true;
+        return drawables > 0;
     }
 
-    private static bool ReadsOn(string color, OklchColor plate)
+    /// <summary>Whether one resolved paint reads on <paramref name="plate"/>: none and gradients pass, a readable solid colour must clear the contrast bar.</summary>
+    private static bool Reads(string paint, OklchColor plate)
     {
-        if (color.StartsWith("url(", StringComparison.OrdinalIgnoreCase))
+        var p = paint.Trim().ToLowerInvariant();
+        if (p is "none" or "transparent" || p.StartsWith("url(", StringComparison.Ordinal))
             return true;
-        var hex = color.Trim().ToLowerInvariant() switch
+        var hex = p switch
         {
             "white" => "#ffffff",
-            var c when c.StartsWith('#') && (c.Length == 7 || c.Length == 4) => c.Length == 4
-                ? $"#{c[1]}{c[1]}{c[2]}{c[2]}{c[3]}{c[3]}"
-                : c,
+            _ when HexColor().IsMatch(p) => p.Length == 4 ? $"#{p[1]}{p[1]}{p[2]}{p[2]}{p[3]}{p[3]}" : p,
             _ => null,
         };
         return hex is not null && OklchColor.FromHex(hex).ContrastRatio(plate) >= MinDarkPlateContrast;
     }
 
-    private static string? StyleFill(string attrs)
+    /// <summary>A paint property out of an inline <c>style</c> attribute, or null.</summary>
+    private static string? StylePaint(string attrs, string property)
         => AttrOf(attrs, "style") is { } style
-           && Regex.Match(style, @"(?<![-\w])fill\s*:\s*(?<v>[^;]+)", RegexOptions.IgnoreCase) is { Success: true } m
+           && Regex.Match(style, @"(?<![-\w])" + property + @"\s*:\s*(?<v>[^;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) is { Success: true } m
             ? m.Groups["v"].Value.Trim()
             : null;
 
@@ -382,15 +401,14 @@ public static partial class IconBackplate
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex FirstDrawable();
 
+    // Every element tag, quote-aware: an opening tag (attrs, optional self-close) or a closing one.
     [GeneratedRegex(
-        @"<(?<tag>rect|circle|ellipse|path|polygon|polyline|text)\b(?<attrs>[^>]*?)/?>",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex AnyDrawable();
+        @"<(?:(?<close>/)(?<name>[A-Za-z][\w:-]*)\s*|(?<name>[A-Za-z][\w:-]*)(?<attrs>(?:[^>""'/]|""[^""]*""|'[^']*'|/(?!>))*)(?<self>/)?)>",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex AnyTag();
 
-    [GeneratedRegex(
-        @"<(?<tag>g|svg)\b(?<attrs>[^>]*?)>",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex GroupFill();
+    [GeneratedRegex(@"^#([0-9a-f]{3}|[0-9a-f]{6})$", RegexOptions.CultureInvariant)]
+    private static partial Regex HexColor();
 
     [GeneratedRegex(
         @"\s+(x|y|width|height)\s*=\s*([""']).*?\2",

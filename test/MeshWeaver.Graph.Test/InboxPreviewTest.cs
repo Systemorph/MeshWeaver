@@ -56,6 +56,24 @@ public class InboxPreviewTest
     public void InvisibleCharacters_AreDropped()
         => InboxPreview.Of("​Hello￼ ͏­there").Should().Be("Hello there");
 
+    /// <summary>Zero-width joiners hold an emoji (or a word) together and stay.</summary>
+    [Fact]
+    public void Joiners_AreKept()
+        => InboxPreview.Of("Pair \U0001F469\u200D\U0001F4BB and \u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645")
+            .Should().Be("Pair \U0001F469\u200D\U0001F4BB and \u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645");
+
+    /// <summary>A hard cut never splits an emoji outside the BMP.</summary>
+    [Fact]
+    public void HardCut_KeepsSurrogatePairsWhole()
+    {
+        var preview = InboxPreview.Of(string.Concat(Enumerable.Repeat("\U0001F600", 100)));
+        var body = preview.TrimEnd('…');
+        char.IsHighSurrogate(body[^1]).Should().BeFalse("the cut must not leave a lone high surrogate");
+        for (var i = 0; i < body.Length; i++)
+            if (char.IsHighSurrogate(body[i]))
+                char.IsLowSurrogate(body[i + 1]).Should().BeTrue();
+    }
+
     /// <summary>No preview from the source is no preview line — never a placeholder.</summary>
     [Theory]
     [InlineData(null)]

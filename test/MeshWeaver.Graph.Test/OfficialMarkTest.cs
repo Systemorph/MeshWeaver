@@ -179,6 +179,16 @@ public class OfficialMarkTest
         Assert.True(IconBackplate.HasBackplate(rendered));
     }
 
+    /// <summary>A malformed colour in an official mark keeps the white plate and never fails the render.</summary>
+    [Fact]
+    public void AMalformedColour_KeepsTheWhitePlate()
+    {
+        var mark = "<svg viewBox='0 0 24 24' data-mw-mark='official'><path d='M0 0h1v1z' fill='#xyz'/></svg>";
+        var rendered = IconBackplate.Ensure(mark);
+        Assert.DoesNotContain(IconBackplate.ThemePlateClass, rendered);
+        Assert.Contains(IconBackplate.OfficialPlate, rendered);
+    }
+
     /// <summary>A near-black vendor mark would vanish on the dark plate: it keeps the white plate on both themes.</summary>
     [Fact]
     public void ANearBlackMark_KeepsTheWhitePlate()
@@ -199,6 +209,19 @@ public class OfficialMarkTest
     [InlineData("<svg viewBox='0 0 24 24'><g fill='#25D366'><path d='M0 0h1v1z'/></g></svg>", true)]
     [InlineData("<svg viewBox='0 0 24 24'><g fill='#111111'><path d='M0 0h1v1z'/></g></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'></svg>", false)]
+    // A white group's fill does not reach an unfilled SIBLING, which paints default black.
+    [InlineData("<svg viewBox='0 0 24 24'><g fill='#fff'><path d='M0 0h1v1z'/></g><path d='M0 0h1v1z'/></svg>", false)]
+    // The inline style wins over the presentation attribute.
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#ffffff' style='fill:#000'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#000' style='fill:#ffffff'/></svg>", true)]
+    // A dark stroke on an unfilled shape, and a stroke-only line, are judged too.
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='none' stroke='#111827'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><line x1='0' y1='0' x2='1' y2='1' stroke='#111827'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><line x1='0' y1='0' x2='1' y2='1' stroke='#25D366'/></svg>", true)]
+    // A malformed colour is unreadable — never a throw.
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#xyz'/></svg>", false)]
+    // A clip path's unfilled geometry is not painted.
+    [InlineData("<svg viewBox='0 0 24 24'><defs><clipPath id='c'><path d='M0 0h1v1z'/></clipPath></defs><path d='M0 0h1v1z' fill='#fff'/></svg>", true)]
     public void ReadsOnDark_JudgesSolidColoursOnly(string svg, bool expected)
         => Assert.Equal(expected, IconBackplate.ReadsOnDark(svg));
 

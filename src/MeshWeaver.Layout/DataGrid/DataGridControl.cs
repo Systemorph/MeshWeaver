@@ -26,7 +26,9 @@ public record DataGridControl(object Data)
     protected override DataGridControl PrepareRendering(RenderingContext context)
     => base.PrepareRendering(context) with
     {
-        Style = Style ?? $"min-width: {Columns.Count * 120}px"
+        // A compact grid has no column-derived minimum: on a phone its box must be free to shrink
+        // below CompactBelow, or the stacked layout could never be reached (6 columns = 720px > 640px).
+        Style = Style ?? (CompactBelow is null ? $"min-width: {Columns.Count * 120}px" : null)
     };
 
     /// <summary>

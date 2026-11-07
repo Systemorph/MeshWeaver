@@ -22,7 +22,7 @@ public static partial class InboxPreview
     /// <summary>
     /// The preview line of <paramref name="text"/>: the reply quoted below the new text, a signature
     /// and the forwarded-message header removed, zero-width and attachment placeholder characters
-    /// dropped, whitespace collapsed to single spaces, and cut at a word to <see cref="MaxLength"/>.
+    /// dropped (zero-width joiners stay — they hold an emoji or a word together), whitespace collapsed to single spaces, and cut at a word to <see cref="MaxLength"/>.
     /// Empty when nothing is left. Cheap: line scans and one regex per line, never a parse of HTML.
     /// </summary>
     /// <param name="text">The source's preview text (plain text), or null.</param>
@@ -94,14 +94,21 @@ public static partial class InboxPreview
     }
 
     private static string Clean(string text)
-        => new([.. text.Where(c => c is not ('​' or '‌' or '‍' or '﻿' or '￼' or '͏' or '­'))]);
+        => new([.. text.Where(c => c is not ('\u200B' or '\uFEFF' or '\uFFFC' or '\u034F' or '\u00AD'))]);
 
     private static string Cut(string text)
     {
         if (text.Length <= MaxLength)
             return text;
         var cut = text.LastIndexOf(' ', MaxLength - 1);
-        return (cut > MaxLength / 2 ? text[..cut] : text[..(MaxLength - 1)]).TrimEnd() + "…";
+        if (cut <= MaxLength / 2)
+        {
+            // A hard cut never splits a surrogate pair (an emoji outside the BMP).
+            cut = MaxLength - 1;
+            if (char.IsLowSurrogate(text[cut]) && char.IsHighSurrogate(text[cut - 1]))
+                cut--;
+        }
+        return text[..cut].TrimEnd() + "…";
     }
 
     [GeneratedRegex(@"(-----Original Message-----|-----Ursprüngliche Nachricht-----|---------- Forwarded message|_{10,}|\b(From|Von):\s.{1,200}?\s(Sent|Gesendet):\s|\bOn\s.{4,200}?\swrote:|\bAm\s.{4,200}?\sschrieb[^:]{0,80}:)", RegexOptions.IgnoreCase)]
