@@ -3031,6 +3031,7 @@ jobs:
         python3 .github/scripts/node-repo-publication-base.py --self-test
         python3 .github/scripts/node-repo-publication-reuse.py --self-test
         python3 .github/scripts/node-repo-project-scope.py --self-test
+        python3 .github/scripts/abi-key.py --self-test
     - name: "A satellite's no-op set stays comparable to ours — the gate can fail (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-noop-scope-parity.py --self-test
