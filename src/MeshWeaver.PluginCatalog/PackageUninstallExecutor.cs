@@ -345,9 +345,13 @@ public static class PackageUninstallExecutor
                         // review): a removal stopped between the tombstone and the projection leaves
                         // the per-module file — what an older image reads — still enabled. The
                         // removal is idempotent, so it runs again and rewrites the projection.
-                        { Enabled: false } => landing.RemoveModule(module).Select(_ => new ModuleRetired(
+                        // 🚨 Every removal goes through the install record's OWNER (MeshWeaver.Plugins#5055,
+                        // ModuleLandingOwner): it queues behind any landing in flight there, so the
+                        // tombstone is written last; a removal the owner did not carry out faults.
+                        { Enabled: false } => ModuleLandingOwner.Remove(hub, record.Id, module, RequestPath, logger).Select(_ => new ModuleRetired(
                             "landed generation already disabled (an earlier run of this phase removed it)", true)),
-                        _ => landing.RemoveModule(module).Select(_ => new ModuleRetired("landed generation disabled", true)),
+                        _ => ModuleLandingOwner.Remove(hub, record.Id, module, RequestPath, logger)
+                            .Select(_ => new ModuleRetired("landed generation disabled", true)),
                     });
             var agent = hub.ServiceProvider.GetService<ModuleReloadAgent>();
             var loaded = (agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()).Contains(module);
