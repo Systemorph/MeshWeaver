@@ -340,7 +340,13 @@ public static class PackageUninstallExecutor
                 : landing.GetCheckedActivation().Take(1).SelectMany(activation =>
                     activation.Entries.FirstOrDefault(e => string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase)) switch
                     {
-                        null => Observable.Return(new ModuleRetired("not landed by the store lane — no landed generation to disable", false)),
+                        // 🚨 No entry HERE is not "never landed" (#7974 review, round 4): the owner may be
+                        // executing the module's FIRST landing right now. The removal is queued behind it,
+                        // and the owner decides whether a generation exists once that landing finished.
+                        null => ModuleLandingOwner.Remove(hub, record.Id, module, RequestPath, logger)
+                            .Select(outcome => outcome == ModuleLandingOwner.NothingToRemove
+                                ? new ModuleRetired(outcome, false)
+                                : new ModuleRetired("landed generation disabled", true)),
                         // 🚨 Disabled by the TOMBSTONE does not mean the removal finished (#7972
                         // review): a removal stopped between the tombstone and the projection leaves
                         // the per-module file — what an older image reads — still enabled. The

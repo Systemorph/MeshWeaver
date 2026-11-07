@@ -219,7 +219,9 @@ public static class InstallRecordGate
                 // record and lose the module, so the person's install is refused until it finishes —
                 // the rule a retirement that is already removing the record follows.
                 case PackageRecordFactKind.PersonClear or PackageRecordFactKind.Stamp
-                    when retiring is not null && ModuleRemovalExecuting(operations, retiring.Request) is { } removing:
+                    // ANY removal in flight, whoever's (#7974 review, round 4): an uninstall that timed out
+                    // and released its retirement (End) leaves its removal executing all the same.
+                    when ModuleRemovalExecuting(operations) is { } removing:
                     outcomes = outcomes.SetItem(key, Answer(false, removing));
                     break;
                 case PackageRecordFactKind.PersonClear when retiring is { Removing: true }:
@@ -372,14 +374,13 @@ public static class InstallRecordGate
             });
     }
 
-    /// <summary>Why a person's install must wait: the retirement holder's REMOVAL of the module is
-    /// executing now (promoted, not refused) — or null. Pure.</summary>
-    internal static string? ModuleRemovalExecuting(ImmutableDictionary<string, PackageModuleOperation> operations, string request) =>
-        operations.Values.Any(o => o.Kind == PackageModuleOperationKind.Remove
-                                   && o.State == PackageModuleOperationState.Executing
-                                   && o.Refusal is null
-                                   && string.Equals(o.Request, request, StringComparison.Ordinal))
-            ? $"refused: {request} is removing this package's module now — install it again once the uninstall finishes"
+    /// <summary>Why a stamp or a person's clear must wait: a REMOVAL of the module is executing now
+    /// (promoted, not refused) — whether or not its uninstall still holds the retirement — or null. Pure.</summary>
+    internal static string? ModuleRemovalExecuting(ImmutableDictionary<string, PackageModuleOperation> operations) =>
+        operations.Values.FirstOrDefault(o => o.Kind == PackageModuleOperationKind.Remove
+                                              && o.State == PackageModuleOperationState.Executing
+                                              && o.Refusal is null) is { } removal
+            ? $"refused: {removal.Request} is removing this package's module now — install it again once the removal finishes"
             : null;
 
     /// <summary>Whether <paramref name="intent"/> is one of the <see cref="PackageRecordWriteIntent"/> values. Pure.</summary>

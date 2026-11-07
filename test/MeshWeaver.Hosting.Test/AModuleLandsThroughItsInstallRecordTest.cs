@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -42,6 +43,10 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
     private int entered;
     private volatile int parked;
     private volatile int release;
+    // A second park, inside a REMOVAL (after its tombstone, before its projection) — a removal in flight.
+    private volatile int parkRemoval;
+    private volatile int removalParked;
+    private volatile int releaseRemoval;
     private ModuleLandingService? landing;
     private readonly FakeRegistry registry = new();
 
@@ -59,6 +64,12 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
                         return;
                     parked = 1;
                     SpinWait.SpinUntil(() => release == 1, TestTimeouts.Convergence);
+                }, beforeProjecting: _ =>
+                {
+                    if (parkRemoval == 0)
+                        return;
+                    removalParked = 1;
+                    SpinWait.SpinUntil(() => releaseRemoval == 1, TestTimeouts.Convergence);
                 })));
 
     private ModuleLandingService Landing => Mesh.ServiceProvider.GetRequiredService<ModuleLandingService>();
@@ -592,6 +603,103 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         }
         (await InstallRecordGate.MarkRemoving(Mesh, "LandRace", request, NullLogger.Instance)
             .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull("the uninstall still holds the retirement and proceeds");
+    }
+
+    /// <summary>
+    /// (13) An uninstall that timed out and RELEASED its retirement (End) leaves its removal executing;
+    /// a person's install meanwhile is still refused — the guard is any removal in flight, not the
+    /// retirement holder's (#7974 review, round 4). Once the removal finishes, the person's install is
+    /// applied. Negative control (measured): with the guard bound to the retirement holder, the
+    /// person's stamp is applied while the removal is still in flight.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AReleasedUninstallsRemovalInFlight_StillHoldsOffAPersonsInstall()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Released.Module";
+        const string request = "Admin/_PackageUninstall/req-released";
+        await WriteRecord("LandReleased", module, ct);
+        (await Land(module, "1.0.0", RecordPath("LandReleased")).Timeout(TestTimeouts.Convergence).Await(ct)).Applied.Should().BeTrue();
+        (await InstallRecordGate.BeginRetirement(Mesh, "LandReleased", request, "test", NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull();
+
+        IObservable<Exception?> Person() =>
+            InstallRecordGate.Write(Mesh, Record("LandReleased", module), PackageRecordWriteIntent.Person, NullLogger.Instance)
+                .Select(_ => (Exception?)null)
+                .Catch((Exception ex) => Observable.Return<Exception?>(ex));
+
+        parkRemoval = 1;
+        try
+        {
+            var remove = ModuleLandingOwner.Remove(Mesh, "LandReleased", module, request, NullLogger.Instance).Replay();
+            using var connection = remove.Connect();
+            SpinWait.SpinUntil(() => removalParked == 1, TestTimeouts.Convergence).Should().BeTrue("the removal is in flight");
+            // The uninstall's writer gave up and released the retirement; its removal runs on.
+            (await InstallRecordGate.EndRetirement(Mesh, "LandReleased", request, NullLogger.Instance)
+                .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull();
+
+            var refused = await Person().Timeout(TestTimeouts.Convergence).Await(ct);
+            refused.Should().BeOfType<PackageRecordWriteRefusedException>()
+                .Which.Reason.Should().Contain("removing this package's module now");
+
+            releaseRemoval = 1;
+            (await remove.Timeout(TestTimeouts.Convergence).Await(ct)).Should().Be("landed generation disabled");
+        }
+        finally
+        {
+            releaseRemoval = 1;
+        }
+        (await Person().Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull("with no removal in flight the person's install is applied");
+    }
+
+    /// <summary>
+    /// (14) An uninstall that starts while the module's FIRST landing is executing at the owner — so
+    /// the activation has no entry yet — still removes the module: the removal is queued behind the
+    /// landing and the owner decides once the landing finished. Real uninstall executor (#7974 review,
+    /// round 4). Negative control (measured): with phase 1 skipping the removal when it reads no entry,
+    /// the uninstall completes with the module enabled.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnUninstallDuringTheFirstLanding_RemovesTheModuleAfterIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.FirstLanding.Module";
+        await WriteRecord("LandFirst", module, ct);
+        await Access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(
+                MeshNode.FromPath("LandFirst") with { NodeType = "Markdown", Name = "LandFirst", State = MeshNodeState.Active }))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        parkFirst = 1;
+        PackageUninstallRequest done;
+        try
+        {
+            var first = Land(module, "1.0.0", RecordPath("LandFirst")).Replay();
+            using var landing = first.Connect();
+            SpinWait.SpinUntil(() => parked == 1, TestTimeouts.Convergence).Should().BeTrue("the first landing is executing");
+            (await Entry(module, ct)).Should().BeNull("precondition: the activation has no entry while the first landing runs");
+
+            var ticket = await PackageUninstall.Request(Mesh, new PackageUninstallRequest { Package = "LandFirst", Reason = "test", RequestedBy = "someone" })
+                .Timeout(TestTimeouts.Convergence).Await(ct);
+            var uninstall = Access.RunAsSystem(() => Mesh.GetMeshNodeStream(ticket.Path!))
+                .Select(n => n.ContentAs<PackageUninstallRequest>(Mesh.JsonSerializerOptions))
+                .OfType<PackageUninstallRequest>()
+                .Where(r => r.Status == PackageUninstallStatus.AwaitingConfirmation || PackageUninstallStatus.IsTerminal(r.Status))
+                .Take(1).Replay();
+            using var uninstallConnection = uninstall.Connect();
+            await Live("LandFirst", r => r.ModuleOperations?.Values.Any(o =>
+                o.Kind == PackageModuleOperationKind.Remove && o.State == PackageModuleOperationState.Queued) == true, ct);
+
+            release = 1;
+            (await first.Timeout(TestTimeouts.Convergence).Await(ct)).Applied.Should().BeTrue();
+            done = await uninstall.Timeout(TestTimeouts.Convergence).Await(ct);
+        }
+        finally
+        {
+            release = 1;
+        }
+        done.Status.Should().Be(PackageUninstallStatus.AwaitingConfirmation, done.Failure ?? done.ModuleOutcome ?? "");
+        done.ModuleDisabled.Should().BeTrue(done.ModuleOutcome ?? "");
+        (await Entry(module, ct))!.Enabled.Should().BeFalse("the module landed first, then the uninstall removed it");
     }
 
     /// <summary>A registry serving one bundle; its index response can be HELD (a worker the test

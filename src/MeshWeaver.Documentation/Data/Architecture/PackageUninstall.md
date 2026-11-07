@@ -160,11 +160,17 @@ So nothing outside the record's own hub lands or removes a package's module
 - **A refusal is an answer.** A refused landing reaches the adoption as its named `Failure`, with
   nothing landed. A removal the owner did not carry out faults with the owner's words.
 
-**A person's install waits for a removal in flight.** A person's stamp or clear is refused while
-the retirement holder's removal of the module is `Executing`. That removal may be waiting on the
+**A person's install waits for a removal in flight.** A stamp or a person's clear is refused while
+ANY removal of the module is `Executing`, including one whose uninstall has already released its
+retirement (a writer that timed out and stated `End`). That removal may be waiting on the
 shared landing lane behind another module, and would disable the module after the person's install
 read it as current. Clearing the retirement then would keep the record and lose the module. The
 person installs again once the uninstall finishes.
+
+**Phase 1 always queues the removal.** When phase 1 finds no activation entry, the module may
+still be landing for the first time on the owner. So phase 1 queues the removal anyway. The owner
+decides whether a generation exists once every earlier landing has finished, and answers
+`ModuleLandingOwner.NothingToRemove` when none does.
 
 **No record path means the canonical one.** An adoption that names no install-record path belongs
 to `Plugins/{package}`, so it never lands around that record's owner by omission.

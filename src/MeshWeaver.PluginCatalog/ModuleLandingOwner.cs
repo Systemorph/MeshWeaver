@@ -151,6 +151,10 @@ public static class ModuleLandingOwner
     /// only after the landing ran, and it may wait behind the one operation in flight.</summary>
     public static readonly TimeSpan OperationBudget = RegistryUpdateReconciler.PerPackageAdoptBudget;
 
+    /// <summary>The owner's answer to a removal of a module that has no landed generation on this
+    /// deployment — decided on the owner, after every earlier landing finished.</summary>
+    public const string NothingToRemove = "not landed by the store lane — no landed generation to disable";
+
     // ── Owner side ──────────────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -418,8 +422,15 @@ public static class ModuleLandingOwner
                 {
                     PackageModuleOperationKind.Land => landing!.LandStaged(key, operation)
                         .Select(verdict => Answer(verdict.Applied, verdict.Detail)),
-                    PackageModuleOperationKind.Remove => landing!.RemoveModule(operation.Module)
-                        .Select(_ => Answer(true, "landed generation disabled"))
+                    // 🚨 Whether a generation EXISTS is decided here, on the owner, after every earlier
+                    // landing of this record has finished (#7974 review, round 4): a removal queued
+                    // while the first landing was in flight must not be skipped by a caller who read
+                    // "never landed" before it. The activation is read WHOLE or not at all (#7972).
+                    PackageModuleOperationKind.Remove => landing!.GetCheckedActivation().Take(1)
+                        .SelectMany(activation => activation.Entries.Any(e =>
+                                string.Equals(e.Name, operation.Module, StringComparison.OrdinalIgnoreCase))
+                            ? landing.RemoveModule(operation.Module).Select(_ => Answer(true, "landed generation disabled"))
+                            : Observable.Return(Answer(true, NothingToRemove)))
                         .Catch((Exception ex) => Observable.Return(Answer(false, $"no landed generation to remove ({ex.Message})"))),
                     _ => Observable.Return(Answer(false, $"refused: unknown module operation '{operation.Kind}'")),
                 })
