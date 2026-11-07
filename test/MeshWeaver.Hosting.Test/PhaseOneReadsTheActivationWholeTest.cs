@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -49,8 +49,8 @@ public class PhaseOneReadsTheActivationWholeTest(ITestOutputHelper output) : Mon
             .AddSingleton(_ => new ModuleReloadAgent
             {
                 LoadedNames = () => moduleLoaded
-                    ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) { Module }
-                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                    ? ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, Module)
+                    : ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase),
             })
             .AddSingleton<IModuleActivationRestart, FailingRestart>());
 
