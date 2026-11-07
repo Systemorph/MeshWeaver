@@ -326,20 +326,38 @@ public static partial class IconBackplate
     }
 
     /// <summary>
-    /// A paint property out of an inline <c>style</c> attribute, or null — as CSS resolves it: the LAST
-    /// declaration wins, and an <c>!important</c> one wins over any that is not.
+    /// A paint property out of an inline <c>style</c> attribute, or null — as CSS resolves it: complete
+    /// declarations (comments stripped, split on <c>;</c>) compared by their EXACT name (a custom property
+    /// <c>--hint: fill:#fff</c> is not <c>fill</c>), the last declaration winning and an <c>!important</c>
+    /// one over plain ones. Syntax this reader does not model — quotes, escapes, <c>var()</c> — near the
+    /// property answers an unreadable paint, so the mark keeps the white plate.
     /// </summary>
     private static string? StylePaint(string attrs, string property)
     {
         if (AttrOf(attrs, "style") is not { } style)
             return null;
-        var values = Regex.Matches(style, @"(?<![-\w])" + property + @"\s*:\s*(?<v>[^;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
-            .Select(m => m.Groups["v"].Value.Trim()).ToList();
-        if (values.Count == 0)
-            return null;
-        var important = values.LastOrDefault(v => v.EndsWith("!important", StringComparison.OrdinalIgnoreCase));
-        return (important ?? values[^1]).Replace("!important", "", StringComparison.OrdinalIgnoreCase).Trim();
+        var css = CssComment().Replace(style, " ");
+        if (css.IndexOfAny(['"', '\'', '\\']) >= 0 && css.Contains(property, StringComparison.OrdinalIgnoreCase))
+            return Unreadable;
+        string? last = null, important = null;
+        foreach (var declaration in css.Split(';'))
+        {
+            var colon = declaration.IndexOf(':');
+            if (colon < 0 || !string.Equals(declaration[..colon].Trim(), property, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var value = declaration[(colon + 1)..].Trim();
+            var bang = ImportantSuffix().Match(value);
+            if (bang.Success)
+                important = value[..bang.Index].Trim();
+            else
+                last = value;
+        }
+        var resolved = important ?? last;
+        return resolved is not null && resolved.Contains("var(", StringComparison.OrdinalIgnoreCase) ? Unreadable : resolved;
     }
+
+    /// <summary>A paint no reader accepts: it fails the contrast check, so the white plate stays.</summary>
+    private const string Unreadable = "#unreadable";
 
     /// <summary>
     /// Rewrites the root <c>&lt;svg&gt;</c> tag of <paramref name="svg"/> so it nests inside the
@@ -399,12 +417,13 @@ public static partial class IconBackplate
     /// <c>rx="16"</c>, nor <c>width</c> read <c>stroke-width</c>.</summary>
     private static string? AttrOf(string attrs, string name)
     {
-        var match = Regex.Match(
-            attrs,
-            @"(?<![-\w])" + name + @"\s*=\s*([""'])(?<v>.*?)\1",
-            // Singleline: a value may span lines (style='\n fill:#000;\n') — the browser reads it whole.
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
-        return match.Success ? match.Groups["v"].Value.Trim() : null;
+        // COMPLETE attributes, left to right, compared by their actual name: text inside another
+        // quoted value (data-note="fill='#fff'") is never read as an attribute, and a short name never
+        // matches inside a longer one (x / rx, width / stroke-width). Singleline: a value may span lines.
+        foreach (Match attribute in Attribute().Matches(attrs))
+            if (string.Equals(attribute.Groups["n"].Value, name, StringComparison.OrdinalIgnoreCase))
+                return (attribute.Groups["d"].Success ? attribute.Groups["d"].Value : attribute.Groups["s"].Value).Trim();
+        return null;
     }
 
     /// <summary>A numeric attribute, tolerating <c>%</c> (relative to <paramref name="canvas"/>).</summary>
@@ -441,6 +460,15 @@ public static partial class IconBackplate
 
     [GeneratedRegex(@"<!\[CDATA\[.*?\]\]>|<!--.*?-->", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
     private static partial Regex XmlComment();
+
+    [GeneratedRegex(@"(?<n>[^\s=/>""']+)\s*=\s*(?:""(?<d>[^""]*)""|'(?<s>[^']*)')", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    private static partial Regex Attribute();
+
+    [GeneratedRegex(@"/\*.*?\*/", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    private static partial Regex CssComment();
+
+    [GeneratedRegex(@"!\s*important\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ImportantSuffix();
 
     [GeneratedRegex(@"^#([0-9a-f]{3}|[0-9a-f]{6})$", RegexOptions.CultureInvariant)]
     private static partial Regex HexColor();
