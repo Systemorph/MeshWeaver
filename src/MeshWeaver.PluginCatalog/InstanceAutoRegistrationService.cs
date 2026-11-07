@@ -894,7 +894,9 @@ public sealed class InstanceAutoRegistrationService(
     ///     must still have it after a self-update, a lost partition, or a boot whose install
     ///     failed. An enabled flag includes its packages; a declared-but-DISABLED flag EXCLUDES
     ///     them, and the exclusion wins over every other signal here — that is how
-    ///     "all of Plugins, without the games" is one line per environment.</item>
+    ///     "all of Plugins, without the games" is one line per environment. A flag declared off
+    ///     with an explicit <c>false</c> also RETIRES an installed copy, through phase 1 of the
+    ///     uninstall request (<see cref="DeclaredDisabledRetirement"/>).</item>
     ///   <item><b>The operator's <see cref="PluginCatalogOptions.InstallByDefault"/> patterns</b> —
     ///     the extras a FRESH deployment seeds itself with, source-scoped so an instance granted
     ///     paid course content never auto-installs it. Gated on the ledger: this seeds a new
@@ -1046,7 +1048,20 @@ public sealed class InstanceAutoRegistrationService(
         // reader is reactive (configuration reloads push a new value), but a boot pass is a single
         // decision taken at a point in time — re-deciding mid-install would mean two passes writing
         // the same partitions.
-        var composition = hub.ServiceProvider.GetService<IFeatureFlags>() is { } flags
+        var composition = ReadComposition();
+
+        // 🚨 A flag declared off with an explicit `false` RETIRES what is installed (#5055), through
+        // phase 1 of the one uninstall request — before the install selection, which excludes the
+        // same packages. Never faults, so a retire that cannot run never withholds the install.
+        return composition.SelectMany(composed => DeclaredDisabledRetirement.Retire(hub, composed, logger)
+            .SelectMany(_ => InstallSelection(options, wanted, baseline, defaultApps, composed, authorizing)));
+    }
+
+    /// <summary>The environment's composition, read ONCE off the live flag surface — the reading the
+    /// boot pass decides on. Never faults: an unreadable composition is logged at Error and read as
+    /// empty.</summary>
+    private IObservable<FeatureComposition> ReadComposition() =>
+        hub.ServiceProvider.GetService<IFeatureFlags>() is { } flags
             ? flags.Composition.Take(1).Timeout(TimeSpan.FromSeconds(5))
                 .Catch((Exception ex) =>
                 {
@@ -1063,9 +1078,6 @@ public sealed class InstanceAutoRegistrationService(
                     return Observable.Return(FeatureComposition.Empty);
                 })
             : Observable.Return(FeatureComposition.Empty);
-
-        return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, defaultApps, composed, authorizing));
-    }
 
     /// <summary>
     /// Whether the packages declaring <c>preInstalled</c> are selected — the platform baseline lane.
@@ -3210,9 +3222,17 @@ public sealed class InstanceAutoRegistrationService(
     /// so: its record is an orphan for the admin list.</para>
     ///
     /// <para>The seed ledger is deliberately not written: every package here is already installed,
-    /// so nothing about "seeded once" changes. Feature-flag exclusions are not applied either — an
+    /// so nothing about "seeded once" changes. The wider feature-flag EXCLUSION is not applied — an
     /// installed package is installed; restoring what it lost is not installing what the operator
     /// excluded.</para>
+    ///
+    /// <para>🚨 <b>…but an install a flag is RETIRING is not re-asserted</b> (MeshWeaver.Plugins#5055).
+    /// This repair lists its records BEFORE it waits for the default install, so the record it would
+    /// re-assert can be one phase 1 is removing, or has removed. The skip is the retirement's actual
+    /// STATE (<see cref="DeclaredDisabledRetirement.IsRetiring"/> over the target's
+    /// <see cref="ReassertTarget.RetireKey"/>), never the flag match: a package whose retire was
+    /// REFUSED — required by a dependent, or a phase-1 safety refusal — stays repairable. Each skip is
+    /// reported on the summary's <see cref="DefaultInstallSummary.Skipped"/>.</para>
     /// </summary>
     /// <param name="targets">The installed packages to re-assert — each with the PARTITION and
     /// module version its install record carries. A record with no module identity cannot be
@@ -3221,6 +3241,27 @@ public sealed class InstanceAutoRegistrationService(
     internal IObservable<DefaultInstallSummary> ReassertInstalled(IReadOnlyList<ReassertTarget> targets)
     {
         ArgumentNullException.ThrowIfNull(targets);
+        if (targets.Count == 0)
+            return Observable.Return(DefaultInstallSummary.Empty);
+        return DeclaredDisabledRetirement.RetiringInstalls(hub, logger).SelectMany(retiring =>
+        {
+            var skipped = targets
+                .Where(t => DeclaredDisabledRetirement.IsRetiringKey(t.RetireKey, retiring))
+                .Select(t => new DefaultInstallSkip(t.PackageId,
+                    "a feature flag declared off is retiring this install (phase 1 of the uninstall request) — never re-asserted"))
+                .ToImmutableList();
+            if (skipped.Count > 0)
+                logger.LogInformation(
+                    "[PackageRepair] {Count} incomplete install(s) are NOT re-asserted: a feature flag is retiring them "
+                    + "— [{Skipped}] (MeshWeaver.Plugins#5055).",
+                    skipped.Count, string.Join(", ", skipped.Select(x => x.Package)));
+            var kept = targets.Where(t => skipped.All(x => !string.Equals(x.Package, t.PackageId, StringComparison.Ordinal))).ToList();
+            return ReassertCore(kept).Select(summary => summary with { Skipped = summary.Skipped.AddRange(skipped) });
+        });
+    }
+
+    private IObservable<DefaultInstallSummary> ReassertCore(IReadOnlyList<ReassertTarget> targets)
+    {
         if (targets.Count == 0)
             return Observable.Return(DefaultInstallSummary.Empty);
         var recordedModuleVersions = targets.ToImmutableDictionary(
@@ -3379,7 +3420,9 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="Source">The source the install record was stamped with — the repair re-asserts
     /// from a listing of THAT source when one lists the package, and derives the deployment
     /// configuration's authority only from it. Null when the record names none.</param>
-    internal sealed record ReassertTarget(string PackageId, string Partition, string ModuleVersion, string? Source = null);
+    /// <param name="RetireKey">The install's identity (<see cref="DeclaredDisabledRetirement.RetireKeyFor"/>)
+    /// — what decides whether a flag is retiring THIS install. Null when the caller has no record.</param>
+    internal sealed record ReassertTarget(string PackageId, string Partition, string ModuleVersion, string? Source = null, string? RetireKey = null);
 
     /// <summary>
     /// Runs the PRODUCTION default-install pass on demand — the identical selection, ordering and

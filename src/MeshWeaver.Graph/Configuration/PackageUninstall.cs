@@ -110,6 +110,47 @@ public record PackageUninstallRequest
 
     /// <summary>Every step, in order. Executor-owned.</summary>
     public ImmutableList<string> Log { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The feature flag whose explicit <c>Enabled=false</c> issued this request at boot, or null for
+    /// a request a person issued (<c>Doc/Architecture/EnvironmentComposition</c> → "A disabled flag
+    /// retires what is installed"). Such a request never blocks a re-install: the flag's exclusion
+    /// keeps the package out while the flag stays off, and once the record stops declaring it off
+    /// the package's own lanes bring it back — the record is the source of truth either way.
+    /// </summary>
+    public string? RetiredByFlag { get; init; }
+
+    /// <summary>
+    /// Whether every replica must drop the module, not only the process executing the request. Set
+    /// for a flag-issued retire. Phase 1 then (a) FAILS the request, keeping the install record, when
+    /// the module's landed generation cannot be disabled DURABLY (an unreadable activation record, or
+    /// a module loaded here that the store lane never landed), and (b) never restarts by itself: it
+    /// records <see cref="ModuleDisabled"/> and leaves the ONE restart to
+    /// <see cref="RequestedRestart"/>, which is honoured only after phase 1 has been persisted, at
+    /// most once per request.
+    /// </summary>
+    public bool RetireOnEveryReplica { get; init; }
+
+    /// <summary>The flag retire's install identity, shared by every attempt at retiring the same
+    /// install (each attempt is its own request). Null for a person's request.</summary>
+    public string? RetireKey { get; init; }
+
+    /// <summary>Whether phase 1 durably disabled a landed module generation — so the replicas that
+    /// loaded it at boot still hold it until a restart. Executor-owned.</summary>
+    public bool ModuleDisabled { get; init; }
+
+    /// <summary>
+    /// Ask this request's executor for the ONE restart that makes every replica drop what phase 1
+    /// disabled (<see cref="RetireOnEveryReplica"/>). Honoured only while the request is
+    /// <see cref="PackageUninstallStatus.AwaitingConfirmation"/> — phase 1 already persisted — and
+    /// only while <see cref="PackageUninstallRequest.RestartRequestedAt"/> is unset; the executor
+    /// stamps that BEFORE it dispatches, so a resumed or re-activated executor never restarts twice.
+    /// </summary>
+    public bool RequestedRestart { get; init; }
+
+    /// <summary>The request whose restart covers this one's disabled module — set on every request a
+    /// single restart answers, so no later boot asks for another. Null until a restart is asked for.</summary>
+    public string? RestartCoveredBy { get; init; }
 }
 
 /// <summary>One partition an uninstall would tear down — measured before anything is destroyed.</summary>
@@ -168,7 +209,29 @@ public static class PackageUninstall
     /// no executor. Cold; emits once.</summary>
     /// <param name="hub">Any surviving hub of the mesh.</param>
     /// <param name="request">What to uninstall and why.</param>
-    public static IObservable<PackageUninstallTicket> Request(IMessageHub hub, PackageUninstallRequest request)
+    public static IObservable<PackageUninstallTicket> Request(IMessageHub hub, PackageUninstallRequest request) =>
+        // Null-safe: Validate (in Write) must answer a request with no package, never an NRE here.
+        Write(hub, request, $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{(request.Package ?? "").Trim()}-{Guid.NewGuid().ToString("N")[..8]}");
+
+    /// <summary>
+    /// <see cref="Request(IMessageHub, PackageUninstallRequest)"/> at a request id the CALLER chose —
+    /// so that several writers deciding the same thing (every replica's boot pass) collide on ONE
+    /// node instead of each opening its own request. The create of an id that already exists faults;
+    /// the caller reads the existing request. Cold; emits once.
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="request">What to uninstall and why.</param>
+    /// <param name="requestId">The node id under <see cref="PackageUninstallRequest.Namespace"/>;
+    /// reduced to a valid path segment.</param>
+    public static IObservable<PackageUninstallTicket> RequestAt(IMessageHub hub, PackageUninstallRequest request, string requestId) =>
+        Write(hub, request, requestId);
+
+    /// <summary>The path a request written at <paramref name="requestId"/> lands at. Pure.</summary>
+    /// <param name="requestId">The caller-chosen id.</param>
+    public static string PathAt(string requestId) =>
+        $"{PackageUninstallRequest.Namespace}/{ActivationRecycle.Segment(requestId)}";
+
+    private static IObservable<PackageUninstallTicket> Write(IMessageHub hub, PackageUninstallRequest request, string requestId)
     {
         if (Validate(request) is { } refusal)
             return Observable.Return(new PackageUninstallTicket(null, refusal));
@@ -177,7 +240,7 @@ public static class PackageUninstall
                 "this mesh registers no package uninstall executor (the plugin catalog is not installed) — nothing was written"));
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
-        var id = ActivationRecycle.Segment($"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{request.Package.Trim()}-{Guid.NewGuid().ToString("N")[..8]}");
+        var id = ActivationRecycle.Segment(requestId);
         var path = $"{PackageUninstallRequest.Namespace}/{id}";
         var node = new MeshNode(id, PackageUninstallRequest.Namespace)
         {
