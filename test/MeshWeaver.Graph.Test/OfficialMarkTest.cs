@@ -248,6 +248,8 @@ public class OfficialMarkTest
     // A second paint server is no fallback; a <!-- inside CDATA opens no comment.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='url(#a) url(#b) #fff'/></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'><desc><![CDATA[<!--]]></desc><style>path{fill:#111827}</style><!-- note --><path d='M0 0h1v1z' fill='#fff'/></svg>", false)]
+    // Attribute-like text inside another quoted value is not an attribute.
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' data-note=\"fill='#fff'\"/></svg>", false)]
     // A malformed colour is unreadable — never a throw.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#xyz'/></svg>", false)]
     // A clip path's unfilled geometry is not painted.

@@ -399,12 +399,13 @@ public static partial class IconBackplate
     /// <c>rx="16"</c>, nor <c>width</c> read <c>stroke-width</c>.</summary>
     private static string? AttrOf(string attrs, string name)
     {
-        var match = Regex.Match(
-            attrs,
-            @"(?<![-\w])" + name + @"\s*=\s*([""'])(?<v>.*?)\1",
-            // Singleline: a value may span lines (style='\n fill:#000;\n') — the browser reads it whole.
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
-        return match.Success ? match.Groups["v"].Value.Trim() : null;
+        // COMPLETE attributes, left to right, compared by their actual name: text inside another
+        // quoted value (data-note="fill='#fff'") is never read as an attribute, and a short name never
+        // matches inside a longer one (x / rx, width / stroke-width). Singleline: a value may span lines.
+        foreach (Match attribute in Attribute().Matches(attrs))
+            if (string.Equals(attribute.Groups["n"].Value, name, StringComparison.OrdinalIgnoreCase))
+                return (attribute.Groups["d"].Success ? attribute.Groups["d"].Value : attribute.Groups["s"].Value).Trim();
+        return null;
     }
 
     /// <summary>A numeric attribute, tolerating <c>%</c> (relative to <paramref name="canvas"/>).</summary>
@@ -441,6 +442,9 @@ public static partial class IconBackplate
 
     [GeneratedRegex(@"<!\[CDATA\[.*?\]\]>|<!--.*?-->", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
     private static partial Regex XmlComment();
+
+    [GeneratedRegex(@"(?<n>[^\s=/>""']+)\s*=\s*(?:""(?<d>[^""]*)""|'(?<s>[^']*)')", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    private static partial Regex Attribute();
 
     [GeneratedRegex(@"^#([0-9a-f]{3}|[0-9a-f]{6})$", RegexOptions.CultureInvariant)]
     private static partial Regex HexColor();
