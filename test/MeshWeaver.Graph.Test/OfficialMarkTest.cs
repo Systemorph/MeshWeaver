@@ -230,6 +230,9 @@ public class OfficialMarkTest
     // A multiline style is read whole; an embedded stylesheet keeps the white plate.
     [InlineData("<svg viewBox='0 0 24 24'><g fill='#fff'><path d='M0 0h1v1z' style='\nfill:#000;\n'/></g></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'><style>path{fill:#111827}</style><path d='M0 0h1v1z' fill='#fff'/></svg>", false)]
+    // A namespace-prefixed element is judged by its local name.
+    [InlineData("<svg viewBox='0 0 24 24'><s:style xmlns:s='http://www.w3.org/2000/svg'>path{fill:#111827}</s:style><path d='M0 0h1v1z' fill='#fff'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24' xmlns:svg='http://www.w3.org/2000/svg'><svg:path d='M0 0h1v1z' fill='#111827'/></svg>", false)]
     // A malformed colour is unreadable — never a throw.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#xyz'/></svg>", false)]
     // A clip path's unfilled geometry is not painted.

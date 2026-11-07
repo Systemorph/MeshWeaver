@@ -263,7 +263,9 @@ public static partial class IconBackplate
         var drawables = 0;
         foreach (Match tag in AnyTag().Matches(svg))
         {
-            var name = tag.Groups["name"].Value.ToLowerInvariant();
+            // The LOCAL name: a namespace prefix (<s:style>, <svg:path>) names the same element.
+            var qualified = tag.Groups["name"].Value.ToLowerInvariant();
+            var name = qualified[(qualified.LastIndexOf(':') + 1)..];
             if (tag.Groups["close"].Success)
             {
                 if (stack.Count > 1)
