@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -80,6 +81,12 @@ public sealed record PackageModuleOperation
     /// <summary>Set by the owner when it promoted the operation: the refusal it answers with instead
     /// of executing (the package is being retired, the remover no longer holds the retirement).</summary>
     public string? Refusal { get; init; }
+
+    /// <summary>Set ONLY by the owner when it promoted a person's landing: the person re-installs the
+    /// package, so the landing is carried out over an uninstall tombstone an uninstall left behind
+    /// (that uninstall lost its retirement to this install). Reset when a fact is queued, so no
+    /// writer can claim it.</summary>
+    public bool ReinstallByPerson { get; init; }
 }
 
 /// <summary>Every argument of one module landing, bytes included — the in-memory form of a landing
@@ -125,8 +132,8 @@ internal sealed record ModuleLandingVerdict(bool Applied, string Detail);
 /// stated, so a removal stated after a landing runs after it — the tombstone is strictly last.</para>
 ///
 /// <para><b>Resume.</b> The operation in flight is persisted as
-/// <see cref="PackageModuleOperationState.Executing"/> BEFORE it runs, and its staged bytes are dropped
-/// only AFTER its answer is written. An owner activation that finds an executing operation it did not
+/// <see cref="PackageModuleOperationState.Executing"/> BEFORE it runs, and its staged bytes are dropped by the writer,
+/// only AFTER its answer is in storage. An owner activation that finds an executing operation it did not
 /// start — the replica that started it died — executes it again: a landing re-reads the same staged
 /// bytes, a removal writes one more tombstone. Neither changes the outcome by running twice.</para>
 ///
@@ -151,13 +158,16 @@ public static class ModuleLandingOwner
     /// update (from <see cref="InstallRecordGate.Fold"/> and <see cref="Complete"/>). The oldest queued
     /// operation becomes <see cref="PackageModuleOperationState.Executing"/>, decided against the
     /// retirement as it stands NOW: a refused one is promoted with its
-    /// <see cref="PackageModuleOperation.Refusal"/>, so the executor answers it and drops its bytes.
+    /// <see cref="PackageModuleOperation.Refusal"/>, so the executor answers it without executing.
     /// </summary>
     /// <param name="operations">The record's operations.</param>
     /// <param name="retiring">The record's retirement.</param>
+    /// <param name="recordModule">The module the install record declares — the only module its owner
+    /// lands or removes.</param>
     /// <param name="now">The decision time.</param>
     internal static (ImmutableDictionary<string, PackageModuleOperation> Operations, PackageRetirement? Retiring) Promote(
-        ImmutableDictionary<string, PackageModuleOperation> operations, PackageRetirement? retiring, DateTimeOffset now)
+        ImmutableDictionary<string, PackageModuleOperation> operations, PackageRetirement? retiring, string? recordModule,
+        DateTimeOffset now)
     {
         if (operations.Values.Any(o => o.State == PackageModuleOperationState.Executing))
             return (operations, retiring);
@@ -171,8 +181,13 @@ public static class ModuleLandingOwner
             return (operations, retiring);
         var (key, operation) = (head.Key, head.Value);
         string? refusal = null;
+        var reinstall = false;
         switch (operation.Kind)
         {
+            case PackageModuleOperationKind.Land or PackageModuleOperationKind.Remove
+                when BindingRefusal(operation, recordModule) is { } unbound:
+                refusal = unbound;
+                break;
             case PackageModuleOperationKind.Land when retiring is not null
                                                      && !(operation.Intent == PackageRecordWriteIntent.Person && !retiring.Removing):
                 refusal = retiring.Removing
@@ -183,7 +198,13 @@ public static class ModuleLandingOwner
                 // A person's landing clears a retirement that is not yet removing the record — the
                 // rule a person's stamp follows (InstallRecordGate.Fold) — so the uninstall's removal
                 // queued behind it is refused instead of taking the module the person just installed.
-                retiring = null;
+                // A person's landing is carried out even over a tombstone (ReinstallByPerson): the
+                // uninstall that wrote it lost its retirement to this install.
+                if (operation.Intent == PackageRecordWriteIntent.Person)
+                {
+                    retiring = null;
+                    reinstall = true;
+                }
                 break;
             case PackageModuleOperationKind.Remove when retiring is null
                                                        || !string.Equals(retiring.Request, operation.Request, StringComparison.Ordinal):
@@ -201,7 +222,56 @@ public static class ModuleLandingOwner
             State = PackageModuleOperationState.Executing,
             StartedAt = now,
             Refusal = refusal,
+            ReinstallByPerson = refusal is null && reinstall,
         }), retiring);
+    }
+
+    /// <summary>Why the owner of a record declaring <paramref name="recordModule"/> must not carry out
+    /// <paramref name="operation"/>, or null: an install record lands and removes ITS OWN module and no
+    /// other (MeshWeaver#7974 review). Pure.</summary>
+    internal static string? BindingRefusal(PackageModuleOperation operation, string? recordModule) =>
+        string.IsNullOrWhiteSpace(recordModule)
+            ? $"refused: this install record declares no module, so it does not {operation.Kind.ToLowerInvariant()} '{operation.Module}'"
+            : !string.Equals(operation.Module?.Trim(), recordModule.Trim(), StringComparison.OrdinalIgnoreCase)
+                ? $"refused: module '{operation.Module}' is not this package's module ('{recordModule}')"
+                : null;
+
+    /// <summary>
+    /// Whether the hub at <paramref name="path"/> is an AUTHORITATIVE install record —
+    /// <c>Plugins/{package}</c>, one segment under the installed partition — the only kind of node
+    /// whose hub executes module operations. A node of the Package type anywhere else (a user's own
+    /// namespace) executes nothing, whatever its content says (MeshWeaver#7974 review). Pure.
+    /// </summary>
+    /// <param name="path">The hub's node path.</param>
+    internal static bool IsAuthoritativeRecordPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+        var segments = path.Trim('/').Split('/');
+        return segments.Length == 2
+               && string.Equals(segments[0], PackageInstaller.InstalledPartition, StringComparison.Ordinal)
+               && segments[1].Length > 0
+               && !segments[1].StartsWith('_');
+    }
+
+    /// <summary>
+    /// The owner's own check, at EXECUTION, of the operation it is about to carry out — against the
+    /// record as the owner holds it now. A promoted operation passes by construction; an operation
+    /// read back as executing (a resume) is held to the same rules, so a persisted
+    /// <see cref="PackageModuleOperationState.Executing"/> entry never bypasses the decision: the
+    /// module must be the record's, and a removal must still be the retirement holder's. Pure.
+    /// </summary>
+    internal static string? ExecutionRefusal(PackageModuleOperation operation, PackageManifest? record)
+    {
+        if (record is null)
+            return "refused: the install record is gone";
+        if (BindingRefusal(operation, record.Module) is { } unbound)
+            return unbound;
+        return operation.Kind == PackageModuleOperationKind.Remove
+               && (record.RetiringBy is null
+                   || !string.Equals(record.RetiringBy.Request, operation.Request, StringComparison.Ordinal))
+            ? $"refused: {operation.Request} does not hold this package's retirement — the module is not removed"
+            : null;
     }
 
     /// <summary>The owner finished operation <paramref name="key"/>: its answer is written under the
@@ -218,7 +288,7 @@ public static class ModuleLandingOwner
             return node;
         var (operations, retiring) = Promote(
             (record.ModuleOperations ?? ImmutableDictionary<string, PackageModuleOperation>.Empty).Remove(key),
-            record.RetiringBy, now);
+            record.RetiringBy, record.Module, now);
         return node with
         {
             Content = record with
@@ -240,8 +310,18 @@ public static class ModuleLandingOwner
     public static IObservable<Unit> Arm(IMessageHub hub) => Observable.Defer(() =>
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ModuleLandingOwner));
+        // 🚨 Only an AUTHORITATIVE install record executes module operations (#7974 review): the
+        // Package node type is armed wherever a Package node lives, and a node outside Plugins/{id}
+        // must not move the shared module volume, whatever its content says.
+        if (!IsAuthoritativeRecordPath(ModuleReloadExecutor.PathOf(hub)))
+            return Observable.Return(Unit.Default);
         var workspace = hub.GetWorkspace();
         var options = hub.JsonSerializerOptions;
+        // 🚨 Every execution is OWNED by this activation (#7974 review): disposed with it, so a
+        // recycled or deactivated owner cancels its landing at the landing's own cancellation points
+        // (before each staged file and before the commit rename) instead of running on unowned.
+        var executions = new CompositeDisposable();
+        hub.RegisterForDisposal(executions);
         // The keys THIS activation has started — per activation (a fresh activation resumes what a
         // dead one left executing), never static. Keys are fresh per submission, so the set only grows
         // by what this activation executed.
@@ -256,9 +336,14 @@ public static class ModuleLandingOwner
                 if (head.ExecutingKey is { } key && head.Executing is { } operation)
                 {
                     if (started.TryStart(key))
-                        Execute(hub, key, operation, logger)
+                    {
+                        var execution = new SingleAssignmentDisposable();
+                        executions.Add(execution);
+                        execution.Disposable = Execute(hub, key, operation, logger)
+                            .Finally(() => executions.Remove(execution))
                             .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
                                 "[ModuleLandingOwner] the module operation '{Key}' on {Address} could not be answered", key, hub.Address));
+                    }
                 }
                 else if (head.Queued > 0)
                     workspace.GetMeshNodeStream()
@@ -304,33 +389,40 @@ public static class ModuleLandingOwner
         var record = node.ContentAs<PackageManifest>(options);
         if (record?.ModuleOperations is not { Count: > 0 } operations)
             return node;
-        var (promoted, retiring) = Promote(operations, record.RetiringBy, now);
+        var (promoted, retiring) = Promote(operations, record.RetiringBy, record.Module, now);
         return ReferenceEquals(promoted, operations)
             ? node
             : node with { Content = record with { ModuleOperations = promoted, RetiringBy = retiring } };
     }
 
-    /// <summary>Executes one promoted operation on the owner's replica, writes its answer (which
-    /// promotes the next), then drops its staged bytes. Cold.</summary>
+    /// <summary>Executes one promoted operation on the owner's replica and writes its answer (which
+    /// promotes the next). Its staged bytes are the WRITER's to drop, after the writer's durable
+    /// barrier (<see cref="InstallRecordGate.Submit(IMessageHub, string, string, PackageRecordFact, ILogger?)"/>
+    /// removes the answer cross-hub, which acknowledges only once the owner's state — the operation
+    /// gone — is in storage): an owner that dropped them after its own in-memory commit could leave a
+    /// stored Executing operation whose bytes are gone (#7974 review). Cold.</summary>
     private static IObservable<Unit> Execute(IMessageHub hub, string key, PackageModuleOperation operation, ILogger? logger)
     {
         var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
         var workspace = hub.GetWorkspace();
         PackageRecordFactOutcome Answer(bool applied, string detail) => new(applied, detail, DateTimeOffset.UtcNow);
-        var run = operation.Refusal is { } refused
+        return workspace.GetMeshNodeStream().Take(1)
+            .Select(node => ExecutionRefusal(operation, node?.ContentAs<PackageManifest>(hub.JsonSerializerOptions)))
+            .SelectMany(unauthorized => Run(unauthorized ?? operation.Refusal));
+
+        IObservable<Unit> Run(string? refused) => (refused is not null
             ? Observable.Return(Answer(false, refused))
             : landing is null
                 ? Observable.Return(Answer(false, "refused: the install record's host registers no module landing service"))
                 : operation.Kind switch
                 {
-                    PackageModuleOperationKind.Land => landing.LandStaged(key, operation)
+                    PackageModuleOperationKind.Land => landing!.LandStaged(key, operation)
                         .Select(verdict => Answer(verdict.Applied, verdict.Detail)),
-                    PackageModuleOperationKind.Remove => landing.RemoveModule(operation.Module)
+                    PackageModuleOperationKind.Remove => landing!.RemoveModule(operation.Module)
                         .Select(_ => Answer(true, "landed generation disabled"))
                         .Catch((Exception ex) => Observable.Return(Answer(false, $"no landed generation to remove ({ex.Message})"))),
                     _ => Observable.Return(Answer(false, $"refused: unknown module operation '{operation.Kind}'")),
-                };
-        return run
+                })
             .Take(1)
             // A landing the link probe refuses faults — an answer like any other, never an operation
             // left executing for ever.
@@ -338,19 +430,10 @@ public static class ModuleLandingOwner
             .Do(outcome => logger?.LogInformation(
                 "[ModuleLandingOwner] {Address}: {Kind} of module '{Module}' ({Key}) — {Detail}",
                 hub.Address, operation.Kind, operation.Module, key, outcome.Detail))
-            // The answer FIRST, the bytes after: a replica that dies between the two leaves a stray
-            // staged folder, never an executing operation whose bytes are gone.
             .SelectMany(outcome => workspace.GetMeshNodeStream()
                 .Update(node => Complete(node, key, outcome, hub.JsonSerializerOptions, DateTimeOffset.UtcNow))
                 .Take(1))
-            .SelectMany(_ => landing is null || operation.Kind != PackageModuleOperationKind.Land
-                ? Observable.Return(Unit.Default)
-                : landing.DropStagedLanding(key)
-                    .Catch((Exception ex) =>
-                    {
-                        logger?.LogWarning(ex, "[ModuleLandingOwner] dropping the staged landing '{Key}' failed", key);
-                        return Observable.Return(Unit.Default);
-                    }));
+            .Select(_ => Unit.Default);
     }
 
     // ── Writer side ─────────────────────────────────────────────────────────────────────────
@@ -362,8 +445,18 @@ public static class ModuleLandingOwner
     /// package) there is no owner and no retirement, and the landing executes here, refused when the
     /// module was uninstalled since it was planned. Cold; a refusal is an answer, never a fault.
     /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="landing">The landing service.</param>
+    /// <param name="arguments">The landing.</param>
+    /// <param name="intent">The <see cref="PackageRecordWriteIntent"/> it is stated under.</param>
+    /// <param name="recordAtPlan">🚨 Whether the install record EXISTED when this adoption began —
+    /// before its download (#7974 review). A landing that belonged to a record and finds it gone has
+    /// LOST its owner (an uninstall removed it while the bytes travelled) and is refused; only a
+    /// landing that never had a record is a fresh package's.</param>
+    /// <param name="logger">Diagnostics.</param>
     internal static IObservable<ModuleLandingVerdict> Land(
-        IMessageHub hub, ModuleLandingService landing, ModuleLandingArguments arguments, string? intent, ILogger? logger)
+        IMessageHub hub, ModuleLandingService landing, ModuleLandingArguments arguments, string? intent,
+        bool recordAtPlan, ILogger? logger)
     {
         var path = arguments.PackagePath;
         if (intent is not null && !InstallRecordGate.IsKnownIntent(intent))
@@ -375,6 +468,10 @@ public static class ModuleLandingOwner
         return storage.Read(path, hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
             .SelectMany(existing =>
             {
+                if (existing is null && recordAtPlan)
+                    return Observable.Return(new ModuleLandingVerdict(false,
+                        $"refused: the install record {path} existed when this adoption began and is gone now — "
+                        + "the package was uninstalled while the module travelled; nothing was landed"));
                 if (existing is null)
                 {
                     logger?.LogInformation(
@@ -401,15 +498,13 @@ public static class ModuleLandingOwner
                     },
                 };
                 return landing.StageLanding(key, arguments)
-                    .SelectMany(_ => InstallRecordGate.Submit(hub, path, key, fact, logger, removeAnswer: null, budget: OperationBudget)
-                        // 🚨 A silent owner (the budget expired with the record still there) may still
-                        // execute this landing: its staged bytes are left for it, never pulled away.
-                        .Catch((Exception ex) => ex is TimeoutException
-                            ? Observable.Throw<PackageRecordFactOutcome>(ex)
-                            : Drop(landing, key, logger).SelectMany(_ => Observable.Throw<PackageRecordFactOutcome>(ex))))
-                    // Answered (applied or refused): the owner is done with the bytes. It drops them
-                    // itself; this is the writer's half for a refusal decided without the owner (the
-                    // record was removed before it answered).
+                    // 🚨 The staged bytes are dropped ONLY on an ANSWER (#7974 review): applied or
+                    // refused by the owner — read after Submit's durable barrier, so storage no longer
+                    // holds the operation — or "the record was removed", when no owner remains. A
+                    // submission whose fate is unknown (a timeout, an unreachable owner whose patch
+                    // may still apply) leaves them for the owner that may yet read them; a stray
+                    // folder is the cost, never an accepted landing whose bytes were pulled away.
+                    .SelectMany(_ => InstallRecordGate.Submit(hub, path, key, fact, logger, removeAnswer: null, budget: OperationBudget))
                     .SelectMany(outcome => Drop(landing, key, logger)
                         .Select(_ => new ModuleLandingVerdict(outcome.Applied, outcome.Detail)));
             });

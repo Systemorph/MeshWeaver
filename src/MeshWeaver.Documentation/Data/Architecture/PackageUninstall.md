@@ -119,23 +119,42 @@ So nothing outside the record's own hub lands or removes a package's module
   `PackageManifest.ModuleOperations`. It promotes exactly ONE to `Executing`, and decides it then,
   against the retirement as it stands at that moment. A landing while the package is being retired is
   refused. A person's landing (`PackageRecordWriteIntent.Person`, the catalog click) lands while the
-  retirement is not yet `Removing`, and clears it, the same rule as a person's stamp. A removal by a
-  request that no longer holds the retirement is refused.
+  retirement is not yet `Removing`, and clears it, the same rule as a person's stamp. The owner also
+  marks it `ReinstallByPerson`, so it lands even over a tombstone the displaced uninstall already
+  wrote. Without that, the person would keep an install record whose module stays disabled. A removal
+  by a request that no longer holds the retirement is refused. An install record lands and removes
+  only the module it declares (`PackageManifest.Module`); an operation naming any other module is
+  refused.
+- **Only an install record executes.** The Package node type is armed wherever a Package node lives.
+  Only a hub at `Plugins/{package}` executes module operations, and it checks each operation again
+  against its own current state just before running it: the module must be the record's, and a
+  removal must still be the retirement holder's. So a persisted `Executing` entry never bypasses the
+  decision, whether it was written by the owner before a crash or forged.
 - **The owner executes.** The record's hub runs the landing or the removal itself, on its own replica,
-  through the landing service's cap-1 lane. It writes the answer under the operation's key and
+  through the landing service's cap-1 lane. The execution belongs to the hub's activation and is
+  disposed with it, so a recycled owner cancels its landing at the landing's own cancellation points. It writes the answer under the operation's key and
   promotes the next operation in the same update. Operations run one at a time and in the order they
   were stated, so a removal stated after a landing runs after it, and the tombstone is written last.
 - **A landing is decided where it is written.** The landing reads the module's head in the same work
   item that writes the bytes, and refuses when the module's newest event is an uninstall. This is the
   rule `ModuleUpdateDecision` applies at plan time (`SkipUninstalled`), taken again after the
   download.
-- **Resume.** The operation in flight is persisted as `Executing` before it runs, and its staged
-  bytes are dropped only after its answer is written. When a replica dies mid-operation, the next
+- **Resume.** The operation in flight is persisted as `Executing` before it runs. Its staged bytes are
+  dropped by the WRITER, and only once it has an answer. The writer removes its answer from the
+  record with a cross-hub update, which acknowledges only after the owner's state is in storage; it
+  drops the bytes after that. So storage never holds an `Executing` operation whose bytes are gone. A
+  submission whose outcome is unknown (a timeout, or an unreachable owner whose patch may still apply)
+  leaves the bytes in place for the owner. When a replica dies mid-operation, the next
   activation of the record's hub finds an executing operation it did not start, and runs it again. A
   landing re-reads the same staged bytes, and a removal writes one more tombstone. Neither changes the
   outcome by running twice.
 - **A refusal is an answer.** A refused landing reaches the adoption as its named `Failure`, with
   nothing landed. A removal the owner did not carry out faults with the owner's words.
+
+**A landing that loses its record is refused.** The adoption notes whether the install record
+exists before it starts the download. If the record existed then and is gone when the bytes arrive,
+an uninstall removed it while the module was downloading, and the landing is refused. This holds even
+for a module that never landed, where no tombstone exists to refuse it.
 
 **A package with no install record has no owner.** The boot's modules-first wave lands a fresh
 package's module before any record exists. A retirement lives on the record and ends when the record
@@ -148,8 +167,12 @@ first and, if it exists, goes through the owner.
 What the fresh path does not close: its uninstall check and its write are one work item on one
 replica. A removal another replica writes **inside** that work item, between the read and the write,
 would be ordered before the landing. For that to happen, a record must be created, a retirement
-granted and the removal executed within that interval. The owned path has no such window. A staged
-landing whose writer and owner both died before the answer is not collected by the modules GC.
+granted and the removal executed within that interval. The owned path has no such window, apart from
+one case: when an owner is torn down after a landing has passed its commit rename, that landing
+finishes its record write. On Orleans a successor activation starts only after the old one has been
+disposed, and on a single process the successor's landing queues behind it on the same cap-1 lane.
+A staged landing whose writer died before taking its answer, or whose submission's outcome is
+unknown, is not collected by the modules GC.
 
 ## Phase 2 — drop the data, on confirmation
 

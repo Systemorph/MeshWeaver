@@ -739,7 +739,15 @@ public sealed class PluginBundleClient
             "Module '{Module}' of {Plugin}: {Reason}",
             moduleName, pluginId, decided.Verdict?.Reason);
         var advertised = bundle!;
-        return Download(pluginId, advertised, index)
+        // 🚨 Whether the install record exists NOW, before the download (#7974 review): a landing
+        // that belonged to a record and finds it gone when the bytes arrive has lost its owner to an
+        // uninstall, and is refused (ModuleLandingOwner.Land) — only a landing that never had a record
+        // is a fresh package's.
+        var storage = _hub.ServiceProvider.GetService<IStorageAdapter>();
+        var recordAtPlan = string.IsNullOrWhiteSpace(packagePath) || storage is null
+            ? Observable.Return(false)
+            : storage.Read(packagePath, _hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null).Select(n => n is not null);
+        return recordAtPlan.SelectMany(hadRecord => Download(pluginId, advertised, index)
             .SelectMany(result => result.Bytes is null
                 ? Miss(pluginId, result.Kind, result.Reason)
                     .Select(_ => decided with
@@ -752,13 +760,13 @@ public sealed class PluginBundleClient
                     })
                 : LandFromBundleOutcome(
                         pluginId, moduleName, packagePath, advertised.Version, result.Bytes,
-                        advertised.FrameworkMvid, intent)
+                        advertised.FrameworkMvid, intent, hadRecord)
                     .Select(landed => decided with
                     {
                         FilesLanded = landed.Count,
                         LandedVersion = landed.Count > 0 ? landed.Version : null,
                         Failure = landed.Refusal,
-                    }));
+                    })));
     }
 
     /// <summary>A planned adoption: what was decided, and — when it lands — the exact bundle and the
@@ -830,7 +838,7 @@ public sealed class PluginBundleClient
     /// </summary>
     internal IObservable<(int Count, string? Version, string? Refusal)> LandFromBundleOutcome(
         string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes,
-        string? advertisedFrameworkMvid = null, string? intent = null) =>
+        string? advertisedFrameworkMvid = null, string? intent = null, bool recordAtPlan = false) =>
         // Not atomic: the closure is one decompression per declared assembly, checked between them.
         _httpPool.InvokeBlocking(ct => BundleReader.ReadModule(bundleBytes, ct))
             .SelectMany(payload =>
@@ -926,7 +934,7 @@ public sealed class PluginBundleClient
                         NativeAssets = BundleReader.ReadModuleNativeAssets(bundleBytes) is { Count: > 0 } natives
                             ? [.. natives.Select(n => (n.RelativePath, n.Bytes))]
                             : null,
-                    }, intent, _logger)
+                    }, intent, recordAtPlan, _logger)
                     .Select(verdict => verdict.Applied
                         ? (Count: files.Count, Version: (string?)declaredVersion, Refusal: (string?)null)
                         : (Count: 0, Version: (string?)null, Refusal: (string?)verdict.Detail))

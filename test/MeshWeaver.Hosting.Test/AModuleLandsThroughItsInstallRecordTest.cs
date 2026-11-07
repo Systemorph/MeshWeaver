@@ -86,8 +86,29 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         InstallRecordGate.Write(Mesh, Record(id, module), PackageRecordWriteIntent.CreateAllowed, NullLogger.Instance)
             .Timeout(TestTimeouts.Convergence).Await(ct);
 
-    private IObservable<ModuleLandingVerdict> Land(string module, string version, string? packagePath, string? intent = null) =>
-        ModuleLandingOwner.Land(Mesh, Landing, Bytes(module, version, packagePath), intent, NullLogger.Instance);
+    private IObservable<ModuleLandingVerdict> Land(string module, string version, string? packagePath, string? intent = null,
+        bool recordAtPlan = false) =>
+        ModuleLandingOwner.Land(Mesh, Landing, Bytes(module, version, packagePath), intent, recordAtPlan, NullLogger.Instance);
+
+    /// <summary>Creates a node as System, content and all — how a test puts a record into a state the
+    /// owner wrote before a replica died, or a Package node where no install record belongs.</summary>
+    private async Task Create(MeshNode node, CancellationToken ct)
+    {
+        var created = await Access.RunAsSystem(() => Mesh.NodeOperationIssuingHub()
+                .Observe<CreateNodeResponse>(new CreateNodeRequest(node)))
+            .FirstAsync().Select(d => d.Message).Timeout(TestTimeouts.Convergence).Await(ct);
+        created.Success.Should().BeTrue(created.Error ?? "");
+    }
+
+    private static PackageModuleOperation ExecutingRemove(string module, string request) => new()
+    {
+        Kind = PackageModuleOperationKind.Remove,
+        Module = module,
+        Request = request,
+        State = PackageModuleOperationState.Executing,
+        At = DateTimeOffset.UtcNow.AddMinutes(-1),
+        StartedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+    };
 
     private Task<ModuleActivationEntry?> Entry(string module, CancellationToken ct) =>
         Landing.GetActivation()
@@ -167,7 +188,7 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         var record = Record("LandResume", module);
         var interrupted = record with
         {
-            Content = ((PackageManifest)record.Content!) with
+            Content = record.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)! with
             {
                 ModuleOperations = ImmutableDictionary<string, PackageModuleOperation>.Empty.Add(key, new PackageModuleOperation
                 {
@@ -181,10 +202,7 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
                 }),
             },
         };
-        var created = await Access.RunAsSystem(() => Mesh.NodeOperationIssuingHub()
-                .Observe<CreateNodeResponse>(new CreateNodeRequest(interrupted)))
-            .FirstAsync().Select(d => d.Message).Timeout(TestTimeouts.Convergence).Await(ct);
-        created.Success.Should().BeTrue(created.Error ?? "");
+        await Create(interrupted, ct);
 
         var answered = await Live("LandResume", r => r.FactOutcomes?.ContainsKey(key) == true, ct);
         answered.FactOutcomes![key].Applied.Should().BeTrue(answered.FactOutcomes[key].Detail);
@@ -193,7 +211,9 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         entry.Should().NotBeNull();
         entry!.Enabled.Should().BeTrue();
         entry.Version.Should().Be("2.0.0");
-        Directory.Exists(Landing.StagedLandingDirectory(key)).Should().BeFalse("the owner drops the staged bytes after answering");
+        // The staged bytes are the WRITER's to drop, after its durable barrier — never the owner's
+        // after an in-memory commit (#7974 review). This writer died, so they stay.
+        Directory.Exists(Landing.StagedLandingDirectory(key)).Should().BeTrue("the owner never drops staged bytes itself");
     }
 
     /// <summary>
@@ -265,5 +285,112 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         (await Entry(module, ct))!.Version.Should().Be("2.0.0", "the landing stated second landed last");
         lock (executing)
             executing.Max().Should().Be(1, "never two module operations executing on one record");
+    }
+
+    /// <summary>
+    /// (5) Only an AUTHORITATIVE install record executes module operations, and only on ITS OWN module
+    /// (#7974 review): a Package node outside <c>Plugins/{id}</c> carrying a persisted executing removal
+    /// moves nothing, and a real install record carrying an executing removal of ANOTHER package's
+    /// module answers it refused. The landed module stays enabled. Negative control (measured): with
+    /// the path check and the execution-time check removed, the module is disabled.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task APersistedExecutingOperation_NeverBypassesTheOwnersAuthority()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Victim.Module";
+        await Landing.LandModule(module, [(module + ".dll", RealAssemblyBytes)], version: "1.0.0")
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // A Package node where no install record belongs, forging an executing removal.
+        var evil = Record("Evil", module) with { Id = "EvilRecord", Namespace = "EvilSpace" };
+        await Create(evil with
+        {
+            Content = evil.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)! with
+            {
+                // Forged whole: even the retirement the removal would need is claimed, so only the
+                // node's place — not an install record — stops it.
+                RetiringBy = new PackageRetirement("EvilSpace/req", "forged", DateTimeOffset.UtcNow),
+                ModuleOperations = ImmutableDictionary<string, PackageModuleOperation>.Empty
+                    .Add("module-remove-evil", ExecutingRemove(module, "EvilSpace/req")),
+            },
+        }, ct);
+        await Access.RunAsSystem(() => Mesh.GetMeshNodeStream("EvilSpace/EvilRecord")).Take(1)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // A real install record of ANOTHER package, forging an executing removal of this module.
+        var other = Record("AuthOther", "Acme.Other.Module");
+        await Create(other with
+        {
+            Content = other.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)! with
+            {
+                ModuleOperations = ImmutableDictionary<string, PackageModuleOperation>.Empty
+                    .Add("module-remove-forged", ExecutingRemove(module, "Admin/_PackageUninstall/req-forged")),
+            },
+        }, ct);
+        var answered = await Live("AuthOther", r => r.FactOutcomes?.ContainsKey("module-remove-forged") == true, ct);
+        answered.FactOutcomes!["module-remove-forged"].Applied.Should().BeFalse();
+        answered.FactOutcomes["module-remove-forged"].Detail.Should().Contain("is not this package's module");
+
+        (await Entry(module, ct))!.Enabled.Should().BeTrue("neither forged removal moved the shared module volume");
+    }
+
+    /// <summary>
+    /// (6) A landing whose install record EXISTED when the adoption began, and is gone when the bytes
+    /// arrive, has lost its owner and is REFUSED — even for a module that never landed, which leaves no
+    /// tombstone to refuse it (#7974 review). Negative control, in the test: the same landing for a
+    /// package that never had a record lands.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ALandingThatLostItsRecordWhileTheBytesTravelled_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.LostOwner.Module";
+        await WriteRecord("LandLost", module, ct);
+        // The adoption begins (record present), the uninstall removes the record (the module never
+        // landed: no tombstone), then the bytes arrive.
+        (await PackageInstaller.RemoveInstalledRecord(Mesh, "LandLost", NullLogger.Instance).Take(1)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeTrue();
+
+        var refused = await Land(module, "1.0.0", RecordPath("LandLost"), recordAtPlan: true)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        refused.Applied.Should().BeFalse();
+        refused.Detail.Should().Contain("existed when this adoption began");
+        (await Entry(module, ct)).Should().BeNull("nothing was landed");
+
+        // Negative control: a package that never had a record — the fresh path — lands.
+        (await Land(module, "1.0.0", RecordPath("LandLost"), recordAtPlan: false)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Applied.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// (7) A PERSON's re-install that the owner authorized lands even after phase 1 wrote the
+    /// tombstone (the retirement was not yet removing the record): the owner clears the retirement and
+    /// carries the landing out over the tombstone, so the person keeps an install record WITH its module
+    /// and the uninstall stops (#7974 review). Negative control (measured): with the owner's
+    /// re-install authorization ignored at execution, the tombstone refuses the person's landing.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task APersonsReinstallDuringTheRetirement_LandsOverTheTombstone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Reinstall.Module";
+        const string request = "Admin/_PackageUninstall/req-reinstall";
+        await WriteRecord("LandAgain", module, ct);
+        (await Land(module, "1.0.0", RecordPath("LandAgain")).Timeout(TestTimeouts.Convergence).Await(ct)).Applied.Should().BeTrue();
+        (await InstallRecordGate.BeginRetirement(Mesh, "LandAgain", request, "test", NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull();
+        (await ModuleLandingOwner.Remove(Mesh, "LandAgain", module, request, NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().Be("landed generation disabled");
+
+        var person = await Land(module, "1.1.0", RecordPath("LandAgain"), PackageRecordWriteIntent.Person, recordAtPlan: true)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        person.Applied.Should().BeTrue(person.Detail);
+        var entry = await Entry(module, ct);
+        entry!.Enabled.Should().BeTrue("the person's re-install is landed over the tombstone");
+        entry.Version.Should().Be("1.1.0");
+        (await Live("LandAgain", r => r.RetiringBy is null, ct)).RetiringBy.Should().BeNull("the person's landing cleared the retirement");
+        (await InstallRecordGate.MarkRemoving(Mesh, "LandAgain", request, NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().Contain("no longer holds", "the displaced uninstall stops and keeps the record");
     }
 }

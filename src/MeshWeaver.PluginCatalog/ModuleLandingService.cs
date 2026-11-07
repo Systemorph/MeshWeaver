@@ -1215,7 +1215,9 @@ public sealed class ModuleLandingService : IDisposable
                 .SelectMany(landing => landing is null
                     ? Observable.Return(new ModuleLandingVerdict(false,
                         $"refused: the staged bytes of this landing are gone ({directory}) — nothing was landed"))
-                    : LandUnlessUninstalled(landing));
+                    // A person's re-install the owner authorized is carried out over a tombstone; every
+                    // other landing keeps the uninstall check.
+                    : LandUnlessUninstalled(landing, refuseOverUninstall: !operation.ReinstallByPerson));
         });
 
     /// <summary>
@@ -1227,7 +1229,10 @@ public sealed class ModuleLandingService : IDisposable
     /// bytes are written, after a download that may have outlived the plan. A module head that cannot
     /// be read whole refuses too: unreadable is never "not uninstalled". Cold.
     /// </summary>
-    internal IObservable<ModuleLandingVerdict> LandUnlessUninstalled(ModuleLandingArguments landing)
+    /// <param name="landing">The landing.</param>
+    /// <param name="refuseOverUninstall">False only for a person's re-install the install record's
+    /// owner authorized (<see cref="PackageModuleOperation.ReinstallByPerson"/>).</param>
+    internal IObservable<ModuleLandingVerdict> LandUnlessUninstalled(ModuleLandingArguments landing, bool refuseOverUninstall = true)
         => pool.InvokeBlocking(ct =>
             {
                 ValidateFileName(landing.Name, "module name");
@@ -1237,7 +1242,7 @@ public sealed class ModuleLandingService : IDisposable
                     return new ModuleLandingVerdict(false,
                         $"refused: module '{landing.Name}''s activation records could not be read whole, so whether it "
                         + "was uninstalled meanwhile is unknown — nothing was landed");
-                if (head.Derived is { Enabled: false })
+                if (refuseOverUninstall && head.Derived is { Enabled: false })
                     return new ModuleLandingVerdict(false,
                         $"refused: module '{landing.Name}' was uninstalled after this landing was planned — "
                         + "nothing was landed");

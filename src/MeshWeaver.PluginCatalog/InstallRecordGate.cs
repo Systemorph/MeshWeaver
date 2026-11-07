@@ -256,6 +256,7 @@ public static class InstallRecordGate
                         State = PackageModuleOperationState.Queued,
                         StartedAt = null,
                         Refusal = null,
+                        ReinstallByPerson = false,
                     });
                     break;
                 case PackageRecordFactKind.ModuleRemove:
@@ -267,6 +268,7 @@ public static class InstallRecordGate
                         State = PackageModuleOperationState.Queued,
                         StartedAt = null,
                         Refusal = null,
+                        ReinstallByPerson = false,
                     });
                     break;
                 default:
@@ -274,7 +276,7 @@ public static class InstallRecordGate
                     break;
             }
         }
-        (operations, retiring) = ModuleLandingOwner.Promote(operations, retiring, now);
+        (operations, retiring) = ModuleLandingOwner.Promote(operations, retiring, content.Module, now);
 
         return node with
         {
