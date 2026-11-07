@@ -161,12 +161,32 @@ def owner_of(path: str, dirs: list[str]) -> str | None:
     return max(hits, key=len) if hits else None
 
 
+UNKNOWN_ASSEMBLY = "?unresolved"
+
+
 def assembly_names(root: Path, rel_dir: str) -> set[str]:
+    """The project's assembly name(s), or UNKNOWN_ASSEMBLY when it cannot be read from the project text:
+    an `<AssemblyName>` built from a property, or one an ancestor Directory.Build.props/.targets sets
+    (review of core #7986 — an InternalsVisibleTo grant to the REAL name must never be missed)."""
     names: set[str] = set()
+    inherited = False
+    here = (root / rel_dir).resolve()
+    while True:
+        for f in here.glob("Directory.Build.*"):
+            if f.suffix in (".props", ".targets") and "<AssemblyName" in f.read_text(encoding="utf-8", errors="replace"):
+                inherited = True
+        if here == root.resolve() or here.parent == here:
+            break
+        here = here.parent
     for csproj in sorted((root / rel_dir).glob("*.csproj")):
         text = csproj.read_text(encoding="utf-8", errors="replace")
-        m = re.search(r"<AssemblyName>\s*([^<$]+?)\s*</AssemblyName>", text)
-        names.add(m.group(1) if m else csproj.stem)
+        m = re.search(r"<AssemblyName>\s*([^<]+?)\s*</AssemblyName>", text)
+        if m and "$(" not in m.group(1):
+            names.add(m.group(1))
+        elif m or inherited:
+            names.add(UNKNOWN_ASSEMBLY)
+        else:
+            names.add(csproj.stem)
     return names
 
 
@@ -561,11 +581,19 @@ def decide(root: Path, verdict: dict, units: list[dict], reselected: set[str] | 
         if uid in reselected:
             out[uid] = {"decision": "keep", "reason": "another changed path still reaches it", "dependencies": hit}
             continue
+        reads = unit_reads(root, project, closure, list(unit.get("reads") or []))
+        # A linked or declared read reaches files OUTSIDE the ProjectReference closure too (a `../Shared/A.cs`
+        # compile include with no reference to Shared — review of core #7986): any probed file it covers keeps.
+        read_hit = next((f for e in projects.values() for f in e.get("files") or []
+                         if any(_PSCOPE.input_covers(f, r) for r in reads)), None)
+        if read_hit:
+            out[uid] = {"decision": "keep", "reason": f"reads {read_hit} as content or compiler input (declared input / linked include)",
+                        "dependencies": hit}
+            continue
         if not hit:
             out[uid] = {"decision": "keep", "reason": "no probed project in its closure — selected for another reason",
                         "dependencies": []}
             continue
-        reads = unit_reads(root, project, closure, list(unit.get("reads") or []))
         assemblies = set().union(*(assembly_names(root, d) for d in closure))
         keep = None
         for d in hit:
@@ -576,8 +604,12 @@ def decide(root: Path, verdict: dict, units: list[dict], reselected: set[str] | 
                 keep = f"{entry.get('assembly') or d}: {entry.get('reason') or 'public API changed'}"
             else:
                 friends = set(entry.get("friends") or []) | friends_from_source(root, d)
-                seen = sorted((assemblies - assembly_names(root, d)) & friends)
-                if seen:
+                others = set().union(*(assembly_names(root, x) for x in closure if x != d))
+                seen = sorted(others & friends)
+                if UNKNOWN_ASSEMBLY in others and friends:
+                    keep = (f"an assembly name in its closure cannot be read from the project text, and "
+                            f"{entry.get('assembly') or d} grants InternalsVisibleTo — a friend cannot be ruled out")
+                elif seen:
                     keep = (f"{seen[0]} sees {entry.get('assembly') or d}'s internals (InternalsVisibleTo) — "
                             "keyed on the full assembly")
                 else:
@@ -596,6 +628,23 @@ def decide(root: Path, verdict: dict, units: list[dict], reselected: set[str] | 
 
 
 # ───────────────────────────── key: the ABI test key ─────────────────────────────
+
+def files_matching(root: Path, pattern: str) -> list[str]:
+    """Repo-relative files a read pattern (a prefix, `.`, or a glob) covers, sorted."""
+    wild = re.search(r"[*?]", pattern)
+    literal = pattern if wild is None else pattern[: pattern.rfind("/", 0, wild.start()) + 1]
+    base = root / literal.rstrip("/") if literal not in ("", ".") else root
+    if base.is_file():
+        return [base.relative_to(root).as_posix()] if _PSCOPE.input_covers(base.relative_to(root).as_posix(), pattern) else []
+    out: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        for name in filenames:
+            rel = (Path(dirpath) / name).relative_to(root).as_posix()
+            if _PSCOPE.input_covers(rel, pattern):
+                out.append(rel)
+    return sorted(out)
+
 
 def abi_key(root: Path, project: str, manifest: dict, platform: str = "", reads: list[str] | None = None) -> dict:
     root = root.resolve()
@@ -618,7 +667,7 @@ def abi_key(root: Path, project: str, manifest: dict, platform: str = "", reads:
             continue
         friends = set(entry.get("friends") or []) | friends_from_source(root, d)
         others = set().union(*(a for x, a in assemblies.items() if x != d))
-        if friends & others:
+        if friends & others or (friends and UNKNOWN_ASSEMBLY in others):
             if not entry.get("full"):
                 raise ValueError(f"{d}: a friend in {project}'s closure needs the full assembly hash, the manifest has none")
             # The full assembly AND the non-compiled files (review of core #7986): a content file copied to
@@ -627,7 +676,12 @@ def abi_key(root: Path, project: str, manifest: dict, platform: str = "", reads:
         else:
             identities[d] = "abi:" + entry["abi"]
     globals_ = {rel: (_MBK.file_hash(root / rel) if (root / rel).is_file() else None) for rel in _MBK.GLOBAL_INPUTS}
-    inputs = {"recipe": ABI_RECIPE, "unit": Path(project).as_posix(), "closure": identities,
+    # Every read is hashed on its own, inside the closure or not (review of core #7986): a linked
+    # `MeshWeaver.Fixture/RepoPaths.cs` with no ProjectReference is compiler input all the same — an edit,
+    # an addition or a deletion under the pattern moves the key.
+    read_hashes = {r: sha256("\n".join(f"{f}={_MBK.file_hash(root / f)}" for f in files_matching(root, r)).encode())
+                   for r in sorted(set(read_patterns))}
+    inputs = {"recipe": ABI_RECIPE, "unit": Path(project).as_posix(), "closure": identities, "reads": read_hashes,
               "globals": globals_, "imports": _MBK.directory_imports(root, closure), "platform": platform}
     canonical = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
     return {"key": sha256(canonical.encode()), "inputs": inputs}
@@ -770,8 +824,37 @@ def self_test() -> int:
         check(kl["inputs"]["closure"]["src/Lib"].startswith("tree:"), "a unit LINKING a dependency's source keys it by tree")
         check(abi_key(root, "src/App.Test/App.Test.csproj", mh, reads=["src/Lib/**"])["inputs"]["closure"]["src/Lib"].startswith("tree:"),
               "…and so does a caller-declared read")
-        (root / "src/Linker/Linker.csproj").unlink()
+        (root / "src/Shared").mkdir()
+        (root / "src/Shared/S.cs").write_text("class S { }\n")
+        (root / "src/Linker/Linker.csproj").write_text('<Project><ItemGroup><ProjectReference Include="../App/App.csproj" />'
+                                                       '<Compile Include="../Shared/S.cs" /></ItemGroup></Project>')
+        k1 = abi_key(root, "src/Linker/Linker.csproj", mh)
+        (root / "src/Shared/S.cs").write_text("class S { int x; }\n")
+        k2 = abi_key(root, "src/Linker/Linker.csproj", mh)
+        check(k1["key"] != k2["key"] and "../Shared/S.cs" not in str(k1["inputs"]["closure"]),
+              "a linked file OUTSIDE the ProjectReference closure is hashed into the key on its own")
+        fake = {"schema": SCHEMA, "projects": {"src/Lib": {"unchanged": True, "files": ["src/Lib/A.cs"], "refasm": "a" * 64,
+                                                          "friends": []},
+                                               "src/Shared": {"unchanged": True, "files": ["src/Shared/S.cs"], "refasm": "b" * 64,
+                                                              "friends": []}}}
+        dl = decide(root, fake, [{"id": "L", "project": "src/Linker/Linker.csproj"}], set())["L"]
+        check(dl["decision"] == "keep" and "src/Shared/S.cs" in dl["reason"],
+              f"decide keeps a unit that links a probed file outside its closure: {dl}")
+        for p in ("src/Linker/Linker.csproj", "src/Shared/S.cs"):
+            (root / p).unlink()
         (root / "src/Linker").rmdir()
+        (root / "src/Shared").rmdir()
+        app_csproj = (root / "src/App/App.csproj").read_text()
+        (root / "src/App/App.csproj").write_text(app_csproj.replace("<ItemGroup>", "<PropertyGroup><AssemblyName>$(Prefix)App</AssemblyName></PropertyGroup><ItemGroup>", 1))
+        check(assembly_names(root, "src/App") == {UNKNOWN_ASSEMBLY}, "a property-built AssemblyName is UNRESOLVED, never the file name")
+        du = decide(root, {"schema": SCHEMA, "projects": {"src/Lib": {"unchanged": True, "files": ["src/Lib/A.cs"],
+                                                                      "refasm": "a" * 64, "friends": ["Friend"]}}},
+                    [{"id": "AT", "project": "src/App.Test/App.Test.csproj"}], set())["AT"]
+        check(du["decision"] == "keep" and "cannot be ruled out" in du["reason"],
+              f"an unresolved assembly name beside an IVT grant keeps the unit: {du}")
+        check(abi_key(root, "src/App.Test/App.Test.csproj", mh)["inputs"]["closure"]["src/Lib"].startswith("full:"),
+              "…and keys the IVT-granting dependency on full:")
+        (root / "src/App/App.csproj").write_text(app_csproj)
 
         # ── BRANCH 2: a public-API change ──
         (root / "src/Lib/A.cs").write_text("public class A { public int F() => 2; public int F2() => 4; }\n")
