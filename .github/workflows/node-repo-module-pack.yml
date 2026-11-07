@@ -1873,8 +1873,15 @@ jobs:
           key="cache/module-pack-tool/$(git -C meshweaver rev-parse HEAD)-${RUNNER_OS}-${RUNNER_ARCH}-sdk10.0.tar"
           echo "key=$key" >> "$GITHUB_OUTPUT"
           tool="$RUNNER_TEMP/pack-tool"
-          if python3 "$PY" probe --store "$STORE" --locator "$STORE/$key" >/dev/null 2>&1 \
-             && python3 "$PY" get --store "$STORE" --expect-store-id "$STORE_ID" --locator "$STORE/$key" --out "$RUNNER_TEMP/pack-tool.tar" >/dev/null \
+          # The archive is read ONLY against the digest `put` recorded beside it (`<key>.sha256`): a
+          # missing record, an unreadable one or a mismatch is a miss — never a damaged tool reused.
+          sha=""
+          if python3 "$PY" probe --store "$STORE" --locator "$STORE/$key.sha256" >/dev/null 2>&1 \
+             && python3 "$PY" get --store "$STORE" --expect-store-id "$STORE_ID" --locator "$STORE/$key.sha256" --out "$RUNNER_TEMP/pack-tool.sha256" >/dev/null; then
+            sha=$(tr -d '[:space:]' < "$RUNNER_TEMP/pack-tool.sha256")
+          fi
+          if [[ "$sha" =~ ^[0-9a-f]{64}$ ]] \
+             && python3 "$PY" get --store "$STORE" --expect-store-id "$STORE_ID" --locator "$STORE/$key#sha256=$sha" --out "$RUNNER_TEMP/pack-tool.tar" >/dev/null \
              && mkdir -p "$tool" && tar -xf "$RUNNER_TEMP/pack-tool.tar" -C "$tool" \
              && [ -f "$tool/MeshWeaver.Plugin.Build.dll" ]; then
             echo "hit=true" >> "$GITHUB_OUTPUT"
@@ -1900,8 +1907,11 @@ jobs:
           KEY: ${{ steps.tool-store.outputs.key }}
         run: |
           set -uo pipefail
+          # The archive first, then its digest record — a reader that finds the record finds the archive.
           tar -cf "$RUNNER_TEMP/pack-tool.tar" -C "$RUNNER_TEMP/pack-tool" . \
+            && sha256sum "$RUNNER_TEMP/pack-tool.tar" | cut -d' ' -f1 > "$RUNNER_TEMP/pack-tool.sha256" \
             && python3 "$PY" put --store "$STORE" --expect-store-id "$STORE_ID" --key "$KEY" --file "$RUNNER_TEMP/pack-tool.tar" \
+            && python3 "$PY" put --store "$STORE" --expect-store-id "$STORE_ID" --key "$KEY.sha256" --file "$RUNNER_TEMP/pack-tool.sha256" \
             || echo "::warning title=Module-pack tool not kept::could not store $KEY — this run is unaffected; the next run on this commit publishes the tool again"
       # Lane-scoped like every other artifact this workflow drops: two calls in one run publish
       # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
