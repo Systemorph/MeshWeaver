@@ -212,6 +212,41 @@ public class PhaseOneReadsTheActivationWholeTest(ITestOutputHelper output) : Mon
         Assert.False(EntryFileEnabled());
     }
 
+    /// <summary>
+    /// Phase 1's OWN removal faults (the activation read whole, the removal stopped after its
+    /// tombstone): the request ends Failed naming the removal fault, the install record is kept and
+    /// the retirement is released, so the package stays repairable. Negative control (measured): with
+    /// a removal fault turned into an outcome sentence, phase 1 reaches AwaitingConfirmation and
+    /// removes the install record.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task PhaseOnesOwnRemovalFaults_FailsKeepsTheRecordAndReleasesTheRetirement()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Land(ct);
+        await Installed("RetireRemovalFaults", ct);
+        const string fault = "the removal faulted inside phase 1";
+        var interrupt = 1;
+        beforeProjecting = _ =>
+        {
+            if (Interlocked.Exchange(ref interrupt, 0) == 1)
+                throw new IOException(fault);
+        };
+
+        var request = await Uninstall("RetireRemovalFaults", ct);
+
+        Assert.Equal(0, Volatile.Read(ref interrupt));
+        Assert.True(request.Status == PackageUninstallStatus.Failed, request.Failure ?? request.Status);
+        Assert.Contains(fault, request.Failure ?? "");
+        Assert.True(await RecordExists("RetireRemovalFaults", ct), "the install record is kept");
+        var record = await Access.RunAsSystem(() => Mesh.GetMeshNodeStream($"{PackageInstaller.InstalledPartition}/RetireRemovalFaults"))
+            .Select(n => n.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions))
+            .OfType<PackageManifest>()
+            .Where(r => r.RetiringBy is null)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Assert.Null(record.RetiringBy);
+    }
+
     /// <summary>Control: a landed, enabled module is disabled by this run and recorded as such.</summary>
     [Fact(Timeout = 180_000)]
     public async Task ALandedModule_IsDisabledByThisRun()
