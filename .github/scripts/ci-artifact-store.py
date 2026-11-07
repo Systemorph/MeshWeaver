@@ -782,6 +782,15 @@ def prune_file_store(store: "FileStore", prefix: str, older_than_days: float, dr
     Another pod's staging file (`*.tmp.<token>`) is left alone until it is a day older than the cutoff:
     its rename may still be in flight."""
     base = store._path(prefix.rstrip("/"))
+    # 🚨 NO SYMLINK BELOW THE STORE ROOT: rglob follows a symlinked prefix component into its target,
+    # so an old file OUTSIDE the cache — outside the store, even — would be deleted. The root itself may
+    # be an alias (a mount path); every component under it must be a real directory.
+    part = store.root
+    for comp in Path(prefix.rstrip("/")).parts:
+        part = part / comp
+        if part.is_symlink():
+            raise Red(f"prune refuses {base}: {part} is a symlink — pruning through it could delete files "
+                      f"outside the cache prefix")
     if not base.is_dir():
         print(f"prune: {base} does not exist — nothing to prune")
         emit("deleted", "0")
@@ -790,8 +799,10 @@ def prune_file_store(store: "FileStore", prefix: str, older_than_days: float, dr
     cutoff = now - older_than_days * 86400
     staging_cutoff = cutoff - 86400
     seen = doomed = 0
-    for f in sorted(base.rglob("*")):
-        if not f.is_file() or f.is_symlink():
+    # os.walk(followlinks=False): a symlinked directory INSIDE the prefix is never descended either.
+    files = sorted(Path(d) / n for d, _, names in os.walk(base, followlinks=False) for n in names)
+    for f in files:
+        if f.is_symlink() or not f.is_file():
             continue
         seen += 1
         limit = staging_cutoff if ".tmp." in f.name else cutoff
@@ -1328,6 +1339,21 @@ def self_test() -> int:
         check("…keeps a fresh one", new_obj.exists())
         check("…keeps another pod's staging file until a day past the cutoff", stage.exists())
         check("…and never reaches outside its prefix", other.exists())
+        outside = tmp / "outside"
+        outside.mkdir()
+        victim = outside / "unrelated.tar"
+        victim.write_bytes(b"x")
+        os.utime(victim, (ancient, ancient))
+        (fs_root / "cache" / "linked").symlink_to(outside, target_is_directory=True)
+        try:
+            prune_file_store(fstore, "cache/linked/", 7)
+            check("a file-store prune refuses a symlinked prefix component", False, "accepted")
+        except Red:
+            check("a file-store prune refuses a symlinked prefix component", True)
+        check("…and the file behind the symlink survives", victim.exists())
+        (fs_root / "cache" / "tool" / "nested-link").symlink_to(outside, target_is_directory=True)
+        prune_file_store(fstore, "cache/tool/", 7)
+        check("a symlinked directory INSIDE the prefix is not descended", victim.exists())
         try:
             prune_file_store(fstore, "../escape", 7)
             check("a file-store prune refuses a prefix with '..'", False, "accepted")
