@@ -122,8 +122,12 @@ write the public DNS record at the shared ingress address, so the name exists be
 is requested. See [/Hosting/PrivateNetwork](/Hosting/PrivateNetwork) for the Hosting half.
 
 The OIDC client secret is a Key Vault object mounted as a **file** through the CSI driver and never
-synced into a Kubernetes Secret. A change to it, or to the config, rolls the pod (checksum
-annotations).
+synced into a Kubernetes Secret. A change to the config, or to WHERE the secret comes from (the
+`SecretProviderClass` and the secret reference), rolls the pod through checksum annotations. **A new
+VALUE in the same Key Vault object does not**: the checksum covers the source, not the value, and
+Headscale reads the credential at startup. After rotating the value, roll the pod deliberately through
+the governed `ApplyChart`, with a changed `podAnnotations` entry (for example a rotation date) in the
+overlay, so the restart is recorded and approved like any other change.
 
 ## 4. A Mac's local portal at a public name (in progress)
 
@@ -143,8 +147,8 @@ sequenceDiagram
     G->>R: HTTP, Host = public name
     R->>R: block /dev/* (open sign-in) as defense in depth
     R->>M: over WireGuard to #lt;mac#gt;.#lt;base-domain#gt;
-    M->>L: delivered on loopback by the userspace client
-    L->>Pt: Host = public name
+    M->>L: tailnet entry point (ACL: only tag:bridge), marks the request forwarded
+    L->>Pt: Host = public name, provenance = tailnet
     Pt->>Pt: sign-in gate (section 5)
     Pt-->>B: page, or sign-in with a configured provider
 ```
@@ -161,14 +165,18 @@ bridge blocks it as well).
 
 ```mermaid
 flowchart TD
-    Req["Sign-in request"] --> Local{"Host is localhost or *.localhost,<br/>and, where reached directly, the peer is loopback?"}
+    Req["Sign-in request"] --> Fwd{"Arrived through the tailnet entry point?"}
+    Fwd -- yes --> Cfg
+    Fwd -- no --> Local{"Host is localhost or *.localhost,<br/>and, where reached directly, the peer is loopback?"}
     Local -- yes --> Open["Open local sign-in allowed<br/>(development login)"]
     Local -- no --> Cfg{"At least one provider configured<br/>for this host?"}
     Cfg -- no --> Refuse["Refused: configure a provider"]
     Cfg -- yes --> Pick["Person chooses among the configured providers<br/>Microsoft · Google · Apple · LinkedIn"]
     Pick --> First{"A human administrator exists?"}
     First -- no --> Admin["This person becomes global admin<br/>(bootstrap)"]
-    First -- yes --> Inv{"Invitation-only?"}
+    First -- yes --> Own{"Own directory gates sign-in?<br/>(Microsoft only, one tenant,<br/>assignment required per Graph)"}
+    Own -- "yes: assigned users admitted" --> In
+    Own -- no --> Inv{"Invitation-only?"}
     Inv -- yes --> Invited{"Invited?"}
     Invited -- yes --> In["Signed in"]
     Invited -- no --> Closed["Closed: invitation required"]
@@ -176,22 +184,34 @@ flowchart TD
     Admin --> In
 ```
 
-- **Why the host and not the peer address.** On a Mac the portal runs inside a local VM behind an
-  ingress controller, so every request reaches it from the ingress pod, never from loopback. The host
-  is what tells local from forwarded: the bridge sets `Host` to the public name, and browsers resolve
-  `*.localhost` only to loopback (RFC 6761). The local front door binds `127.0.0.1` only, so a
-  forged `Host` needs a path onto the Mac itself. The remaining exposure is a network member sending
-  `Host: localhost`, and the ACL limits who can reach the Mac at all.
+- **Local is decided by provenance first, then the host.** On a Mac the portal runs inside a local
+  VM behind an ingress controller, so every request reaches it from the ingress pod, never from
+  loopback, and a userspace network client also delivers network traffic on loopback. So the design
+  (in progress) gives network traffic its OWN entry point: the ACL lets only `tag:bridge` reach it,
+  it marks every request as forwarded (overwriting whatever the sender claimed), and the open sign-in
+  is refused on that provenance **whatever the `Host` header says**. The loopback-only front door
+  (bound to `127.0.0.1`) serves the person at the Mac, where browsers resolve `*.localhost` only to
+  loopback (RFC 6761). Until that entry point exists, the ACL must not let any member other than the
+  bridge reach the Mac's front-door ports: a member that can reach them can send `Host: localhost`.
 - **Choosing a provider.** When several are configured, the person picks one. On Apple devices
   **Sign in with Apple** is pre-selected and uses the Apple ID the person is signed in with on the
   device; the choice is remembered per device (in progress in the apps). On a device enrolled in
   Intune with Company Portal, choosing Microsoft signs in silently with the device account through
   Microsoft's Enterprise SSO plug-in.
-- **First sign-in becomes global admin.** The bootstrap promotion is the platform's existing rule
-  (`AdministratorProbeService`, `OnboardingGate.Decide`): a seeded grant for an identity nobody has
-  signed in as does not count as an administrator. After that, admission follows
-  `Features:Onboarding:InvitationOnly`. A deployment that wants "first person in, everyone else
-  locked out" sets it to `true` and offers only a single-tenant provider.
+- **First sign-in becomes global admin, so who can arrive first matters.** The bootstrap promotion
+  is the platform's existing rule (`AdministratorProbeService`, `OnboardingGate.Decide`): a seeded
+  grant for an identity nobody has signed in as does not count as an administrator. Invitation-only
+  does **not** protect that first promotion. It is safe only when the sign-in admits nobody but the
+  intended organisation: a single-tenant Microsoft app. A portal whose public host offers Google,
+  LinkedIn, Apple or a multi-tenant Microsoft app hands itself to whoever arrives first, so it must
+  not be published without a setup link or a record-declared first administrator
+  ([First run on a provisioned instance](../FirstRunSetupOnAProvisionedInstance)).
+- **After the first administrator.** Admission follows `Features:Onboarding:InvitationOnly`, with
+  one exemption: where Microsoft is the only route, the tenant is named and Graph confirms the app
+  requires user assignment, every assigned user is admitted without an invitation
+  ([Invitation-only onboarding](../InvitationOnlyOnboarding), *Exempt where the instance's own
+  directory gates sign-in*). For "first person in, everyone else locked out": a single-tenant
+  Microsoft app WITHOUT assignment required, plus `InvitationOnly=true`.
 - **General Macs stay open.** The platform ships no organisation-specific default. A Mac's owner
   configures any provider from the catalog, and an estate's own fleet declares its choice in that
   fleet's records and overlays.
