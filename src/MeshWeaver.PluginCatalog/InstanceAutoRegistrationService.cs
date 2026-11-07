@@ -894,7 +894,9 @@ public sealed class InstanceAutoRegistrationService(
     ///     must still have it after a self-update, a lost partition, or a boot whose install
     ///     failed. An enabled flag includes its packages; a declared-but-DISABLED flag EXCLUDES
     ///     them, and the exclusion wins over every other signal here — that is how
-    ///     "all of Plugins, without the games" is one line per environment.</item>
+    ///     "all of Plugins, without the games" is one line per environment. A flag declared off
+    ///     with an explicit <c>false</c> also RETIRES an installed copy, through phase 1 of the
+    ///     uninstall request (<see cref="DeclaredDisabledRetirement"/>).</item>
     ///   <item><b>The operator's <see cref="PluginCatalogOptions.InstallByDefault"/> patterns</b> —
     ///     the extras a FRESH deployment seeds itself with, source-scoped so an instance granted
     ///     paid course content never auto-installs it. Gated on the ledger: this seeds a new
@@ -1046,7 +1048,20 @@ public sealed class InstanceAutoRegistrationService(
         // reader is reactive (configuration reloads push a new value), but a boot pass is a single
         // decision taken at a point in time — re-deciding mid-install would mean two passes writing
         // the same partitions.
-        var composition = hub.ServiceProvider.GetService<IFeatureFlags>() is { } flags
+        var composition = ReadComposition();
+
+        // 🚨 A flag declared off with an explicit `false` RETIRES what is installed (#5055), through
+        // phase 1 of the one uninstall request — before the install selection, which excludes the
+        // same packages. Never faults, so a retire that cannot run never withholds the install.
+        return composition.SelectMany(composed => DeclaredDisabledRetirement.Retire(hub, composed, logger)
+            .SelectMany(_ => InstallSelection(options, wanted, baseline, defaultApps, composed, authorizing)));
+    }
+
+    /// <summary>The environment's composition, read ONCE off the live flag surface — the reading
+    /// both the boot pass and the repair's re-assert decide on. Never faults: an unreadable
+    /// composition is logged at Error and read as empty.</summary>
+    private IObservable<FeatureComposition> ReadComposition() =>
+        hub.ServiceProvider.GetService<IFeatureFlags>() is { } flags
             ? flags.Composition.Take(1).Timeout(TimeSpan.FromSeconds(5))
                 .Catch((Exception ex) =>
                 {
@@ -1063,9 +1078,6 @@ public sealed class InstanceAutoRegistrationService(
                     return Observable.Return(FeatureComposition.Empty);
                 })
             : Observable.Return(FeatureComposition.Empty);
-
-        return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, defaultApps, composed, authorizing));
-    }
 
     /// <summary>
     /// Whether the packages declaring <c>preInstalled</c> are selected — the platform baseline lane.
@@ -3210,9 +3222,18 @@ public sealed class InstanceAutoRegistrationService(
     /// so: its record is an orphan for the admin list.</para>
     ///
     /// <para>The seed ledger is deliberately not written: every package here is already installed,
-    /// so nothing about "seeded once" changes. Feature-flag exclusions are not applied either — an
+    /// so nothing about "seeded once" changes. The wider feature-flag EXCLUSION is not applied — an
     /// installed package is installed; restoring what it lost is not installing what the operator
     /// excluded.</para>
+    ///
+    /// <para>🚨 <b>…but a package a flag declared off with an explicit <c>false</c> is NOT re-asserted</b>
+    /// (MeshWeaver.Plugins#5055). The boot pass retires it through phase 1 of the uninstall request
+    /// (<see cref="DeclaredDisabledRetirement"/>), and this repair lists its records BEFORE it waits
+    /// for the default install — so without this skip it could re-write the install record of a
+    /// package phase 1 is removing, and the next boot would retire it again under a new id. The rule
+    /// is the retire's own (<see cref="DeclaredDisabledRetirement.CoveredBy"/> over
+    /// <see cref="FeatureComposition.Retired"/>), read off the same composition; each skip is
+    /// reported on the summary's <see cref="DefaultInstallSummary.Skipped"/>.</para>
     /// </summary>
     /// <param name="targets">The installed packages to re-assert — each with the PARTITION and
     /// module version its install record carries. A record with no module identity cannot be
@@ -3221,6 +3242,28 @@ public sealed class InstanceAutoRegistrationService(
     internal IObservable<DefaultInstallSummary> ReassertInstalled(IReadOnlyList<ReassertTarget> targets)
     {
         ArgumentNullException.ThrowIfNull(targets);
+        if (targets.Count == 0)
+            return Observable.Return(DefaultInstallSummary.Empty);
+        return ReadComposition().SelectMany(composition =>
+        {
+            var skipped = targets
+                .Select(t => (Target: t, Flag: DeclaredDisabledRetirement.CoveredBy(t.Source, t.PackageId, composition.Retired)))
+                .Where(x => x.Flag is not null)
+                .Select(x => new DefaultInstallSkip(x.Target.PackageId,
+                    $"declared off by the feature flag '{x.Flag}' (Enabled=false) — retired, never re-asserted"))
+                .ToImmutableList();
+            if (skipped.Count > 0)
+                logger.LogInformation(
+                    "[PackageRepair] {Count} incomplete install(s) are NOT re-asserted: a feature flag declares them off "
+                    + "and the boot pass retires them — [{Skipped}] (MeshWeaver.Plugins#5055).",
+                    skipped.Count, string.Join(", ", skipped.Select(x => x.Package)));
+            var kept = targets.Where(t => skipped.All(x => !string.Equals(x.Package, t.PackageId, StringComparison.Ordinal))).ToList();
+            return ReassertCore(kept).Select(summary => summary with { Skipped = summary.Skipped.AddRange(skipped) });
+        });
+    }
+
+    private IObservable<DefaultInstallSummary> ReassertCore(IReadOnlyList<ReassertTarget> targets)
+    {
         if (targets.Count == 0)
             return Observable.Return(DefaultInstallSummary.Empty);
         var recordedModuleVersions = targets.ToImmutableDictionary(

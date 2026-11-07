@@ -110,6 +110,23 @@ public record PackageUninstallRequest
 
     /// <summary>Every step, in order. Executor-owned.</summary>
     public ImmutableList<string> Log { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The feature flag whose explicit <c>Enabled=false</c> issued this request at boot, or null for
+    /// a request a person issued (<c>Doc/Architecture/EnvironmentComposition</c> → "A disabled flag
+    /// retires what is installed"). Such a request never blocks a re-install: the flag's exclusion
+    /// keeps the package out while the flag stays off, and once the record stops declaring it off
+    /// the package's own lanes bring it back — the record is the source of truth either way.
+    /// </summary>
+    public string? RetiredByFlag { get; init; }
+
+    /// <summary>
+    /// Whether phase 1 must make EVERY replica drop the module, not only the process executing the
+    /// request: after the landed generation is disabled (on the volume every replica shares), one
+    /// restart is requested even when this process retired the module live or never loaded it.
+    /// Set for a flag-issued retire, whose purpose is that no replica keeps serving the package.
+    /// </summary>
+    public bool RetireOnEveryReplica { get; init; }
 }
 
 /// <summary>One partition an uninstall would tear down — measured before anything is destroyed.</summary>
@@ -168,7 +185,28 @@ public static class PackageUninstall
     /// no executor. Cold; emits once.</summary>
     /// <param name="hub">Any surviving hub of the mesh.</param>
     /// <param name="request">What to uninstall and why.</param>
-    public static IObservable<PackageUninstallTicket> Request(IMessageHub hub, PackageUninstallRequest request)
+    public static IObservable<PackageUninstallTicket> Request(IMessageHub hub, PackageUninstallRequest request) =>
+        Write(hub, request, $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{request.Package.Trim()}-{Guid.NewGuid().ToString("N")[..8]}");
+
+    /// <summary>
+    /// <see cref="Request(IMessageHub, PackageUninstallRequest)"/> at a request id the CALLER chose —
+    /// so that several writers deciding the same thing (every replica's boot pass) collide on ONE
+    /// node instead of each opening its own request. The create of an id that already exists faults;
+    /// the caller reads the existing request. Cold; emits once.
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="request">What to uninstall and why.</param>
+    /// <param name="requestId">The node id under <see cref="PackageUninstallRequest.Namespace"/>;
+    /// reduced to a valid path segment.</param>
+    public static IObservable<PackageUninstallTicket> RequestAt(IMessageHub hub, PackageUninstallRequest request, string requestId) =>
+        Write(hub, request, requestId);
+
+    /// <summary>The path a request written at <paramref name="requestId"/> lands at. Pure.</summary>
+    /// <param name="requestId">The caller-chosen id.</param>
+    public static string PathAt(string requestId) =>
+        $"{PackageUninstallRequest.Namespace}/{ActivationRecycle.Segment(requestId)}";
+
+    private static IObservable<PackageUninstallTicket> Write(IMessageHub hub, PackageUninstallRequest request, string requestId)
     {
         if (Validate(request) is { } refusal)
             return Observable.Return(new PackageUninstallTicket(null, refusal));
@@ -177,7 +215,7 @@ public static class PackageUninstall
                 "this mesh registers no package uninstall executor (the plugin catalog is not installed) — nothing was written"));
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
-        var id = ActivationRecycle.Segment($"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{request.Package.Trim()}-{Guid.NewGuid().ToString("N")[..8]}");
+        var id = ActivationRecycle.Segment(requestId);
         var path = $"{PackageUninstallRequest.Namespace}/{id}";
         var node = new MeshNode(id, PackageUninstallRequest.Namespace)
         {
