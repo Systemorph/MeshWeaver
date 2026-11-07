@@ -227,6 +227,9 @@ public class OfficialMarkTest
     // CSS: the last declaration wins, and !important wins over a plain one.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' style='fill:#fff;fill:#000'/></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' style='fill:#000 !important;fill:#fff'/></svg>", false)]
+    // A multiline style is read whole; an embedded stylesheet keeps the white plate.
+    [InlineData("<svg viewBox='0 0 24 24'><g fill='#fff'><path d='M0 0h1v1z' style='\nfill:#000;\n'/></g></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><style>path{fill:#111827}</style><path d='M0 0h1v1z' fill='#fff'/></svg>", false)]
     // A malformed colour is unreadable — never a throw.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#xyz'/></svg>", false)]
     // A clip path's unfilled geometry is not painted.

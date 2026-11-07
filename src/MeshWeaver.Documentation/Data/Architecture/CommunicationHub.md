@@ -632,7 +632,7 @@ A logo sits on a plate (`IconBackplate`). A vendor mark whose solid colours, fil
 (`IconBackplate.ReadsOnDark`, which holds for every channel mark: Outlook, Gmail, iMessage, WhatsApp, Teams) gets a plate
 that follows the theme, white in light mode and `OfficialDarkPlate` (`#2b2b2b`) in dark mode (maintainer, 2026-11-07:
 *"icons for outlook and teams etc => in dark mode can we put dark bg?"*). A near-black mark, or one whose paint the scan
-cannot judge (a `<use>`, an `<image>`), keeps the white plate on both themes, because it would vanish on the dark one.
+cannot judge (a `<use>`, an `<image>`, an embedded `<style>` sheet), keeps the white plate on both themes, because it would vanish on the dark one.
 The plate carries its own `prefers-color-scheme` rule: every icon reaches the page as an image, where the page's CSS
 variables do not reach but the colour scheme does.
 
