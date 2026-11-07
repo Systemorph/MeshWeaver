@@ -1913,6 +1913,10 @@ jobs:
             && python3 "$PY" put --store "$STORE" --expect-store-id "$STORE_ID" --key "$KEY" --file "$RUNNER_TEMP/pack-tool.tar" \
             && python3 "$PY" put --store "$STORE" --expect-store-id "$STORE_ID" --key "$KEY.sha256" --file "$RUNNER_TEMP/pack-tool.sha256" \
             || echo "::warning title=Module-pack tool not kept::could not store $KEY — this run is unaffected; the next run on this commit publishes the tool again"
+          # BOUNDED: the writer evicts this cache's entries older than 7 days (a `file:` store has no
+          # server lifecycle — CiArtifactStorage.md → Lifecycle, `cache/`); an evicted entry is a miss.
+          python3 "$PY" prune --store "$STORE" --prefix cache/module-pack-tool/ --older-than 7 \
+            || echo "::warning title=Module-pack tool cache not pruned::the prune of cache/module-pack-tool/ failed — this run is unaffected"
       # Lane-scoped like every other artifact this workflow drops: two calls in one run publish
       # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
       # with the other call's builder.
