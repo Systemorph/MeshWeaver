@@ -283,6 +283,32 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         Assert.True(await Exists($"{Package}/Guide", ct));
     }
 
+    /// <summary>A listed install record that yields no manifest id could be a dependent of the package
+    /// declared off: dropping it from the dependency picture would retire what it requires. The read
+    /// faults instead, so nothing is retired (#7959 review). Negative control: with the record dropped
+    /// silently (the old filter), the package is retired and this test goes red.</summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AnInstallRecordWithNoManifestId_RetiresNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Installed(Package, ct);
+        await Access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(
+                MeshNode.FromPath($"{PackageInstaller.InstalledPartition}/{Dependent}") with
+                {
+                    NodeType = PackageInstaller.PackageNodeType,
+                    Name = Dependent,
+                    State = MeshNodeState.Active,
+                    Content = new PackageManifest { Name = Dependent, Requires = [Package] },
+                }))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var outcome = await Retire(Declared("off", enabled: false, $"Plugins/{Package}"), ct);
+
+        Assert.Empty(outcome.Requested);
+        Assert.Equal(0, await Requests(ct));
+        Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "the install record is kept");
+    }
+
     [Fact(Timeout = 240_000)]
     public async Task TwoReplicasBootingTogether_WriteOneRequest()
     {

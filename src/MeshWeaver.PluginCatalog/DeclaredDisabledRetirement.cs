@@ -279,13 +279,16 @@ public static class DeclaredDisabledRetirement
                 .Timeout(ActivationRecycle.ReadBudget))
             .SelectMany(change => change.Items.Select(n => n.Path).ToObservable()
                 .Select(path => access.RunAsSystem(() => hub.GetMeshNodeStream(path).Take(1).Timeout(ActivationRecycle.ReadBudget))
-                    .Select(node => node.ContentAs<PackageManifest>(hub.JsonSerializerOptions)))
+                    // 🚨 A listed record that yields no manifest with an id FAULTS the read, naming its
+                    // path (#7959 review): dropping it would hide a dependent from the dependency check.
+                    .Select(node => node.ContentAs<PackageManifest>(hub.JsonSerializerOptions) is { Id: { } id } manifest
+                                    && !string.IsNullOrWhiteSpace(id)
+                        ? manifest
+                        : throw new InvalidOperationException(
+                            $"the install record {path} could not be read as a package manifest with an id")))
                 .MergeBounded(8)
                 .ToList())
-            .Select(read => (IReadOnlyList<PackageManifest>)read
-                .OfType<PackageManifest>()
-                .Where(m => !string.IsNullOrWhiteSpace(m.Id))
-                .ToImmutableList());
+            .Select(read => (IReadOnlyList<PackageManifest>)read.ToImmutableList());
     }
 
     private static IObservable<Outcome> Act(
@@ -357,7 +360,9 @@ public static class DeclaredDisabledRetirement
             {
                 Retired = step.Retired ? progress.Retired.Add(covered.Record.Id) : progress.Retired,
                 Requested = step.Written ? progress.Requested.Add(step.Path) : progress.Requested,
-                AlreadyRequested = step.Written ? progress.AlreadyRequested : progress.AlreadyRequested.Add(step.Path),
+                // Only a request that EXISTS joins the restart census — a refused or failed create names a path
+                // with no node behind it, and point-reading it would fault the census (#7959 review).
+                AlreadyRequested = step.Written || !step.Exists ? progress.AlreadyRequested : progress.AlreadyRequested.Add(step.Path),
                 Refused = step.Failure is { } failure ? progress.Refused.Add($"{covered.Record.Id}: {failure}") : progress.Refused,
             }));
     }
@@ -369,7 +374,9 @@ public static class DeclaredDisabledRetirement
             + "(they are then retired together), or enable '{Flag}'.",
             package, flag, string.Join(", ", requiredBy), flag);
 
-    private sealed record Step(string Path, bool Written, bool Retired, string? Failure);
+    /// <param name="Exists">Whether a request node exists at <paramref name="Path"/> — false when the
+    /// create was refused or failed for any reason other than a collision (#7959 review).</param>
+    private sealed record Step(string Path, bool Written, bool Retired, string? Failure, bool Exists = true);
 
     /// <summary>The requests at <paramref name="paths"/> (each known to exist), read from their own nodes.</summary>
     private static IObservable<ImmutableList<(string Path, PackageUninstallRequest Request)>> ReadRequests(IMessageHub hub, IReadOnlyList<string> paths)
@@ -451,7 +458,7 @@ public static class DeclaredDisabledRetirement
                     logger.LogError(
                         "[FlagRetire] {Package}, declared off by the feature flag '{Flag}', could not be retired: {Refusal}",
                         covered.Record.Id, covered.Flag, refusal);
-                    return Observable.Return(new Step(path, false, false, refusal));
+                    return Observable.Return(new Step(path, false, false, refusal, Exists: false));
                 }
                 logger.LogInformation(
                     "[FlagRetire] {Package} is declared off by the feature flag '{Flag}' — retire requested at {Path} "
@@ -469,7 +476,7 @@ public static class DeclaredDisabledRetirement
                 logger.LogError(ex,
                     "[FlagRetire] {Package}, declared off by the feature flag '{Flag}': the retire request {Path} could not be "
                     + "written: {Reason}. The next boot decides again.", covered.Record.Id, covered.Flag, path, ex.Message);
-                return Observable.Return(new Step(path, false, false, ex.Message));
+                return Observable.Return(new Step(path, false, false, ex.Message, Exists: false));
             });
     }
 
