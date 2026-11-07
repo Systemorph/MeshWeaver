@@ -169,6 +169,22 @@ public class TheInstallRecordDecidesWhoMayWriteItTest(ITestOutputHelper output) 
     }
 
     /// <summary>
+    /// A write through the gate is DURABLE when it completes: storage — what every later reader of the
+    /// record uses (the next install's carry-forward, the update lanes) — already holds the stamp. Found
+    /// by MeshWeaver.Plugins' install suites (5 red on the first cut, where the owner's fold was not
+    /// awaited to storage). Negative control (measured): with the writer's answer removal no longer
+    /// awaited, storage still holds the old version here.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AStamp_IsInStorageWhenTheWriteCompletes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Write("GateDurable", PackageRecordWriteIntent.CreateAllowed, ct);
+        await Write("GateDurable", PackageRecordWriteIntent.Restamp, ct, version: "3.0.0");
+        Assert.Equal("3.0.0", (await Stored("GateDurable", ct))!.Version);
+    }
+
+    /// <summary>
     /// The existing person-requested uninstall holds the retirement through phase 1: it is granted,
     /// the record is removed, and a stale re-stamp afterwards is refused. Negative control: test (1).
     /// </summary>

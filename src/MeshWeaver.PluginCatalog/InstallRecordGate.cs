@@ -354,11 +354,17 @@ public static class InstallRecordGate
                 }))
             .Take(1)
             .SelectMany(_ => answer)
-            .Do(outcome =>
+            // The answer is the writer's to remove — under its own key, unconditionally — and the
+            // removal is AWAITED before the outcome is emitted: a cross-hub stream.Update acks off the
+            // owner's DURABLE write of the node as it now stands, which carries the owner's fold. So
+            // when a write through this gate completes, the stamped record is in storage — the
+            // read-after-write the full-replace CreateOrUpdateNodeRequest used to give, and what every
+            // later storage read of the record (the next install's carry-forward, the update lanes)
+            // relies on. A failed removal is logged; the answer stands and the owner prunes it.
+            .SelectMany(outcome =>
             {
                 logger?.LogDebug("[InstallRecordGate] {Path} answered {Kind} '{Key}': {Detail}", path, fact.Kind, key, outcome.Detail);
-                // The answer is the writer's to remove — under its own key, unconditionally.
-                access.RunAsSystem(() => hub.GetMeshNodeStream(path)
+                return access.RunAsSystem(() => hub.GetMeshNodeStream(path)
                         .Update<PackageManifest>(current => current with
                         {
                             // Remove the key, never null the map: a null would delete every other
@@ -366,7 +372,12 @@ public static class InstallRecordGate
                             FactOutcomes = current.FactOutcomes?.Remove(key),
                         }))
                     .Take(1)
-                    .Subscribe(_ => { }, ex => logger?.LogDebug(ex, "[InstallRecordGate] removing the answer '{Key}' on {Path} failed", key, path));
+                    .Select(_ => outcome)
+                    .Catch((Exception ex) =>
+                    {
+                        logger?.LogWarning(ex, "[InstallRecordGate] removing the answer '{Key}' on {Path} failed", key, path);
+                        return Observable.Return(outcome);
+                    });
             });
     }
 

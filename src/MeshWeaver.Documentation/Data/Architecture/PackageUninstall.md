@@ -68,7 +68,11 @@ answer and removes it.
 | `Stamp` | every install-record write: the install funnel, the repair, the unattended update | applies it, or **refuses** it while a retirement is held. A person's stamp (`PackageRecordWriteIntent.Person`, the catalog click) clears a retirement that is not yet `Removing`, and is applied |
 
 A refused stamp reaches its writer as `PackageRecordWriteRefusedException`, carrying the owner's
-words; the boot install records it as a skip, never as a silent success. If no answer arrives within
+words; the boot install records it as a skip, never as a silent success. A write through the gate is
+**durable when it completes**. The writer removes its answer with a cross-hub `stream.Update`, which
+acknowledges only after the owner has written the node to storage, fold included, and the writer
+waits for that before it returns. So every later storage read of the record sees the stamp, as it did
+when the record was written with a full-replace `CreateOrUpdateNodeRequest`. If no answer arrives within
 `InstallRecordGate.AnswerBudget`, the writer re-reads the record. Absent means it was removed and the
 write is refused; present means a fault naming the owner that did not answer.
 
