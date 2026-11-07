@@ -33,7 +33,7 @@ Refused by name, before anything is touched:
 
 Then, in order: the **module** is retired (its landed generation disabled; unloaded live through
 `IModuleLiveActivation.Retire` where the loader can, else exactly one automatic restart through the
-self-update restart path, stamped first); the partition's **hubs are closed** (`DisposeRequest` to
+self-update restart path, stamped first — a phase 1 resumed after that restart finds the stamp and does not ask again); the partition's **hubs are closed** (`DisposeRequest` to
 every hosted hub at or under it, from the off-router issuing hub); the **install record is
 removed**; and the request moves to `AwaitingConfirmation` with the **preview** — per partition:
 whether a storage provider reports a per-partition store (Postgres: the schema), rows per table
@@ -72,7 +72,7 @@ teardown sentence and ends `Done`. Never raw SQL.
 |---|---|
 | MCP `uninstall_package` (MeshWeaver.Plugins) | `MeshOperations.UninstallPackage(package, reason)` answers the preview and the exact confirmation string; `UninstallPackage(requestPath: …, confirmation: …)` confirms. Platform admins only. |
 | the platform's own code | `PackageUninstall.Request` / `PackageUninstall.Confirm`; `PackageUninstall.RequestAt` writes at a caller-chosen id so several writers deciding the same thing collide on one node |
-| a feature flag declared off | the boot pass runs phase 1 for every installed package the flag names ([Environment Composition](../EnvironmentComposition) → "A disabled flag retires what is installed"). The request carries `RetiredByFlag` (so it blocks no re-install) and `RetireOnEveryReplica` (one restart after the module is retired, so every replica drops it), and names no requester, so phase 2 can never run. |
+| a feature flag declared off | the boot pass runs phase 1 for every installed package the flag names ([Environment Composition](../EnvironmentComposition) → "A disabled flag retires what is installed"). The request carries `RetiredByFlag` (so it blocks no re-install) and `RetireOnEveryReplica` — the module's landed generation must be disabled durably or the request FAILS with the install record kept, and phase 1 never restarts by itself: it records `ModuleDisabled`, and the ONE restart is asked for through `RequestedRestart` once phase 1 is persisted (`AwaitingConfirmation`), honoured only while `RestartRequestedAt` is unset and stamped before dispatch. It names no requester, so phase 2 can never run. |
 
 ## What is NOT established
 

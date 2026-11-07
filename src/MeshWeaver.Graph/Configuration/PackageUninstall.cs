@@ -121,12 +121,36 @@ public record PackageUninstallRequest
     public string? RetiredByFlag { get; init; }
 
     /// <summary>
-    /// Whether phase 1 must make EVERY replica drop the module, not only the process executing the
-    /// request: after the landed generation is disabled (on the volume every replica shares), one
-    /// restart is requested even when this process retired the module live or never loaded it.
-    /// Set for a flag-issued retire, whose purpose is that no replica keeps serving the package.
+    /// Whether every replica must drop the module, not only the process executing the request. Set
+    /// for a flag-issued retire. Phase 1 then (a) FAILS the request, keeping the install record, when
+    /// the module's landed generation cannot be disabled DURABLY (an unreadable activation record, or
+    /// a module loaded here that the store lane never landed), and (b) never restarts by itself: it
+    /// records <see cref="ModuleDisabled"/> and leaves the ONE restart to
+    /// <see cref="RequestedRestart"/>, which is honoured only after phase 1 has been persisted, at
+    /// most once per request.
     /// </summary>
     public bool RetireOnEveryReplica { get; init; }
+
+    /// <summary>The flag retire's install identity, shared by every attempt at retiring the same
+    /// install (each attempt is its own request). Null for a person's request.</summary>
+    public string? RetireKey { get; init; }
+
+    /// <summary>Whether phase 1 durably disabled a landed module generation — so the replicas that
+    /// loaded it at boot still hold it until a restart. Executor-owned.</summary>
+    public bool ModuleDisabled { get; init; }
+
+    /// <summary>
+    /// Ask this request's executor for the ONE restart that makes every replica drop what phase 1
+    /// disabled (<see cref="RetireOnEveryReplica"/>). Honoured only while the request is
+    /// <see cref="PackageUninstallStatus.AwaitingConfirmation"/> — phase 1 already persisted — and
+    /// only while <see cref="PackageUninstallRequest.RestartRequestedAt"/> is unset; the executor
+    /// stamps that BEFORE it dispatches, so a resumed or re-activated executor never restarts twice.
+    /// </summary>
+    public bool RequestedRestart { get; init; }
+
+    /// <summary>The request whose restart covers this one's disabled module — set on every request a
+    /// single restart answers, so no later boot asks for another. Null until a restart is asked for.</summary>
+    public string? RestartCoveredBy { get; init; }
 }
 
 /// <summary>One partition an uninstall would tear down — measured before anything is destroyed.</summary>
@@ -186,7 +210,8 @@ public static class PackageUninstall
     /// <param name="hub">Any surviving hub of the mesh.</param>
     /// <param name="request">What to uninstall and why.</param>
     public static IObservable<PackageUninstallTicket> Request(IMessageHub hub, PackageUninstallRequest request) =>
-        Write(hub, request, $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{request.Package.Trim()}-{Guid.NewGuid().ToString("N")[..8]}");
+        // Null-safe: Validate (in Write) must answer a request with no package, never an NRE here.
+        Write(hub, request, $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{(request.Package ?? "").Trim()}-{Guid.NewGuid().ToString("N")[..8]}");
 
     /// <summary>
     /// <see cref="Request(IMessageHub, PackageUninstallRequest)"/> at a request id the CALLER chose —

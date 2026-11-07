@@ -82,17 +82,31 @@ internal static class PackageUpdateReconciler
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
 
+        // 🚨 A package a flag DECLARED OFF is never updated unattended (MeshWeaver.Plugins#5055): the
+        // boot pass retires it, and an update applied while phase 1 runs would re-write the install
+        // record phase 1 removes. The retire's own rule, over the same declaration.
+        //
         // SEQUENTIAL (Concat), not a fan-out: each apply writes a partition's worth of nodes and
         // may compile node types. The boot caller runs this on a cold pod, where a parallel
         // fan-out is how you saturate it — the same call InstanceAutoRegistrationService.InstallAll
         // already makes for the identical reason.
-        return candidates
-            .Select(pkg => ReconcileOne(
-                hub, storage, meshService, accessService, source, sourceRef, pkg, provenance, logger, binding))
-            .ToObservable()
-            .Concat()
-            .DefaultIfEmpty(Unit.Default)
-            .LastAsync();
+        return DeclaredDisabledRetirement.CurrentComposition(hub, logger)
+            .SelectMany(composition => candidates
+                .Where(pkg =>
+                {
+                    if (DeclaredDisabledRetirement.CoveredBy(pkg.Source, pkg.Id, composition.Retired) is not { } flag)
+                        return true;
+                    logger?.LogInformation(
+                        "Package update: {Id} is declared off by the feature flag '{Flag}' and is retired, never updated unattended.",
+                        pkg.Id, flag);
+                    return false;
+                })
+                .Select(pkg => ReconcileOne(
+                    hub, storage, meshService, accessService, source, sourceRef, pkg, provenance, logger, binding))
+                .ToObservable()
+                .Concat()
+                .DefaultIfEmpty(Unit.Default)
+                .LastAsync());
     }
 
     private static IObservable<Unit> ReconcileOne(

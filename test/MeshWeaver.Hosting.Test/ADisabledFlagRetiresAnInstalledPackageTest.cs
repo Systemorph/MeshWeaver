@@ -11,6 +11,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Features;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -129,13 +130,29 @@ public class DeclaredDisabledFlagCompositionTest
     }
 
     [Fact]
-    public void TheRequestId_IsTheSameForTheSameInstall_AndNewForANewOne()
+    public void TheRetireKey_IsTheSameForTheSameInstall_AndNewForANewOne()
     {
         var at = new DateTimeOffset(2026, 11, 7, 8, 0, 0, TimeSpan.Zero);
         var first = Record("Mcp") with { InstalledAtUtc = at };
-        Assert.Equal(DeclaredDisabledRetirement.RequestIdFor(first), DeclaredDisabledRetirement.RequestIdFor(first with { }));
-        Assert.NotEqual(DeclaredDisabledRetirement.RequestIdFor(first),
-            DeclaredDisabledRetirement.RequestIdFor(first with { InstalledAtUtc = at.AddMinutes(5) }));
+        Assert.Equal(DeclaredDisabledRetirement.RetireKeyFor(first), DeclaredDisabledRetirement.RetireKeyFor(first with { }));
+        Assert.NotEqual(DeclaredDisabledRetirement.RetireKeyFor(first),
+            DeclaredDisabledRetirement.RetireKeyFor(first with { InstalledAtUtc = at.AddMinutes(5) }));
+        Assert.NotEqual(DeclaredDisabledRetirement.RequestIdFor("k", 1), DeclaredDisabledRetirement.RequestIdFor("k", 2));
+    }
+
+    /// <summary>#7959 review: ids that SANITIZE alike must not share a key. Negative control: the
+    /// sanitized segment alone — what the key used to be — IS equal for them.</summary>
+    [Fact]
+    public void IdsThatSanitizeAlike_GetDifferentKeys()
+    {
+        var a = Record("Mcp.Host");
+        var b = Record("Mcp-Host");
+        Assert.Equal(MeshWeaver.Graph.Configuration.ActivationRecycle.Segment("flag-retire-Mcp.Host-0-1.0.0"),
+            MeshWeaver.Graph.Configuration.ActivationRecycle.Segment("flag-retire-Mcp-Host-0-1.0.0"));
+        Assert.NotEqual(DeclaredDisabledRetirement.RetireKeyFor(a), DeclaredDisabledRetirement.RetireKeyFor(b));
+        // Legacy records with no install time and no version too.
+        Assert.NotEqual(DeclaredDisabledRetirement.RetireKeyFor(a with { Version = null }),
+            DeclaredDisabledRetirement.RetireKeyFor(b with { Version = null }));
     }
 }
 
@@ -145,7 +162,37 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
     private const string Package = "FlagRetirePkg";
     private const string Dependent = "FlagRetireDependent";
 
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => base.ConfigureMesh(builder).AddPluginCatalog();
+    private readonly string moduleRoot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "mw-5055-" + Guid.NewGuid().ToString("N")[..8]);
+    private readonly CountingRestart restart = new();
+    private ModuleLandingService? landing;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => base.ConfigureMesh(builder)
+        .AddPluginCatalog()
+        .ConfigureServices(services => services
+            // Registered AFTER the catalog's own, so these are the instances resolved.
+            .AddSingleton(_ => landing ??= new ModuleLandingService(baseDirectory: EnsureDirectory(moduleRoot)))
+            .AddSingleton<IModuleActivationRestart>(restart));
+
+    private static string EnsureDirectory(string path)
+    {
+        System.IO.Directory.CreateDirectory(path);
+        return path;
+    }
+
+    /// <summary>Counts restart requests — the deployment roll this test must see at most once.</summary>
+    private sealed class CountingRestart : IModuleActivationRestart
+    {
+        private int count;
+        public int Count => Volatile.Read(ref count);
+
+        public IObservable<ModuleRestartOutcome> RequestRestart(string reason) => Observable.Defer(() =>
+        {
+            Interlocked.Increment(ref count);
+            return Observable.Return(new ModuleRestartOutcome(ModuleRestartKinds.Restarted, "counted by the test"));
+        });
+    }
+
+    private ModuleLandingService Landing => Mesh.ServiceProvider.GetRequiredService<ModuleLandingService>();
 
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
     private IStorageAdapter Storage => Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
@@ -163,7 +210,10 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         return DeclaredDisabledFlagCompositionTest.Composed(flags);
     }
 
-    private async Task Installed(string id, CancellationToken ct, params string[] requires)
+    private Task Installed(string id, CancellationToken ct, params string[] requires) =>
+        Installed(id, ct, partition: id, module: null, requires);
+
+    private async Task Installed(string id, CancellationToken ct, string partition, string? module, params string[] requires)
     {
         foreach (var node in new[]
                  {
@@ -174,13 +224,13 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
                          State = MeshNodeState.Active,
                          Content = new PackageManifest
                          {
-                             Id = id, Name = id, Source = "Plugins", Version = "1.0.0", TargetPartition = id,
+                             Id = id, Name = id, Source = "Plugins", Version = "1.0.0", TargetPartition = partition, Module = module,
                              Requires = [.. requires],
                              InstalledAtUtc = new DateTimeOffset(2026, 11, 7, 7, 0, 0, TimeSpan.Zero),
                          },
                      },
-                     MeshNode.FromPath(id) with { NodeType = "Markdown", Name = id, State = MeshNodeState.Active },
-                     MeshNode.FromPath($"{id}/Guide") with { NodeType = "Markdown", Name = "Guide", State = MeshNodeState.Active },
+                     MeshNode.FromPath(partition) with { NodeType = "Markdown", Name = partition, State = MeshNodeState.Active },
+                     MeshNode.FromPath($"{partition}/Guide") with { NodeType = "Markdown", Name = "Guide", State = MeshNodeState.Active },
                  })
             await Access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(node)).Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{id}", ct), "the premise: the package is installed");
@@ -278,6 +328,133 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         Assert.Equal(0, await Requests(ct));
         Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "refused, so still installed");
     }
+
+    private Task<PackageUninstallRequest> Read(string path, Func<PackageUninstallRequest, bool> until, CancellationToken ct) =>
+        Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path))
+            .Select(n => n.ContentAs<PackageUninstallRequest>(Mesh.JsonSerializerOptions))
+            .OfType<PackageUninstallRequest>()
+            .Where(until)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+    /// <summary>
+    /// #7959 review (dependency retired while its dependent's retire is refused): Essentials-like
+    /// <c>Dependent</c> requires <c>Package</c>, both are declared off, and the dependent's phase 1 is
+    /// REFUSED (its partition is shared with a package that stays). The dependency must NOT be
+    /// retired, and the refusal is reported on THIS boot. Negative control (measured): without the
+    /// re-validation after each settlement the dependency is retired and this test is red.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ADependentRefusedByPhaseOne_KeepsWhatItRequires_AndTheRefusalIsReportedThisBoot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Installed(Package, ct);
+        await Installed(Dependent, ct, partition: Dependent, module: null, $"{Package}@^1.0");
+        await Installed("FlagRetireSharer", ct, partition: Dependent, module: null);
+
+        var outcome = await Retire(Declared("off", enabled: false, $"Plugins/{Package}", $"Plugins/{Dependent}"), ct);
+
+        Assert.Contains(outcome.Refused, line => line.StartsWith(Dependent + ":") && line.Contains("shared"));
+        Assert.Contains(outcome.Refused, line => line.StartsWith(Package + ":") && line.Contains(Dependent));
+        Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Dependent}", ct), "the refused dependent stays");
+        Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "and so does what it requires");
+    }
+
+    /// <summary>
+    /// #7959 review (a failed request blocked every later attempt): attempt 1 is refused (shared
+    /// partition); once the cause is gone the next boot re-evaluates with attempt 2, which retires.
+    /// Negative control: the first boot's refusal — the same install, the same declaration.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AFailedAttempt_IsReevaluatedOnTheNextBoot_WithOneActiveAttempt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Installed(Package, ct);
+        await Installed("FlagRetireSharer", ct, partition: Package, module: null);
+        var composition = Declared("off", enabled: false, $"Plugins/{Package}");
+
+        var first = await Retire(composition, ct);
+        var attempt1 = Assert.Single(first.Requested);
+        Assert.Equal(PackageUninstallStatus.Failed, (await Settled(attempt1, ct)).Status);
+        Assert.Contains(first.Refused, line => line.StartsWith(Package + ":"));
+        Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct));
+
+        await Access.RunAsSystem(() => NodeFactory.DeleteNode($"{PackageInstaller.InstalledPartition}/FlagRetireSharer"))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var second = await Retire(composition, ct);
+        var attempt2 = Assert.Single(second.Requested);
+        Assert.NotEqual(attempt1, attempt2);
+        Assert.EndsWith("-a2", attempt2);
+        Assert.Equal(PackageUninstallStatus.AwaitingConfirmation, (await Settled(attempt2, ct)).Status);
+        Assert.False(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "retired on re-evaluation");
+    }
+
+    /// <summary>
+    /// #7959 review (a real landed module): the activation entry is disabled DURABLY, and exactly ONE
+    /// restart is asked for — after phase 1 is persisted — and never again on a later boot.
+    /// Negative control: before the boot retire asks, no restart has happened (phase 1 alone never rolls).
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ALandedModule_IsDisabledDurably_AndExactlyOneRestartRollsEveryReplica()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "MeshWeaver.FlagRetireProbe";
+        await Landing.LandModule(module, [(module + ".dll", System.IO.File.ReadAllBytes(typeof(BundleReader).Assembly.Location))],
+                packagePath: $"{PackageInstaller.InstalledPartition}/{Package}", version: "1.0.0")
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        Assert.Contains((await Landing.GetActivation().Take(1).Timeout(TestTimeouts.Convergence).Await(ct)).Entries,
+            e => e.Enabled && e.Name == module);
+        await Installed(Package, ct, partition: Package, module: module);
+        var composition = Declared("off", enabled: false, $"Plugins/{Package}");
+
+        var outcome = await Retire(composition, ct);
+        var path = Assert.Single(outcome.Requested);
+        var restarted = await Read(path, r => r.ModuleOutcome?.Contains("one restart requested") == true, ct);
+
+        Assert.True(restarted.ModuleDisabled, restarted.ModuleOutcome ?? "");
+        Assert.Equal(path, restarted.RestartCoveredBy);
+        Assert.Contains("one restart requested", restarted.ModuleOutcome ?? "");
+        Assert.DoesNotContain((await Landing.GetActivation().Take(1).Timeout(TestTimeouts.Convergence).Await(ct)).Entries,
+            e => e.Enabled && e.Name == module);
+        Assert.Equal(1, restart.Count);
+
+        // The next boot (every replica, after the roll): nothing is decided, nothing restarts again.
+        var again = await Retire(composition, ct);
+        Assert.Empty(again.Requested);
+        Assert.Equal(1, restart.Count);
+    }
+
+    /// <summary>
+    /// #7959 review (restart after a failed durable disable): a module LOADED here that the store lane
+    /// never landed cannot be disabled durably, so the flag retire FAILS — install record kept, no
+    /// restart. Negative control: <see cref="ALandedModule_IsDisabledDurably_AndExactlyOneRestartRollsEveryReplica"/>.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AModuleThatCannotBeDisabledDurably_FailsTheRetire_AndRestartsNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Installed(Package, ct, partition: Package, module: "MeshWeaver.PluginCatalog");
+
+        var outcome = await Retire(Declared("off", enabled: false, $"Plugins/{Package}"), ct);
+        var request = await Settled(Assert.Single(outcome.Requested), ct);
+
+        Assert.Equal(PackageUninstallStatus.Failed, request.Status);
+        Assert.Contains("not landed by the store lane", request.Failure ?? "");
+        Assert.Contains(outcome.Refused, line => line.StartsWith(Package + ":"));
+        Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "the install record is kept");
+        Assert.Equal(0, restart.Count);
+    }
+
+    /// <summary>#7959 review: a request with no package is REFUSED by validation, never an NRE.</summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ARequestWithNoPackage_IsRefusedByValidation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ticket = await PackageUninstall.Request(Mesh, new PackageUninstallRequest { Package = null!, Reason = "x" })
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        Assert.False(ticket.Accepted);
+        Assert.Contains("needs a package id", ticket.Refusal);
+    }
 }
 
 /// <summary>
@@ -297,6 +474,51 @@ public abstract class AReassertSkipsDeclaredOffPackagesTestBase(ITestOutputHelpe
         .AddPluginCatalog()
         .ConfigureServices(services => services.AddSingleton<IFeatureFlags>(
             new ConfigurationFeatureFlags(new ConfigurationBuilder().AddInMemoryCollection(flags).Build())));
+
+    /// <summary>
+    /// The UNATTENDED UPDATE lane over a pinned install record with a newer candidate: it reaches the
+    /// policy decision ("has an update") unless the declaration retires the package first. The
+    /// record is pinned (<see cref="PackageUpdatePolicy.None"/>) so the decision writes nothing.
+    /// Returns what the lane logged.
+    /// </summary>
+    protected async Task<IReadOnlyList<string>> UnattendedUpdate(CancellationToken ct)
+    {
+        var record = new PackageManifest
+        {
+            Id = Package, Name = Package, Source = "Plugins", Version = "1.0.0", TargetPartition = Package,
+            ModuleVersion = "v1", UpdatePolicy = PackageUpdatePolicy.None,
+        };
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>().RunAsSystem(() => NodeFactory.CreateOrUpdateNode(
+                MeshNode.FromPath($"{PackageInstaller.InstalledPartition}/{Package}") with
+                {
+                    NodeType = PackageInstaller.PackageNodeType, Name = Package, State = MeshNodeState.Active, Content = record,
+                }))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        var log = new CapturingLogger();
+        await PackageUpdateReconciler.ReconcileInstalled(Mesh, new SilentSource(), "HEAD",
+                [record with { ModuleVersion = "v2" }], "test", log)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        return log.Lines;
+    }
+
+    private sealed class SilentSource : IPackageSource
+    {
+        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
+            Observable.Return((IReadOnlyList<PackageManifest>)[]);
+
+        public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
+            Observable.Return((IReadOnlyList<PackageFile>)[]);
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        private ImmutableList<string> lines = ImmutableList<string>.Empty;
+        public IReadOnlyList<string> Lines => lines;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            ImmutableInterlocked.Update(ref lines, l => l.Add(formatter(state, exception)));
+    }
 
     protected Task<DefaultInstallSummary> Reassert(CancellationToken ct, string? source = "Plugins") =>
         Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>()
@@ -321,6 +543,16 @@ public class AReassertSkipsADeclaredOffPackageTest(ITestOutputHelper output)
         Assert.Contains("'off'", skip.Reason);
     }
 
+    /// <summary>#7959 review: the unattended UPDATE lane never touches a package the declaration retires.
+    /// Negative control: <see cref="AReassertWithNoDeclaredOffFlagTest.AnUnattendedUpdate_ReachesItsDecision_WithNoFlag"/>.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnUnattendedUpdate_SkipsADeclaredOffPackage()
+    {
+        var lines = await UnattendedUpdate(TestContext.Current.CancellationToken);
+        Assert.Contains(lines, l => l.Contains("declared off by the feature flag 'off'"));
+        Assert.DoesNotContain(lines, l => l.Contains("has an update"));
+    }
+
     /// <summary>The same rule as the retire: a record naming no source is not covered, so it is not skipped.</summary>
     [Fact(Timeout = 120_000)]
     public async Task ARecordNamingNoSource_IsNotSkipped()
@@ -339,5 +571,13 @@ public class AReassertWithNoDeclaredOffFlagTest(ITestOutputHelper output)
     {
         var ct = TestContext.Current.CancellationToken;
         Assert.Empty((await Reassert(ct)).Skipped);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task AnUnattendedUpdate_ReachesItsDecision_WithNoFlag()
+    {
+        var lines = await UnattendedUpdate(TestContext.Current.CancellationToken);
+        Assert.Contains(lines, l => l.Contains("has an update"));
+        Assert.DoesNotContain(lines, l => l.Contains("declared off by the feature flag"));
     }
 }
