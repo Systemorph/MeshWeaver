@@ -1855,13 +1855,54 @@ jobs:
         with:
           path: ${{ runner.temp }}/pack-tool
           key: pack-tool-${{ inputs.platform-ref }}
+      # ⚡ CONTENT-ADDRESSED IN OUR OWN STORE (MeshWeaver.Plugins Hosting/CiProfile.md #4). The gha cache
+      # above runs only on the `gha` store; every caller on our store re-published the tool on EVERY run
+      # (MeshWeaver.Plugins 2026-11-07: ~117 runs/day, 90-110 s each). The tool is a function of the
+      # platform COMMIT actually checked out (never the input string: a branch name would key a moving
+      # target) and the toolchain (runner OS/arch + the SDK line, 10.0) — that tuple is the key. A miss,
+      # an unreadable object or a tar without the tool's entry point publishes afresh; never a red.
+      - name: Restore the module-pack tool from our store (platform commit + toolchain)
+        if: needs.select.outputs.build-modules != '[]' && needs.select.outputs.artifact-store != 'gha'
+        id: tool-store
+        env:
+          STORE: ${{ needs.select.outputs.artifact-store }}
+          STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
+          PY: build-logic/.github/scripts/ci-artifact-store.py
+        run: |
+          set -uo pipefail
+          key="cache/module-pack-tool/$(git -C meshweaver rev-parse HEAD)-${RUNNER_OS}-${RUNNER_ARCH}-sdk10.0.tar"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          tool="$RUNNER_TEMP/pack-tool"
+          if python3 "$PY" probe --store "$STORE" --locator "$STORE/$key" >/dev/null 2>&1 \
+             && python3 "$PY" get --store "$STORE" --expect-store-id "$STORE_ID" --locator "$STORE/$key" --out "$RUNNER_TEMP/pack-tool.tar" >/dev/null \
+             && mkdir -p "$tool" && tar -xf "$RUNNER_TEMP/pack-tool.tar" -C "$tool" \
+             && [ -f "$tool/MeshWeaver.Plugin.Build.dll" ]; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+            echo "module-pack tool: reused $key — no publish"
+          else
+            rm -rf "$tool"
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            echo "module-pack tool: $key is not in the store — publishing it"
+          fi
       - uses: actions/setup-dotnet@v6
-        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true'
+        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true' && steps.tool-store.outputs.hit != 'true'
         with:
           dotnet-version: "10.0.x"
       - name: Publish the module-pack tool (once for every pack job)
-        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true'
+        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true' && steps.tool-store.outputs.hit != 'true'
         run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
+      - name: Keep the module-pack tool in our store for the next run on this commit
+        if: needs.select.outputs.build-modules != '[]' && steps.tool-store.outputs.hit == 'false'
+        env:
+          STORE: ${{ needs.select.outputs.artifact-store }}
+          STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
+          PY: build-logic/.github/scripts/ci-artifact-store.py
+          KEY: ${{ steps.tool-store.outputs.key }}
+        run: |
+          set -uo pipefail
+          tar -cf "$RUNNER_TEMP/pack-tool.tar" -C "$RUNNER_TEMP/pack-tool" . \
+            && python3 "$PY" put --store "$STORE" --expect-store-id "$STORE_ID" --key "$KEY" --file "$RUNNER_TEMP/pack-tool.tar" \
+            || echo "::warning title=Module-pack tool not kept::could not store $KEY — this run is unaffected; the next run on this commit publishes the tool again"
       # Lane-scoped like every other artifact this workflow drops: two calls in one run publish
       # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
       # with the other call's builder.
