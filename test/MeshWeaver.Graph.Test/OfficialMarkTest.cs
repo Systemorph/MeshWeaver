@@ -179,6 +179,14 @@ public class OfficialMarkTest
         Assert.True(IconBackplate.HasBackplate(rendered));
     }
 
+    /// <summary>Thousands of url() tokens in one paint are judged in one pass, not one recursion per token.</summary>
+    [Fact]
+    public void ManyPaintServerTokens_AreJudgedOnce()
+    {
+        var paint = string.Concat(Enumerable.Repeat("url(#g) ", 7000));
+        Assert.False(IconBackplate.ReadsOnDark($"<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='{paint}'/></svg>"));
+    }
+
     /// <summary>A malformed colour in an official mark keeps the white plate and never fails the render.</summary>
     [Fact]
     public void AMalformedColour_KeepsTheWhitePlate()
@@ -237,6 +245,9 @@ public class OfficialMarkTest
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='url(#missing) #111827'/></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='url(#g) #ffffff'/></svg>", true)]
     [InlineData("<svg viewBox='0 0 24 24'><!-- <g fill='#fff'> --><path d='M0 0h1v1z'/></svg>", false)]
+    // A second paint server is no fallback; a <!-- inside CDATA opens no comment.
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='url(#a) url(#b) #fff'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><desc><![CDATA[<!--]]></desc><style>path{fill:#111827}</style><!-- note --><path d='M0 0h1v1z' fill='#fff'/></svg>", false)]
     // A malformed colour is unreadable — never a throw.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#xyz'/></svg>", false)]
     // A clip path's unfilled geometry is not painted.

@@ -261,7 +261,8 @@ public static partial class IconBackplate
         var stack = new Stack<(string Fill, string Stroke, bool NotPainted)>();
         stack.Push(("black", "none", false));
         var drawables = 0;
-        // Comments are not markup: `<!-- <g fill='#fff'> -->` must not push a group.
+        // Comments and CDATA are not markup: `<!-- <g fill='#fff'> -->` must not push a group, and a
+        // `<!--` inside CDATA opens no comment. One left-to-right pass consumes whichever starts first.
         foreach (Match tag in AnyTag().Matches(XmlComment().Replace(svg, string.Empty)))
         {
             // The LOCAL name: a namespace prefix (<s:style>, <svg:path>) names the same element.
@@ -307,9 +308,13 @@ public static partial class IconBackplate
         // reference is missing (`url(#missing) #111827`), is.
         if (p.StartsWith("url(", StringComparison.Ordinal))
         {
+            // Parsed ONCE: the fallback is a colour or none; a second paint server is not a valid
+            // fallback, and is not chased (an icon may legally carry thousands of url() tokens).
             var close = p.IndexOf(')');
             var fallback = close < 0 ? string.Empty : p[(close + 1)..].Trim();
-            return fallback.Length == 0 || Reads(fallback, plate);
+            if (fallback.Length == 0)
+                return true;
+            return !fallback.StartsWith("url(", StringComparison.Ordinal) && Reads(fallback, plate);
         }
         var hex = p switch
         {
@@ -434,7 +439,7 @@ public static partial class IconBackplate
         RegexOptions.CultureInvariant)]
     private static partial Regex AnyTag();
 
-    [GeneratedRegex(@"<!--.*?-->", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"<!\[CDATA\[.*?\]\]>|<!--.*?-->", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
     private static partial Regex XmlComment();
 
     [GeneratedRegex(@"^#([0-9a-f]{3}|[0-9a-f]{6})$", RegexOptions.CultureInvariant)]
