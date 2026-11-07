@@ -625,7 +625,9 @@ public static partial class CatalogLayoutAreas
         // Sequential (Concat): a dependency's install must COMPLETE before the dependent's begins,
         // which is what makes its NodeType nodes present for the dependent's type validation.
         var install = closure
-            .Select(p => InstallOrUpdate(host.Hub, source, sourceRef, p, logger, authorizingUserId)
+            // 🚨 A PERSON's install: creates or re-stamps, and clears a retirement that has not started
+            // removing the record (MeshWeaver.Plugins#5055, InstallRecordGate).
+            .Select(p => InstallOrUpdate(host.Hub, source, sourceRef, p with { WriteIntent = PackageRecordWriteIntent.Person }, logger, authorizingUserId)
                 .Do(result => logger?.LogInformation(
                     "Installed {Id}: {Written} written, {Unchanged} unchanged.",
                     p.Id, result.Written, result.Unchanged))
@@ -711,7 +713,13 @@ public static partial class CatalogLayoutAreas
             // records onto unmet floors.
             .SelectMany(_ => HoldIfPlatformBelowFloor(hub, pkg, logger,
                 () => HoldIfADependencyIsBelowItsFloor(hub, pkg, logger,
-                    () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId, proposeModuleSet))));
+                    () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId, proposeModuleSet))))
+            // 🚨 A PERSON's install clears a retirement on EVERY exit (#7964 review): an up-to-date
+            // package skips the record write entirely, so the person's intent would otherwise never
+            // reach the record's owner and the uninstall could still delete the record.
+            .SelectMany(result => pkg.WriteIntent == PackageRecordWriteIntent.Person
+                ? InstallRecordGate.ClearForPerson(hub, pkg.Id, logger).Select(_ => result)
+                : Observable.Return(result));
     }
 
     /// <summary>
