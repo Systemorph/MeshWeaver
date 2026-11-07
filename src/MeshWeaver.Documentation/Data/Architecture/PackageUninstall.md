@@ -97,9 +97,59 @@ repair, the unattended update) is refused when the record is gone. This is how t
 create-if-missing-plus-fold gap (#4928): the record is never written with a full-replace
 `CreateOrUpdateNodeRequest`.
 
-What this does not cover: the partition's content and the module's landing happen **before** an
-install stamps the record. A stamp refused at the owner keeps the record, but not those earlier
-writes, from coming back. Landing the module through the record's owner is the next step.
+The partition's content is still written **before** an install stamps the record, and a stamp
+refused at the owner does not undo it. The module no longer shares that gap; see the next section.
+
+## The module lands through the install record
+
+An install writes its record, then downloads and lands the module. A download that started before
+an uninstall could finish after phase 1 had written the module's **tombstone**. Its landing then
+re-enabled the module on every replica, because the module volume is shared. The decision to land
+was taken on a snapshot read before the download and carried out after it.
+
+So nothing outside the record's own hub lands or removes a package's module
+(`ModuleLandingOwner`):
+
+- **The writer stages and states.** The downloaded bytes cannot ride the node, so the writer stages
+  them on the shared volume under `modules/.landing-requests/<key>/`. It then states a `ModuleLand`
+  fact on the record carrying every other landing argument, and waits for the owner's answer before
+  it does anything that follows a landing (proposing the module set). Phase 1's removal is a
+  `ModuleRemove` fact through the same owner.
+- **The owner queues, then decides one at a time.** The fold queues each operation in
+  `PackageManifest.ModuleOperations`. It promotes exactly ONE to `Executing`, and decides it then,
+  against the retirement as it stands at that moment. A landing while the package is being retired is
+  refused. A person's landing (`PackageRecordWriteIntent.Person`, the catalog click) lands while the
+  retirement is not yet `Removing`, and clears it, the same rule as a person's stamp. A removal by a
+  request that no longer holds the retirement is refused.
+- **The owner executes.** The record's hub runs the landing or the removal itself, on its own replica,
+  through the landing service's cap-1 lane. It writes the answer under the operation's key and
+  promotes the next operation in the same update. Operations run one at a time and in the order they
+  were stated, so a removal stated after a landing runs after it, and the tombstone is written last.
+- **A landing is decided where it is written.** The landing reads the module's head in the same work
+  item that writes the bytes, and refuses when the module's newest event is an uninstall. This is the
+  rule `ModuleUpdateDecision` applies at plan time (`SkipUninstalled`), taken again after the
+  download.
+- **Resume.** The operation in flight is persisted as `Executing` before it runs, and its staged
+  bytes are dropped only after its answer is written. When a replica dies mid-operation, the next
+  activation of the record's hub finds an executing operation it did not start, and runs it again. A
+  landing re-reads the same staged bytes, and a removal writes one more tombstone. Neither changes the
+  outcome by running twice.
+- **A refusal is an answer.** A refused landing reaches the adoption as its named `Failure`, with
+  nothing landed. A removal the owner did not carry out faults with the owner's words.
+
+**A package with no install record has no owner.** The boot's modules-first wave lands a fresh
+package's module before any record exists. A retirement lives on the record and ends when the record
+is deleted, so a package with no record has no retirement in flight. That landing runs where it is,
+through `ModuleLandingService.LandUnlessUninstalled`. It is refused when the module's newest event is
+an uninstall, which covers a download released after an uninstall that has completed. It never
+creates a record. It is never a fallback for a package that does have one: the writer reads the record
+first and, if it exists, goes through the owner.
+
+What the fresh path does not close: its uninstall check and its write are one work item on one
+replica. A removal another replica writes **inside** that work item, between the read and the write,
+would be ordered before the landing. For that to happen, a record must be created, a retirement
+granted and the removal executed within that interval. The owned path has no such window. A staged
+landing whose writer and owner both died before the answer is not collected by the modules GC.
 
 ## Phase 2 — drop the data, on confirmation
 

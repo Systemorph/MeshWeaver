@@ -320,7 +320,9 @@ public static class PackageUninstallExecutor
             var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
             var removed = landing is null
                 ? Observable.Return("no landing service on this host")
-                : landing.RemoveModule(module).Select(_ => "landed generation disabled")
+                // 🚨 Through the install record's OWNER (MeshWeaver.Plugins#5055, ModuleLandingOwner):
+                // the removal queues behind any landing in flight there, so the tombstone is last.
+                : ModuleLandingOwner.Remove(hub, record.Id, module, RequestPath, logger)
                     .Catch((Exception ex) => Observable.Return($"no landed generation to remove ({ex.Message})"));
             var agent = hub.ServiceProvider.GetService<ModuleReloadAgent>();
             var loaded = (agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()).Contains(module);
