@@ -709,8 +709,11 @@ internal static class PackageUpdateReconciler
 
         return Observable.Using(
                 accessService.ImpersonateAsSystem,
+                // 🚨 An unattended update RE-STAMPS the existing record and never re-creates one an
+                // uninstall removed meanwhile; the record's own hub refuses it while the package is
+                // being retired (MeshWeaver.Plugins#5055).
                 _ => CatalogLayoutAreas.InstallOrUpdate(
-                    hub, source, sourceRef, pkg, logger, record.AuthorizedBy))
+                    hub, source, sourceRef, pkg with { WriteIntent = PackageRecordWriteIntent.Restamp }, logger, record.AuthorizedBy))
             .Do(result => logger?.LogInformation(
                 "Package update: {Id} auto-updated ({Written} written, {Unchanged} unchanged).",
                 pkg.Id, result.Written, result.Unchanged))

@@ -49,6 +49,45 @@ baseline, not a feature flag (`InstanceAutoRegistrationService.InstallAll` consu
 `PackageUninstallExecutor.UninstalledHere`). A person installing it again lifts that: the block only
 applies while no install record exists.
 
+## The install record decides who may write it
+
+An uninstall and the unattended lanes write the same node, the install record `Plugins/{package}`,
+from different hubs. Every writer that is not the record's own hub runs its `stream.Update` lambda on
+its own copy of the node, so a check like "is this package being uninstalled?" made there can be stale
+([Conditional Writes Across Hubs](../ConditionalWritesAcrossHubs)). So no writer decides. Each writer
+states a **fact**, unconditionally and under its own key (`PackageManifest.RecordFacts`). The
+record's **own hub** folds every pending fact against current state (`InstallRecordGate.Fold`,
+serialised there) and answers each one under the same key (`FactOutcomes`). The writer reads its
+answer and removes it.
+
+| fact | stated by | the owner |
+|---|---|---|
+| `Begin` | phase 1, after its refusals and the preview | grants `RetiringBy` (this request) unless another request holds it; phase 1 proceeds only when granted, and touches nothing otherwise |
+| `Remove` | phase 1, just before it deletes the record | marks the retirement `Removing`; refuses when this request no longer holds it (a person installed the package meanwhile), and phase 1 then stops and keeps the record |
+| `End` | phase 1, when it faults after `Begin` | releases the retirement, so the package is repairable again |
+| `Stamp` | every install-record write: the install funnel, the repair, the unattended update | applies it, or **refuses** it while a retirement is held. A person's stamp (`PackageRecordWriteIntent.Person`, the catalog click) clears a retirement that is not yet `Removing`, and is applied |
+
+A refused stamp reaches its writer as `PackageRecordWriteRefusedException`, carrying the owner's
+words; the boot install records it as a skip, never as a silent success. A write through the gate is
+**durable when it completes**. The writer removes its answer with a cross-hub `stream.Update`, which
+acknowledges only after the owner has written the node to storage, fold included, and the writer
+waits for that before it returns. So every later storage read of the record sees the stamp, as it did
+when the record was written with a full-replace `CreateOrUpdateNodeRequest`. If no answer arrives within
+`InstallRecordGate.AnswerBudget`, the writer re-reads the record. Absent means it was removed and the
+write is refused; present means a fault naming the owner that did not answer.
+
+**Re-creation is closed one level down.** A stamp is a `stream.Update`, and a delete wins over an
+update that commits after it (`UpdateNeverResurrectsADeletedNodeTest`). An absent record is created
+(create-only, `CreateNodeRequest`) only by `CreateAllowed` (the default install of a package the
+instance does not hold) or `Person`. A create that collides falls back to a stamp. A `Restamp` (the
+repair, the unattended update) is refused when the record is gone. This is how this page answers the
+create-if-missing-plus-fold gap (#4928): the record is never written with a full-replace
+`CreateOrUpdateNodeRequest`.
+
+What this does not cover: the partition's content and the module's landing happen **before** an
+install stamps the record. A stamp refused at the owner keeps the record, but not those earlier
+writes, from coming back. Landing the module through the record's owner is the next step.
+
 ## Phase 2 — drop the data, on confirmation
 
 `ConfirmationRequired` is the partition name. The requester sends it back (`PackageUninstall.Confirm`,
