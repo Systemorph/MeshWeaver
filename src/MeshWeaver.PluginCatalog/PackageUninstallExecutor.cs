@@ -68,7 +68,8 @@ public static class PackageUninstallExecutor
 
     /// <summary>
     /// The packages this instance has UNINSTALLED and not installed again — what no unattended
-    /// install pass may bring back. Read from a LISTING of the request namespace (stale-tolerant:
+    /// install pass may bring back. A request a feature flag issued
+    /// (<see cref="PackageUninstallRequest.RetiredByFlag"/>) is not counted. Read from a LISTING of the request namespace (stale-tolerant:
     /// a request missing from it costs one more boot) minus the install records that exist now, so
     /// a person installing the package again lifts the block. Never faults: an unreadable listing
     /// blocks nothing.
@@ -94,6 +95,10 @@ public static class PackageUninstallExecutor
                 .ToList())
             .Select(requests => requests
                 .OfType<PackageUninstallRequest>()
+                // A FLAG-issued retire blocks nothing (#5055): while the flag stays off its exclusion
+                // keeps the package out, and once the record stops declaring it off the package's
+                // own lanes must be free to bring it back — the record decides, not this ledger.
+                .Where(r => r.RetiredByFlag is null)
                 .Where(r => r.Status is PackageUninstallStatus.AwaitingConfirmation or PackageUninstallStatus.TearingDown or PackageUninstallStatus.Done)
                 .Select(r => r.Package)
                 .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase))
@@ -122,11 +127,15 @@ public static class PackageUninstallExecutor
         !string.IsNullOrWhiteSpace(createdBy)
         && !string.Equals(createdBy, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>The module outcome's words for a landed generation that was disabled.</summary>
+    private const string LandedGenerationDisabled = "landed generation disabled";
+
     private sealed class Run(IMessageHub hub, ILogger? logger)
     {
         private int phase1;
         private int phase2;
         private int finished;
+        private int restarted;
 
         private AccessService? Access => hub.ServiceProvider.GetService<AccessService>();
 
@@ -145,6 +154,9 @@ public static class PackageUninstallExecutor
                 PackageUninstallStatus.Requested or PackageUninstallStatus.Uninstalling =>
                     Once(ref phase1, () => Phase1(request)),
                 PackageUninstallStatus.AwaitingConfirmation when request.Confirmation is not null => Confirmed(request),
+                // The ONE every-replica restart — only after phase 1 is persisted, only while unstamped.
+                PackageUninstallStatus.AwaitingConfirmation when request is { RequestedRestart: true, RestartRequestedAt: null } =>
+                    Once(ref restarted, () => RestartForEveryReplica(request)),
                 PackageUninstallStatus.AwaitingConfirmation => Observable.Empty<Unit>(),
                 PackageUninstallStatus.TearingDown => Once(ref phase2, () => Phase2(request)),
                 _ => Once(ref finished, () => Finish(PackageUninstallStatus.Failed,
@@ -209,29 +221,42 @@ public static class PackageUninstallExecutor
         /// request goes red, so the package is repairable again.</summary>
         private IObservable<Unit> Retire(PackageUninstallRequest request, PackageManifest record, string partition, PackageUninstallPartition preview) =>
             RetireModule(request, record)
-                            .SelectMany(moduleOutcome => CloseHubs(partition).Select(closed => (moduleOutcome, closed)))
-                            // Announce the removal: from the owner's answer on, a person's install is
-                            // refused too. A refusal here means a PERSON installed it meanwhile — the
-                            // record is theirs now and stays.
-                            .SelectMany(x => InstallRecordGate.MarkRemoving(hub, record.Id, RequestPath, logger)
-                                .Select(displaced => (x.moduleOutcome, x.closed, displaced)))
-                            .SelectMany(x => x.displaced is { } displaced
-                                ? Finish(PackageUninstallStatus.Failed,
-                                    $"stopped: {displaced}; the install record is kept (module: {x.moduleOutcome})")
-                                : RemoveAndPreview(record, partition, preview, x.moduleOutcome, x.closed))
+                            .SelectMany(retired => retired.Failure is { } moduleFailure
+                                // 🚨 A module that could not be disabled durably FAILS an every-replica
+                                // retire before the install record is touched (#7959 review) — and
+                                // releases the retirement, so the package stays repairable.
+                                ? ReleaseThenFail(record, $"refused: {moduleFailure}; the install record is kept")
+                                : CloseHubs(partition).Select(closed => (moduleOutcome: retired.Outcome, retired.Disabled, closed))
+                                // Announce the removal: from the owner's answer on, a person's install is
+                                // refused too. A refusal here means a PERSON installed it meanwhile — the
+                                // record is theirs now and stays.
+                                .SelectMany(x => InstallRecordGate.MarkRemoving(hub, record.Id, RequestPath, logger)
+                                    .Select(displaced => (x.moduleOutcome, x.Disabled, x.closed, displaced)))
+                                .SelectMany(x => x.displaced is { } displaced
+                                    ? Finish(PackageUninstallStatus.Failed,
+                                        $"stopped: {displaced}; the install record is kept (module: {x.moduleOutcome})")
+                                    : RemoveAndPreview(record, partition, preview, x.moduleOutcome, x.Disabled, x.closed)))
                 .Catch((Exception ex) => InstallRecordGate.EndRetirement(hub, record.Id, RequestPath, logger)
                     .Select(_ => "released")
                     .Catch((Exception endFault) => Observable.Return($"NOT released ({endFault.Message})"))
                     .SelectMany(released => Finish(PackageUninstallStatus.Failed,
                         $"phase 1 faulted after the retirement was granted: {ex.Message}; the retirement was {released}")));
 
-        private IObservable<Unit> RemoveAndPreview(PackageManifest record, string partition, PackageUninstallPartition preview, string moduleOutcome, int closed) =>
+        /// <summary>Releases the held retirement, then fails the request naming whether the release landed.</summary>
+        private IObservable<Unit> ReleaseThenFail(PackageManifest record, string message) =>
+            InstallRecordGate.EndRetirement(hub, record.Id, RequestPath, logger)
+                .Select(_ => "released")
+                .Catch((Exception endFault) => Observable.Return($"NOT released ({endFault.Message})"))
+                .SelectMany(released => Finish(PackageUninstallStatus.Failed, $"{message}; the retirement was {released}"));
+
+        private IObservable<Unit> RemoveAndPreview(PackageManifest record, string partition, PackageUninstallPartition preview, string moduleOutcome, bool moduleDisabled, int closed) =>
             PackageInstaller.RemoveInstalledRecord(hub, record.Id, logger).Take(1)
-                                .Select(removed => (moduleOutcome, closed, removed))
+                                .Select(removed => (moduleOutcome, Disabled: moduleDisabled, closed, removed))
                             .SelectMany(x => Write(r => r with
                                 {
                                     Module = string.IsNullOrWhiteSpace(record.Module) ? null : record.Module,
                                     ModuleOutcome = x.moduleOutcome,
+                                    ModuleDisabled = x.Disabled,
                                     Partitions = [preview],
                                     ConfirmationRequired = partition,
                                     Status = PackageUninstallStatus.AwaitingConfirmation,
@@ -310,34 +335,99 @@ public static class PackageUninstallExecutor
             + string.Join(", ", p.RowsByTable.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value}"))
             + (p.SyncConfig ? "; a sync configuration" : "");
 
+        /// <summary>What retiring the module did: the outcome sentence, whether a landed generation was
+        /// durably disabled, and — for an every-replica retire only — why it must FAIL instead.</summary>
+        private sealed record ModuleRetired(string Outcome, bool Disabled, string? Failure);
+
         /// <summary>Retires the package's module: removes its landed generation, then unloads it live
-        /// where the process can, else asks for exactly ONE restart (stamped first).</summary>
-        private IObservable<string> RetireModule(PackageUninstallRequest request, PackageManifest record)
+        /// where the process can, else asks for exactly ONE restart (stamped first, and never asked
+        /// again by a resumed phase 1). An every-replica retire takes <see cref="RetireForEveryReplica"/>.</summary>
+        private IObservable<ModuleRetired> RetireModule(PackageUninstallRequest request, PackageManifest record)
         {
             var module = record.Module?.Trim();
             if (string.IsNullOrWhiteSpace(module))
-                return Observable.Return("the package declares no compiled module");
+                return Observable.Return(new ModuleRetired("the package declares no compiled module", false, null));
+            if (request.RetireOnEveryReplica)
+                return RetireForEveryReplica(request, module);
             var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
             var removed = landing is null
                 ? Observable.Return("no landing service on this host")
-                : landing.RemoveModule(module).Select(_ => "landed generation disabled")
+                : landing.RemoveModule(module).Select(_ => LandedGenerationDisabled)
                     .Catch((Exception ex) => Observable.Return($"no landed generation to remove ({ex.Message})"));
-            var agent = hub.ServiceProvider.GetService<ModuleReloadAgent>();
-            var loaded = (agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()).Contains(module);
+            var loaded = IsLoaded(module);
+            var reason = $"package uninstall {ModuleReloadExecutor.PathOf(hub)}: {request.Reason}";
             return removed.SelectMany(landed =>
             {
                 if (!loaded)
-                    return Observable.Return($"{module}: {landed}; not loaded in this process — nothing to unload");
-                var reason = $"package uninstall {ModuleReloadExecutor.PathOf(hub)}: {request.Reason}";
-                var live = hub.ServiceProvider.GetService<IModuleLiveActivation>();
-                var liveTry = live is not null && live.CanSwap(module)
-                    ? live.Retire(module, reason).Take(1).Catch((Exception ex) => Observable.Return(new ModuleReloadSwapOutcome(false, ex.Message)))
-                    : Observable.Return(new ModuleReloadSwapOutcome(false, live is null ? "this process has no live module loader" : "it cannot be unloaded in place"));
-                return liveTry.SelectMany(outcome => outcome.Swapped
-                    ? Observable.Return($"{module}: {landed}; retired LIVE")
-                    : Restart(reason).Select(restart => $"{module}: {landed}; not retired live ({outcome.Failure}) — {restart}"));
+                    return Observable.Return(new ModuleRetired($"{module}: {landed}; not loaded in this process — nothing to unload", false, null));
+                return LiveRetire(module, reason).SelectMany(outcome => outcome.Swapped
+                    ? Observable.Return(new ModuleRetired($"{module}: {landed}; retired LIVE", false, null))
+                    // 🚨 Resume-safe (#7959 review): a phase 1 resumed after the restart it asked for
+                    // must not ask again — RestartRequestedAt is stamped before every dispatch.
+                    : request.RestartRequestedAt is { } asked
+                        ? Observable.Return(new ModuleRetired($"{module}: {landed}; not retired live ({outcome.Failure}) — one restart was already requested at {asked:u}", false, null))
+                        : Restart(reason).Select(restart => new ModuleRetired($"{module}: {landed}; not retired live ({outcome.Failure}) — {restart}", false, null)));
             });
         }
+
+        /// <summary>
+        /// 🚨 The every-replica retire (a flag-issued request, #5055). The module must be DURABLY
+        /// disabled on the volume every replica shares, or the request fails — a restart over a
+        /// still-enabled generation would bring the module back on every replica while the install
+        /// record needed for another attempt was gone. It never restarts here: the ONE restart is asked
+        /// for through <see cref="PackageUninstallRequest.RequestedRestart"/> once phase 1 is persisted.
+        /// </summary>
+        private IObservable<ModuleRetired> RetireForEveryReplica(PackageUninstallRequest request, string module)
+        {
+            var loaded = IsLoaded(module);
+            var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+            var reason = $"package uninstall {ModuleReloadExecutor.PathOf(hub)}: {request.Reason}";
+            if (landing is null)
+                return Observable.Return(loaded
+                    ? new ModuleRetired("", false, $"module {module} is loaded here, and this host has no landing service to disable it durably")
+                    : new ModuleRetired($"{module}: not loaded here, and this host lands no modules — nothing to disable", false, null));
+            return landing.GetActivation().Take(1)
+                .SelectMany(activation =>
+                {
+                    var landed = activation.Entries.Any(e => e.Enabled && string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase));
+                    if (!landed)
+                        return Observable.Return(loaded
+                            ? new ModuleRetired("", false, $"module {module} is loaded here but was not landed by the store lane (no enabled activation entry) — "
+                                                           + "an image-carried module is the deployment's, and no flag can retire it")
+                            : new ModuleRetired($"{module}: no enabled landed generation and not loaded here — nothing to disable", false, null));
+                    return landing.RemoveModule(module)
+                        .SelectMany(_ => loaded
+                            ? LiveRetire(module, reason).Select(o => o.Swapped ? "retired LIVE here" : $"still loaded here ({o.Failure})")
+                            : Observable.Return("not loaded here"))
+                        .Select(local => new ModuleRetired(
+                            $"{module}: {LandedGenerationDisabled} on the shared volume; {local} — every replica drops it at the ONE restart asked for after phase 1",
+                            true, null));
+                })
+                .Catch((Exception ex) => Observable.Return(new ModuleRetired("", false,
+                    $"module {module}'s landed generation could not be disabled durably: {ex.Message}")));
+        }
+
+        private bool IsLoaded(string module) =>
+            (hub.ServiceProvider.GetService<ModuleReloadAgent>()?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()).Contains(module);
+
+        private IObservable<ModuleReloadSwapOutcome> LiveRetire(string module, string reason)
+        {
+            var live = hub.ServiceProvider.GetService<IModuleLiveActivation>();
+            return live is not null && live.CanSwap(module)
+                ? live.Retire(module, reason).Take(1).Catch((Exception ex) => Observable.Return(new ModuleReloadSwapOutcome(false, ex.Message)))
+                : Observable.Return(new ModuleReloadSwapOutcome(false, live is null ? "this process has no live module loader" : "it cannot be unloaded in place"));
+        }
+
+        /// <summary>
+        /// The ONE every-replica restart, asked for through <see cref="PackageUninstallRequest.RequestedRestart"/>
+        /// on a request phase 1 already persisted. <see cref="Restart"/> stamps
+        /// <see cref="PackageUninstallRequest.RestartRequestedAt"/> before it dispatches, and this runs
+        /// only while that is unset — so a re-activated executor can never roll the deployment twice.
+        /// </summary>
+        private IObservable<Unit> RestartForEveryReplica(PackageUninstallRequest request) =>
+            Restart($"package uninstall {ModuleReloadExecutor.PathOf(hub)}: {request.Reason} — every replica drops the disabled module(s)")
+                .SelectMany(outcome => Write(r => r with { ModuleOutcome = $"{r.ModuleOutcome}; {outcome}" }, Line($"every replica: {outcome}")))
+                .Catch((Exception ex) => Write(r => r, Line($"every replica: the restart could not be requested ({ex.Message}); siblings drop the module at their next restart")));
 
         private IObservable<string> Restart(string reason)
         {
