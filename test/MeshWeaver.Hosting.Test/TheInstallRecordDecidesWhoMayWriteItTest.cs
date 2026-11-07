@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
@@ -166,6 +167,148 @@ public class TheInstallRecordDecidesWhoMayWriteItTest(ITestOutputHelper output) 
         Assert.Equal(RecordPath("GateReport"), refused.Path);
         Assert.Contains("req-x", refused.Reason);
         Assert.Equal("1.0.0", (await Stored("GateReport", ct))!.Version);
+    }
+
+    // ── #7964 review round ────────────────────────────────────────────────────────────────
+
+    private sealed class SilentSource : IPackageSource
+    {
+        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
+            Observable.Return((IReadOnlyList<PackageManifest>)[]);
+
+        public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
+            Observable.Return((IReadOnlyList<PackageFile>)[]);
+    }
+
+    /// <summary>
+    /// 4501122651: a person's reinstall of an UP-TO-DATE package — the funnel's skip exit, which writes
+    /// no record — still clears the retirement, through the real install funnel. Negative control
+    /// (measured): without the funnel's person clear, the retirement stays held.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task APersonsReinstallOfAnUpToDatePackage_ClearsTheRetirement()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var manifest = new PackageManifest
+        {
+            Id = "GateUpToDate", Name = "GateUpToDate", Source = "Plugins", Version = "1.0.0", TargetPartition = "GateUpToDate",
+            Kind = PackageKind.NodeRepo, ModuleVersion = "v1", ComparisonEpoch = PackageInstaller.InstallComparisonEpoch,
+        };
+        await InstallRecordGate.Write(Mesh, Record("GateUpToDate") with { Content = manifest }, PackageRecordWriteIntent.CreateAllowed, NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        Assert.Null(await Begin("GateUpToDate", "Admin/_PackageUninstall/req-u", ct));
+
+        var result = await CatalogLayoutAreas.InstallOrUpdate(Mesh, new SilentSource(), "HEAD",
+                manifest with { WriteIntent = PackageRecordWriteIntent.Person }, NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        Assert.Equal(0, result.Written);
+        Assert.Null((await Live("GateUpToDate", r => r.RetiringBy is null, ct)).RetiringBy);
+    }
+
+    /// <summary>
+    /// 4501122681: a stale answer left on the record is never read as this submission's grant. The
+    /// record carries an old APPLIED answer under the key a retirement used to reuse, while ANOTHER
+    /// request holds the retirement. Negative control (measured): with the reused key restored, the
+    /// stale answer is read as a grant and this is red.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AStaleAnswer_IsNeverReadAsAFreshGrant()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string request = "Admin/_PackageUninstall/req-stale";
+        var reusedKey = $"begin-{request.Replace('/', '_')}";
+        var seeded = Record("GateStale") with
+        {
+            Content = ((PackageManifest)Record("GateStale").Content!) with
+            {
+                RetiringBy = new PackageRetirement("Admin/_PackageUninstall/someone-else", "held", DateTimeOffset.UtcNow),
+                FactOutcomes = System.Collections.Immutable.ImmutableDictionary<string, PackageRecordFactOutcome>.Empty
+                    .Add(reusedKey, new PackageRecordFactOutcome(true, "a grant from an earlier attempt", DateTimeOffset.UtcNow)),
+            },
+        };
+        await Access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(seeded)).Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var refusal = await Begin("GateStale", request, ct);
+
+        Assert.NotNull(refusal);
+        Assert.Contains("someone-else already holds", refusal);
+    }
+
+    /// <summary>
+    /// 4501122704: a Begin that arrives AFTER its request released (the writer gave up on the answer and
+    /// released) never re-grants the retirement. Negative control (measured): without the owner's
+    /// ended-request memory the late Begin is granted.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ALateBeginAfterItsRelease_IsNeverGranted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Write("GateLate", PackageRecordWriteIntent.CreateAllowed, ct);
+        Assert.Null(await InstallRecordGate.EndRetirement(Mesh, "GateLate", "Admin/_PackageUninstall/req-late", NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct));
+
+        var refusal = await Begin("GateLate", "Admin/_PackageUninstall/req-late", ct);
+
+        Assert.NotNull(refusal);
+        Assert.Contains("already released", refusal);
+        Assert.Null(await Refusal("GateLate", PackageRecordWriteIntent.Restamp, ct, "1.1.0"));
+    }
+
+    /// <summary>
+    /// 4501122738: an intent the gate does not know is refused by name — at the writer (nothing is
+    /// created for an absent record) and at the owner (a stamp is not applied). Negative control
+    /// (measured): with the writer's check removed, the absent record is created.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnUnknownIntent_IsRefusedByName()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var absent = Assert.IsType<PackageRecordWriteRefusedException>(await Refusal("GateUnknown", "Bogus", ct));
+        Assert.Contains("'Bogus' is not a write intent", absent.Reason);
+        Assert.Null(await Stored("GateUnknown", ct));
+
+        await Write("GateUnknown", PackageRecordWriteIntent.CreateAllowed, ct);
+        var atOwner = await InstallRecordGate.Submit(Mesh, RecordPath("GateUnknown"), $"stamp-{Guid.NewGuid():N}",
+                new PackageRecordFact
+                {
+                    Kind = PackageRecordFactKind.Stamp,
+                    Intent = "Bogus",
+                    Stamp = (PackageManifest)Record("GateUnknown", "9.0.0").Content!,
+                    At = DateTimeOffset.UtcNow,
+                }, NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        Assert.False(atOwner.Applied);
+        Assert.Contains("not a write intent this owner knows", atOwner.Detail);
+        Assert.Equal("1.0.0", (await Stored("GateUnknown", ct))!.Version);
+    }
+
+    /// <summary>
+    /// 4501122756: a submission to a record that was DELETED is the typed refusal, not an escaping
+    /// read/delete fault. Negative control (measured): without the delete handling the submission
+    /// faults instead of answering.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ASubmissionToADeletedRecord_IsARefusal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Write("GateDeleted", PackageRecordWriteIntent.CreateAllowed, ct);
+        Assert.True(await PackageInstaller.RemoveInstalledRecord(Mesh, "GateDeleted", NullLogger.Instance).Take(1)
+            .Timeout(TestTimeouts.Convergence).Await(ct));
+
+        var outcome = await InstallRecordGate.Submit(Mesh, RecordPath("GateDeleted"), $"stamp-{Guid.NewGuid():N}",
+                new PackageRecordFact
+                {
+                    Kind = PackageRecordFactKind.Stamp,
+                    Intent = PackageRecordWriteIntent.Restamp,
+                    Stamp = (PackageManifest)Record("GateDeleted", "2.0.0").Content!,
+                    At = DateTimeOffset.UtcNow,
+                }, NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        Assert.False(outcome.Applied);
+        Assert.Contains("removed", outcome.Detail);
+        Assert.Null(await Stored("GateDeleted", ct));
     }
 
     /// <summary>

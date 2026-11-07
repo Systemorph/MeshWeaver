@@ -185,9 +185,20 @@ public static class PackageUninstallExecutor
                         // unattended stamp, so no repair or update re-writes the record while this
                         // runs. Refused (another uninstall holds it) ⇒ nothing was touched.
                         : InstallRecordGate.BeginRetirement(hub, record.Id, RequestPath, request.Reason, logger)
-                            .SelectMany(refusal => refusal is not null
-                                ? Finish(PackageUninstallStatus.Failed, $"refused: {refusal}; nothing was touched")
-                                : Retire(request, record, partition, preview)));
+                            .Select(refusal => (Refusal: refusal, Fault: (Exception?)null))
+                            .Catch((Exception ex) => Observable.Return((Refusal: (string?)null, Fault: (Exception?)ex)))
+                            .SelectMany(begun => begun.Fault is { } fault
+                                // 🚨 The owner may have GRANTED the retirement although its answer
+                                // never arrived (#7964 review): release it before going red, and the
+                                // owner's ended-request memory refuses a late Begin of this request.
+                                ? InstallRecordGate.EndRetirement(hub, record.Id, RequestPath, logger)
+                                    .Select(_ => "released")
+                                    .Catch((Exception endFault) => Observable.Return($"NOT released ({endFault.Message})"))
+                                    .SelectMany(released => Finish(PackageUninstallStatus.Failed,
+                                        $"the retirement's answer did not arrive ({fault.Message}); nothing was touched and the retirement was {released}"))
+                                : begun.Refusal is { } refusal
+                                    ? Finish(PackageUninstallStatus.Failed, $"refused: {refusal}; nothing was touched")
+                                    : Retire(request, record, partition, preview)));
                 })
                 .Catch((Exception ex) => Finish(PackageUninstallStatus.Failed, $"phase 1 faulted: {ex.Message}"));
 

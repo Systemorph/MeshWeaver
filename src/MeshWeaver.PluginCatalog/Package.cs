@@ -751,6 +751,11 @@ public record PackageManifest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PackageRetirement? RetiringBy { get; init; }
 
+    /// <summary>Install-record only: requests that RELEASED their retirement, and when — kept by the
+    /// owner for a retention window so a late Begin of the same request never re-grants it.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableDictionary<string, DateTimeOffset>? EndedRetirements { get; init; }
+
     /// <summary>Install-record only: facts writers stated under their own keys, pending the owner's
     /// fold (<see cref="InstallRecordGate"/>). Consumed by the owner, applied or refused.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

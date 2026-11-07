@@ -43,6 +43,11 @@ public static class PackageRecordFactKind
 
     /// <summary>A writer's new record content, applied or refused by the owner.</summary>
     public const string Stamp = "Stamp";
+
+    /// <summary>A person installed the package from the catalog — clears a retirement that is not yet
+    /// removing the record, even when the install wrote nothing (an up-to-date package skips the
+    /// record write entirely).</summary>
+    public const string PersonClear = "PersonClear";
 }
 
 /// <summary>Who is retiring a package, set and cleared only by the install record's OWN hub.</summary>
@@ -145,7 +150,14 @@ public static class InstallRecordGate
         var outcomes = (record.FactOutcomes ?? ImmutableDictionary<string, PackageRecordFactOutcome>.Empty)
             .Where(kv => now - kv.Value.At <= OutcomeRetention)
             .ToImmutableDictionary(StringComparer.Ordinal);
-        if (facts.IsEmpty && outcomes.Count == (record.FactOutcomes?.Count ?? 0))
+        // Requests that RELEASED their retirement, kept for the retention window so a Begin of the
+        // same request that arrives late (its writer gave up on the answer and released) can never
+        // re-grant it.
+        var ended = (record.EndedRetirements ?? ImmutableDictionary<string, DateTimeOffset>.Empty)
+            .Where(kv => now - kv.Value <= OutcomeRetention)
+            .ToImmutableDictionary(StringComparer.Ordinal);
+        if (facts.IsEmpty && outcomes.Count == (record.FactOutcomes?.Count ?? 0)
+                          && ended.Count == (record.EndedRetirements?.Count ?? 0))
             return node;
 
         var retiring = record.RetiringBy;
@@ -155,6 +167,9 @@ public static class InstallRecordGate
             PackageRecordFactOutcome Answer(bool applied, string detail) => new(applied, detail, now);
             switch (fact.Kind)
             {
+                case PackageRecordFactKind.Begin when fact.Request is { Length: > 0 } endedRequest && ended.ContainsKey(endedRequest):
+                    outcomes = outcomes.SetItem(key, Answer(false, $"refused: {endedRequest} already released this retirement — a late Begin never re-grants it"));
+                    break;
                 case PackageRecordFactKind.Begin when retiring is null && fact.Request is { Length: > 0 } request:
                     retiring = new PackageRetirement(request, fact.Reason, now);
                     outcomes = outcomes.SetItem(key, Answer(true, $"retirement held by {request}"));
@@ -179,7 +194,20 @@ public static class InstallRecordGate
                     var held = retiring is not null && string.Equals(retiring.Request, fact.Request, StringComparison.Ordinal);
                     if (held)
                         retiring = null;
+                    if (fact.Request is { Length: > 0 } released)
+                        ended = ended.SetItem(released, now);
                     outcomes = outcomes.SetItem(key, Answer(true, held ? "retirement released" : "nothing to release"));
+                    break;
+                case PackageRecordFactKind.PersonClear when retiring is { Removing: true }:
+                    outcomes = outcomes.SetItem(key, Answer(false, $"refused: {retiring.Request} is removing this install record now"));
+                    break;
+                case PackageRecordFactKind.PersonClear:
+                    var clearedBy = retiring?.Request;
+                    retiring = null;
+                    outcomes = outcomes.SetItem(key, Answer(true, clearedBy is null ? "nothing to clear" : $"cleared the retirement held by {clearedBy}"));
+                    break;
+                case PackageRecordFactKind.Stamp when !IsKnownIntent(fact.Intent):
+                    outcomes = outcomes.SetItem(key, Answer(false, $"refused: '{fact.Intent}' is not a write intent this owner knows"));
                     break;
                 case PackageRecordFactKind.Stamp when fact.Stamp is null:
                     outcomes = outcomes.SetItem(key, Answer(false, "refused: the stamp carries no content"));
@@ -209,6 +237,7 @@ public static class InstallRecordGate
             Content = content with
             {
                 RetiringBy = retiring,
+                EndedRetirements = ended.IsEmpty ? null : ended,
                 RecordFacts = null,
                 FactOutcomes = outcomes.IsEmpty ? null : outcomes,
                 WriteIntent = null,
@@ -262,6 +291,11 @@ public static class InstallRecordGate
         return storage.Read(record.Path, hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
             .SelectMany(existing =>
             {
+                // Every intent is resolved by name; an unclaimed value is refused, never given the
+                // default's semantics (open vocabularies: unknown stays unknown).
+                if (!IsKnownIntent(intent))
+                    return Observable.Throw<MeshNode>(new PackageRecordWriteRefusedException(record.Path,
+                        $"'{intent}' is not a write intent this gate knows — nothing was written"));
                 if (existing is not null)
                     return Stamp(hub, record.Path, clean, intent, logger);
                 if (intent == PackageRecordWriteIntent.Restamp)
@@ -279,6 +313,34 @@ public static class InstallRecordGate
                             : Observable.Throw<MeshNode>(new InvalidOperationException(
                                 $"Recording install at '{record.Path}' failed: {response.Error}")));
             });
+    }
+
+    /// <summary>Whether <paramref name="intent"/> is one of the <see cref="PackageRecordWriteIntent"/> values. Pure.</summary>
+    /// <param name="intent">The intent.</param>
+    public static bool IsKnownIntent(string? intent) =>
+        intent is PackageRecordWriteIntent.CreateAllowed or PackageRecordWriteIntent.Restamp or PackageRecordWriteIntent.Person;
+
+    /// <summary>
+    /// A person's catalog install of <paramref name="packageId"/> CLEARS a retirement that is not yet
+    /// removing the record — stated even when the install wrote nothing (an up-to-date package never
+    /// reaches the record write). Absent record: nothing to clear. Faults with
+    /// <see cref="PackageRecordWriteRefusedException"/> when the record is being removed right now.
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="packageId">The package.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static IObservable<Unit> ClearForPerson(IMessageHub hub, string packageId, ILogger? logger)
+    {
+        var path = $"{PackageInstaller.InstalledPartition}/{packageId}";
+        var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        return storage.Read(path, hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
+            .SelectMany(existing => existing is null
+                ? Observable.Return(Unit.Default)
+                : Submit(hub, path, $"personclear-{Guid.NewGuid():N}",
+                        new PackageRecordFact { Kind = PackageRecordFactKind.PersonClear, At = DateTimeOffset.UtcNow }, logger)
+                    .SelectMany(outcome => outcome.Applied
+                        ? Observable.Return(Unit.Default)
+                        : Observable.Throw<Unit>(new PackageRecordWriteRefusedException(path, outcome.Detail))));
     }
 
     private static IObservable<MeshNode> Stamp(IMessageHub hub, string path, PackageManifest content, string intent, ILogger? logger)
@@ -318,7 +380,10 @@ public static class InstallRecordGate
     private static IObservable<string?> Retirement(IMessageHub hub, string packageId, string request, string kind, string? reason, ILogger? logger)
     {
         var path = $"{PackageInstaller.InstalledPartition}/{packageId}";
-        var key = $"{kind.ToLowerInvariant()}-{request.Replace('/', '_')}";
+        // A FRESH correlation key per submission (#7964 review): a persisted answer under a reused key
+        // could be read as this submission's grant. The request is the stable holder identity the owner
+        // is idempotent on; the key only correlates this one answer.
+        var key = $"{kind.ToLowerInvariant()}-{Guid.NewGuid():N}";
         return Submit(hub, path, key, new PackageRecordFact { Kind = kind, Request = request, Reason = reason, At = DateTimeOffset.UtcNow }, logger)
             .Select(outcome => outcome.Applied ? null : outcome.Detail);
     }
@@ -329,7 +394,25 @@ public static class InstallRecordGate
     /// arrives within <see cref="AnswerBudget"/> the record is re-read: absent ⇒ refused (removed
     /// meanwhile — a stated fact never re-creates it); present ⇒ a fault naming the silent owner.
     /// </summary>
-    private static IObservable<PackageRecordFactOutcome> Submit(
+    internal static IObservable<PackageRecordFactOutcome> Submit(
+        IMessageHub hub, string path, string key, PackageRecordFact fact, ILogger? logger)
+    {
+        var storageForRemoval = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        // 🚨 A delete of THIS record racing the submission does not always reach the timeout: the
+        // stream cache ends active readers with a delete exception, a fresh read gets a routing
+        // NotFound, and the stating Update itself can fail on a deleted node (#7964 review). Each is
+        // judged by the one fact that matters — is the record gone? — and becomes the typed refusal;
+        // with the record still there the fault is unrelated and propagates unchanged.
+        return SubmitCore(hub, path, key, fact, logger)
+            .Catch((Exception ex) => storageForRemoval.Read(path, hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
+                .Catch((Exception _) => Observable.Throw<MeshNode?>(ex))
+                .SelectMany(node => node is null
+                    ? Observable.Return(new PackageRecordFactOutcome(false,
+                        "the install record was removed before its owner answered", DateTimeOffset.UtcNow))
+                    : Observable.Throw<PackageRecordFactOutcome>(ex)));
+    }
+
+    private static IObservable<PackageRecordFactOutcome> SubmitCore(
         IMessageHub hub, string path, string key, PackageRecordFact fact, ILogger? logger)
     {
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();

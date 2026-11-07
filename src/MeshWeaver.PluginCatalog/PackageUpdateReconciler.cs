@@ -707,12 +707,13 @@ internal static class PackageUpdateReconciler
             "Package update: auto-updating {Id} to {Version} ({Detail}); authorized by {Principal}.",
             pkg.Id, pkg.ModuleVersion, detail, record.AuthorizedBy ?? "(nobody)");
 
-        return Observable.Using(
-                accessService.ImpersonateAsSystem,
+        // RunAsSystem, never Observable.Using (#1790): a Using scope opens on the subscribing thread
+        // and closes wherever the install terminates, latching the subscriber as System.
+        return accessService.RunAsSystem(
                 // 🚨 An unattended update RE-STAMPS the existing record and never re-creates one an
                 // uninstall removed meanwhile; the record's own hub refuses it while the package is
                 // being retired (MeshWeaver.Plugins#5055).
-                _ => CatalogLayoutAreas.InstallOrUpdate(
+                () => CatalogLayoutAreas.InstallOrUpdate(
                     hub, source, sourceRef, pkg with { WriteIntent = PackageRecordWriteIntent.Restamp }, logger, record.AuthorizedBy))
             .Do(result => logger?.LogInformation(
                 "Package update: {Id} auto-updated ({Written} written, {Unchanged} unchanged).",

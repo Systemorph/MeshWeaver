@@ -713,7 +713,13 @@ public static partial class CatalogLayoutAreas
             // records onto unmet floors.
             .SelectMany(_ => HoldIfPlatformBelowFloor(hub, pkg, logger,
                 () => HoldIfADependencyIsBelowItsFloor(hub, pkg, logger,
-                    () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId, proposeModuleSet))));
+                    () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId, proposeModuleSet))))
+            // 🚨 A PERSON's install clears a retirement on EVERY exit (#7964 review): an up-to-date
+            // package skips the record write entirely, so the person's intent would otherwise never
+            // reach the record's owner and the uninstall could still delete the record.
+            .SelectMany(result => pkg.WriteIntent == PackageRecordWriteIntent.Person
+                ? InstallRecordGate.ClearForPerson(hub, pkg.Id, logger).Select(_ => result)
+                : Observable.Return(result));
     }
 
     /// <summary>

@@ -64,8 +64,17 @@ answer and removes it.
 |---|---|---|
 | `Begin` | phase 1, after its refusals and the preview | grants `RetiringBy` (this request) unless another request holds it; phase 1 proceeds only when granted, and touches nothing otherwise |
 | `Remove` | phase 1, just before it deletes the record | marks the retirement `Removing`; refuses when this request no longer holds it (a person installed the package meanwhile), and phase 1 then stops and keeps the record |
-| `End` | phase 1, when it faults after `Begin` | releases the retirement, so the package is repairable again |
+| `End` | phase 1, when it faults after `Begin` — and when `Begin`'s answer never arrived (the owner may have granted it) | releases the retirement, so the package is repairable again, and remembers the request for the retention window so a LATE `Begin` of it is refused |
 | `Stamp` | every install-record write: the install funnel, the repair, the unattended update | applies it, or **refuses** it while a retirement is held. A person's stamp (`PackageRecordWriteIntent.Person`, the catalog click) clears a retirement that is not yet `Removing`, and is applied |
+
+| `PersonClear` | the install funnel, at the end of every exit of a person's install — including the up-to-date skip, which writes no record | clears a retirement that is not yet `Removing`; refused while the record is being removed |
+
+Every submission correlates its answer under a FRESH key, so an answer left behind by an earlier
+attempt is never read as this one's; the owner is idempotent on the request, not on the key. A write
+intent the gate does not know is refused by name — by the writer before anything is created, and by
+the owner for a stamp — never given the default's semantics. A delete of the record racing a
+submission (an ended reader, a routing NotFound, a failed stating write) is judged by whether the
+record is gone: gone is the typed refusal, present is an unrelated fault and propagates.
 
 A refused stamp reaches its writer as `PackageRecordWriteRefusedException`, carrying the owner's
 words; the boot install records it as a skip, never as a silent success. A write through the gate is
