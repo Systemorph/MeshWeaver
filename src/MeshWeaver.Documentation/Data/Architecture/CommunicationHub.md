@@ -395,11 +395,26 @@ function of the filter and the legs.
 >
 > Kinds, per-kind states, sources and "Show ignorable" are CHECKBOXES bound to the person's own `InboxPreferences` node
 > (`kinds/{key}`, `activityStates/{group}`, `mailStates/{group}`, `chatStates/{group}`, `sources/{key}`, `showIgnorable` — see "What the inbox shows by default" below), the
-> tags a bound list of `InboxTagItem`: the union of the ticked kinds or tags is listed, and none ticked lists all. A **State**
-> column (`InboxState`, read from the node's own status or implied by the leg that found it) badges each row:
-> Awaiting decision / Approved / Rejected / Expired for approvals, Requested / Running / Done / Failed / Cancelled
-> for activities, Unread for mail and notifications. A check mark is reserved for done states; approval requests
-> are symbolised by a gavel (`InboxSourceIcons`), never a tick.
+> tags a bound list of `InboxTagItem`: the union of the ticked kinds or tags is listed, and none ticked lists all.
+>
+> **The row reads like a mail client's message list (2026-11).** After the Source symbol the grid has ONE column,
+> **Item**, a template of platform controls bound to the row (`InboxLayoutArea.ItemCell`): line 1 the sender
+> (`InboxRow.From`, semibold while unread — `InboxRow.Emphasis`, carried on the row so the Blazor and React clients
+> bold the same two lines), the state badge, the account and the compact time (`InboxRows.ShortWhen`: the time today,
+> the weekday and time within the last week, else the short date, in the viewer's zone and culture); line 2 the subject
+> and the tags; line 3 the beginning of the body (`InboxRow.Preview` — the content's `preview`, which the Outlook,
+> Gmail and Teams sources write from the provider's `bodyPreview`/snippet, else a stored mail's `body` as plain text).
+> Each line is one line, cut with an ellipsis, so nothing scrolls sideways. The State badge (`InboxState`, read from
+> the node's own status or implied by the leg that found it) shows Awaiting decision / Approved / Rejected / Expired
+> for approvals and Requested / Running / Done / Failed / Cancelled for activities; it is hidden without a state, and
+> VISUALLY hidden for Unread (the bold says it to the eye; the localized badge still says it to a screen reader). The
+> account and tags shrink and ellipsize within a third of their line; only the compact time never shrinks. A stored
+> mail's body is read as HTML only when it looks like HTML, so a plain text with `<` or `>` keeps its meaning. 🚨 That is also why the separate State and Status columns were blank for
+> every mail: a READ mail has no lifecycle state at all, an unread one only Unread, and Status repeated the badge — so
+> the row now spends no room on either. A status that says MORE than the badge (an approval whose target was refused
+> as stale) is the third line when there is no preview. The account is named only when more than one account feeds
+> the inbox (`InboxRows.ForList`). A check mark is reserved for done states; approval requests are symbolised by a
+> gavel (`InboxSourceIcons`), never a tick.
 
 | Control | Bound to | What it does |
 |---|---|---|
