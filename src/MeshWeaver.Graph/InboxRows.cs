@@ -647,7 +647,7 @@ public static class InboxRows
     /// <summary>
     /// The beginning of an item's body for the row's preview line (<see cref="InboxRow.Preview"/>): the content's
     /// <c>preview</c> when the source wrote one, else its <c>body</c> — a stored mail, HTML or plain text — as plain
-    /// text. Whitespace collapsed, cut at <see cref="PreviewLength"/> characters with an ellipsis; empty when there
+    /// text. The quoted reply and the signature cut (<see cref="InboxPreview.Clean"/>), whitespace collapsed, cut at <see cref="PreviewLength"/> characters with an ellipsis; empty when there
     /// is neither. Pure.
     /// </summary>
     /// <param name="content">The row's content, or null.</param>
@@ -656,7 +656,9 @@ public static class InboxRows
         var text = StringOf(content, "preview") is { } preview && !string.IsNullOrWhiteSpace(preview)
             ? preview
             : StringOf(content, "body") is { } body && !string.IsNullOrWhiteSpace(body) ? PlainText(body) : string.Empty;
-        var collapsed = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        // The new text only: the reply it quotes and the signature are cut where a cheap scan sees them
+        // (InboxPreview.Clean — "On … wrote:", "From: … Sent:", "-- ", mid-line too, as Graph's bodyPreview is one line).
+        var collapsed = InboxPreview.Clean(text);
         if (collapsed.Length <= PreviewLength)
             return collapsed;
         // Cut on a character boundary: never between the halves of a surrogate pair (an emoji).
