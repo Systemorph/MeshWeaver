@@ -39,8 +39,8 @@ flowchart TB
     end
     DERP["DERP relays<br/>(public map today)"]
 
-    Internet -->|"https://&lt;control-server-host&gt;"| Ingress --> HS
-    Internet -->|"https://&lt;mac&gt;.&lt;public-domain&gt;"| Ingress --> Bridge
+    Internet -->|"https://#lt;control-server-host#gt;"| Ingress --> HS
+    Internet -->|"https://#lt;mac#gt;.#lt;public-domain#gt;"| Ingress --> Bridge
     HS -. "keys, policy, MagicDNS" .- Mac1 & Mac2 & Laptop & Phone & Bridge
     Mac1 <-->|"WireGuard, peer to peer"| Laptop
     Bridge <-->|WireGuard| Mac1
@@ -82,9 +82,9 @@ sequenceDiagram
     rect rgba(127,127,127,0.08)
     note over D,P: A person's laptop or phone: OIDC
     D->>H: register (machine key, no auth)
-    H-->>D: authURL /register/<request>
+    H-->>D: authURL /register/#lt;request#gt;
     D->>P: open authURL
-    P->>H: GET /register/<request>
+    P->>H: GET /register/#lt;request#gt;
     H-->>P: redirect to the provider (PKCE)
     P->>I: sign in (the provider's MFA, SSO, passkey)
     I-->>H: /oidc/callback with code
@@ -139,10 +139,10 @@ sequenceDiagram
     participant M as Mac host (network member)
     participant L as Mac's local front door (127.0.0.1)
     participant Pt as Local portal
-    B->>G: https://<mac>.<public-domain>/...
+    B->>G: https://#lt;mac#gt;.#lt;public-domain#gt;/...
     G->>R: HTTP, Host = public name
     R->>R: block /dev/* (open sign-in) as defense in depth
-    R->>M: over WireGuard to <mac>.<base-domain>
+    R->>M: over WireGuard to #lt;mac#gt;.#lt;base-domain#gt;
     M->>L: delivered on loopback by the userspace client
     L->>Pt: Host = public name
     Pt->>Pt: sign-in gate (section 5)
@@ -206,8 +206,8 @@ flowchart LR
     end
     subgraph Ctl["Control instance"]
         Inbox["Heartbeat inbox<br/>verify, then publish"]
-        Status["Ops/Status/&lt;mac&gt;<br/>DeploymentStatus + Host section<br/>staleAfter = 3 × interval"]
-        FW["Fleet watch<br/>does not sample mac-host records;<br/>reads the pushed status"]
+        Status["Ops/Status/#lt;mac#gt;<br/>DeploymentStatus + Host section<br/>staleAfter = 3 × interval"]
+        FW["Fleet watch<br/>does not sample mac-host records,<br/>reads the pushed status"]
         OC["Collector → metrics store<br/>(in progress)"]
     end
     HB -->|"over the private network"| Inbox --> Status --> FW
