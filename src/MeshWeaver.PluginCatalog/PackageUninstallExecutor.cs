@@ -209,29 +209,30 @@ public static class PackageUninstallExecutor
         /// request goes red, so the package is repairable again.</summary>
         private IObservable<Unit> Retire(PackageUninstallRequest request, PackageManifest record, string partition, PackageUninstallPartition preview) =>
             RetireModule(request, record)
-                            .SelectMany(moduleOutcome => CloseHubs(partition).Select(closed => (moduleOutcome, closed)))
+                            .SelectMany(retired => CloseHubs(partition).Select(closed => (moduleOutcome: retired.Outcome, retired.Disabled, closed)))
                             // Announce the removal: from the owner's answer on, a person's install is
                             // refused too. A refusal here means a PERSON installed it meanwhile — the
                             // record is theirs now and stays.
                             .SelectMany(x => InstallRecordGate.MarkRemoving(hub, record.Id, RequestPath, logger)
-                                .Select(displaced => (x.moduleOutcome, x.closed, displaced)))
+                                .Select(displaced => (x.moduleOutcome, x.Disabled, x.closed, displaced)))
                             .SelectMany(x => x.displaced is { } displaced
                                 ? Finish(PackageUninstallStatus.Failed,
                                     $"stopped: {displaced}; the install record is kept (module: {x.moduleOutcome})")
-                                : RemoveAndPreview(record, partition, preview, x.moduleOutcome, x.closed))
+                                : RemoveAndPreview(record, partition, preview, x.moduleOutcome, x.Disabled, x.closed))
                 .Catch((Exception ex) => InstallRecordGate.EndRetirement(hub, record.Id, RequestPath, logger)
                     .Select(_ => "released")
                     .Catch((Exception endFault) => Observable.Return($"NOT released ({endFault.Message})"))
                     .SelectMany(released => Finish(PackageUninstallStatus.Failed,
                         $"phase 1 faulted after the retirement was granted: {ex.Message}; the retirement was {released}")));
 
-        private IObservable<Unit> RemoveAndPreview(PackageManifest record, string partition, PackageUninstallPartition preview, string moduleOutcome, int closed) =>
+        private IObservable<Unit> RemoveAndPreview(PackageManifest record, string partition, PackageUninstallPartition preview, string moduleOutcome, bool moduleDisabled, int closed) =>
             PackageInstaller.RemoveInstalledRecord(hub, record.Id, logger).Take(1)
                                 .Select(removed => (moduleOutcome, closed, removed))
                             .SelectMany(x => Write(r => r with
                                 {
                                     Module = string.IsNullOrWhiteSpace(record.Module) ? null : record.Module,
                                     ModuleOutcome = x.moduleOutcome,
+                                    ModuleDisabled = moduleDisabled,
                                     Partitions = [preview],
                                     ConfirmationRequired = partition,
                                     Status = PackageUninstallStatus.AwaitingConfirmation,
@@ -310,23 +311,64 @@ public static class PackageUninstallExecutor
             + string.Join(", ", p.RowsByTable.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value}"))
             + (p.SyncConfig ? "; a sync configuration" : "");
 
-        /// <summary>Retires the package's module: removes its landed generation, then unloads it live
-        /// where the process can, else asks for exactly ONE restart (stamped first).</summary>
-        private IObservable<string> RetireModule(PackageUninstallRequest request, PackageManifest record)
+        /// <summary>What retiring the module did: the outcome sentence, and whether the landed generation
+        /// is disabled (now, or by an earlier interrupted run).</summary>
+        private sealed record ModuleRetired(string Outcome, bool Disabled);
+
+        /// <summary>
+        /// Retires the package's module: disables its landed generation, then unloads it live where the
+        /// process can, else asks for exactly ONE restart (stamped first).
+        ///
+        /// <para>🚨 The activation is read WHOLE or not at all (<see cref="ModuleLandingService.GetCheckedActivation"/>,
+        /// #7959 review): a read that dropped an unreadable record would make a landed module look
+        /// absent, and phase 1 would then remove the install record with the generation still enabled
+        /// — so an incomplete read FAULTS, and phase 1 goes red with the install record kept. A removal
+        /// that fails faults the same way, never becomes a sentence. An entry that is ALREADY disabled
+        /// is "disable done" (a phase 1 resumed after its removal), never "never landed" — and its
+        /// removal still runs again, because the tombstone may have landed without the projection.
+        /// Once the generation is disabled, <see cref="PackageUninstallRequest.ModuleDisabled"/> is
+        /// written at once, before any later step can fail.</para>
+        /// </summary>
+        private IObservable<ModuleRetired> RetireModule(PackageUninstallRequest request, PackageManifest record)
         {
             var module = record.Module?.Trim();
             if (string.IsNullOrWhiteSpace(module))
-                return Observable.Return("the package declares no compiled module");
+                return Observable.Return(new ModuleRetired("the package declares no compiled module", false));
             var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
             var removed = landing is null
-                ? Observable.Return("no landing service on this host")
-                // 🚨 Through the install record's OWNER (MeshWeaver.Plugins#5055, ModuleLandingOwner):
-                // the removal queues behind any landing in flight there, so the tombstone is last.
-                : ModuleLandingOwner.Remove(hub, record.Id, module, RequestPath, logger)
-                    .Catch((Exception ex) => Observable.Return($"no landed generation to remove ({ex.Message})"));
+                ? Observable.Return(new ModuleRetired("no landing service on this host", false))
+                : landing.GetCheckedActivation().Take(1).SelectMany(activation =>
+                    activation.Entries.FirstOrDefault(e => string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase)) switch
+                    {
+                        null => Observable.Return(new ModuleRetired("not landed by the store lane — no landed generation to disable", false)),
+                        // 🚨 Disabled by the TOMBSTONE does not mean the removal finished (#7972
+                        // review): a removal stopped between the tombstone and the projection leaves
+                        // the per-module file — what an older image reads — still enabled. The
+                        // removal is idempotent, so it runs again and rewrites the projection.
+                        // 🚨 Every removal goes through the install record's OWNER (MeshWeaver.Plugins#5055,
+                        // ModuleLandingOwner): it queues behind any landing in flight there, so the
+                        // tombstone is written last; a removal the owner did not carry out faults.
+                        { Enabled: false } => ModuleLandingOwner.Remove(hub, record.Id, module, RequestPath, logger).Select(_ => new ModuleRetired(
+                            "landed generation already disabled (an earlier run of this phase removed it)", true)),
+                        _ => ModuleLandingOwner.Remove(hub, record.Id, module, RequestPath, logger)
+                            .Select(_ => new ModuleRetired("landed generation disabled", true)),
+                    });
             var agent = hub.ServiceProvider.GetService<ModuleReloadAgent>();
             var loaded = (agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()).Contains(module);
-            return removed.SelectMany(landed =>
+            return removed
+                // 🚨 What is on disk is recorded the moment it is true (#7972 review): a later step
+                // (the live retire, the restart, the hub close, the record removal) that fails ends
+                // the request Failed, and it must still say the module IS disabled.
+                .SelectMany(retired => (retired.Disabled
+                        ? Write(r => r with { ModuleDisabled = true }, Line($"module: {retired.Outcome}"))
+                        : Observable.Return(Unit.Default))
+                    .Select(_ => retired))
+                .SelectMany(retired => RetireLoaded(request, module, loaded, retired.Outcome)
+                    .Select(outcome => retired with { Outcome = outcome }));
+        }
+
+        private IObservable<string> RetireLoaded(PackageUninstallRequest request, string module, bool loaded, string landed)
+        {
             {
                 if (!loaded)
                     return Observable.Return($"{module}: {landed}; not loaded in this process — nothing to unload");
@@ -338,7 +380,7 @@ public static class PackageUninstallExecutor
                 return liveTry.SelectMany(outcome => outcome.Swapped
                     ? Observable.Return($"{module}: {landed}; retired LIVE")
                     : Restart(reason).Select(restart => $"{module}: {landed}; not retired live ({outcome.Failure}) — {restart}"));
-            });
+            }
         }
 
         private IObservable<string> Restart(string reason)

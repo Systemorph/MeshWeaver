@@ -505,10 +505,29 @@ raises an occurrence count instead of opening another ticket.
 |---|---|---|---|
 | Loki answered a long, continuously-watched window with **zero lines** | `LogPipelineGap.IsLostWindow` | Critical | the store lost that stretch — the query is unfiltered, so a running portal cannot be that quiet |
 | The query came back **at `QueryLimit`** | `LogPipelineGap.IsTruncated` | Error | the window was NOT fully read; the remainder is **deferred**, and while it lasts a noisy source crowds quieter errors out of the prefix that gets read |
-| The cursor was **floored by `MaxCatchUp`** | `WatcherState.CursorFor` returns the skipped stretch | Critical | one of the two paths that LOSE evidence outright — that stretch will never be read |
+| The cursor was **floored by `MaxCatchUp`** | `WatcherState.CursorFor` returns the skipped stretch | Critical | one of the two paths that LOSE evidence outright — that stretch will never be read. The same pass ALSO files the restart / collection-failed / behind finding over the WHOLE unwatched stretch, from the old cursor to the window's end (see below) |
 | Red bursts arrived as a console **header and nothing else** | `BurstAggregator` → `LogPipelineGap.HeaderOnlyReport` | Error | a capture with no body; never fingerprinted, because `(category, eventId)` names a component and no defect |
 | The portal **permanently rejected** a report | `LogIncidentDelivery.IsPermanent` → `LogPipelineGap.RejectedReport` | Critical | the other path that loses outright — that report is gone from the queue and its red log will never be ticketed |
 | …and the **portal's own** record of the same refusal | `LogIncidentEndpoints.PermanentRefusal` → `LogIncidentDelivery.RefusalReport` | Critical | written by the ingest endpoint, not the watcher — the only one that survives a contract skew |
+
+### 🚨 A floored cursor names its WIDTH and its CAUSE, not only the stretch it skips
+
+The skipped stretch is only the OLDEST part of the time the watcher was not reading. With the
+default 6 h cap, a watcher that was absent for 6 h 01 min skips one minute and reads the other six
+hours late. Measured on 2026-11-07 (#7956, #7958): memex and memex-cloud both resumed at 07:18:53Z
+on a cursor left at 01:18:06Z. Each filed `Skipped [01:18:06Z, 01:18:53Z) — 1 minute(s) never read`
+and nothing else. Six hours in which no red line was ticketed therefore read as a sub-minute blip.
+The one fact that separates the causes, a watcher restart or failed collections, was reported
+nowhere, because a floored cursor is by definition not continuous and the restart / failure /
+behind classification was gated on continuity.
+
+Now the floored pass files that classification too, over the whole unwatched stretch
+`[old cursor, window end)`: `log-watcher-restart-gap-{ns}` when this process did not leave the
+cursor, `log-collection-failed-{ns}` when collections failed since it last moved, otherwise
+`log-pipeline-behind-{ns}`. The skipped report's sample prints a sub-minute stretch in seconds,
+never as "0 minute(s)" or "1 minute(s)", and adds how long the cursor had not moved. Pinned by
+`PipelineLagIsVisibleAndIsolatedTest.ARestartOlderThanMaxCatchUp_FilesTheSkipAndTheRestartOverTheWholeStretch`
+and its siblings in MeshWeaver.Plugins.
 
 ### 🚨 A rejected report is DESTROYED, so the destruction is a finding
 

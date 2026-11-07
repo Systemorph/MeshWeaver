@@ -31,6 +31,13 @@ Refused by name, before anything is touched:
 - any node under it **cannot be read** while it is measured: a fault is not an absence, so the
   partition is not verified free of user data (the first five faults are named).
 
+The module's activation is read **whole or not at all** (`ModuleLandingService.GetCheckedActivation`).
+An unreadable activation record would make a landed module look like it was never landed, and phase 1
+would remove the install record with the generation still enabled. So an incomplete read, or a
+removal that fails, **fails** the request and keeps the install record. An entry that is **already
+disabled** counts as done: a phase 1 resumed after its removal records `ModuleDisabled`, never "never
+landed".
+
 Then, in order: the **module** is retired (its landed generation disabled; unloaded live through
 `IModuleLiveActivation.Retire` where the loader can, else exactly one automatic restart through the
 self-update restart path, stamped first); the partition's **hubs are closed** (`DisposeRequest` to
