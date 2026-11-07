@@ -527,7 +527,9 @@ emit, `obj/<cfg>/<tfm>/ref/<Asm>.dll`), not of its method bodies.
 | public API — the reference assembly differs (this includes the optional-constructor-parameter binary break, because the signature is public surface) | rebuilt and tested as before |
 | any non-C# file under D (csproj, resource, content, asset) | rebuilt — the reference assembly does not describe it |
 
-What makes a skip sound, every rule erring toward rebuild: only `*.cs` edits are eligible; a unit
+What makes a skip sound, every rule erring toward rebuild: only edits of evaluated `Compile` items are
+eligible (a `.cs` a project embeds as a resource is payload, hashed into the non-C# identity); a
+`.Test` unit owns its production sibling; a unit
 whose closure holds an `InternalsVisibleTo` friend of D keys on D's FULL assembly (friends are the
 union of the compiled attribute blobs and the declared items, over-approximated); a unit that
 READS a changed file as text (a declared input, a linked include, a census) is never skipped;
@@ -543,8 +545,9 @@ publication) never consult a verdict.
   eligible changed project at head, swaps only that project's changed files to the base, rebuilds
   it, restores and rebuilds head; the verdict lists per project `eligible`, `unchanged`, `refasm`,
   `baseRefasm`, `friends`, `files`, `reason`.
-* `abi-key.py decide --root R --verdict V --units U.json [--reselected ids.json]` — per unit
-  `skip` (with the reason) or `keep` (with why).
+* `abi-key.py decide --root R --verdict V --units U.json --reselected ids.json` — per unit
+  `skip` (with the reason) or `keep` (with why). Without `--reselected` nothing skips: only the
+  caller's re-selection can prove that nothing ELSE in the diff reaches a unit.
 * `abi-key.py key --root R --project P --manifest M.json` — the ABI test key of unit P: own
   directories by tree hash, every other closure project by `abi:` (reference assembly + non-C#
   tree), or `full:` when a friend in P's closure sees its internals; plus module-build-key.py's

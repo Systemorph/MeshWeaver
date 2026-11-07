@@ -93,10 +93,11 @@ CLI
         files[], friends[], reason}}, deterministic}. Leaves every probed project built at HEAD.
   abi-key.py decide --root R --verdict V --units U.json [--reselected ids.json] [--out decision.json]
       U.json = [{id, project, reads?: [prefix|glob …]}]; ids.json = ids still selected when the
-      verdict's unchanged files are removed from the diff (the caller's own selector).
+      verdict's unchanged files are removed from the diff (the caller's own selector). REQUIRED for any
+      skip: without it every unit is kept (nothing outside the verdict's files is known unchanged).
       → {id: {decision: "skip"|"keep", reason, dependencies[]}}; skip reasons read exactly
         `public API unchanged (ref asm <hash12>)`.
-  abi-key.py key --root R --project P --manifest M.json [--platform STR] [--json]
+  abi-key.py key --root R --project P --manifest M.json [--platform STR] [--read GLOB …] [--json]
       → the ABI test key of unit P (see THE KEY), or {key, inputs} with --json.
   abi-key.py --self-test
 
@@ -170,26 +171,50 @@ def assembly_names(root: Path, rel_dir: str) -> set[str]:
 
 
 def own_dirs(root: Path, project: str) -> set[str]:
-    """The unit's own directories: its entry project's dir and its sibling `<dir>.Test`."""
+    """The unit's own directories: its entry project's dir and its sibling — `<dir>.Test` for a
+    production entry, the production `<dir>` for a `.Test` entry (review of core #7986: a test-project
+    unit must keep its production sibling's changes its own, or an internal edit would skip it)."""
     d = (root / project).parent
     out = {d.relative_to(root).as_posix()}
-    t = d.with_name(d.name + ".Test")
-    if t.is_dir() and any(t.glob("*.csproj")):
-        out.add(t.relative_to(root).as_posix())
+    sibling = d.with_name(d.name[: -len(".Test")]) if d.name.endswith(".Test") else d.with_name(d.name + ".Test")
+    if sibling.is_dir() and any(sibling.glob("*.csproj")):
+        out.add(sibling.relative_to(root).as_posix())
     return out
 
 
-def noncode_hash(root: Path, rel_dir: str) -> str:
-    """Tree hash over every file under rel_dir that is NOT C# source — what a reference assembly
-    cannot describe (project file, resources, content, assets)."""
+_PAYLOAD_RISK = re.compile(r"<Compile\s[^>]*Remove=|EnableDefaultCompileItems|"
+                           r"<(?:EmbeddedResource|Content|None)\s[^>]*(?:Include|Update)=[\"'][^\"']*(?:\.cs\b|\*)")
+
+
+def payload_risk(root: Path, rel_dir: str) -> bool:
+    """Could a `.cs` file under rel_dir be PAYLOAD rather than compiler input? (a Compile Remove, default
+    compile items off, or a resource/content include that matches .cs or a wildcard). Read from the
+    project text — the fallback when MSBuild's evaluated Compile items are not at hand."""
+    return any(_PAYLOAD_RISK.search(c.read_text(encoding="utf-8", errors="replace"))
+               for c in (root / rel_dir).glob("*.csproj"))
+
+
+def is_code(root: Path, rel_path: str, rel_dir: str, code: set[str] | None) -> bool:
+    """Is this file compiler input of the project at rel_dir? `code` = MSBuild's evaluated Compile items
+    under rel_dir (minus resources/content) when known; otherwise a `.cs` with no payload risk."""
+    if not rel_path.endswith(".cs"):
+        return False
+    if code is not None:
+        return rel_path in code
+    return not payload_risk(root, rel_dir)
+
+
+def noncode_hash(root: Path, rel_dir: str, code: set[str] | None = None) -> str:
+    """Tree hash over every file under rel_dir that is NOT compiler input — what a reference assembly
+    cannot describe (project file, resources, content, assets, C# payload a project embeds)."""
     base = root / rel_dir
     entries: list[str] = []
     for dirpath, dirnames, filenames in os.walk(base):
         dirnames[:] = sorted(d for d in dirnames if d not in _MBK.SKIP_DIRS)
         for name in sorted(filenames):
-            if name.endswith(".cs"):
-                continue
             p = Path(dirpath) / name
+            if is_code(root, p.relative_to(root).as_posix(), rel_dir, code):
+                continue
             entries.append(f"{p.relative_to(base).as_posix()}={_MBK.file_hash(p)}")
     return sha256("\n".join(entries).encode("utf-8"))
 
@@ -198,9 +223,24 @@ def noncode_hash(root: Path, rel_dir: str) -> str:
 
 _IVT_ITEM = re.compile(r"<InternalsVisibleTo\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')")
 _IVT_ATTR = re.compile(r"InternalsVisibleTo(?:Attribute)?\s*\(\s*\"([^\"]+)\"")
-# A custom-attribute blob with ONE string argument: prolog 0x0001, a packed length (< 0x80 for any
-# assembly name), UTF-8 bytes, zero named arguments 0x0000.
-_SERSTRING = re.compile(rb"\x01\x00([\x01-\x7f])")
+# A custom-attribute blob with ONE string argument: prolog 0x0001, an ECMA-335 COMPRESSED length
+# (1 byte < 0x80, 2 bytes 10xxxxxx… < 0x4000 — a full strong-name PublicKey makes an IVT string ~330
+# bytes, review of core #7986), UTF-8 bytes, zero named arguments 0x0000.
+_PROLOG = b"\x01\x00"
+
+
+def _compressed(data: bytes, at: int) -> tuple[int, int] | None:
+    """(value, bytes used) of the ECMA-335 compressed unsigned integer at `at`, or None."""
+    if at >= len(data):
+        return None
+    b0 = data[at]
+    if b0 & 0x80 == 0:
+        return b0, 1
+    if b0 & 0xC0 == 0x80 and at + 1 < len(data):
+        return ((b0 & 0x3F) << 8) | data[at + 1], 2
+    if b0 & 0xE0 == 0xC0 and at + 3 < len(data):
+        return ((b0 & 0x1F) << 24) | (data[at + 1] << 16) | (data[at + 2] << 8) | data[at + 3], 4
+    return None
 
 
 def _name(raw: str) -> str:
@@ -216,10 +256,17 @@ def friends_from_assembly(data: bytes) -> set[str]:
     if b"InternalsVisibleToAttribute" not in data:
         return set()
     out: set[str] = set()
-    for m in _SERSTRING.finditer(data):
-        n = m.group(1)[0]
-        start = m.end()
+    at = data.find(_PROLOG)
+    while at != -1:
+        got = _compressed(data, at + 2)
+        nxt = data.find(_PROLOG, at + 1)
+        if got is None or got[0] == 0 or got[0] > 4096:
+            at = nxt
+            continue
+        n, used = got
+        start = at + 2 + used
         blob = data[start:start + n]
+        at = nxt
         if len(blob) == n and data[start + n:start + n + 2] == b"\x00\x00":
             try:
                 text = blob.decode("utf-8")
@@ -252,13 +299,27 @@ def friends_from_source(root: Path, rel_dir: str) -> set[str]:
 
 def _msbuild_paths(root: Path, csproj: Path, configuration: str, msbuild_args: list[str]) -> dict:
     cmd = ["dotnet", "msbuild", str(csproj), "-nologo", f"-p:Configuration={configuration}",
-           "-getProperty:TargetRefPath", "-getProperty:TargetPath", "-getProperty:AssemblyName", *msbuild_args]
+           "-getProperty:TargetRefPath", "-getProperty:TargetPath", "-getProperty:AssemblyName",
+           "-getItem:Compile", "-getItem:EmbeddedResource", "-getItem:Content", *msbuild_args]
     proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:
         raise RuntimeError(f"msbuild evaluation of {csproj} failed: {proc.stderr.strip()[-400:] or proc.stdout.strip()[-400:]}")
-    props = json.loads(proc.stdout).get("Properties") or {}
+    doc = json.loads(proc.stdout)
+    props = doc.get("Properties") or {}
+    items = doc.get("Items") or {}
+
+    def rel(kind: str) -> set[str]:
+        out = set()
+        for it in items.get(kind) or []:
+            try:
+                out.add(Path(it.get("FullPath") or "").resolve().relative_to(root.resolve()).as_posix())
+            except ValueError:
+                continue
+        return out
+    prefix = csproj.parent.resolve().relative_to(root.resolve()).as_posix() + "/"
+    code = {f for f in rel("Compile") - rel("EmbeddedResource") - rel("Content") if f.startswith(prefix)}
     return {"ref": props.get("TargetRefPath") or "", "full": props.get("TargetPath") or "",
-            "assembly": props.get("AssemblyName") or csproj.stem}
+            "assembly": props.get("AssemblyName") or csproj.stem, "code": sorted(code)}
 
 
 def _glob_paths(root: Path, csproj: Path, configuration: str) -> dict:
@@ -280,11 +341,13 @@ def manifest_entry(root: Path, rel_dir: str, paths: dict) -> dict:
     ref_bytes = ref.read_bytes()
     full_bytes = full.read_bytes() if full and full.is_file() else b""
     refasm = sha256(ref_bytes)
-    nc = noncode_hash(root, rel_dir)
+    code = set(paths["code"]) if paths.get("code") is not None else None
+    nc = noncode_hash(root, rel_dir, code)
     friends = friends_from_assembly(full_bytes) | friends_from_assembly(ref_bytes) | friends_from_source(root, rel_dir)
     return {"assembly": paths.get("assembly") or "", "refasm": refasm,
             "full": sha256(full_bytes) if full_bytes else "", "noncode": nc,
-            "abi": sha256(f"{refasm}\n{nc}".encode()), "friends": sorted(friends)}
+            "abi": sha256(f"{refasm}\n{nc}".encode()), "friends": sorted(friends),
+            "code": sorted(code) if code is not None else None}
 
 
 def build_manifest(root: Path, projects: list[str], configuration: str = "Release",
@@ -386,9 +449,21 @@ def probe(root: Path, base: str, head: str, files: list[str], build: Builder, re
             projects[d].update(eligible=False, reason="did not build at head — the regular legs report why")
             continue
         try:
-            head_entries[d] = read(d)
+            head_entry = read(d)
         except (RuntimeError, OSError, ValueError, IndexError) as exc:
             projects[d].update(eligible=False, reason=f"head reference assembly unreadable: {exc}")
+            continue
+        # A `.cs` extension is not compiler input (review of core #7986): a project can embed C# as a
+        # resource (`<Compile Remove="Data/**"/><EmbeddedResource Include="Data/**"/>`). Every changed
+        # file must be an evaluated Compile item at head — a deleted one, absent a payload risk.
+        code = set(head_entry["code"]) if head_entry.get("code") is not None else None
+        payload = [f for f in projects[d]["files"]
+                   if not (is_code(root, f, d, code) if (root / f).is_file() else not payload_risk(root, d))]
+        if payload:
+            projects[d].update(eligible=False, reason=f"{payload[0]} is not compiler input (resource/content payload) — "
+                                                     "not described by the reference assembly")
+            continue
+        head_entries[d] = head_entry
     for d, head_entry in head_entries.items():
         entry = projects[d]
         saved: dict[str, bytes | None] = {}
@@ -477,7 +552,13 @@ def decide(root: Path, verdict: dict, units: list[dict], reselected: set[str] | 
         closure = _MBK.closure_dirs(root, project)
         own = own_dirs(root, project)
         hit = [d for d in closure if d in projects]
-        if reselected is not None and uid in reselected:
+        if reselected is None:
+            # No re-selection evidence ⇒ nothing outside the verdict's files is known to be unchanged
+            # (a Directory.Build.props beside the body edit), so nothing may skip (review of core #7986).
+            out[uid] = {"decision": "keep", "reason": "no re-selection evidence (--reselected) — skipping needs it",
+                        "dependencies": hit}
+            continue
+        if uid in reselected:
             out[uid] = {"decision": "keep", "reason": "another changed path still reaches it", "dependencies": hit}
             continue
         if not hit:
@@ -516,15 +597,23 @@ def decide(root: Path, verdict: dict, units: list[dict], reselected: set[str] | 
 
 # ───────────────────────────── key: the ABI test key ─────────────────────────────
 
-def abi_key(root: Path, project: str, manifest: dict, platform: str = "") -> dict:
+def abi_key(root: Path, project: str, manifest: dict, platform: str = "", reads: list[str] | None = None) -> dict:
     root = root.resolve()
     closure = _MBK.closure_dirs(root, project)
     own = own_dirs(root, project)
     assemblies = {d: assembly_names(root, d) for d in closure}
+    # A unit that READS a dependency's files as text (a linked `../Lib/A.cs` compile include, a declared
+    # input, a census) depends on those bytes, not on a surface: key that dependency by its tree
+    # (review of core #7986 — the same safeguard `decide` applies).
+    read_patterns = unit_reads(root, project, closure, list(reads or []))
     identities: dict[str, str] = {}
     for d in closure:
         entry = manifest.get(d)
-        if d in own or not entry:
+        read_here = d not in own and any(
+            _PSCOPE.input_covers(str(p.relative_to(root).as_posix()), r)
+            for p in (root / d).rglob("*") if p.is_file() and not (set(p.relative_to(root / d).parts) & _MBK.SKIP_DIRS)
+            for r in read_patterns)
+        if d in own or not entry or read_here:
             identities[d] = "tree:" + _MBK.tree_hash(root, d)
             continue
         friends = set(entry.get("friends") or []) | friends_from_source(root, d)
@@ -532,7 +621,9 @@ def abi_key(root: Path, project: str, manifest: dict, platform: str = "") -> dic
         if friends & others:
             if not entry.get("full"):
                 raise ValueError(f"{d}: a friend in {project}'s closure needs the full assembly hash, the manifest has none")
-            identities[d] = "full:" + entry["full"]
+            # The full assembly AND the non-compiled files (review of core #7986): a content file copied to
+            # output can change while the implementation DLL stays byte-identical.
+            identities[d] = "full:" + sha256(f"{entry['full']}\n{entry.get('noncode', '')}".encode())
         else:
             identities[d] = "abi:" + entry["abi"]
     globals_ = {rel: (_MBK.file_hash(root / rel) if (root / rel).is_file() else None) for rel in _MBK.GLOBAL_INPUTS}
@@ -608,6 +699,11 @@ def self_test() -> int:
     check(friends_from_assembly(blob) == {"Lib.Test", "Friend"}, "IVT names (public key stripped)")
     check(friends_from_assembly(b"\x01\x00\x08Lib.Test\x00\x00") == set(), "no IVT attribute type ⇒ no friend")
     check(friends_from_assembly(b"InternalsVisibleToAttribute\x01\x00\x09Lib.Test\x00\x00") == set(), "a length that does not close is no blob")
+    strong = "Friend.Strong, PublicKey=" + "0024000004800000940000000602000000240000525341310004000001000100" * 5
+    n = len(strong.encode())
+    check(n >= 0x80, "the fixture's strong name needs a TWO-byte compressed length")
+    blob2 = b"InternalsVisibleToAttribute..\x01\x00" + bytes([0x80 | (n >> 8), n & 0xFF]) + strong.encode() + b"\x00\x00"
+    check(friends_from_assembly(blob2) == {"Friend.Strong"}, "an IVT with a full PublicKey (2-byte SerString length) is read")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -642,13 +738,18 @@ def self_test() -> int:
         check((root / "src/Lib/A.cs").read_text() == head_text, "the probe restores the head's files")
         check(log[0] == ("src/Lib", True) and log[1:] == [("src/Lib", False), ("src/Lib", False)],
               f"head with references, then base and head-again without: {log}")
-        d = decide(root, v, units)
+        d = decide(root, v, units, set())
         check(d["App"]["decision"] == "skip" and d["App.Test"]["decision"] == "skip", f"dependents skipped: {d}")
         check(d["App.Test"]["reason"] == f"public API unchanged (ref asm {lib['refasm'][:12]})", d["App.Test"]["reason"])
         check(d["Lib"]["decision"] == "keep" and d["Lib.Test"]["decision"] == "keep", "the changed module and its own suite run")
         check(d["Friend"]["decision"] == "keep" and "InternalsVisibleTo" in d["Friend"]["reason"], f"an IVT friend keys on the full assembly: {d['Friend']}")
         check(d["Friend.Test"]["decision"] == "keep" and "Friend sees" in d["Friend.Test"]["reason"], "…and so does every unit whose closure holds the friend")
         check(d["Census.Test"]["decision"] == "keep" and "as content" in d["Census.Test"]["reason"], "a census reader of src/**/*.cs is never skipped")
+        dn = decide(root, v, units)
+        check(all(x["decision"] == "keep" and "re-selection" in x["reason"] for x in dn.values()),
+              "no --reselected evidence ⇒ nothing skips (a Directory.Build.props beside the edit is invisible here)")
+        check("own project" in decide(root, v, [{"id": "LT", "project": "src/Lib.Test/Lib.Test.csproj"}], set())["LT"]["reason"],
+              "a .Test entry owns its production sibling: Lib.Test keeps on an internal Lib change even without IVT")
         d2 = decide(root, v, units, reselected={"App.Test"})
         check(d2["App.Test"]["decision"] == "keep" and d2["App"]["decision"] == "skip", "a unit another changed path reaches stays")
         # The KEY: equal across the internal change for a non-friend dependent, `full:` for a friend.
@@ -658,6 +759,19 @@ def self_test() -> int:
         check(ka["inputs"]["closure"]["src/App.Test"].startswith("tree:"), "own dirs key on their tree")
         kf = abi_key(root, "src/Friend.Test/Friend.Test.csproj", mh)
         check(kf["inputs"]["closure"]["src/Lib"].startswith("full:"), "a friend's closure keys D on full:")
+        (root / "src/Lib/data.json").write_text('{"copied": "to output"}\n')
+        kf2 = abi_key(root, "src/Friend.Test/Friend.Test.csproj", {"src/Lib": _fake_builder(root, [])[1]("src/Lib")})
+        check(kf2["key"] != kf["key"], "full: carries the non-C# tree too — a content file moves a friend's key")
+        subprocess.run(["git", "checkout", "-q", "--", "src/Lib/data.json"], cwd=root, check=True)
+        (root / "src/Linker").mkdir()
+        (root / "src/Linker/Linker.csproj").write_text('<Project><ItemGroup><ProjectReference Include="../Lib/Lib.csproj" />'
+                                                       '<Compile Include="../Lib/A.cs" /></ItemGroup></Project>')
+        kl = abi_key(root, "src/Linker/Linker.csproj", mh)
+        check(kl["inputs"]["closure"]["src/Lib"].startswith("tree:"), "a unit LINKING a dependency's source keys it by tree")
+        check(abi_key(root, "src/App.Test/App.Test.csproj", mh, reads=["src/Lib/**"])["inputs"]["closure"]["src/Lib"].startswith("tree:"),
+              "…and so does a caller-declared read")
+        (root / "src/Linker/Linker.csproj").unlink()
+        (root / "src/Linker").rmdir()
 
         # ── BRANCH 2: a public-API change ──
         (root / "src/Lib/A.cs").write_text("public class A { public int F() => 2; public int F2() => 4; }\n")
@@ -665,7 +779,7 @@ def self_test() -> int:
         v, _ = run_probe()
         lib = v["projects"]["src/Lib"]
         check(lib["eligible"] and not lib["unchanged"] and lib["reason"].startswith("public API changed"), f"API change ⇒ changed: {lib}")
-        d = decide(root, v, units)
+        d = decide(root, v, units, set())
         check(all(x["decision"] == "keep" for x in d.values()), f"API change ⇒ every dependent rebuilds and tests: {d}")
         kb = abi_key(root, "src/App.Test/App.Test.csproj", {"src/Lib": _fake_builder(root, [])[1]("src/Lib")})
         check(kb["key"] != ka["key"], "the ABI key moves with the public surface")
@@ -689,7 +803,25 @@ def self_test() -> int:
         v, log = run_probe()
         check(not v["projects"]["src/Lib"]["eligible"] and log == [] and "non-C#" in v["projects"]["src/Lib"]["reason"],
               f"a content edit is not a reference-assembly question: {v['projects']['src/Lib']}")
-        check(decide(root, v, units)["App.Test"]["decision"] == "keep", "…so dependents rebuild")
+        check(decide(root, v, units, set())["App.Test"]["decision"] == "keep", "…so dependents rebuild")
+
+        # ── C# that is PAYLOAD, not compiler input: never eligible ──
+        base = git(root, "rev-parse", "HEAD").strip()
+        (root / "src/Doc/Data").mkdir(parents=True)
+        (root / "src/Doc/Doc.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><Compile Remove="Data/**" />'
+                                                 '<EmbeddedResource Include="Data/**" /></ItemGroup></Project>')
+        (root / "src/Doc/D.cs").write_text("public class D { }\n")
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
+        commit("doc project")
+        base = git(root, "rev-parse", "HEAD").strip()
+        (root / "src/Doc/Data/Node.cs").write_text("// an embedded C# node\npublic class N { }\n")
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
+        commit("embedded node")
+        v, _ = run_probe()
+        doc = v["projects"]["src/Doc"]
+        check(not doc["eligible"] and "not compiler input" in doc["reason"], f"embedded C# payload is not a surface question: {doc}")
+        check(noncode_hash(root, "src/Doc") != noncode_hash(root, "src/Lib") and payload_risk(root, "src/Doc")
+              and not payload_risk(root, "src/Lib"), "a payload-risk project hashes its .cs into the non-C# identity")
 
         # ── non-determinism withdraws every skip ──
         base = git(root, "rev-parse", "HEAD").strip()
@@ -705,7 +837,7 @@ def self_test() -> int:
         commit("broken head")
         v, _ = run_probe()
         check(not v["projects"]["src/Lib"]["eligible"], "a head that does not build narrows nothing")
-        check(decide(root, v, units)["App"]["decision"] == "keep", "…its dependents keep")
+        check(decide(root, v, units, set())["App"]["decision"] == "keep", "…its dependents keep")
         try:
             decide(root, {"schema": "nope"}, units)
         except ValueError:
@@ -732,6 +864,7 @@ def main() -> int:
     ap.add_argument("--reselected")
     ap.add_argument("--manifest")
     ap.add_argument("--platform", default="")
+    ap.add_argument("--read", action="append", default=[], help="key: a caller-declared read (prefix or glob) of the unit")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--out")
     a = ap.parse_args()
@@ -768,7 +901,7 @@ def main() -> int:
         else:
             if len(a.project) != 1 or not a.manifest:
                 ap.error("key needs exactly one --project and --manifest")
-            got = abi_key(root, a.project[0], json.loads(Path(a.manifest).read_text()), a.platform)
+            got = abi_key(root, a.project[0], json.loads(Path(a.manifest).read_text()), a.platform, a.read)
             print(json.dumps(got, indent=2, sort_keys=True) if a.json else got["key"])
     except (ValueError, RuntimeError, OSError) as exc:
         print(f"abi-key: {exc}", file=sys.stderr)
