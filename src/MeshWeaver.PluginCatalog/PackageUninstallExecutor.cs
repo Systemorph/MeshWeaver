@@ -256,7 +256,7 @@ public static class PackageUninstallExecutor
                                 {
                                     Module = string.IsNullOrWhiteSpace(record.Module) ? null : record.Module,
                                     ModuleOutcome = x.moduleOutcome,
-                                    ModuleDisabled = x.Disabled,
+                                    ModuleDisabled = moduleDisabled,
                                     Partitions = [preview],
                                     ConfirmationRequired = partition,
                                     Status = PackageUninstallStatus.AwaitingConfirmation,
@@ -335,39 +335,78 @@ public static class PackageUninstallExecutor
             + string.Join(", ", p.RowsByTable.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value}"))
             + (p.SyncConfig ? "; a sync configuration" : "");
 
-        /// <summary>What retiring the module did: the outcome sentence, whether a landed generation was
-        /// durably disabled, and — for an every-replica retire only — why it must FAIL instead.</summary>
-        private sealed record ModuleRetired(string Outcome, bool Disabled, string? Failure);
+        /// <summary>What retiring the module did: the outcome sentence, whether the landed generation is
+        /// disabled (now, or by an earlier interrupted run), and — for an every-replica retire only — why
+        /// it must FAIL instead.</summary>
+        private sealed record ModuleRetired(string Outcome, bool Disabled, string? Failure = null);
 
-        /// <summary>Retires the package's module: removes its landed generation, then unloads it live
-        /// where the process can, else asks for exactly ONE restart (stamped first, and never asked
-        /// again by a resumed phase 1). An every-replica retire takes <see cref="RetireForEveryReplica"/>.</summary>
+        /// <summary>
+        /// Retires the package's module: disables its landed generation, then unloads it live where the
+        /// process can, else asks for exactly ONE restart (stamped first).
+        ///
+        /// <para>🚨 The activation is read WHOLE or not at all (<see cref="ModuleLandingService.GetCheckedActivation"/>,
+        /// #7959 review): a read that dropped an unreadable record would make a landed module look
+        /// absent, and phase 1 would then remove the install record with the generation still enabled
+        /// — so an incomplete read FAULTS, and phase 1 goes red with the install record kept. A removal
+        /// that fails faults the same way, never becomes a sentence. An entry that is ALREADY disabled
+        /// is "disable done" (a phase 1 resumed after its removal), never "never landed" — and its
+        /// removal still runs again, because the tombstone may have landed without the projection.
+        /// Once the generation is disabled, <see cref="PackageUninstallRequest.ModuleDisabled"/> is
+        /// written at once, before any later step can fail. An every-replica retire (a flag-issued
+        /// request) takes <see cref="RetireForEveryReplica"/> under the same rules.</para>
+        /// </summary>
         private IObservable<ModuleRetired> RetireModule(PackageUninstallRequest request, PackageManifest record)
         {
             var module = record.Module?.Trim();
             if (string.IsNullOrWhiteSpace(module))
-                return Observable.Return(new ModuleRetired("the package declares no compiled module", false, null));
+                return Observable.Return(new ModuleRetired("the package declares no compiled module", false));
             if (request.RetireOnEveryReplica)
-                return RetireForEveryReplica(request, module);
+                return RetireForEveryReplica(request, module)
+                    // What is on disk is recorded the moment it is true (#7972 review), on this lane too.
+                    .SelectMany(retired => (retired.Disabled
+                            ? Write(r => r with { ModuleDisabled = true }, Line($"module: {retired.Outcome}"))
+                            : Observable.Return(Unit.Default))
+                        .Select(_ => retired));
             var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
             var removed = landing is null
-                ? Observable.Return("no landing service on this host")
-                : landing.RemoveModule(module).Select(_ => LandedGenerationDisabled)
-                    .Catch((Exception ex) => Observable.Return($"no landed generation to remove ({ex.Message})"));
+                ? Observable.Return(new ModuleRetired("no landing service on this host", false))
+                : landing.GetCheckedActivation().Take(1).SelectMany(activation =>
+                    activation.Entries.FirstOrDefault(e => string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase)) switch
+                    {
+                        null => Observable.Return(new ModuleRetired("not landed by the store lane — no landed generation to disable", false)),
+                        // 🚨 Disabled by the TOMBSTONE does not mean the removal finished (#7972
+                        // review): a removal stopped between the tombstone and the projection leaves
+                        // the per-module file — what an older image reads — still enabled. The
+                        // removal is idempotent, so it runs again and rewrites the projection.
+                        { Enabled: false } => landing.RemoveModule(module).Select(_ => new ModuleRetired(
+                            "landed generation already disabled (an earlier run of this phase removed it)", true)),
+                        _ => landing.RemoveModule(module).Select(_ => new ModuleRetired("landed generation disabled", true)),
+                    });
             var loaded = IsLoaded(module);
+            return removed
+                // 🚨 What is on disk is recorded the moment it is true (#7972 review): a later step
+                // (the live retire, the restart, the hub close, the record removal) that fails ends
+                // the request Failed, and it must still say the module IS disabled.
+                .SelectMany(retired => (retired.Disabled
+                        ? Write(r => r with { ModuleDisabled = true }, Line($"module: {retired.Outcome}"))
+                        : Observable.Return(Unit.Default))
+                    .Select(_ => retired))
+                .SelectMany(retired => RetireLoaded(request, module, loaded, retired.Outcome)
+                    .Select(outcome => retired with { Outcome = outcome }));
+        }
+
+        private IObservable<string> RetireLoaded(PackageUninstallRequest request, string module, bool loaded, string landed)
+        {
+            if (!loaded)
+                return Observable.Return($"{module}: {landed}; not loaded in this process — nothing to unload");
             var reason = $"package uninstall {ModuleReloadExecutor.PathOf(hub)}: {request.Reason}";
-            return removed.SelectMany(landed =>
-            {
-                if (!loaded)
-                    return Observable.Return(new ModuleRetired($"{module}: {landed}; not loaded in this process — nothing to unload", false, null));
-                return LiveRetire(module, reason).SelectMany(outcome => outcome.Swapped
-                    ? Observable.Return(new ModuleRetired($"{module}: {landed}; retired LIVE", false, null))
-                    // 🚨 Resume-safe (#7959 review): a phase 1 resumed after the restart it asked for
-                    // must not ask again — RestartRequestedAt is stamped before every dispatch.
-                    : request.RestartRequestedAt is { } asked
-                        ? Observable.Return(new ModuleRetired($"{module}: {landed}; not retired live ({outcome.Failure}) — one restart was already requested at {asked:u}", false, null))
-                        : Restart(reason).Select(restart => new ModuleRetired($"{module}: {landed}; not retired live ({outcome.Failure}) — {restart}", false, null)));
-            });
+            return LiveRetire(module, reason).SelectMany(outcome => outcome.Swapped
+                ? Observable.Return($"{module}: {landed}; retired LIVE")
+                // 🚨 Resume-safe (#7959 review): a phase 1 resumed after the restart it asked for must
+                // not ask again — RestartRequestedAt is stamped before every dispatch.
+                : request.RestartRequestedAt is { } asked
+                    ? Observable.Return($"{module}: {landed}; not retired live ({outcome.Failure}) — one restart was already requested at {asked:u}")
+                    : Restart(reason).Select(restart => $"{module}: {landed}; not retired live ({outcome.Failure}) — {restart}"));
         }
 
         /// <summary>
@@ -386,15 +425,18 @@ public static class PackageUninstallExecutor
                 return Observable.Return(loaded
                     ? new ModuleRetired("", false, $"module {module} is loaded here, and this host has no landing service to disable it durably")
                     : new ModuleRetired($"{module}: not loaded here, and this host lands no modules — nothing to disable", false, null));
-            return landing.GetActivation().Take(1)
+            // 🚨 Read WHOLE (GetCheckedActivation, #7972): an unreadable record faults and the retire
+            // fails with the install record kept. A DISABLED entry is "disable done" (a phase 1 resumed
+            // after its removal) and its idempotent removal runs again, never "not landed".
+            return landing.GetCheckedActivation().Take(1)
                 .SelectMany(activation =>
                 {
-                    var landed = activation.Entries.Any(e => e.Enabled && string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase));
+                    var landed = activation.Entries.Any(e => string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase));
                     if (!landed)
                         return Observable.Return(loaded
-                            ? new ModuleRetired("", false, $"module {module} is loaded here but was not landed by the store lane (no enabled activation entry) — "
+                            ? new ModuleRetired("", false, $"module {module} is loaded here but was not landed by the store lane (no activation entry) — "
                                                            + "an image-carried module is the deployment's, and no flag can retire it")
-                            : new ModuleRetired($"{module}: no enabled landed generation and not loaded here — nothing to disable", false, null));
+                            : new ModuleRetired($"{module}: no landed generation and not loaded here — nothing to disable", false, null));
                     return landing.RemoveModule(module)
                         .SelectMany(_ => loaded
                             ? LiveRetire(module, reason).Select(o => o.Swapped ? "retired LIVE here" : $"still loaded here ({o.Failure})")

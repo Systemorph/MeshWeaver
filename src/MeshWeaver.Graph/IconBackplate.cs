@@ -246,7 +246,8 @@ public static partial class IconBackplate
     /// are not judged; content of <c>defs</c>, <c>clipPath</c>, <c>mask</c>, <c>symbol</c>,
     /// <c>pattern</c> and <c>marker</c> is not painted directly and is skipped. <c>currentColor</c>,
     /// <c>black</c> and anything that is not a well-formed <c>#rgb</c>/<c>#rrggbb</c> or <c>white</c>
-    /// count as unreadable. A painted <c>use</c> or <c>image</c> (geometry this scan cannot judge) and a
+    /// count as unreadable. A painted <c>use</c> or <c>image</c> (geometry this scan cannot judge), an embedded
+    /// <c>style</c> sheet (paint it could override) and a
     /// mark with no drawable are not judged legible. Pure and total: malformed
     /// markup answers false, it never throws.
     /// </summary>
@@ -260,9 +261,13 @@ public static partial class IconBackplate
         var stack = new Stack<(string Fill, string Stroke, bool NotPainted)>();
         stack.Push(("black", "none", false));
         var drawables = 0;
-        foreach (Match tag in AnyTag().Matches(svg))
+        // Comments and CDATA are not markup: `<!-- <g fill='#fff'> -->` must not push a group, and a
+        // `<!--` inside CDATA opens no comment. One left-to-right pass consumes whichever starts first.
+        foreach (Match tag in AnyTag().Matches(XmlComment().Replace(svg, string.Empty)))
         {
-            var name = tag.Groups["name"].Value.ToLowerInvariant();
+            // The LOCAL name: a namespace prefix (<s:style>, <svg:path>) names the same element.
+            var qualified = tag.Groups["name"].Value.ToLowerInvariant();
+            var name = qualified[(qualified.LastIndexOf(':') + 1)..];
             if (tag.Groups["close"].Success)
             {
                 if (stack.Count > 1)
@@ -274,8 +279,9 @@ public static partial class IconBackplate
             var fill = StylePaint(attrs, "fill") ?? AttrOf(attrs, "fill") ?? inheritedFill;
             var stroke = StylePaint(attrs, "stroke") ?? AttrOf(attrs, "stroke") ?? inheritedStroke;
             var skipped = notPainted || name is "defs" or "clippath" or "mask" or "symbol" or "pattern" or "marker";
-            // A painted <use> or <image> draws geometry this scan cannot see: keep the white plate.
-            if (!skipped && name is "use" or "image")
+            // A painted <use> or <image> draws geometry this scan cannot see, and an embedded <style>
+            // sheet can override any paint it reads: keep the white plate.
+            if (name == "style" || (!skipped && name is "use" or "image"))
                 return false;
             if (!skipped && name is "rect" or "circle" or "ellipse" or "path" or "polygon" or "polyline" or "line" or "text" or "tspan" or "textpath")
             {
@@ -296,8 +302,20 @@ public static partial class IconBackplate
     private static bool Reads(string paint, OklchColor plate)
     {
         var p = paint.Trim().ToLowerInvariant();
-        if (p is "none" or "transparent" || p.StartsWith("url(", StringComparison.Ordinal))
+        if (p is "none" or "transparent")
             return true;
+        // A paint server (a gradient) is not judged — but its FALLBACK colour, painted when the
+        // reference is missing (`url(#missing) #111827`), is.
+        if (p.StartsWith("url(", StringComparison.Ordinal))
+        {
+            // Parsed ONCE: the fallback is a colour or none; a second paint server is not a valid
+            // fallback, and is not chased (an icon may legally carry thousands of url() tokens).
+            var close = p.IndexOf(')');
+            var fallback = close < 0 ? string.Empty : p[(close + 1)..].Trim();
+            if (fallback.Length == 0)
+                return true;
+            return !fallback.StartsWith("url(", StringComparison.Ordinal) && Reads(fallback, plate);
+        }
         var hex = p switch
         {
             "white" => "#ffffff",
@@ -384,7 +402,8 @@ public static partial class IconBackplate
         var match = Regex.Match(
             attrs,
             @"(?<![-\w])" + name + @"\s*=\s*([""'])(?<v>.*?)\1",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            // Singleline: a value may span lines (style='\n fill:#000;\n') — the browser reads it whole.
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
         return match.Success ? match.Groups["v"].Value.Trim() : null;
     }
 
@@ -419,6 +438,9 @@ public static partial class IconBackplate
         @"<(?:(?<close>/)(?<name>[A-Za-z][\w:-]*)\s*|(?<name>[A-Za-z][\w:-]*)(?<attrs>(?:[^>""'/]|""[^""]*""|'[^']*'|/(?!>))*)(?<self>/)?)>",
         RegexOptions.CultureInvariant)]
     private static partial Regex AnyTag();
+
+    [GeneratedRegex(@"<!\[CDATA\[.*?\]\]>|<!--.*?-->", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    private static partial Regex XmlComment();
 
     [GeneratedRegex(@"^#([0-9a-f]{3}|[0-9a-f]{6})$", RegexOptions.CultureInvariant)]
     private static partial Regex HexColor();

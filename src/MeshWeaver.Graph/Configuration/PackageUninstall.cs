@@ -76,6 +76,12 @@ public record PackageUninstallRequest
     /// <summary>How the module was retired — live, by a restart, or why not. Executor-owned.</summary>
     public string? ModuleOutcome { get; init; }
 
+    /// <summary>Whether the module's landed generation is DISABLED on the volume — by this run of
+    /// phase 1, or by an earlier one that was interrupted after its removal (a resumed phase 1 counts
+    /// an already-disabled entry as done, never as "never landed"). Every replica that loaded the module
+    /// still holds it until it restarts. Executor-owned.</summary>
+    public bool ModuleDisabled { get; init; }
+
     /// <summary>When the ONE restart was requested, if the module needed one. Executor-owned.</summary>
     public DateTimeOffset? RestartRequestedAt { get; init; }
 
@@ -134,10 +140,6 @@ public record PackageUninstallRequest
     /// <summary>The flag retire's install identity, shared by every attempt at retiring the same
     /// install (each attempt is its own request). Null for a person's request.</summary>
     public string? RetireKey { get; init; }
-
-    /// <summary>Whether phase 1 durably disabled a landed module generation — so the replicas that
-    /// loaded it at boot still hold it until a restart. Executor-owned.</summary>
-    public bool ModuleDisabled { get; init; }
 
     /// <summary>
     /// Ask this request's executor for the ONE restart that makes every replica drop what phase 1
