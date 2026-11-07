@@ -81,7 +81,11 @@ words; the boot install records it as a skip, never as a silent success. A write
 **durable when it completes**. The writer removes its answer with a cross-hub `stream.Update`, which
 acknowledges only after the owner has written the node to storage, fold included, and the writer
 waits for that before it returns. So every later storage read of the record sees the stamp, as it did
-when the record was written with a full-replace `CreateOrUpdateNodeRequest`. If no answer arrives within
+when the record was written with a full-replace `CreateOrUpdateNodeRequest`. The gate issues every write from
+the mesh's off-router execution hub, never from the record's own hub, even when that hub is the
+caller: an own-hub update acknowledges the in-memory commit, not the durable write. If that
+durability step fails for an applied stamp, the write **faults** instead of reporting it as applied.
+A refused stamp stays a refusal. If no answer arrives within
 `InstallRecordGate.AnswerBudget`, the writer re-reads the record. Absent means it was removed and the
 write is refused; present means a fault naming the owner that did not answer.
 

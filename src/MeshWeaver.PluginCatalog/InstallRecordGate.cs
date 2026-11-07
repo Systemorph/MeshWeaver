@@ -395,7 +395,14 @@ public static class InstallRecordGate
     /// meanwhile — a stated fact never re-creates it); present ⇒ a fault naming the silent owner.
     /// </summary>
     internal static IObservable<PackageRecordFactOutcome> Submit(
-        IMessageHub hub, string path, string key, PackageRecordFact fact, ILogger? logger)
+        IMessageHub hub, string path, string key, PackageRecordFact fact, ILogger? logger) =>
+        Submit(hub, path, key, fact, logger, removeAnswer: null);
+
+    /// <summary><see cref="Submit(IMessageHub, string, string, PackageRecordFact, ILogger?)"/> with a
+    /// test seam for the answer removal — the durability barrier — so its failure can be pinned.</summary>
+    internal static IObservable<PackageRecordFactOutcome> Submit(
+        IMessageHub hub, string path, string key, PackageRecordFact fact, ILogger? logger,
+        Func<IObservable<Unit>>? removeAnswer)
     {
         var storageForRemoval = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         // 🚨 A delete of THIS record racing the submission does not always reach the timeout: the
@@ -403,7 +410,7 @@ public static class InstallRecordGate
         // NotFound, and the stating Update itself can fail on a deleted node (#7964 review). Each is
         // judged by the one fact that matters — is the record gone? — and becomes the typed refusal;
         // with the record still there the fault is unrelated and propagates unchanged.
-        return SubmitCore(hub, path, key, fact, logger)
+        return SubmitCore(hub, path, key, fact, logger, removeAnswer)
             .Catch((Exception ex) => storageForRemoval.Read(path, hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
                 .Catch((Exception _) => Observable.Throw<MeshNode?>(ex))
                 .SelectMany(node => node is null
@@ -413,12 +420,18 @@ public static class InstallRecordGate
     }
 
     private static IObservable<PackageRecordFactOutcome> SubmitCore(
-        IMessageHub hub, string path, string key, PackageRecordFact fact, ILogger? logger)
+        IMessageHub hub, string path, string key, PackageRecordFact fact, ILogger? logger,
+        Func<IObservable<Unit>>? removeAnswer)
     {
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var options = hub.JsonSerializerOptions;
-        var answer = access.RunAsSystem(() => hub.GetMeshNodeStream(path))
+        // 🚨 Every write is issued from the mesh's off-router execution hub, NEVER from the record's own
+        // hub even when that is the caller (#7964 review): an own-hub stream.Update acks the in-memory
+        // commit, a cross-hub one acks the owner's DURABLE write — and the durability barrier below
+        // depends on the second.
+        var issuer = hub.NodeOperationExecutionHub() ?? hub;
+        var answer = access.RunAsSystem(() => issuer.GetMeshNodeStream(path))
             .Select(node => node.ContentAs<PackageManifest>(options)?.FactOutcomes?.GetValueOrDefault(key))
             .Where(outcome => outcome is not null)
             .Select(outcome => outcome!)
@@ -430,7 +443,17 @@ public static class InstallRecordGate
                         "the install record was removed before its owner answered", DateTimeOffset.UtcNow))
                     : Observable.Throw<PackageRecordFactOutcome>(new TimeoutException(
                         $"the install record {path} did not answer the {fact.Kind} '{key}' within {AnswerBudget}"))));
-        return access.RunAsSystem(() => hub.GetMeshNodeStream(path)
+        IObservable<Unit> RemoveAnswer() => removeAnswer?.Invoke()
+            ?? access.RunAsSystem(() => issuer.GetMeshNodeStream(path)
+                    .Update<PackageManifest>(current => current with
+                    {
+                        // Remove the key, never null the map: a null would delete every other
+                        // writer's answer that arrived meanwhile.
+                        FactOutcomes = current.FactOutcomes?.Remove(key),
+                    }))
+                .Take(1)
+                .Select(_ => Unit.Default);
+        return access.RunAsSystem(() => issuer.GetMeshNodeStream(path)
                 .Update<PackageManifest>(current => current with
                 {
                     RecordFacts = (current.RecordFacts ?? ImmutableDictionary<string, PackageRecordFact>.Empty).SetItem(key, fact),
@@ -441,24 +464,22 @@ public static class InstallRecordGate
             // removal is AWAITED before the outcome is emitted: a cross-hub stream.Update acks off the
             // owner's DURABLE write of the node as it now stands, which carries the owner's fold. So
             // when a write through this gate completes, the stamped record is in storage — the
-            // read-after-write the full-replace CreateOrUpdateNodeRequest used to give, and what every
-            // later storage read of the record (the next install's carry-forward, the update lanes)
-            // relies on. A failed removal is logged; the answer stands and the owner prunes it.
+            // read-after-write the full-replace CreateOrUpdateNodeRequest used to give.
+            // 🚨 For an APPLIED outcome that barrier is the contract, so a failed removal FAULTS the
+            // write (#7964 review): returning "applied" without it would let a caller read storage
+            // and find the previous stamp. A REFUSED outcome promised no write, so it is still
+            // returned as the refusal it is; the owner prunes the stray answer.
             .SelectMany(outcome =>
             {
                 logger?.LogDebug("[InstallRecordGate] {Path} answered {Kind} '{Key}': {Detail}", path, fact.Kind, key, outcome.Detail);
-                return access.RunAsSystem(() => hub.GetMeshNodeStream(path)
-                        .Update<PackageManifest>(current => current with
-                        {
-                            // Remove the key, never null the map: a null would delete every other
-                            // writer's answer that arrived meanwhile.
-                            FactOutcomes = current.FactOutcomes?.Remove(key),
-                        }))
-                    .Take(1)
+                return RemoveAnswer()
                     .Select(_ => outcome)
                     .Catch((Exception ex) =>
                     {
-                        logger?.LogWarning(ex, "[InstallRecordGate] removing the answer '{Key}' on {Path} failed", key, path);
+                        if (outcome.Applied)
+                            return Observable.Throw<PackageRecordFactOutcome>(new InvalidOperationException(
+                                $"the install record {path} applied the {fact.Kind} '{key}' but its durability barrier failed: {ex.Message}", ex));
+                        logger?.LogWarning(ex, "[InstallRecordGate] removing the refused answer '{Key}' on {Path} failed", key, path);
                         return Observable.Return(outcome);
                     });
             });

@@ -9,6 +9,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -309,6 +310,64 @@ public class TheInstallRecordDecidesWhoMayWriteItTest(ITestOutputHelper output) 
         Assert.False(outcome.Applied);
         Assert.Contains("removed", outcome.Detail);
         Assert.Null(await Stored("GateDeleted", ct));
+    }
+
+    /// <summary>
+    /// 4501204097: a write issued FROM the install record's own hub is durable when it completes too —
+    /// the gate issues its writes from the off-router execution hub, never as an own-hub update (which
+    /// acks the in-memory commit). Negative control (measured): issuing from the caller's hub, storage
+    /// still holds the old version here.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AStampFromTheRecordsOwnHub_IsInStorageWhenTheWriteCompletes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Write("GateOwnHub", PackageRecordWriteIntent.CreateAllowed, ct);
+        await Live("GateOwnHub", _ => true, ct); // activates the record's own hub
+        var ownHub = Mesh.ServiceProvider.GetRequiredService<HostedHubsCollection>().Hubs
+            .Single(h => h.RunLevel == MeshWeaver.Messaging.MessageHubRunLevel.Started
+                         && ActivationRecycle.PathOf(h) == RecordPath("GateOwnHub"));
+
+        await InstallRecordGate.Write(ownHub, Record("GateOwnHub", "4.0.0"), PackageRecordWriteIntent.Restamp, NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        Assert.Equal("4.0.0", (await Stored("GateOwnHub", ct))!.Version);
+    }
+
+    /// <summary>
+    /// 4501204125: an APPLIED stamp whose durability barrier (the answer removal) fails FAULTS the
+    /// write instead of reporting "applied"; a REFUSED one is still returned as the refusal. Negative
+    /// control (measured): with the old log-and-return, the applied stamp is reported as applied.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnAppliedStampWhoseBarrierFails_FaultsTheWrite_ARefusalStaysARefusal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Write("GateBarrier", PackageRecordWriteIntent.CreateAllowed, ct);
+        IObservable<System.Reactive.Unit> Failing() =>
+            Observable.Throw<System.Reactive.Unit>(new System.IO.IOException("simulated barrier failure"));
+        PackageRecordFact StampFact(string version) => new()
+        {
+            Kind = PackageRecordFactKind.Stamp,
+            Intent = PackageRecordWriteIntent.Restamp,
+            Stamp = (PackageManifest)Record("GateBarrier", version).Content!,
+            At = DateTimeOffset.UtcNow,
+        };
+
+        var applied = await InstallRecordGate.Submit(Mesh, RecordPath("GateBarrier"), $"stamp-{Guid.NewGuid():N}",
+                StampFact("5.0.0"), NullLogger.Instance, Failing)
+            .Select(_ => (Exception?)null)
+            .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        Assert.NotNull(applied);
+        Assert.Contains("durability barrier failed", applied!.Message);
+
+        Assert.Null(await Begin("GateBarrier", "Admin/_PackageUninstall/req-barrier", ct));
+        var refused = await InstallRecordGate.Submit(Mesh, RecordPath("GateBarrier"), $"stamp-{Guid.NewGuid():N}",
+                StampFact("6.0.0"), NullLogger.Instance, Failing)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        Assert.False(refused.Applied);
+        Assert.Contains("being retired", refused.Detail);
     }
 
     /// <summary>
