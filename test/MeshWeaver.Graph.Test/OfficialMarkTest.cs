@@ -221,6 +221,12 @@ public class OfficialMarkTest
     // A painted <use> draws referenced geometry the scan cannot judge: the white plate stays.
     [InlineData("<svg viewBox='0 0 24 24'><defs><path id='d' d='M0 0h1v1z' fill='#111827'/></defs><path d='M0 0h1v1z' fill='#fff'/><use href='#d'/></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#fff'/><image href='x.png'/></svg>", false)]
+    // tspan/textPath carry their own text paint.
+    [InlineData("<svg viewBox='0 0 24 24'><text fill='#fff'><tspan fill='#111827'>Logo</tspan></text></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><text fill='#fff'><tspan>Logo</tspan></text></svg>", true)]
+    // CSS: the last declaration wins, and !important wins over a plain one.
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' style='fill:#fff;fill:#000'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' style='fill:#000 !important;fill:#fff'/></svg>", false)]
     // A malformed colour is unreadable — never a throw.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#xyz'/></svg>", false)]
     // A clip path's unfilled geometry is not painted.

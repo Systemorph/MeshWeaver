@@ -47,6 +47,19 @@ public class InboxPreviewTest
     public void AllQuote_FallsBackToTheQuotedText()
         => InboxPreview.Of("> the forwarded text").Should().Be("the forwarded text");
 
+    /// <summary>A signature-only text stays empty: the all-quote fallback restores quoted lines, never a signature.</summary>
+    [Fact]
+    public void SignatureOnly_StaysEmpty() => InboxPreview.Of("-- \nJane Roe\nAcme").Should().BeEmpty();
+
+    /// <summary>A flattened preview (Graph's one-line bodyPreview, an HTML body's text) drops an inline signature.</summary>
+    [Theory]
+    [InlineData("Thanks. -- Jane Roe Acme", "Thanks.")]
+    [InlineData("Thanks. Sent from my iPhone", "Thanks.")]
+    [InlineData("Passt. Von meinem iPhone gesendet", "Passt.")]
+    [InlineData("Noted. Get Outlook for iOS", "Noted.")]
+    [InlineData("this -- that is fine", "this -- that is fine")]
+    public void FlattenedSignature_IsCut(string text, string expected) => InboxPreview.Of(text).Should().Be(expected);
+
     /// <summary>Zero-width characters and the attachment placeholder never reach the line.</summary>
     [Fact]
     public void InvisibleCharacters_AreDropped()
@@ -102,6 +115,8 @@ public class InboxPreviewTest
             .Should().Be("Agreed.");
         InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { body = "<p>See you at ten.</p><p>On Mon, 3 Nov 2026 at 10:02, Jane Roe wrote:</p><blockquote>Shall we</blockquote>" }))
             .Should().Be("See you at ten.");
+        InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { body = "<p>Thanks.</p><p>-- </p><p>Jane Roe</p>" }))
+            .Should().Be("Thanks.");
         InboxRows.PreviewOf(JsonSerializer.SerializeToElement(new { from = "x" })).Should().BeEmpty();
     }
 }

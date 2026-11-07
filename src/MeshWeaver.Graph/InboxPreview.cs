@@ -37,7 +37,8 @@ public static partial class InboxPreview
         if (string.IsNullOrWhiteSpace(text))
             return string.Empty;
         var kept = new StringBuilder();
-        foreach (var raw in text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+        foreach (var raw in lines)
         {
             var line = raw.Trim();
             // Everything from here down is the conversation it answers, or the sender's signature.
@@ -50,9 +51,11 @@ public static partial class InboxPreview
                 kept.Append(line).Append(' ');
         }
         var collapsed = CutInline(Whitespace().Replace(Invisible(kept.ToString()), " ").Trim());
-        // A preview that was ALL quote (a bare forward) says what the quote says rather than nothing.
+        // A preview that was ALL quote (a bare forward) says what the QUOTED lines say rather than
+        // nothing — never a signature, which was cut on purpose: "-- \nJane" stays empty.
         if (collapsed.Length == 0)
-            collapsed = Whitespace().Replace(Invisible(text.Replace('>', ' ')), " ").Trim();
+            collapsed = Whitespace().Replace(Invisible(string.Join(' ', lines
+                .Select(l => l.Trim()).Where(l => l.StartsWith('>')).Select(l => l.TrimStart('>', ' ')))), " ").Trim();
         return collapsed;
     }
 
@@ -97,7 +100,7 @@ public static partial class InboxPreview
         return text[..cut].TrimEnd() + "…";
     }
 
-    [GeneratedRegex(@"(-----Original Message-----|-----Ursprüngliche Nachricht-----|---------- Forwarded message|_{10,}|\b(From|Von):\s.{1,200}?\s(Sent|Gesendet):\s|\bOn\s.{4,200}?\swrote:|\bAm\s.{4,200}?\sschrieb[^:]{0,80}:)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(-----Original Message-----|-----Ursprüngliche Nachricht-----|---------- Forwarded message|_{10,}|\b(From|Von):\s.{1,200}?\s(Sent|Gesendet):\s|\bOn\s.{4,200}?\swrote:|\bAm\s.{4,200}?\sschrieb[^:]{0,80}:|\s--\s+(?-i:\p{Lu})|\bSent from my\s|\bVon meinem\s\S+\s+gesendet|\bGet Outlook for\s)", RegexOptions.IgnoreCase)]
     private static partial Regex InlineMarker();
 
     [GeneratedRegex(@"\s+")]

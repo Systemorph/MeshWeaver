@@ -277,7 +277,7 @@ public static partial class IconBackplate
             // A painted <use> or <image> draws geometry this scan cannot see: keep the white plate.
             if (!skipped && name is "use" or "image")
                 return false;
-            if (!skipped && name is "rect" or "circle" or "ellipse" or "path" or "polygon" or "polyline" or "line" or "text")
+            if (!skipped && name is "rect" or "circle" or "ellipse" or "path" or "polygon" or "polyline" or "line" or "text" or "tspan" or "textpath")
             {
                 drawables++;
                 // A line has no interior: only its stroke paints.
@@ -307,12 +307,21 @@ public static partial class IconBackplate
         return hex is not null && OklchColor.FromHex(hex).ContrastRatio(plate) >= MinDarkPlateContrast;
     }
 
-    /// <summary>A paint property out of an inline <c>style</c> attribute, or null.</summary>
+    /// <summary>
+    /// A paint property out of an inline <c>style</c> attribute, or null — as CSS resolves it: the LAST
+    /// declaration wins, and an <c>!important</c> one wins over any that is not.
+    /// </summary>
     private static string? StylePaint(string attrs, string property)
-        => AttrOf(attrs, "style") is { } style
-           && Regex.Match(style, @"(?<![-\w])" + property + @"\s*:\s*(?<v>[^;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) is { Success: true } m
-            ? m.Groups["v"].Value.Trim()
-            : null;
+    {
+        if (AttrOf(attrs, "style") is not { } style)
+            return null;
+        var values = Regex.Matches(style, @"(?<![-\w])" + property + @"\s*:\s*(?<v>[^;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            .Select(m => m.Groups["v"].Value.Trim()).ToList();
+        if (values.Count == 0)
+            return null;
+        var important = values.LastOrDefault(v => v.EndsWith("!important", StringComparison.OrdinalIgnoreCase));
+        return (important ?? values[^1]).Replace("!important", "", StringComparison.OrdinalIgnoreCase).Trim();
+    }
 
     /// <summary>
     /// Rewrites the root <c>&lt;svg&gt;</c> tag of <paramref name="svg"/> so it nests inside the
