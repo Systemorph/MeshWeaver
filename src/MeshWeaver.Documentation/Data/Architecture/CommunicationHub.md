@@ -404,6 +404,9 @@ function of the filter and the legs.
 > the weekday and time within the last week, else the short date, in the viewer's zone and culture); line 2 the subject
 > and the tags; line 3 the beginning of the body (`InboxRow.Preview` — the content's `preview`, which the Outlook,
 > Gmail and Teams sources write from the provider's `bodyPreview`/snippet, else a stored mail's `body` as plain text).
+> The preview is the NEW text only (`InboxPreview.Clean`): the reply it quotes and the signature are cut where a cheap
+> scan sees them ("On … wrote:", "From: … Sent:", `-----Original Message-----`, `-- `, quoted `>` lines), mid-line
+> too because Graph collapses `bodyPreview` to one line; zero-width joiners are kept. Nothing fetches a body for it.
 > Each line is one line, cut with an ellipsis, so nothing scrolls sideways. The State badge (`InboxState`, read from
 > the node's own status or implied by the leg that found it) shows Awaiting decision / Approved / Rejected / Expired
 > for approvals and Requested / Running / Done / Failed / Cancelled for activities; it is hidden without a state, and
@@ -625,6 +628,13 @@ splitter's own handle hides it and gives the list the width.
 bubble, Mail → an envelope), else the first Fluent glyph among its sources, else the fallback — never a
 full-colour logo, even when the category's first source carries one (Conversations listed WhatsApp
 first and showed its logo). Logos stay in the per-item Source column and on a source's account row.
+A logo sits on a plate (`IconBackplate`). A vendor mark whose solid colours, fill and stroke, read on a dark ground
+(`IconBackplate.ReadsOnDark`, which holds for every channel mark: Outlook, Gmail, iMessage, WhatsApp, Teams) gets a plate
+that follows the theme, white in light mode and `OfficialDarkPlate` (`#2b2b2b`) in dark mode (maintainer, 2026-11-07:
+*"icons for outlook and teams etc => in dark mode can we put dark bg?"*). A near-black mark, or one whose paint the scan
+cannot judge (a `<use>`, an `<image>`), keeps the white plate on both themes, because it would vanish on the dark one.
+The plate carries its own `prefers-color-scheme` rule: every icon reaches the page as an image, where the page's CSS
+variables do not reach but the colour scheme does.
 
 **What a package puts on the inbox page** is declared as data: a `UiContribution` of context
 **`Inbox`** (`UiContribution.InboxContext`) embeds its `Area` of the person's own user node — or of an

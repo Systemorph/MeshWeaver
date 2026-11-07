@@ -92,6 +92,25 @@ public static partial class IconBackplate
     /// </summary>
     public const string OfficialPlate = "#ffffff";
 
+    /// <summary>
+    /// The plate an official mark gets on the DARK theme when its own colours read there
+    /// (<see cref="ReadsOnDark"/>) — a dark neutral surface, so the white tile no longer glares in a
+    /// dark inbox (maintainer, 2026-11-07: "icons for outlook and teams etc => in dark mode can we put
+    /// dark bg?"). Defined once, here: every brand icon that goes through <see cref="Ensure"/> (the
+    /// inbox's source column, the accounts page, the setup tiles, store cards) gets it.
+    /// </summary>
+    public const string OfficialDarkPlate = "#2b2b2b";
+
+    /// <summary>The class of the plate that follows the theme — what the plated svg's own style rule targets.</summary>
+    public const string ThemePlateClass = "mw-mark-plate";
+
+    /// <summary>
+    /// The minimum WCAG contrast every SOLID colour of a mark must reach against <see cref="OfficialDarkPlate"/>
+    /// for the mark to get the theme-following plate. Below it (a near-black vendor mark) the plate stays
+    /// white on both themes — legible beats matching.
+    /// </summary>
+    public const double MinDarkPlateContrast = 2.0;
+
     /// <summary>The corner radius of a generated plate on the canonical 24-unit canvas.</summary>
     public const int CornerRadius = 5;
 
@@ -203,10 +222,105 @@ public static partial class IconBackplate
         // The wrapper re-declares the claim, so "is this an official mark" survives plating and a
         // caller downstream of Ensure reads the same answer as one upstream of it.
         var claim = official ? $" {OfficialMarkAttribute}='{OfficialMarkValue}'" : "";
+        // A mark whose colours read on a dark ground follows the theme: the svg carries its own
+        // prefers-color-scheme rule, because every icon reaches the page as an IMAGE (secure static
+        // mode), where the page's CSS variables do not reach — but the colour scheme does. A
+        // renderer without media queries (native) keeps the white the attribute paints.
+        var themed = official && ReadsOnDark(svg);
+        var plate = themed
+            ? $"<rect class='{ThemePlateClass}' width='24' height='24' rx='{CornerRadius}' fill='{hue}' stroke='none'/>"
+              + $"<style>@media (prefers-color-scheme: dark){{.{ThemePlateClass}{{fill:{OfficialDarkPlate}}}}}</style>"
+            : $"<rect width='24' height='24' rx='{CornerRadius}' fill='{hue}' stroke='none'/>";
         return $"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'{claim}>"
-               + $"<rect width='24' height='24' rx='{CornerRadius}' fill='{hue}' stroke='none'/>"
+               + plate
                + inner
                + "</svg>";
+    }
+
+    /// <summary>
+    /// Whether every SOLID colour <paramref name="svg"/> paints — fill AND stroke — reads on
+    /// <see cref="OfficialDarkPlate"/> (WCAG contrast at least <see cref="MinDarkPlateContrast"/>).
+    /// Each drawable's paint is resolved the way SVG resolves it: an inline <c>style</c> wins over the
+    /// presentation attribute, which wins over what the nearest ancestor set, and an unset fill is
+    /// black (an unset stroke is none). Gradient paints (<c>url(#…)</c>) are the vendor's shading and
+    /// are not judged; content of <c>defs</c>, <c>clipPath</c>, <c>mask</c>, <c>symbol</c>,
+    /// <c>pattern</c> and <c>marker</c> is not painted directly and is skipped. <c>currentColor</c>,
+    /// <c>black</c> and anything that is not a well-formed <c>#rgb</c>/<c>#rrggbb</c> or <c>white</c>
+    /// count as unreadable. A painted <c>use</c> or <c>image</c> (geometry this scan cannot judge) and a
+    /// mark with no drawable are not judged legible. Pure and total: malformed
+    /// markup answers false, it never throws.
+    /// </summary>
+    /// <param name="svg">The authored mark.</param>
+    public static bool ReadsOnDark(string svg)
+    {
+        if (string.IsNullOrWhiteSpace(svg))
+            return false;
+        var plate = OklchColor.FromHex(OfficialDarkPlate);
+        // Each open element's resolved (fill, stroke, painted?) — the initial values are SVG's defaults.
+        var stack = new Stack<(string Fill, string Stroke, bool NotPainted)>();
+        stack.Push(("black", "none", false));
+        var drawables = 0;
+        foreach (Match tag in AnyTag().Matches(svg))
+        {
+            var name = tag.Groups["name"].Value.ToLowerInvariant();
+            if (tag.Groups["close"].Success)
+            {
+                if (stack.Count > 1)
+                    stack.Pop();
+                continue;
+            }
+            var attrs = tag.Groups["attrs"].Value;
+            var (inheritedFill, inheritedStroke, notPainted) = stack.Peek();
+            var fill = StylePaint(attrs, "fill") ?? AttrOf(attrs, "fill") ?? inheritedFill;
+            var stroke = StylePaint(attrs, "stroke") ?? AttrOf(attrs, "stroke") ?? inheritedStroke;
+            var skipped = notPainted || name is "defs" or "clippath" or "mask" or "symbol" or "pattern" or "marker";
+            // A painted <use> or <image> draws geometry this scan cannot see: keep the white plate.
+            if (!skipped && name is "use" or "image")
+                return false;
+            if (!skipped && name is "rect" or "circle" or "ellipse" or "path" or "polygon" or "polyline" or "line" or "text" or "tspan" or "textpath")
+            {
+                drawables++;
+                // A line has no interior: only its stroke paints.
+                if (name != "line" && !Reads(fill, plate))
+                    return false;
+                if (!Reads(stroke, plate))
+                    return false;
+            }
+            if (!tag.Groups["self"].Success)
+                stack.Push((fill, stroke, skipped));
+        }
+        return drawables > 0;
+    }
+
+    /// <summary>Whether one resolved paint reads on <paramref name="plate"/>: none and gradients pass, a readable solid colour must clear the contrast bar.</summary>
+    private static bool Reads(string paint, OklchColor plate)
+    {
+        var p = paint.Trim().ToLowerInvariant();
+        if (p is "none" or "transparent" || p.StartsWith("url(", StringComparison.Ordinal))
+            return true;
+        var hex = p switch
+        {
+            "white" => "#ffffff",
+            _ when HexColor().IsMatch(p) => p.Length == 4 ? $"#{p[1]}{p[1]}{p[2]}{p[2]}{p[3]}{p[3]}" : p,
+            _ => null,
+        };
+        return hex is not null && OklchColor.FromHex(hex).ContrastRatio(plate) >= MinDarkPlateContrast;
+    }
+
+    /// <summary>
+    /// A paint property out of an inline <c>style</c> attribute, or null — as CSS resolves it: the LAST
+    /// declaration wins, and an <c>!important</c> one wins over any that is not.
+    /// </summary>
+    private static string? StylePaint(string attrs, string property)
+    {
+        if (AttrOf(attrs, "style") is not { } style)
+            return null;
+        var values = Regex.Matches(style, @"(?<![-\w])" + property + @"\s*:\s*(?<v>[^;]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            .Select(m => m.Groups["v"].Value.Trim()).ToList();
+        if (values.Count == 0)
+            return null;
+        var important = values.LastOrDefault(v => v.EndsWith("!important", StringComparison.OrdinalIgnoreCase));
+        return (important ?? values[^1]).Replace("!important", "", StringComparison.OrdinalIgnoreCase).Trim();
     }
 
     /// <summary>
@@ -299,6 +413,15 @@ public static partial class IconBackplate
         @"<(?<tag>rect|circle|ellipse|path|polygon|polyline|line|text)\b(?<attrs>[^>]*?)/?>",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex FirstDrawable();
+
+    // Every element tag, quote-aware: an opening tag (attrs, optional self-close) or a closing one.
+    [GeneratedRegex(
+        @"<(?:(?<close>/)(?<name>[A-Za-z][\w:-]*)\s*|(?<name>[A-Za-z][\w:-]*)(?<attrs>(?:[^>""'/]|""[^""]*""|'[^']*'|/(?!>))*)(?<self>/)?)>",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex AnyTag();
+
+    [GeneratedRegex(@"^#([0-9a-f]{3}|[0-9a-f]{6})$", RegexOptions.CultureInvariant)]
+    private static partial Regex HexColor();
 
     [GeneratedRegex(
         @"\s+(x|y|width|height)\s*=\s*([""']).*?\2",
