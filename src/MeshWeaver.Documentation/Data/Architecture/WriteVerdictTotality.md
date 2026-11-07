@@ -717,6 +717,32 @@ RequestTimeout").
 Each stage is also stamped on the request's fate trail (`CREATE_STAGE …`, `COPY_STAGE …`), so a trail
 that ends early names the leg that was running instead of ending at `CREATE_CHAIN_SUBSCRIBED`.
 
+**What `existence-read` is, and what it is not** (MeshWeaver#7957). The stage opens with
+`IStorageAdapter.Read(node.Path)`, made by the detached create chain once `authorship-source` (and the
+relocation source) have answered. It stays the reported stage until `partition-bootstrap` is
+entered, so two less common legs WRITE under the same name. The first is the Transient → Active
+confirmation, which saves the confirmed node when the read finds a `Transient` node at the path.
+The second is `PersistenceService.Read`'s legacy-user repair (`LegacyUserPartitionRepair`). For a bare,
+one-segment partition-root path it runs in two cases: on a miss, and when the root found is an
+upgradable stub (`IsUpgradableStubRoot`: Active, no NodeType, no content). In either case it reads
+the legacy `User/{id}` twin and may write the partition root and a self-admin grant. Every other create takes neither leg, and for those the
+stage is the read alone. On a Postgres host that read is a direct STORE read, never a hub hop:
+the guard decorators (`SubtreeDeletionGuardStorageAdapter` → `MonotonicWriteGuardStorageAdapter` →
+`VersionWritingStorageAdapter`) forward it to `PersistenceService`, which asks each partition
+provider in turn (`Concat`); the Postgres provider's `PostgreSqlPathRoutingAdapter` picks the
+schema's `PostgreSqlStorageAdapter`, whose `Read` is a leaf on the `pg-read:<provider>` I/O pool
+(`IoPoolOptions.PostgresRead`, 16 per silo), wrapped in a transient-fault retry (3 retries,
+200–800 ms backoff, and an Npgsql connect or command timeout counts as transient). The static and
+in-memory providers answer synchronously; the embedded-resource provider is a pooled leaf too.
+`AddPartitionStorageHubs`, which would turn the read into a routed `GetDataRequest`, is wired by no
+host. Nothing on that path awaits, blocks or bridges outside the pool. The admission is
+non-blocking on the subscriber's thread and the work runs on the thread pool, so a parked hub action
+block cannot hold this stage. When the create took neither write leg, a stall here therefore means
+one of four things: the read pool's
+admission queue (all slots held by slower reads), the Npgsql connection pool, a database that does
+not answer, or a starved thread pool delaying the leaf. The stage reading cannot tell them apart.
+The pool's own wait gauges and the database's metrics for that minute can.
+
 **The validators stage names the validator it is waiting on** (MeshWeaver#6391). The create runs its
 `INodeValidator`s one after another (`Concat`), so `stalled at stage 'validators'` named every
 registered validator at once. On memex.systemorph.com it fired ten
