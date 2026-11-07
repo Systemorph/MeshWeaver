@@ -174,6 +174,8 @@ public static class UserActivityLayoutAreas
         // the subject or a global admin. The owner never lands here (they get the dashboard); every
         // other viewer starts REDACTED and the email is revealed only once global-admin is confirmed.
         var canSeeEmail = CanSeeEmailStream(host.Hub, capturedAccessContext, isOwner);
+        // The viewer's locale, resolved ONCE on the render turn (the greeting is platform UI, not authored text).
+        var locale = host.ViewerLocale();
 
         var areaLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.UserActivityLayoutAreas");
@@ -212,7 +214,7 @@ public static class UserActivityLayoutAreas
                         nodeOwnerId, homeClock.ElapsedMilliseconds, ownerNode is not null);
 
                 if (isOwner)
-                    return (UiControl?)BuildOwnerHome(nodePath, ownerName, ownerNode, options);
+                    return (UiControl?)BuildOwnerHome(nodePath, ownerName, ownerNode, options, locale);
                 return (UiControl?)BuildProfile(nodePath, nodeOwnerId, ownerName, ownerNode,
                     isOwner: false, canSeeEmail: t.showEmail, options);
             })
@@ -285,11 +287,11 @@ public static class UserActivityLayoutAreas
     /// per-segment override — the page IS the override surface. Kept <c>internal</c> so the
     /// default-vs-override behaviour is unit-testable without standing up a hub.
     /// </summary>
-    internal static UiControl BuildOwnerHome(string nodePath, string ownerName, MeshNode? ownerNode, JsonSerializerOptions options)
+    internal static UiControl BuildOwnerHome(string nodePath, string ownerName, MeshNode? ownerNode, JsonSerializerOptions options, string? locale = null)
     {
         // ContentAs (not `as User`): the owner-node stream alternates typed↔JsonElement↔null frames.
         var body = ownerNode.ContentAs<User>(options)?.Body;
-        var markdown = string.IsNullOrWhiteSpace(body) ? UserWelcomeMarkdown(ownerName) : body!;
+        var markdown = string.IsNullOrWhiteSpace(body) ? UserWelcomeMarkdown(ownerName, locale) : body!;
         return Controls.Markdown(markdown) with { NodePath = nodePath };
     }
 
@@ -302,16 +304,36 @@ public static class UserActivityLayoutAreas
     /// keeps working. This is the single source of truth for "the default", shared by the render path
     /// and the unit tests.
     /// </summary>
-    /// <param name="ownerName">The owner's display name; the heading greets its first word.</param>
+    /// <param name="ownerName">The owner's display name; the heading greets its first word, as literal text.</param>
+    /// <param name="locale">The viewer's locale for the greeting (catalog key <c>home.welcomeBack</c>).</param>
     /// <returns>The default home page markdown.</returns>
-    internal static string UserWelcomeMarkdown(string ownerName) =>
+    internal static string UserWelcomeMarkdown(string ownerName, string? locale = null) =>
         $$"""
-        # Welcome back, {{FirstName(ownerName)}}
+        # {{LocalizationCatalog.Get("home.welcomeBack", locale, EscapeMarkdownText(FirstName(ownerName)))}}
 
         @@("area/Composer")
 
         @@("area/Catalog")
         """;
+
+    /// <summary>
+    /// A display name as LITERAL markdown text: every ASCII punctuation character is backslash-escaped
+    /// (CommonMark's escapable set), so a name such as <c>[Jane](https://x)</c> or <c>*Jane*</c> renders
+    /// as typed — never as a link, emphasis, HTML or an <c>@@</c> embed.
+    /// </summary>
+    /// <param name="text">The plain text.</param>
+    /// <returns>The escaped markdown.</returns>
+    internal static string EscapeMarkdownText(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length * 2);
+        foreach (var c in text)
+        {
+            if (c < 128 && (char.IsPunctuation(c) || c is '$' or '+' or '<' or '=' or '>' or '^' or '`' or '|' or '~'))
+                sb.Append('\\');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
 
     /// <summary>The first word of a display name ("Jane Roe" → "Jane"); the whole value when it has no space.</summary>
     /// <param name="name">The display name.</param>

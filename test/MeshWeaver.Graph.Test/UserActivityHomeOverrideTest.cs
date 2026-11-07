@@ -48,6 +48,25 @@ public class UserActivityHomeOverrideTest
     }
 
     [Fact]
+    public void OwnerHome_Greeting_IsLocalized()
+    {
+        UserActivityLayoutAreas.UserWelcomeMarkdown("Jane Roe", "de").Should().StartWith("# Willkommen zurück, Jane");
+        UserActivityLayoutAreas.UserWelcomeMarkdown("Jane Roe", "en").Should().StartWith("# Welcome back, Jane");
+    }
+
+    [Theory]
+    [InlineData("[Jane](https://example.com) Roe", @"\[Jane\]\(https\:\/\/example\.com\)")]
+    [InlineData("*Jane* Roe", @"\*Jane\*")]
+    [InlineData("<b>Jane</b>", @"\<b\>Jane\<\/b\>")]
+    [InlineData("@@(area/X)", @"\@\@\(area\/X\)")]
+    public void OwnerHome_Greeting_ShowsTheNameLiterally(string name, string escaped)
+    {
+        var heading = UserActivityLayoutAreas.UserWelcomeMarkdown(name, "en").Split('\n')[0];
+        heading.Should().Be("# Welcome back, " + escaped,
+            "a display name is plain text: it must never become a link, emphasis, HTML or an embed");
+    }
+
+    [Fact]
     public void OwnerHome_WithBody_RespectsTheOverrideVerbatim()
     {
         const string custom = "# My page\n\nJust my own words.\n\n@@(\"area/Search\")";
