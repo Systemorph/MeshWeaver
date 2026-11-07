@@ -1498,7 +1498,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             return bundles.AdoptModuleOutcome(packageId, moduleName, recordPath, unattended: true,
                     policyDecline: policyDecline)
                 .Select(outcome => (ModuleAdoptOutcome?)outcome);
-        return bundles.PlanModuleAdoption(packageId, moduleName, unattended: true, policyDecline, landing)
+        // The record's existence is read BEFORE planning (#7974 review): the plan's own reads are
+        // part of the window an uninstall can remove the record in.
+        return bundles.RecordExists(recordPath).SelectMany(hadRecord =>
+            bundles.PlanModuleAdoption(packageId, moduleName, unattended: true, policyDecline, landing)
             .SelectMany(plan => !plan.Lands
                 ? Observable.Return<ModuleAdoptOutcome?>(plan.Decided)
                 : servedListing()
@@ -1509,13 +1512,13 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     .SelectMany(declined =>
                     {
                         if (declined is null)
-                            return bundles.ExecuteModuleAdoption(plan, packageId, moduleName, recordPath)
+                            return bundles.ExecuteModuleAdoption(plan, packageId, moduleName, recordPath, recordAtPlan: hadRecord)
                                 .Select(outcome => (ModuleAdoptOutcome?)outcome);
                         logger?.LogInformation(
                             "[RegistryUpdate] module '{Module}' of {Id} is NOT landed on this pass: {Reason}",
                             moduleName, packageId, declined);
                         return Observable.Return<ModuleAdoptOutcome?>(null);
-                    }));
+                    })));
     }
 
     /// <summary>
