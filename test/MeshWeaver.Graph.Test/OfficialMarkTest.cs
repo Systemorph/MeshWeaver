@@ -233,6 +233,10 @@ public class OfficialMarkTest
     // A namespace-prefixed element is judged by its local name.
     [InlineData("<svg viewBox='0 0 24 24'><s:style xmlns:s='http://www.w3.org/2000/svg'>path{fill:#111827}</s:style><path d='M0 0h1v1z' fill='#fff'/></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24' xmlns:svg='http://www.w3.org/2000/svg'><svg:path d='M0 0h1v1z' fill='#111827'/></svg>", false)]
+    // A paint server's fallback colour is judged; a comment is not markup.
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='url(#missing) #111827'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='url(#g) #ffffff'/></svg>", true)]
+    [InlineData("<svg viewBox='0 0 24 24'><!-- <g fill='#fff'> --><path d='M0 0h1v1z'/></svg>", false)]
     // A malformed colour is unreadable — never a throw.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#xyz'/></svg>", false)]
     // A clip path's unfilled geometry is not painted.

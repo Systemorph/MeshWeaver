@@ -261,7 +261,8 @@ public static partial class IconBackplate
         var stack = new Stack<(string Fill, string Stroke, bool NotPainted)>();
         stack.Push(("black", "none", false));
         var drawables = 0;
-        foreach (Match tag in AnyTag().Matches(svg))
+        // Comments are not markup: `<!-- <g fill='#fff'> -->` must not push a group.
+        foreach (Match tag in AnyTag().Matches(XmlComment().Replace(svg, string.Empty)))
         {
             // The LOCAL name: a namespace prefix (<s:style>, <svg:path>) names the same element.
             var qualified = tag.Groups["name"].Value.ToLowerInvariant();
@@ -300,8 +301,16 @@ public static partial class IconBackplate
     private static bool Reads(string paint, OklchColor plate)
     {
         var p = paint.Trim().ToLowerInvariant();
-        if (p is "none" or "transparent" || p.StartsWith("url(", StringComparison.Ordinal))
+        if (p is "none" or "transparent")
             return true;
+        // A paint server (a gradient) is not judged — but its FALLBACK colour, painted when the
+        // reference is missing (`url(#missing) #111827`), is.
+        if (p.StartsWith("url(", StringComparison.Ordinal))
+        {
+            var close = p.IndexOf(')');
+            var fallback = close < 0 ? string.Empty : p[(close + 1)..].Trim();
+            return fallback.Length == 0 || Reads(fallback, plate);
+        }
         var hex = p switch
         {
             "white" => "#ffffff",
@@ -424,6 +433,9 @@ public static partial class IconBackplate
         @"<(?:(?<close>/)(?<name>[A-Za-z][\w:-]*)\s*|(?<name>[A-Za-z][\w:-]*)(?<attrs>(?:[^>""'/]|""[^""]*""|'[^']*'|/(?!>))*)(?<self>/)?)>",
         RegexOptions.CultureInvariant)]
     private static partial Regex AnyTag();
+
+    [GeneratedRegex(@"<!--.*?-->", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    private static partial Regex XmlComment();
 
     [GeneratedRegex(@"^#([0-9a-f]{3}|[0-9a-f]{6})$", RegexOptions.CultureInvariant)]
     private static partial Regex HexColor();
