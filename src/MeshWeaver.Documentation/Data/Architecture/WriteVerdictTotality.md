@@ -717,6 +717,24 @@ RequestTimeout").
 Each stage is also stamped on the request's fate trail (`CREATE_STAGE …`, `COPY_STAGE …`), so a trail
 that ends early names the leg that was running instead of ending at `CREATE_CHAIN_SUBSCRIBED`.
 
+**What `existence-read` is, and what it is not** (MeshWeaver#7957). The stage is ONE call,
+`IStorageAdapter.Read(node.Path)`, made by the detached create chain once `authorship-source` (and the
+relocation source) have answered. On a Postgres host it is a direct STORE read, never a hub hop:
+the guard decorators (`SubtreeDeletionGuardStorageAdapter` → `MonotonicWriteGuardStorageAdapter` →
+`VersionWritingStorageAdapter`) forward it to `PersistenceService`, which asks each partition
+provider in turn (`Concat`); the Postgres provider's `PostgreSqlPathRoutingAdapter` picks the
+schema's `PostgreSqlStorageAdapter`, whose `Read` is a leaf on the `pg-read:<provider>` I/O pool
+(`IoPoolOptions.PostgresRead`, 16 per silo), wrapped in a transient-fault retry (3 retries,
+200–800 ms backoff, and an Npgsql connect or command timeout counts as transient). The static and
+in-memory providers answer synchronously; the embedded-resource provider is a pooled leaf too.
+`AddPartitionStorageHubs`, which would turn the read into a routed `GetDataRequest`, is wired by no
+host. Nothing on that path awaits, blocks or bridges outside the pool. The admission is
+non-blocking on the subscriber's thread and the work runs on the thread pool, so a parked hub action
+block cannot hold this stage. A stall here therefore means one of four things: the read pool's
+admission queue (all slots held by slower reads), the Npgsql connection pool, a database that does
+not answer, or a starved thread pool delaying the leaf. The stage reading cannot tell them apart.
+The pool's own wait gauges and the database's metrics for that minute can.
+
 **The validators stage names the validator it is waiting on** (MeshWeaver#6391). The create runs its
 `INodeValidator`s one after another (`Concat`), so `stalled at stage 'validators'` named every
 registered validator at once. On memex.systemorph.com it fired ten
