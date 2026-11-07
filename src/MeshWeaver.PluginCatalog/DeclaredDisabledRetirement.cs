@@ -137,8 +137,8 @@ public static class DeclaredDisabledRetirement
     /// <summary>
     /// THE rule for "a flag declared off covers this package" — the declared-off flag whose
     /// source-scoped pattern matches <paramref name="source"/>/<paramref name="packageId"/>, or null.
-    /// <see cref="Decide"/> uses it, and so does every lane that must not write a package the
-    /// declaration retires (the repair's re-assert), so there is one decision, not two copies. A
+    /// <see cref="Decide"/> uses it. It decides what to RETIRE; whether an unattended writer must keep
+    /// off an install is the retirement's state (<see cref="IsRetiring"/>), never this match. A
     /// package naming no source matches nothing (fails closed, as every source-scoped lane does).
     /// Pure.
     /// </summary>
@@ -190,21 +190,47 @@ public static class DeclaredDisabledRetirement
     /// <param name="attempt">The attempt number.</param>
     public static string RequestIdFor(string retireKey, int attempt) => $"{retireKey}-a{attempt}";
 
-    /// <summary>The environment's composition, read once off the live flag surface — for an unattended
-    /// lane that must not write a package the declaration retires. Never faults: an unreadable
-    /// composition is logged at Error and read as empty.</summary>
+    /// <summary>
+    /// 🚨 THE rule every unattended writer of an install record or a module consults (#7959 review):
+    /// the install identities (<see cref="RetireKeyFor"/>) a flag-issued request is retiring NOW or
+    /// has retired — every such request whose status is not <see cref="PackageUninstallStatus.Failed"/>.
+    /// It is the retirement's actual STATE, never the flag match: a package whose retire was REFUSED
+    /// (required by a dependent — no request at all — or a phase-1 safety refusal — a failed one) is
+    /// NOT in it, so it stays repairable and updatable; and a person's later re-install has a new
+    /// identity, so it is not in it either. Read as System from a listing of the request namespace
+    /// (paths) and each request's own node (status). Never faults: an unreadable state is logged at
+    /// Warning and read as empty.
+    /// </summary>
     /// <param name="hub">The mesh hub.</param>
-    /// <param name="logger">Receives the read failure.</param>
-    public static IObservable<FeatureComposition> CurrentComposition(IMessageHub hub, ILogger? logger) =>
-        hub.ServiceProvider.GetService<IFeatureFlags>() is { } flags
-            ? flags.Composition.Take(1).Timeout(TimeSpan.FromSeconds(5))
+    /// <param name="logger">Receives a read failure.</param>
+    public static IObservable<ImmutableHashSet<string>> RetiringInstalls(IMessageHub hub, ILogger? logger) =>
+        hub.ServiceProvider.GetService<IMeshService>() is null
+            ? Observable.Return(ImmutableHashSet<string>.Empty)
+            : ExistingRequests(hub)
+                .Select(all => all
+                    .Where(x => x.Request.Status != PackageUninstallStatus.Failed)
+                    .Select(x => x.Request.RetireKey!)
+                    .ToImmutableHashSet(StringComparer.Ordinal))
                 .Catch((Exception ex) =>
                 {
-                    logger?.LogError(ex,
-                        "[FlagRetire] the environment's feature flags could not be read, so no package is treated as declared off here.");
-                    return Observable.Return(FeatureComposition.Empty);
-                })
-            : Observable.Return(FeatureComposition.Empty);
+                    logger?.LogWarning(ex,
+                        "[FlagRetire] the flag retirements in flight could not be read; this pass treats no install as being retired.");
+                    return Observable.Return(ImmutableHashSet<string>.Empty);
+                });
+
+    /// <summary>Whether <paramref name="record"/>'s install is being (or has been) retired by a flag —
+    /// <see cref="RetiringInstalls"/> applied to one record. Pure.</summary>
+    /// <param name="record">The install record as the writer read it.</param>
+    /// <param name="retiring">The identities <see cref="RetiringInstalls"/> answered.</param>
+    public static bool IsRetiring(PackageManifest record, ImmutableHashSet<string> retiring) =>
+        IsRetiringKey(RetireKeyFor(record), retiring);
+
+    /// <summary><see cref="IsRetiring"/> for a caller that
+    /// carries the install identity (<see cref="RetireKeyFor"/>) rather than the record. Pure.</summary>
+    /// <param name="retireKey">The install identity; null (no record) is never retiring.</param>
+    /// <param name="retiring">The identities <see cref="RetiringInstalls"/> answered.</param>
+    public static bool IsRetiringKey(string? retireKey, ImmutableHashSet<string> retiring) =>
+        retireKey is not null && retiring.Contains(retireKey);
 
     /// <summary>How long one boot waits for one request's phase 1 to settle before it counts the
     /// package as staying (refusing whatever it requires this boot) and says so at Error.</summary>

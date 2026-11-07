@@ -82,27 +82,19 @@ internal static class PackageUpdateReconciler
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
 
-        // 🚨 A package a flag DECLARED OFF is never updated unattended (MeshWeaver.Plugins#5055): the
-        // boot pass retires it, and an update applied while phase 1 runs would re-write the install
-        // record phase 1 removes. The retire's own rule, over the same declaration.
+        // 🚨 An install a flag is RETIRING is never updated unattended (MeshWeaver.Plugins#5055): an
+        // update applied while phase 1 runs — or by a pass that read the record before phase 1 removed
+        // it — would re-write that record. The retirement's actual state, read once per pass
+        // (DeclaredDisabledRetirement.IsRetiring); a REFUSED retire leaves the package updatable.
         //
         // SEQUENTIAL (Concat), not a fan-out: each apply writes a partition's worth of nodes and
         // may compile node types. The boot caller runs this on a cold pod, where a parallel
         // fan-out is how you saturate it — the same call InstanceAutoRegistrationService.InstallAll
         // already makes for the identical reason.
-        return DeclaredDisabledRetirement.CurrentComposition(hub, logger)
-            .SelectMany(composition => candidates
-                .Where(pkg =>
-                {
-                    if (DeclaredDisabledRetirement.CoveredBy(pkg.Source, pkg.Id, composition.Retired) is not { } flag)
-                        return true;
-                    logger?.LogInformation(
-                        "Package update: {Id} is declared off by the feature flag '{Flag}' and is retired, never updated unattended.",
-                        pkg.Id, flag);
-                    return false;
-                })
+        return DeclaredDisabledRetirement.RetiringInstalls(hub, logger)
+            .SelectMany(retiring => candidates
                 .Select(pkg => ReconcileOne(
-                    hub, storage, meshService, accessService, source, sourceRef, pkg, provenance, logger, binding))
+                    hub, storage, meshService, accessService, source, sourceRef, pkg, provenance, logger, binding, retiring))
                 .ToObservable()
                 .Concat()
                 .DefaultIfEmpty(Unit.Default)
@@ -119,7 +111,8 @@ internal static class PackageUpdateReconciler
         PackageManifest pkg,
         string provenance,
         ILogger? logger,
-        InstallOriginBinding? binding)
+        InstallOriginBinding? binding,
+        System.Collections.Immutable.ImmutableHashSet<string> retiring)
     {
         var recordPath = $"{PackageInstaller.InstalledPartition}/{pkg.Id}";
         return storage.Read(recordPath, hub.JsonSerializerOptions)
@@ -135,8 +128,17 @@ internal static class PackageUpdateReconciler
             .SelectMany(record => record is null
                 // Not installed here → nothing to remind anyone about.
                 ? Observable.Return(Unit.Default)
+                : DeclaredDisabledRetirement.IsRetiring(record, retiring)
+                    ? Skip(pkg, logger)
                 : Decide(hub, meshService, accessService, source, sourceRef, pkg, record, recordPath,
                     provenance, logger, binding));
+    }
+
+    private static IObservable<Unit> Skip(PackageManifest pkg, ILogger? logger)
+    {
+        logger?.LogInformation(
+            "Package update: {Id} is being retired by a feature flag declared off, so it is not updated unattended.", pkg.Id);
+        return Observable.Return(Unit.Default);
     }
 
     private static IObservable<Unit> Decide(

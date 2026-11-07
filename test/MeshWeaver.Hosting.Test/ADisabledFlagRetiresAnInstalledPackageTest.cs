@@ -458,47 +458,107 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
 }
 
 /// <summary>
-/// 🚨 <b>The repair's re-assert never re-writes a package a flag declared off</b> (MeshWeaver.Plugins#5055).
-/// <see cref="InstalledPackageRepairService"/> lists the install records BEFORE it waits for the
-/// default install, so the record it hands to <c>ReassertInstalled</c> can belong to a package the
-/// boot pass is retiring at that moment; re-asserting it would re-write the record phase 1 removes.
-/// The re-assert reads the same composition and skips by the retire's own rule
-/// (<see cref="DeclaredDisabledRetirement.CoveredBy"/>), reporting each skip on the summary.
+/// 🚨 <b>No unattended writer re-writes an install a flag is RETIRING — and a REFUSED retire stays
+/// repairable and updatable</b> (MeshWeaver.Plugins#5055, #7959 review). The repair lists its records
+/// before it waits for the boot pass, and the update lanes can run while phase 1 does (a settle wait
+/// that times out, a webhook), so each consults the retirement's actual STATE
+/// (<see cref="DeclaredDisabledRetirement.IsRetiring"/>), never the flag match.
 /// </summary>
-public abstract class AReassertSkipsDeclaredOffPackagesTestBase(ITestOutputHelper output, Dictionary<string, string?> flags)
-    : MonolithMeshTestBase(output)
+public class AnUnattendedWriterKeepsOffARetiringInstallTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    protected const string Package = "FlagRetirePkg";
+    private const string Mcp = "FlagRetireMcp";
+    private const string Essentials = "FlagRetireEssentials";
+    private static readonly DateTimeOffset InstalledAt = new(2026, 11, 7, 7, 0, 0, TimeSpan.Zero);
 
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => base.ConfigureMesh(builder)
-        .AddPluginCatalog()
-        .ConfigureServices(services => services.AddSingleton<IFeatureFlags>(
-            new ConfigurationFeatureFlags(new ConfigurationBuilder().AddInMemoryCollection(flags).Build())));
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => base.ConfigureMesh(builder).AddPluginCatalog();
 
-    /// <summary>
-    /// The UNATTENDED UPDATE lane over a pinned install record with a newer candidate: it reaches the
-    /// policy decision ("has an update") unless the declaration retires the package first. The
-    /// record is pinned (<see cref="PackageUpdatePolicy.None"/>) so the decision writes nothing.
-    /// Returns what the lane logged.
-    /// </summary>
-    protected async Task<IReadOnlyList<string>> UnattendedUpdate(CancellationToken ct)
+    private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+    private static PackageManifest Record(string id, params string[] requires) => new()
     {
-        var record = new PackageManifest
-        {
-            Id = Package, Name = Package, Source = "Plugins", Version = "1.0.0", TargetPartition = Package,
-            ModuleVersion = "v1", UpdatePolicy = PackageUpdatePolicy.None,
-        };
-        await Mesh.ServiceProvider.GetRequiredService<AccessService>().RunAsSystem(() => NodeFactory.CreateOrUpdateNode(
-                MeshNode.FromPath($"{PackageInstaller.InstalledPartition}/{Package}") with
+        Id = id, Name = id, Source = "Plugins", Version = "1.0.0", TargetPartition = id, InstalledAtUtc = InstalledAt,
+        ModuleVersion = "v1", UpdatePolicy = PackageUpdatePolicy.None, Requires = [.. requires],
+    };
+
+    /// <summary>Writes the install record as a writer that read it earlier would — the same install identity.</summary>
+    private Task Write(PackageManifest record, CancellationToken ct) =>
+        Access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(
+                MeshNode.FromPath($"{PackageInstaller.InstalledPartition}/{record.Id}") with
                 {
-                    NodeType = PackageInstaller.PackageNodeType, Name = Package, State = MeshNodeState.Active, Content = record,
+                    NodeType = PackageInstaller.PackageNodeType, Name = record.Id, State = MeshNodeState.Active, Content = record,
                 }))
             .Timeout(TestTimeouts.Convergence).Await(ct);
+
+    private Task<DeclaredDisabledRetirement.Outcome> Retire(CancellationToken ct, params string[] packages)
+    {
+        var values = new Dictionary<string, string?> { ["Features:Flags:off:Enabled"] = "false" };
+        for (var i = 0; i < packages.Length; i++)
+            values[$"Features:Flags:off:Packages:{i}"] = packages[i];
+        using var flags = new ConfigurationFeatureFlags(new ConfigurationBuilder().AddInMemoryCollection(values).Build());
+        return DeclaredDisabledRetirement.Retire(Mesh, DeclaredDisabledFlagCompositionTest.Composed(flags),
+                NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+    }
+
+    private Task<DefaultInstallSummary> Reassert(PackageManifest record, CancellationToken ct) =>
+        Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>()
+            .ReassertInstalled([new InstanceAutoRegistrationService.ReassertTarget(
+                record.Id, record.Id, record.ModuleVersion!, record.Source, DeclaredDisabledRetirement.RetireKeyFor(record))])
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+    /// <summary>The unattended UPDATE lane over a pinned record with a newer candidate: it reaches its
+    /// policy decision ("has an update") unless the install is being retired. Returns what it logged.</summary>
+    private async Task<IReadOnlyList<string>> UnattendedUpdate(PackageManifest record, CancellationToken ct)
+    {
         var log = new CapturingLogger();
         await PackageUpdateReconciler.ReconcileInstalled(Mesh, new SilentSource(), "HEAD",
                 [record with { ModuleVersion = "v2" }], "test", log)
             .Timeout(TestTimeouts.Convergence).Await(ct);
         return log.Lines;
+    }
+
+    /// <summary>A retired install whose record a stale writer brings back (it read the record before
+    /// phase 1 removed it): the repair skips it, and the update lane does not touch it.</summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AStaleWriterOfARetiredInstall_IsNeitherReassertedNorUpdated()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var mcp = Record(Mcp);
+        await Write(mcp, ct);
+        var outcome = await Retire(ct, $"Plugins/{Mcp}");
+        Assert.Single(outcome.Requested);
+        Assert.Empty(outcome.Refused);
+
+        await Write(mcp, ct); // the stale writer: same install identity, after phase 1 removed it
+
+        var skip = Assert.Single((await Reassert(mcp, ct)).Skipped);
+        Assert.Equal(Mcp, skip.Package);
+        var lines = await UnattendedUpdate(mcp, ct);
+        Assert.Contains(lines, l => l.Contains("is being retired by a feature flag"));
+        Assert.DoesNotContain(lines, l => l.Contains("has an update"));
+    }
+
+    /// <summary>
+    /// THE regression for the review: <c>Mcp</c> is declared off but <c>Essentials</c> (which stays)
+    /// requires it, so the retire is REFUSED — and Mcp stays repairable and updatable. Negative control
+    /// (measured): with the skip keyed on the flag match, as before, Mcp is skipped here and this is red.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ARefusedRetire_StaysRepairableAndUpdatable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var mcp = Record(Mcp);
+        await Write(mcp, ct);
+        await Write(Record(Essentials, $"{Mcp}@^1.0"), ct);
+
+        var outcome = await Retire(ct, $"Plugins/{Mcp}");
+        Assert.Empty(outcome.Requested);
+        Assert.Contains(outcome.Refused, l => l.StartsWith(Mcp + ":") && l.Contains(Essentials));
+
+        Assert.Empty((await Reassert(mcp, ct)).Skipped);
+        var lines = await UnattendedUpdate(mcp, ct);
+        Assert.Contains(lines, l => l.Contains("has an update"));
+        Assert.DoesNotContain(lines, l => l.Contains("is being retired"));
     }
 
     private sealed class SilentSource : IPackageSource
@@ -518,66 +578,5 @@ public abstract class AReassertSkipsDeclaredOffPackagesTestBase(ITestOutputHelpe
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
             ImmutableInterlocked.Update(ref lines, l => l.Add(formatter(state, exception)));
-    }
-
-    protected Task<DefaultInstallSummary> Reassert(CancellationToken ct, string? source = "Plugins") =>
-        Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>()
-            .ReassertInstalled([new InstanceAutoRegistrationService.ReassertTarget(Package, Package, "1.0.0", source)])
-            .Timeout(TestTimeouts.Convergence).Await(ct);
-}
-
-public class AReassertSkipsADeclaredOffPackageTest(ITestOutputHelper output)
-    : AReassertSkipsDeclaredOffPackagesTestBase(output, new()
-    {
-        ["Features:Flags:off:Enabled"] = "false",
-        ["Features:Flags:off:Packages:0"] = $"Plugins/{Package}",
-    })
-{
-    [Fact(Timeout = 120_000)]
-    public async Task APackageAFlagDeclaresOff_IsNotReasserted_AndTheSkipNamesTheFlag()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var summary = await Reassert(ct);
-        var skip = Assert.Single(summary.Skipped);
-        Assert.Equal(Package, skip.Package);
-        Assert.Contains("'off'", skip.Reason);
-    }
-
-    /// <summary>#7959 review: the unattended UPDATE lane never touches a package the declaration retires.
-    /// Negative control: <see cref="AReassertWithNoDeclaredOffFlagTest.AnUnattendedUpdate_ReachesItsDecision_WithNoFlag"/>.</summary>
-    [Fact(Timeout = 120_000)]
-    public async Task AnUnattendedUpdate_SkipsADeclaredOffPackage()
-    {
-        var lines = await UnattendedUpdate(TestContext.Current.CancellationToken);
-        Assert.Contains(lines, l => l.Contains("declared off by the feature flag 'off'"));
-        Assert.DoesNotContain(lines, l => l.Contains("has an update"));
-    }
-
-    /// <summary>The same rule as the retire: a record naming no source is not covered, so it is not skipped.</summary>
-    [Fact(Timeout = 120_000)]
-    public async Task ARecordNamingNoSource_IsNotSkipped()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        Assert.Empty((await Reassert(ct, source: null)).Skipped);
-    }
-}
-
-/// <summary>Negative control: the same re-assert with the flag merely ABSENT skips nothing.</summary>
-public class AReassertWithNoDeclaredOffFlagTest(ITestOutputHelper output)
-    : AReassertSkipsDeclaredOffPackagesTestBase(output, new())
-{
-    [Fact(Timeout = 120_000)]
-    public async Task AnAbsentFlag_SkipsNothing()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        Assert.Empty((await Reassert(ct)).Skipped);
-    }
-
-    [Fact(Timeout = 120_000)]
-    public async Task AnUnattendedUpdate_ReachesItsDecision_WithNoFlag()
-    {
-        var lines = await UnattendedUpdate(TestContext.Current.CancellationToken);
-        Assert.Contains(lines, l => l.Contains("has an update"));
-        Assert.DoesNotContain(lines, l => l.Contains("declared off by the feature flag"));
     }
 }

@@ -1057,9 +1057,9 @@ public sealed class InstanceAutoRegistrationService(
             .SelectMany(_ => InstallSelection(options, wanted, baseline, defaultApps, composed, authorizing)));
     }
 
-    /// <summary>The environment's composition, read ONCE off the live flag surface — the reading
-    /// both the boot pass and the repair's re-assert decide on. Never faults: an unreadable
-    /// composition is logged at Error and read as empty.</summary>
+    /// <summary>The environment's composition, read ONCE off the live flag surface — the reading the
+    /// boot pass decides on. Never faults: an unreadable composition is logged at Error and read as
+    /// empty.</summary>
     private IObservable<FeatureComposition> ReadComposition() =>
         hub.ServiceProvider.GetService<IFeatureFlags>() is { } flags
             ? flags.Composition.Take(1).Timeout(TimeSpan.FromSeconds(5))
@@ -3226,13 +3226,12 @@ public sealed class InstanceAutoRegistrationService(
     /// installed package is installed; restoring what it lost is not installing what the operator
     /// excluded.</para>
     ///
-    /// <para>🚨 <b>…but a package a flag declared off with an explicit <c>false</c> is NOT re-asserted</b>
-    /// (MeshWeaver.Plugins#5055). The boot pass retires it through phase 1 of the uninstall request
-    /// (<see cref="DeclaredDisabledRetirement"/>), and this repair lists its records BEFORE it waits
-    /// for the default install — so without this skip it could re-write the install record of a
-    /// package phase 1 is removing, and the next boot would retire it again under a new id. The rule
-    /// is the retire's own (<see cref="DeclaredDisabledRetirement.CoveredBy"/> over
-    /// <see cref="FeatureComposition.Retired"/>), read off the same composition; each skip is
+    /// <para>🚨 <b>…but an install a flag is RETIRING is not re-asserted</b> (MeshWeaver.Plugins#5055).
+    /// This repair lists its records BEFORE it waits for the default install, so the record it would
+    /// re-assert can be one phase 1 is removing, or has removed. The skip is the retirement's actual
+    /// STATE (<see cref="DeclaredDisabledRetirement.IsRetiring"/> over the target's
+    /// <see cref="ReassertTarget.RetireKey"/>), never the flag match: a package whose retire was
+    /// REFUSED — required by a dependent, or a phase-1 safety refusal — stays repairable. Each skip is
     /// reported on the summary's <see cref="DefaultInstallSummary.Skipped"/>.</para>
     /// </summary>
     /// <param name="targets">The installed packages to re-assert — each with the PARTITION and
@@ -3244,18 +3243,17 @@ public sealed class InstanceAutoRegistrationService(
         ArgumentNullException.ThrowIfNull(targets);
         if (targets.Count == 0)
             return Observable.Return(DefaultInstallSummary.Empty);
-        return ReadComposition().SelectMany(composition =>
+        return DeclaredDisabledRetirement.RetiringInstalls(hub, logger).SelectMany(retiring =>
         {
             var skipped = targets
-                .Select(t => (Target: t, Flag: DeclaredDisabledRetirement.CoveredBy(t.Source, t.PackageId, composition.Retired)))
-                .Where(x => x.Flag is not null)
-                .Select(x => new DefaultInstallSkip(x.Target.PackageId,
-                    $"declared off by the feature flag '{x.Flag}' (Enabled=false) — retired, never re-asserted"))
+                .Where(t => DeclaredDisabledRetirement.IsRetiringKey(t.RetireKey, retiring))
+                .Select(t => new DefaultInstallSkip(t.PackageId,
+                    "a feature flag declared off is retiring this install (phase 1 of the uninstall request) — never re-asserted"))
                 .ToImmutableList();
             if (skipped.Count > 0)
                 logger.LogInformation(
-                    "[PackageRepair] {Count} incomplete install(s) are NOT re-asserted: a feature flag declares them off "
-                    + "and the boot pass retires them — [{Skipped}] (MeshWeaver.Plugins#5055).",
+                    "[PackageRepair] {Count} incomplete install(s) are NOT re-asserted: a feature flag is retiring them "
+                    + "— [{Skipped}] (MeshWeaver.Plugins#5055).",
                     skipped.Count, string.Join(", ", skipped.Select(x => x.Package)));
             var kept = targets.Where(t => skipped.All(x => !string.Equals(x.Package, t.PackageId, StringComparison.Ordinal))).ToList();
             return ReassertCore(kept).Select(summary => summary with { Skipped = summary.Skipped.AddRange(skipped) });
@@ -3422,7 +3420,9 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="Source">The source the install record was stamped with — the repair re-asserts
     /// from a listing of THAT source when one lists the package, and derives the deployment
     /// configuration's authority only from it. Null when the record names none.</param>
-    internal sealed record ReassertTarget(string PackageId, string Partition, string ModuleVersion, string? Source = null);
+    /// <param name="RetireKey">The install's identity (<see cref="DeclaredDisabledRetirement.RetireKeyFor"/>)
+    /// — what decides whether a flag is retiring THIS install. Null when the caller has no record.</param>
+    internal sealed record ReassertTarget(string PackageId, string Partition, string ModuleVersion, string? Source = null, string? RetireKey = null);
 
     /// <summary>
     /// Runs the PRODUCTION default-install pass on demand — the identical selection, ordering and

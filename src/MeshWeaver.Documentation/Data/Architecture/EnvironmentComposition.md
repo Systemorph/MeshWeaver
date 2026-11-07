@@ -176,12 +176,19 @@ How it runs (`DeclaredDisabledRetirement`, called by the boot pass before the in
   says so, and siblings drop it at their next restart.
 - **Never phase 2.** The request names no requester, and phase 2 refuses a confirmation for such a
   request — a flag can never drop a partition.
-- **No unattended lane re-writes it.** Two unattended lanes can write an install record outside the
-  boot selection, and both skip what the declaration covers: the boot repair's
-  `ReassertInstalled` (it lists records before it waits for the default install), reported on the
-  summary's `Skipped`; and the unattended update lane (`PackageUpdateReconciler.ReconcileInstalled`),
-  which would otherwise apply an update over a record phase 1 is removing. A person's install from the
-  catalog is not blocked — and is retired again by the next boot while the flag stays off.
+- **No unattended writer re-writes it — keyed on the retirement's STATE, not the flag.** Phase 1 can
+  still be running when the boot pass completes (a settle wait that timed out, a request an earlier
+  boot left in flight), and a webhook-driven lane can run at any time. So every unattended writer of an
+  install record or a module consults ONE rule, `DeclaredDisabledRetirement.IsRetiring`: is there a
+  flag-issued request for THIS install's identity (`RetireKeyFor`) whose status is not `Failed`? The
+  boot repair's `ReassertInstalled` (it lists records before it waits for the default install,
+  reported on the summary's `Skipped`), the unattended update lane
+  (`PackageUpdateReconciler.ReconcileInstalled`) and the registry's module lane (`AdoptOne`, where a
+  landing after phase 1's tombstone would be a FIRST landing) all skip such an install. A package
+  whose retire was **refused** — required by a dependent (no request) or a phase-1 safety refusal (a
+  failed one) — is not retiring, so it stays repairable and updatable; and a person's later
+  re-install has a new identity, so it is not skipped either. A person's install from the catalog is
+  never blocked — and is retired again by the next boot while the flag stays off.
 - **It blocks no re-install.** A flag-issued request (`RetiredByFlag`) is not counted by
   `PackageUninstallExecutor.UninstalledHere`: while the flag stays off its exclusion keeps the package
   out, and once the record stops declaring it off the package's own lanes bring it back.
