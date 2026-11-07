@@ -1939,6 +1939,17 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 // Init-time pass-through: messages that contribute to Current
                 // being populated (initial frame from owner, error responses).
                 d.Message is SetCurrentRequest or DeliveryFailure or GetDataResponse
+                // 🚨 …and the OWNER'S error, which is the other "error response" this gate exists to
+                // let through (#7919). An owner that ends the stream BEFORE its first frame — a
+                // followed read whose first verdict refuses or reaches none (#7825), a reducer
+                // that faults on the initial snapshot — posts a StreamErrorEvent and never a frame,
+                // so the frame that opens this gate never comes. Deferred here, the error waited
+                // behind a gate only it could have opened: the mirror never faulted, the view sat
+                // on "awaiting first data" instead of the denied / unavailable state, and the error
+                // was finally DISCARDED when something disposed the sub-hub — the [DISPOSE-DISCARD]
+                // of a StreamErrorEvent behind [SynchronizationGate] measured on memex-cloud
+                // 2026-11-06. Its handler faults the stream, and the stream's OnError opens the gate.
+                || d.Message is StreamErrorEvent
                 // 🚨 Pass BOTH Full AND Patch DataChangedEvents through during init.
                 // Gated (deferred) messages are LOST — TPL Dataflow's LinkTo from the
                 // deferred block to main doesn't re-flush queued items in this codebase
