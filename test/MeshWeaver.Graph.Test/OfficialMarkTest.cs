@@ -218,6 +218,9 @@ public class OfficialMarkTest
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='none' stroke='#111827'/></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'><line x1='0' y1='0' x2='1' y2='1' stroke='#111827'/></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'><line x1='0' y1='0' x2='1' y2='1' stroke='#25D366'/></svg>", true)]
+    // A painted <use> draws referenced geometry the scan cannot judge: the white plate stays.
+    [InlineData("<svg viewBox='0 0 24 24'><defs><path id='d' d='M0 0h1v1z' fill='#111827'/></defs><path d='M0 0h1v1z' fill='#fff'/><use href='#d'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#fff'/><image href='x.png'/></svg>", false)]
     // A malformed colour is unreadable — never a throw.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#xyz'/></svg>", false)]
     // A clip path's unfilled geometry is not painted.

@@ -246,7 +246,8 @@ public static partial class IconBackplate
     /// are not judged; content of <c>defs</c>, <c>clipPath</c>, <c>mask</c>, <c>symbol</c>,
     /// <c>pattern</c> and <c>marker</c> is not painted directly and is skipped. <c>currentColor</c>,
     /// <c>black</c> and anything that is not a well-formed <c>#rgb</c>/<c>#rrggbb</c> or <c>white</c>
-    /// count as unreadable. A mark with no drawable is not judged legible. Pure and total: malformed
+    /// count as unreadable. A painted <c>use</c> or <c>image</c> (geometry this scan cannot judge) and a
+    /// mark with no drawable are not judged legible. Pure and total: malformed
     /// markup answers false, it never throws.
     /// </summary>
     /// <param name="svg">The authored mark.</param>
@@ -273,6 +274,9 @@ public static partial class IconBackplate
             var fill = StylePaint(attrs, "fill") ?? AttrOf(attrs, "fill") ?? inheritedFill;
             var stroke = StylePaint(attrs, "stroke") ?? AttrOf(attrs, "stroke") ?? inheritedStroke;
             var skipped = notPainted || name is "defs" or "clippath" or "mask" or "symbol" or "pattern" or "marker";
+            // A painted <use> or <image> draws geometry this scan cannot see: keep the white plate.
+            if (!skipped && name is "use" or "image")
+                return false;
             if (!skipped && name is "rect" or "circle" or "ellipse" or "path" or "polygon" or "polyline" or "line" or "text")
             {
                 drawables++;
