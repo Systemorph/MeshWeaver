@@ -27,10 +27,10 @@ public class UserActivityHomeOverrideTest
     [Fact]
     public void OwnerHome_WithoutBody_ServesTheWelcomeTemplate()
     {
-        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, UserNode(new User()), Options);
+        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, "Jane Roe", UserNode(new User()), Options);
 
         home.Should().BeOfType<MarkdownControl>();
-        Markdown(home).Should().Be(UserActivityLayoutAreas.UserWelcomeMarkdown());
+        Markdown(home).Should().Be(UserActivityLayoutAreas.UserWelcomeMarkdown("Jane Roe"));
         // NodePath must be set so the welcome's relative @@("area/…") embeds resolve to this user hub.
         ((MarkdownControl)home).NodePath.Should().Be(NodePath);
     }
@@ -38,20 +38,20 @@ public class UserActivityHomeOverrideTest
     [Fact]
     public void OwnerHome_WelcomeTemplate_IsTheMessageBoxThenTheLauncher_AndNothingElse()
     {
-        // Policy home-is-composer-apps-spaces: the message box, apps, then spaces. The Catalog
-        // region is the Apps grid followed by the Spaces grid (BuildHome); the template carries
-        // only the composer and that region — no heading, no cards, no footer note.
-        var md = UserActivityLayoutAreas.UserWelcomeMarkdown();
+        // Policy home-is-composer-apps-spaces: a welcome heading, the message box, apps, then spaces.
+        // The Catalog region is the Apps grid followed by the Spaces grid (BuildHome); the template
+        // carries only the heading, the composer and that region — no cards, no footer note.
+        var md = UserActivityLayoutAreas.UserWelcomeMarkdown("Jane Roe");
 
         var blocks = md.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        blocks.Should().Equal("@@(\"area/Composer\")", "@@(\"area/Catalog\")");
+        blocks.Should().Equal("# Welcome back, Jane", "@@(\"area/Composer\")", "@@(\"area/Catalog\")");
     }
 
     [Fact]
     public void OwnerHome_WithBody_RespectsTheOverrideVerbatim()
     {
         const string custom = "# My page\n\nJust my own words.\n\n@@(\"area/Search\")";
-        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, UserNode(new User { Body = custom }), Options);
+        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, "Jane Roe", UserNode(new User { Body = custom }), Options);
 
         home.Should().BeOfType<MarkdownControl>();
         Markdown(home).Should().Be(custom);
@@ -65,9 +65,9 @@ public class UserActivityHomeOverrideTest
     [InlineData("\n\t ")]
     public void OwnerHome_WithBlankBody_FallsBackToTheDefault(string blank)
     {
-        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, UserNode(new User { Body = blank }), Options);
+        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, "Jane Roe", UserNode(new User { Body = blank }), Options);
 
-        Markdown(home).Should().Be(UserActivityLayoutAreas.UserWelcomeMarkdown(),
+        Markdown(home).Should().Be(UserActivityLayoutAreas.UserWelcomeMarkdown("Jane Roe"),
             "blank/whitespace is not an override — the default template must show");
     }
 
@@ -75,9 +75,9 @@ public class UserActivityHomeOverrideTest
     public void OwnerHome_NullContent_StillRendersTheDefault()
     {
         var node = MeshNode.FromPath(NodePath) with { Name = "Roland", NodeType = "User" };
-        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, node, Options);
+        var home = UserActivityLayoutAreas.BuildOwnerHome(NodePath, "Jane Roe", node, Options);
 
-        Markdown(home).Should().Be(UserActivityLayoutAreas.UserWelcomeMarkdown());
+        Markdown(home).Should().Be(UserActivityLayoutAreas.UserWelcomeMarkdown("Jane Roe"));
     }
 
     [Fact]
