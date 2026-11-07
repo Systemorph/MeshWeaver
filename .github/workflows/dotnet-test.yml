@@ -2919,6 +2919,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-artifact-store.py --self-test
 
+    # The module-pack tool's cache key (node-repo-module-pack.yml `prepare`): a change outside the tool's
+    # ProjectReference closure keeps the key, one inside it or in a root MSBuild input changes it, and a
+    # project that includes a file outside its own directory is refused rather than keyed blind.
+    - name: "The pack tool's closure key moves with its inputs and only them (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/msbuild-closure-key.py --self-test
+
     - name: "Own-store named artifacts preserve rerun inputs and reject corrupt archives"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test_ci_run_artifacts.py
@@ -3031,6 +3038,7 @@ jobs:
         python3 .github/scripts/node-repo-publication-base.py --self-test
         python3 .github/scripts/node-repo-publication-reuse.py --self-test
         python3 .github/scripts/node-repo-project-scope.py --self-test
+        python3 .github/scripts/abi-key.py --self-test
     - name: "A satellite's no-op set stays comparable to ours — the gate can fail (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-noop-scope-parity.py --self-test

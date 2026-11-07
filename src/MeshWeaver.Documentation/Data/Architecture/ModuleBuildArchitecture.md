@@ -510,6 +510,62 @@ fallback. Core dispatches to no repository (maintainer, 2026-09-03: *"core publi
 finishes"*).
 🚨 No longer true since 2026-09-12 (phase 1): the `schedule` poll is the primary and only per-platform run — `meshweaver-framework-released` is emitted only while `Hosting:PlatformBuilds:BroadcastFrameworkReleases` is `true` (default off, Plugins#1707) and no satellite lists the type; release-follow means the daily run resolving the newest SEALED set. See `Hosting/BuildAndReleaseProcess`.
 
+### ABI-keyed rebuild — a dependent rebuilds only when a dependency's PUBLIC SURFACE changed (2026-11-07)
+
+> *"can we reduce amount we rebuild? do we need to rebuild always all dependencies? actually only
+> when api changes?!"* — maintainer, 2026-11-07
+
+The key above hashes every in-repo dependency by SOURCE TREE, so an edit to a private method body
+in a project forty others reference re-keys, rebuilds and re-tests all forty. A dependent's
+compilation is a function of the dependency's **reference assembly** (Roslyn's public-surface
+emit, `obj/<cfg>/<tfm>/ref/<Asm>.dll`), not of its method bodies.
+`.github/scripts/abi-key.py` (self-tested in `dotnet-test.yml`) keys on that:
+
+| Change to dependency D | Dependents |
+|---|---|
+| internal only — D's reference assembly byte-identical at base and head | **skipped**, reason `public API unchanged (ref asm <hash>)`; D and its own `<D>.Test` compile and test |
+| public API — the reference assembly differs (this includes the optional-constructor-parameter binary break, because the signature is public surface) | rebuilt and tested as before |
+| any non-C# file under D (csproj, resource, content, asset) | rebuilt — the reference assembly does not describe it |
+
+What makes a skip sound, every rule erring toward rebuild: only edits of evaluated `Compile` items are
+eligible (a `.cs` a project embeds as a resource is payload, hashed into the non-C# identity); a
+`.Test` unit owns its production sibling; a unit
+whose closure holds an `InternalsVisibleTo` friend of D keys on D's FULL assembly (friends are the
+union of the compiled attribute blobs and the declared items, over-approximated); a unit that
+READS a changed file as text (a declared input, a linked include, a census) is never skipped;
+determinism is measured on every probe (head is rebuilt after the base build, and a differing
+reference assembly withdraws every skip); a base that does not build against the head's
+dependencies is an API change; and the caller re-selects on the diff WITHOUT the verdict's files,
+so a unit another changed path reaches stays. Full runs (schedule, platform release, trunk
+publication) never consult a verdict.
+
+**The interface (for the GitHub Actions callers and the build hosts alike):**
+
+* `abi-key.py probe --root R --range A...B [--msbuild-arg …] --out verdict.json` — builds each
+  eligible changed project at head, swaps only that project's changed files to the base, rebuilds
+  it, restores and rebuilds head; the verdict lists per project `eligible`, `unchanged`, `refasm`,
+  `baseRefasm`, `friends`, `files`, `reason`.
+* `abi-key.py decide --root R --verdict V --units U.json --reselected ids.json` — per unit
+  `skip` (with the reason) or `keep` (with why). Without `--reselected` nothing skips: only the
+  caller's re-selection can prove that nothing ELSE in the diff reaches a unit.
+* `abi-key.py key --root R --project P --manifest M.json` — the ABI test key of unit P: own
+  directories by tree hash, every other closure project by `abi:` (reference assembly + non-C#
+  tree), or `full:` when a friend in P's closure sees its internals; plus module-build-key.py's
+  globals and imports and the caller's platform identity. Equal keys ⇒ the same public surface,
+  own sources, build inputs and platform ⇒ a recorded verdict may be reused.
+* `abi-key.py manifest --root R --project P …` — the per-project reference-assembly manifest of
+  a built workspace.
+
+🚨 The .NET SDK writes `<version>+<git sha>` into `AssemblyInformationalVersion`, and the
+reference assembly carries it (measured). The probe builds with
+`-p:IncludeSourceRevisionInInformationalVersion=false`; a host comparing keys across commits must
+do the same or pin `InformationalVersion`.
+
+The bundle key above is deliberately UNCHANGED: a bundle carries its module-owned siblings, so a
+reused dependent bundle beside a rebuilt dependency would put one assembly into the composed set at
+two builds (MeshWeaver#3732). ABI keying narrows what is COMPILED AND TESTED for validation; what
+is PACKED for publication still follows the tree-hash key.
+
 ### What a satellite passes
 
 ```yaml
