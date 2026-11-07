@@ -192,7 +192,7 @@ public static class DocumentationExtensions
     /// read it (the partition is public-read, so in practice everyone), top-level.
     /// </summary>
     public static DeclaredApp DocumentationApp { get; } = new(
-        DocumentationNodeProvider.RootNamespace, "Documentation",
+        DocumentationNodeProvider.RootNamespace, "Docs",
         DocumentationStaticRepoSource.DocIcon, DocumentationNodeProvider.RootNamespace)
     {
         LabelKey = DocumentationLabelKey,

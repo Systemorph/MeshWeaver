@@ -1165,7 +1165,7 @@ public static class UserActivityLayoutAreas
         new Dictionary<string, (string Name, string Icon)>
         {
             ["Store"] = ("Store", "/static/NodeTypeIcons/shopping-bag.svg"),
-            ["Doc"] = ("Documentation", "/static/NodeTypeIcons/book.svg"),
+            ["Doc"] = ("Docs", "/static/NodeTypeIcons/book.svg"),
             ["~/" + ChatArea] = ("Threads", ThreadsIcon),
             ["~/" + InboxLayoutArea.AreaName] = ("Inbox", InboxIcon),
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
