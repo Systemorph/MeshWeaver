@@ -213,6 +213,15 @@ public static class InstallRecordGate
                         ended = ended.SetItem(released, now);
                     outcomes = outcomes.SetItem(key, Answer(true, held ? "retirement released" : "nothing to release"));
                     break;
+                // 🚨 A removal of this package's module is EXECUTING (#7974 review, round 3): it may sit
+                // on the shared landing lane behind another module and disable the module after this
+                // person's install read it as current. Clearing the retirement now would keep the
+                // record and lose the module, so the person's install is refused until it finishes —
+                // the rule a retirement that is already removing the record follows.
+                case PackageRecordFactKind.PersonClear or PackageRecordFactKind.Stamp
+                    when retiring is not null && ModuleRemovalExecuting(operations, retiring.Request) is { } removing:
+                    outcomes = outcomes.SetItem(key, Answer(false, removing));
+                    break;
                 case PackageRecordFactKind.PersonClear when retiring is { Removing: true }:
                     outcomes = outcomes.SetItem(key, Answer(false, $"refused: {retiring.Request} is removing this install record now"));
                     break;
@@ -362,6 +371,16 @@ public static class InstallRecordGate
                                 $"Recording install at '{record.Path}' failed: {response.Error}")));
             });
     }
+
+    /// <summary>Why a person's install must wait: the retirement holder's REMOVAL of the module is
+    /// executing now (promoted, not refused) — or null. Pure.</summary>
+    internal static string? ModuleRemovalExecuting(ImmutableDictionary<string, PackageModuleOperation> operations, string request) =>
+        operations.Values.Any(o => o.Kind == PackageModuleOperationKind.Remove
+                                   && o.State == PackageModuleOperationState.Executing
+                                   && o.Refusal is null
+                                   && string.Equals(o.Request, request, StringComparison.Ordinal))
+            ? $"refused: {request} is removing this package's module now — install it again once the uninstall finishes"
+            : null;
 
     /// <summary>Whether <paramref name="intent"/> is one of the <see cref="PackageRecordWriteIntent"/> values. Pure.</summary>
     /// <param name="intent">The intent.</param>

@@ -160,6 +160,15 @@ So nothing outside the record's own hub lands or removes a package's module
 - **A refusal is an answer.** A refused landing reaches the adoption as its named `Failure`, with
   nothing landed. A removal the owner did not carry out faults with the owner's words.
 
+**A person's install waits for a removal in flight.** A person's stamp or clear is refused while
+the retirement holder's removal of the module is `Executing`. That removal may be waiting on the
+shared landing lane behind another module, and would disable the module after the person's install
+read it as current. Clearing the retirement then would keep the record and lose the module. The
+person installs again once the uninstall finishes.
+
+**No record path means the canonical one.** An adoption that names no install-record path belongs
+to `Plugins/{package}`, so it never lands around that record's owner by omission.
+
 **A landing that loses its record is refused.** The adoption notes whether the install record
 exists when it STARTS, before the plan reads the registry index and the activation, and so before
 the download. If the record existed then and is gone when the bytes arrive,

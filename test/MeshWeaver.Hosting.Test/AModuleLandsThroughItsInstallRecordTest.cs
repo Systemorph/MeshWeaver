@@ -521,6 +521,79 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         (await Live("LandTwice", r => r.ModuleOperations is null, ct)).ModuleOperations.Should().BeNull("nothing is left executing");
     }
 
+    /// <summary>
+    /// (11) An adoption that names NO record path belongs to the canonical record <c>Plugins/{id}</c>
+    /// anyway (#7974 review, round 3): with that record being retired, the pathless adoption is refused
+    /// by its owner, never landed around it. Negative control (measured): with no default path, the
+    /// adoption takes the pathless branch and lands the module.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task APathlessAdoption_GoesThroughTheCanonicalRecordsOwner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Pathless.Module";
+        await WriteRecord("LandNoPath", module, ct);
+        (await InstallRecordGate.BeginRetirement(Mesh, "LandNoPath", "Admin/_PackageUninstall/req-nopath", "test", NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull();
+        registry.Serve("LandNoPath", "1.0.0", module, ModuleBundle("LandNoPath", module, "1.0.0"));
+
+        var outcome = await Bundles.AdoptModuleOutcome("LandNoPath", module).Timeout(TestTimeouts.Convergence).Await(ct);
+        outcome.FilesLanded.Should().Be(0);
+        (outcome.Failure ?? "").Should().Contain("being retired by Admin/_PackageUninstall/req-nopath");
+        (await Entry(module, ct)).Should().BeNull("nothing landed around the record's owner");
+    }
+
+    /// <summary>
+    /// (12) A person's install while the uninstall's REMOVAL is executing — parked on the shared
+    /// landing lane behind another module — is refused at the owner, so it can never clear the
+    /// retirement, keep the record and then lose the module to the removal (#7974 review, round 3).
+    /// Once the removal finishes, the uninstall proceeds to remove the record. Negative control
+    /// (measured): with the owner's check removed, the person's stamp is applied and the uninstall is
+    /// displaced with the module disabled.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task APersonsInstallWhileTheRemovalExecutes_IsRefused_TheUninstallFinishes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Race.Module";
+        const string request = "Admin/_PackageUninstall/req-race";
+        await WriteRecord("LandRace", module, ct);
+        (await Land(module, "1.0.0", RecordPath("LandRace")).Timeout(TestTimeouts.Convergence).Await(ct)).Applied.Should().BeTrue();
+        (await InstallRecordGate.BeginRetirement(Mesh, "LandRace", request, "test", NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull();
+
+        parkFirst = 1;
+        try
+        {
+            // Another module's landing holds the shared (cap-1) landing lane.
+            var other = Landing.LandModule("Acme.Other.Lane", [("Acme.Other.Lane.dll", RealAssemblyBytes)], version: "1.0.0").Replay();
+            using var otherConnection = other.Connect();
+            SpinWait.SpinUntil(() => parked == 1, TestTimeouts.Convergence).Should().BeTrue("the shared lane is parked");
+
+            var remove = ModuleLandingOwner.Remove(Mesh, "LandRace", module, request, NullLogger.Instance).Replay();
+            using var removeConnection = remove.Connect();
+            await Live("LandRace", r => r.ModuleOperations?.Values.Any(o =>
+                o.Kind == PackageModuleOperationKind.Remove && o.State == PackageModuleOperationState.Executing) == true, ct);
+
+            var person = await InstallRecordGate.Write(Mesh, Record("LandRace", module), PackageRecordWriteIntent.Person, NullLogger.Instance)
+                .Select(_ => (Exception?)null)
+                .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+                .Timeout(TestTimeouts.Convergence).Await(ct);
+            person.Should().BeOfType<PackageRecordWriteRefusedException>()
+                .Which.Reason.Should().Contain("removing this package's module now");
+
+            release = 1;
+            (await remove.Timeout(TestTimeouts.Convergence).Await(ct)).Should().Be("landed generation disabled");
+            await other.Timeout(TestTimeouts.Convergence).Await(ct);
+        }
+        finally
+        {
+            release = 1;
+        }
+        (await InstallRecordGate.MarkRemoving(Mesh, "LandRace", request, NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull("the uninstall still holds the retirement and proceeds");
+    }
+
     /// <summary>A registry serving one bundle; its index response can be HELD (a worker the test
     /// deliberately parks, released through a volatile flag under a bounded spin).</summary>
     private sealed class FakeRegistry : HttpMessageHandler

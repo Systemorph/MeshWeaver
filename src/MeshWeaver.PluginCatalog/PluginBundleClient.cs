@@ -625,6 +625,12 @@ public sealed class PluginBundleClient
         // 🚨 Whether the install record exists is read FIRST — before the plan's index and activation
         // reads (#7974 review, round 2): the whole adoption, plan included, is the window an
         // uninstall can remove the record in, and a landing that belonged to a record must know it.
+        // 🚨 No path named ⇒ the CANONICAL install record (#7974 review, round 3): an adoption of
+        // package X belongs to Plugins/X whether or not its caller spelled it out, so a landing never
+        // skips that record's owner — its retirement and its operation queue — by omission.
+        packagePath = string.IsNullOrWhiteSpace(packagePath)
+            ? $"{PackageInstaller.InstalledPartition}/{pluginId}"
+            : packagePath;
         return RecordExists(packagePath)
             .SelectMany(hadRecord => PlanModuleAdoption(pluginId, moduleName, unattended, policyDecline, landing, intent)
                 .SelectMany(plan => ExecuteModuleAdoption(plan, pluginId, moduleName, packagePath, intent, hadRecord)))
