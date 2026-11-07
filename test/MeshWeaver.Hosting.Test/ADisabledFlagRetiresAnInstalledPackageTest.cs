@@ -279,3 +279,65 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "refused, so still installed");
     }
 }
+
+/// <summary>
+/// 🚨 <b>The repair's re-assert never re-writes a package a flag declared off</b> (MeshWeaver.Plugins#5055).
+/// <see cref="InstalledPackageRepairService"/> lists the install records BEFORE it waits for the
+/// default install, so the record it hands to <c>ReassertInstalled</c> can belong to a package the
+/// boot pass is retiring at that moment; re-asserting it would re-write the record phase 1 removes.
+/// The re-assert reads the same composition and skips by the retire's own rule
+/// (<see cref="DeclaredDisabledRetirement.CoveredBy"/>), reporting each skip on the summary.
+/// </summary>
+public abstract class AReassertSkipsDeclaredOffPackagesTestBase(ITestOutputHelper output, Dictionary<string, string?> flags)
+    : MonolithMeshTestBase(output)
+{
+    protected const string Package = "FlagRetirePkg";
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => base.ConfigureMesh(builder)
+        .AddPluginCatalog()
+        .ConfigureServices(services => services.AddSingleton<IFeatureFlags>(
+            new ConfigurationFeatureFlags(new ConfigurationBuilder().AddInMemoryCollection(flags).Build())));
+
+    protected Task<DefaultInstallSummary> Reassert(CancellationToken ct, string? source = "Plugins") =>
+        Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>()
+            .ReassertInstalled([new InstanceAutoRegistrationService.ReassertTarget(Package, Package, "1.0.0", source)])
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+}
+
+public class AReassertSkipsADeclaredOffPackageTest(ITestOutputHelper output)
+    : AReassertSkipsDeclaredOffPackagesTestBase(output, new()
+    {
+        ["Features:Flags:off:Enabled"] = "false",
+        ["Features:Flags:off:Packages:0"] = $"Plugins/{Package}",
+    })
+{
+    [Fact(Timeout = 120_000)]
+    public async Task APackageAFlagDeclaresOff_IsNotReasserted_AndTheSkipNamesTheFlag()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var summary = await Reassert(ct);
+        var skip = Assert.Single(summary.Skipped);
+        Assert.Equal(Package, skip.Package);
+        Assert.Contains("'off'", skip.Reason);
+    }
+
+    /// <summary>The same rule as the retire: a record naming no source is not covered, so it is not skipped.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARecordNamingNoSource_IsNotSkipped()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Assert.Empty((await Reassert(ct, source: null)).Skipped);
+    }
+}
+
+/// <summary>Negative control: the same re-assert with the flag merely ABSENT skips nothing.</summary>
+public class AReassertWithNoDeclaredOffFlagTest(ITestOutputHelper output)
+    : AReassertSkipsDeclaredOffPackagesTestBase(output, new())
+{
+    [Fact(Timeout = 120_000)]
+    public async Task AnAbsentFlag_SkipsNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Assert.Empty((await Reassert(ct)).Skipped);
+    }
+}

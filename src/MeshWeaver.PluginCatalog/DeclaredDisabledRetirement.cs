@@ -89,11 +89,7 @@ public static class DeclaredDisabledRetirement
     /// <param name="retired">The declared-off patterns (<see cref="FeatureComposition.Retired"/>).</param>
     public static Decision Decide(IReadOnlyList<PackageManifest> installed, IReadOnlyList<FeaturePackage> retired)
     {
-        var patterns = retired
-            .Select(p => (p.Flag, Entry: PluginGrantEntry.TryParse(p.Package)))
-            .Where(p => p.Entry is not null)
-            .Select(p => (p.Flag, Entry: p.Entry!))
-            .ToList();
+        var patterns = Patterns(retired);
         if (patterns.Count == 0 || installed.Count == 0)
             return Decision.None;
 
@@ -101,10 +97,9 @@ public static class DeclaredDisabledRetirement
         var noSource = new List<Covered>();
         foreach (var record in installed.OrderBy(r => r.Id, StringComparer.Ordinal))
         {
-            var hit = patterns.FirstOrDefault(p => p.Entry.Matches(record.Source ?? "", record.Id));
-            if (hit.Entry is not null)
+            if (FlagMatching(patterns, record.Source, record.Id) is { } flag)
             {
-                covered.Add(new Covered(record, hit.Flag));
+                covered.Add(new Covered(record, flag));
                 continue;
             }
             if (string.IsNullOrWhiteSpace(record.Source)
@@ -131,6 +126,30 @@ public static class DeclaredDisabledRetirement
                 .Select(c => new Refused(c.Record, c.Flag, RequiredBy(installed, retiring, c.Record.Id)))],
             [.. noSource]);
     }
+
+    /// <summary>
+    /// THE rule for "a flag declared off covers this package" — the declared-off flag whose
+    /// source-scoped pattern matches <paramref name="source"/>/<paramref name="packageId"/>, or null.
+    /// <see cref="Decide"/> uses it, and so does every lane that must not write a package the
+    /// declaration retires (the repair's re-assert), so there is one decision, not two copies. A
+    /// package naming no source matches nothing (fails closed, as every source-scoped lane does).
+    /// Pure.
+    /// </summary>
+    /// <param name="source">The package's source, as its record or listing carries it.</param>
+    /// <param name="packageId">The package id.</param>
+    /// <param name="retired">The declared-off patterns (<see cref="FeatureComposition.Retired"/>).</param>
+    public static string? CoveredBy(string? source, string packageId, IReadOnlyList<FeaturePackage> retired) =>
+        FlagMatching(Patterns(retired), source, packageId);
+
+    private static string? FlagMatching(IReadOnlyList<(string Flag, PluginGrantEntry Entry)> patterns, string? source, string packageId) =>
+        patterns.FirstOrDefault(p => p.Entry.Matches(source ?? "", packageId)) is { Entry: not null } hit ? hit.Flag : null;
+
+    private static IReadOnlyList<(string Flag, PluginGrantEntry Entry)> Patterns(IReadOnlyList<FeaturePackage> retired) =>
+        retired
+            .Select(p => (p.Flag, Entry: PluginGrantEntry.TryParse(p.Package)))
+            .Where(p => p.Entry is not null)
+            .Select(p => (p.Flag, Entry: p.Entry!))
+            .ToList();
 
     /// <summary>The installed packages, outside <paramref name="retiring"/>, that require <paramref name="id"/>.</summary>
     private static ImmutableList<string> RequiredBy(IReadOnlyList<PackageManifest> installed, ImmutableHashSet<string> retiring, string id) =>
