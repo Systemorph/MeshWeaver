@@ -1,4 +1,5 @@
 using System.Linq;
+using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Logon;
 using MeshWeaver.Mesh;
@@ -80,8 +81,33 @@ public class DefaultAppIconRefreshTest
 
     // ── The name-side twin: the Doc tile "Documentation" → "Docs" (2026-11-07) ─────────────────
 
+    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
+
     private static MeshNode DocRecordNamed(string? name) =>
-        MeshNode.FromPath("alice/_App/Doc") with { NodeType = AppNodeType.NodeType, Name = name };
+        MeshNode.FromPath("alice/_App/Doc") with
+        {
+            NodeType = AppNodeType.NodeType,
+            Name = name,
+            Content = new App { Plugin = "Doc", Source = AppSources.Default, Group = "Mine" },
+        };
+
+    [Fact]
+    public void The_migrated_record_receives_the_catalog_key_and_keeps_its_other_content()
+    {
+        var app = (App)DefaultAppIconRefreshLogonAction
+            .Converged(DocRecordNamed("Documentation"), DocSpec("de"), Options).Content!;
+        app.LabelKey.Should().Be("launcher.documentation", "switching the viewer to English must show Docs again");
+        app.Plugin.Should().Be("Doc");
+        app.Group.Should().Be("Mine");
+    }
+
+    [Fact]
+    public void The_retired_name_is_scoped_to_the_app_that_shipped_it()
+    {
+        // A viewer who calls their Store tile "Documentation" chose that name.
+        var store = MeshNode.FromPath("alice/_App/Store") with { NodeType = AppNodeType.NodeType, Name = "Documentation" };
+        AppIconAdoption.NeedsNameRefresh(store, "Store").Should().BeFalse();
+    }
 
     private static UserActivityLayoutAreas.AppRecordSpec DocSpec(string? locale) =>
         UserActivityLayoutAreas.AppRecordSpecs(new HomeConfig { DefaultApps = ["Doc"] }, "alice", locale).Single();
@@ -89,14 +115,14 @@ public class DefaultAppIconRefreshTest
     [Fact]
     public void A_record_still_wearing_the_retired_Documentation_name_is_renamed()
     {
-        var converged = DefaultAppIconRefreshLogonAction.Converged(DocRecordNamed("Documentation"), DocSpec(null));
+        var converged = DefaultAppIconRefreshLogonAction.Converged(DocRecordNamed("Documentation"), DocSpec(null), Options);
         converged.Name.Should().Be("Docs", "\"Documentation\" wrapped mid-word in an 88px launcher tile");
     }
 
     [Fact]
     public void The_rename_lands_in_the_owner_s_language()
     {
-        DefaultAppIconRefreshLogonAction.Converged(DocRecordNamed("Documentation"), DocSpec("de"))
+        DefaultAppIconRefreshLogonAction.Converged(DocRecordNamed("Documentation"), DocSpec("de"), Options)
             .Name.Should().Be("Doku");
     }
 
@@ -104,7 +130,7 @@ public class DefaultAppIconRefreshTest
     public void A_name_the_viewer_chose_is_never_overwritten()
     {
         var mine = DocRecordNamed("Handbook");
-        DefaultAppIconRefreshLogonAction.Converged(mine, DocSpec(null)).Should().BeSameAs(mine);
+        DefaultAppIconRefreshLogonAction.Converged(mine, DocSpec(null), Options).Should().BeSameAs(mine);
         AppIconAdoption.NeedsNameRefresh(DocRecordNamed("Docs"), "Docs").Should().BeFalse("the steady state is a no-op");
     }
 

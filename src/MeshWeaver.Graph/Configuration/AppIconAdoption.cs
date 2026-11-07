@@ -57,11 +57,14 @@ public static class AppIconAdoption
     /// Names core seeded on a DEFAULT app record and has since replaced — the name-side twin of
     /// <see cref="SupersededDefaultIcons"/>. Only a record still wearing one of these EXACT values
     /// is renamed; any other name is the viewer's (or the Store's) and is never touched.
+    /// <para>Keyed by the RECORD ID the name was shipped on: a viewer who calls their Store tile
+    /// "Documentation" chose that name, and it is not ours to converge.</para>
     /// </summary>
-    internal static readonly IReadOnlySet<string> SupersededDefaultNames =
-        new HashSet<string>(StringComparer.Ordinal)
+    internal static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> SupersededDefaultNames =
+        new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
-            "Documentation",   // the Doc tile, renamed "Docs" 2026-11-07: wrapped mid-word in an 88px tile
+            // the Doc tile, renamed "Docs" 2026-11-07: wrapped mid-word in an 88px tile
+            ["Doc"] = new HashSet<string>(StringComparer.Ordinal) { "Documentation" },
         };
 
     /// <summary>
@@ -73,7 +76,8 @@ public static class AppIconAdoption
         && !string.IsNullOrEmpty(record.Name)
         && !string.IsNullOrEmpty(currentSeedName)
         && !string.Equals(record.Name, currentSeedName, StringComparison.Ordinal)
-        && SupersededDefaultNames.Contains(record.Name);
+        && SupersededDefaultNames.TryGetValue(record.Id, out var retired)
+        && retired.Contains(record.Name);
 
     /// <summary>True when a record has no icon, or still wears the placeholder.</summary>
     internal static bool NeedsIcon(MeshNode? record) =>

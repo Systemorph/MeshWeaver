@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -113,7 +114,7 @@ public sealed class DefaultAppIconRefreshLogonAction : ILogonAction
             .GetMeshNodeStream(record.Path)
             // Re-check inside the update: between the read and the write the Store or the viewer
             // may have chosen an icon, and this repair must never overwrite a real answer.
-            .Update(cur => Converged(cur, spec))
+            .Update(cur => Converged(cur, spec, context.Hub.JsonSerializerOptions))
             .Select(_ => Unit.Default)
             .Catch((Exception exception) =>
             {
@@ -125,15 +126,24 @@ public sealed class DefaultAppIconRefreshLogonAction : ILogonAction
     /// <summary>
     /// The record moved off whatever retired default it still wears — the icon, the name, or both —
     /// and nothing else. A field the viewer or the Store chose is never in a superseded set, so it
-    /// comes back unchanged. Pure, for tests.
+    /// comes back unchanged. A renamed record also receives the catalog key the seed now carries
+    /// (<see cref="App.LabelKey"/>), so the launcher localizes it for whoever views it rather than
+    /// freezing the language of the logon that migrated it; every other content field is kept.
+    /// Pure, for tests.
     /// </summary>
-    internal static MeshNode Converged(MeshNode cur, UserActivityLayoutAreas.AppRecordSpec spec)
+    internal static MeshNode Converged(
+        MeshNode cur, UserActivityLayoutAreas.AppRecordSpec spec, JsonSerializerOptions options)
     {
         var next = cur;
         if (AppIconAdoption.NeedsIconRefresh(next, spec.Icon))
             next = next with { Icon = spec.Icon };
         if (AppIconAdoption.NeedsNameRefresh(next, spec.Name))
+        {
             next = next with { Name = spec.Name };
+            if (spec.LabelKey is not null
+                && next.ContentAs<App>(options) is { LabelKey: null } app)
+                next = next with { Content = app with { LabelKey = spec.LabelKey } };
+        }
         return next;
     }
 }
