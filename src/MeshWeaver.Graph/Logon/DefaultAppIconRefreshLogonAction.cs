@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -74,8 +75,8 @@ public sealed class DefaultAppIconRefreshLogonAction : ILogonAction
         HomeConfig config, ILogger? logger)
     {
         // What today's seed WOULD stamp, keyed by record id — the target of the convergence.
-        var current = UserActivityLayoutAreas.AppRecordSpecs(config, ownerId)
-            .ToDictionary(spec => spec.Id, spec => spec.Icon, StringComparer.OrdinalIgnoreCase);
+        var current = UserActivityLayoutAreas.AppRecordSpecs(config, ownerId, context.Identity.Locale)
+            .ToDictionary(spec => spec.Id, StringComparer.OrdinalIgnoreCase);
         if (current.Count == 0)
             return Observable.Return(LogonActionOutcome.Nothing);
 
@@ -89,14 +90,16 @@ public sealed class DefaultAppIconRefreshLogonAction : ILogonAction
             .SelectMany(records =>
             {
                 var stale = records
-                    .Select(record => (record, icon: current.GetValueOrDefault(record.Id)))
-                    .Where(pair => AppIconAdoption.NeedsIconRefresh(pair.record, pair.icon))
+                    .Select(record => (record, spec: current.GetValueOrDefault(record.Id)))
+                    .Where(pair => pair.spec is not null
+                        && (AppIconAdoption.NeedsIconRefresh(pair.record, pair.spec.Icon)
+                            || AppIconAdoption.NeedsNameRefresh(pair.record, pair.spec.Name)))
                     .ToArray();
                 if (stale.Length == 0)
                     return Observable.Return(LogonActionOutcome.Nothing);
 
                 return stale
-                    .Select(pair => Refresh(context, pair.record, pair.icon!, logger))
+                    .Select(pair => Refresh(context, pair.record, pair.spec!, logger))
                     .Concat()
                     .ToArray()
                     .Select(_ => LogonActionOutcome.Nothing);
@@ -104,19 +107,43 @@ public sealed class DefaultAppIconRefreshLogonAction : ILogonAction
     }
 
     private static IObservable<Unit> Refresh(
-        LogonActionContext context, MeshNode record, string icon, ILogger? logger)
+        LogonActionContext context, MeshNode record, UserActivityLayoutAreas.AppRecordSpec spec, ILogger? logger)
     {
-        logger?.LogDebug("Refreshing superseded default icon on {Path}", record.Path);
+        logger?.LogDebug("Refreshing superseded default icon/name on {Path}", record.Path);
         return context.Hub.GetWorkspace()
             .GetMeshNodeStream(record.Path)
             // Re-check inside the update: between the read and the write the Store or the viewer
             // may have chosen an icon, and this repair must never overwrite a real answer.
-            .Update(cur => AppIconAdoption.NeedsIconRefresh(cur, icon) ? cur with { Icon = icon } : cur)
+            .Update(cur => Converged(cur, spec, context.Hub.JsonSerializerOptions))
             .Select(_ => Unit.Default)
             .Catch((Exception exception) =>
             {
-                logger?.LogDebug(exception, "Icon refresh failed for {Path}", record.Path);
+                logger?.LogDebug(exception, "Icon/name refresh failed for {Path}", record.Path);
                 return Observable.Return(Unit.Default);
             });
+    }
+
+    /// <summary>
+    /// The record moved off whatever retired default it still wears — the icon, the name, or both —
+    /// and nothing else. A field the viewer or the Store chose is never in a superseded set, so it
+    /// comes back unchanged. A renamed record also receives the catalog key the seed now carries
+    /// (<see cref="App.LabelKey"/>), so the launcher localizes it for whoever views it rather than
+    /// freezing the language of the logon that migrated it; every other content field is kept.
+    /// Pure, for tests.
+    /// </summary>
+    internal static MeshNode Converged(
+        MeshNode cur, UserActivityLayoutAreas.AppRecordSpec spec, JsonSerializerOptions options)
+    {
+        var next = cur;
+        if (AppIconAdoption.NeedsIconRefresh(next, spec.Icon))
+            next = next with { Icon = spec.Icon };
+        if (AppIconAdoption.NeedsNameRefresh(next, spec.Name))
+        {
+            next = next with { Name = spec.Name };
+            if (spec.LabelKey is not null
+                && next.ContentAs<App>(options) is { LabelKey: null } app)
+                next = next with { Content = app with { LabelKey = spec.LabelKey } };
+        }
+        return next;
     }
 }

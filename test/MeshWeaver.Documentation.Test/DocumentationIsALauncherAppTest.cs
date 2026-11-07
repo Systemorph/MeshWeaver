@@ -45,7 +45,9 @@ public class DocumentationIsALauncherAppTest(ITestOutputHelper output) : Monolit
         app.ProbePathFor("alice").Should().Be(DocumentationNodeProvider.RootNamespace);
         app.LauncherGroup.Should().Be("", "top-level, like the Inbox and Threads");
         app.LabelKey.Should().Be(DocumentationExtensions.DocumentationLabelKey);
-        LocalizationCatalog.Get(DocumentationExtensions.DocumentationLabelKey, "de").Should().Be("Dokumentation");
+        LocalizationCatalog.Get(DocumentationExtensions.DocumentationLabelKey, "de").Should().Be("Doku");
+        LocalizationCatalog.Get(DocumentationExtensions.DocumentationLabelKey, "en").Should().Be("Docs");
+        app.Name.Should().Be("Docs", "the unlocalized fallback is what a native client paints; \"Documentation\" wrapped mid-word in an 88px tile");
         app.Icon.Should().Be(DocumentationStaticRepoSource.DocIcon);
     }
 
