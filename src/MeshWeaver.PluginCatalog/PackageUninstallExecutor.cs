@@ -68,7 +68,8 @@ public static class PackageUninstallExecutor
 
     /// <summary>
     /// The packages this instance has UNINSTALLED and not installed again — what no unattended
-    /// install pass may bring back. Read from a LISTING of the request namespace (stale-tolerant:
+    /// install pass may bring back. A request a feature flag issued
+    /// (<see cref="PackageUninstallRequest.RetiredByFlag"/>) is not counted. Read from a LISTING of the request namespace (stale-tolerant:
     /// a request missing from it costs one more boot) minus the install records that exist now, so
     /// a person installing the package again lifts the block. Never faults: an unreadable listing
     /// blocks nothing.
@@ -94,6 +95,10 @@ public static class PackageUninstallExecutor
                 .ToList())
             .Select(requests => requests
                 .OfType<PackageUninstallRequest>()
+                // A FLAG-issued retire blocks nothing (#5055): while the flag stays off its exclusion
+                // keeps the package out, and once the record stops declaring it off the package's
+                // own lanes must be free to bring it back — the record decides, not this ledger.
+                .Where(r => r.RetiredByFlag is null)
                 .Where(r => r.Status is PackageUninstallStatus.AwaitingConfirmation or PackageUninstallStatus.TearingDown or PackageUninstallStatus.Done)
                 .Select(r => r.Package)
                 .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase))
@@ -121,6 +126,9 @@ public static class PackageUninstallExecutor
     public static bool IsUserCreated(string? createdBy) =>
         !string.IsNullOrWhiteSpace(createdBy)
         && !string.Equals(createdBy, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The module outcome's words for a landed generation that was disabled.</summary>
+    private const string LandedGenerationDisabled = "landed generation disabled";
 
     private sealed class Run(IMessageHub hub, ILogger? logger)
     {
@@ -278,21 +286,31 @@ public static class PackageUninstallExecutor
             var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
             var removed = landing is null
                 ? Observable.Return("no landing service on this host")
-                : landing.RemoveModule(module).Select(_ => "landed generation disabled")
+                : landing.RemoveModule(module).Select(_ => LandedGenerationDisabled)
                     .Catch((Exception ex) => Observable.Return($"no landed generation to remove ({ex.Message})"));
             var agent = hub.ServiceProvider.GetService<ModuleReloadAgent>();
             var loaded = (agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()).Contains(module);
+            var reason = $"package uninstall {ModuleReloadExecutor.PathOf(hub)}: {request.Reason}";
             return removed.SelectMany(landed =>
             {
+                // 🚨 EVERY replica (#5055): the request runs on ONE process, so a live retire here
+                // leaves every sibling replica serving the module (and its HTTP routes) until its
+                // next restart. When the request asks for every replica, the landed generation is
+                // already disabled on the shared volume, so ONE restart is what makes them all drop it.
+                var everyReplica = request.RetireOnEveryReplica
+                                   && (loaded || string.Equals(landed, LandedGenerationDisabled, StringComparison.Ordinal));
                 if (!loaded)
-                    return Observable.Return($"{module}: {landed}; not loaded in this process — nothing to unload");
-                var reason = $"package uninstall {ModuleReloadExecutor.PathOf(hub)}: {request.Reason}";
+                    return everyReplica
+                        ? Restart(reason).Select(restart => $"{module}: {landed}; not loaded in this process — {restart}, so every replica drops it")
+                        : Observable.Return($"{module}: {landed}; not loaded in this process — nothing to unload");
                 var live = hub.ServiceProvider.GetService<IModuleLiveActivation>();
                 var liveTry = live is not null && live.CanSwap(module)
                     ? live.Retire(module, reason).Take(1).Catch((Exception ex) => Observable.Return(new ModuleReloadSwapOutcome(false, ex.Message)))
                     : Observable.Return(new ModuleReloadSwapOutcome(false, live is null ? "this process has no live module loader" : "it cannot be unloaded in place"));
                 return liveTry.SelectMany(outcome => outcome.Swapped
-                    ? Observable.Return($"{module}: {landed}; retired LIVE")
+                    ? everyReplica
+                        ? Restart(reason).Select(restart => $"{module}: {landed}; retired LIVE here — {restart}, so every replica drops it")
+                        : Observable.Return($"{module}: {landed}; retired LIVE")
                     : Restart(reason).Select(restart => $"{module}: {landed}; not retired live ({outcome.Failure}) — {restart}"));
             });
         }

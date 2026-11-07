@@ -47,7 +47,8 @@ whether a storage provider reports a per-partition store (Postgres: the schema),
 From this point **no unattended pass installs the package again** — not the seed, not the platform
 baseline, not a feature flag (`InstanceAutoRegistrationService.InstallAll` consults
 `PackageUninstallExecutor.UninstalledHere`). A person installing it again lifts that: the block only
-applies while no install record exists.
+applies while no install record exists. A request a feature flag issued (`RetiredByFlag`) blocks
+nothing — the flag's own exclusion governs, so the record decides.
 
 ## Phase 2 — drop the data, on confirmation
 
@@ -70,7 +71,8 @@ teardown sentence and ends `Done`. Never raw SQL.
 | surface | how |
 |---|---|
 | MCP `uninstall_package` (MeshWeaver.Plugins) | `MeshOperations.UninstallPackage(package, reason)` answers the preview and the exact confirmation string; `UninstallPackage(requestPath: …, confirmation: …)` confirms. Platform admins only. |
-| the platform's own code | `PackageUninstall.Request` / `PackageUninstall.Confirm` |
+| the platform's own code | `PackageUninstall.Request` / `PackageUninstall.Confirm`; `PackageUninstall.RequestAt` writes at a caller-chosen id so several writers deciding the same thing collide on one node |
+| a feature flag declared off | the boot pass runs phase 1 for every installed package the flag names ([Environment Composition](../EnvironmentComposition) → "A disabled flag retires what is installed"). The request carries `RetiredByFlag` (so it blocks no re-install) and `RetireOnEveryReplica` (one restart after the module is retired, so every replica drops it), and names no requester, so phase 2 can never run. |
 
 ## What is NOT established
 

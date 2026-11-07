@@ -117,10 +117,52 @@ untouched, and the two coexist.
 Reconciling costs an up-to-date instance nothing: the content-identity gate in
 `CatalogLayoutAreas.InstallOrUpdate` turns the pass into one catalog listing and no writes.
 
-**Disabling a flag does not uninstall.** It stops the environment *asserting* the packages, and (via
-the exclusion rule) keeps them out of every future selection. It does not delete a partition full of
-user content — an unattended uninstall racing per-node hubs on boot is not a default anybody wants.
-Removing content that is already there stays a deliberate act on the catalog surface.
+### A disabled flag retires what is installed
+
+A flag declared off **in so many words** — `Enabled` present and the boolean `false` — also
+**retires an installed copy** of every package it names, at boot, through **phase 1** of the
+[package uninstall request](../PackageUninstall): the module is retired, the install record is
+removed, and **no data is dropped**. That is how an estate turns a pre-installed package (MCP, a
+harness) off through its record alone, with no call to the endpoint it wants gone
+(MeshWeaver.Plugins#5055). The record is the source of truth: under policy `declared-not-derived`
+pruning removes what the declaration dropped, and an explicit `false` is such a declaration.
+
+| the flag | install selection | an installed copy |
+|---|---|---|
+| declared, `Enabled` absent or `true` | included | kept |
+| declared, `Enabled: false` | excluded | **retired** (phase 1) |
+| declared, `Enabled` not a boolean (`no`, `0`, `off`) | excluded, named at Warning | kept — an unreadable value is not a declaration |
+| **not declared at all** | — | kept — an absent contributor is never a removal |
+
+How it runs (`DeclaredDisabledRetirement`, called by the boot pass before the install selection):
+
+- **Only the declaration counts.** It reads `FeatureComposition.Retired` — the patterns of flags whose
+  `FeatureFlag.DeclaredDisabled` is set — matched against the install records with the same
+  source-scoped `PluginGrantEntry` as every other lane. A record that names no source matches no
+  source-scoped pattern and is **not** retired; it is named at Warning.
+- **A package another installed package requires is REFUSED, by name.** Retiring `Mcp` while
+  `Essentials` (which requires it) stays installed would leave `Essentials` failing at use, so the
+  retire is refused and logged at **Error** naming the flag, the package and every dependent — an
+  Error the instance's error telemetry carries as a signature, on every boot until it is resolved.
+  Declaring the dependents off as well retires them together. The refusal propagates: a refused
+  package stays installed, so what *it* requires is refused too.
+- **One request per install, on every replica.** Every replica's boot runs the retire. The request id
+  is derived from the install record (package, `installedAtUtc`, version —
+  `DeclaredDisabledRetirement.RequestIdFor`), so replicas booting together collide on ONE
+  `Admin/_PackageUninstall/flag-retire-…` node; the loser reads it. A later boot finds the record
+  gone and decides nothing, so the pass is idempotent. A request that already exists is read and
+  reported — a refused one (`Failed`) at Error, every boot.
+- **Every replica drops the module.** The request carries `RetireOnEveryReplica`: after disabling the
+  landed generation (on the volume all replicas share), phase 1 requests **one restart** even when
+  it retired the module live on its own process, so no sibling replica keeps the module — and the
+  routes it mapped, such as `/mcp` — until some later restart. Where no restart path exists the
+  request says so, and siblings drop it at their next restart.
+- **Never phase 2.** The request names no requester, and phase 2 refuses a confirmation for such a
+  request — a flag can never drop a partition. Phase 1's own refusals (a shared partition, user data
+  in the partition, an unreadable node) still apply and end the request `Failed`, by name.
+- **It blocks no re-install.** A flag-issued request (`RetiredByFlag`) is not counted by
+  `PackageUninstallExecutor.UninstalledHere`: while the flag stays off its exclusion keeps the package
+  out, and once the record stops declaring it off the package's own lanes bring it back.
 
 **An exclusion is applied last, after the dependency closure**, so it also removes a package the
 closure pulled back in as somebody's requirement — the operator's explicit statement outranks an

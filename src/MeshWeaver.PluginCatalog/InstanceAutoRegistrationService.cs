@@ -894,7 +894,9 @@ public sealed class InstanceAutoRegistrationService(
     ///     must still have it after a self-update, a lost partition, or a boot whose install
     ///     failed. An enabled flag includes its packages; a declared-but-DISABLED flag EXCLUDES
     ///     them, and the exclusion wins over every other signal here — that is how
-    ///     "all of Plugins, without the games" is one line per environment.</item>
+    ///     "all of Plugins, without the games" is one line per environment. A flag declared off
+    ///     with an explicit <c>false</c> also RETIRES an installed copy, through phase 1 of the
+    ///     uninstall request (<see cref="DeclaredDisabledRetirement"/>).</item>
     ///   <item><b>The operator's <see cref="PluginCatalogOptions.InstallByDefault"/> patterns</b> —
     ///     the extras a FRESH deployment seeds itself with, source-scoped so an instance granted
     ///     paid course content never auto-installs it. Gated on the ledger: this seeds a new
@@ -1064,7 +1066,11 @@ public sealed class InstanceAutoRegistrationService(
                 })
             : Observable.Return(FeatureComposition.Empty);
 
-        return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, defaultApps, composed, authorizing));
+        // 🚨 A flag declared off with an explicit `false` RETIRES what is installed (#5055), through
+        // phase 1 of the one uninstall request — before the install selection, which excludes the
+        // same packages. Never faults, so a retire that cannot run never withholds the install.
+        return composition.SelectMany(composed => DeclaredDisabledRetirement.Retire(hub, composed, logger)
+            .SelectMany(_ => InstallSelection(options, wanted, baseline, defaultApps, composed, authorizing)));
     }
 
     /// <summary>
