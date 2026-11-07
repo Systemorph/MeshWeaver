@@ -40,7 +40,18 @@ namespace MeshWeaver.Mesh.Features;
 /// </param>
 /// <param name="Description">Optional operator note, shown on the admin surface.</param>
 public sealed record FeatureFlag(
-    string Name, bool Enabled, ImmutableList<string> Packages, string? Description);
+    string Name, bool Enabled, ImmutableList<string> Packages, string? Description)
+{
+    /// <summary>
+    /// 🚨 Whether the environment DECLARED this flag off in so many words — <c>Enabled</c> present
+    /// and parsing as the boolean <c>false</c>. Narrower than <c>!Enabled</c> on purpose: a
+    /// non-boolean value also reads as off (it is not consent to install), but it is not a
+    /// declaration either, so it must never RETIRE anything. Only this reading feeds
+    /// <see cref="FeatureComposition.Retired"/> (policy <c>declared-not-derived</c>: pruning removes
+    /// what the declaration dropped; a value nobody can read is not a declaration).
+    /// </summary>
+    public bool DeclaredDisabled { get; init; }
+}
 
 /// <summary>
 /// The deployment's declared features, READ REACTIVELY.
@@ -99,6 +110,16 @@ public readonly record struct FeaturePackage(string Flag, string Package);
 public sealed record FeatureComposition(
     ImmutableList<FeaturePackage> Included, ImmutableList<FeaturePackage> Excluded)
 {
+    /// <summary>
+    /// The packages an INSTALLED copy of which is retired at boot — the patterns of every flag
+    /// <see cref="FeatureFlag.DeclaredDisabled">declared off with an explicit <c>false</c></see>,
+    /// same ordering as <see cref="Excluded"/> and always a subset of it. A flag that is merely
+    /// absent contributes nothing (an absent contributor is never a removal), and a non-boolean
+    /// <c>Enabled</c> excludes from install without retiring (<c>Doc/Architecture/EnvironmentComposition</c>
+    /// → "A disabled flag retires what is installed").
+    /// </summary>
+    public ImmutableList<FeaturePackage> Retired { get; init; } = [];
+
     /// <summary>A composition that neither includes nor excludes anything.</summary>
     public static FeatureComposition Empty { get; } = new([], []);
 }
@@ -171,7 +192,12 @@ public sealed class ConfigurationFeatureFlags : IFeatureFlags, IDisposable
                 .OrderBy(p => p.Flag, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(p => p.Package, StringComparer.Ordinal)
                 .ToImmutableList();
-        return new FeatureComposition(Side(enabled: true), Side(enabled: false));
+        return new FeatureComposition(Side(enabled: true), Side(enabled: false))
+        {
+            Retired = Side(enabled: false)
+                .Where(p => all.TryGetValue(p.Flag, out var flag) && flag.DeclaredDisabled)
+                .ToImmutableList(),
+        };
     }
 
     /// <inheritdoc />
@@ -196,6 +222,9 @@ public sealed class ConfigurationFeatureFlags : IFeatureFlags, IDisposable
                 // actually wrote. The leaf shape has NO `Enabled` subkey, so telling them to fix
                 // `Features:Flags:betaChat:Enabled` sends them to a key that does not exist.
                 ? new FeatureFlag(name, Enabled(child.Value, $"{SectionName}:{name}"), [], null)
+                {
+                    DeclaredDisabled = IsDeclaredFalse(child.Value),
+                }
                 : new FeatureFlag(
                     name,
                     Enabled(child["Enabled"], $"{SectionName}:{name}:Enabled"),
@@ -204,11 +233,19 @@ public sealed class ConfigurationFeatureFlags : IFeatureFlags, IDisposable
                         .Where(p => !string.IsNullOrEmpty(p))
                         .Select(p => p!)
                         .ToImmutableList(),
-                    child["Description"]);
+                    child["Description"])
+                {
+                    DeclaredDisabled = IsDeclaredFalse(child["Enabled"]),
+                };
             builder[name] = flag;
         }
         return builder.ToImmutable();
     }
+
+    /// <summary>Whether a raw <c>Enabled</c> value is the boolean <c>false</c>, spelled out. Pure.</summary>
+    /// <param name="raw">The configured value, or null when the key is absent.</param>
+    internal static bool IsDeclaredFalse(string? raw) =>
+        bool.TryParse(raw?.Trim(), out var parsed) && !parsed;
 
     /// <summary>
     /// Reads a flag's <c>Enabled</c> value. ABSENT (or blank) means <b>on</b> — declaring the flag in
