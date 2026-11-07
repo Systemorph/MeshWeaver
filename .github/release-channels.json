@@ -489,6 +489,31 @@
       "status": "written"
     },
     {
+      "id": "tailnet-bridge-line",
+      "tag": "1.104.4",
+      "edition": "service",
+      "meaning": "The ingress bridge line tag (MeshWeaver.Deploy deploy/tailnet-bridge: the stock Tailscale client 1.104.4 and Caddy, both pinned by digest — one machine of the private network at a public name), re-pushed by every main build of that image (the per-build tag is <line>-<sha>). Version-SHAPED, which is allowed only because no self-updater lists this repository. A service image, never a self-update candidate.",
+      "platforms": [
+        "linux/amd64"
+      ],
+      "writers": [
+        {
+          "workflow": "tailnet-bridge-image.yml",
+          "repo": "Systemorph/MeshWeaver.Deploy",
+          "job": "publish",
+          "repositories": [
+            "tailnet-bridge"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io"
+          ],
+          "state": "every main build"
+        }
+      ],
+      "notation": "any",
+      "status": "written"
+    },
+    {
       "id": "whisper-line",
       "tag": "1.7.4-flix-large-v3-q8",
       "edition": "service",
