@@ -92,7 +92,7 @@ public sealed class SeedDefaultAppsLogonAction : ILogonAction
             .Timeout(ConfigReadBound)
             .SelectMany(config =>
             {
-                var specs = UserActivityLayoutAreas.AppRecordSpecs(config, ownerId).ToArray();
+                var specs = UserActivityLayoutAreas.AppRecordSpecs(config, ownerId, context.Identity.Locale).ToArray();
                 if (specs.Length == 0)
                     return Observable.Return(LogonActionOutcome.Nothing);
 

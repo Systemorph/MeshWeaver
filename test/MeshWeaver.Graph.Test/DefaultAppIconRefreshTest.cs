@@ -1,3 +1,4 @@
+using System.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Logon;
 using MeshWeaver.Mesh;
@@ -75,5 +76,45 @@ public class DefaultAppIconRefreshTest
         // leaving every FUTURE redraw permanently unreachable — the exact bug this action exists
         // to fix, reintroduced one level up.
         new DefaultAppIconRefreshLogonAction().Mode.Should().Be(LogonActionMode.EveryLogon);
+    }
+
+    // ── The name-side twin: the Doc tile "Documentation" → "Docs" (2026-11-07) ─────────────────
+
+    private static MeshNode DocRecordNamed(string? name) =>
+        MeshNode.FromPath("alice/_App/Doc") with { NodeType = AppNodeType.NodeType, Name = name };
+
+    private static UserActivityLayoutAreas.AppRecordSpec DocSpec(string? locale) =>
+        UserActivityLayoutAreas.AppRecordSpecs(new HomeConfig { DefaultApps = ["Doc"] }, "alice", locale).Single();
+
+    [Fact]
+    public void A_record_still_wearing_the_retired_Documentation_name_is_renamed()
+    {
+        var converged = DefaultAppIconRefreshLogonAction.Converged(DocRecordNamed("Documentation"), DocSpec(null));
+        converged.Name.Should().Be("Docs", "\"Documentation\" wrapped mid-word in an 88px launcher tile");
+    }
+
+    [Fact]
+    public void The_rename_lands_in_the_owner_s_language()
+    {
+        DefaultAppIconRefreshLogonAction.Converged(DocRecordNamed("Documentation"), DocSpec("de"))
+            .Name.Should().Be("Doku");
+    }
+
+    [Fact]
+    public void A_name_the_viewer_chose_is_never_overwritten()
+    {
+        var mine = DocRecordNamed("Handbook");
+        DefaultAppIconRefreshLogonAction.Converged(mine, DocSpec(null)).Should().BeSameAs(mine);
+        AppIconAdoption.NeedsNameRefresh(DocRecordNamed("Docs"), "Docs").Should().BeFalse("the steady state is a no-op");
+    }
+
+    [Fact]
+    public void The_seeded_Doc_record_carries_its_catalog_key_and_is_seeded_in_the_owner_s_language()
+    {
+        DocSpec("de").Name.Should().Be("Doku");
+        DocSpec("en").Name.Should().Be("Docs");
+        DocSpec(null).LabelKey.Should().Be("launcher.documentation");
+        ((App)UserActivityLayoutAreas.BuildAppRecord("alice", DocSpec("de")).Content!).LabelKey
+            .Should().Be("launcher.documentation", "the launcher resolves the key for whoever views the tile");
     }
 }

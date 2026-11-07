@@ -211,7 +211,7 @@ public class HomeTabsTest
 
         specs.Select(s => s.Id).Should().Equal("Store", "Doc", "Chat");
         specs.Single(s => s.Id == "Store").Name.Should().Be("Store");
-        specs.Single(s => s.Id == "Doc").Name.Should().Be("Documentation");
+        specs.Single(s => s.Id == "Doc").Name.Should().Be("Docs", "a tile label fits the 88px tile on one line");
         var threads = specs.Single(s => s.Id == "Chat");
         threads.Name.Should().Be("Threads");
         // Inline artwork now, not a static glyph URL — the grey chat.svg read as unfinished beside
