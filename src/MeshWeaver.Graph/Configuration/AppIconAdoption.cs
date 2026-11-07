@@ -53,6 +53,28 @@ public static class AppIconAdoption
             "/static/NodeTypeIcons/chat.svg",   // Threads, replaced by inline artwork 2026-08-24
         };
 
+    /// <summary>
+    /// Names core seeded on a DEFAULT app record and has since replaced — the name-side twin of
+    /// <see cref="SupersededDefaultIcons"/>. Only a record still wearing one of these EXACT values
+    /// is renamed; any other name is the viewer's (or the Store's) and is never touched.
+    /// </summary>
+    internal static readonly IReadOnlySet<string> SupersededDefaultNames =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Documentation",   // the Doc tile, renamed "Docs" 2026-11-07: wrapped mid-word in an 88px tile
+        };
+
+    /// <summary>
+    /// True when a record still wears a name core shipped and has since replaced, so it should be
+    /// converged to <paramref name="currentSeedName"/> — the name today's seed would give it.
+    /// </summary>
+    internal static bool NeedsNameRefresh(MeshNode? record, string? currentSeedName) =>
+        record is not null
+        && !string.IsNullOrEmpty(record.Name)
+        && !string.IsNullOrEmpty(currentSeedName)
+        && !string.Equals(record.Name, currentSeedName, StringComparison.Ordinal)
+        && SupersededDefaultNames.Contains(record.Name);
+
     /// <summary>True when a record has no icon, or still wears the placeholder.</summary>
     internal static bool NeedsIcon(MeshNode? record) =>
         record is not null

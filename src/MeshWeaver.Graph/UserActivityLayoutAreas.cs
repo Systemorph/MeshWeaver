@@ -1171,6 +1171,18 @@ public static class UserActivityLayoutAreas
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// The catalog keys of the defaults whose label is localized — the record is seeded in the
+    /// owner's language and carries the key for whoever views it. <c>launcher.documentation</c> is
+    /// the key <c>DocumentationExtensions.DocumentationLabelKey</c> declares (this assembly does not
+    /// reference that module), so the seeded record and the declared tile read one label.
+    /// </summary>
+    internal static readonly ImmutableDictionary<string, string> KnownAppLabelKeys =
+        new Dictionary<string, string>
+        {
+            ["Doc"] = "launcher.documentation",
+        }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The Threads tile's artwork — full-bleed, so it reads as a product icon rather than a small
     /// grey glyph floating in a box, which is what <c>chat.svg</c> looked like next to the Store's.
     ///
@@ -1240,7 +1252,12 @@ public static class UserActivityLayoutAreas
     /// <see cref="KnownApps"/> gives them their product name + icon. Pure, exposed for tests.
     /// <para>Installed apps are NOT here: the Store writes their records when it installs them.</para>
     /// </summary>
-    internal static IReadOnlyList<AppRecordSpec> AppRecordSpecs(HomeConfig? config, string ownerId)
+    /// <param name="config">The portal's home configuration; null = the shipped defaults.</param>
+    /// <param name="ownerId">The owner's partition.</param>
+    /// <param name="locale">The OWNER's language. A default that has a catalog key
+    /// (<see cref="KnownAppLabelKeys"/>) is stored under its name in that language and carries the
+    /// key, as the Inbox does (<see cref="InboxAppSpec"/>); null = the catalog's default.</param>
+    internal static IReadOnlyList<AppRecordSpec> AppRecordSpecs(HomeConfig? config, string ownerId, string? locale = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
         var specs = new List<AppRecordSpec>();
@@ -1274,8 +1291,11 @@ public static class UserActivityLayoutAreas
                 var (name, icon) = KnownApps.TryGetValue(path, out var known)
                     ? known
                     : (LeafOf(path), GenericAppIcon);
+                var labelKey = KnownAppLabelKeys.GetValueOrDefault(path);
+                if (labelKey is not null)
+                    name = LocalizationCatalog.Get(labelKey, locale);
                 specs.Add(new AppRecordSpec(id, name, icon,
-                    Plugin: path, OpenPath: null, Source: AppSources.Default));
+                    Plugin: path, OpenPath: null, Source: AppSources.Default, LabelKey: labelKey));
             }
         }
         return specs;
