@@ -324,7 +324,10 @@ public static class PackageUninstallExecutor
         /// absent, and phase 1 would then remove the install record with the generation still enabled
         /// — so an incomplete read FAULTS, and phase 1 goes red with the install record kept. A removal
         /// that fails faults the same way, never becomes a sentence. An entry that is ALREADY disabled
-        /// is "disable done" (a phase 1 resumed after its removal), never "never landed".</para>
+        /// is "disable done" (a phase 1 resumed after its removal), never "never landed" — and its
+        /// removal still runs again, because the tombstone may have landed without the projection.
+        /// Once the generation is disabled, <see cref="PackageUninstallRequest.ModuleDisabled"/> is
+        /// written at once, before any later step can fail.</para>
         /// </summary>
         private IObservable<ModuleRetired> RetireModule(PackageUninstallRequest request, PackageManifest record)
         {
@@ -338,14 +341,26 @@ public static class PackageUninstallExecutor
                     activation.Entries.FirstOrDefault(e => string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase)) switch
                     {
                         null => Observable.Return(new ModuleRetired("not landed by the store lane — no landed generation to disable", false)),
-                        { Enabled: false } => Observable.Return(new ModuleRetired(
+                        // 🚨 Disabled by the TOMBSTONE does not mean the removal finished (#7972
+                        // review): a removal stopped between the tombstone and the projection leaves
+                        // the per-module file — what an older image reads — still enabled. The
+                        // removal is idempotent, so it runs again and rewrites the projection.
+                        { Enabled: false } => landing.RemoveModule(module).Select(_ => new ModuleRetired(
                             "landed generation already disabled (an earlier run of this phase removed it)", true)),
                         _ => landing.RemoveModule(module).Select(_ => new ModuleRetired("landed generation disabled", true)),
                     });
             var agent = hub.ServiceProvider.GetService<ModuleReloadAgent>();
             var loaded = (agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()).Contains(module);
-            return removed.SelectMany(retired => RetireLoaded(request, module, loaded, retired.Outcome)
-                .Select(outcome => retired with { Outcome = outcome }));
+            return removed
+                // 🚨 What is on disk is recorded the moment it is true (#7972 review): a later step
+                // (the live retire, the restart, the hub close, the record removal) that fails ends
+                // the request Failed, and it must still say the module IS disabled.
+                .SelectMany(retired => (retired.Disabled
+                        ? Write(r => r with { ModuleDisabled = true }, Line($"module: {retired.Outcome}"))
+                        : Observable.Return(Unit.Default))
+                    .Select(_ => retired))
+                .SelectMany(retired => RetireLoaded(request, module, loaded, retired.Outcome)
+                    .Select(outcome => retired with { Outcome = outcome }));
         }
 
         private IObservable<string> RetireLoaded(PackageUninstallRequest request, string module, bool loaded, string landed)
