@@ -179,6 +179,14 @@ public class OfficialMarkTest
         Assert.True(IconBackplate.HasBackplate(rendered));
     }
 
+    /// <summary>Thousands of url() tokens in one paint are judged in one pass, not one recursion per token.</summary>
+    [Fact]
+    public void ManyPaintServerTokens_AreJudgedOnce()
+    {
+        var paint = string.Concat(Enumerable.Repeat("url(#g) ", 7000));
+        Assert.False(IconBackplate.ReadsOnDark($"<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='{paint}'/></svg>"));
+    }
+
     /// <summary>A malformed colour in an official mark keeps the white plate and never fails the render.</summary>
     [Fact]
     public void AMalformedColour_KeepsTheWhitePlate()
@@ -227,6 +235,19 @@ public class OfficialMarkTest
     // CSS: the last declaration wins, and !important wins over a plain one.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' style='fill:#fff;fill:#000'/></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' style='fill:#000 !important;fill:#fff'/></svg>", false)]
+    // A multiline style is read whole; an embedded stylesheet keeps the white plate.
+    [InlineData("<svg viewBox='0 0 24 24'><g fill='#fff'><path d='M0 0h1v1z' style='\nfill:#000;\n'/></g></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><style>path{fill:#111827}</style><path d='M0 0h1v1z' fill='#fff'/></svg>", false)]
+    // A namespace-prefixed element is judged by its local name.
+    [InlineData("<svg viewBox='0 0 24 24'><s:style xmlns:s='http://www.w3.org/2000/svg'>path{fill:#111827}</s:style><path d='M0 0h1v1z' fill='#fff'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24' xmlns:svg='http://www.w3.org/2000/svg'><svg:path d='M0 0h1v1z' fill='#111827'/></svg>", false)]
+    // A paint server's fallback colour is judged; a comment is not markup.
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='url(#missing) #111827'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='url(#g) #ffffff'/></svg>", true)]
+    [InlineData("<svg viewBox='0 0 24 24'><!-- <g fill='#fff'> --><path d='M0 0h1v1z'/></svg>", false)]
+    // A second paint server is no fallback; a <!-- inside CDATA opens no comment.
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='url(#a) url(#b) #fff'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><desc><![CDATA[<!--]]></desc><style>path{fill:#111827}</style><!-- note --><path d='M0 0h1v1z' fill='#fff'/></svg>", false)]
     // A malformed colour is unreadable — never a throw.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#xyz'/></svg>", false)]
     // A clip path's unfilled geometry is not painted.
