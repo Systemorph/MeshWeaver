@@ -90,6 +90,22 @@ public sealed record InboxRow
     /// <summary>When the item last changed, in the VIEWER's time zone.</summary>
     public string When { get; init; } = string.Empty;
 
+    /// <summary>
+    /// The same instant as the grid shows it — the time alone for an item of the viewer's today, the
+    /// short date for an older one (<see cref="InboxPreview.ShortTime"/>), so the column never clips.
+    /// </summary>
+    public string ShortWhen { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The first line of what the item says (<see cref="InboxPreview.Of"/> over the content's
+    /// <c>preview</c> — the source's own listing text: Graph's <c>bodyPreview</c>, Gmail's
+    /// <c>snippet</c>, a chat's last message); empty when the source gave none. Shown muted under the title.
+    /// </summary>
+    public string Preview { get; init; } = string.Empty;
+
+    /// <summary>The preview's style — hidden when there is no preview, so an empty line is never drawn.</summary>
+    public string PreviewStyle { get; init; } = InboxLayoutArea.HiddenStyle;
+
     /// <summary>The same instant as a sortable UTC stamp — the row order, never shown.</summary>
     public string Stamp { get; init; } = string.Empty;
 
@@ -345,6 +361,15 @@ public static class InboxRows
     /// <summary>The row property that carries the state badge's style.</summary>
     public const string StateStyleProperty = "stateStyle";
 
+    /// <summary>The row property that carries the row's title.</summary>
+    public const string TitleProperty = "title";
+
+    /// <summary>The row property that carries the preview line.</summary>
+    public const string PreviewProperty = "preview";
+
+    /// <summary>The row property that carries the preview line's style.</summary>
+    public const string PreviewStyleProperty = "previewStyle";
+
     /// <summary>The row property that carries the row's CSS class.</summary>
     public const string RowClassProperty = "rowClass";
 
@@ -460,6 +485,7 @@ public static class InboxRows
         var content = ContentOf(node, options);
         var at = TimeFrom(node, section.TimeField, content);
         var from = StringOf(content, "from");
+        var preview = InboxPreview.Of(StringOf(content, "preview"));
         var tags = TagsOf(content);
         // Per row when the source says (a live mailbox answers read and unread in one leg), else the
         // leg's. 🚨 Typed content is read off the instance itself: serializing it with the hub's
@@ -483,6 +509,9 @@ public static class InboxRows
             // never the container's UTC, never one fixed pattern for every language.
             When = DisplayTimeExtensions.ToDisplayTime(at, zone)
                 .ToString("g", culture ?? CultureInfo.InvariantCulture),
+            ShortWhen = InboxPreview.ShortTime(at, zone, culture, DateTimeOffset.UtcNow),
+            Preview = preview,
+            PreviewStyle = preview.Length > 0 ? InboxLayoutArea.PreviewStyle : InboxLayoutArea.HiddenStyle,
             Stamp = at.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
             BlockedReason = blockedReason ?? string.Empty,
             SourceIcon = section.SourceIcon,

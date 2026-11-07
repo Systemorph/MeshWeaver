@@ -288,6 +288,7 @@ public static class InboxLayoutArea
             // ignorable) is the person's InboxPreferences node, which the checkboxes are bound to directly.
             host.UpdateData(InboxRows.FilterId, new InboxFilter());
             host.UpdateData(AccountOptionsId, AccountOptions(host.Localize("inbox.account.all"), []));
+            host.UpdateData(AccountColumnId, false);
             EnsurePreferences(host, owner, sections);
             host.UpdateData(UnreadId, string.Empty);
             host.UpdateData(SlowId, string.Empty);
@@ -1018,6 +1019,7 @@ public static class InboxLayoutArea
                 if (stored is not null)
                     SeedMissing(hub, viewerAccess, viewerContext, logger, preferencesPath, stored, seedFor, seeded);
                 host.UpdateData(AccountOptionsId, AccountOptions(host.Localize("inbox.account.all"), AccountsOf(rows)));
+                host.UpdateData(AccountColumnId, AccountColumnShown(rows));
                 host.UpdateData(StateStylesId, StateStyles(sections, asked.Kinds));
                 // The tag checkboxes follow the rows; a box the viewer ticked stays ticked while its tag exists.
                 var ticked = items.Where(item => item.Checked).Select(item => item.Key).ToImmutableHashSet(StringComparer.Ordinal);
@@ -1240,10 +1242,61 @@ public static class InboxLayoutArea
             : handler is null ? noHandler
             : null;
 
+    /// <summary>The data id of the Account column's visibility — shown only when the rows reached more than one address.</summary>
+    public const string AccountColumnId = "inboxAccountColumn";
+
+    /// <summary>The style of a row's preview line: one muted line, cut with an ellipsis rather than wrapped.</summary>
+    internal const string PreviewStyle = "display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;";
+
+    /// <summary>The width below which the grid is drawn as a phone list (one stacked entry per row).</summary>
+    internal const int CompactBelow = 640;
+
     /// <summary>
-    /// The grid: the selection column, the source's symbol, what the row is, who brought it, when —
-    /// and Open, which hands off to the item's own page; an unread row is bold (its row class). The inbox lists and hands off; it is not a
-    /// second mail client or chat client.
+    /// The grid's columns, in order — what a test pins. Source, Item, From, Account, Tags, When: the
+    /// title with its preview line (and the state badge, for an item that has one) is the one
+    /// flexible column; there is no State or Status column, whose cells were empty for every mail
+    /// (maintainer, 2026-11-07: "state and status not useful … first line of text of email").
+    /// </summary>
+    internal static ImmutableArray<(string Key, string Width, string Compact)> Columns { get; } =
+    [
+        ("inbox.column.channel", "56px", ColumnCompactPlacement.Lead),
+        ("inbox.column.item", "1fr", ColumnCompactPlacement.Body),
+        ("inbox.column.source", "200px", ColumnCompactPlacement.Lead),
+        // Which of the viewer's accounts it reached — several mailboxes in one list; hidden with one.
+        ("inbox.column.account", "180px", ColumnCompactPlacement.Hidden),
+        ("inbox.column.tags", "120px", ColumnCompactPlacement.Hidden),
+        ("inbox.column.when", "96px", ColumnCompactPlacement.Trail),
+    ];
+
+    /// <summary>
+    /// The Item cell: the title, the state badge when the item has a state (an approval, an activity —
+    /// hidden, never drawn empty, for mail), and under them the first line of what it says, muted.
+    /// Framework controls bound to the row (<see cref="ContextProperty"/>), never markup.
+    /// </summary>
+    internal static UiControl ItemCell()
+        => Controls.Stack
+            .WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(6)
+                .WithStyle("align-items: center; min-width: 0;")
+                .WithView(Controls.Label(new ContextProperty(InboxRows.TitleProperty))
+                    .WithStyle("overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;"))
+                .WithView(Controls.Badge(new ContextProperty(InboxRows.StateTextProperty)) with
+                {
+                    BackgroundColor = new ContextProperty(InboxRows.StateColorProperty),
+                    Color = "#ffffff",
+                    Style = new ContextProperty(InboxRows.StateStyleProperty),
+                }))
+            .WithView(Controls.Hint(new ContextProperty(InboxRows.PreviewProperty)) with
+            {
+                Style = new ContextProperty(InboxRows.PreviewStyleProperty),
+            })
+            .WithStyle("min-width: 0;");
+
+    /// <summary>
+    /// The grid: the selection column, the source's symbol, what the row is (title, state badge,
+    /// preview line), who brought it, which account, its tags, when — an unread row is bold (its row
+    /// class). A click opens the item's own page; the inbox lists and hands off, it is not a second
+    /// mail client or chat client. On a phone the same columns draw as one entry per row: symbol and
+    /// sender with the time on the right, then the title and preview.
     /// </summary>
     private static DataGridControl Grid(LayoutAreaHost host, IObservable<ImmutableList<InboxRow>> rows)
     {
@@ -1252,41 +1305,24 @@ public static class InboxLayoutArea
             .WithRowSelection(InboxRows.SelectionId, InboxRows.KeyProperty, InboxRows.BlockedReasonProperty)
             // Unread rows carry their class (bold), as a mail client shows new mail.
             .WithRowClassProperty(InboxRows.RowClassProperty)
-            // The medium the item came through, first, so a glance tells mail from a message from an
-            // approval: a header and the source's name as the tooltip.
-            .WithColumn(new TemplateColumnControl(Controls.Icon(new ContextProperty(InboxRows.SourceIconProperty)).WithWidth("20px"))
-                .WithTitle(host.Localize("inbox.column.channel")).WithWidth("72px").WithSortable(false));
-        // Outlook's columns: what, from whom, when. Ordered by date always: a header sort would be a
-        // second, unbound ordering.
-        foreach (var (property, key, width) in new[]
-                 {
-                     (nameof(InboxRow.Title), "inbox.column.item", "3fr"),
-                     (nameof(InboxRow.StateText), "inbox.column.state", "150px"),
-                     // The detailed status — what the target (or the run) says, beyond the badge.
-                     (nameof(InboxRow.Status), "inbox.column.status", "1.5fr"),
-                     (nameof(InboxRow.From), "inbox.column.source", "1.5fr"),
-                     // Which of the viewer's accounts it reached — several mailboxes in one list.
-                     (nameof(InboxRow.Account), "inbox.column.account", "1.5fr"),
-                     (nameof(InboxRow.TagText), "inbox.column.tags", "1fr"),
-                     (nameof(InboxRow.When), "inbox.column.when", "170px"),
-                 })
+            .WithCompactBelow(CompactBelow);
+        foreach (var (key, width, compact) in Columns)
         {
-            // The lifecycle state as a badge — coloured by state, a check only for what is done, and
-            // hidden (not drawn empty) for an item that has none.
-            if (property == nameof(InboxRow.StateText))
+            grid = key switch
             {
-                grid = grid.WithColumn(new TemplateColumnControl(Controls.Badge(new ContextProperty(InboxRows.StateTextProperty)) with
-                    {
-                        BackgroundColor = new ContextProperty(InboxRows.StateColorProperty),
-                        Color = "#ffffff",
-                        Style = new ContextProperty(InboxRows.StateStyleProperty),
-                    })
-                    .WithTitle(host.Localize(key)).WithWidth(width).WithSortable(false));
-                continue;
-            }
-            grid = grid.WithColumn(new PropertyColumnControl<string> { Property = property.ToCamelCase() }
-                .WithTitle(host.Localize(key)).WithWidth(width).WithSortable(false));
+                // The medium the item came through, first, so a glance tells mail from a message from an approval.
+                "inbox.column.channel" => grid.WithColumn(new TemplateColumnControl(Controls.Icon(new ContextProperty(InboxRows.SourceIconProperty)).WithWidth("20px"))
+                    .WithTitle(host.Localize(key)).WithWidth(width).WithSortable(false).WithCompact(compact)),
+                "inbox.column.item" => grid.WithColumn(new TemplateColumnControl(ItemCell())
+                    .WithTitle(host.Localize(key)).WithWidth(width).WithSortable(false).WithCompact(compact)),
+                _ => grid.WithColumn(new PropertyColumnControl<string> { Property = PropertyOf(key) }
+                    .WithTitle(host.Localize(key)).WithWidth(width).WithSortable(false).WithCompact(compact)
+                    .WithVisible(key == "inbox.column.account"
+                        ? new JsonPointerReference(LayoutAreaReference.GetDataPointer(AccountColumnId))
+                        : true)),
+            };
         }
+        // Outlook's ordering: by date always — a header sort would be a second, unbound ordering.
         return grid
             // A click on a row OPENS it, as in a mail client — always INSIDE the portal, in the
             // inbox's reading view (InboxReadingView), never the provider's own client. (Ticking a box
@@ -1297,6 +1333,20 @@ public static class InboxLayoutArea
             .WithShowPageSizeSelector()
             .Resizable();
     }
+
+    /// <summary>The row property a text column shows, by its column key.</summary>
+    internal static string PropertyOf(string key) => key switch
+    {
+        "inbox.column.source" => "from",
+        "inbox.column.account" => "account",
+        "inbox.column.tags" => "tagText",
+        "inbox.column.when" => "shortWhen",
+        _ => throw new ArgumentOutOfRangeException(nameof(key), key, "not a text column"),
+    };
+
+    /// <summary>Whether the Account column is shown: only when the rows reached more than one address. Pure.</summary>
+    /// <param name="rows">The merged rows.</param>
+    internal static bool AccountColumnShown(IEnumerable<InboxRow> rows) => AccountsOf(rows).Count > 1;
 
     /// <summary>Opens the clicked row in the owner's reading view.</summary>
     private static void OpenRow(UiActionContext ctx)

@@ -126,6 +126,7 @@ new TemplateColumnControl(Controls.Button("View"))
 | `WithEmptyContent(control)` | Content shown when the dataset is empty | — |
 | `WithLoading(bool)` | Show loading skeleton | `false` |
 | `WithGenerateHeader(string)` | Header generation strategy (`"Sticky"`, etc.) | `"Sticky"` |
+| `WithCompactBelow(int)` | Below this width (px, of the grid's own box) draw each row as one stacked entry instead of a table — see "Compact (phone) layout" | — (always a table) |
 
 ## Column options (all column types)
 
@@ -141,6 +142,24 @@ new TemplateColumnControl(Controls.Button("View"))
 | `WithVisible(bool)` | Show or hide the column | `true` |
 | `WithFrozen(bool)` | Freeze column (pin to left edge) | `false` |
 | `WithFilterable(bool)` | Enable column filtering | — |
+| `WithCompact(string)` | Where the column goes in the compact layout: `ColumnCompactPlacement.Lead` / `Trail` / `Body` / `Hidden` | `Body` |
+
+## Compact (phone) layout
+
+A grid with `WithCompactBelow(px)` is drawn COMPACT when its box is narrower than `px`: no header and
+no table — each row one entry. The entry's first line holds the `Lead` columns on the left and the
+`Trail` columns on the right; every `Body` column follows on a line of its own, in column order;
+`Hidden` columns are left out. The selection checkbox, row click and row class work as in the table.
+A renderer that does not know compact mode ignores both properties and draws the table, so declaring
+them never changes the wide grid. The inbox uses it for its phone list: symbol and sender lead, the
+time trails, the item (title and preview) is the body.
+
+```csharp
+grid.WithCompactBelow(640)
+    .WithColumn(new PropertyColumnControl<string> { Property = "from" }.WithCompact(ColumnCompactPlacement.Lead))
+    .WithColumn(new PropertyColumnControl<string> { Property = "shortWhen" }.WithCompact(ColumnCompactPlacement.Trail))
+    .WithColumn(new TemplateColumnControl(itemCell).WithCompact(ColumnCompactPlacement.Body));
+```
 
 ## PropertyColumnControl extras
 

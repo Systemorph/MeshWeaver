@@ -147,4 +147,67 @@ public class OfficialMarkTest
         Assert.Contains("#111827", card.Value);
         Assert.Contains(MeshNodeImageHelper.MeshWeaverMarkUrl, tab.Href);
     }
+
+    // ---- the plate follows the theme where the mark reads on dark (2026-11-07) ---------------
+
+    /// <summary>
+    /// The inbox's channel marks (Outlook, Gmail, iMessage, WhatsApp, Teams) read on a dark ground, so
+    /// their plate follows the theme: white in light mode, <see cref="IconBackplate.OfficialDarkPlate"/>
+    /// in dark mode — the white tile glared in a dark inbox. The brand colours stay byte-identical.
+    /// </summary>
+    [Theory]
+    [InlineData("Outlook")]
+    [InlineData("Gmail")]
+    [InlineData("iMessage")]
+    [InlineData("WhatsApp")]
+    [InlineData("Teams")]
+    public void AChannelMark_GetsTheThemeFollowingPlate(string source)
+    {
+        var mark = InboxSourceIcons.Resolve(source, null);
+        Assert.True(IconBackplate.ReadsOnDark(mark), $"{source} reads on the dark plate");
+
+        var rendered = IconBackplate.Ensure(mark);
+
+        Assert.Contains($"class='{IconBackplate.ThemePlateClass}'", rendered);
+        Assert.Contains("prefers-color-scheme: dark", rendered);
+        Assert.Contains(IconBackplate.OfficialDarkPlate, rendered);
+        // Light mode (and a renderer without media queries) keeps the white plate.
+        Assert.Contains($"fill='{IconBackplate.OfficialPlate}'", rendered);
+        // The mark itself is untouched.
+        Assert.Contains(mark.Trim()[^120..], rendered);
+        // Still recognised as plated, so no renderer plates it a second time.
+        Assert.True(IconBackplate.HasBackplate(rendered));
+    }
+
+    /// <summary>A near-black vendor mark would vanish on the dark plate: it keeps the white plate on both themes.</summary>
+    [Fact]
+    public void ANearBlackMark_KeepsTheWhitePlate()
+    {
+        Assert.False(IconBackplate.ReadsOnDark(OfficialMark));
+        var rendered = IconBackplate.Ensure(OfficialMark);
+        Assert.DoesNotContain(IconBackplate.ThemePlateClass, rendered);
+        Assert.DoesNotContain(IconBackplate.OfficialDarkPlate, rendered);
+    }
+
+    /// <summary>currentColor, a default (unset) fill and black all count as dark; gradients are not judged.</summary>
+    [Theory]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='currentColor'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='black'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' style='fill:#000'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='url(#g)'/><path d='M0 0h1v1z' fill='#fff'/></svg>", true)]
+    [InlineData("<svg viewBox='0 0 24 24'><g fill='#25D366'><path d='M0 0h1v1z'/></g></svg>", true)]
+    [InlineData("<svg viewBox='0 0 24 24'><g fill='#111111'><path d='M0 0h1v1z'/></g></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'></svg>", false)]
+    public void ReadsOnDark_JudgesSolidColoursOnly(string svg, bool expected)
+        => Assert.Equal(expected, IconBackplate.ReadsOnDark(svg));
+
+    /// <summary>The dark plate is dark enough that the light theme's white text detail would never be expected on it, and each channel's colours clear the bar.</summary>
+    [Fact]
+    public void TheDarkPlate_ContrastsWithTheChannelColours()
+    {
+        var plate = MeshWeaver.Layout.Palettes.OklchColor.FromHex(IconBackplate.OfficialDarkPlate);
+        foreach (var brand in new[] { "#4285F4", "#34A853", "#FBBC04", "#EA4335", "#C5221F", "#34DA50", "#25D366", "#ffffff" })
+            Assert.True(MeshWeaver.Layout.Palettes.OklchColor.FromHex(brand).ContrastRatio(plate) >= IconBackplate.MinDarkPlateContrast, brand);
+    }
 }
