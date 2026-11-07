@@ -64,6 +64,13 @@ def git(repo: Path, *args: str) -> str:
     return r.stdout
 
 
+def names(repo: Path, treeish: str) -> list[str]:
+    """The entry names of one tree, NUL-delimited (a non-ASCII name is never C-quoted)."""
+    r = subprocess.run(["git", "-C", str(repo), "ls-tree", "-z", "--name-only", treeish],
+                       capture_output=True, text=True, errors="surrogateescape")
+    return [n for n in r.stdout.split("\0") if n] if r.returncode == 0 else []
+
+
 def object_hash(repo: Path, path: str) -> str | None:
     r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "-q", f"HEAD:{path}"],
                        capture_output=True, text=True)
@@ -153,8 +160,7 @@ def implicit_files(repo: Path, project_dir: str) -> list[str]:
     parts = PurePosixPath(project_dir).parts
     for i in range(0, len(parts) + 1):
         prefix = PurePosixPath(*parts[:i]) if i else PurePosixPath("")
-        listing = subprocess.run(["git", "-C", str(repo), "ls-tree", "--name-only", f"HEAD:{prefix}" if i else "HEAD"],
-                                 capture_output=True, text=True).stdout.split()
+        listing = names(repo, f"HEAD:{prefix}" if i else "HEAD")
         for n in listing:
             if n in PATH_FILES or NUGET_CONFIG.match(n):
                 found.append(str(prefix / n) if i else n)
@@ -206,7 +212,7 @@ def key(repo: Path, project: str, salt: str = "") -> tuple[str, list[str]]:
     files: set[str] = set(evaluated)
     for d in dirs:
         files.update(implicit_files(repo, d))
-    files.update(f for f in git(repo, "ls-tree", "--name-only", "HEAD").split() if ROOT_FILE.match(f))
+    files.update(f for f in names(repo, "HEAD") if ROOT_FILE.match(f))
     for f in sorted(files):
         if any(f.startswith(d + "/") for d in dirs):
             continue   # already in that directory's tree hash
