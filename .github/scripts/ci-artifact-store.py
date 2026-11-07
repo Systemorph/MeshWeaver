@@ -123,6 +123,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -744,6 +745,8 @@ def prune_cmd(a: argparse.Namespace) -> int:
         raise Red("prune needs an object store; 'gha' artifacts are pruned by their retention")
     if not a.prefix:
         raise Red("prune refuses to run without --prefix: a store-wide sweep is never what a lane means")
+    if isinstance(store, FileStore):
+        return prune_file_store(store, a.prefix, a.older_than, a.dry_run)
     import datetime as dt
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=a.older_than)
     full = f"{store.prefix}/{a.prefix}" if store.prefix else a.prefix
@@ -769,6 +772,50 @@ def prune_cmd(a: argparse.Namespace) -> int:
         store._az("delete-batch", "--source", store.container, *sum([["--pattern", n] for n in batch], []))
     emit("deleted", str(len(doomed)))
     summary(f"**Store prune:** {len(doomed)} blob(s) under `{full}/` older than {a.older_than} day(s)")
+    return 0
+
+
+def prune_file_store(store: "FileStore", prefix: str, older_than_days: float, dry_run: bool = False) -> int:
+    """A `file:` store has no server-side lifecycle, so a writer that keeps a CACHE there bounds it
+    itself (`cache/<name>/`, CiArtifactStorage.md → Lifecycle). Deletes regular files under the prefix
+    whose mtime is older than the cutoff — a cache eviction is a miss for its reader, never a red.
+    Another pod's staging file (`*.tmp.<token>`) is left alone until it is a day older than the cutoff:
+    its rename may still be in flight."""
+    base = store._path(prefix.rstrip("/"))
+    # 🚨 NO SYMLINK BELOW THE STORE ROOT: rglob follows a symlinked prefix component into its target,
+    # so an old file OUTSIDE the cache — outside the store, even — would be deleted. The root itself may
+    # be an alias (a mount path); every component under it must be a real directory.
+    part = store.root
+    for comp in Path(prefix.rstrip("/")).parts:
+        part = part / comp
+        if part.is_symlink():
+            raise Red(f"prune refuses {base}: {part} is a symlink — pruning through it could delete files "
+                      f"outside the cache prefix")
+    if not base.is_dir():
+        print(f"prune: {base} does not exist — nothing to prune")
+        emit("deleted", "0")
+        return 0
+    now = time.time()
+    cutoff = now - older_than_days * 86400
+    staging_cutoff = cutoff - 86400
+    seen = doomed = 0
+    # os.walk(followlinks=False): a symlinked directory INSIDE the prefix is never descended either.
+    files = sorted(Path(d) / n for d, _, names in os.walk(base, followlinks=False) for n in names)
+    for f in files:
+        if f.is_symlink() or not f.is_file():
+            continue
+        seen += 1
+        limit = staging_cutoff if ".tmp." in f.name else cutoff
+        if f.stat().st_mtime >= limit:
+            continue
+        doomed += 1
+        if dry_run:
+            print(f"  would delete {f}")
+            continue
+        f.unlink(missing_ok=True)
+    print(f"prune: {seen} file(s) under {base}/, {doomed} older than {older_than_days} day(s)"
+          + (" (dry run)" if dry_run else " deleted"))
+    emit("deleted", "0" if dry_run else str(doomed))
     return 0
 
 
@@ -1272,6 +1319,46 @@ def self_test() -> int:
         except Red as e:
             check("an az failure is red and names the account",
                   "meshweaverci/ciartifacts" in str(e) and "AuthorizationPermissionMismatch" in str(e))
+
+        # 18. a `file:` store prunes a cache prefix by age, leaves fresh objects and young staging files
+        fs_root = tmp / "fs-prune"
+        fstore = FileStore(str(fs_root))
+        old_obj = fs_root / "cache" / "tool" / "old.tar"
+        new_obj = fs_root / "cache" / "tool" / "new.tar"
+        stage = fs_root / "cache" / "tool" / "new.tar.tmp.abc"
+        other = fs_root / "modules" / "keep.nupkg"
+        for f in (old_obj, new_obj, stage, other):
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"x")
+        ancient = time.time() - 30 * 86400
+        os.utime(old_obj, (ancient, ancient))
+        os.utime(other, (ancient, ancient))
+        os.utime(stage, (time.time() - 7.5 * 86400,) * 2)
+        prune_file_store(fstore, "cache/tool/", 7)
+        check("a file-store prune deletes a cache object older than the cutoff", not old_obj.exists())
+        check("…keeps a fresh one", new_obj.exists())
+        check("…keeps another pod's staging file until a day past the cutoff", stage.exists())
+        check("…and never reaches outside its prefix", other.exists())
+        outside = tmp / "outside"
+        outside.mkdir()
+        victim = outside / "unrelated.tar"
+        victim.write_bytes(b"x")
+        os.utime(victim, (ancient, ancient))
+        (fs_root / "cache" / "linked").symlink_to(outside, target_is_directory=True)
+        try:
+            prune_file_store(fstore, "cache/linked/", 7)
+            check("a file-store prune refuses a symlinked prefix component", False, "accepted")
+        except Red:
+            check("a file-store prune refuses a symlinked prefix component", True)
+        check("…and the file behind the symlink survives", victim.exists())
+        (fs_root / "cache" / "tool" / "nested-link").symlink_to(outside, target_is_directory=True)
+        prune_file_store(fstore, "cache/tool/", 7)
+        check("a symlinked directory INSIDE the prefix is not descended", victim.exists())
+        try:
+            prune_file_store(fstore, "../escape", 7)
+            check("a file-store prune refuses a prefix with '..'", False, "accepted")
+        except Red:
+            check("a file-store prune refuses a prefix with '..'", True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("FAKE_AZ_ROOT", None)
