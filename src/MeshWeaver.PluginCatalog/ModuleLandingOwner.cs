@@ -530,7 +530,13 @@ public static class ModuleLandingOwner
     /// <param name="module">The module's entry-assembly name.</param>
     /// <param name="request">The uninstall request holding the retirement.</param>
     /// <param name="logger">Diagnostics.</param>
-    public static IObservable<string> Remove(IMessageHub hub, string packageId, string module, string request, ILogger? logger)
+    public static IObservable<string> Remove(IMessageHub hub, string packageId, string module, string request, ILogger? logger) =>
+        // 🚨 A FRESH key per SUBSCRIPTION (#7974 review, round 2): the observable is cold, and a key
+        // minted once at call time would be reused by a second subscription — the owner, which runs
+        // each key once per activation, would then never execute that operation.
+        Observable.Defer(() => RemoveCore(hub, packageId, module, request, logger));
+
+    private static IObservable<string> RemoveCore(IMessageHub hub, string packageId, string module, string request, ILogger? logger)
     {
         var path = $"{PackageInstaller.InstalledPartition}/{packageId}";
         var key = $"module-remove-{Guid.NewGuid():N}";

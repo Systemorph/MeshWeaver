@@ -3,8 +3,11 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Reactive.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -40,6 +43,7 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
     private volatile int parked;
     private volatile int release;
     private ModuleLandingService? landing;
+    private readonly FakeRegistry registry = new();
 
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -47,6 +51,7 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
             .AddPluginCatalog()
             .ConfigureServices(services => services
                 .AddSingleton(new PluginCatalogOptions { InstallPreInstalledPackages = false })
+                .AddSingleton<IHttpClientFactory>(new FakeFactory(registry))
                 // Registered AFTER the catalog's own, so this is the instance every hub resolves.
                 .AddSingleton(_ => landing ??= new ModuleLandingService(null, moduleRoot, beforeRecording: _ =>
                 {
@@ -392,5 +397,175 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         (await Live("LandAgain", r => r.RetiringBy is null, ct)).RetiringBy.Should().BeNull("the person's landing cleared the retirement");
         (await InstallRecordGate.MarkRemoving(Mesh, "LandAgain", request, NullLogger.Instance)
             .Timeout(TestTimeouts.Convergence).Await(ct)).Should().Contain("no longer holds", "the displaced uninstall stops and keeps the record");
+    }
+
+    // ── Through the bundle funnel (round 2 of the #7974 review) ────────────────────────────
+
+    private PluginBundleClient Bundles => new(Mesh, FakeRegistry.Url, "mwi_test");
+
+    /// <summary>A real module bundle: the module's entry assembly (real bytes — the landing link
+    /// probes them) under the module lane, version declared to match the index.</summary>
+    private static byte[] ModuleBundle(string plugin, string module, string version)
+    {
+        var entries = new[]
+        {
+            new NuGetPackageWriter.Entry(NuGetPackageWriter.ModuleEntryPathFor(module + ".dll"),
+                () => new MemoryStream(RealAssemblyBytes)),
+        };
+        var manifestJson = JsonSerializer.Serialize(new
+        {
+            plugin,
+            version,
+            frameworkMvid = "33f2efb8aaaabbbbccccddddeeeeffff",
+            module = new { assemblyName = module, assemblies = new[] { module + ".dll" }, version },
+        });
+        var buffer = new MemoryStream();
+        NuGetPackageWriter.Write(buffer, new MeshWeaver.Plugin.Packaging.PluginManifest(plugin, "MeshWeaver.Plugin." + plugin, version, plugin, null, []),
+            "3.0.0", entries, manifestJson);
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// (8) The record's existence is read at the adoption's START — before the plan's index read: an
+    /// uninstall that removes the record while the INDEX response is held (the module never landed, so
+    /// no tombstone exists) leaves the landing refused, never a fresh package's (#7974 review, round
+    /// 2). Negative control (measured): with the existence read back at execution (after the plan),
+    /// the adoption lands the module.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ARecordRemovedWhileTheIndexIsHeld_TheLandingIsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.IndexHeld.Module";
+        await WriteRecord("LandIdx", module, ct);
+        registry.Serve("LandIdx", "1.0.0", module, ModuleBundle("LandIdx", module, "1.0.0"));
+        registry.HoldIndex = 1;
+        try
+        {
+            var adopt = Bundles.AdoptModuleOutcome("LandIdx", module, RecordPath("LandIdx")).Replay();
+            using var connection = adopt.Connect();
+            SpinWait.SpinUntil(() => registry.IndexEntered == 1, TestTimeouts.Convergence)
+                .Should().BeTrue("the adoption's plan is waiting on the index");
+            (await PackageInstaller.RemoveInstalledRecord(Mesh, "LandIdx", NullLogger.Instance).Take(1)
+                .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeTrue();
+            registry.HoldIndex = 0;
+
+            var outcome = await adopt.Timeout(TestTimeouts.Convergence).Await(ct);
+            outcome.FilesLanded.Should().Be(0);
+            (outcome.Failure ?? "").Should().Contain("existed when this adoption began");
+        }
+        finally
+        {
+            registry.HoldIndex = 0;
+        }
+        (await Entry(module, ct)).Should().BeNull("nothing was landed");
+    }
+
+    /// <summary>
+    /// (9) A PERSON's catalog re-install, through the bundle funnel, lands a module phase 1 already
+    /// disabled: the plan reads the disabled entry as never landed for a person's install, and the
+    /// owner carries it out over the tombstone (#7974 review, round 2). Negative control, in the test:
+    /// the same adoption with no person intent is <see cref="ModuleUpdateAction.SkipUninstalled"/>.
+    /// Negative control (measured): with the plan ignoring the person's intent, the re-install is
+    /// skipped and the module stays disabled.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task APersonsCatalogReinstall_ThroughTheBundleFunnel_LandsTheDisabledModule()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Funnel.Module";
+        const string request = "Admin/_PackageUninstall/req-funnel";
+        await WriteRecord("LandFunnel", module, ct);
+        registry.Serve("LandFunnel", "1.0.0", module, ModuleBundle("LandFunnel", module, "1.0.0"));
+        var first = await Bundles.AdoptModuleOutcome("LandFunnel", module, RecordPath("LandFunnel"))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        first.FilesLanded.Should().BeGreaterThan(0, first.Failure ?? "");
+        (await InstallRecordGate.BeginRetirement(Mesh, "LandFunnel", request, "test", NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull();
+        (await ModuleLandingOwner.Remove(Mesh, "LandFunnel", module, request, NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().Be("landed generation disabled");
+
+        var unattended = await Bundles.AdoptModuleOutcome("LandFunnel", module, RecordPath("LandFunnel"))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        unattended.Verdict!.Action.Should().Be(ModuleUpdateAction.SkipUninstalled, "no person asked — the uninstall holds");
+
+        var person = await Bundles.AdoptModuleOutcomeAs("LandFunnel", module, RecordPath("LandFunnel"),
+                unattended: false, policyDecline: null, intent: PackageRecordWriteIntent.Person)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        person.FilesLanded.Should().BeGreaterThan(0, person.Failure ?? person.Verdict?.Reason ?? "");
+        (await Entry(module, ct))!.Enabled.Should().BeTrue("the person's re-install landed the module again");
+        (await Live("LandFunnel", r => r.RetiringBy is null, ct)).RetiringBy.Should().BeNull();
+    }
+
+    /// <summary>
+    /// (10) Subscribing TWICE to one removal submits two operations, each answered (#7974 review,
+    /// round 2). Negative control (measured): with the key minted once at call time, the second
+    /// subscription's operation is promoted but never executed — the owner runs a key once per
+    /// activation — and this times out red.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task SubscribingTwiceToARemoval_SubmitsTwoOperations()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Twice.Module";
+        const string request = "Admin/_PackageUninstall/req-twice";
+        await WriteRecord("LandTwice", module, ct);
+        (await Land(module, "1.0.0", RecordPath("LandTwice")).Timeout(TestTimeouts.Convergence).Await(ct)).Applied.Should().BeTrue();
+        (await InstallRecordGate.BeginRetirement(Mesh, "LandTwice", request, "test", NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull();
+
+        var remove = ModuleLandingOwner.Remove(Mesh, "LandTwice", module, request, NullLogger.Instance);
+        (await remove.Timeout(TestTimeouts.Convergence).Await(ct)).Should().Be("landed generation disabled");
+        (await remove.Timeout(TestTimeouts.Convergence).Await(ct)).Should().Be("landed generation disabled",
+            "a second subscription is a second operation, answered like the first");
+        (await Live("LandTwice", r => r.ModuleOperations is null, ct)).ModuleOperations.Should().BeNull("nothing is left executing");
+    }
+
+    /// <summary>A registry serving one bundle; its index response can be HELD (a worker the test
+    /// deliberately parks, released through a volatile flag under a bounded spin).</summary>
+    private sealed class FakeRegistry : HttpMessageHandler
+    {
+        public const string Url = "https://registry.test";
+        private volatile string index = "{\"bundles\":[]}";
+        private volatile byte[] bundle = [];
+        public volatile int HoldIndex;
+        public volatile int IndexEntered;
+
+        public void Serve(string plugin, string version, string module, byte[] bytes)
+        {
+            bundle = bytes;
+            index = "{\"bundles\":[{\"plugin\":\"" + plugin + "\",\"version\":\"" + version
+                + "\",\"url\":\"" + Url + PluginBundleClient.RoutePrefix + "/" + plugin
+                + ".zip\",\"module\":\"" + module + "\"}]}";
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/index.json", StringComparison.Ordinal))
+            {
+                if (HoldIndex == 0)
+                    return Task.FromResult(Index());
+                IndexEntered = 1;
+                return Task.Run(() =>
+                {
+                    SpinWait.SpinUntil(() => HoldIndex == 0, TestTimeouts.Convergence);
+                    return Index();
+                }, cancellationToken);
+            }
+            if (path.StartsWith(PluginBundleClient.RoutePrefix + "/", StringComparison.Ordinal))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bundle) });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
+
+        private HttpResponseMessage Index() => new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(index, Encoding.UTF8, "application/json"),
+        };
+    }
+
+    private sealed class FakeFactory(HttpMessageHandler handler) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
 }

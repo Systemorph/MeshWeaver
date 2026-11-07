@@ -1168,8 +1168,11 @@ public sealed class ModuleLandingService : IDisposable
 
     /// <summary>Removes a staged landing — idempotent, best-effort by contract of its callers. Cold.</summary>
     internal IObservable<Unit> DropStagedLanding(string key)
-        => ReadPool.InvokeBlocking(_ =>
+        => ReadPool.InvokeBlocking(ct =>
         {
+            // The pool's token is observed before the delete: a drain stops a drop that has not
+            // started, and a drop that did not happen leaves a stray folder, never a broken landing.
+            ct.ThrowIfCancellationRequested();
             var target = StagedLandingDirectory(key);
             if (Directory.Exists(target))
                 Directory.Delete(target, recursive: true);
@@ -1186,8 +1189,9 @@ public sealed class ModuleLandingService : IDisposable
         => Observable.Defer(() =>
         {
             var directory = StagedLandingDirectory(key);
-            return ReadPool.InvokeBlocking(_ =>
+            return ReadPool.InvokeBlocking(ct =>
                 {
+                    ct.ThrowIfCancellationRequested();
                     if (!Directory.Exists(directory))
                         return null;
                     (string, byte[])[] Files(string folder)
@@ -1196,7 +1200,13 @@ public sealed class ModuleLandingService : IDisposable
                         return Directory.Exists(root)
                             ? [.. Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
                                 .Order(StringComparer.Ordinal)
-                                .Select(f => (Path.GetRelativePath(root, f).Replace('\\', '/'), File.ReadAllBytes(f)))]
+                                // Between files: a drain stops the read at the next file, never
+                                // midway through one.
+                                .Select(f =>
+                                {
+                                    ct.ThrowIfCancellationRequested();
+                                    return (Path.GetRelativePath(root, f).Replace('\\', '/'), File.ReadAllBytes(f));
+                                })]
                             : [];
                     }
                     var natives = Files("n");

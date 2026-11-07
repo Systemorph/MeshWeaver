@@ -121,7 +121,9 @@ So nothing outside the record's own hub lands or removes a package's module
   refused. A person's landing (`PackageRecordWriteIntent.Person`, the catalog click) lands while the
   retirement is not yet `Removing`, and clears it, the same rule as a person's stamp. The owner also
   marks it `ReinstallByPerson`, so it lands even over a tombstone the displaced uninstall already
-  wrote. Without that, the person would keep an install record whose module stays disabled. A removal
+  wrote. Without that, the person would keep an install record whose module stays disabled. The
+  plan agrees: for a person's install, `ModuleUpdateDecision` reads an entry an uninstall disabled as
+  never landed. `SkipUninstalled` holds only the lanes no person asked for. A removal
   by a request that no longer holds the retirement is refused. An install record lands and removes
   only the module it declares (`PackageManifest.Module`); an operation naming any other module is
   refused.
@@ -152,7 +154,8 @@ So nothing outside the record's own hub lands or removes a package's module
   nothing landed. A removal the owner did not carry out faults with the owner's words.
 
 **A landing that loses its record is refused.** The adoption notes whether the install record
-exists before it starts the download. If the record existed then and is gone when the bytes arrive,
+exists when it STARTS, before the plan reads the registry index and the activation, and so before
+the download. If the record existed then and is gone when the bytes arrive,
 an uninstall removed it while the module was downloading, and the landing is refused. This holds even
 for a module that never landed, where no tombstone exists to refuse it.
 

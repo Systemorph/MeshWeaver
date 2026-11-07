@@ -622,8 +622,12 @@ public sealed class PluginBundleClient
             });
         }
 
-        return PlanModuleAdoption(pluginId, moduleName, unattended, policyDecline, landing)
-            .SelectMany(plan => ExecuteModuleAdoption(plan, pluginId, moduleName, packagePath, intent))
+        // 🚨 Whether the install record exists is read FIRST — before the plan's index and activation
+        // reads (#7974 review, round 2): the whole adoption, plan included, is the window an
+        // uninstall can remove the record in, and a landing that belonged to a record must know it.
+        return RecordExists(packagePath)
+            .SelectMany(hadRecord => PlanModuleAdoption(pluginId, moduleName, unattended, policyDecline, landing, intent)
+                .SelectMany(plan => ExecuteModuleAdoption(plan, pluginId, moduleName, packagePath, intent, hadRecord)))
             .Catch((Exception ex) =>
             {
                 // A distribution hiccup must not fail the install/reconcile that asked — the module
@@ -653,8 +657,14 @@ public sealed class PluginBundleClient
     /// <param name="unattended">True on the reconciler's background lane.</param>
     /// <param name="policyDecline">On the unattended lane, why the package's own policy declines.</param>
     /// <param name="landing">The landing service.</param>
+    /// <param name="intent">The <see cref="PackageRecordWriteIntent"/> of the install asking. A
+    /// PERSON's install (<see cref="PackageRecordWriteIntent.Person"/>) re-installs a module an
+    /// uninstall disabled — the decision reads the disabled entry as "never landed here" — and the
+    /// install record's owner still decides whether that landing is carried out
+    /// (<see cref="ModuleLandingOwner"/>). Every other lane keeps <see cref="ModuleUpdateAction.SkipUninstalled"/>.</param>
     internal IObservable<ModuleAdoptionPlan> PlanModuleAdoption(
-        string pluginId, string moduleName, bool unattended, string? policyDecline, ModuleLandingService landing)
+        string pluginId, string moduleName, bool unattended, string? policyDecline, ModuleLandingService landing,
+        string? intent = null)
     {
         var declineOnLane = Observable.Return<string?>(unattended ? policyDecline : null);
         return SharedIndex()
@@ -668,6 +678,13 @@ public sealed class PluginBundleClient
                             && !string.IsNullOrWhiteSpace(b.Module));
                         var entry = activation.Entries.FirstOrDefault(e =>
                             string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
+                        // 🚨 A person installing the package again lifts its uninstall (#7974 review,
+                        // round 2): "an unattended update must not re-install it" is the rule
+                        // SkipUninstalled states, and a person's catalog install is not one. The
+                        // disabled entry reads as never landed; floors, policy and the owner's own
+                        // authorization at execution all still apply.
+                        if (intent == PackageRecordWriteIntent.Person && entry is { Enabled: false })
+                            entry = null;
 
                         // 🚨 #2417 — the presence probe, bound to the landing service's OWN base
                         // directory and resolved by ModuleActivationBoot, which is the same rule
@@ -727,8 +744,11 @@ public sealed class PluginBundleClient
     /// <param name="packagePath">The install record's mesh path, recorded on the activation entry.</param>
     /// <param name="intent">The <see cref="PackageRecordWriteIntent"/> the landing is stated under at
     /// the install record's owner; null for every lane that is not a person's install.</param>
+    /// <param name="recordAtPlan">Whether the install record existed when the adoption BEGAN —
+    /// read before the plan (<see cref="RecordExists"/>); null reads it here, before the download.</param>
     internal IObservable<ModuleAdoptOutcome> ExecuteModuleAdoption(
-        ModuleAdoptionPlan plan, string pluginId, string moduleName, string? packagePath, string? intent = null)
+        ModuleAdoptionPlan plan, string pluginId, string moduleName, string? packagePath, string? intent = null,
+        bool? recordAtPlan = null)
     {
         if (!plan.Lands)
             return Observable.Return(plan.Decided);
@@ -739,15 +759,12 @@ public sealed class PluginBundleClient
             "Module '{Module}' of {Plugin}: {Reason}",
             moduleName, pluginId, decided.Verdict?.Reason);
         var advertised = bundle!;
-        // 🚨 Whether the install record exists NOW, before the download (#7974 review): a landing
+        // 🚨 Whether the install record existed when the adoption began (#7974 review): a landing
         // that belonged to a record and finds it gone when the bytes arrive has lost its owner to an
         // uninstall, and is refused (ModuleLandingOwner.Land) — only a landing that never had a record
-        // is a fresh package's.
-        var storage = _hub.ServiceProvider.GetService<IStorageAdapter>();
-        var recordAtPlan = string.IsNullOrWhiteSpace(packagePath) || storage is null
-            ? Observable.Return(false)
-            : storage.Read(packagePath, _hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null).Select(n => n is not null);
-        return recordAtPlan.SelectMany(hadRecord => Download(pluginId, advertised, index)
+        // is a fresh package's. Callers read it BEFORE planning; null reads it here.
+        var hadRecordAtStart = recordAtPlan is { } known ? Observable.Return(known) : RecordExists(packagePath);
+        return hadRecordAtStart.SelectMany(hadRecord => Download(pluginId, advertised, index)
             .SelectMany(result => result.Bytes is null
                 ? Miss(pluginId, result.Kind, result.Reason)
                     .Select(_ => decided with
@@ -767,6 +784,18 @@ public sealed class PluginBundleClient
                         LandedVersion = landed.Count > 0 ? landed.Version : null,
                         Failure = landed.Refusal,
                     })));
+    }
+
+    /// <summary>Whether an install record exists at <paramref name="packagePath"/> — read from
+    /// storage, false when no path is named. What an adoption reads at its START, so its landing knows
+    /// whether it belonged to a record (<see cref="ModuleLandingOwner"/>). Cold.</summary>
+    /// <param name="packagePath">The install record's path, or null.</param>
+    internal IObservable<bool> RecordExists(string? packagePath)
+    {
+        var storage = _hub.ServiceProvider.GetService<IStorageAdapter>();
+        return string.IsNullOrWhiteSpace(packagePath) || storage is null
+            ? Observable.Return(false)
+            : storage.Read(packagePath, _hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null).Select(n => n is not null);
     }
 
     /// <summary>A planned adoption: what was decided, and — when it lands — the exact bundle and the
