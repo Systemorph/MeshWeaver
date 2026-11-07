@@ -51,6 +51,16 @@ public class InboxPreviewTest
     [Fact]
     public void SignatureOnly_StaysEmpty() => InboxPreview.Of("-- \nJane Roe\nAcme").Should().BeEmpty();
 
+    /// <summary>A text that is only a device or client signature is no preview, as a line or alone.</summary>
+    [Theory]
+    [InlineData("Get Outlook for iOS")]
+    [InlineData("Von meinem iPad gesendet")]
+    [InlineData("Von meinem iPhone gesendet")]
+    [InlineData("Sent from my iPhone")]
+    [InlineData("Thanks.\nGet Outlook for Android")]
+    public void StandaloneSignature_IsCut(string text)
+        => InboxPreview.Of(text).Should().Be(text.StartsWith("Thanks.", StringComparison.Ordinal) ? "Thanks." : string.Empty);
+
     /// <summary>A flattened preview (Graph's one-line bodyPreview, an HTML body's text) drops an inline signature.</summary>
     [Theory]
     [InlineData("Thanks. -- Jane Roe Acme", "Thanks.")]

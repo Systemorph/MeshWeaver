@@ -66,7 +66,8 @@ public static partial class InboxPreview
            || line.StartsWith("---------- Forwarded message", StringComparison.OrdinalIgnoreCase)
            || line.StartsWith("-----Ursprüngliche Nachricht-----", StringComparison.OrdinalIgnoreCase)
            || line.StartsWith("Sent from my ", StringComparison.OrdinalIgnoreCase)
-           || line.StartsWith("Von meinem iPhone gesendet", StringComparison.OrdinalIgnoreCase)
+           || line.StartsWith("Get Outlook for ", StringComparison.OrdinalIgnoreCase)
+           || LineSignature().IsMatch(line)
            || QuoteHeader().IsMatch(line)
            || OutlookHeader().IsMatch(line);
 
@@ -102,6 +103,10 @@ public static partial class InboxPreview
 
     [GeneratedRegex(@"(-----Original Message-----|-----Ursprüngliche Nachricht-----|---------- Forwarded message|_{10,}|\b(From|Von):\s.{1,200}?\s(Sent|Gesendet):\s|\bOn\s.{4,200}?\swrote:|\bAm\s.{4,200}?\sschrieb[^:]{0,80}:|\s--\s+(?-i:\p{Lu})|\bSent from my\s|\bVon meinem\s\S+\s+gesendet|\bGet Outlook for\s)", RegexOptions.IgnoreCase)]
     private static partial Regex InlineMarker();
+
+    // "Von meinem iPhone gesendet", "Von meinem iPad gesendet" — any device.
+    [GeneratedRegex(@"^Von meinem\s\S+\s+gesendet", RegexOptions.IgnoreCase)]
+    private static partial Regex LineSignature();
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex Whitespace();
