@@ -595,7 +595,19 @@ public sealed class PluginBundleClient
     /// <param name="policyDecline">On the unattended lane, why the package's own policy declines.</param>
     public IObservable<ModuleAdoptOutcome> AdoptModuleOutcome(
         string pluginId, string moduleName, string? packagePath = null, bool unattended = false,
-        string? policyDecline = null)
+        string? policyDecline = null) =>
+        AdoptModuleOutcomeAs(pluginId, moduleName, packagePath, unattended, policyDecline, intent: null);
+
+    /// <summary>
+    /// <see cref="AdoptModuleOutcome"/> naming the <see cref="PackageRecordWriteIntent"/> its landing
+    /// is stated under at the install record's owner (<see cref="ModuleLandingOwner"/>): a person's
+    /// catalog install (<see cref="PackageRecordWriteIntent.Person"/>) lands while a retirement has not
+    /// started removing the record and clears it; every other intent — null included — is refused
+    /// while the package is being retired. A distinct NAME, not an overload (CS0419 in dependents).
+    /// </summary>
+    internal IObservable<ModuleAdoptOutcome> AdoptModuleOutcomeAs(
+        string pluginId, string moduleName, string? packagePath, bool unattended,
+        string? policyDecline, string? intent)
     {
         var landing = _hub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null)
@@ -610,8 +622,12 @@ public sealed class PluginBundleClient
             });
         }
 
-        return PlanModuleAdoption(pluginId, moduleName, unattended, policyDecline, landing)
-            .SelectMany(plan => ExecuteModuleAdoption(plan, pluginId, moduleName, packagePath))
+        // 🚨 Whether the install record exists is read FIRST — before the plan's index and activation
+        // reads (#7974 review, round 2): the whole adoption, plan included, is the window an
+        // uninstall can remove the record in, and a landing that belonged to a record must know it.
+        return RecordExists(packagePath)
+            .SelectMany(hadRecord => PlanModuleAdoption(pluginId, moduleName, unattended, policyDecline, landing, intent)
+                .SelectMany(plan => ExecuteModuleAdoption(plan, pluginId, moduleName, packagePath, intent, hadRecord)))
             .Catch((Exception ex) =>
             {
                 // A distribution hiccup must not fail the install/reconcile that asked — the module
@@ -641,8 +657,14 @@ public sealed class PluginBundleClient
     /// <param name="unattended">True on the reconciler's background lane.</param>
     /// <param name="policyDecline">On the unattended lane, why the package's own policy declines.</param>
     /// <param name="landing">The landing service.</param>
+    /// <param name="intent">The <see cref="PackageRecordWriteIntent"/> of the install asking. A
+    /// PERSON's install (<see cref="PackageRecordWriteIntent.Person"/>) re-installs a module an
+    /// uninstall disabled — the decision reads the disabled entry as "never landed here" — and the
+    /// install record's owner still decides whether that landing is carried out
+    /// (<see cref="ModuleLandingOwner"/>). Every other lane keeps <see cref="ModuleUpdateAction.SkipUninstalled"/>.</param>
     internal IObservable<ModuleAdoptionPlan> PlanModuleAdoption(
-        string pluginId, string moduleName, bool unattended, string? policyDecline, ModuleLandingService landing)
+        string pluginId, string moduleName, bool unattended, string? policyDecline, ModuleLandingService landing,
+        string? intent = null)
     {
         var declineOnLane = Observable.Return<string?>(unattended ? policyDecline : null);
         return SharedIndex()
@@ -656,6 +678,13 @@ public sealed class PluginBundleClient
                             && !string.IsNullOrWhiteSpace(b.Module));
                         var entry = activation.Entries.FirstOrDefault(e =>
                             string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
+                        // 🚨 A person installing the package again lifts its uninstall (#7974 review,
+                        // round 2): "an unattended update must not re-install it" is the rule
+                        // SkipUninstalled states, and a person's catalog install is not one. The
+                        // disabled entry reads as never landed; floors, policy and the owner's own
+                        // authorization at execution all still apply.
+                        if (intent == PackageRecordWriteIntent.Person && entry is { Enabled: false })
+                            entry = null;
 
                         // 🚨 #2417 — the presence probe, bound to the landing service's OWN base
                         // directory and resolved by ModuleActivationBoot, which is the same rule
@@ -713,8 +742,13 @@ public sealed class PluginBundleClient
     /// <param name="pluginId">The package id.</param>
     /// <param name="moduleName">The module's entry-assembly name.</param>
     /// <param name="packagePath">The install record's mesh path, recorded on the activation entry.</param>
+    /// <param name="intent">The <see cref="PackageRecordWriteIntent"/> the landing is stated under at
+    /// the install record's owner; null for every lane that is not a person's install.</param>
+    /// <param name="recordAtPlan">Whether the install record existed when the adoption BEGAN —
+    /// read before the plan (<see cref="RecordExists"/>); null reads it here, before the download.</param>
     internal IObservable<ModuleAdoptOutcome> ExecuteModuleAdoption(
-        ModuleAdoptionPlan plan, string pluginId, string moduleName, string? packagePath)
+        ModuleAdoptionPlan plan, string pluginId, string moduleName, string? packagePath, string? intent = null,
+        bool? recordAtPlan = null)
     {
         if (!plan.Lands)
             return Observable.Return(plan.Decided);
@@ -725,7 +759,12 @@ public sealed class PluginBundleClient
             "Module '{Module}' of {Plugin}: {Reason}",
             moduleName, pluginId, decided.Verdict?.Reason);
         var advertised = bundle!;
-        return Download(pluginId, advertised, index)
+        // 🚨 Whether the install record existed when the adoption began (#7974 review): a landing
+        // that belonged to a record and finds it gone when the bytes arrive has lost its owner to an
+        // uninstall, and is refused (ModuleLandingOwner.Land) — only a landing that never had a record
+        // is a fresh package's. Callers read it BEFORE planning; null reads it here.
+        var hadRecordAtStart = recordAtPlan is { } known ? Observable.Return(known) : RecordExists(packagePath);
+        return hadRecordAtStart.SelectMany(hadRecord => Download(pluginId, advertised, index)
             .SelectMany(result => result.Bytes is null
                 ? Miss(pluginId, result.Kind, result.Reason)
                     .Select(_ => decided with
@@ -738,13 +777,25 @@ public sealed class PluginBundleClient
                     })
                 : LandFromBundleOutcome(
                         pluginId, moduleName, packagePath, advertised.Version, result.Bytes,
-                        advertised.FrameworkMvid)
+                        advertised.FrameworkMvid, intent, hadRecord)
                     .Select(landed => decided with
                     {
                         FilesLanded = landed.Count,
                         LandedVersion = landed.Count > 0 ? landed.Version : null,
                         Failure = landed.Refusal,
-                    }));
+                    })));
+    }
+
+    /// <summary>Whether an install record exists at <paramref name="packagePath"/> — read from
+    /// storage, false when no path is named. What an adoption reads at its START, so its landing knows
+    /// whether it belonged to a record (<see cref="ModuleLandingOwner"/>). Cold.</summary>
+    /// <param name="packagePath">The install record's path, or null.</param>
+    internal IObservable<bool> RecordExists(string? packagePath)
+    {
+        var storage = _hub.ServiceProvider.GetService<IStorageAdapter>();
+        return string.IsNullOrWhiteSpace(packagePath) || storage is null
+            ? Observable.Return(false)
+            : storage.Read(packagePath, _hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null).Select(n => n is not null);
     }
 
     /// <summary>A planned adoption: what was decided, and — when it lands — the exact bundle and the
@@ -816,7 +867,7 @@ public sealed class PluginBundleClient
     /// </summary>
     internal IObservable<(int Count, string? Version, string? Refusal)> LandFromBundleOutcome(
         string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes,
-        string? advertisedFrameworkMvid = null) =>
+        string? advertisedFrameworkMvid = null, string? intent = null, bool recordAtPlan = false) =>
         // Not atomic: the closure is one decompression per declared assembly, checked between them.
         _httpPool.InvokeBlocking(ct => BundleReader.ReadModule(bundleBytes, ct))
             .SelectMany(payload =>
@@ -872,23 +923,28 @@ public sealed class PluginBundleClient
                 }
 
                 var landing = _hub.ServiceProvider.GetRequiredService<ModuleLandingService>();
-                return landing
-                    .LandModule(
+                // 🚨 Through the install record's OWNER (MeshWeaver.Plugins#5055, ModuleLandingOwner):
+                // the download above may have outlived an uninstall that started after it was planned,
+                // so the landing is DECIDED where it executes — by the record's own hub, one module
+                // operation at a time, against the retirement as it stands then; or, for a fresh
+                // package with no record, against the module's own tombstone on the volume.
+                return ModuleLandingOwner.Land(_hub, landing, new ModuleLandingArguments(
                         moduleName,
-                        files.Select(f => (f.FileName, f.Bytes)).ToArray(),
+                        files.Select(f => (f.FileName, f.Bytes)).ToArray())
+                    {
                         // Which exact platform build produced these bytes — the registry's
                         // per-bundle claim first, the archive's requested-lane stamp only as the
                         // legacy fallback. Still never a LANDING gate (the link probe is), but no
                         // longer merely diagnostic: ModuleUpdateDecision reads it back to tell a
                         // rebuild from a no-op (Plugins#931).
-                        advertisedFrameworkMvid ?? manifest!.FrameworkMvid,
-                        packagePath,
-                        declaredVersion,
-                        manifest!.Module?.MinMeshVersion,
+                        FrameworkMvid = advertisedFrameworkMvid ?? manifest!.FrameworkMvid,
+                        PackagePath = packagePath,
+                        Version = declaredVersion,
+                        MinMeshVersion = manifest!.Module?.MinMeshVersion,
                         // A view pack's wwwroot rides the bundle (#1724's provider serves it from
                         // the module folder); without this the pack lands unstyled and its
                         // collocated JS 404s.
-                        BundleReader.ReadModuleAssets(bundleBytes) is { Count: > 0 } assets
+                        StaticAssets = BundleReader.ReadModuleAssets(bundleBytes) is { Count: > 0 } assets
                             ? [.. assets.Select(a => (a.RelativePath, a.Bytes))]
                             : null,
                         // #4158 — the producing repository's commit these bytes were built from,
@@ -896,7 +952,7 @@ public sealed class PluginBundleClient
                         // activation entry so this deployment's [ModuleLoad] line can say what the
                         // loaded generation came FROM, not only what its file looks like. Absent on
                         // a bundle whose producer recorded none, which prints "(unrecorded)".
-                        manifest!.SourceCommit,
+                        SourceCommit = manifest!.SourceCommit,
                         // #4126 — the module's RID-specific NATIVE payloads. Same read and same
                         // rule as the assets, for a failure one step harder: without this the
                         // module lands complete in every visible respect, loads, and throws
@@ -904,13 +960,23 @@ public sealed class PluginBundleClient
                         // and is checked on both sides — the reader refuses a bundle declaring
                         // anything but runtimes/<rid>/native/<file>, and the landing refuses it
                         // again before a byte reaches disk.
-                        BundleReader.ReadModuleNativeAssets(bundleBytes) is { Count: > 0 } natives
+                        NativeAssets = BundleReader.ReadModuleNativeAssets(bundleBytes) is { Count: > 0 } natives
                             ? [.. natives.Select(n => (n.RelativePath, n.Bytes))]
-                            : null)
-                    .Select(_ => (Count: files.Count, Version: (string?)declaredVersion, Refusal: (string?)null))
-                    .Do(landed => _logger?.LogInformation(
-                        "Module '{Module}' of {Plugin} landed ({Count} file(s), version {Version}) "
-                        + "— RESTART REQUIRED to load it", moduleName, pluginId, landed.Count, declaredVersion));
+                            : null,
+                    }, intent, recordAtPlan, _logger)
+                    .Select(verdict => verdict.Applied
+                        ? (Count: files.Count, Version: (string?)declaredVersion, Refusal: (string?)null)
+                        : (Count: 0, Version: (string?)null, Refusal: (string?)verdict.Detail))
+                    .Do(landed =>
+                    {
+                        if (landed.Count > 0)
+                            _logger?.LogInformation(
+                                "Module '{Module}' of {Plugin} landed ({Count} file(s), version {Version}) "
+                                + "— RESTART REQUIRED to load it", moduleName, pluginId, landed.Count, declaredVersion);
+                        else
+                            _logger?.LogInformation(
+                                "Module '{Module}' of {Plugin}: NOT landed — {Refusal}", moduleName, pluginId, landed.Refusal);
+                    });
             });
 
     /// <summary>

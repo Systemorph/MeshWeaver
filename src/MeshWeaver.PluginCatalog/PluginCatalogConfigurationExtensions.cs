@@ -440,7 +440,10 @@ public static class PluginCatalogConfigurationExtensions
             .AddModuleReloadViews()
             // 🚨 The install record decides who may write it (MeshWeaver.Plugins#5055): writers state
             // facts under their own keys and THIS hub folds them against current state.
-            .WithInitialization(InstallRecordGate.Arm),
+            .WithInitialization(InstallRecordGate.Arm)
+            // 🚨 …and THIS hub lands and removes the package's module, one operation at a time, so an
+            // uninstall's tombstone is never followed by a landing that started before it.
+            .WithInitialization(ModuleLandingOwner.Arm),
     };
 
     /// <summary>
