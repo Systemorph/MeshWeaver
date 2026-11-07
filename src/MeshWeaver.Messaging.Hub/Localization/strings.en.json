@@ -293,6 +293,7 @@
   "home.mine": "Mine",
   "home.pinned": "Pinned",
   "home.apps": "Apps",
+  "home.welcomeBack": "Welcome back, {0}",
   "home.content": "Content",
   "home.spaces": "Spaces",
   "home.sortLastAccessed": "Last accessed",
