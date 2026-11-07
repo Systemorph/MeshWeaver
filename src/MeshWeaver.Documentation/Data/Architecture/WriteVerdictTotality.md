@@ -717,9 +717,15 @@ RequestTimeout").
 Each stage is also stamped on the request's fate trail (`CREATE_STAGE …`, `COPY_STAGE …`), so a trail
 that ends early names the leg that was running instead of ending at `CREATE_CHAIN_SUBSCRIBED`.
 
-**What `existence-read` is, and what it is not** (MeshWeaver#7957). The stage is ONE call,
+**What `existence-read` is, and what it is not** (MeshWeaver#7957). The stage opens with
 `IStorageAdapter.Read(node.Path)`, made by the detached create chain once `authorship-source` (and the
-relocation source) have answered. On a Postgres host it is a direct STORE read, never a hub hop:
+relocation source) have answered. It stays the reported stage until `partition-bootstrap` is
+entered, so two less common legs WRITE under the same name. The first is the Transient → Active
+confirmation, which saves the confirmed node when the read finds a `Transient` node at the path.
+The second is `PersistenceService.Read`'s legacy-user repair (`LegacyUserPartitionRepair`): on a miss
+for a bare, one-segment partition-root path, it reads the legacy `User/{id}` twin and may write the
+partition root and a self-admin grant. Every other create takes neither leg, and for those the
+stage is the read alone. On a Postgres host that read is a direct STORE read, never a hub hop:
 the guard decorators (`SubtreeDeletionGuardStorageAdapter` → `MonotonicWriteGuardStorageAdapter` →
 `VersionWritingStorageAdapter`) forward it to `PersistenceService`, which asks each partition
 provider in turn (`Concat`); the Postgres provider's `PostgreSqlPathRoutingAdapter` picks the
@@ -730,7 +736,8 @@ in-memory providers answer synchronously; the embedded-resource provider is a po
 `AddPartitionStorageHubs`, which would turn the read into a routed `GetDataRequest`, is wired by no
 host. Nothing on that path awaits, blocks or bridges outside the pool. The admission is
 non-blocking on the subscriber's thread and the work runs on the thread pool, so a parked hub action
-block cannot hold this stage. A stall here therefore means one of four things: the read pool's
+block cannot hold this stage. When the create took neither write leg, a stall here therefore means
+one of four things: the read pool's
 admission queue (all slots held by slower reads), the Npgsql connection pool, a database that does
 not answer, or a starved thread pool delaying the leaf. The stage reading cannot tell them apart.
 The pool's own wait gauges and the database's metrics for that minute can.
