@@ -114,7 +114,7 @@ public class HomeCardsContributionTest
         (shape.NodeType, shape.Path).Should().Be((UserNodeType.NodeType, "jroe"),
             "the gates read the home's shape from registration (a User partition root), never by waiting on the user node");
 
-        UserActivityLayoutAreas.UserWelcomeMarkdown().Should().NotContain("area/HomeCards",
+        UserActivityLayoutAreas.UserWelcomeMarkdown("Jane Roe").Should().NotContain("area/HomeCards",
             "the default home is the message box, apps and spaces only — the region stays registered for authored bodies");
     }
 }

@@ -293,6 +293,7 @@
   "home.mine": "Meine",
   "home.pinned": "Angeheftet",
   "home.apps": "Apps",
+  "home.welcomeBack": "Willkommen zurück, {0}",
   "home.content": "Inhalte",
   "home.spaces": "Spaces",
   "home.sortLastAccessed": "Zuletzt geöffnet",
