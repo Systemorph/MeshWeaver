@@ -510,6 +510,19 @@ calls `Hub.FailStartup` + `Hub.OpenGate(SynchronizationGate)` — which releases
 deferred behind that gate. Re-establishing stays the *subscriber's* decision, taken because
 it was finally told.
 
+**What the gate lets through before the first frame.** Until its first frame arrives, the
+subscriber's `sync/{id}` sub-hub defers every delivery behind `SynchronizationGate` except the
+ones that can populate the stream or end it: `SetCurrentRequest`, `GetDataResponse`, every
+`DataChangedEvent`, `UpdateStreamRequest`, a `DeliveryFailure`, and the owner's
+`StreamErrorEvent`. That last one was missing until #7919: an owner that ends a stream *before*
+its first frame (a followed read whose first verdict refuses or reaches none, or a reducer that
+faults on the initial snapshot) posts a `StreamErrorEvent` and never a frame, so the error
+waited behind a gate only a frame could open. The mirror never faulted, the view stayed on
+"awaiting first data" instead of showing the denied or unavailable state, and the error was
+discarded when something finally disposed the sub-hub (`[DISPOSE-DISCARD] … StreamErrorEvent …
+[SynchronizationGate]`). A message that can end a stream must pass this gate, or the stream can
+only end by timing out. Pinned by `StreamErrorBeforeFirstFrameTest`.
+
 **The operator signal** is `[SYNC_STREAM] Resync gave up for {StreamId}: N consecutive
 fresh-snapshot requests to {Owner} were acknowledged and none produced a base snapshot` at
 **Warning**, followed by the stream's own `OnError` line. Seeing it means the
