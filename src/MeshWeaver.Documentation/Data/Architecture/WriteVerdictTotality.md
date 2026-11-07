@@ -722,9 +722,10 @@ that ends early names the leg that was running instead of ending at `CREATE_CHAI
 relocation source) have answered. It stays the reported stage until `partition-bootstrap` is
 entered, so two less common legs WRITE under the same name. The first is the Transient → Active
 confirmation, which saves the confirmed node when the read finds a `Transient` node at the path.
-The second is `PersistenceService.Read`'s legacy-user repair (`LegacyUserPartitionRepair`): on a miss
-for a bare, one-segment partition-root path, it reads the legacy `User/{id}` twin and may write the
-partition root and a self-admin grant. Every other create takes neither leg, and for those the
+The second is `PersistenceService.Read`'s legacy-user repair (`LegacyUserPartitionRepair`). For a bare,
+one-segment partition-root path it runs in two cases: on a miss, and when the root found is an
+upgradable stub (`IsUpgradableStubRoot`: Active, no NodeType, no content). In either case it reads
+the legacy `User/{id}` twin and may write the partition root and a self-admin grant. Every other create takes neither leg, and for those the
 stage is the read alone. On a Postgres host that read is a direct STORE read, never a hub hop:
 the guard decorators (`SubtreeDeletionGuardStorageAdapter` → `MonotonicWriteGuardStorageAdapter` →
 `VersionWritingStorageAdapter`) forward it to `PersistenceService`, which asks each partition
