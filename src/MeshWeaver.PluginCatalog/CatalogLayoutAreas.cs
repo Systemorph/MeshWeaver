@@ -625,7 +625,9 @@ public static partial class CatalogLayoutAreas
         // Sequential (Concat): a dependency's install must COMPLETE before the dependent's begins,
         // which is what makes its NodeType nodes present for the dependent's type validation.
         var install = closure
-            .Select(p => InstallOrUpdate(host.Hub, source, sourceRef, p, logger, authorizingUserId)
+            // 🚨 A PERSON's install: creates or re-stamps, and clears a retirement that has not started
+            // removing the record (MeshWeaver.Plugins#5055, InstallRecordGate).
+            .Select(p => InstallOrUpdate(host.Hub, source, sourceRef, p with { WriteIntent = PackageRecordWriteIntent.Person }, logger, authorizingUserId)
                 .Do(result => logger?.LogInformation(
                     "Installed {Id}: {Written} written, {Unchanged} unchanged.",
                     p.Id, result.Written, result.Unchanged))

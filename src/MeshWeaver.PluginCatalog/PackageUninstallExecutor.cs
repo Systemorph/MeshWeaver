@@ -180,10 +180,43 @@ public static class PackageUninstallExecutor
                         return Finish(PackageUninstallStatus.Failed, $"refused: {never}; nothing was touched");
                     return Measure(partition).SelectMany(measured => measured is not { Preview: { } preview }
                         ? Finish(PackageUninstallStatus.Failed, $"refused: {measured.Refusal ?? "the partition could not be measured"}; nothing was touched")
-                        : RetireModule(request, record)
+                        // 🚨 The install record's OWN hub grants the retirement first
+                        // (MeshWeaver.Plugins#5055, InstallRecordGate): from here it refuses every
+                        // unattended stamp, so no repair or update re-writes the record while this
+                        // runs. Refused (another uninstall holds it) ⇒ nothing was touched.
+                        : InstallRecordGate.BeginRetirement(hub, record.Id, RequestPath, request.Reason, logger)
+                            .SelectMany(refusal => refusal is not null
+                                ? Finish(PackageUninstallStatus.Failed, $"refused: {refusal}; nothing was touched")
+                                : Retire(request, record, partition, preview)));
+                })
+                .Catch((Exception ex) => Finish(PackageUninstallStatus.Failed, $"phase 1 faulted: {ex.Message}"));
+
+        private string RequestPath => ModuleReloadExecutor.PathOf(hub);
+
+        /// <summary>Phase 1 once the retirement is held: retire the module, close the hubs, announce the
+        /// removal to the record's owner, remove the record. A fault RELEASES the retirement before the
+        /// request goes red, so the package is repairable again.</summary>
+        private IObservable<Unit> Retire(PackageUninstallRequest request, PackageManifest record, string partition, PackageUninstallPartition preview) =>
+            RetireModule(request, record)
                             .SelectMany(moduleOutcome => CloseHubs(partition).Select(closed => (moduleOutcome, closed)))
-                            .SelectMany(x => PackageInstaller.RemoveInstalledRecord(hub, record.Id, logger).Take(1)
-                                .Select(removed => (x.moduleOutcome, x.closed, removed)))
+                            // Announce the removal: from the owner's answer on, a person's install is
+                            // refused too. A refusal here means a PERSON installed it meanwhile — the
+                            // record is theirs now and stays.
+                            .SelectMany(x => InstallRecordGate.MarkRemoving(hub, record.Id, RequestPath, logger)
+                                .Select(displaced => (x.moduleOutcome, x.closed, displaced)))
+                            .SelectMany(x => x.displaced is { } displaced
+                                ? Finish(PackageUninstallStatus.Failed,
+                                    $"stopped: {displaced}; the install record is kept (module: {x.moduleOutcome})")
+                                : RemoveAndPreview(record, partition, preview, x.moduleOutcome, x.closed))
+                .Catch((Exception ex) => InstallRecordGate.EndRetirement(hub, record.Id, RequestPath, logger)
+                    .Select(_ => "released")
+                    .Catch((Exception endFault) => Observable.Return($"NOT released ({endFault.Message})"))
+                    .SelectMany(released => Finish(PackageUninstallStatus.Failed,
+                        $"phase 1 faulted after the retirement was granted: {ex.Message}; the retirement was {released}")));
+
+        private IObservable<Unit> RemoveAndPreview(PackageManifest record, string partition, PackageUninstallPartition preview, string moduleOutcome, int closed) =>
+            PackageInstaller.RemoveInstalledRecord(hub, record.Id, logger).Take(1)
+                                .Select(removed => (moduleOutcome, closed, removed))
                             .SelectMany(x => Write(r => r with
                                 {
                                     Module = string.IsNullOrWhiteSpace(record.Module) ? null : record.Module,
@@ -204,9 +237,7 @@ public static class PackageUninstallExecutor
                                 Line(x.removed ? $"install record {PackageInstaller.InstalledPartition}/{record.Id} removed — unattended passes will not re-install it"
                                                : $"install record {PackageInstaller.InstalledPartition}/{record.Id} was already gone"),
                                 Line($"UNINSTALLED, data RETAINED. Phase 2 drops partition '{partition}' ({Describe(preview)}) — "
-                                     + $"send the confirmation '{partition}' to run it"))));
-                })
-                .Catch((Exception ex) => Finish(PackageUninstallStatus.Failed, $"phase 1 faulted: {ex.Message}"));
+                                     + $"send the confirmation '{partition}' to run it")));
 
         private sealed record Measured(PackageUninstallPartition? Preview, string? Refusal);
 
