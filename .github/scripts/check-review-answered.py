@@ -528,7 +528,10 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
         title = ((internal.get("output") or {}).get("title") or "").strip()
         notes.append(f"internal review landed on head {head[:10]}: `{DEGRADATION_CHECK_NAME}` {internal.get('conclusion')} "
                      f"\"{title}\" (check run {internal.get('id')}, App {DEGRADATION_APP_SLUG})"
-                     + (" — reviewed, nothing found" if not roots else "") + " (policy internal-code-review)")
+                     # Only a CLEAN run says "nothing found": a blocking finding the reviewer could not anchor to a
+                     # line sits in the review body with no thread, so zero roots alone is not "nothing" (#7994 review).
+                     + (" — reviewed, nothing found" if not roots and internal.get("conclusion") == "success" else "")
+                     + " (policy internal-code-review)")
     else:
         if landed and not roots and clean_copilot is None:
             r = landed[-1]
@@ -2064,8 +2067,11 @@ def copilot_review_pending(timeline) -> bool:
 #: sweep start it, so this lane never has to ask it for anything. Copilot stays a FALLBACK until the internal
 #: reviewer has proven itself: when the internal reviewer has not reviewed a head this many minutes after it became
 #: the head, the scheduled sweep requests a Copilot review. 0 retires the Copilot path entirely.
-#: A review at effort high takes about 10-20 minutes (Hosting/ReviewEnsemble); 60 allows three times that.
-COPILOT_FALLBACK_MINUTES = 60
+#: A review at effort high takes about 10-20 minutes (Hosting/ReviewEnsemble); 60 allowed three times that.
+#: 🚨 RETIRED on 2026-11-08 (0): the internal reviewer posted on 18 pull requests across four repositories within
+#: its first 20 minutes back (the bar was 10), so Copilot is no longer requested at all. A caller may still pass a
+#: positive `copilot-fallback-minutes` to re-arm the fallback deliberately, for example during a reviewer outage.
+COPILOT_FALLBACK_MINUTES = 0
 
 
 def head_since(pr: dict, timeline, head: str, pushed_at: str | None = None) -> datetime.datetime | None:
@@ -4215,6 +4221,10 @@ def self_test() -> int:
          [_review(user=INTERNAL_REVIEWER_USER)],
          [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")],
          check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=972, sha="a" * 40)])
+    case("INTERNAL: a body-only blocking finding (no thread) never reads 'reviewed, nothing found'", GREEN, _pr(0),
+         [_review(user=INTERNAL_REVIEWER_USER)], [],
+         check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=986, sha="a" * 40)],
+         mention=("internal review landed",), never_says=("reviewed, nothing found",))
     case("INTERNAL NEG: blocking findings on the head, a thread unanswered -> red", (UNANSWERED,), _pr(1),
          [_review(user=INTERNAL_REVIEWER_USER)], [_comment(1, INTERNAL_REVIEWER_USER)],
          check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=973, sha="a" * 40)])
@@ -4989,7 +4999,7 @@ def self_test() -> int:
         # on the self-test step of every run.
         printed = io.StringIO()
         with contextlib.redirect_stdout(printed):
-            rc = run_request_review("Systemorph/MeshWeaver", 1, before, gh=stub)
+            rc = run_request_review("Systemorph/MeshWeaver", 1, before, gh=stub, fallback_minutes=60)
         if rc and "::error::the Copilot review of #1 was NOT requested" not in printed.getvalue():
             rc = -1
         bot_ok = all(v.get("bot") == COPILOT_BOT_NODE_ID and v.get("pr") == "PR_node" and "botIds: [$bot]" in q and "union: true" in q
@@ -5020,7 +5030,7 @@ def self_test() -> int:
         stub = _ReqGh(dict(routes, **{"pulls?state=open": [{"number": 1, "draft": False}, {"number": 2, "draft": True}]}), ANSWER_OK)
         printed = io.StringIO()
         with contextlib.redirect_stdout(printed):
-            rc = run_request_review_sweep("Systemorph/MeshWeaver", gh=stub)
+            rc = run_request_review_sweep("Systemorph/MeshWeaver", gh=stub, fallback_minutes=60)
         ok = rc == 0 and len(stub.mutations) == expect_mutations and not any(c.startswith("pulls/2") for c in stub.calls)
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} rc={rc} mutations={len(stub.mutations)}")
@@ -5108,6 +5118,14 @@ def self_test() -> int:
         ok = rc == want_rc and len(stub.mutations) == expect_mutations and says in printed.getvalue()
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} rc={rc} mutations={len(stub.mutations)}")
+    # Copilot fallback RETIRED (2026-11-08): with the default, even an overdue head with no review asks nobody.
+    stub = _ReqGh(dict(changed, **{"pulls/1": dict(FRESH, base={"ref": "main"})}), ANSWER_OK)
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        rc = run_request_review("Systemorph/MeshWeaver", 1, O, gh=stub, now="2026-11-08T13:00:00Z")
+    ok = COPILOT_FALLBACK_MINUTES == 0 and rc == 0 and not stub.mutations and "fallback is retired" in printed.getvalue()
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} {'retired: the default never requests Copilot, even overdue':60} rc={rc} mutations={len(stub.mutations)}")
     # The rotation: 41 open pull requests -> two windows; across consecutive slots every number is
     # judged (a fixed "newest 40" never reached #1 — the negative control is the old slice).
     many = list(range(1, 42))
