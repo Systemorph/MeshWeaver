@@ -330,8 +330,19 @@ def _msbuild_paths(root: Path, csproj: Path, configuration: str, msbuild_args: l
         raise RuntimeError(f"msbuild evaluation of {csproj} failed: {proc.stderr.strip()[-400:] or proc.stdout.strip()[-400:]}")
     doc = json.loads(proc.stdout)
     props = doc.get("Properties") or {}
-    items = doc.get("Items") or {}
+    return {"ref": props.get("TargetRefPath") or "", "full": props.get("TargetPath") or "",
+            "assembly": props.get("AssemblyName") or csproj.stem,
+            "code": sorted(code_from_evaluation(root, csproj.parent, props, doc.get("Items") or {}))}
 
+
+def code_from_evaluation(root: Path, project_dir: Path, props: dict, items: dict) -> set[str]:
+    """The project's compiler input under its directory, from `dotnet msbuild -getProperty/-getItem` JSON.
+
+    Compile items, plus Razor markup — a `Content` item the Razor SDK compiles (RazorComponent is only filled
+    in by targets) — but only in a project the Razor SDK compiles (a plain Microsoft.NET.Sdk project may carry
+    a .razor Content item nobody compiles; default component items can be switched off), and never one
+    copied to output or publish (an MVC/Razor Pages `.cshtml` with PreserveNewest) or embedded. Everything
+    else — the copied `.cshtml` included — stays payload, hashed into the non-code identity (review of #7995)."""
     def rel(kind: str, keep=lambda it: True) -> set[str]:
         out = set()
         for it in items.get(kind) or []:
@@ -342,11 +353,7 @@ def _msbuild_paths(root: Path, csproj: Path, configuration: str, msbuild_args: l
             except ValueError:
                 continue
         return out
-    prefix = csproj.parent.resolve().relative_to(root.resolve()).as_posix() + "/"
-    # Razor markup is a `Content` item the Razor SDK compiles (RazorComponent is only filled in by targets);
-    # one copied to output or publish is payload, not compiler input.
-    # …and only in a project the Razor SDK compiles (review of core #7995): a plain Microsoft.NET.Sdk project
-    # may carry a .razor Content item nobody compiles, and default component items can be switched off.
+    prefix = project_dir.resolve().relative_to(root.resolve()).as_posix() + "/"
     razor_sdk = (str(props.get("UsingMicrosoftNETSdkRazor") or "").lower() == "true"
                  and str(props.get("EnableDefaultRazorComponentItems") or "true").lower() != "false")
 
@@ -355,9 +362,7 @@ def _msbuild_paths(root: Path, csproj: Path, configuration: str, msbuild_args: l
                 and (it.get("CopyToOutputDirectory") or "Never") == "Never"
                 and (it.get("CopyToPublishDirectory") or "Never") == "Never")
     copied = rel("Content", lambda it: not razor(it))
-    code = {f for f in (rel("Compile") | rel("Content", razor)) - rel("EmbeddedResource") - copied if f.startswith(prefix)}
-    return {"ref": props.get("TargetRefPath") or "", "full": props.get("TargetPath") or "",
-            "assembly": props.get("AssemblyName") or csproj.stem, "code": sorted(code)}
+    return {f for f in (rel("Compile") | rel("Content", razor)) - rel("EmbeddedResource") - copied if f.startswith(prefix)}
 
 
 def _glob_paths(root: Path, csproj: Path, configuration: str) -> dict:
@@ -920,7 +925,6 @@ def self_test() -> int:
         check(decide(root, v, units, set())["App.Test"]["decision"] == "keep", "…so dependents rebuild")
 
         # ── Razor markup: a body edit keeps the surface, a [Parameter] is surface ──
-        base = git(root, "rev-parse", "HEAD").strip()
         (root / "src/Lib/V.razor").write_text("<div>hello</div>\n@code { private int n = 1; }\n")
         subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
         commit("a razor view")
@@ -944,6 +948,22 @@ def self_test() -> int:
         check(not v["projects"]["src/Lib"]["eligible"] and log == [], "scoped CSS (.razor.css) is an asset, never eligible")
         check(not is_code(root, "src/Lib/V.razor", "src/Lib", None) and is_code(root, "src/Lib/A.cs", "src/Lib", None),
               "unevaluated (--glob): C# only — a .razor needs MSBuild's word that the Razor SDK compiles it")
+
+        # ── MSBuild's evaluation → compiler input (the JSON `dotnet msbuild -getProperty -getItem` answers) ──
+        def item(rel_path: str, **meta) -> dict:
+            return {"FullPath": str(root / rel_path), **meta}
+        evaluation = {"Compile": [item("src/Lib/A.cs")],
+                      "Content": [item("src/Lib/V.razor"), item("src/Lib/Page.cshtml", CopyToPublishDirectory="PreserveNewest"),
+                                  item("src/Lib/data.json", CopyToOutputDirectory="PreserveNewest")],
+                      "EmbeddedResource": [item("src/Lib/Embedded.cshtml")]}
+        razor_props = {"UsingMicrosoftNETSdkRazor": "true"}
+        got = code_from_evaluation(root, root / "src/Lib", razor_props, evaluation)
+        check(got == {"src/Lib/A.cs", "src/Lib/V.razor"},
+              f"Razor SDK: Compile + uncopied .razor are code; a PreserveNewest .cshtml, an embedded one and content are payload: {got}")
+        check(code_from_evaluation(root, root / "src/Lib", {}, evaluation) == {"src/Lib/A.cs"},
+              "a plain Microsoft.NET.Sdk project: its .razor Content is payload")
+        check(code_from_evaluation(root, root / "src/Lib", {**razor_props, "EnableDefaultRazorComponentItems": "false"}, evaluation)
+              == {"src/Lib/A.cs"}, "default Razor component items switched off: payload")
 
         # ── C# that is PAYLOAD, not compiler input: never eligible ──
         base = git(root, "rev-parse", "HEAD").strip()
