@@ -130,6 +130,10 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
     /// <summary>Starts the query now rather than at the first read. Idempotent.</summary>
     public void Start() => EnsureSubscribed();
 
+    // The owner the IoPool registry's release names (#7992): stable, and distinct per content type —
+    // a GetType().Name read differs by subclass and says nothing about which record kind it holds.
+    private static string OwnerName => $"{nameof(InstanceAdminRecordCatalog<TContent>)}<{typeof(TContent).Name}>";
+
     private void EnsureSubscribed()
     {
         if (subscription is not null)
@@ -158,7 +162,7 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
                 logger,
                 $"[{name}] catalog query",
                 onTransientFault: OnFault,
-                onPoisonedContent: _ => OnFault()), GetType().Name);
+                onPoisonedContent: _ => OnFault()), OwnerName);
         }
     }
 

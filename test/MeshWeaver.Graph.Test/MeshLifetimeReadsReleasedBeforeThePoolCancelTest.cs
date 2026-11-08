@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
@@ -95,5 +96,50 @@ public class MeshLifetimeReadsReleasedBeforeThePoolCancelTest(ITestOutputHelper 
         {
             control.Dispose();
         }
+    }
+
+    /// <summary>A change feed that counts its live handlers — the runner's live firing path.</summary>
+    private sealed class CountingChangeFeed : IMeshChangeFeed
+    {
+        private int handlers;
+        public int Handlers => Volatile.Read(ref handlers);
+        public void Publish(MeshChangeEvent change) { }
+        public IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null)
+        {
+            Interlocked.Increment(ref handlers);
+            return System.Reactive.Disposables.Disposable.Create(() => Interlocked.Decrement(ref handlers));
+        }
+    }
+
+    /// <summary>
+    /// Review of #8013: the drain owns the runner's whole <c>Dispose()</c>, so at a silo's stop the runner
+    /// is released BEFORE the host reaches its <c>StopAsync</c>. That later stop — and a second dispose,
+    /// and a read of its public surface — must be harmless on a runner already released.
+    /// </summary>
+    [Fact]
+    public void ASiloStop_ReleasesTheEventSubscriptionRunner_AndItsLaterStopIsHarmless()
+    {
+        var registry = Mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>();
+        var feed = new CountingChangeFeed();
+        using var runner = new EventSubscriptionRunner(Mesh, feed,
+            Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
+            Mesh.ServiceProvider.GetRequiredService<AccessService>());
+
+        var owned = registry.OwnedUntilDrainCount;
+        runner.StartAsync(TestContext.Current.CancellationToken).IsCompletedSuccessfully.Should().BeTrue();
+        feed.Handlers.Should().Be(1, "precondition: the runner's live change-feed path is armed");
+        registry.OwnedUntilDrainCount.Should().Be(owned + 1, "the runner is owned until the IoPool drain");
+
+        // The silo's stop: the registry releases its owners before cancelling the pools.
+        registry.Dispose();
+        feed.Handlers.Should().Be(0, "the drain's release disposed the runner — before any host StopAsync");
+        registry.OwnedUntilDrainCount.Should().Be(0);
+
+        // The host's hosted-service stop comes later: it must find a released runner and do nothing harmful.
+        var stop = runner.StopAsync(TestContext.Current.CancellationToken);
+        stop.IsCompletedSuccessfully.Should().BeTrue("StopAsync on an already-released runner completes cleanly");
+        runner.Dispose();
+        runner.PendingSnapshot.Should().NotBeNull("its public surface stays readable after the release");
+        feed.Handlers.Should().Be(0);
     }
 }
