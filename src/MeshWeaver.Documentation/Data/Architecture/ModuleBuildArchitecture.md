@@ -561,6 +561,19 @@ reference assembly carries it (measured). The probe builds with
 `-p:IncludeSourceRevisionInInformationalVersion=false`; a host comparing keys across commits must
 do the same or pin `InformationalVersion`.
 
+**Realms too, not only suites (2026-11-08).** *"we are still building way too many packages"*: a
+satellite's realm selection (compile-check units, Tests-area gate realms, bundle pack set) comes from its
+`scripts/affected-modules.py`, which reached every package whose module closure contains a changed `src/`
+project and then that package's `requires` dependents. Both shared lanes now take an `abi-verdict` input
+(`node-repo-gate.yml`, `node-repo-module-pack.yml`) and hand it, with the lane's own copy of
+`abi-key.py`, to the caller's selector as `MW_ABI_VERDICT` / `MW_ABI_SCRIPT`; the selector asks
+`decide` which reached packages keep (their own module project, an InternalsVisibleTo friend, a
+reader) and drops the rest — with them, their dependents. Empty input = no change. `.razor` markup is
+eligible since the same day: an evaluated `Content` item in a project the Razor SDK compiles, never one
+copied or embedded (measured: a markup edit keeps the reference assembly, a new `[Parameter]` moves it;
+a plain-SDK `.razor` Content item is payload). `.cshtml` qualifies only when it evaluates the same way —
+not measured on an MVC/Razor Pages project, where `PreserveNewest` keeps it payload (no skip).
+
 The bundle key above is deliberately UNCHANGED: a bundle carries its module-owned siblings, so a
 reused dependent bundle beside a rebuilt dependency would put one assembly into the composed set at
 two builds (MeshWeaver#3732). ABI keying narrows what is COMPILED AND TESTED for validation; what
