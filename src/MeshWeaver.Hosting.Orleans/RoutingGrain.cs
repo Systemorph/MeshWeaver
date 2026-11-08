@@ -331,9 +331,12 @@ internal class RoutingGrain(
         // #7968: OWNED by the silo's routing gauge, so the `.Finally` below runs when the leg lands OR
         // when its owner disposes it before the pool drains — never because the pool's cancel
         // completed it on the pool's own thread (which it no longer does).
+        // An owner already releasing refuses the leg: no routing work starts, and Observable.Empty
+        // runs the bookkeeping below at once.
         var leg = new SingleAssignmentDisposable();
         var owned = quiescence?.Own(leg);
-        leg.Disposable = routingPool.SubscribeThroughPool(route)
+        var refused = quiescence is not null && owned is null;
+        leg.Disposable = (refused ? Observable.Empty<Unit>() : routingPool.SubscribeThroughPool(route))
             .Finally(() =>
             {
                 SaturationReport.OnTerminated(Interlocked.Decrement(ref inFlightRoutes));
@@ -774,13 +777,16 @@ internal class RoutingGrain(
         // #7968: owned by the routing gauge like every leg — see Dispatch.
         var leg = new SingleAssignmentDisposable();
         var owned = quiescence?.Own(leg);
-        leg.Disposable = routingPool.SubscribeThroughPool(
-                silos.ToObservable()
-                    .SelectMany(silo => DeliverToSilo(silo).Select(told => (Silo: silo, Told: told)))
-                    .Where(r => r.Told)
-                    .Select(r => (SiloAddress?)r.Silo)
-                    .Take(1)
-                    .DefaultIfEmpty())
+        var refused = quiescence is not null && owned is null;
+        leg.Disposable = (refused
+                ? Observable.Empty<SiloAddress?>()
+                : routingPool.SubscribeThroughPool(
+                    silos.ToObservable()
+                        .SelectMany(silo => DeliverToSilo(silo).Select(told => (Silo: silo, Told: told)))
+                        .Where(r => r.Told)
+                        .Select(r => (SiloAddress?)r.Silo)
+                        .Take(1)
+                        .DefaultIfEmpty()))
             .Finally(() =>
             {
                 slot?.Dispose();
@@ -1393,7 +1399,8 @@ internal class RoutingGrain(
             // #7968: owned by the routing gauge like every leg — see Dispatch.
             var leg = new SingleAssignmentDisposable();
             var owned = quiescence?.Own(leg);
-            leg.Disposable = routingPool.SubscribeThroughPool(nack)
+            var refused = quiescence is not null && owned is null;
+            leg.Disposable = (refused ? Observable.Empty<Unit>() : routingPool.SubscribeThroughPool(nack))
                 .Finally(() =>
                 {
                     slot?.Dispose();

@@ -333,35 +333,55 @@ public sealed class RoutingQuiescence : IDisposable
     /// subscribing, so a release that races the subscribe still reaches the subscription.
     /// </summary>
     /// <param name="leg">The leg's subscription (or the slot it will be assigned to).</param>
-    /// <returns>The ownership handle; dispose it when the leg terminates.</returns>
-    public IDisposable Own(IDisposable leg)
+    /// <returns>
+    /// The ownership handle — dispose it when the leg terminates — or <c>null</c> when the owner is
+    /// already RELEASING: then <paramref name="leg"/> has been disposed and the caller must NOT start
+    /// the routing work (it runs its bookkeeping instead; the pools drain next). A release that begins
+    /// after this returned a handle still reaches the leg through <paramref name="leg"/>, whose later
+    /// assignment then disposes the subscription at once.
+    /// </returns>
+    public IDisposable? Own(IDisposable leg)
     {
         var id = Interlocked.Increment(ref ownedTicket);
         ownedLegs[id] = leg;
         // Published-then-read, mirrored in ReleaseOwnedLegs (flag-then-enumerate): either the release
         // sees this entry or this sees the flag — a leg can never escape both.
-        if (IsReleasing && ownedLegs.TryRemove(id, out _))
-            leg.Dispose();
+        if (IsReleasing)
+        {
+            if (ownedLegs.TryRemove(id, out _))
+                leg.Dispose();
+            return null;
+        }
         return Disposable.Create(() => ownedLegs.TryRemove(id, out _));
     }
 
     /// <summary>
     /// Disposes every routing leg still owned — their <c>.Finally</c> bookkeeping runs on THIS thread,
-    /// the owner's — and refuses legs from now on. Called once, at the silo stage just before the pools
-    /// drain, so a leg is never left for the pool's cancel to find. Returns how many were released.
+    /// the owner's — and refuses legs from now on. Called at the silo stage just before the pools drain
+    /// (and again, idempotently, from <see cref="Dispose"/> for a container torn down without an
+    /// orderly stop), so a leg is never left for the pool's cancel to find. EVERY leg is attempted; a
+    /// leg whose teardown throws does not keep the rest attached — the failures are thrown together
+    /// afterwards.
     /// </summary>
     /// <returns>The number of legs disposed.</returns>
+    /// <exception cref="AggregateException">One or more legs' teardown threw; all were attempted.</exception>
     public int ReleaseOwnedLegs()
     {
         Interlocked.Exchange(ref releasing, 1);
         var released = 0;
+        var failures = System.Collections.Immutable.ImmutableList<Exception>.Empty;
         foreach (var id in ownedLegs.Keys)
         {
             if (!ownedLegs.TryRemove(id, out var leg))
                 continue;
             released++;
-            leg.Dispose();
+            try { leg.Dispose(); }
+            catch (Exception ex) { failures = failures.Add(ex); }
         }
+        if (!failures.IsEmpty)
+            throw new AggregateException(
+                $"RoutingQuiescence: {failures.Count} of {released} owned routing leg(s) threw while being released; every leg was attempted.",
+                failures);
         return released;
     }
 
@@ -377,8 +397,15 @@ public sealed class RoutingQuiescence : IDisposable
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
-        connections.Dispose();
-        scheduler.Dispose();
+        // #7968: the gauge OWNS legs, so its disposal releases them — the orderly silo stop has
+        // usually done this already (idempotent), but a container disposed without one (an aborted
+        // startup goes straight to host disposal) must not leave legs attached for the pool to find.
+        try { ReleaseOwnedLegs(); }
+        finally
+        {
+            connections.Dispose();
+            scheduler.Dispose();
+        }
     }
 }
 
@@ -497,7 +524,15 @@ public sealed class RoutingQuiescenceSiloParticipant
 
         public Task OnStop(CancellationToken cancellationToken)
         {
-            var released = quiescence.ReleaseOwnedLegs();
+            int released;
+            try { released = quiescence.ReleaseOwnedLegs(); }
+            catch (AggregateException ex)
+            {
+                // Every leg was attempted; the stop proceeds — the pool drain names anything left.
+                logger.LogError(ex, "RoutingQuiescence: releasing the owned routing legs threw — every leg was "
+                    + "attempted, and the silo stop proceeds to the pool drain");
+                return Task.CompletedTask;
+            }
             if (released > 0)
                 logger.LogWarning(
                     "RoutingQuiescence: released {Released} routing leg(s) still in flight before the pools "

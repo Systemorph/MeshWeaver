@@ -107,7 +107,10 @@ public class RoutingLegOwnershipTest
             "no leg's bookkeeping ran on the pool's canceller — the pool runs no consumer code there (#7968)");
         Volatile.Read(ref secondStarted).Should().Be(0,
             "once the owner is releasing, nothing more is handed to a pool that is about to be cancelled");
-        (await quiescence.InFlightChanges.FirstAsync().Timeout(Bound).Await(TestContext.Current.CancellationToken))
+        // The gauge folds its deltas on its own scheduler, so wait for the ZERO it reaches — the first
+        // replayed value may still be the count before the release was folded in.
+        (await quiescence.InFlightChanges.Where(n => n == 0).FirstAsync().Timeout(Bound)
+                .Await(TestContext.Current.CancellationToken))
             .Should().Be(0, "every tracked slot was released");
         registry.UnownedLeaks().Should().BeEmpty(
             "the owner disposed its legs before the pool drained, so the pool's cancel found none attached");
@@ -127,7 +130,59 @@ public class RoutingLegOwnershipTest
         var handle = quiescence.Own(leg);
 
         leg.IsDisposed.Should().BeTrue("the owner is releasing, so a late leg is released on arrival");
+        handle.Should().BeNull("a refused leg gets no ownership handle — the caller must not start it");
         quiescence.IsReleasing.Should().BeTrue();
-        handle.Dispose();
+    }
+
+    /// <summary>
+    /// A leg enqueued after the owner began releasing is never started — its source is not subscribed,
+    /// not even briefly — and its bookkeeping still runs.
+    /// </summary>
+    [Fact]
+    public void AnOrderedLegEnqueuedAfterTheRelease_IsNeverStarted_AndIsStillCompleted()
+    {
+        using var pool = new IoPool(2);
+        using var quiescence = new RoutingQuiescence();
+        var dispatcher = new OrderedRouteDispatcher(pool, NullLogger.Instance, quiescence);
+        quiescence.ReleaseOwnedLegs();
+        var started = 0;
+        var completed = 0;
+
+        dispatcher.Enqueue("client/one", orderingKey: null,
+            Observable.Defer(() => { Interlocked.Exchange(ref started, 1); return Observable.Never<Unit>(); }),
+            () => Interlocked.Increment(ref completed));
+
+        Volatile.Read(ref started).Should().Be(0, "a releasing owner starts no routing work");
+        Volatile.Read(ref completed).Should().Be(1, "the leg's bookkeeping runs without it");
+    }
+
+    /// <summary>
+    /// Releasing attempts EVERY leg: one whose teardown throws does not leave the others attached, and
+    /// the failure is surfaced after all were tried. Disposing the gauge releases what it still owns.
+    /// </summary>
+    [Fact]
+    public void ReleaseAttemptsEveryLeg_EvenWhenOneThrows_AndDisposeReleasesTheRest()
+    {
+        var quiescence = new RoutingQuiescence();
+        var first = new System.Reactive.Disposables.BooleanDisposable();
+        var last = new System.Reactive.Disposables.BooleanDisposable();
+        quiescence.Own(first).Should().NotBeNull();
+        quiescence.Own(System.Reactive.Disposables.Disposable.Create(
+            () => throw new InvalidOperationException("a source teardown that throws"))).Should().NotBeNull();
+        quiescence.Own(last).Should().NotBeNull();
+
+        var thrown = Assert.Throws<AggregateException>(() => quiescence.ReleaseOwnedLegs());
+
+        thrown.InnerExceptions.Should().ContainSingle();
+        first.IsDisposed.Should().BeTrue("the leg before the throwing one was released");
+        last.IsDisposed.Should().BeTrue("and so was the leg after it");
+
+        var orphan = new System.Reactive.Disposables.BooleanDisposable();
+        var fresh = new RoutingQuiescence();
+        fresh.Own(orphan).Should().NotBeNull();
+        fresh.Dispose();
+        orphan.IsDisposed.Should().BeTrue(
+            "a container disposed without an orderly silo stop still releases the legs its gauge owns");
+        quiescence.Dispose();
     }
 }

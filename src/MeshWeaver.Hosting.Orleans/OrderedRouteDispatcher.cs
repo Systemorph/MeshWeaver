@@ -261,7 +261,10 @@ internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger, Routi
         // the pool's own thread (which it no longer does).
         var subscription = new SingleAssignmentDisposable();
         var owned = owner?.Own(subscription);
-        subscription.Disposable = pool.SubscribeThroughPool(next.Leg)
+        // The owner began releasing between the check above and here: start nothing, release the leg
+        // (Observable.Empty runs the .Finally at once, which then releases the rest of the channel).
+        var refused = owner is not null && owned is null;
+        subscription.Disposable = (refused ? Observable.Empty<Unit>() : pool.SubscribeThroughPool(next.Leg))
             .Finally(() =>
             {
                 owned?.Dispose();

@@ -877,7 +877,12 @@ an OWNER. Rx runs `.Finally` on dispose as well as on a terminal, on the dispose
 - `RoutingQuiescenceSiloParticipant` subscribes a second observer at `ServiceLifecycleStage.First + 1`.
   It stops after the routing hold and after every grain has deactivated, so each leg had its whole chance
   to land, and BEFORE `IoPoolSiloTeardown`. It calls `ReleaseOwnedLegs()`, which disposes every leg still
-  owned and refuses new ones (a late `Own` disposes at once). It logs a Warning naming the count.
+  owned and refuses new ones. A leg offered after the release began gets no handle (`Own` returns
+  `null`), so its caller starts no routing work at all and runs the bookkeeping at once. A leg whose
+  teardown throws does not stop the release: every leg is attempted and the failures are thrown
+  together. It logs a Warning naming the count. `RoutingQuiescence.Dispose()` releases whatever it
+  still owns too, so a container torn down without an orderly silo stop (an aborted startup) leaves
+  nothing attached.
 - `OrderedRouteDispatcher`, once its owner is releasing, starts nothing more: the channel's queued legs
   get their completion callback in a loop (no recursion) and are never handed to a pool that is about to
   be cancelled.

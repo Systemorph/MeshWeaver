@@ -160,6 +160,10 @@ public class IoPoolDrainRunsNoConsumerCodeTest
 
         SpinWait.SpinUntil(() => Volatile.Read(ref subscribed) == 1, Timeout10)
             .Should().BeTrue("precondition: the pooled subscribe ran");
+        // `subscribed` is set INSIDE source.Subscribe, before the setup leaf assigns the subscription it
+        // returns; wait for the leaf to release its slot so the dispose below reaches the source.
+        SpinWait.SpinUntil(() => pool.CurrentInFlight == 0, Timeout10)
+            .Should().BeTrue("precondition: the setup leaf finished and handed over the source subscription");
 
         // The owner's teardown (a hub's disposal, the routing gauge's release) — strictly before the drain.
         subscription.Dispose();
