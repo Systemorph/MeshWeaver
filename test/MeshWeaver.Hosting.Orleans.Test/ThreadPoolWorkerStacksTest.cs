@@ -130,7 +130,20 @@ public class ThreadPoolWorkerStacksTest
                 TimeSpan.FromSeconds(10));
             var line = ThreadPoolStall.Describe(reading, waiters, null, stacks.OtherThreads);
 
-            line.Should().Contain($"×{Held}:", "the waiting workers share one shape");
+            // Every waiter is IN the gate: in a Monitor enter frame under the lock site. Per stack, so a
+            // failure names the stack that is not.
+            foreach (var waiter in waiters)
+                (waiter.Contains("System.Threading.Monitor.Enter", StringComparison.Ordinal)
+                 && waiter.Contains(nameof(EnterTheGate), StringComparison.Ordinal))
+                    .Should().BeTrue("every parked worker waits on the gate inside {0}, but one stood in:{1}{2}",
+                        nameof(EnterTheGate), Environment.NewLine, waiter);
+            // 🚨 NOT "one ×4 group": workers in the SAME wait can differ in their innermost runtime-transition
+            // frames (measured on Linux CI, #8025: ×3 under InlinedCallFrame, ×1 still in the
+            // Enter_Slowpath(ObjectHandleOnStack) call into the runtime), which splits them into two shapes.
+            // What the line owes is that every waiter is in a group it recognises as waiting on the monitor.
+            WorkersInMonitorGroups(line).Should().Be(Held,
+                "every waiting worker is in a group the line recognises as waiting on the gate; the line was:{0}{1}",
+                Environment.NewLine, line);
             line.Should().Contain(OuterFrame, "the line names the caller that led the workers to the gate");
             line.Should().Contain("LOCK waiting to enter a monitor at", "the group is recognised as waiting on a monitor");
             line.Should().Contain(nameof(EnterTheGate), "the lock site is the method that takes the gate");
@@ -143,6 +156,53 @@ public class ThreadPoolWorkerStacksTest
             SpinWait.SpinUntil(() => Volatile.Read(ref waitersDone) == Volatile.Read(ref waiting), Budget);
             holder.Join(Budget);
         }
+    }
+
+    /// <summary>
+    /// How many workers the line puts in groups it recognises as waiting to enter a monitor: the sum of
+    /// the <c>×N</c> counts of every group that carries a <c>LOCK waiting to enter a monitor</c> section.
+    /// </summary>
+    private static int WorkersInMonitorGroups(string line) =>
+        line.Split(Environment.NewLine + "  ×", StringSplitOptions.None)
+            .Skip(1)
+            .Where(group => group.Contains("LOCK waiting to enter a monitor at", StringComparison.Ordinal))
+            .Sum(group => int.Parse(group[..group.IndexOf(':', StringComparison.Ordinal)], System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <summary>
+    /// The exact two shapes of the Linux CI failure (#8025's fresh-merge run): four workers in ONE monitor
+    /// wait, split by their innermost runtime-transition frames. The assertion the real-dump test now makes
+    /// holds for them (all four are in monitor-waiting groups); the one it used to make — a single ×4
+    /// group — does not, which is the negative control showing the old assertion was what failed.
+    /// </summary>
+    [Fact]
+    public void WaitersSplitByTheirRuntimeTransitionFrames_AreAllCountedAsWaitingOnTheGate()
+    {
+        string[] Inner(params string[] transition) =>
+        [
+            .. transition,
+            "System.Threading.Monitor.Enter_Slowpath(System.Object)",
+            "System.Threading.Monitor.Enter(System.Object, Boolean ByRef)",
+            "MeshWeaver.Hosting.Orleans.Test.ThreadPoolWorkerStacksTest.EnterTheGate(Boolean)",
+            .. Enumerable.Repeat("MeshWeaver.Hosting.Orleans.Test.ThreadPoolWorkerStacksTest.DescendTowardsTheGate(Int32)", 21),
+            "MeshWeaver.Hosting.Orleans.Test.ThreadPoolWorkerStacksTest.OuterCaller(Int32)",
+            "System.Threading.ThreadPoolWorkQueue.Dispatch()",
+            "System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()",
+        ];
+        string Stack(string[] frames) => string.Join(Environment.NewLine, frames.Select(frame => "at " + frame));
+        var blocked = Stack(Inner("InlinedCallFrame", "InlinedCallFrame"));
+        var entering = Stack(Inner(
+            "System.Threading.Monitor.Enter_Slowpath(System.Runtime.CompilerServices.ObjectHandleOnStack)",
+            "System.Threading.Monitor.Enter_Slowpath(System.Runtime.CompilerServices.ObjectHandleOnStack)"));
+        var reading = ProcessLiveness.Read(
+            new ProcessLivenessSample(1, TimeSpan.FromSeconds(10), 0, 0, 0, TimeSpan.Zero, 0, true, Held, 0, 1_000),
+            new ProcessLivenessSample(2, TimeSpan.FromSeconds(20), 0, 0, 0, TimeSpan.Zero, 0, true, Held, 20_335, 1_000),
+            TimeSpan.FromSeconds(10));
+
+        var line = ThreadPoolStall.Describe(reading, [blocked, blocked, blocked, entering], null, []);
+
+        line.Should().Contain("4 worker stack(s) in 2 distinct shape(s)", "this is the CI line's split");
+        line.Should().NotContain("×4:", "negative control: the old one-group assertion fails on this input");
+        WorkersInMonitorGroups(line).Should().Be(4, "both shapes are recognised as waiting on the gate");
     }
 
     /// <summary>The outermost frame of the waiters' own code — it appears ONCE, <see cref="Depth"/> frames below the gate.</summary>
