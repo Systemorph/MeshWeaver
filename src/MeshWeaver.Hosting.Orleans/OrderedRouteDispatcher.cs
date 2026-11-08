@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
@@ -88,7 +89,7 @@ namespace MeshWeaver.Hosting.Orleans;
 /// this change a non-zero <c>Deepest</c> means legs are queued behind a leg of the SAME stream,
 /// which is a far stronger statement than it used to be.</para>
 /// </summary>
-internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
+internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger, RoutingQuiescence? owner = null)
 {
     private readonly record struct QueuedLeg(IObservable<Unit> Leg, Action? OnStarted, Action OnCompleted);
 
@@ -227,6 +228,22 @@ internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
     /// </summary>
     private void DrainNext(Channel channel)
     {
+        // 🚨 #7968: once the OWNER is releasing its legs (the silo stage just before the pools drain),
+        // nothing more is started: the channel's remaining legs are released — their bookkeeping runs
+        // here, on the owner's thread — and never handed to a pool that is about to be cancelled.
+        if (owner?.IsReleasing == true)
+        {
+            ImmutableQueue<QueuedLeg> abandoned;
+            lock (gate)
+            {
+                abandoned = queues.TryGetValue(channel, out var q) ? q.Pending : ImmutableQueue<QueuedLeg>.Empty;
+                queues.Remove(channel);
+            }
+            foreach (var leg in abandoned)
+                leg.OnCompleted();
+            return;
+        }
+
         QueuedLeg next;
         lock (gate)
         {
@@ -239,9 +256,18 @@ internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
         }
 
         next.OnStarted?.Invoke();
-        pool.SubscribeThroughPool(next.Leg)
+        // #7968: OWNED, so its `.Finally` — the FIFO advance and the caller's bookkeeping — runs when
+        // the leg lands or when the owner disposes it, never because the pool's cancel completed it on
+        // the pool's own thread (which it no longer does).
+        var subscription = new SingleAssignmentDisposable();
+        var owned = owner?.Own(subscription);
+        // The owner began releasing between the check above and here: start nothing, release the leg
+        // (Observable.Empty runs the .Finally at once, which then releases the rest of the channel).
+        var refused = owner is not null && owned is null;
+        subscription.Disposable = (refused ? Observable.Empty<Unit>() : pool.SubscribeThroughPool(next.Leg))
             .Finally(() =>
             {
+                owned?.Dispose();
                 next.OnCompleted();
                 DrainNext(channel);
             })
