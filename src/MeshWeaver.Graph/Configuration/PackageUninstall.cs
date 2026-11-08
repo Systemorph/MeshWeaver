@@ -82,7 +82,15 @@ public record PackageUninstallRequest
     /// still holds it until it restarts. Executor-owned.</summary>
     public bool ModuleDisabled { get; init; }
 
-    /// <summary>When the ONE restart was requested, if the module needed one. Executor-owned.</summary>
+    /// <summary>
+    /// RETIRED — never written any more. A request no longer issues its own restart: the instance's
+    /// ONE restart coordinator (<c>PackageRestartCoordinator</c> at
+    /// <c>Admin/_PackageUninstall/RestartCoordinator</c>) dispatches one restart for every retirement
+    /// that needs one (<c>Doc/Architecture/PackageUninstall</c> → "One restart for every retirement").
+    /// Kept only so a request persisted before the coordinator existed still reads correctly: a phase 1
+    /// that resumes such a request and finds this stamped never asks for a restart again.
+    /// </summary>
+    [Obsolete("Retired: the package restart coordinator dispatches the restart. Read only for requests persisted before it; never write it.")]
     public DateTimeOffset? RestartRequestedAt { get; init; }
 
     /// <summary>Exactly what phase 2 destroys, per partition. Executor-owned.</summary>
@@ -116,6 +124,31 @@ public record PackageUninstallRequest
 
     /// <summary>Every step, in order. Executor-owned.</summary>
     public ImmutableList<string> Log { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The feature flag whose explicit <c>Enabled=false</c> issued this request at boot, or null for
+    /// a request a person issued (<c>Doc/Architecture/EnvironmentComposition</c> → "A disabled flag
+    /// retires what is installed"). Such a request never blocks a re-install: the flag's exclusion
+    /// keeps the package out while the flag stays off, and once the record stops declaring it off
+    /// the package's own lanes bring it back — the record is the source of truth either way.
+    /// </summary>
+    public string? RetiredByFlag { get; init; }
+
+    /// <summary>
+    /// Whether every replica must drop the module, not only the process executing the request. Set
+    /// for a flag-issued retire. Phase 1 then (a) FAILS the request, keeping the install record, when
+    /// the module's landed generation cannot be disabled DURABLY (an unreadable activation record, or
+    /// a module loaded here that the store lane never landed, or a host with no landing service to read it), and (b) states its restart on the
+    /// instance's ONE restart coordinator (<c>PackageRestartCoordinator</c>) whether or not this
+    /// process holds the module, because a sibling replica may: the boot pass enrolled the request
+    /// as pending before writing it, phase 1 states it ready once <see cref="ModuleDisabled"/> is
+    /// recorded, and the coordinator dispatches ONE restart for the whole batch.
+    /// </summary>
+    public bool RetireOnEveryReplica { get; init; }
+
+    /// <summary>The flag retire's install identity, shared by every attempt at retiring the same
+    /// install (each attempt is its own request). Null for a person's request.</summary>
+    public string? RetireKey { get; init; }
 }
 
 /// <summary>One partition an uninstall would tear down — measured before anything is destroyed.</summary>
@@ -174,7 +207,29 @@ public static class PackageUninstall
     /// no executor. Cold; emits once.</summary>
     /// <param name="hub">Any surviving hub of the mesh.</param>
     /// <param name="request">What to uninstall and why.</param>
-    public static IObservable<PackageUninstallTicket> Request(IMessageHub hub, PackageUninstallRequest request)
+    public static IObservable<PackageUninstallTicket> Request(IMessageHub hub, PackageUninstallRequest request) =>
+        // Null-safe: Validate (in Write) must answer a request with no package, never an NRE here.
+        Write(hub, request, $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{(request.Package ?? "").Trim()}-{Guid.NewGuid().ToString("N")[..8]}");
+
+    /// <summary>
+    /// <see cref="Request(IMessageHub, PackageUninstallRequest)"/> at a request id the CALLER chose —
+    /// so that several writers deciding the same thing (every replica's boot pass) collide on ONE
+    /// node instead of each opening its own request. The create of an id that already exists faults;
+    /// the caller reads the existing request. Cold; emits once.
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="request">What to uninstall and why.</param>
+    /// <param name="requestId">The node id under <see cref="PackageUninstallRequest.Namespace"/>;
+    /// reduced to a valid path segment.</param>
+    public static IObservable<PackageUninstallTicket> RequestAt(IMessageHub hub, PackageUninstallRequest request, string requestId) =>
+        Write(hub, request, requestId);
+
+    /// <summary>The path a request written at <paramref name="requestId"/> lands at. Pure.</summary>
+    /// <param name="requestId">The caller-chosen id.</param>
+    public static string PathAt(string requestId) =>
+        $"{PackageUninstallRequest.Namespace}/{ActivationRecycle.Segment(requestId)}";
+
+    private static IObservable<PackageUninstallTicket> Write(IMessageHub hub, PackageUninstallRequest request, string requestId)
     {
         if (Validate(request) is { } refusal)
             return Observable.Return(new PackageUninstallTicket(null, refusal));
@@ -183,7 +238,7 @@ public static class PackageUninstall
                 "this mesh registers no package uninstall executor (the plugin catalog is not installed) — nothing was written"));
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
-        var id = ActivationRecycle.Segment($"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{request.Package.Trim()}-{Guid.NewGuid().ToString("N")[..8]}");
+        var id = ActivationRecycle.Segment(requestId);
         var path = $"{PackageUninstallRequest.Namespace}/{id}";
         var node = new MeshNode(id, PackageUninstallRequest.Namespace)
         {

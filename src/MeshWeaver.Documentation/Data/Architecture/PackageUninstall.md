@@ -39,8 +39,9 @@ disabled** counts as done: a phase 1 resumed after its removal records `ModuleDi
 landed".
 
 Then, in order: the **module** is retired (its landed generation disabled; unloaded live through
-`IModuleLiveActivation.Retire` where the loader can, else exactly one automatic restart through the
-self-update restart path, stamped first); the partition's **hubs are closed** (`DisposeRequest` to
+`IModuleLiveActivation.Retire` where the loader can, else by the ONE restart the instance's restart
+coordinator dispatches, see "One restart for every retirement" below);
+the partition's **hubs are closed** (`DisposeRequest` to
 every hosted hub at or under it, from the off-router issuing hub); the **install record is
 removed**; and the request moves to `AwaitingConfirmation` with the **preview** — per partition:
 whether a storage provider reports a per-partition store (Postgres: the schema), rows per table
@@ -54,7 +55,8 @@ whether a storage provider reports a per-partition store (Postgres: the schema),
 From this point **no unattended pass installs the package again** — not the seed, not the platform
 baseline, not a feature flag (`InstanceAutoRegistrationService.InstallAll` consults
 `PackageUninstallExecutor.UninstalledHere`). A person installing it again lifts that: the block only
-applies while no install record exists.
+applies while no install record exists. A request a feature flag issued (`RetiredByFlag`) blocks
+nothing — the flag's own exclusion governs, so the record decides.
 
 ## The install record decides who may write it
 
@@ -104,9 +106,198 @@ repair, the unattended update) is refused when the record is gone. This is how t
 create-if-missing-plus-fold gap (#4928): the record is never written with a full-replace
 `CreateOrUpdateNodeRequest`.
 
-What this does not cover: the partition's content and the module's landing happen **before** an
-install stamps the record. A stamp refused at the owner keeps the record, but not those earlier
-writes, from coming back. Landing the module through the record's owner is the next step.
+The partition's content is still written **before** an install stamps the record, and a stamp
+refused at the owner does not undo it. The module no longer shares that gap; see the next section.
+
+## The module lands through the install record
+
+An install writes its record, then downloads and lands the module. A download that started before
+an uninstall could finish after phase 1 had written the module's **tombstone**. Its landing then
+re-enabled the module on every replica, because the module volume is shared. The decision to land
+was taken on a snapshot read before the download and carried out after it.
+
+So nothing outside the record's own hub lands or removes a package's module
+(`ModuleLandingOwner`):
+
+- **The writer stages and states.** The downloaded bytes cannot ride the node, so the writer stages
+  them on the shared volume under `modules/.landing-requests/<key>/`. It then states a `ModuleLand`
+  fact on the record carrying every other landing argument, and waits for the owner's answer before
+  it does anything that follows a landing (proposing the module set). Phase 1's removal is a
+  `ModuleRemove` fact through the same owner.
+- **The owner queues, then decides one at a time.** The fold queues each operation in
+  `PackageManifest.ModuleOperations`. It promotes exactly ONE to `Executing`, and decides it then,
+  against the retirement as it stands at that moment. A landing while the package is being retired is
+  refused. A person's landing (`PackageRecordWriteIntent.Person`, the catalog click) lands while the
+  retirement is not yet `Removing`, and clears it, the same rule as a person's stamp. The owner also
+  marks it `ReinstallByPerson`, so it lands even over a tombstone the displaced uninstall already
+  wrote. Without that, the person would keep an install record whose module stays disabled. The
+  plan agrees: for a person's install, `ModuleUpdateDecision` reads an entry an uninstall disabled as
+  never landed. `SkipUninstalled` holds only the lanes no person asked for. A removal
+  by a request that no longer holds the retirement is refused. An install record lands and removes
+  only the module it declares (`PackageManifest.Module`); an operation naming any other module is
+  refused.
+- **Only an install record executes.** The Package node type is armed wherever a Package node lives.
+  Only a hub at `Plugins/{package}` executes module operations, and it checks each operation again
+  against its own current state just before running it: the module must be the record's, and a
+  removal must still be the retirement holder's. So a persisted `Executing` entry never bypasses the
+  decision, whether it was written by the owner before a crash or forged.
+- **The owner executes.** The record's hub runs the landing or the removal itself, on its own replica,
+  through the landing service's cap-1 lane. The execution belongs to the hub's activation and is
+  disposed with it, so a recycled owner cancels its landing at the landing's own cancellation points. It writes the answer under the operation's key and
+  promotes the next operation in the same update. Operations run one at a time and in the order they
+  were stated, so a removal stated after a landing runs after it, and the tombstone is written last.
+- **A landing is decided where it is written.** The landing reads the module's head in the same work
+  item that writes the bytes, and refuses when the module's newest event is an uninstall. This is the
+  rule `ModuleUpdateDecision` applies at plan time (`SkipUninstalled`), taken again after the
+  download.
+- **Resume.** The operation in flight is persisted as `Executing` before it runs. Its staged bytes are
+  dropped by the WRITER, and only once it has an answer. The writer removes its answer from the
+  record with a cross-hub update, which acknowledges only after the owner's state is in storage; it
+  drops the bytes after that. So storage never holds an `Executing` operation whose bytes are gone. A
+  submission whose outcome is unknown (a timeout, or an unreachable owner whose patch may still apply)
+  leaves the bytes in place for the owner. When a replica dies mid-operation, the next
+  activation of the record's hub finds an executing operation it did not start, and runs it again. A
+  landing re-reads the same staged bytes, and a removal writes one more tombstone. Neither changes the
+  outcome by running twice.
+- **A failed answer does not latch the queue.** The answer and the promotion of the next operation
+  are one update. If that update fails, storage still holds the operation as `Executing`, and nothing
+  else changes on the record to prompt the owner to look again. So the owner forgets that it started
+  the operation and faults its own watcher. The watcher re-opens (its usual paced re-open; there is no
+  separate timer or retry loop), reads the record anew, finds the `Executing` operation not started,
+  and runs it again. This is the resume path a new activation takes, so it is idempotent the same way,
+  and the operations queued behind it are not held until a recycle. A failed promotion of a queued
+  operation recovers the same way: an unchanged queue would never wake the owner again.
+- **A refusal is an answer, and a fault says whether it may clear.** A refused landing reaches the
+  adoption as its named `Failure`, with nothing landed. A removal the owner did not carry out faults
+  with the owner's words. A landing that FAULTS on the owner (an I/O error on the volume, a timeout)
+  is also answered not-applied, but its answer carries `PackageRecordFactOutcome.Transient`, decided by
+  the shared classifier `TransientRegistryFailure`. The adoption carries it to
+  `ModuleAdoptOutcome.Transient`, so a module reload records `Faulted` and is re-armed rather than a
+  final `Failed`. That is the verdict a landing with no install record already reaches when it faults
+  (`PluginBundleClient.LandingFaultOutcome`). A decided refusal (a retirement, a binding, a tombstone)
+  is never transient. A module head that cannot be read whole when the landing executes is a fault,
+  not a refusal: the read may succeed on the next pass, so the classifier decides, as it does when
+  `GetCheckedActivation` cannot read the activation whole. Only an uninstall the landing actually
+  observes is a decided refusal.
+
+**A person's install waits for a removal in flight.** A stamp or a person's clear is refused while
+ANY removal of the module is `Executing`, including one whose uninstall has already released its
+retirement (a writer that timed out and stated `End`). That removal may be waiting on the
+shared landing lane behind another module, and would disable the module after the person's install
+read it as current. Clearing the retirement then would keep the record and lose the module. The
+person installs again once the uninstall finishes.
+
+**Phase 1 always queues the removal.** When phase 1 finds no activation entry, the module may
+still be landing for the first time on the owner. So phase 1 queues the removal anyway. The owner
+decides whether a generation exists once every earlier landing has finished, and answers
+`ModuleLandingOwner.NothingToRemove` when none does.
+
+**No record path means the canonical one.** An adoption that names no install-record path belongs
+to `Plugins/{package}`, so it never lands around that record's owner by omission.
+
+**A landing that loses its record is refused.** The adoption notes whether the install record
+exists when it STARTS, before the plan reads the registry index and the activation, and so before
+the download. If the record existed then and is gone when the bytes arrive,
+an uninstall removed it while the module was downloading, and the landing is refused. This holds even
+for a module that never landed, where no tombstone exists to refuse it.
+
+**A landing planned against an earlier install is refused.** Knowing that a record existed is not
+enough: an uninstall followed by a re-install leaves a record at the same path, with no retirement
+and the module enabled. So each install record carries an `Incarnation`, minted when the gate
+creates the record and kept by every stamp. The adoption reads it when it starts, and the landing
+carries it on its operation. The owner refuses, at promotion and again at execution, a landing whose
+incarnation is not the record's. Without that, a download held across the uninstall and the
+re-install would replace the new install's module with the old install's bytes. A record created
+before incarnations existed has none, and a landing planned against it is not checked this way.
+
+**A package with no install record has no owner.** The boot's modules-first wave lands a fresh
+package's module before any record exists. A retirement lives on the record and ends when the record
+is deleted, so a package with no record has no retirement in flight. That landing runs where it is,
+through `ModuleLandingService.LandUnlessUninstalled`. It is refused when the module's newest event is
+an uninstall, which covers a download released after an uninstall that has completed. It never
+creates a record. It is never a fallback for a package that does have one: the writer reads the record
+first and, if it exists, goes through the owner.
+
+What the fresh path does not close: its uninstall check and its write are one work item on one
+replica. A removal another replica writes **inside** that work item, between the read and the write,
+would be ordered before the landing. For that to happen, a record must be created, a retirement
+granted and the removal executed within that interval. The owned path has no such window, apart from
+one case: when an owner is torn down after a landing has passed its commit rename, that landing
+finishes its record write. On Orleans a successor activation starts only after the old one has been
+disposed, and on a single process the successor's landing queues behind it on the same cap-1 lane.
+A staged landing whose writer died before taking its answer, or whose submission's outcome is
+unknown, is not collected by the modules GC.
+
+## One restart for every retirement
+
+A module that some process still holds is unloaded by a restart. A request does not issue that
+restart itself any more. Two uninstalls running at once used to restart the instance twice, and a
+request that resumed after the restart it had asked for could not tell whether to ask again. So the
+instance has ONE restart coordinator, a node at `Admin/_PackageUninstall/RestartCoordinator`
+(`PackageRestartCoordinator`, content `PackageRestartCoordinatorState`). It is written only through
+its own stream, and it follows the same facts-to-owner shape as the install record
+([Conditional Writes Across Hubs](../ConditionalWritesAcrossHubs)): requesters state facts under
+fresh keys, and the coordinator's own hub decides.
+
+| fact | stated by | the coordinator |
+|---|---|---|
+| `Pending` | phase 1, after the retirement is granted and before the module is touched, when a restart can follow (a declared module this process holds, and a restart path on the host); for a flag-issued request the boot pass, before it writes the request, and phase 1 again whether or not this process holds the module (see below) | records the request as pending. While any member is pending (for at most `PendingBudget`, 15 minutes), no NEW restart is dispatched, so the restart that follows covers this request too |
+| `Ready` | phase 1, once the module's generation is disabled and it could not be retired live; for a flag-issued request, once the generation is disabled durably, whether or not it was retired live here (a sibling replica may hold it) | records the request as ready. A request that is already covered stays covered: stating `Ready` again (a resumed phase 1) never dispatches again |
+| `Withdraw` | phase 1, when no restart is needed after all (retired live, not loaded here, no restart path, a request that already asked its restart before the coordinator existed) or when phase 1 stops | removes a pending member. A ready or covered member keeps its place, because its module IS disabled |
+| `Retry` | the plugin catalog's reconcile pass (`PackageRestartCoordinator.RetryFaulted`), once a faulted dispatch's backoff is due | dispatches that faulted dispatch again. With no dispatch named, it only decides again, so a ready member held back by a pending member that went stale is dispatched |
+
+**The decision** (`Decide`, pure, on the coordinator's own hub): every ready member joins a dispatch
+that faulted, because that dispatch restarted nothing and its retry covers them too. Otherwise, while
+no dispatch is in flight and no member is pending, ONE new dispatch covers every ready member.
+
+**The dispatch** follows `ModuleReloadExecutor.IssueRestart`:
+
+- It is persisted as `Dispatching` BEFORE the restart lane (`IModuleActivationRestart`) is asked, and
+  only the activation that wrote it asks, once.
+- The structured outcome is recorded on the dispatch: a scheduled restart (`Restarted`, `HandedOver`)
+  is `Accepted` and final; `Faulted`, or a lane that throws, is `Faulted` and retryable; anything
+  else (`Unavailable`, or no restart path registered) is `Unavailable` and final.
+- A faulted dispatch is retried by the reconcile pass with the same backoff as a faulted module
+  reload: the safety-net interval, doubled per attempt. The request's phase 1 is **not** repeated;
+  it already reached `AwaitingConfirmation`, and its `ModuleOutcome` says the dispatch faulted and is
+  retried.
+- An accepted dispatch is never dispatched again, also not after the coordinator's hub is recycled.
+
+**Resume-safe across a process restart.** Everything lives on the node. A dispatch that another
+activation left `Dispatching` (most often because the restart it asked for rolled that very process
+before the answer was written) becomes `Interrupted` and is never asked again: a restart is asked
+at most once. There is no leader election: the coordinator is one node, so one hub decides.
+
+Phase 1 waits for the answer of the dispatch that covers it (up to `AnswerBudget`) only to state it
+in `ModuleOutcome` (`one restart requested (Restarted: …) — dispatched by the restart coordinator as
+restart-N`). If no dispatch answers in time, for example because another uninstall is still pending,
+phase 1 continues and says so; the coordinator dispatches all the same.
+
+**Retired per-request field.** `PackageUninstallRequest.RestartRequestedAt` is `[Obsolete]` and never
+written. A request persisted by an earlier build may carry it: such a request asked its one restart
+itself. When its phase 1 resumes on this build, it finds the stamp and withdraws, so it is never
+restarted again. Requests without the stamp go through the coordinator.
+
+**Flag retirements: one restart for the whole batch.** The boot pass that retires every installed
+package a feature flag declared off (`DeclaredDisabledRetirement`, [Environment
+Composition](../EnvironmentComposition) → "A disabled flag retires what is installed") walks its
+packages one at a time, each phase 1 settled before the next is decided. So before it writes the
+FIRST request, it states `Pending` for every request it will run phase 1 for: a new attempt, or the
+install's active attempt that is still in phase 1, of a package that declares a module, on a host
+with a restart path. An attempt already past phase 1 is not enrolled again, because nothing would
+ever resolve that pending member. Each phase 1 (`RetireOnEveryReplica`) then states `Ready` once the
+module's generation is disabled durably, or `Withdraw` when there was nothing to disable or it
+failed. It does not wait for the dispatch, because the dispatch waits for the batch's last request
+and an earlier one would only spend `AnswerBudget` (`PackageRestartCoordinator.StateReady`). When
+the walk ends, the boot pass withdraws every enrolment whose request was never written: refused by
+validation, a create that faulted, or a package that a staying package requires. The coordinator
+dispatches ONE restart once no member of the batch is pending. A request carries no restart field of
+its own, and a later boot that finds every request settled enrols nothing, so it never restarts again.
+
+The batching is pinned by `ADisabledFlagRetiresAnInstalledPackageTest.TwoPackagesDeclaredOff_RestartTheInstanceOnce`:
+two packages declared off, each with a landed module, give one dispatch covering both requests and
+one restart. Without the boot pass's enrolment (negative control, measured) the first request
+dispatches alone and the second dispatches again, so the instance restarts twice.
 
 ## Phase 2 — drop the data, on confirmation
 
@@ -129,7 +320,8 @@ teardown sentence and ends `Done`. Never raw SQL.
 | surface | how |
 |---|---|
 | MCP `uninstall_package` (MeshWeaver.Plugins) | `MeshOperations.UninstallPackage(package, reason)` answers the preview and the exact confirmation string; `UninstallPackage(requestPath: …, confirmation: …)` confirms. Platform admins only. |
-| the platform's own code | `PackageUninstall.Request` / `PackageUninstall.Confirm` |
+| the platform's own code | `PackageUninstall.Request` / `PackageUninstall.Confirm`; `PackageUninstall.RequestAt` writes at a caller-chosen id so several writers deciding the same thing collide on one node |
+| a feature flag declared off | the boot pass runs phase 1 for every installed package the flag names ([Environment Composition](../EnvironmentComposition) → "A disabled flag retires what is installed"). The request carries `RetiredByFlag` (so it blocks no re-install) and `RetireOnEveryReplica` — the module's landed generation must be disabled durably or the request FAILS with the install record kept, and phase 1 never restarts by itself: it records `ModuleDisabled` and states `Ready` on the restart coordinator, which dispatches ONE restart for the boot pass's whole batch ("One restart for every retirement" above). It names no requester, so phase 2 can never run. |
 
 ## What is NOT established
 
@@ -144,6 +336,13 @@ teardown sentence and ends `Done`. Never raw SQL.
 - **Other replicas' hubs.** Hubs are closed on the executor's process; a hub another replica hosts
   under the partition is torn down by the store drop's write refusal and its next activation, not
   by a `DisposeRequest` from here.
+- **The restart coordinator on more than one replica.** Its tests run on the monolith. On Orleans the
+  coordinator is one grain, so one activation decides. That was not exercised here.
+- **Two uninstalls minutes apart restart twice.** The coordinator batches requests whose phase 1
+  overlaps. A request that becomes ready after an accepted dispatch gets a dispatch of its own; it
+  does not ride the earlier one, because the earlier roll may already have passed some replicas.
+- **An interrupted dispatch that never reached the lane** is not retried. At-most-once is chosen
+  over at-least-once, because the usual cause of an interruption is the restart itself.
 - **A resumed phase 1.** If the executor's activation dies after removing the install record but
   before recording the preview, the resumed phase 1 reads no install record and fails by name; the
   partition is untouched and a new request is needed for phase 2.

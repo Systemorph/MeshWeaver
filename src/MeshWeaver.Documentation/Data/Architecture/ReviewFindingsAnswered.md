@@ -264,8 +264,13 @@ Policy [`review-evidence-any-head`](../PolicyNotProse) answers the question #473
 *"0 unanswered threads"* is produced by two opposite states, **reviewed and nothing found** and
 **never reviewed**, so what evidence separates them?
 
-**Only a completed Copilot review object on the pull request with zero findings — on ANY of its
-heads.** In the check that is `copilot_review_of_pull_request(reviews, head)`: a review by the
+**Two pieces of evidence count (since 2026-11-08, policy [`internal-code-review`](../PolicyNotProse)).**
+The first is the internal reviewer's `internal-review` check run on the **current head**, posted by the
+reviewer's App (`systemorph-com`, app id 4918443). Its title must name a review: `No blocking findings`,
+`N blocking finding(s)` or `Review carried from …`. In the check that is `real_review_run(check_runs, head)`.
+The second is **a completed Copilot review object on the pull request with zero findings, on ANY of its
+heads.** It is the fallback while Copilot is still requested; see [The internal reviewer is the
+reviewer](#the-internal-reviewer-is-the-reviewer-2026-11-08). In the check that is `copilot_review_of_pull_request(reviews, head)`: a review by the
 Copilot account (id 175728472, type Bot) at a non-`PENDING` state, whose body is not a refusal,
 against the current head or any earlier one, and no reviewer thread anywhere on the pull request.
 A re-review on every push is **not** required: a clean review followed by a push — a fix, or a
@@ -278,7 +283,9 @@ merge of `main` — stays reviewed.
 | a clean Copilot review of an EARLIER head, then a push that changed the pull request's own diff | RED — **this head owes a review** (`Verdict.stale`, policy `review-on-real-change`) until the requested review lands |
 | no Copilot review object at all | RED — never reviewed |
 | a Copilot refusal only (any head) | RED — a refusal is not a review |
-| the internal reviewer's clean review only | RED — **no Copilot review** (`Verdict.not_copilot`) |
+| the internal reviewer's `internal-review` review run on the current head (`No blocking findings`, or `Review carried from …` after a clean merge of `main`) | **reviewed, nothing found** — green, with no Copilot review at all |
+| the internal reviewer's review run on an EARLIER head only | RED, and **pending** (it arrives): the control plane reviews every head, or carries the review across a clean merge |
+| the internal reviewer's clean review *body* without that run | RED, pending — the body is not the evidence, the head-bound run is (`Verdict.not_copilot` is retired) |
 | a `Reviewer unavailable` degradation run | RED — not a review (it used to release the gate; see below) |
 | nothing for N minutes | RED — elapsed time is never evidence; there is no timeout-based acceptance |
 | any red row above plus a maintainer's `review-waived` label | green, credited to the person who waived |
@@ -298,7 +305,11 @@ the state #4730 was about.
 **Controls.** The self-test's `EVIDENCE` cases pin each row above with a control beside each case.
 Cut `copilot_review_of_pull_request` back to the current head (`copilot_review_on`) and the
 earlier-head case, the refusal-then-earlier-review case and the person's-lock-PR case turn red;
-widen it to any reviewer and the internal-reviewer cases turn green and fail.
+widen it to any reviewer and the internal-reviewer cases turn green and fail. The `INTERNAL` cases pin the
+internal reviewer's evidence. A clean run on the head turns green, and so does a carried run. Findings that are
+all answered turn green as well. Each of the following stays red: a run on another head, the degradation, the
+*Review not completed* exit, a run still in progress, and the same check name posted by another App. If you delete
+the `real_review_run` branch in `evaluate`, the positive cases turn red.
 
 ## The reviewer, as measured
 
@@ -320,11 +331,56 @@ both slugs as the same App (`DEGRADATION_APP_SLUGS`, always together with the id
 cases of `--self-test` pin both, with another App's bot and a `User` account of the new name as
 negative controls.
 
-**Historical — superseded by the next section.** Under the retired policy [`internal-code-review`](../PolicyNotProse) two reviewers were accepted: Copilot, and the internal GLM-5.3 reviewer of MeshWeaver.Plugins' PR steward, which posts through the `systemorph-com` App (COMMENTED or CHANGES_REQUESTED, never APPROVED). That policy planned for Copilot to leave the set; the next section reverses it.
+### The internal reviewer is the reviewer (2026-11-08)
 
-### Copilot is the reviewer again
+Maintainer, 2026-11-08: *"we can take code reviews on our side and do them, e.g., with glm 5.3 in high
+thinking"*. Policy [`internal-code-review`](../PolicyNotProse) is in force again and supersedes
+`copilot-code-review`.
 
-Policy [`copilot-code-review`](../PolicyNotProse) reverses `internal-code-review`. GitHub Copilot reviews every pull request again; the internal reviewer is no longer required and is being switched off.
+- **The reviewer.** The control plane's internal reviewer is MeshWeaver.Plugins `Hosting/Triage`, design
+  `Governance/PullRequestSteward`. It runs GLM-5.3 at reasoning effort **high**, declared in the control
+  instance's deployment record (`Hosting__Triage__PullRequestReview__Ensemble__Members__0__Effort`).
+  The organisation webhook's pull-request events start it, and so does its own ten-minute sweep. It posts
+  through the `systemorph-com` App: a review (COMMENTED, with its findings as inline threads) and the
+  `internal-review` check run on the head.
+- **This merge gate.** The internal review run on the head is the evidence (see the table above), and
+  zero findings turn the gate green by itself. The review event and the check-run event both start
+  evaluations, because the App's events need no approval. A review comment from Copilot does need
+  approval (`action_required`), which is why its review could never re-evaluate the gate.
+  `review-answered-on-degradation.yml` re-evaluates on every completed `internal-review` run.
+- **The request lane** (`node-repo-request-review.yml`, `internal_review_state`). It asks the internal
+  reviewer for nothing, because the webhook starts every review. It reads whether the internal
+  reviewer's review landed on the head, or on an earlier head with only clean merges of `main` since. If
+  it did, Copilot is not requested. Copilot is requested **as the fallback** only for a head that has gone
+  `copilot-fallback-minutes` with no internal review (60 until 2026-11-08; 0, retired, since). The scheduled sweep makes that
+  request, through the unchanged review-on-real-change predicate (retired by default, see below). The lane reads reviews: its callers grant
+  `pull-requests` and not `checks`, and a new grant would cause a `startup_failure` on every caller. Where
+  the token can read check runs anyway (a public repository, or a caller that grants `checks: read`), the
+  lane also requires the review run on the head, as the gate does. A review whose run write was lost
+  then reaches the fallback instead of reading as covered.
+- **Bound to this pull request.** A check run is commit-scoped, so the gate counts the internal run only
+  when this pull request carries the internal reviewer's review it belongs to (`internal_run_unbound`):
+  on the head for a review run, and on the named head for `Review carried from <sha>`. A second pull
+  request at the same commit cannot borrow it.
+- **The fallback is retired (2026-11-08).** The bar was 10 pull requests reviewed by the internal reviewer
+  across the repositories. It reviewed 18, across MeshWeaver, MeshWeaver.Plugins, Memex and
+  MeshWeaver.Deploy, within 20 minutes of being switched back on. `copilot-fallback-minutes` now
+  defaults to `0`, so the internal reviewer is the only reviewer. A caller can re-arm the fallback
+  deliberately with a positive value, for example during a reviewer outage. The gate still accepts a
+  Copilot review that does land.
+- **The rulesets.** `copilot_code_review` was removed from every ruleset on 2026-11-08. Every other rule
+  in those rulesets was kept. Nothing requests Copilot at open any more.
+- **What branch protection requires.** The internal review is required INSIDE `Automatic review
+  answered`, not as a separate `internal-review` context. A separate required context would block on an
+  `N blocking finding(s)` run until a new head is pushed, even after every finding is answered. It
+  would also block a Copilot-fallback review and the maintainer's waiver. Both of those are this gate's
+  own exits.
+
+**Historical — superseded by the next section and by the one above.** Under the retired policy [`internal-code-review`](../PolicyNotProse) two reviewers were accepted: Copilot, and the internal GLM-5.3 reviewer of MeshWeaver.Plugins' PR steward, which posts through the `systemorph-com` App (COMMENTED or CHANGES_REQUESTED, never APPROVED). That policy planned for Copilot to leave the set; the next section reverses it.
+
+### Copilot is the reviewer again (2026-10 — superseded on 2026-11-08)
+
+Policy [`copilot-code-review`](../PolicyNotProse) reversed `internal-code-review`. GitHub Copilot reviews every pull request again; the internal reviewer is no longer required and is being switched off.
 
 - **The request.** Every repository's ruleset carries `copilot_code_review` with `review_on_push: true` (`review_draft_pull_requests: false`), so Copilot reviews every pushed head of a non-draft pull request. [One review per pull request](#one-review-per-pull-request) below turned that off for a while; [Every push is reviewed again](#every-push-is-reviewed-again) turns it back on.
 - **What branch protection requires.** `internal-review` is not a required context in any repository. Core still requires `Automatic review answered`.

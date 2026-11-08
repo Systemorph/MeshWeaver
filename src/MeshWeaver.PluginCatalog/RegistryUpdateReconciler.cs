@@ -716,6 +716,16 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted reboot(s): {Paths}",
                         paths.Count, string.Join(", ", paths));
             })
+            // A package-uninstall restart whose dispatch FAULTED is retried on the same pass, with the
+            // same backoff — by its coordinator, never by repeating any request's phase 1 (#5055). An
+            // Interrupted dispatch is final and never retried (a restart is asked at most once).
+            .SelectMany(_ => PackageRestartCoordinator.RetryFaulted(hub, unit, now))
+            .Do(ids =>
+            {
+                if (!ids.IsEmpty)
+                    logger.LogInformation("[RegistryUpdate] retried {Count} faulted package-uninstall restart(s): {Ids}",
+                        ids.Count, string.Join(", ", ids));
+            })
             // AFTER the re-arm, so a faulted reboot due for its retry is retried, never ended: a reboot
             // that recorded no progress within its declared execution window is ended as Failed, naming
             // the stall — it never stays open, holding every pod's self-reboot back (MeshWeaver#6625).
@@ -1432,6 +1442,25 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     private IObservable<LandedModule?> AdoptOne(
         PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath,
         PackageManifest? record, Func<IObservable<PackageManifest?>> servedListing) =>
+        // 🚨 An install a flag is RETIRING never has its module (re-)landed (MeshWeaver.Plugins#5055):
+        // a landing after phase 1's tombstone is a FIRST landing and would bring the module back on
+        // every replica. The retirement's actual state — the same rule the content lane and the
+        // repair consult (DeclaredDisabledRetirement.IsRetiring); a refused retire still lands.
+        record is null
+            ? AdoptOneUnchecked(bundles, registryName, packageId, moduleName, recordPath, record, servedListing)
+            : DeclaredDisabledRetirement.RetiringInstalls(hub, logger).SelectMany(retiring =>
+            {
+                if (!DeclaredDisabledRetirement.IsRetiring(record, retiring))
+                    return AdoptOneUnchecked(bundles, registryName, packageId, moduleName, recordPath, record, servedListing);
+                logger.LogInformation(
+                    "[RegistryUpdate] {Name}: {Package} is being retired by a feature flag declared off, so its module {Module} is not landed.",
+                    registryName, packageId, moduleName);
+                return Observable.Return<LandedModule?>(null);
+            });
+
+    private IObservable<LandedModule?> AdoptOneUnchecked(
+        PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath,
+        PackageManifest? record, Func<IObservable<PackageManifest?>> servedListing) =>
         // 🚨 policy packages-auto-update — the module lands on TWO inputs only: a newer version was
         // published, and its declared platform floor is met (the floor is decided inside the adopt,
         // ModuleUpdateDecision). The package's own policy still speaks (an administrator's
@@ -1498,7 +1527,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             return bundles.AdoptModuleOutcome(packageId, moduleName, recordPath, unattended: true,
                     policyDecline: policyDecline)
                 .Select(outcome => (ModuleAdoptOutcome?)outcome);
-        return bundles.PlanModuleAdoption(packageId, moduleName, unattended: true, policyDecline, landing)
+        // The record's existence is read BEFORE planning (#7974 review): the plan's own reads are
+        // part of the window an uninstall can remove the record in.
+        return bundles.RecordAtPlan(recordPath).SelectMany(atPlan =>
+            bundles.PlanModuleAdoption(packageId, moduleName, unattended: true, policyDecline, landing)
             .SelectMany(plan => !plan.Lands
                 ? Observable.Return<ModuleAdoptOutcome?>(plan.Decided)
                 : servedListing()
@@ -1509,13 +1541,14 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     .SelectMany(declined =>
                     {
                         if (declined is null)
-                            return bundles.ExecuteModuleAdoption(plan, packageId, moduleName, recordPath)
+                            return bundles.ExecuteModuleAdoption(plan, packageId, moduleName, recordPath,
+                                    recordAtPlan: atPlan.Exists, incarnationAtPlan: atPlan.Incarnation)
                                 .Select(outcome => (ModuleAdoptOutcome?)outcome);
                         logger?.LogInformation(
                             "[RegistryUpdate] module '{Module}' of {Id} is NOT landed on this pass: {Reason}",
                             moduleName, packageId, declined);
                         return Observable.Return<ModuleAdoptOutcome?>(null);
-                    }));
+                    })));
     }
 
     /// <summary>

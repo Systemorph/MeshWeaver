@@ -64,6 +64,20 @@ public sealed record DeclaredApp(string Id, string Name, string Icon, string Ope
         path.Replace(ViewerToken, viewer, StringComparison.OrdinalIgnoreCase).Trim('/');
 }
 
+/// <summary>
+/// A module's declaration that an app is the CATALOG of some node types — the code form of an app
+/// root's <c>catalogs</c>, for the module that SERVES those types when the app browsing them is no
+/// package root of its own (the built-in Inbox browses mail; the Threads app on a device mesh that
+/// runs the AI engine without its package). While the module is installed, the types get no section
+/// of their own on the home below the Apps band (Doc/Architecture/AppsHome → "Type sections").
+/// </summary>
+/// <param name="AppId">The app that catalogs the types — an app root's path or a built-in's id
+/// (<c>Inbox</c>). Informational: the exclusion holds while the declaring module is installed.</param>
+/// <param name="Types">The node types the app catalogs.</param>
+/// <remarks>A SET modules contribute to, read absence-aware like <see cref="DeclaredApp"/>.</remarks>
+[AbsentWhenModuleGone]
+public sealed record AppCatalogDeclaration(string AppId, CatalogedTypeSet Types);
+
 /// <summary>Registers <see cref="DeclaredApp"/>s on the mesh builder.</summary>
 public static class DeclaredAppRegistration
 {
@@ -75,6 +89,19 @@ public static class DeclaredAppRegistration
     public static TBuilder AddDeclaredApp<TBuilder>(this TBuilder builder, DeclaredApp app) where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services => services.AddSingleton(app));
+        return builder;
+    }
+
+    /// <summary>
+    /// Declares that the app <paramref name="appId"/> is the CATALOG of <paramref name="types"/>
+    /// (<see cref="AppCatalogDeclaration"/>): the home gives them no type section while this module
+    /// is installed. Call it from the module that serves the types. A plain <c>AddSingleton</c>: an
+    /// enumerable fan-in, read by <see cref="AppDirectory.CatalogedTypes"/>.
+    /// </summary>
+    public static TBuilder AddAppCatalog<TBuilder>(this TBuilder builder, string appId, params string[] types) where TBuilder : MeshBuilder
+    {
+        var declaration = new AppCatalogDeclaration(appId, CatalogedTypeSet.Of(types));
+        builder.ConfigureServices(services => services.AddSingleton(declaration));
         return builder;
     }
 }

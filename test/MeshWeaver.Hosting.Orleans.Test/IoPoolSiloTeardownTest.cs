@@ -354,7 +354,9 @@ public class IoPoolSiloTeardownTest
     /// <summary>
     /// 🚨 #7277, the <c>Query=0</c> shape: the silo stop's <c>Dispose()</c> hands the pool token's
     /// cancel to the pool's canceller thread, and that cancel runs every pooled subscription's
-    /// downstream teardown inline. One teardown callback that parks keeps the cancel from returning,
+    /// registered teardown inline — since #7968 only the pool's own teardown of the SOURCE (it delivers
+    /// no subscriber terminal), so that is what parks here. One teardown callback that parks keeps the
+    /// cancel from returning,
     /// so disposal never completes — while no LEAF is in flight. Before this fix the expiry then read
     /// <c>Did NOT report: Query=0.</c>, naming nothing (three production occurrences): the cancel's
     /// label was set only by <c>Drain()</c>'s own join, which the Dispose path never runs. The report
@@ -372,8 +374,8 @@ public class IoPoolSiloTeardownTest
         await observer.OnStart(TestContext.Current.CancellationToken);
 
         // A live pooled subscription whose subscribe RETURNS (so no leaf is in flight) and whose
-        // OnCompleted — run by the pool's cancel — parks. `subscribed` travels leaf → test; `release`
-        // travels test → the deliberately parked callback, written in the finally.
+        // source teardown — run by the pool's cancel — parks. `subscribed` travels leaf → test;
+        // `release` travels test → the deliberately parked callback, written in the finally.
         var subscribed = new AsyncSubject<Unit>();
         var release = 0;
         using var subscription = registry.Get(IoPoolNames.Query)
@@ -381,9 +383,9 @@ public class IoPoolSiloTeardownTest
             {
                 subscribed.OnNext(Unit.Default);
                 subscribed.OnCompleted();
-                return Disposable.Empty;
+                return Disposable.Create(() => ParkedInsideATeardownCallback(() => Volatile.Read(ref release) == 1));
             }))
-            .Subscribe(_ => { }, _ => { }, () => ParkedInsideATeardownCallback(() => Volatile.Read(ref release) == 1));
+            .Subscribe(_ => { }, _ => { });
 
         try
         {

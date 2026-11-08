@@ -100,6 +100,31 @@ public sealed class LauncherArrangementSource
                     }))
             .Switch();
 
+    /// <summary>
+    /// Rearranges <paramref name="owner"/>'s home type sections (hide, show, reorder): the change is
+    /// a merge patch on the arrangement node when it exists, and a create-if-absent of it — carrying
+    /// only the changed sections — when it does not (an "already exists" race falls back to the
+    /// patch). Existence is read from the live listing (<see cref="Observe"/>), never a point read of
+    /// a possibly absent node. The create runs as the owner: it is their own data.
+    /// </summary>
+    public IObservable<MeshNode> UpdateSections(string owner, Func<HomeSections, HomeSections> change)
+    {
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var options = hub.JsonSerializerOptions;
+        IObservable<MeshNode> Patch() => LauncherArrangementPaths.UpdateSections(cache, owner, change, options);
+        return Observe(owner)
+            .Take(1)
+            .SelectMany(current => current is not null
+                ? Patch()
+                : CreateAs(access, owner, () => mesh.CreateNode(BuildNode(owner, new LauncherArrangement { Sections = change(new HomeSections()) })))
+                    .Catch((Exception exception) => exception.IsNodeAlreadyExists() ? Patch() : Observable.Throw<MeshNode>(exception)));
+    }
+
+    private static IObservable<MeshNode> CreateAs(AccessService? access, string owner, Func<IObservable<MeshNode>> create) =>
+        access is null ? create() : access.RunAs(new AccessContext { ObjectId = owner, Name = owner }, create);
+
     /// <summary>Whether this process has seeded <paramref name="owner"/>'s arrangement.</summary>
     public bool IsSeeded(string owner)
     {

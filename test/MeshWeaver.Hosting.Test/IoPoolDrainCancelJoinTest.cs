@@ -36,6 +36,14 @@ namespace MeshWeaver.Hosting.Test;
 /// <c>CompletionUsageIndex.EnsureFresh()</c>, whose 1 s <c>Throttle</c> lands on the test bodies
 /// that take ~1 s (1018 ms and 1044 ms in the two traces that survived).</para>
 ///
+/// <para><b>#7968 closed the channel this ran through.</b> The drain callback no longer calls the
+/// subscriber at all (it runs no consumer code on the canceller; a still-attached subscription is an
+/// unowned leak), so a consumer's gate can no longer park the cancel from EITHER side. The first test
+/// now pins that: the consumer is inside its gate for the whole drain, and the drain neither enters it
+/// nor waits on it. A cancel can still park in the pool's OWN teardown of a source (its
+/// <c>Dispose</c>), and the second test keeps the diagnostic for that: the residual names the cancel
+/// join.</para>
+///
 /// <para>Deterministic here because the timer is a <see cref="TestScheduler"/> advanced from a
 /// thread this test owns, and the two interleavings the deadlock needs — "the consumer is inside
 /// its gate" and "the drain callback is executing" — are volatile flags polled under bounded
@@ -47,24 +55,25 @@ public class IoPoolDrainCancelJoinTest
     private static readonly TimeSpan DrainBudget = TimeSpan.FromMilliseconds(250);
 
     /// <summary>
-    /// 🚨 THE repro. Fails on the pre-fix pool with <c>Query=1</c> and no site after exactly one
-    /// drain budget — the CI signature — and the two threads stay deadlocked for the life of the
-    /// process, exactly as they did on the runner.
+    /// 🚨 THE repro, under the #7968 contract. The consumer is INSIDE its Throttle gate (on the timer
+    /// thread) for the whole drain — the interleaving that used to deadlock against the drain's
+    /// <c>OnCompleted</c>. The drain must return on its own with no residual, without ever entering the
+    /// consumer's chain, and the still-attached subscription must be named as a leak.
     /// </summary>
     [Fact]
-    public void Drain_WhenAConsumerCompletesInsideItsOperatorGateAsTheDrainCancels_TheCancelReturns()
+    public void Drain_WhileAConsumerIsInsideItsOperatorGate_TheCancelNeitherEntersNorWaitsOnIt()
     {
         using var registry = new IoPoolRegistry(new IoPoolOptions { DrainTimeout = DrainBudget });
-        var pool = registry.Get(IoPoolNames.Query);
+        var pool = (IoPool)registry.Get(IoPoolNames.Query);
         var scheduler = new TestScheduler();
         var feed = new Subject<int>();
         var subscribed = 0;
-        var drainCallbackEntered = 0;
+        var drainEnteredConsumer = 0;
         var consumerInsideGate = 0;
+        var drainReturned = 0;
         var consumerReturned = 0;
 
-        // The change feed a query opens: subscribed through the pool (the tracked window), then
-        // left open — a query's feed never completes on its own.
+        // The change feed a query opens: subscribed through the pool, then left open.
         var pooled = pool.SubscribeThroughPool(Observable.Create<int>(o =>
         {
             var d = feed.Subscribe(o);
@@ -72,76 +81,78 @@ public class IoPoolDrainCancelJoinTest
             return d;
         }));
 
-        // CompletionUsageIndex.EnsureFresh()'s exact operator shape, with the two interleavings
-        // made explicit:
-        //  • the drain's OnCompleted passes the first Do on the IoPool-cancel thread BEFORE it
-        //    reaches Throttle's gate — that is "the drain callback is executing";
-        //  • the second Do runs INSIDE Throttle's gate on the timer thread (Rx forwards from
-        //    Propagate under `lock (_gate)`), and holds it until the callback is executing.
-        // Take(1) then completes and disposes upstream — still under that gate — which is where
-        // CancellationTokenRegistration.Dispose() used to wait for the very callback that is
-        // waiting for the gate.
+        // CompletionUsageIndex.EnsureFresh()'s operator shape. The first Do records any terminal the
+        // pool delivers (there must be none); the second runs INSIDE Throttle's gate on the timer
+        // thread and holds it until the drain has returned.
         using var subscription = pooled
-            .Do(_ => { }, () => Volatile.Write(ref drainCallbackEntered, 1))
+            .Do(_ => { }, _ => Volatile.Write(ref drainEnteredConsumer, 1), () => Volatile.Write(ref drainEnteredConsumer, 1))
             .Throttle(TimeSpan.FromSeconds(1), scheduler)
             .Do(_ =>
             {
                 Volatile.Write(ref consumerInsideGate, 1);
-                SpinWait.SpinUntil(() => Volatile.Read(ref drainCallbackEntered) == 1, Timeout10);
+                SpinWait.SpinUntil(() => Volatile.Read(ref drainReturned) == 1, Timeout10);
             })
             .Take(1)
             .Subscribe(_ => { }, _ => { });
 
-        SpinWait.SpinUntil(() => Volatile.Read(ref subscribed) == 1, Timeout10)
-            .Should().BeTrue("precondition: the pooled subscribe ran and the drain registration exists");
-
-        // The timer thread: the feed's Initial arrives, then virtual time reaches the throttle's
-        // due time and Propagate forwards under the gate.
-        var timer = new Thread(() =>
+        Thread? timer = null;
+        try
         {
-            feed.OnNext(1);
-            scheduler.AdvanceBy(TimeSpan.FromSeconds(1).Ticks);
-            Volatile.Write(ref consumerReturned, 1);
-        })
+            SpinWait.SpinUntil(() => Volatile.Read(ref subscribed) == 1, Timeout10)
+                .Should().BeTrue("precondition: the pooled subscribe ran and the drain registration exists");
+
+            timer = new Thread(() =>
+            {
+                feed.OnNext(1);
+                scheduler.AdvanceBy(TimeSpan.FromSeconds(1).Ticks);
+                Volatile.Write(ref consumerReturned, 1);
+            })
+            {
+                IsBackground = true,
+                Name = "rx-throttle-timer",
+            };
+            timer.Start();
+
+            SpinWait.SpinUntil(() => Volatile.Read(ref consumerInsideGate) == 1, Timeout10)
+                .Should().BeTrue("precondition: the consumer is inside its operator gate");
+
+            var sw = Stopwatch.StartNew();
+            var residual = registry.DrainAll(out var byPool);
+            sw.Stop();
+            Volatile.Write(ref drainReturned, 1);
+
+            residual.Should().Be(0,
+                "a consumer inside its operator gate must never be able to park the pool's cancel. "
+                + "Residual reported: [{0}]", string.Join(", ", byPool));
+            sw.Elapsed.Should().BeLessThan(DrainBudget,
+                "the cancel join returns because the callbacks FINISHED, not because the budget expired");
+            Volatile.Read(ref drainEnteredConsumer).Should().Be(0,
+                "the pool's cancel runs NO consumer code (#7968): it delivered no terminal into the chain");
+            pool.UnownedLeaks.Should().Be(1,
+                "the subscription was still attached when the pool was cancelled — its owner never disposed it");
+            SpinWait.SpinUntil(() => Volatile.Read(ref consumerReturned) == 1, Timeout10)
+                .Should().BeTrue("the consumer's own thread finished its work and its unsubscribe");
+        }
+        finally
         {
-            IsBackground = true,
-            Name = "rx-throttle-timer",
-        };
-        timer.Start();
-
-        SpinWait.SpinUntil(() => Volatile.Read(ref consumerInsideGate) == 1, Timeout10)
-            .Should().BeTrue("precondition: the consumer is inside its operator gate, about to complete");
-
-        // Teardown's phase 2: cancel + join every pool. On the pre-fix pool this returns after the
-        // budget with the cancel thread and the timer thread parked on each other.
-        var sw = Stopwatch.StartNew();
-        var residual = registry.DrainAll(out var byPool);
-        sw.Stop();
-
-        residual.Should().Be(0,
-            "a consumer unsubscribing from inside its operator gate must never be able to park the "
-            + "pool's cancel: its unsubscribe must not wait for the drain callback, and the callback "
-            + "then completes on its own. Residual reported: [{0}]",
-            string.Join(", ", byPool));
-        sw.Elapsed.Should().BeLessThan(DrainBudget,
-            "the cancel join must return because the callbacks FINISHED, not because the budget "
-            + "expired — a join that only returns on its budget is the anonymous 30 s teardown");
-        SpinWait.SpinUntil(() => Volatile.Read(ref consumerReturned) == 1, Timeout10)
-            .Should().BeTrue("the consumer's unsubscribe returned — it did not wait on the drain callback");
+            Volatile.Write(ref drainReturned, 1);
+            timer?.Join(Timeout10);
+        }
     }
 
     /// <summary>
     /// The diagnostic half: a cancel that does not return within the budget must be NAMED as the
     /// cancel join, not reported as an anonymous count. <c>Query=1</c> and <c>Query=1 [the cancel
     /// did not return]</c> are the difference between a week and an afternoon (#2616 → this file).
-    /// The parked callback here is the subscriber's own <c>OnCompleted</c>, which the drain runs
-    /// inline — the same channel the deadlock above travels, without the deadlock.
+    /// Since #7968 the subscriber's terminal can no longer park it (the drain delivers none); the
+    /// remaining thing the cancel runs is the pool's own teardown of the source, so that is what parks
+    /// here.
     /// </summary>
     [Fact]
     public void Drain_WhenTheCancelJoinExpires_TheResidualNamesTheCancelJoin()
     {
         using var registry = new IoPoolRegistry(new IoPoolOptions { DrainTimeout = DrainBudget });
-        var pool = registry.Get(IoPoolNames.Query);
+        var pool = (IoPool)registry.Get(IoPoolNames.Query);
         var subscribed = 0;
         var release = 0;
 
@@ -149,14 +160,11 @@ public class IoPoolDrainCancelJoinTest
             .SubscribeThroughPool(Observable.Create<int>(_ =>
             {
                 Volatile.Write(ref subscribed, 1);
-                return Disposable.Empty;
-            }))
-            .Subscribe(
-                _ => { },
-                _ => { },
-                // The SUBJECT: a teardown that will not return. Bounded, and released in the
+                // The SUBJECT: a source teardown that will not return. Bounded, and released in the
                 // finally below so a failing assertion cannot leave the cancel thread parked.
-                () => SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, Timeout10));
+                return Disposable.Create(() => SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, Timeout10));
+            }))
+            .Subscribe(_ => { }, _ => { });
 
         try
         {
