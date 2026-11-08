@@ -277,19 +277,27 @@ public class EventSubscriptionExactPathDeletionTest(ITestOutputHelper output) : 
         var final = await Settled(subscription.Id);
         Assert.True(final.Status == EventSubscriptionStatus.Fired, $"subscription ended {final.Status}: {final.LastError}");
         await Until(() => runner.PendingSnapshot.All(s => s.Id != subscription.Id));
-        Release(rest);
-        // Every read the runner issued has answered — so whatever it was going to deliver off them has
-        // been handed to Execute — before the deliveries are counted.
-        await Until(() => Volatile.Read(ref answered) >= Volatile.Read(ref calls));
+        var firstDelivery = await Delivered($"{Receivers}/owner-t");
 
-        var deliveries = await Mesh.GetWorkspace().GetMeshNodeStream($"{Receivers}/owner-t")
+        // Collect from BEFORE the held reads are released: the stream replays only the latest value, so
+        // a second delivery that landed before a later subscription would be counted as one.
+        var deliveries = Mesh.GetWorkspace().GetMeshNodeStream($"{Receivers}/owner-t")
             .Select(n => n?.ContentAs<ReceiverContent>(Mesh.JsonSerializerOptions)?.EventDelivery?.FiredAt)
             .Where(at => at is not null)
             .Distinct()
-            .TakeUntil(Observable.Timer(4.Seconds()))
+            .TakeUntil(Observable.Timer(10.Seconds()))
             .ToList()
-            .Await();
-        Assert.True(deliveries.Count == 1, $"delivered {deliveries.Count} times; {Volatile.Read(ref calls)} read(s) issued");
+            .Replay();
+        using var collecting = deliveries.Connect();
+
+        Release(rest);
+        // Every read the runner issued has answered — so whatever it was going to deliver off them has
+        // been handed to Execute — before the window closes.
+        await Until(() => Volatile.Read(ref answered) >= Volatile.Read(ref calls));
+
+        var seen = await deliveries.Await();
+        Assert.True(seen.Count == 1 && seen[0] == firstDelivery.FiredAt,
+            $"saw {seen.Count} distinct delivery time(s), the first being {firstDelivery.FiredAt:O}; {Volatile.Read(ref calls)} read(s) issued");
     }
 
     /// <summary>
