@@ -396,7 +396,7 @@ Browsers make a **localhost exception** (they accept `Secure` cookies over `http
 
 ---
 
-### The owner is the instance's global administrator (the onboarding rule)
+### The owner is the instance's global administrator (the onboarding rule, part of §9)
 
 **Every onboarding collects the OWNER, and the owner is the instance's global administrator** (maintainer, 2026-11-08). `memex-local up`, `fleet join`, the `.pkg`'s unattended daemon and `first-attach.sh` all ask for it, or read it from `--owner`/`--owner-email`, from `MEMEX_OWNER`/`MEMEX_OWNER_EMAIL`, or from the managed preferences `OwnerId`/`OwnerEmail`. It is the MeshWeaver **user id** the owner signs in as, not the e-mail, plus their **e-mail**. Both go into this install's own overlay and nowhere else:
 - `Auth__GlobalAdmins__0`, from which the portal seeds the Admin grant, so the owner can install packages such as ClaudeCode from Admin;
@@ -406,7 +406,7 @@ An unattended install with no owner **fails** rather than come up without an adm
 
 ## 10. Local LLM — Qwen via Ollama
 
-The local LLM is wired through the chart's **`OpenAICompatible`** provider, and it is the **default chat model on every memex-local install** — no key, no command. The wrinkle on macOS is the **GPU**: Colima's arm64 VM has no Metal passthrough, so a containerized Ollama would run CPU-only. Therefore **Ollama runs on the host** (keeping the Metal GPU), **bound to the Mac's loopback** (it has no authentication), and the cluster reaches it through the VM's gateway, which Colima maps to the Mac's loopback. `memex-local up` proves that reach from inside the VM. Only when the VM cannot reach a loopback listener does memex-local move its own Ollama agent to every interface, and then it says so loudly. That fallback, and an Ollama someone else already started LAN-wide, are refused outright with `MEMEX_OLLAMA_ALLOW_LAN=0`, which is the setting for a Mac whose network is not trusted.
+The local LLM is wired through the chart's **`OpenAICompatible`** provider, and it is the **default chat model on every memex-local install** — no key, no command. The wrinkle on macOS is the **GPU**: Colima's arm64 VM has no Metal passthrough, so a containerized Ollama would run CPU-only. Therefore **Ollama runs on the host** (keeping the Metal GPU), **bound to the Mac's loopback** (it has no authentication), and the cluster reaches it through the VM's gateway, which Colima maps to the Mac's loopback. `memex-local up` proves that reach from inside the VM. Only when the VM cannot reach a loopback listener does memex-local move its own Ollama agent to every interface, and then it says so loudly. `MEMEX_OLLAMA_ALLOW_LAN` defaults to `1`, which permits that fallback, loudly, so an ordinary install is not protected from it by default. Set it to `0` on a Mac whose network is not trusted: the fallback and an Ollama someone else already started LAN-wide are then refused outright, and the portal has no local model rather than an exposed one.
 
 The chart's `deploy/helm/templates/ollama/service.yaml` (gated on `ollama.external.enabled`) creates a **selector-less `Service ollama` + a manual `Endpoints`** object pointing at the VM's gateway (`ollama.external.host`). `memex-local` resolves that gateway per install from inside the VM (Colima's is usually `192.168.5.2`, but it can differ). What the portal is configured with:
 
