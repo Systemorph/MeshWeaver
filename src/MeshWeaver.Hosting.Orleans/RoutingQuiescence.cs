@@ -305,6 +305,86 @@ public sealed class RoutingQuiescence : IDisposable
     // out of a Finally) would turn a leg's own bookkeeping into a second fault. The Subject is
     // never disposed for the same reason: with the connection gone it has no observers, so a late
     // push is a no-op rather than a throw.
+    // 🚨 #7968 — the OWNER of every routing leg. A leg is a pooled subscription (RoutingGrain.Dispatch,
+    // its NACKs, its refused-reply reports, OrderedRouteDispatcher's ordered legs) whose `.Finally`
+    // releases bookkeeping: the in-flight route count, this gauge's slot, the ordered channel's FIFO.
+    // Until #7968 that `.Finally` ran because the IoPool's drain COMPLETED the leg on its canceller
+    // (#1789) — consumer code on the pool's thread, which a held consumer lock turned into a parked
+    // cancel. The pool no longer delivers anything there; the leg's owner disposes it instead, and Rx
+    // runs `.Finally` on dispose as well, on the disposer's thread. The grain cannot be the owner (a
+    // StatelessWorker is recycled; its legs are not), so the silo-scoped gauge is: it already tracks
+    // every leg from dispatch to termination, and it is released at the silo stage just before
+    // IoPoolSiloTeardown (see RoutingQuiescenceSiloParticipant.Participate), after the hold and the
+    // grain deactivations.
+    private readonly ConcurrentDictionary<long, IDisposable> ownedLegs = new();
+    private long ownedTicket;
+    private int releasing;
+
+    /// <summary>
+    /// Whether <see cref="ReleaseOwnedLegs"/> has begun: no new routing leg may be started from here
+    /// on — the pool drains next — and one handed to <see cref="Own"/> is disposed at once.
+    /// </summary>
+    public bool IsReleasing => Volatile.Read(ref releasing) != 0;
+
+    /// <summary>
+    /// Takes ownership of a routing leg's subscription until it terminates: the returned handle is
+    /// disposed by the leg's own <c>.Finally</c> (which removes it), and <see cref="ReleaseOwnedLegs"/>
+    /// disposes every leg still owned. Pass a <see cref="SingleAssignmentDisposable"/> created BEFORE
+    /// subscribing, so a release that races the subscribe still reaches the subscription.
+    /// </summary>
+    /// <param name="leg">The leg's subscription (or the slot it will be assigned to).</param>
+    /// <returns>
+    /// The ownership handle — dispose it when the leg terminates — or <c>null</c> when the owner is
+    /// already RELEASING: then <paramref name="leg"/> has been disposed and the caller must NOT start
+    /// the routing work (it runs its bookkeeping instead; the pools drain next). A release that begins
+    /// after this returned a handle still reaches the leg through <paramref name="leg"/>, whose later
+    /// assignment then disposes the subscription at once.
+    /// </returns>
+    public IDisposable? Own(IDisposable leg)
+    {
+        var id = Interlocked.Increment(ref ownedTicket);
+        ownedLegs[id] = leg;
+        // Published-then-read, mirrored in ReleaseOwnedLegs (flag-then-enumerate): either the release
+        // sees this entry or this sees the flag — a leg can never escape both.
+        if (IsReleasing)
+        {
+            if (ownedLegs.TryRemove(id, out _))
+                leg.Dispose();
+            return null;
+        }
+        return Disposable.Create(() => ownedLegs.TryRemove(id, out _));
+    }
+
+    /// <summary>
+    /// Disposes every routing leg still owned — their <c>.Finally</c> bookkeeping runs on THIS thread,
+    /// the owner's — and refuses legs from now on. Called at the silo stage just before the pools drain
+    /// (and again, idempotently, from <see cref="Dispose"/> for a container torn down without an
+    /// orderly stop), so a leg is never left for the pool's cancel to find. EVERY leg is attempted; a
+    /// leg whose teardown throws does not keep the rest attached — the failures are thrown together
+    /// afterwards.
+    /// </summary>
+    /// <returns>The number of legs disposed.</returns>
+    /// <exception cref="AggregateException">One or more legs' teardown threw; all were attempted.</exception>
+    public int ReleaseOwnedLegs()
+    {
+        Interlocked.Exchange(ref releasing, 1);
+        var released = 0;
+        var failures = System.Collections.Immutable.ImmutableList<Exception>.Empty;
+        foreach (var id in ownedLegs.Keys)
+        {
+            if (!ownedLegs.TryRemove(id, out var leg))
+                continue;
+            released++;
+            try { leg.Dispose(); }
+            catch (Exception ex) { failures = failures.Add(ex); }
+        }
+        if (!failures.IsEmpty)
+            throw new AggregateException(
+                $"RoutingQuiescence: {failures.Count} of {released} owned routing leg(s) threw while being released; every leg was attempted.",
+                failures);
+        return released;
+    }
+
     private void Push(int delta)
     {
         if (Volatile.Read(ref disposed) != 0)
@@ -317,8 +397,15 @@ public sealed class RoutingQuiescence : IDisposable
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
-        connections.Dispose();
-        scheduler.Dispose();
+        // #7968: the gauge OWNS legs, so its disposal releases them — the orderly silo stop has
+        // usually done this already (idempotent), but a container disposed without one (an aborted
+        // startup goes straight to host disposal) must not leave legs attached for the pool to find.
+        try { ReleaseOwnedLegs(); }
+        finally
+        {
+            connections.Dispose();
+            scheduler.Dispose();
+        }
     }
 }
 
@@ -414,10 +501,46 @@ public sealed class RoutingQuiescenceSiloParticipant
     }
 
     /// <inheritdoc />
-    public void Participate(ISiloLifecycle observer) =>
+    public void Participate(ISiloLifecycle observer)
+    {
         // Active ⇒ the LAST stage to start and the FIRST to stop (Orleans stops in descending
         // stage order). See the type remarks for why it must be this early.
         observer.Subscribe(nameof(RoutingQuiescenceSiloParticipant), ServiceLifecycleStage.Active, this);
+        // #7968: the gauge OWNS the legs, so it disposes them — after the hold above and after every
+        // grain has deactivated (each leg got its whole chance to land), and BEFORE IoPoolSiloTeardown
+        // (ServiceLifecycleStage.First, which stops last) cancels the pools. A leg left for the pool's
+        // cancel would be torn down with no terminal and named as an unowned leak.
+        observer.Subscribe(nameof(RoutingLegRelease), ServiceLifecycleStage.First + 1,
+            new RoutingLegRelease(quiescence, logger));
+    }
+
+    /// <summary>
+    /// The owner's release of every routing leg still in flight, at the silo stage just before the
+    /// pools drain (#7968). Synchronous: disposing a leg runs only its own bookkeeping.
+    /// </summary>
+    private sealed class RoutingLegRelease(RoutingQuiescence quiescence, ILogger logger) : ILifecycleObserver
+    {
+        public Task OnStart(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task OnStop(CancellationToken cancellationToken)
+        {
+            int released;
+            try { released = quiescence.ReleaseOwnedLegs(); }
+            catch (AggregateException ex)
+            {
+                // Every leg was attempted; the stop proceeds — the pool drain names anything left.
+                logger.LogError(ex, "RoutingQuiescence: releasing the owned routing legs threw — every leg was "
+                    + "attempted, and the silo stop proceeds to the pool drain");
+                return Task.CompletedTask;
+            }
+            if (released > 0)
+                logger.LogWarning(
+                    "RoutingQuiescence: released {Released} routing leg(s) still in flight before the pools "
+                    + "drain — they did not land during the hold or the grain deactivations; their owner "
+                    + "disposed them so the pool's cancel finds none (#7968)", released);
+            return Task.CompletedTask;
+        }
+    }
 
     Task ILifecycleObserver.OnStart(CancellationToken cancellationToken) => Task.CompletedTask;
 

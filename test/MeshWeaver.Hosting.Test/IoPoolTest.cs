@@ -835,43 +835,38 @@ public class IoPoolTest
     }
 
     /// <summary>
-    /// 🚨 A leg the drain cancels AFTER its subscribe completed must ALSO terminate — issue #1789,
-    /// the other half of <see cref="Drain_terminates_a_SubscribeThroughPool_leg_it_cancels"/>.
+    /// 🚨 A leg the drain finds AFTER its subscribe completed is torn down and NAMED, never served —
+    /// issue #7968, which reverses #1789's terminal for this window.
     ///
-    /// <para>That test covers a leg cancelled BEFORE or DURING <c>source.Subscribe(observer)</c>:
-    /// its gate wait throws <see cref="OperationCanceledException"/> and the error arm turns it into
-    /// <c>OnCompleted</c>. A leg whose subscribe already RETURNED never reaches that arm. It is torn
-    /// down by the drain's cancellation registration, which disposed the inner subscription and
-    /// nothing else — and <b>disposing a subscription emits nothing</b>. No <c>OnCompleted</c>, no
-    /// <c>OnError</c>, so the observable terminated in neither direction and every
-    /// <c>.Finally(...)</c> hung off it never ran.</para>
+    /// <para><b>History.</b> #1789 (prod 2026-08-17) found that a leg cancelled here terminated in
+    /// neither direction — the drain disposed the inner subscription, and disposal emits nothing — so
+    /// <c>RoutingGrain.Dispatch</c>'s in-flight decrement and <c>OrderedRouteDispatcher</c>'s FIFO advance,
+    /// both in a <c>.Finally</c>, never ran. It made the drain call <c>observer.OnCompleted()</c>. That
+    /// ran the consumer's teardown on the <c>IoPool-cancel</c> thread, and in #7968 a consumer lock held
+    /// by another thread (a <c>SelectMany</c>'s gate) parked the cancel for the whole silo join.</para>
     ///
-    /// <para>That bookkeeping is <c>RoutingGrain.Dispatch</c>'s in-flight decrement and
-    /// <c>OrderedRouteDispatcher.DrainNext</c>'s FIFO advance. Leaking it strands a destination's
-    /// queue permanently and makes the <c>cleared after</c> line structurally impossible to emit
-    /// (it requires in-flight to fall back below half the saturation threshold) — which is exactly
-    /// what prod showed on 2026-08-17: two saturation Criticals ten minutes apart at identical
-    /// depth, both deep inside the termination grace period, with no clear line in the window.</para>
+    /// <para><b>The contract now.</b> The pool runs no consumer code on its canceller. A leg still
+    /// attached when the pool is cancelled is one its OWNER never disposed: the pool tears its source
+    /// down, delivers nothing, and reports it as an unowned leak. The routing legs #1789 was about are
+    /// owned by <c>RoutingQuiescence</c>, which disposes them before the pool drains — Rx runs
+    /// <c>.Finally</c> on dispose — so their bookkeeping no longer depends on the drain at all (pinned
+    /// in <c>RoutingLegOwnershipTest</c>; the owned shape in <c>IoPoolDrainRunsNoConsumerCodeTest</c>).</para>
     ///
-    /// <para>Deterministic and bounded: the source's subscribe returns immediately, and the test
-    /// waits for the pool's permit to be released before draining — so the leg is provably PAST the
-    /// window the sibling test covers. Disposal of the inner subscription is asserted first, so a
-    /// failure on termination cannot be confused with a drain that never ran.</para>
+    /// <para>Deterministic and bounded: the source's subscribe returns immediately, and the test waits
+    /// for the pool's permit to be released before draining — so the leg is provably PAST the window
+    /// the sibling test covers. Disposal of the inner subscription is asserted first, so the silence
+    /// asserted after it is attributable to the contract, not to a drain that never ran.</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task Drain_terminates_a_SubscribeThroughPool_leg_that_already_subscribed()
+    public async Task Drain_tears_down_an_unowned_SubscribeThroughPool_leg_names_it_and_delivers_nothing()
     {
         using var pool = new IoPool(2);
-        // Three signals the PRODUCT emits and the test consumes — nothing is parked here, so all
-        // three are AsyncSubjects awaited through the assertion helpers.
         var subscribed = new AsyncSubject<Unit>();
         var innerDisposed = new AsyncSubject<Unit>();
         var terminated = new AsyncSubject<Unit>();
 
         // A LONG-LIVED source, the shape every real SubscribeThroughPool caller has: the subscribe
-        // returns promptly (releasing the pool permit) and the subscription then stays open,
-        // emitting on its own schedule. Nothing here emits — the leg is simply alive when the pool
-        // drains, which is what host shutdown does to every live route.
+        // returns promptly (releasing the pool permit) and the subscription then stays open.
         var source = Observable.Create<int>(obs =>
         {
             subscribed.OnNext(Unit.Default);
@@ -883,6 +878,7 @@ public class IoPoolTest
             });
         });
 
+        // UNOWNED: nothing disposes it before the drain.
         using var sub = pool.SubscribeThroughPool(source)
             .Finally(() =>
             {
@@ -898,23 +894,22 @@ public class IoPoolTest
             "the setup leaf must have released its permit, so the leg is provably past the subscribe "
             + "window the sibling test covers (otherwise this would re-test that one)");
 
-        var drainDone = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
+        var residual = pool.Drain();
 
         await innerDisposed.Should().Within(Timeout5).Emit(
-            "the drain must tear the live inner subscription down — asserted FIRST so a failure on "
-            + "termination below is attributable to the missing terminal, not to a drain that never ran");
-        // 🚨 THE REGRESSION GUARD. Before the fix this never fired: the drain disposed the inner
-        // subscription and emitted nothing, so `.Finally` never ran and this waited out its budget.
-        await terminated.Should().Within(Timeout5).Emit(
-            "a leg the drain tears down AFTER its subscribe completed MUST terminate (OnCompleted) so "
-            + "its .Finally runs — that callback releases RoutingGrain's in-flight route slot and "
-            + "advances OrderedRouteDispatcher's per-destination FIFO; disposing the subscription "
-            + "emits nothing, so without an explicit terminal both leak permanently (#1789)");
-
-        var residual = await drainDone.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
+            "the drain must tear the pool's side down — the live subscription to the source",
+            cancellationToken: TestContext.Current.CancellationToken);
         residual.Should().Be(0,
-            "a leg past its subscribe holds no gate permit, so terminating it must not change what "
+            "a leg past its subscribe holds no gate permit, so tearing it down must not change what "
             + "Drain joins or reports");
+        // Drain() joined the cancel, so whatever the drain callback was going to do has been done.
+        await terminated.Should().NotEmit(TimeSpan.FromMilliseconds(200),
+            "the pool's cancel runs NO consumer code (#7968): no terminal, so no .Finally on the pool's "
+            + "thread — the consumer's bookkeeping is its OWNER's to release by disposing it");
+        pool.UnownedLeaks.Should().Be(1, "the leg was still attached when the pool was cancelled");
+        pool.UnownedLeakSites.Should().ContainSingle()
+            .Which.Should().Contain("when the pool was cancelled",
+                "the leak line says what happened, and names the subscriber chain");
     }
 
     [Fact]
@@ -1015,8 +1010,8 @@ public class IoPoolTest
     ///
     /// <para><see cref="CancellationTokenSource.Cancel()"/> runs every registered callback
     /// SYNCHRONOUSLY on the thread that calls it, and <see cref="IoPool.SubscribeThroughPool{T}"/>
-    /// registers one per LIVE pooled subscription which performs that subscription's whole
-    /// downstream teardown (<c>inner.Dispose()</c> then <c>observer.OnCompleted()</c>) — layout
+    /// registers one per LIVE pooled subscription which tears it down (<c>inner.Dispose()</c>; until
+    /// #7968 also <c>observer.OnCompleted()</c>, the subscriber's whole downstream teardown) — layout
     /// renders, query change feeds, routing dispatch. <see cref="IoPool.Drain"/> used to call
     /// <c>_poolCts.Cancel()</c> inline, so <c>IoPoolRegistry.DrainAll()</c> — i.e. the MESH
     /// TEARDOWN thread — executed arbitrary application teardown with nothing over it:
@@ -1038,9 +1033,12 @@ public class IoPoolTest
         var releaseTeardown = 0;
         var teardownThread = 0;
 
-        using var subscription = pool.SubscribeThroughPool<int>(source).Subscribe(
-            _ => { },
-            () =>
+        // 🚨 #7968: the drain callback delivers NO subscriber terminal any more — what it still runs is
+        // the pool's own teardown of the SOURCE, so that is the slow leg here.
+        using var subscription = pool.SubscribeThroughPool(Observable.Create<int>(o =>
+        {
+            var inner = source.Subscribe(o);
+            return System.Reactive.Disposables.Disposable.Create(() =>
             {
                 teardownThread = Environment.CurrentManagedThreadId;
                 teardownEntered.OnNext(Unit.Default);
@@ -1048,7 +1046,9 @@ public class IoPoolTest
                 // The teardown leg simply does not return promptly — that is the whole
                 // precondition of the wedge this test repros.
                 SpinWait.SpinUntil(() => Volatile.Read(ref releaseTeardown) == 1, Timeout10);
+                inner.Dispose();
             });
+        })).Subscribe(_ => { });
 
         try
         {
@@ -1065,10 +1065,10 @@ public class IoPoolTest
                 TestContext.Current.CancellationToken);
 
             await teardownEntered.Should().Within(Timeout5)
-                .Emit("Drain cancels the pool, which terminates every pooled subscription");
+                .Emit("Drain cancels the pool, which tears down every pooled subscription's source");
 
             teardownThread.Should().NotBe(drainThread,
-                "a pooled subscription's downstream teardown must never run on the thread that called "
+                "a pooled subscription's teardown must never run on the thread that called "
                 + "Drain() — that thread is the mesh-teardown thread, and Cancel() executes registered "
                 + "callbacks synchronously on whoever calls it (#2394)");
 
@@ -1098,15 +1098,19 @@ public class IoPoolTest
         var teardownEntered = new AsyncSubject<Unit>();
         var releaseTeardown = 0;
 
-        using var subscription = pool.SubscribeThroughPool<int>(source).Subscribe(
-            _ => { },
-            () =>
+        // 🚨 #7968: the slow leg is the source's teardown — the one thing the cancel still runs.
+        using var subscription = pool.SubscribeThroughPool(Observable.Create<int>(o =>
+        {
+            var inner = source.Subscribe(o);
+            return System.Reactive.Disposables.Disposable.Create(() =>
             {
                 teardownEntered.OnNext(Unit.Default);
                 teardownEntered.OnCompleted();
                 // A SLOW teardown leg — the condition under which Dispose used to block.
                 SpinWait.SpinUntil(() => Volatile.Read(ref releaseTeardown) == 1, Timeout5);
+                inner.Dispose();
             });
+        })).Subscribe(_ => { });
 
         try
         {
@@ -1126,7 +1130,7 @@ public class IoPoolTest
             sw.Stop();
 
             await teardownEntered.Should().Within(Timeout5)
-                .Emit("disposal must still terminate the subscription",
+                .Emit("disposal must still tear the subscription's source down",
                     cancellationToken: TestContext.Current.CancellationToken);
             sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
                 "Dispose must return immediately — the WAIT belongs on Disposed, and running the "

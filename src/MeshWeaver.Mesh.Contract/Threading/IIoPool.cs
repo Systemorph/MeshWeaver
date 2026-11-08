@@ -110,8 +110,15 @@ public interface IIoPool
     /// can route → create a per-node hub (hub service level being begun); that bounded, dangerous
     /// window holds one pool slot and counts as in-flight, so teardown's <c>Drain()</c> gate-join WAITS
     /// for it before the owning service scope is disposed — no <c>BeginLifetimeScope</c> races the scope
-    /// teardown, which is the endemic teardown-SIGSEGV. The resulting subscription lives on and is
-    /// disposed when the pool drains. Unlike <see cref="InvokeObservable{T}"/> (one-shot — awaits
+    /// teardown, which is the endemic teardown-SIGSEGV. The resulting subscription lives on until its
+    /// subscriber disposes it.
+    /// <para>🚨 <b>The caller OWNS the subscription and must dispose it before the pool drains</b>
+    /// (#7968). A subscription still attached when the pool is cancelled has its source torn down and
+    /// receives NO terminal — the cancel runs on the pool's own thread, and the pool never runs consumer
+    /// code there — and it is reported as an unowned leak (<c>IoPool.UnownedLeakSites</c>). So a
+    /// <c>.Finally(...)</c> that releases bookkeeping runs because the OWNER disposed the leg (Rx runs
+    /// it on dispose too), never because the drain completed it.</para>
+    /// Unlike <see cref="InvokeObservable{T}"/> (one-shot — awaits
     /// completion, emits the last value) this fits a NEVER-COMPLETING change feed. It is the tracked,
     /// drainable replacement for a bare <c>.SubscribeOn(TaskPoolScheduler.Default)</c>, which the drain
     /// cannot reach.

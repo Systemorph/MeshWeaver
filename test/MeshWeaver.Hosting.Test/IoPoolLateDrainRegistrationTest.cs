@@ -106,8 +106,9 @@ public class IoPoolLateDrainRegistrationTest
             Volatile.Write(ref releaseSetupLeaf, 1);
 
             await terminal.Should().Within(TestTimeouts.Quick).Emit(
-                "a leg the drain cancelled must still TERMINATE — its .Finally is what releases a route slot "
-                + "and advances OrderedRouteDispatcher's FIFO (#1789)",
+                "a leg the drain cancelled BEFORE its source opened must still TERMINATE, from the setup "
+                + "leaf's pool thread, exactly as a refusal does (#4530) — it was never attached to anything "
+                + "an owner could dispose",
                 cancellationToken: TestContext.Current.CancellationToken);
 
             Volatile.Read(ref setupLeafReleasedByBudget).Should().Be(0,
@@ -122,6 +123,11 @@ public class IoPoolLateDrainRegistrationTest
                 + "callback inline on the registering thread, which is exactly where this one ran (#4524)");
             Volatile.Read(ref sourceSubscribed).Should().Be(0,
                 "the cancel preceded the subscribe, so the source must never be opened");
+            Volatile.Read(ref terminalThread).Should().NotBe(pool.CancellerThreadId,
+                "and never on the pool's canceller either: the pool runs no consumer code there (#7968)");
+            pool.UnownedLeaks.Should().Be(0,
+                "a leg cancelled BEFORE its source opened is a refusal, terminated from a pool thread — "
+                + "not a leak; only a subscription whose source is open when the pool is cancelled is one");
         }
         finally
         {
