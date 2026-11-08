@@ -89,27 +89,26 @@ public class PresentationSurfacesTest
             .Should().Contain("Acme");
     }
 
-    // ── The home's sections: Apps, then Spaces ─────────────────────────────────────────────────
+    // ── The home's sections: Apps, then the type sections ───────────────────────────────────────
 
-    private static string SpacesBandQuery(UiControl home) =>
-        ((System.Collections.IEnumerable)typeof(StackControl).BaseType!
-            .GetProperty("Views", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-            .GetValue(home)!)
-        .OfType<MeshSearchControl>().Single(b => b.Title!.ToString() == "Spaces")
-        .HiddenQuery!.ToString()!;
+    private static string SpacesSectionQuery(User user, PresentationScreen? screen) =>
+        HomeTypeSections.SectionQuery(HomeTypeSections.LegsFor(Owner, user, screen), "Space");
 
     [Fact]
-    public void SpacesBand_ScreensMarkedSpacesAndGrants_BeforeTheQueryIsBuilt()
+    public void TypeSections_ScreenMarkedSpacesAndGrants_BeforeTheQueryIsBuilt()
     {
-        // The space manifest and the grants are interpolated into the Spaces band's query string,
-        // which the search view exposes in its options editor and in the `hq=` URL — so a marked
-        // name must be dropped BEFORE the query exists, not only where its tile is painted.
+        // The space manifest and the grants are interpolated into every type section's query
+        // string (and the discovery's), which the search view exposes in its options editor and in
+        // the `hq=` URL — so a marked name must be dropped BEFORE the query exists, not only where
+        // its tile is painted.
         var user = new User { SpacePaths = ["Acme", "Globex"], SharedPaths = ["Acme/Deals", "Northwind/Sales"] };
 
-        var marked = SpacesBandQuery(UserActivityLayoutAreas.BuildHome(Owner, user: user, screen: Active("Acme")));
+        var marked = SpacesSectionQuery(user, Active("Acme"));
         marked.Should().NotContain("Acme").And.Contain("Globex").And.Contain("Northwind/Sales");
+        string.Join("\n", HomeTypeSections.DiscoveryQueries(HomeTypeSections.LegsFor(Owner, user, Active("Acme"))))
+            .Should().NotContain("Acme");
 
-        var plain = SpacesBandQuery(UserActivityLayoutAreas.BuildHome(Owner, user: user));
+        var plain = SpacesSectionQuery(user, null);
         plain.Should().Contain("Acme").And.Contain("Acme/Deals");
     }
 

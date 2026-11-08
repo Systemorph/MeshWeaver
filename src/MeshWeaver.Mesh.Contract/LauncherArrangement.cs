@@ -20,6 +20,13 @@ public sealed record LauncherArrangement
     public ImmutableDictionary<string, LauncherEntry> Entries { get; init; } =
         ImmutableDictionary.Create<string, LauncherEntry>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The viewer's arrangement of the home's TYPE SECTIONS (below the Apps band): which node types
+    /// they hid and the order they put them in. Lives in this node because it is the same kind of
+    /// state — the viewer's own arrangement of their home — and is written the same way.
+    /// </summary>
+    public HomeSections Sections { get; init; } = new();
+
     /// <summary>The placement of <paramref name="appId"/>, or <c>null</c> when the viewer never
     /// placed it. Pure.</summary>
     public LauncherEntry? For(string appId) =>
@@ -78,6 +85,53 @@ public sealed record LauncherEntry
     /// the launcher lists it under its Hidden filter, where it can be shown again.</summary>
     [Browsable(false)]
     public bool Hidden { get; init; }
+}
+
+/// <summary>
+/// The viewer's arrangement of the home's TYPE SECTIONS — one section per node type the viewer has
+/// content of, below the Apps band (Doc/Architecture/AppsHome → "Type sections"). Both lists hold
+/// NodeType paths. A type in neither list is shown, in the default order (most recently changed
+/// first), after the types the viewer ordered.
+/// </summary>
+public sealed record HomeSections
+{
+    /// <summary>The node types the viewer hid from their home. Hiding is a home preference and
+    /// nothing else: the content stays where it is, readable and searchable.</summary>
+    public ImmutableList<string> Hidden { get; init; } = [];
+
+    /// <summary>The order the viewer put the sections in (first = top). Types not listed follow.</summary>
+    public ImmutableList<string> Order { get; init; } = [];
+
+    /// <summary>Whether the viewer hid <paramref name="nodeType"/>. Pure.</summary>
+    public bool IsHidden(string nodeType) => Hidden.Contains(nodeType, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>These sections with <paramref name="nodeType"/> hidden (<c>true</c>) or shown again. Pure.</summary>
+    public HomeSections SetHidden(string nodeType, bool hidden)
+    {
+        var without = Hidden.RemoveAll(t => string.Equals(t, nodeType, StringComparison.OrdinalIgnoreCase));
+        return this with { Hidden = hidden ? without.Add(nodeType) : without };
+    }
+
+    /// <summary>
+    /// These sections with <paramref name="nodeType"/> moved <paramref name="delta"/> places within
+    /// <paramref name="current"/> — the order as the viewer SEES it now (their order, then the
+    /// default for the rest). The whole visible order is written, so the move survives a later
+    /// change of the defaults. A move past either end stays at that end. Pure.
+    /// </summary>
+    public HomeSections Move(string nodeType, int delta, IReadOnlyList<string> current)
+    {
+        var order = current.ToList();
+        var index = order.FindIndex(t => string.Equals(t, nodeType, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+            return this;
+        var target = Math.Clamp(index + delta, 0, order.Count - 1);
+        if (target == index)
+            return this;
+        var moved = order[index];
+        order.RemoveAt(index);
+        order.Insert(target, moved);
+        return this with { Order = [.. order] };
+    }
 }
 
 /// <summary>
@@ -188,6 +242,24 @@ public static class LauncherArrangementPaths
         return cache.Update(path, current => current with
         {
             Content = Current(current, path, options).Place(appId, group, order),
+        }, options);
+    }
+
+    /// <summary>
+    /// Rearranges the home's type sections of <paramref name="owner"/>: <paramref name="change"/> is
+    /// applied to the arrangement node's <see cref="LauncherArrangement.Sections"/> (through the one
+    /// mutation API, a merge patch), leaving every tile placement untouched. The node must EXIST —
+    /// <c>LauncherArrangementSource.UpdateSections</c> creates it when it does not. NOT cold, like
+    /// <see cref="Place"/>.
+    /// </summary>
+    public static IObservable<MeshNode> UpdateSections(
+        IMeshNodeStreamCache cache, string owner, Func<HomeSections, HomeSections> change, JsonSerializerOptions options)
+    {
+        var path = PathFor(owner);
+        return cache.Update(path, current =>
+        {
+            var arrangement = Current(current, path, options);
+            return current with { Content = arrangement with { Sections = change(arrangement.Sections) } };
         }, options);
     }
 
