@@ -253,7 +253,12 @@ def abi_filter_hits(root: Path, hits: dict[str, list[str]], src_files: list[str]
         if not abi_only:
             continue
         closure = _invoke(root, PROJECTS, ["--closure", entry, "--json"], say)
-        unit = {"id": entry, "project": entry, **({"closure": list(closure)} if isinstance(closure, list) else {})}
+        if not isinstance(closure, list) or not closure or not all(isinstance(d, str) for d in closure):
+            # Without the caller's own graph, decide would judge a NARROWER closure and could miss an
+            # InternalsVisibleTo friend or a reader (review of #7995): keep the entry's hits.
+            say(f"    {entry}: the caller's closure could not be read — kept")
+            continue
+        unit = {"id": entry, "project": entry, "closure": list(closure)}
         try:
             decision = abi.decide(root, verdict, [unit], set())[entry]
         except Exception as exc:  # noqa: BLE001
@@ -821,7 +826,11 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         if not isinstance(got, dict) or set(got) != set(hits):
             return full(f"{PROJECTS} answered for {len(got or {})} of {len(hits)} entries — "
                         "packing every module.")
-        hits = abi_filter_hits(root, {k: list(v) for k, v in got.items()}, src_files, say)
+        hits = {k: list(v) for k, v in got.items()}
+        # ABI narrowing is for VALIDATION runs only (review of #7995): a publication diff packs by tree,
+        # because a reused dependent bundle beside a rebuilt dependency would ship old sibling bytes.
+        if not publication_diff:
+            hits = abi_filter_hits(root, hits, src_files, say)
 
     # 🚨 THE FLOOR IS NOT A SELECTION. The caller's gates COMPOSE a fixed set of module bundles
     # (the AI engine that registers Skill/Agent; the carved-out collaboration module) from THIS
@@ -1637,6 +1646,12 @@ def self_test() -> int:
             items = "".join(f'<ProjectReference Include="../{r}/{r}.csproj" />' for r in refs)
             (root / d / f"{Path(d).name}.csproj").write_text(f"<Project><ItemGroup>{items}</ItemGroup></Project>")
         hits = {"src/App/App.csproj": ["src/Lib"], "src/Lib/Lib.csproj": ["src/Lib"], "src/Other/Other.csproj": ["src/Lib", "src/Other"]}
+        (root / PROJECTS).parent.mkdir(parents=True, exist_ok=True)
+        (root / PROJECTS).write_text(
+            "import json, sys\n"
+            "closures = {'src/App/App.csproj': ['src/App', 'src/Lib'], 'src/Lib/Lib.csproj': ['src/Lib'],\n"
+            "            'src/Other/Other.csproj': ['src/Other', 'src/Lib']}\n"
+            "print(json.dumps(closures[sys.argv[sys.argv.index('--closure') + 1]]))\n", encoding="utf-8")
         files = ["src/Lib/A.cs", "src/Other/O.cs"]
         verdict = {"schema": "abi-verdict/1", "projects": {"src/Lib": {"unchanged": True, "files": ["src/Lib/A.cs"], "refasm": "a" * 64, "friends": []}}}
         old_env = os.environ.get("MW_ABI_VERDICT")
@@ -1649,6 +1664,10 @@ def self_test() -> int:
             check("[abi] an entry another changed project reaches keeps that reach", got["src/Other/Other.csproj"] == ["src/Other"], repr(got))
             os.environ["MW_ABI_VERDICT"] = json.dumps({**verdict, "projects": {"src/Lib": {**verdict["projects"]["src/Lib"], "unchanged": False}}})
             check("[abi] NEGATIVE CONTROL: a public-API change keeps every hit", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
+            os.environ["MW_ABI_VERDICT"] = json.dumps(verdict)
+            (root / PROJECTS).write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
+            check("[abi] the caller's closure cannot be read ⇒ the entry keeps its hits (decide never judges a narrower graph)",
+                  abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
             for bad in ("not json", json.dumps({"unavailable": "no mount"}), json.dumps({"schema": "other"})):
                 os.environ["MW_ABI_VERDICT"] = bad
                 check(f"[abi] an unusable verdict ({bad[:20]}) leaves the hits alone", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
