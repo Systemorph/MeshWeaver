@@ -840,6 +840,17 @@ on:
         required: false
         type: string
         default: ''
+      cache-signing-environment:
+        description: >
+          The caller's GitHub ENVIRONMENT holding `CI_CACHE_SIGNING_KEY` (Ed25519 private key, PEM) for
+          the workspace compile cache. Its deployment policy MUST admit the default branch only: that is
+          what keeps the key out of every pull-request job, whatever the PR's workflow says. Empty (the
+          default): nothing is ever signed, so the cache serves nothing — it can never serve an entry a
+          pull request planted. Readers trust the public key(s) in the content repo's
+          `.github/ci-cache-signing.pub` (Plugins Hosting/CiProfile.md §11).
+        required: false
+        type: string
+        default: ''
       ledger:
         description: >
           The CI MODULE BUILD LEDGER on the registry portal (Doc/Architecture/ModuleBuildArchitecture →
@@ -928,6 +939,11 @@ on:
         type: string
         default: ''
     secrets:
+      CI_CACHE_SIGNING_KEY:
+        description: >-
+          Never passed by a caller: read from `cache-signing-environment` by the one job that declares it
+          (`compile-cache-sign`), on a trusted run only.
+        required: false
       publish-token:
         description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
         required: false
@@ -2209,6 +2225,10 @@ jobs:
     # `workspace-runner` (inputs): a Docker-capable label — the compiler is the platform image.
     runs-on: ${{ inputs.workspace-runner }}
     timeout-minutes: 30
+    outputs:
+      # The compile cache's CLAIMS ([{entry, sha256}]) — handed to `compile-cache-sign` through the run's
+      # own job outputs, never read back from the share a pull request can write.
+      ccache-claims: ${{ steps.ccache-keep.outputs.claims }}
     # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
     # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
     # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
@@ -2443,6 +2463,10 @@ jobs:
           cp -R .compile-cache-logic/.github/scripts/. "$tools/"
           rm -rf "${GITHUB_WORKSPACE:?}/.compile-cache-logic"
           cc="$tools/workspace-compile-cache.py"
+          # The trunk's public key(s), from the tested tree. A pull request that edits this file changes
+          # only its OWN run's trust — the trunk reads with the trunk's file.
+          trust="$RUNNER_TEMP/ccache-trust.pub"
+          cp .github/ci-cache-signing.pub "$trust" 2>/dev/null || : > "$trust"
           python3 "$cc" --self-test >/dev/null || { echo "::warning title=Compile cache off::workspace-compile-cache.py failed its self-test at the build-logic ref — every entry is compiled"; exit 0; }
           if [ -z "$DIGEST" ] || [ -z "$TESTER_DIGEST" ]; then
             echo "compile cache: off — no image digests to key on (the build step names why it cannot compile)"; exit 0
@@ -2464,7 +2488,7 @@ jobs:
           if ! python3 "$cc" plan --repo . --modules "@$RUNNER_TEMP/ccache-selection.json" --salt "$salt" --out "$plan"; then
             echo "::warning title=Compile cache off::the plan failed — every entry is compiled"; exit 0
           fi
-          if ! python3 "$cc" restore --plan "$plan" --store "$STORE" --store-id "$STORE_ID" \
+          if ! python3 "$cc" restore --plan "$plan" --store "$STORE" --store-id "$STORE_ID" --trust "$trust" \
                  --stage "$RUNNER_TEMP/ccache-stage" --misses "$RUNNER_TEMP/ccache-misses.txt"; then
             echo "::warning title=Compile cache off::the restore failed — every entry is compiled"; exit 0
           fi
@@ -2722,6 +2746,7 @@ jobs:
       # bundles. So the default branch's push, schedule and dispatch runs fill the cache; every run
       # reads it. A PR's unchanged entries hit what main compiled under the same key.
       - name: Compile cache — keep what this run compiled
+        id: ccache-keep
         if: >-
           success() && steps.ccache.outputs.enabled == 'true' && steps.build.outputs.built == 'true'
           && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -2733,9 +2758,12 @@ jobs:
         run: |
           set -uo pipefail
           tools="$RUNNER_TEMP/compile-cache-tools"
+          claims="$RUNNER_TEMP/ccache-claims.json"
+          echo '[]' > "$claims"
           python3 "$tools/workspace-compile-cache.py" save --plan "$PLAN" --out "$RUNNER_TEMP/module-build" \
-            --store "$STORE" --store-id "$STORE_ID" \
+            --store "$STORE" --store-id "$STORE_ID" --claims-out "$claims" \
             || echo "::warning title=Compile cache not kept::the save failed — this run is unaffected"
+          echo "claims=$(jq -c . "$claims" 2>/dev/null || echo '[]')" >> "$GITHUB_OUTPUT"
           # BOUNDED, like cache/module-pack-tool/: entries older than 7 days are evicted (a miss).
           python3 "$tools/ci-artifact-store.py" prune --store "$STORE" --prefix cache/workspace-compile/ --older-than 7 \
             || echo "::warning title=Compile cache not pruned::the prune of cache/workspace-compile/ failed — this run is unaffected"
@@ -2792,6 +2820,46 @@ jobs:
           path: ${{ runner.temp }}/module-build
           retention-days: 1
           if-no-files-found: error
+
+  # ═══════════ THE COMPILE CACHE'S TRUNK SIGNATURE ═══════════
+  # The ONLY job that holds `CI_CACHE_SIGNING_KEY`: it declares the caller's signing environment, whose
+  # deployment policy admits the default branch only, so no pull-request job can ever obtain the key —
+  # whatever its own workflow says. It signs the CLAIMS `build-workspace` handed over through job
+  # outputs (entry + the sha256 that job computed of the bytes it put), never bytes read back from the
+  # share. A reader serves an entry only when a pinned trunk key signed its digest and the fetched
+  # bytes match it (workspace-compile-cache.py, ci_cache_signature.py). Off the pack legs' path.
+  compile-cache-sign:
+    name: Compile cache — trunk signature
+    needs: [select, build-workspace]
+    if: >-
+      needs.build-workspace.result == 'success'
+      && needs.build-workspace.outputs.ccache-claims != '' && needs.build-workspace.outputs.ccache-claims != '[]'
+      && inputs.cache-signing-environment != ''
+      && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'repository_dispatch')
+    environment: ${{ inputs.cache-signing-environment }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Check out the compile-cache tools at the build-logic ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: build-logic
+          sparse-checkout: .github/scripts
+      - name: Sign what this run kept
+        env:
+          CI_CACHE_SIGNING_KEY: ${{ secrets.CI_CACHE_SIGNING_KEY }}
+          CLAIMS: ${{ needs.build-workspace.outputs.ccache-claims }}
+          STORE: ${{ needs.select.outputs.artifact-store }}
+          STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
+        run: |
+          set -uo pipefail
+          printf '%s' "$CLAIMS" > "$RUNNER_TEMP/ccache-claims.json"
+          python3 build-logic/.github/scripts/workspace-compile-cache.py sign \
+            --claims "@$RUNNER_TEMP/ccache-claims.json" --store "$STORE" --store-id "$STORE_ID" \
+            || echo "::warning title=Compile cache not signed::the signature step failed — nothing this run kept is trusted"
 
   # ═══════════ THE PACK LEGS — N MODULES PER RUNNER, ONE VERDICT PER MODULE (2026-09-12) ═══════════
   # 🚨 A BATCH IS A RUNNER-SHARING DEVICE, NOT A COUPLING. Every step below that used to read
