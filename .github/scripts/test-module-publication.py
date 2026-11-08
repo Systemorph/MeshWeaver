@@ -97,20 +97,23 @@ def run_step(body: str, env: dict[str, str], workspace: Path) -> subprocess.Comp
 CALLER_WORKFLOW = ".github/workflows/ci.yml"
 
 
-def tip_run_env(ws: Path, status: str) -> dict[str, str]:
+def tip_run_env(ws: Path, status: str | None, conclusion: str | None = None) -> dict[str, str]:
     """Env for the `newer` step with a stub `gh` on PATH whose runs listing reports the trunk tip's
     run of CALLER_WORKFLOW as `status`. The step reads the tip run's STATE before it may stand a module
-    down (only `in_progress` may), so a harness that supplies no listing tests nothing but `unreadable`."""
+    down (only `in_progress` may), so a harness that supplies no listing tests nothing but `unreadable`.
+    `status=None` makes the stub REFUSE the read (a caller granting no `actions: read`)."""
     bindir = ws / "_bin"
     bindir.mkdir(exist_ok=True)
     listing = ws / "_temp" / "fake-tip-runs.json"
     listing.parent.mkdir(exist_ok=True)
-    listing.write_text(json.dumps({"total_count": 1, "workflow_runs": [
-        {"path": CALLER_WORKFLOW, "status": status}]}))
+    listing.write_text("" if status is None else json.dumps({"total_count": 1, "workflow_runs": [
+        {"path": CALLER_WORKFLOW, "status": status, "conclusion": conclusion}]}))
     gh = bindir / "gh"
     gh.write_text("#!/usr/bin/env bash\n"
                   "case \"$1 $2\" in\n"
-                  "  \"api repos/Systemorph/Acme/actions/runs?\"*) cat \"$FAKE_TIP_RUNS\" ;;\n"
+                  "  \"api repos/Systemorph/Acme/actions/runs?\"*)\n"
+                  "    [ -s \"$FAKE_TIP_RUNS\" ] || { echo 'HTTP 403: Resource not accessible by integration' >&2; exit 1; }\n"
+                  "    cat \"$FAKE_TIP_RUNS\" ;;\n"
                   "  *) echo \"stub gh: unexpected call: $*\" >&2; exit 2 ;;\n"
                   "esac\n")
     gh.chmod(0o755)
@@ -440,6 +443,16 @@ def main() -> int:  # noqa: C901
         r = run_step(newer_body, dict(env, **tip_run_env(ws, "queued")), ws)
         check("a newer trunk commit whose run is only QUEUED stands NOTHING down (the step read the tip run's state)",
               r.returncode == 0 and decided() == {} and "is queued" in (r.stdout + r.stderr), r.stdout + r.stderr)
+        r = run_step(newer_body, dict(env, **tip_run_env(ws, "completed", "cancelled")), ws)
+        check("a newer trunk commit whose run was CANCELLED stands NOTHING down (it never reaches its hand-over)",
+              r.returncode == 0 and decided() == {} and "is completed" in (r.stdout + r.stderr), r.stdout + r.stderr)
+        r = run_step(newer_body, dict(env, **tip_run_env(ws, None)), ws)
+        check("a newer trunk commit whose run state is UNREADABLE stands NOTHING down — and the refusal is named",
+              r.returncode == 0 and decided() == {} and "is unreadable" in (r.stdout + r.stderr)
+              and "Resource not accessible" in (r.stdout + r.stderr), r.stdout + r.stderr)
+        r = run_step(newer_body, dict(env, **tip_run_env(ws, "in_progress")), ws)
+        check("NEGATIVE CONTROL: the same commit with its run back IN PROGRESS stands the module down again",
+              r.returncode == 0 and set(decided()) == {"MeshWeaver.AI"}, r.stdout + r.stderr)
         r = run_step(newer_body, dict(env, TRUNK=""), ws)
         check("no default branch on the event is RED ('cannot tell' never publishes)", r.returncode == 1,
               r.stdout + r.stderr)
