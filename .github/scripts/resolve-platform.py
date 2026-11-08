@@ -357,7 +357,8 @@ def rate_limit_wait(code: int, headers, body: str, now: float) -> float | None:
     # The SENTENCE decides, not the headers: `x-ratelimit-*` rides on every answer, so a permission 403
     # landing while the bucket reads 0 stays a verdict. Only an empty body is judged by `remaining`.
     text = (body or "").lower()
-    if retry_after is None and "rate limit" not in text and not (remaining == "0" and not text.strip()):
+    # A 429 IS a capacity refusal by its status alone (review on #8003); only a 403 needs the evidence.
+    if code == 403 and retry_after is None and "rate limit" not in text and not (remaining == "0" and not text.strip()):
         return None
     try:
         if retry_after is not None:
@@ -4393,6 +4394,9 @@ def self_test() -> int:
              [limited("0", b'{"message":"API rate limit exceeded for installation."}')], "ok"),
             ("NEG: a permission 403 is a verdict on the first answer, never a wait",
              [limited("4000", b'{"message":"Resource not accessible by integration"}')], "verdict"),
+            ("a bare 429 is capacity by its status alone (waits, then answers)",
+             [urllib.error.HTTPError("https://api.github.com/x", 429, "Too Many Requests", email.message.Message(),
+                                     io.BytesIO(b""))], "ok429"),
             ("NEG: a permission 403 while the bucket reads 0 is still a verdict",
              [limited("0", b'{"message":"Resource not accessible by integration"}')], "verdict"),
             ("a reset beyond the bound is INFRA, said first",
@@ -4404,7 +4408,7 @@ def self_test() -> int:
             urllib.request.urlopen = opener                     # type: ignore[assignment]
             try:
                 github_fetch_with("t", sleep=slept.append)("/repos/x/y")
-                got = "ok"
+                got = "ok429" if slept == [60.0] else "ok"
             except ResolutionError as error:
                 got = "infra" if str(error).startswith(INFRA_RATE_LIMITED) else "verdict"
             if got != want or (want == "ok" and not (290 <= sum(slept) <= 310)) or (want == "verdict" and slept):
