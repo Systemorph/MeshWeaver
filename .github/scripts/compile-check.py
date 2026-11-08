@@ -1395,7 +1395,215 @@ def compile_parallelism(sets: int, override: "str | None", cpus: int,
     return max(1, min(width, sets)), why
 
 
-def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: bool, workers: int):
+# ── the verdict cache ──────────────────────────────────────────────────────────────────────────
+# A set's verdict is a pure function of what `dotnet build` is handed: the generated unit
+# (Combined.cs), the generated project, the BYTES of every reference assembly, the SDK, and this
+# checker (its rules shape both the unit and the project). On a pull request most sets are
+# unchanged — measured 2026-11-08 (MeshWeaver.Plugins run 42504770966): a 113-set unit took
+# 1037.5 s of build work, 267.9 s wall on 4 workers, for a diff that changed none of those types'
+# sources. With `MW_COMPILE_CHECK_VERDICT_CACHE=<dir>` a set whose key is in <dir> is NOT built:
+# its recorded verdict (errors, needs_external) is reused. Only verdicts with no infra error are
+# kept (an infra error is not a property of the inputs). A record that does not parse or does not
+# carry its own key is a miss; any I/O error is a miss; nothing here can change a verdict.
+# 🚨 ONLY A TRUNK-SIGNED RECORD IS EVER READ. The cache directory sits on a share every CI job can
+# write, pull-request jobs included, so a "clean" record a PR planted under a key the trunk later
+# computes would let a broken NodeType through the trunk's gate. A record counts only when an Ed25519
+# signature by a PINNED trunk key (`MW_COMPILE_CHECK_VERDICT_TRUST` = a file of PEM public keys, the
+# content repo's `.github/ci-cache-signing.pub`) vouches for the sha256 of its bytes. Writing
+# (`MW_COMPILE_CHECK_VERDICT_CACHE_WRITE=1`, a trusted run) records the verdict and appends its CLAIM
+# ({entry, sha256}) to `MW_COMPILE_CHECK_VERDICT_CLAIMS`; the caller hands those claims, through the
+# run's own artifacts, to the one job holding the key (`--sign-verdicts`, `CI_CACHE_SIGNING_KEY` from
+# an environment that admits the default branch only). No pinned key ⇒ nothing is read. Signatures go
+# through the `openssl` CLI (Ed25519, `pkeyutl -rawin`); every failure is "not trusted".
+VERDICT_CACHE_ENV = "MW_COMPILE_CHECK_VERDICT_CACHE"
+VERDICT_CACHE_WRITE_ENV = "MW_COMPILE_CHECK_VERDICT_CACHE_WRITE"
+VERDICT_TRUST_ENV = "MW_COMPILE_CHECK_VERDICT_TRUST"
+VERDICT_CLAIMS_ENV = "MW_COMPILE_CHECK_VERDICT_CLAIMS"
+SIGNING_KEY_ENV = "CI_CACHE_SIGNING_KEY"
+VERDICT_RECIPE = "compile-check-verdict/v1"
+
+
+def _cache_claim(entry: str, sha: str) -> bytes:
+    return f"{VERDICT_RECIPE}\n{entry}\n{sha}\n".encode("utf-8")
+
+
+def _openssl(args) -> bool:
+    try:
+        return subprocess.run(["openssl", *args], capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def cache_sign(message: bytes, private_pem: str) -> "str | None":
+    """Base64 Ed25519 signature of `message` with `private_pem`, or None."""
+    import base64
+    import tempfile
+    if not private_pem.strip():
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        key, msg, out = Path(tmp, "k.pem"), Path(tmp, "m"), Path(tmp, "s")
+        key.write_text(private_pem if private_pem.endswith("\n") else private_pem + "\n")
+        os.chmod(key, 0o600)
+        msg.write_bytes(message)
+        if not _openssl(["pkeyutl", "-sign", "-inkey", str(key), "-rawin", "-in", str(msg), "-out", str(out)]):
+            return None
+        return base64.b64encode(out.read_bytes()).decode("ascii")
+
+
+def cache_public_keys(text: str) -> list:
+    """Every PEM public key in `text` (more than one pins a rotation)."""
+    keys, cur = [], []
+    for line in text.splitlines():
+        if line.startswith("-----BEGIN PUBLIC KEY-----"):
+            cur = [line]
+        elif cur:
+            cur.append(line)
+            if line.startswith("-----END PUBLIC KEY-----"):
+                keys.append("\n".join(cur) + "\n")
+                cur = []
+    return keys
+
+
+def cache_verify(message: bytes, signature_b64: str, trusted: list) -> bool:
+    """True only for a valid Ed25519 signature of `message` by one of the `trusted` PEM keys."""
+    import base64
+    import tempfile
+    if not trusted or not signature_b64:
+        return False
+    try:
+        raw = base64.b64decode(signature_b64.strip(), validate=True)
+    except (ValueError, TypeError):
+        return False
+    if len(raw) != 64:
+        return False
+    with tempfile.TemporaryDirectory() as tmp:
+        msg, sig = Path(tmp, "m"), Path(tmp, "s")
+        msg.write_bytes(message)
+        sig.write_bytes(raw)
+        for i, pem in enumerate(trusted):
+            pub = Path(tmp, f"p{i}.pem")
+            pub.write_text(pem)
+            if _openssl(["pkeyutl", "-verify", "-pubin", "-inkey", str(pub), "-rawin", "-in", str(msg),
+                         "-sigfile", str(sig)]):
+                return True
+    return False
+
+
+def references_digest(refs: dict) -> "str | None":
+    """sha256 over every reference assembly's NAME and BYTES — never its path (runners differ).
+    None when any reference cannot be read: an unkeyable set turns the cache off, never a placeholder."""
+    import hashlib
+    h = hashlib.sha256()
+    for name, path in sorted(refs.items()):
+        try:
+            data = Path(path).read_bytes()
+        except OSError:
+            return None
+        h.update(f"{name} {hashlib.sha256(data).hexdigest()}\n".encode())
+    return h.hexdigest()
+
+
+def toolchain_identity() -> "str | None":
+    """The SDK that builds every set (`dotnet --version`), and this checker's own bytes. None when the
+    SDK cannot be named: an unkeyable toolchain turns the cache off, never a shared placeholder."""
+    import hashlib
+    try:
+        proc = subprocess.run(["dotnet", "--version"], capture_output=True, text=True, timeout=60)
+        sdk = proc.stdout.strip() if proc.returncode == 0 else ""
+        me = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if not re.fullmatch(r"\d+\.\d+\.\d+\S*", sdk):
+        return None
+    return f"sdk={sdk} checker={me} wae={WARNINGS_AS_ERRORS}"
+
+
+def verdict_key(unit_text: str, csproj_text: str, refs_digest: str, toolchain: str,
+                ai_available: bool, impl_frameworks: bool) -> str:
+    """The content key of one set's verdict. Pure."""
+    import hashlib
+    h = hashlib.sha256()
+    for part in (VERDICT_RECIPE, toolchain, refs_digest, f"ai={ai_available} impl={impl_frameworks}",
+                 csproj_text, unit_text):
+        h.update(part.encode("utf-8"))
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def read_verdict(cache: Path, key: str, trusted: list):
+    """(errors, needs_external, None) recorded under `key` AND signed by a trusted trunk key, else None."""
+    import hashlib
+    try:
+        data = (cache / key[:2] / f"{key}.json").read_bytes()
+        signature = (cache / key[:2] / f"{key}.sig").read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return None
+    if not cache_verify(_cache_claim(key, hashlib.sha256(data).hexdigest()), signature, trusted):
+        return None   # unsigned, signed by an unpinned key, or bytes changed since the trunk signed them
+    try:
+        rec = json.loads(data.decode("utf-8"))
+        if rec.get("key") != key or not isinstance(rec.get("errors"), list):
+            return None
+        return [str(e) for e in rec["errors"]], bool(rec.get("needsExternal")), None
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        return None
+
+
+def write_verdict(cache: Path, key: str, outcome) -> "dict | None":
+    """Record a verdict atomically (temp file, then rename) and return its CLAIM {entry, sha256} for the
+    trunk signer, or None. Infra errors are never recorded. Unsigned, the record is never read."""
+    import hashlib
+    errors, needs_external, infra_error = outcome
+    if infra_error is not None:
+        return None
+    data = json.dumps({"key": key, "recipe": VERDICT_RECIPE, "errors": list(errors),
+                       "needsExternal": bool(needs_external)}).encode("utf-8")
+    try:
+        d = cache / key[:2]
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / f".{key}.{os.getpid()}.tmp"
+        tmp.write_bytes(data)
+        os.replace(tmp, d / f"{key}.json")
+    except OSError:
+        return None
+    return {"entry": key, "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def sign_verdicts(cache: Path, claims: list, private_pem: str) -> int:
+    """Sign each claim with the trunk key; the signature lands beside its record. Returns the count."""
+    n = 0
+    for c in claims:
+        key, sha = str(c.get("entry", "")), str(c.get("sha256", ""))
+        if not re.fullmatch(r"[0-9a-f]{64}", key) or not re.fullmatch(r"[0-9a-f]{64}", sha):
+            continue
+        signature = cache_sign(_cache_claim(key, sha), private_pem)
+        if signature is None:
+            return n
+        try:
+            d = cache / key[:2]
+            d.mkdir(parents=True, exist_ok=True)
+            tmp = d / f".{key}.{os.getpid()}.sig.tmp"
+            tmp.write_text(signature, encoding="ascii")
+            os.replace(tmp, d / f"{key}.sig")
+            n += 1
+        except OSError:
+            pass
+    return n
+
+
+def set_key(sources, lam, ref_xml: str, impl_frameworks: bool, refs_digest: str, toolchain: str,
+            ai_available: bool) -> str:
+    """The key of one ((sources, lambda)) set: the unit and project exactly as compile_set writes them,
+    the project WITHOUT its reference paths (the digest names the references by content)."""
+    unit, _, _ = build_unit(sources, lam)
+    csproj = build_csproj(Path("."), "", impl_frameworks=impl_frameworks)
+    return verdict_key(unit, csproj, refs_digest, toolchain, ai_available, impl_frameworks)
+
+
+def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: bool, workers: int,
+                 cache: "Path | None" = None, refs_digest: str = "", toolchain: str = "",
+                 stats: "dict | None" = None, cache_write: bool = False, trusted: "list | None" = None,
+                 claims: "list | None" = None):
     """Yield (item, compile_set result, seconds) for each ((sources, lambda), names) item, in the
     ORDER GIVEN, building up to `workers` sets at once. Each worker borrows one work directory for
     the duration of a build, so two builds never share a project file or an obj/ directory.
@@ -1416,14 +1624,34 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
     import time
     from concurrent.futures import ThreadPoolExecutor
 
+    keys = {}
+    cached = {}
+    if cache is not None:
+        for index, item in enumerate(ordered):
+            (sources, lam), _ = item
+            try:
+                keys[index] = set_key(sources, lam, ref_xml, impl_frameworks, refs_digest, toolchain,
+                                      ai_available)
+            except Exception:   # a key that cannot be computed is a miss, never a verdict
+                continue
+            hit = read_verdict(cache, keys[index], trusted or [])
+            if hit is not None:
+                cached[index] = hit
+    if stats is not None:
+        stats.update(hits=len(cached), keyed=len(keys))
+
     dirs = queue.Queue()
     restored = {}
-    for _ in range(max(1, workers)):
+    # Only as many work directories (and restores) as the MISSES can use: a cached set never borrows one.
+    for _ in range(min(len(ordered) - len(cached), max(1, workers))):
         work = Path(tempfile.mkdtemp(prefix="compile-check-"))
         restored[work] = restore_dir(work, ref_xml, impl_frameworks) is None
         dirs.put(work)
 
-    def build(item):
+    def build(indexed):
+        index, item = indexed
+        if index in cached:
+            return cached[index], 0.0
         (sources, lam), _ = item
         work = dirs.get()
         try:
@@ -1433,6 +1661,10 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
             # CS errors still mean the restore worked; only an infra error (no CS diagnostic at
             # all) leaves this directory's restore in doubt, so its next build restores again.
             restored[work] = outcome[2] is None
+            if cache is not None and cache_write and index in keys:
+                claim = write_verdict(cache, keys[index], outcome)
+                if claim is not None and claims is not None:
+                    claims.append(claim)
             return outcome, time.time() - started
         finally:
             dirs.put(work)
@@ -1440,7 +1672,7 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         # `map` yields in submission order as each result is ready, so the log keeps the serial
         # order and streams while later sets are still building.
-        for item, (outcome, seconds) in zip(ordered, pool.map(build, ordered)):
+        for item, (outcome, seconds) in zip(ordered, pool.map(build, list(enumerate(ordered)))):
             yield item, outcome, seconds
 
 
@@ -2011,6 +2243,7 @@ def _self_test() -> int:
 
     _self_test_exit_codes(failures)
     _self_test_parallel(failures)
+    _self_test_verdict_cache(failures)
 
     if failures:
         print("✗ compile-check self-test FAILED:")
@@ -2043,6 +2276,123 @@ def _self_test() -> int:
           f"{EXIT_REFUSED_NOTHING_JUDGED} — each with one `REFUSED` line and no GREEN line; a "
           "NodeType-less --modules unit says NOTHING TO COMPILE; GREEN only over a judged count > 0")
     return 0
+
+
+def _self_test_verdict_cache(failures: list) -> None:
+    """The verdict cache serves a set only when EVERYTHING the build reads is unchanged."""
+    import tempfile
+
+    def check(label, ok):
+        print(f"  {'✓' if ok else '✗'} verdict cache: {label}")
+        if not ok:
+            failures.append(f"verdict cache: {label}")
+
+    base = verdict_key("class A {}", "<Project/>", "r1", "sdk=1", True, True)
+    check("the key is deterministic", base == verdict_key("class A {}", "<Project/>", "r1", "sdk=1", True, True))
+    check("a source change misses", base != verdict_key("class A { }", "<Project/>", "r1", "sdk=1", True, True))
+    check("a project change misses", base != verdict_key("class A {}", "<Project />", "r1", "sdk=1", True, True))
+    check("a reference-byte change misses", base != verdict_key("class A {}", "<Project/>", "r2", "sdk=1", True, True))
+    check("an SDK or checker change misses", base != verdict_key("class A {}", "<Project/>", "r1", "sdk=2", True, True))
+    check("the AI / framework mode is keyed", base != verdict_key("class A {}", "<Project/>", "r1", "sdk=1", False, True)
+          and base != verdict_key("class A {}", "<Project/>", "r1", "sdk=1", True, False))
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        a, b = d / "a.dll", d / "b.dll"
+        a.write_bytes(b"1"); b.write_bytes(b"2")
+        r1 = references_digest({"A.dll": str(a), "B.dll": str(b)})
+        moved = d / "x"; moved.mkdir(); (moved / "a.dll").write_bytes(b"1")
+        check("references are keyed by content, not path",
+              r1 == references_digest({"A.dll": str(moved / "a.dll"), "B.dll": str(b)}))
+        b.write_bytes(b"3")
+        check("a reference's bytes are keyed", r1 != references_digest({"A.dll": str(a), "B.dll": str(b)}))
+        check("an unreadable reference makes the set UNKEYABLE (cache off), never a placeholder",
+              references_digest({"A.dll": str(d / "missing.dll")}) is None)
+        # Two keys: the TRUNK's (pinned) and another — what a pull request could make for itself.
+        keys = []
+        for name in ("trunk", "pr"):
+            k_dir = d / name; k_dir.mkdir()
+            priv, pub = k_dir / "k.pem", k_dir / "k.pub"
+            ok = _openssl(["genpkey", "-algorithm", "ed25519", "-out", str(priv)]) and \
+                _openssl(["pkey", "-in", str(priv), "-pubout", "-out", str(pub)])
+            keys.append((priv.read_text(), pub.read_text()) if ok else ("", ""))
+        (trunk_priv, trunk_pub), (pr_priv, _) = keys
+        check("openssl can make an Ed25519 test key (the signature path is exercised)", bool(trunk_priv and pr_priv))
+        if not (trunk_priv and pr_priv):
+            return
+        trusted = cache_public_keys(trunk_pub)
+        cache = d / "cache"
+        claim = write_verdict(cache, base, (["CS0001: x"], False, None))
+        check("a written verdict returns its claim to sign", claim is not None and claim["entry"] == base)
+        # 🚨 THE POISONING CASES — what a pull request can write must never decide a verdict.
+        check("an UNSIGNED record (what a pull request's own step can write) is IGNORED",
+              read_verdict(cache, base, trusted) is None)
+        (cache / base[:2] / f"{base}.sig").write_text(cache_sign(_cache_claim(base, claim["sha256"]), pr_priv) or "")
+        check("a record signed by a NON-trunk key is IGNORED", read_verdict(cache, base, trusted) is None)
+        check("the trunk signer signs the claim", sign_verdicts(cache, [claim], trunk_priv) == 1)
+        check("a TRUNK-signed record is read back", read_verdict(cache, base, trusted) == (["CS0001: x"], False, None))
+        check("with no trusted key pinned no record is read", read_verdict(cache, base, []) is None)
+        rec = cache / base[:2] / f"{base}.json"
+        good = rec.read_bytes()
+        rec.write_text(json.dumps({"key": base, "recipe": VERDICT_RECIPE, "errors": [], "needsExternal": False}))
+        check("a pull request REPLACING a trunk-signed failure with a CLEAN record is IGNORED (the signature names the old bytes)",
+              read_verdict(cache, base, trusted) is None)
+        rec.write_bytes(good)
+        other = verdict_key("class B {}", "<Project/>", "r1", "sdk=1", True, True)
+        check("an infra error is never recorded", write_verdict(cache, other, ([], False, "NU1101: infra")) is None
+              and read_verdict(cache, other, trusted) is None)
+        forged = {"key": "someone-else", "errors": []}
+        rec.write_text(json.dumps(forged))
+        sign_verdicts(cache, [{"entry": base, "sha256": __import__("hashlib").sha256(rec.read_bytes()).hexdigest()}], trunk_priv)
+        check("a trunk-signed record that does not carry its own key is a miss", read_verdict(cache, base, trusted) is None)
+        check("the signer refuses a malformed claim", sign_verdicts(cache, [{"entry": "../x", "sha256": "0" * 64}], trunk_priv) == 0)
+        # compile_sets: a TRUNK-signed set is not built; a missed one is built and recorded.
+        calls = []
+        real = globals()["compile_set"]
+        real_restore = globals()["restore_dir"]
+        try:
+            globals()["compile_set"] = lambda work, srcs, *a, **k: (calls.append(srcs) or ([], False, None))
+            restores = []
+            globals()["restore_dir"] = lambda *a, **k: restores.append(1)
+            src1, src2 = d / "One.cs", d / "Two.cs"
+            src1.write_text("class One {}"); src2.write_text("class Two {}")
+            items = [((frozenset([src1]), None), ["One"]), ((frozenset([src2]), None), ["Two"])]
+            cache2 = d / "cache2"
+            st: dict = {}
+            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st,
+                              trusted=trusted))
+            check("a READ-ONLY run (the default) records nothing", len(calls) == 2 and not any(cache2.rglob("*.json")))
+            calls.clear(); st = {}; claims: list = []
+            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st,
+                              cache_write=True, trusted=trusted, claims=claims))
+            check("a cold cache builds every set and a trusted run records it with its claims",
+                  len(calls) == 2 and st.get("hits") == 0 and len(claims) == 2)
+            calls.clear(); st = {}
+            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st,
+                              trusted=trusted))
+            check("records NOT YET signed by the trunk are not trusted — every set is built again",
+                  len(calls) == 2 and st.get("hits") == 0)
+            sign_verdicts(cache2, claims, trunk_priv)
+            calls.clear(); st = {}; restores.clear()
+            out = list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st,
+                                    trusted=trusted))
+            check("a trunk-signed warm cache builds nothing and returns the recorded verdicts in order",
+                  calls == [] and st.get("hits") == 2 and [o[0][1] for o in out] == [["One"], ["Two"]])
+            check("an all-hit run restores no work directory", restores == [])
+            src2.write_text("class Two { int x; }")
+            calls.clear(); st = {}; restores.clear()
+            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st,
+                              trusted=trusted))
+            check("a changed source is built again, the unchanged one is not",
+                  len(calls) == 1 and st.get("hits") == 1)
+            check("a partial hit restores only as many work directories as the misses use (1, not 2)",
+                  len(restores) == 1)
+            calls.clear()
+            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r-changed", toolchain="t", stats={},
+                              trusted=trusted))
+            check("changed reference bytes rebuild every set", len(calls) == 2)
+        finally:
+            globals()["compile_set"] = real
+            globals()["restore_dir"] = real_restore
 
 
 def _self_test_parallel(failures: list) -> None:
@@ -2332,6 +2682,10 @@ def main() -> int:
                          "diagnostics are produced at all, and the nullable context becomes "
                          "`annotations` to match the mesh. OPT-IN: a repo turns it on once its "
                          "in-mesh warning debt is paid.")
+    ap.add_argument("--sign-verdicts", metavar="CLAIMS",
+                    help="sign the verdict claims in CLAIMS (JSON lines {entry, sha256}) with CI_CACHE_SIGNING_KEY, "
+                         "beside their records in MW_COMPILE_CHECK_VERDICT_CACHE — the trunk signer's verb, and "
+                         "nothing else is done")
     ap.add_argument("--self-test", action="store_true",
                     help="check the unit shaping against its known shapes and exit")
     # nargs="*", not "+": a source-LESS NodeType is a real case (its `configuration` lambda is
@@ -2365,6 +2719,22 @@ def main() -> int:
 
     if args.self_test:
         return _self_test()
+
+    if args.sign_verdicts:
+        cache_dir = os.environ.get(VERDICT_CACHE_ENV, "").strip()
+        key = os.environ.get(SIGNING_KEY_ENV, "")
+        if not cache_dir or not key.strip():
+            print(f"compile-check: --sign-verdicts needs {VERDICT_CACHE_ENV} and {SIGNING_KEY_ENV} — nothing signed")
+            return 0
+        claims = []
+        for path in args.sign_verdicts.split(","):
+            try:
+                claims += [json.loads(l) for l in Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+            except (OSError, ValueError):
+                print(f"compile-check: --sign-verdicts could not read {path} — skipped")
+        n = sign_verdicts(Path(cache_dir), claims, key)
+        print(f"compile-check: verdict cache — {n} of {len(claims)} claim(s) signed with the trunk key")
+        return 0
 
     if args.emit_unit is not None:        # [] means 'a source-less set', not 'not asked'
         imports, code = shape_authored_source(
@@ -2532,8 +2902,30 @@ def main() -> int:
     t0 = time.time()
     ordered = sorted(sets.items(), key=lambda kv: sorted(kv[1])[0])
     work_seconds = 0.0
+    cache_dir = os.environ.get(VERDICT_CACHE_ENV, "").strip()
+    cache = Path(cache_dir) if cache_dir else None
+    cache_stats: dict = {}
+    cache_write = os.environ.get(VERDICT_CACHE_WRITE_ENV, "").strip() == "1"
+    refs_digest = toolchain = ""
+    if cache is not None:
+        t_key = time.time()
+        refs_digest, toolchain = references_digest(refs), toolchain_identity()
+        if refs_digest is None or toolchain is None:
+            print("compile-check: verdict cache OFF for this run — "
+                  + ("a reference assembly could not be read" if refs_digest is None else "the SDK version could not be read")
+                  + "; every set is built")
+            cache, refs_digest, toolchain = None, "", ""
+    trust_file = os.environ.get(VERDICT_TRUST_ENV, "").strip()
+    trusted = cache_public_keys(Path(trust_file).read_text()) if trust_file and Path(trust_file).is_file() else []
+    verdict_claims: list = []
+    if cache is not None:
+        print(f"compile-check: verdict cache {cache} ({'read-write' if cache_write else 'read-only'}; "
+              f"{len(trusted)} trusted trunk key(s){'' if trusted else ' — no record can be read'}) — references {refs_digest[:12]} "
+              f"({len(refs)} assemblies, keyed in {time.time() - t_key:.1f}s), {toolchain.split(' checker=')[0]}")
     for i, (((s, lam), names), (errors, needs_external, infra_error), seconds) in enumerate(
-            compile_sets(ordered, ref_xml, ai_available, impl_frameworks, workers), 1):
+            compile_sets(ordered, ref_xml, ai_available, impl_frameworks, workers,
+                         cache=cache, refs_digest=refs_digest, toolchain=toolchain, stats=cache_stats,
+                         cache_write=cache_write, trusted=trusted, claims=verdict_claims), 1):
         work_seconds += seconds
         if infra_error:
             # nonzero build with no CS diagnostic (restore/SDK/MSBuild) — a real, gating failure.
@@ -2554,6 +2946,18 @@ def main() -> int:
         print(f"  [{i}/{len(sets)}] {tag:12} {lead}{extra}"
               + (f"    {errors[0]}" if errors else ""))
     elapsed = time.time() - t0
+    if cache is not None:
+        print(f"\ncompile-check: verdict cache — {cache_stats.get('hits', 0)} of {len(sets)} set(s) reused "
+              f"(trunk-signed, not built), {len(sets) - cache_stats.get('hits', 0)} built")
+        claims_out = os.environ.get(VERDICT_CLAIMS_ENV, "").strip()
+        if cache_write and claims_out and verdict_claims:
+            try:
+                with open(claims_out, "a", encoding="utf-8") as fh:
+                    for c in verdict_claims:
+                        fh.write(json.dumps(c) + "\n")
+                print(f"compile-check: verdict cache — {len(verdict_claims)} record(s) written, awaiting the trunk signature ({claims_out})")
+            except OSError:
+                pass
     if sets:
         print(f"\ncompile-check: {len(sets)} build(s), {work_seconds:.1f}s of build work in "
               f"{elapsed:.1f}s wall on {workers} worker(s) — parallel speed-up "
