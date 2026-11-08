@@ -27,6 +27,14 @@ public sealed class IoPoolRegistry : IDisposable
     private int _disposing;
     private readonly System.Reactive.Subjects.AsyncSubject<int> _disposed = new();
 
+    // The subscriptions owned for the MESH's lifetime (OwnUntilDrain, #7992) — instance fields on a
+    // mesh-scoped singleton, never static. Released (disposed) by ReleaseOwnedUntilDrain, which every
+    // drain entry point runs BEFORE it cancels a single pool. Set once, then enumerated: an Own that
+    // reads the flag after adding releases its own entry, so none is missed by a racing release.
+    private readonly ConcurrentDictionary<long, OwnedUntilDrain> _ownedUntilDrain = new();
+    private long _nextOwnedTicket;
+    private int _ownersReleasing;
+
     // 🚨 THE POOLS Dispose() IS WAITING ON, kept so the TIMEOUT path can still name them — issue
     // #2480. Dispose() clears _pools (a handed-out pool after disposal would never be joined by
     // anyone), so by the time a caller's bounded wait expires there was nothing left to enumerate
@@ -247,6 +255,102 @@ public sealed class IoPoolRegistry : IDisposable
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default));
 
     /// <summary>
+    /// Owns <paramref name="subscription"/> for the MESH's lifetime: it is disposed — its owner's
+    /// release — before the pools it runs on are cancelled, by whichever drain comes first
+    /// (<see cref="DrainAll()"/> in mesh teardown, <see cref="Dispose"/> at a silo's stop). Dispose the
+    /// returned handle to end it earlier; that disposes <paramref name="subscription"/> and forgets it.
+    ///
+    /// <para><b>Who needs this (#7992).</b> A mesh-scoped service — a catalog, a standing watcher, a
+    /// cache — that holds a pooled subscription for as long as the mesh lives. Its natural owner is the
+    /// service container (or the mesh hub), and both end AFTER the pools: mesh teardown drains the
+    /// pools before the container is disposed, and on a silo <c>IoPoolSiloTeardown</c> cancels them at
+    /// the silo's stop, while the mesh hub and every singleton live on until the host's
+    /// <c>StoppedAsync</c>. So such a subscription was still attached at every pool cancel and was
+    /// reported as an unowned leak, with its <c>.Finally</c> never run. Owning it here puts its release
+    /// where its pools end.</para>
+    ///
+    /// <para><b>Where it runs.</b> On the drain caller's thread, before any lane is closed or any pool
+    /// is cancelled, outside every pool gate — the same step <c>RoutingQuiescence</c>'s release is for
+    /// routing legs. The pool's cancel still runs no consumer code.</para>
+    ///
+    /// <para>Owned after the release has begun, <paramref name="subscription"/> is disposed at once and
+    /// an empty handle is returned: nothing started on a mesh whose pools are going away outlives them.</para>
+    /// </summary>
+    /// <param name="subscription">The subscription to own.</param>
+    /// <param name="owner">Who holds it, for the release's log line (e.g. the service's type name).</param>
+    /// <returns>A handle that ends the subscription early.</returns>
+    public IDisposable OwnUntilDrain(IDisposable subscription, string owner)
+    {
+        ArgumentNullException.ThrowIfNull(subscription);
+        var ticket = Interlocked.Increment(ref _nextOwnedTicket);
+        var owned = new OwnedUntilDrain(subscription, owner, this, ticket);
+        _ownedUntilDrain[ticket] = owned;
+        // Flag-then-enumerate on the release side, add-then-read here: either the release saw this
+        // entry, or this sees the flag — and then whichever removes the entry first disposes it.
+        if (Volatile.Read(ref _ownersReleasing) != 0 && _ownedUntilDrain.TryRemove(ticket, out _))
+        {
+            subscription.Dispose();
+            return System.Reactive.Disposables.Disposable.Empty;
+        }
+        return owned;
+    }
+
+    /// <summary>How many subscriptions are owned until the drain right now (<see cref="OwnUntilDrain"/>).</summary>
+    public int OwnedUntilDrainCount => _ownedUntilDrain.Count;
+
+    /// <summary>
+    /// Disposes every subscription owned until the drain, on this thread, and refuses new ones. A
+    /// subscription whose dispose throws is reported at Error and does not stop the others: every one
+    /// is attempted, and the drain that follows still runs.
+    /// </summary>
+    private void ReleaseOwnedUntilDrain(string prefix)
+    {
+        if (Interlocked.Exchange(ref _ownersReleasing, 1) != 0)
+            return;
+        var released = new List<string>();
+        foreach (var ticket in _ownedUntilDrain.Keys.ToArray())
+        {
+            if (!_ownedUntilDrain.TryRemove(ticket, out var owned))
+                continue;
+            released.Add(owned.Owner);
+            try
+            {
+                owned.Subscription.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex,
+                    "{Prefix}: releasing the subscription owned by {Owner} before the pools drain threw — "
+                    + "the other owned subscriptions are still released and the drain still runs",
+                    prefix, owned.Owner);
+            }
+        }
+        if (released.Count > 0)
+            _logger?.LogInformation(
+                "{Prefix}: released {Count} subscription(s) owned for the mesh's lifetime before cancelling "
+                + "the pools: {Owners}",
+                prefix, released.Count,
+                string.Join(", ", released.GroupBy(o => o, StringComparer.Ordinal)
+                    .Select(g => g.Count() == 1 ? g.Key : $"{g.Key}×{g.Count()}")));
+    }
+
+    /// <summary>One subscription owned until the drain, and the handle that ends it early.</summary>
+    private sealed class OwnedUntilDrain(IDisposable subscription, string owner, IoPoolRegistry registry, long ticket)
+        : IDisposable
+    {
+        public IDisposable Subscription { get; } = subscription;
+        public string Owner { get; } = owner;
+
+        public void Dispose()
+        {
+            // Only the side that removes the entry disposes it: an early dispose racing the release
+            // disposes the subscription exactly once.
+            if (registry._ownedUntilDrain.TryRemove(ticket, out _))
+                Subscription.Dispose();
+        }
+    }
+
+    /// <summary>
     /// Synchronously drains every created pool: cancels all in-flight leaves and JOINS (blocks until
     /// they have unwound) — see <see cref="IoPool.Drain"/>. Unlike <see cref="WhenDrained"/> (which
     /// only WAITS, so a live change-feed subscription never reaches zero and it times out), this
@@ -295,6 +399,10 @@ public sealed class IoPoolRegistry : IDisposable
     /// <param name="cancelledByPool">One entry per pool that had to cancel a wedged leaf, in drain order.</param>
     public int DrainAll(out IReadOnlyList<PoolResidual> byPool, out IReadOnlyList<PoolResidual> cancelledByPool)
     {
+        // 🚨 THE OWNERS FIRST (#7992): what is owned for the mesh's lifetime is disposed here, on this
+        // caller's thread, before any lane closes or any pool is cancelled — so its bookkeeping runs as
+        // an owner's release, never as a leak the cancel tears down with no terminal.
+        ReleaseOwnedUntilDrain("IoPoolDrain");
         var leaked = 0;
         var residuals = new List<PoolResidual>();
         var cancelled = new List<PoolResidual>();
@@ -508,6 +616,12 @@ public sealed class IoPoolRegistry : IDisposable
     {
         // Idempotent, and only the first caller reports.
         if (Interlocked.CompareExchange(ref _disposing, 1, 0) != 0) return;
+
+        // 🚨 THE OWNERS FIRST (#7992) — the same step DrainAll opens with. On a silo this Dispose runs
+        // at the silo's stop (IoPoolSiloTeardown), while the mesh hub and every mesh-scoped service
+        // live on until the host's StoppedAsync: without this, everything those own on the pools is
+        // still attached at the cancel below and is torn down as an unowned leak.
+        ReleaseOwnedUntilDrain("IoPoolSiloTeardown");
 
         // The serial lanes hold no thread; their in-flight writes are leaves of the budget pools
         // drained below. Disposing a lane answers every write that has not started with an

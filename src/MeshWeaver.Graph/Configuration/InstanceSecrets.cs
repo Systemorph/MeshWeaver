@@ -12,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -836,14 +837,17 @@ public sealed class InstanceSecretCatalog : IDisposable
             // for the life of the process, and every per-sender key was refused until a restart. The
             // hub watcher re-opens the query; between the fault and the re-opened listing the catalog
             // stays fail-closed (Faulted), and the next full listing clears it.
-            subscription = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            // 🚨 Owned for the mesh's lifetime by the IoPool registry (#7992): this singleton is disposed
+            // only with the container — AFTER the pools are cancelled (on a silo, long after) — so the
+            // registry releases the watch before its pools go, instead of the cancel finding it attached.
+            subscription = hub.OwnUntilIoDrain(ActivityControlPlaneExtensions.SubscribeHubWatcher(
                 hub,
                 () => Observable.Defer(open).SelectMany(RejectIncompleteListing).Do(_ => { }, OnFault),
                 OnChange,
                 logger,
                 "[InstanceSecrets] catalog query",
                 scheduleReEstablish: scheduleReopen,
-                onPoisonedContent: OnFault);
+                onPoisonedContent: OnFault), nameof(InstanceSecretCatalog));
         }
     }
 
