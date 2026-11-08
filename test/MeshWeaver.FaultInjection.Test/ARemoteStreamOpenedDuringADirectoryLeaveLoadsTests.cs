@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
@@ -38,12 +39,19 @@ namespace MeshWeaver.FaultInjection.Test;
 /// <para><b>The shape.</b> Three multi-silo silos on <c>LocalGrainDirectory</c>. The reader is a real
 /// hub (<c>silohub/…</c>, the rig's pod-hub type, the leg <c>cache/…</c> takes in production) on silo 0,
 /// under an id whose directory registration lives on a second silo, chosen by the directory's own ring
-/// calculation. The node's owner is activated on the third silo. The reader's re-assertion is held
-/// (<see cref="ClaimHold"/>), the second silo begins a graceful stop and is held in
+/// calculation. The node's owner is activated on the third silo, under a path whose own directory
+/// registration is NOT on the leaving silo (a leave deactivates every activation registered there, and a
+/// re-activated owner would answer from the reader's silo, past the directory). The reader's re-assertion
+/// is held (<see cref="ClaimHold"/>), the second silo begins a graceful stop and is held in
 /// <c>ShuttingDown</c> (<see cref="ShutdownHold"/>), and once every remaining directory has moved the
-/// entry off it the reader opens the node's stream. While the hold lasts the stream delivers nothing:
-/// the window is real. Then the re-assertion is let go, and the stream must load within
-/// <see cref="Prompt"/>, far inside the 60 s budget production ran out.</para>
+/// entry off it the reader opens the node's stream.</para>
+///
+/// <para><b>The premise is asserted, not assumed.</b> The first thing the reader's tapped local route
+/// hears from the node must be the router's refused-reply report (<see cref="ErrorType.ShuttingDown"/>,
+/// the catalog sentence), and the owner must still be the one placed on the third silo. Only then does
+/// the case hold the window: the stream neither loads nor fails. Then the re-assertion is let go, and the
+/// stream must load within <see cref="Prompt"/>, far inside the 60 s budget production ran out, still
+/// served by the placed owner.</para>
 ///
 /// <para><b>Negative control</b> (measured locally, recorded in <c>Doc/Architecture/PodHubClaimReassertion</c>):
 /// with the router's report to the asker removed (<c>RoutingGrain.AnswerPodHubNotHere</c> never calls
@@ -91,17 +99,32 @@ public class ARemoteStreamOpenedDuringADirectoryLeaveLoadsTest(ARemoteStreamOpen
         var owner = Enumerable.Range(0, Silos).Single(i => i != Reader && i != leaving);
 
         // ── The node, activated on the owner silo ──────────────────────────────────────────────────
-        var ns = $"leave-read-{Guid.NewGuid():N}";
-        var path = $"{ns}/Doc";
+        // 🚨 The node's OWN grain must not be registered on the leaving silo either. LocalGrainDirectory
+        // deactivates, on every silo, each activation whose directory partition was on a silo that has
+        // entered a terminating status (Orleans' LocalGrainDirectory.OnSiloStatusChange). An owner
+        // registered there is deactivated by the leave; the reader's SubscribeRequest re-activates it,
+        // prefer-local, on the READER's silo, and its answer then reaches the reader locally without
+        // crossing the directory at all. That happened in about one run in three (main ac8a8fddb): the read
+        // loaded inside the window from an owner the case had not placed. So the path is chosen the way
+        // the reader's id is, by the directory's own ring calculation.
+        string ns, path;
+        GrainId nodeGrain;
+        do
+        {
+            ns = $"leave-read-{Guid.NewGuid():N}";
+            path = $"{ns}/Doc";
+            nodeGrain = factory.GetGrain<IMessageHubGrain>(path).GetGrainId();
+        } while (Equals(PodHubRoles.DirectoryPartition(mesh, Reader, nodeGrain).Owner, addresses[leaving]));
+        var node = new Address(path);
         var ownerServices = mesh.Silo(owner);
         var ownerAccess = ownerServices.GetRequiredService<AccessService>();
         await ownerAccess.RunAsSystem(() => ownerServices.GetRequiredService<IMeshService>().CreateNode(
                 new MeshNode("Doc", ns) { Name = "v1", NodeType = "Markdown", State = MeshNodeState.Active }))
             .Should().Within(TestTimeouts.Convergence).Emit("the node is created on its owner's silo", ct);
         await ownerAccess.RunAsSystem(() => mesh.Hub(owner).NodeOperationIssuingHub()
-                .Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
+                .Observe(new PingRequest(), o => o.WithTarget(node)))
             .Should().Within(TestTimeouts.Convergence).Emit($"the node's owner answers on silo {owner}", ct);
-        mesh.Hub(owner).GetHostedHub(new Address(path), HostedHubCreation.Never).Should().NotBeNull(
+        mesh.Hub(owner).GetHostedHub(node, HostedHubCreation.Never).Should().NotBeNull(
             $"the node's owner must be activated on silo {owner}, the silo that is neither leaving nor reading");
 
         // ── The reader: a real hub on silo 0 whose pod-hub claim has landed ───────────────────────
@@ -109,10 +132,18 @@ public class ARemoteStreamOpenedDuringADirectoryLeaveLoadsTest(ARemoteStreamOpen
             .Should().BeOfType<OrleansRoutingService>().Subject;
         readerRouting.HasMemoryStream.Should().BeFalse(
             "with a memory stream a refused pod-hub delivery falls back to the stream and this case would prove nothing");
+        // The reader's own local route, tapped. What reaches the hub through it (the owner's answer, or
+        // the router's report that the answer was refused) is the positive reading of the window.
+        var heard = new ReplaySubject<IMessageDelivery>();
         var reader = mesh.Hub(Reader).GetHostedHub(readerAddress, config => config
                 .WithPostingIdentity(PostingIdentity.System)
                 .AddData()
-                .WithInitialization(h => h.RegisterForDisposal(((IRoutingService)readerRouting).RegisterStream(h))),
+                .WithInitialization(h => h.RegisterForDisposal(((IRoutingService)readerRouting).RegisterStream(h.Address,
+                    (SyncDelivery)(delivery =>
+                    {
+                        heard.OnNext(delivery);
+                        return h.DeliverMessage(delivery);
+                    })))),
             HostedHubCreation.Always);
         Assert.NotNull(reader);
         // No fallback: a null settle signal means the reader took no pod-hub claim at all, and the
@@ -143,14 +174,29 @@ public class ARemoteStreamOpenedDuringADirectoryLeaveLoadsTest(ARemoteStreamOpen
 
             var access = mesh.Silo(Reader).GetRequiredService<AccessService>();
             var read = access.RunAsSystem(() => (IObservable<ChangeItem<MeshNode>>)((Workspace)reader.GetWorkspace())
-                    .GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(new Address(path), new MeshNodeReference()))
+                    .GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(node, new MeshNodeReference()))
                 .Select(change => change.Value)
                 .Where(node => node is not null)
                 .Materialize()
                 .Replay();
             using var open = read.Connect();
 
-            // POSITIVE: the window is real — the owner's answer cannot reach the reader while its entry is gone.
+            // POSITIVE: the premise happened. The FIRST thing the reader hears from the node is the router's
+            // report that the owner's answer was refused because no silo serves the reader: the named,
+            // ShuttingDown-classified failure of RoutingGrain.RefusedReplyFailure. An answer that reached the
+            // reader first would mean the directory did not lose the entry, and the case would measure nothing.
+            var first = await heard.Where(d => d.Sender == node).Take(1).Should().Within(Prompt).Emit(
+                $"the reader's subscription to '{path}' must hear from the node while the window is open", ct);
+            var failure = first.Message.Should().BeOfType<DeliveryFailure>(
+                $"the owner's answer to '{readerAddress}' must be REFUSED on the way back and reported to the reader, "
+                + $"not delivered (it was {first.Message?.GetType().Name}) — otherwise the window did not happen").Subject;
+            failure.ErrorType.Should().Be(ErrorType.ShuttingDown, "the refused-reply report is classified ShuttingDown");
+            failure.Message.Should().Be(LocalizationCatalog.Get(ARefusedDeliveryAndItsAsker.RefusedReplyMessageKey, null),
+                "it is the router's refused-reply report, not some other failure");
+            mesh.Hub(owner).GetHostedHub(node, HostedHubCreation.Never).Should().NotBeNull(
+                $"the refused answer must come from the owner placed on silo {owner}, not from a re-activation elsewhere");
+
+            // And the read rides the refusal out: it neither loads nor fails while the entry is gone.
             await read.Select(n => n.Exception?.ToString() ?? n.Kind.ToString()).Should().NotEmit(Window,
                 $"while '{readerAddress}' has no directory entry the owner's answer is refused on the way back, so "
                 + "the read neither loads nor fails — it rides the refusal out", ct);
@@ -165,6 +211,8 @@ public class ARemoteStreamOpenedDuringADirectoryLeaveLoadsTest(ARemoteStreamOpen
                 $"the read must deliver the node, not end with {loaded.Exception?.GetType().Name}: {loaded.Exception?.Message}");
             Assert.NotNull(loaded.Value);
             loaded.Value.Name.Should().Be("v1");
+            mesh.Hub(owner).GetHostedHub(node, HostedHubCreation.Never).Should().NotBeNull(
+                $"the read must have been served by the owner placed on silo {owner}");
         }
         finally
         {

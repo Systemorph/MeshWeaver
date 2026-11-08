@@ -354,6 +354,22 @@ chain on production's directory: `ARemoteStreamOpenedDuringADirectoryLeaveLoadsT
   node's raw subscription (`GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>`). That is the
   subscription the node-stream cache's own hub opens.
 
+- The node's path is chosen so that its OWN grain is not registered on the leaving silo, and the case
+  asserts the premise before it relies on it: the first thing the reader hears from the node is the
+  router's refused-reply report, from the owner placed on the third silo.
+
+🚨 **A leave on `LocalGrainDirectory` also moves the OWNERS.** Every silo deactivates each activation
+whose directory partition was on a silo that has entered a terminating status (Orleans'
+`LocalGrainDirectory.OnSiloStatusChange`). An owner registered on the leaving silo is therefore
+deactivated by the leave, and the next request re-activates it, prefer-local, on the ASKING silo, where
+its answer reaches the asker locally and never crosses the directory. The first version of the case did
+not choose the node's path. The case went red on main in about one run in three (`ac8a8fddb`): the read
+loaded inside the window. Locally the baseline failed 4 of 13 runs. With the path chosen, 20 of 20
+passed. Forcing the owner's registration ONTO the leaving silo failed 6 of 6, each time with the owner's
+answer (`RawJson`) arriving before any refusal. By the same mechanism (reasoned, not measured in production), some readers caught by the
+window are not affected at all, because their owner moved to their own pod. It changes nothing about the
+readers whose owner stayed.
+
 | Phase | What the read does |
 |---|---|
 | The window is open (2 s) | Nothing is delivered and nothing fails. The owner's answers are refused on the way back. `JsonSynchronizationStream` takes each named `ShuttingDown` failure as a routing-layer refusal (no owner banner) and re-asks, paced at 500 ms, within its 16-re-ask ride-out. |
