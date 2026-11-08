@@ -92,11 +92,9 @@ from pathlib import Path
 # 🚨 scripts/affected-modules.py's NOOP_DIRS — the top-level dirs a change in which can reach no
 # build at all. Every entry NOT in this set falls through to a FULL run, so adding one silently
 # un-builds something and dropping one merely costs a full run.
-# `clients/` is deliberately absent (the established selector treats it as ALL, and a client asset
-# can be embedded by a host). Measured over 120 first-parent merges to MeshWeaver.Plugins' main,
-# `clients/` is the largest remaining full-set trigger after `.github/` (11 of 45); the entry stays
-# out because this set also feeds the mesh gate and the bake, so moving it is a wider decision than
-# the module matrix — see Doc/Architecture/BuildScopeNarrowing.
+# `clients/` is deliberately absent: a client asset can be embedded by a host, and this set also
+# feeds the mesh gate and the bake. On a pull request it is the CALLER's call instead (owned
+# elsewhere, NOT_OWNABLE_TOPS below) — see Doc/Architecture/BuildScopeNarrowing.
 #
 # 🚨 A HAND COPY IS NOT A GUARANTEE, and this one drifted on its first day: `WhatsNew` was missing,
 # so a note-only PR ran the entire fleet's module suite — the exact case affected-modules.py added
@@ -165,6 +163,17 @@ NOOP_FILES = {
 # (`src/Directory.Build.targets`, two test projects), so it stays on the global branch — EVERYTHING —
 # whatever any selector would answer.
 CI_PATH_PREFIXES = (".github/", "scripts/")
+# 🎯 OWNED ELSEWHERE — the CALLER's call, the same shape as a CI path (MeshWeaver.Plugins
+# Hosting/CiAffectedClosure.md → "Owned elsewhere"). A path in an EXISTING top-level dir that is no
+# node package, no no-op dir and none of these (they change how every build or gate RUNS, or are the
+# compiled half itself) is deferred to the caller's selector on a pull request: MeshWeaver.Plugins'
+# answers `[]` for `clients/` (ci.yml's `rn-app` leg) and for a dir another workflow's `paths` filter
+# claims, and ALL the moment any MSBuild file references the path; a selector that predates the rule
+# answers ALL for it, which is a FULL run here. Measured 2026-11-08 on MeshWeaver.Plugins #5177 (the
+# #5100 shape: one Razor file + one clients/react file): the change set selected 0 of 80 realms and
+# 0 compile units, yet this script ruled `clients/react/…` EVERYTHING and the module lane packed 42 of
+# 42 bundles plus the 11.8-minute workspace build.
+NOT_OWNABLE_TOPS = frozenset({".github", "scripts", "tools", "src", "test"})
 
 SELECTOR = "scripts/affected-modules.py"        # the caller's NODE graph
 PROJECTS = "scripts/project-closure.py"          # the caller's PROJECT graph
@@ -737,6 +746,7 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
     packages = node_packages(root)
     node_files: list[str] = []
     ci_files: list[str] = []
+    owned_files: list[str] = []
     src_files: list[str] = []
     global_files: list[str] = []
     report: list[str] = []
@@ -766,6 +776,13 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
             ci_files.append(f)
             report.append(f"  {f}  → a CI path — the caller's selector decides "
                           "(policy ci-paths-owe-no-module-leg)")
+        # 🎯 OWNED ELSEWHERE (see NOT_OWNABLE_TOPS): the caller's selector decides, on the same
+        # events as a CI path and never on a publication question.
+        elif ("/" in f and top not in NOT_OWNABLE_TOPS and top not in packages
+              and (root / top).is_dir() and not publication_diff and not publication_reach):
+            owned_files.append(f)
+            report.append(f"  {f}  → {top}/ is no package — the caller's selector decides "
+                          "(owned elsewhere)")
         elif f.startswith("src/") and f.count("/") >= 2 and lane == "modules":
             src_files.append(f)
             report.append(f"  {f}  → src/ (which project decides, below)")
@@ -780,16 +797,20 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
                     f"{global_files[0]}. Running the full set.")
 
     affected: set[str] = set()
-    if node_files or ci_files:
-        answer = affected_packages(root, node_files + ci_files, say)
+    if node_files or ci_files or owned_files:
+        answer = affected_packages(root, node_files + ci_files + owned_files, say)
         if answer is None:
             # 🚨 For a CI path this is the EXPECTED answer from a selector that predates policy
             # ci-paths-owe-no-module-leg — it answers ALL — and the full set is the safe reading.
             ci_note = (f" A selector that predates policy ci-paths-owe-no-module-leg answers ALL "
                        f"for a CI path ({len(ci_files)} here, first: {ci_files[0]}); teach it the "
                        "policy to narrow them.") if ci_files else ""
+            owned_note = (f" It answers ALL for {len(owned_files)} path(s) outside every package "
+                          f"(first: {owned_files[0]}) — it found them read by a build, claimed by "
+                          "no other lane, or predates the owned-elsewhere rule.") if owned_files else ""
             return full(f"{SELECTOR} could not narrow the node-package closure (it refused, "
-                        f"answered ALL, or could not be parsed) — running the full set.{ci_note}")
+                        f"answered ALL, or could not be parsed) — running the full set."
+                        f"{ci_note}{owned_note}")
         affected = answer
 
     # ── the modules lane also needs the COMPILED half ──
@@ -949,6 +970,11 @@ _STUB_SELECTOR = (
     # path reaches no package. Any OTHER non-package path (e.g. `tools/`) would also reach none in
     # this stub — which is what makes "tools/ ⇒ ALL" prove the CORE classifier keeps it loud.
     "paths=[p for p in paths if not p.startswith(('.github/','scripts/'))]\n"
+    # OWNED ELSEWHERE, as MeshWeaver.Plugins' selector answers it: `clients/` is a leg's (EMPTY);
+    # `deploy/` is claimed by no lane in this fixture, so it is ALL — the selector's own NEGATIVE.
+    "_dep=[p for p in paths if p.startswith('deploy/')]\n"
+    "_dep and (json.dump({'runAll':True,'affected':[]},sys.stdout) or sys.exit(0))\n"
+    "paths=[p for p in paths if not p.startswith('clients/')]\n"
     "pk=sorted({p.split('/')[0] for p in paths})\n"
     # Alpha is Beta's dependent in the fixture graph, exactly as a `requires` edge would make it.
     "aff=sorted(set(pk)|({'Alpha'} if 'Beta' in pk else set()))\n"
@@ -962,6 +988,13 @@ _STUB_SELECTOR_PRE_POLICY = _STUB_SELECTOR.replace(
     "_ci=[p for p in paths if p.startswith(('.github/','scripts/'))]\n"
     "_ci and (json.dump({'runAll':True,'affected':[]},sys.stdout) or sys.exit(0))\n")
 assert _STUB_SELECTOR_PRE_POLICY != _STUB_SELECTOR, "the pre-policy stub must differ from the stub"
+
+# A selector that predates the OWNED-ELSEWHERE rule: any path outside a package is ALL to it.
+_STUB_SELECTOR_PRE_OWNED = _STUB_SELECTOR.replace(
+    "paths=[p for p in paths if not p.startswith('clients/')]\n",
+    "_cl=[p for p in paths if p.startswith('clients/')]\n"
+    "_cl and (json.dump({'runAll':True,'affected':[]},sys.stdout) or sys.exit(0))\n")
+assert _STUB_SELECTOR_PRE_OWNED != _STUB_SELECTOR, "the pre-owned stub must differ from the stub"
 
 
 def _csproj(refs: list[str]) -> str:
@@ -995,6 +1028,8 @@ def _fixture(root: Path) -> None:
     (root / "src" / "Directory.Build.props").write_text("<Project />\n", encoding="utf-8")
     (root / "docs").mkdir(exist_ok=True)
     (root / "README.md").write_text("x\n", encoding="utf-8")
+    for owned in ("clients/react/src", "deploy/op", "tools/x"):
+        (root / owned).mkdir(parents=True, exist_ok=True)
 
 
 def _raw(root: Path, lane: str, event: str, changed: list[str] | None,
@@ -1229,7 +1264,43 @@ def self_test() -> int:
         check("[modules] …while publication reach still narrows a diff with no CI path",
               got["scope"] == "narrowed" and got["selected"] == ["Acme.Alpha"],
               f"{got['scope']} {got['selected']}")
+        print("OWNED ELSEWHERE — a non-package top-level dir is the caller's call too:")
+        rx = ["clients/react/src/core.ts"]
+        got = _run(root, "modules", "pull_request", rx)
+        check("[modules] a clients/-only diff (the selector: a leg owns it) packs ZERO bundles",
+              got["scope"] == "narrowed" and got["count"] == 0 and got["tested"] == [],
+              f"scope={got['scope']} count={got['count']} — {got['reason'][:90]}")
+        got = _run(root, "modules", "pull_request", rx + ["src/Acme.Beta/T.cs"])
+        check("[modules] #5177's shape — clients/ beside one module's source — packs exactly that module",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['scope']} {got['selected']}")
+        got = _run(root, "modules", "pull_request", rx + ["Beta/index.json"])
+        check("[modules] clients/ beside a node package keeps that package's dependent edge",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Alpha", "Acme.Beta"], f"{got['selected']}")
+        got = _run(root, "modules", "pull_request", ["deploy/op/Dockerfile"])
+        check("NEGATIVE CONTROL: a dir the selector answers ALL for (read by a build / claimed by no lane) is FULL, named",
+              got["scope"] == "full" and got["count"] == 2 and "deploy/op/Dockerfile" in got["reason"],
+              f"scope={got['scope']} — {got['reason'][:120]}")
+        got = _run(root, "modules", "pull_request", ["tools/x/y.json"])
+        check("NEGATIVE CONTROL: tools/ is never owned elsewhere (build input) ⇒ FULL without asking",
+              got["scope"] == "full" and "tooling/global" in got["reason"], f"{got['scope']} {got['reason'][:90]}")
+        got = _run(root, "modules", "pull_request", ["gone/a.txt"])
+        check("NEGATIVE CONTROL: a top-level dir that does not EXIST (a deleted package) stays FULL",
+              got["scope"] == "full" and "tooling/global" in got["reason"], f"{got['scope']} {got['reason'][:90]}")
+        got = _run(root, "modules", "push", rx)
+        check("NEGATIVE CONTROL: a clients/-only PUSH is still FULL (it publishes)",
+              got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+        got = _run(root, "modules", "pull_request", rx, extra=["--publication-reach"])
+        check("NEGATIVE CONTROL: PUBLICATION REACH — a newer clients/ commit reaches every module",
+              got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
         selector = root / "scripts" / "affected-modules.py"
+        selector.write_text(_STUB_SELECTOR_PRE_OWNED, encoding="utf-8")
+        try:
+            got = _run(root, "modules", "pull_request", rx)
+            check("NEGATIVE CONTROL: a selector that predates the rule keeps a clients/ diff FULL, saying why",
+                  got["scope"] == "full" and got["count"] == 2 and "owned-elsewhere" in got["reason"],
+                  f"scope={got['scope']} — {got['reason'][:160]}")
+        finally:
+            selector.write_text(_STUB_SELECTOR, encoding="utf-8")
         selector.write_text(_STUB_SELECTOR_PRE_POLICY, encoding="utf-8")
         try:
             got = _run(root, "modules", "pull_request", ci_only)

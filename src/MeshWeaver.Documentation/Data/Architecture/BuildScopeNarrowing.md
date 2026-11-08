@@ -148,13 +148,13 @@ module that delegated nothing. Two mutually exclusive `if:`s can both be false; 
 what make that impossible to do quietly. Moving an entry from tested to untested moves it through
 that same accounting, not around it.
 
-**`clients/` stays on the loud path**, deliberately, and it is the largest remaining bucket:
-measured over 120 first-parent merges to MeshWeaver.Plugins' `main`, 45 took the full-set fallback,
-and the first global path was `.github/` in 25 of them, `clients/` in 11. `clients/` is absent from
-`NOOP_DIRS` on purpose — *a client asset can be embedded by a host* — and the set feeds the mesh
-gate and the bake as well as this lane, so narrowing it is a separate decision with a wider blast
-radius than the module matrix. The number is recorded here so that decision can be taken on
-evidence rather than re-derived.
+**`clients/` is the caller's call since 2026-11-08** (see *Owned elsewhere* below). It is still
+absent from `NOOP_DIRS`, because *a client asset can be embedded by a host* and that set feeds the
+mesh gate and the bake too. Instead, a pull request now hands it to the caller's selector, which
+answers whether any MSBuild file reads it. Before that rule it was the largest remaining full-set
+bucket after `.github/`: measured over 120 first-parent merges to MeshWeaver.Plugins' `main`, 45
+took the full-set fallback, and the first global path was `.github/` in 25 of them and `clients/`
+in 11.
 
 **`.github/workflows/ci.yml` stays on the loud path of every main push**, and on a pull request it
 is now the caller's call (policy `ci-paths-owe-no-module-leg`, below). The caller's workflow file
@@ -191,8 +191,8 @@ Four things stay EVERYTHING whatever any selector answers:
 
 - **`tools/`** — not a CI path. MeshWeaver.Plugins' `src/Directory.Build.targets` and two test
   projects read it, so it is build input.
-- **any other path the build reads** — an unnamed repo-root file, a top-level dir no list names,
-  a file directly under `src/` — the classifier's catch-all, untouched.
+- **any other path the build reads** — an unnamed repo-root file, a top-level dir that does not
+  EXIST at the tree (a deleted package), a file directly under `src/` — the classifier's catch-all.
 - **a main push narrowed by `--publication-base`** — that run IS the "main's push run" the policy
   relies on, so there a CI path is still the full set.
 - **a publication-reach question (`--publication-reach`)** — the newest-wins check of
@@ -201,6 +201,30 @@ Four things stay EVERYTHING whatever any selector answers:
   narrows a pull request's BUILD SELECTION only. A newer CI-only commit changes the workflow and
   build inputs that commit's own run packs with, so here it reaches every module, and the older run
   stands down instead of publishing over the newer one.
+
+## Owned elsewhere — a non-package top-level dir is the caller's call too (2026-11-08)
+
+A path under an **existing** top-level dir is handed to the caller's selector on a pull request,
+exactly like a CI path. The dir must be no node package and not `.github/`, `scripts/`, `tools/`,
+`src/` or `test/` (`NOT_OWNABLE_TOPS`). Examples are `clients/` and `deploy/`. MeshWeaver.Plugins'
+`affected-modules.py` already answers that question
+(Plugins `Hosting/CiAffectedClosure.md` → *Owned elsewhere*):
+
+- `[]` when a lane other than a module leg owns the path: ci.yml's `rn-app` leg for `clients/`, or a
+  workflow whose `pull_request.paths` filter claims it;
+- **ALL** the moment any MSBuild file under `src/` or at the root references the path.
+
+A selector that predates the rule answers ALL, which is a full run here, and the reason says so.
+Pushes, publication diffs and `--publication-reach` never defer.
+
+**Measured** on MeshWeaver.Plugins #5177, run 42470623788. That pull request had the shape of #5100:
+one Razor file in `MeshWeaver.Blazor.Views` and one `clients/react` file. The change set selected
+0 of 80 realms and 0 compile-check units. Its Tests-area gate ran in 24 s on an empty mount. Yet
+this script ruled `clients/react/…` EVERYTHING, so the module lane packed **42 of 42** bundles behind
+an 11.8-minute workspace build. Replayed locally with the same matrix, the same floor and the same
+ABI verdict against that head, the rule selects **4 of 42**: the four floor bundles. Of those,
+`MeshWeaver.AI` is tested, because `MeshWeaver.Hosting.Blazor`, an InternalsVisibleTo friend of
+`MeshWeaver.Blazor.Views`, sits in its closure.
 
 ## The guards
 
