@@ -396,6 +396,14 @@ Browsers make a **localhost exception** (they accept `Secure` cookies over `http
 
 ---
 
+### The owner is the instance's global administrator (the onboarding rule)
+
+**Every onboarding collects the OWNER, and the owner is the instance's global administrator** (maintainer, 2026-11-08). `memex-local up`, `fleet join`, the `.pkg`'s unattended daemon and `first-attach.sh` all ask for it, or read it from `--owner`/`--owner-email`, from `MEMEX_OWNER`/`MEMEX_OWNER_EMAIL`, or from the managed preferences `OwnerId`/`OwnerEmail`. It is the MeshWeaver **user id** the owner signs in as, not the e-mail, plus their **e-mail**. Both go into this install's own overlay and nowhere else:
+- `Auth__GlobalAdmins__0`, from which the portal seeds the Admin grant, so the owner can install packages such as ClaudeCode from Admin;
+- `Instance__Owner__Id` and `Instance__Owner__Email`.
+
+An unattended install with no owner **fails** rather than come up without an administrator. Change the owner with `memex-local owner --id <user-id> --email <e-mail>`, never by editing the YAML. The same owner answers the fleet opt-in questions.
+
 ## 10. Local LLM — Qwen via Ollama
 
 The local LLM is wired through the chart's **`OpenAICompatible`** provider, and it is the **default chat model on every memex-local install** — no key, no command. The wrinkle on macOS is the **GPU**: Colima's arm64 VM has no Metal passthrough, so a containerized Ollama would run CPU-only. Therefore **Ollama runs on the host** (keeping the Metal GPU), **bound to the Mac's loopback** (it has no authentication), and the cluster reaches it through the VM's gateway, which Colima maps to the Mac's loopback. `memex-local up` proves that reach from inside the VM. Only when the VM cannot reach a loopback listener does memex-local move its own Ollama agent to every interface, and then it says so loudly. That fallback, and an Ollama someone else already started LAN-wide, are refused outright with `MEMEX_OLLAMA_ALLOW_LAN=0`, which is the setting for a Mac whose network is not trusted.
@@ -427,7 +435,7 @@ An overlay generated before 2026-11-08 carries `OpenAICompatible__Endpoint: "htt
 
 **The context window is the one Ollama SERVES, not the trained one.** Ollama loads a model at its own default context, which it sizes from the GPU memory it sees (on a 128 GB Mac Studio its log reads `vram-based default context total_vram="107.5 GiB" default_num_ctx=262144`; a smaller Mac gets less) or from `OLLAMA_CONTEXT_LENGTH`. `memex-local` loads the model and reads the loaded context back from Ollama's `/api/ps`, and declares that. The portal's context-window guard is then armed at what the server accepts. A model Ollama cannot load gets no window; it stays undeclared and logged rather than guessed.
 
-**Ollama itself.** `memex-local` starts it as **Homebrew's service** (`brew services start ollama`), which binds `127.0.0.1:11434` and sets `OLLAMA_FLASH_ATTENTION=1` and `OLLAMA_KV_CACHE_TYPE=q8_0` (an 8-bit KV cache: half the memory per token of context). Where that service is not available, memex-local's own launchd agent (`com.memex.local.ollama`) carries the same settings. An Ollama already listening beyond loopback is handled by who runs it. If it is memex-local's own agent, memex-local rebinds it to loopback. If it is someone else's, memex-local reports it and goes on; stop it (`brew services stop ollama`, or end the process) and re-run `memex-local up --skip-image`, and under `MEMEX_OLLAMA_ALLOW_LAN=0` the run refuses to continue.
+**Ollama itself.** `memex-local` starts it as **Homebrew's service** (`brew services start ollama`), which binds `127.0.0.1:11434` and sets `OLLAMA_FLASH_ATTENTION=1` and `OLLAMA_KV_CACHE_TYPE=q8_0` (an 8-bit KV cache: half the memory per token of context). Where that service is not available, memex-local's own launchd agent (`com.memex.local.ollama`) carries the same settings. An Ollama already listening beyond loopback is handled according to whoever runs it. If it is memex-local's own agent, memex-local rebinds it to loopback. If it is someone else's, memex-local reports it and goes on; stop it (`brew services stop ollama`, or end the process), then re-run `memex-local up --skip-image`. Under `MEMEX_OLLAMA_ALLOW_LAN=0`, a run that finds such a listener still running refuses to continue.
 
 **Without memex-local (the manual Helm route of §4).** Do by hand what memex-local does:
 
