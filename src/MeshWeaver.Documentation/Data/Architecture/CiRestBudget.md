@@ -195,6 +195,14 @@ permission, and `meshweaver-cloud` is reserved for writes), the closing-keyword 
 reads (no read-only App holds Issues), and the Public-surface gate's own body read. That gate also runs
 on `merge_group`, where `pr-body` does not run. All three now answer a rate limit with NO VERDICT.
 
+## A bucket of its own for the review lanes (2026-11-08)
+
+On 2026-11-08 the Plugins job-token bucket (5,000 calls per hour) ran out at about 08:33Z, and again soon after each reset. The review lanes were its largest reader. Measured that morning from 07:46 to 09:10Z, counting executed runs: about 200 `Review answered` runs and about 150 `Stage advance` runs. Conditional re-reads (`Gh.api` with `If-None-Match`, #8003) take the repeated polls off the bucket. The lanes' first reads still draw on it.
+
+`node-repo-review-answered.yml` and `node-repo-stage-advance.yml` accept two optional secrets, `api-app-id` and `api-app-private-key`. When a caller passes them, every API step of the lane uses that App's installation token, which has its own bucket. The fetch steps go over git either way. When a caller passes nothing, the lane uses `github.token`, as before.
+
+The App must never be the one that merges or pushes (`meshweaver-cloud`), because that App's bucket carries those paths. The read App, `meshweaver-reader` (id 4919171, org-wide), has exactly the permissions the lanes need: `pull-requests: read`, `issues: read`, `checks: read`, `actions: write`. Its key is `FLEET_READER_APP_ID` / `FLEET_READER_APP_PRIVATE_KEY`, which is provisioned for core's CD. A caller repository needs those two secrets before its caller can pass them.
+
 ## What was NOT measured
 
 - **The limit itself was not read.** No job in the window printed `/rate_limit`; 1,000/hour is
