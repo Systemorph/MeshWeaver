@@ -421,6 +421,47 @@ public class EventSubscriptionExactPathDeletionTest(ITestOutputHelper output) : 
         Assert.True(final.Status == EventSubscriptionStatus.Fired, $"subscription ended {final.Status}: {final.LastError}");
     }
 
+    /// <summary>
+    /// A gate read that TIMES OUT is no evidence of a delete. The seam forwards to the real
+    /// <c>GetMeshNodeOutcome</c> with the runner's own <see cref="ReadTimeoutBehavior.EmitNull"/> but a
+    /// budget that has already elapsed, so every read takes the timeout branch — on a path that IS gone,
+    /// where an answered read would say Absent and fire. Phase 1: nothing fires over a window and every
+    /// outcome the runner saw was <see cref="NodeReadStatus.Unavailable"/>. Phase 2: the owner "answers"
+    /// again and an unrelated subscription write re-emits the pending set; the subscription now fires,
+    /// which it can only do if the timed-out check was RELEASED. Fails if a timeout maps to Absent
+    /// (phase 1 fires), or if the runner keeps an Unavailable check (phase 2 never fires).
+    /// </summary>
+    [Fact(Timeout = 90000)]
+    public async Task ATimedOutGateRead_FiresNothing_AndIsRetried()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await CreateRecord("slow", ct);
+        await CreateReceiver("owner-slow", ct);
+        var subscription = await Subscribe($"{Records}/slow", $"{Receivers}/owner-slow", ct);
+        await Delete($"{Records}/slow", ct);   // gone: an ANSWERED read says Absent
+
+        var timingOut = 1;
+        var outcomes = System.Collections.Immutable.ImmutableList<NodeReadStatus>.Empty;
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        using var runner = NewRunner(new SilentChangeFeed());
+        runner.ReadPathOverride = path => Volatile.Read(ref timingOut) == 1
+            ? access.RunAsSystem(() => Mesh.GetMeshNodeOutcome(path, TimeSpan.Zero, ReadTimeoutBehavior.EmitNull))
+                .Do(o => System.Collections.Immutable.ImmutableInterlocked.Update(ref outcomes, l => l.Add(o.Status)))
+            : RealRead(path);
+        await runner.StartAsync(default);
+
+        await Until(() => !Volatile.Read(ref outcomes).IsEmpty);
+        await StaysPending(subscription.Id, "every gate read timed out — no evidence the path is gone", ct);
+        Assert.All(Volatile.Read(ref outcomes), status => Assert.Equal(NodeReadStatus.Unavailable, status));
+
+        Volatile.Write(ref timingOut, 0);
+        await CreateReceiver("nudge", ct);
+        await Subscribe($"{Records}/nudge-absent", $"{Receivers}/nudge", ct);   // any subscription write re-emits the pending set
+
+        var final = await Settled(subscription.Id);
+        Assert.True(final.Status == EventSubscriptionStatus.Fired, $"subscription ended {final.Status}: {final.LastError}");
+    }
+
     /// <summary>A TriggerPath that is empty once normalised (whitespace, only slashes) is not read as a
     /// type trigger with no type: it ends Failed, naming why.</summary>
     [Fact(Timeout = 60000)]
