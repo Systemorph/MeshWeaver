@@ -2319,12 +2319,26 @@ class Gh:
     """REST over `gh api`. `runner`, `sleep`, `clock` and `budget_s` are injectable so the self-test
     drives the outage path through a FAKE `gh` — nothing in a self-test reaches GitHub."""
 
-    def __init__(self, repo: str, runner=None, sleep=None, clock=None, budget_s: float | None = None):
+    def __init__(self, repo: str, runner=None, sleep=None, clock=None, budget_s: float | None = None,
+                 conditional: bool | None = None):
         self.repo = repo
         self._run = runner or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True, check=False))
         self._sleep, self._clock = sleep or time.sleep, clock or time.time
         self.budget_s = outage_budget_seconds() if budget_s is None else budget_s
         self.waited_s = 0.0
+        # 🚨 CONDITIONAL READS (2026-11-08, Plugins' bucket spent at 08:34Z with every heavy gate of four
+        # pull requests red behind it). Every lane here RE-READS the same listings — the review wait's
+        # probe every 30 s, the settle wait's full read every 10 s, the refresh's runs listing every 30 s —
+        # and almost every re-read is unchanged. A GET carrying the previous answer's `ETag` as
+        # `If-None-Match` that comes back `304 Not Modified` is NOT charged to the primary limit
+        # (GitHub's REST docs; measured the same day: x-ratelimit-used did not move across 304s and
+        # moved by one on every 200), so the cached answer is served for free. ONE process's cache only:
+        # nothing is carried between runs. Real `gh` only — an injected runner (the self-test) keeps
+        # the plain read unless it opts in.
+        self.conditional = (runner is None) if conditional is None else conditional
+        self._etags: dict[str, tuple[str, object]] = {}
+        self._multi_page: set[str] = set()
+        self.not_modified = 0
 
     def sleep(self, seconds: float) -> None:
         self._sleep(seconds)
@@ -2368,7 +2382,48 @@ class Gh:
             self.waited_s += delay
             attempt += 1
 
+    def _conditional_get(self, path: str):
+        """ONE page of `path`, sent with the cached ETag when there is one. Returns (data, has_next);
+        a 304 answers the cached data. Raises ReadError like `api`."""
+        cmd = ["gh", "api", "-i", "-H", "Accept: application/vnd.github+json", f"repos/{self.repo}/{path}"]
+        cached = self._etags.get(path)
+        if cached is not None:
+            cmd[3:3] = ["-H", f"If-None-Match: {cached[0]}"]
+        p = self._call(cmd, f"GET repos/{self.repo}/{path}", "core")
+        out = p.stdout or ""
+        status = out.split("\n", 1)[0].strip()
+        if cached is not None and re.match(r"HTTP/\S+ 304\b", status):
+            self.not_modified += 1
+            return cached[1], False
+        if p.returncode != 0:
+            raise ReadError(f"GET repos/{self.repo}/{path} failed ({p.returncode}): {(p.stderr or '').strip()[:600]}")
+        parts = re.split(r"\r?\n\r?\n", out, maxsplit=1)
+        if len(parts) != 2 or not status.startswith("HTTP/"):
+            raise ReadError(f"GET repos/{self.repo}/{path} did not return headers and a body")
+        headers = {}
+        for line in parts[0].splitlines()[1:]:
+            name, _, value = line.partition(":")
+            headers[name.strip().lower()] = value.strip()
+        try:
+            data = json.loads(parts[1]) if parts[1].strip() else None
+        except json.JSONDecodeError as e:
+            raise ReadError(f"GET repos/{self.repo}/{path} did not return JSON: {e}") from e
+        has_next = 'rel="next"' in headers.get("link", "")
+        if headers.get("etag") and not has_next:
+            self._etags[path] = (headers["etag"], data)
+        return data, has_next
+
     def api(self, path: str, paginate: bool = False):
+        if self.conditional and path not in self._multi_page:
+            data, has_next = self._conditional_get(path)
+            if not paginate:
+                return data
+            if not has_next:
+                if not isinstance(data, list):
+                    raise ReadError(f"GET repos/{self.repo}/{path} did not return a list of pages")
+                return data
+            # A listing longer than one page: read it whole, uncached, from now on (one extra call, once).
+            self._multi_page.add(path)
         cmd = ["gh", "api", "-H", "Accept: application/vnd.github+json", f"repos/{self.repo}/{path}"]
         if paginate:
             cmd[2:2] = ["--paginate", "--slurp"]
@@ -3209,6 +3264,13 @@ def run_request_review(repo: str, number: int, before: str | None, gh=None, swee
     GitHub's answer lists Copilot as requested, or had nothing to do (both printed, with why); 1 (RED,
     named) when a read, the request or its confirmation failed. `gh` defaults to `Gh(repo)`; the
     self-test injects a stub and asserts the ONE mutation it issues."""
+    if fallback_minutes <= 0:
+        # 🚨 NOTHING TO REQUEST, SO NOTHING TO READ (2026-11-08). With the fallback retired (#7999) every
+        # path below ends in "requests nothing", yet each run spent ~8 reads of the caller's shared REST
+        # bucket on the way there — ~700/hour in Plugins, the morning that bucket ran out.
+        print(f"  #{number}: the Copilot fallback is retired (copilot-fallback-minutes {fallback_minutes}) — this lane "
+              f"requests nothing, so it reads nothing; the control plane reviews it, and the merge gate waits for it")
+        return 0
     try:
         gh = gh if gh is not None else Gh(repo)
         pr = gh.api(f"pulls/{number}")
@@ -3315,6 +3377,10 @@ def run_request_review_sweep(repo: str, gh=None, now_epoch: int | None = None,
     non-draft pull request with `run_request_review(..., sweep=True)`, which acts only when a landed
     review does not cover the head and nothing is pending. Exit 1 when the listing or any one
     pull request's judgement failed (every failure named); 0 otherwise."""
+    if fallback_minutes <= 0:
+        print(f"the Copilot fallback is retired (copilot-fallback-minutes {fallback_minutes}) — the sweep requests "
+              f"nothing, so it reads nothing")
+        return 0
     gh = gh if gh is not None else Gh(repo)
     try:
         pulls = gh.api("pulls?state=open&per_page=100", paginate=True)
@@ -5137,10 +5203,24 @@ def self_test() -> int:
     stub = _ReqGh({}, ANSWER_OK)
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed):
-        rc = run_request_review_sweep("Systemorph/MeshWeaver", gh=stub)
+        rc = run_request_review_sweep("Systemorph/MeshWeaver", gh=stub, fallback_minutes=30)
     ok = rc == 1 and "cannot list open pull requests" in printed.getvalue()
     failures += 0 if ok else 1
     print(f"self-test {'ok' if ok else 'FAIL':4} {'sweep: an unreadable listing -> RED, named':60} rc={rc}")
+
+    class _NoReads:
+        calls = 0
+
+        def api(self, *a, **k):
+            _NoReads.calls += 1
+            raise ReadError("read")
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        rcs = (run_request_review_sweep("Systemorph/MeshWeaver", gh=_NoReads()),
+               run_request_review("Systemorph/MeshWeaver", 1, None, gh=_NoReads()))
+    ok = rcs == (0, 0) and _NoReads.calls == 0 and printed.getvalue().count("fallback is retired") == 2
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} {'request lane: fallback 0 -> requests nothing AND reads nothing':60} rc={rcs} reads={_NoReads.calls}")
 
     # ── the EVENT half: only a FAILED gate on the CURRENT head with a GREEN stage 1 is re-run.
     def adv_case(name, expect, pr, run, job, verdict, says=""):
@@ -5929,6 +6009,38 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
             rc, out, err = script.pop(0) if script else (0, "{}", "")
             return subprocess.CompletedProcess(cmd, rc, out, err)
         return run_, calls
+
+    # ── conditional reads (2026-11-08): a re-read of an unchanged resource is a free 304
+    def hdr(status, etag=None, link=None, body="{}"):
+        lines = [f"HTTP/2.0 {status}"] + ([f"Etag: {etag}"] if etag else []) + ([f'Link: {link}'] if link else [])
+        return "\r\n".join(lines) + "\r\n\r\n" + body
+    clock = _Clock()
+    run_, calls = runner_of([(0, hdr("200 OK", '"e1"', body='[{"id": 1}]'), ""),
+                             (1, "HTTP/2.0 304 Not Modified\r\nEtag: \"e1\"\r\n\r\n", "gh: HTTP 304"),
+                             (0, hdr("200 OK", '"e2"', body='[{"id": 1}, {"id": 2}]'), "")])
+    gh = Gh("o/r", runner=run_, sleep=clock.sleep, clock=clock.now, budget_s=300, conditional=True)
+    first, second, third = (gh.api("pulls/1/reviews?per_page=100", paginate=True) for _ in range(3))
+    check("conditional: the first read sends no If-None-Match", not any("If-None-Match" in c for c in calls[0]), str(calls[0]))
+    check("conditional: the re-read sends the cached ETag", f'If-None-Match: "e1"' in calls[1], str(calls[1]))
+    check("conditional: a 304 serves the cached answer (and counts it)", second == [{"id": 1}] and gh.not_modified == 1,
+          f"{second} {gh.not_modified}")
+    check("conditional: NEG a changed resource answers the NEW data", third == [{"id": 1}, {"id": 2}], str(third))
+    run_, calls = runner_of([(1, "HTTP/2.0 304 Not Modified\r\n\r\n", "gh: HTTP 304")])
+    gh = Gh("o/r", runner=run_, sleep=clock.sleep, clock=clock.now, budget_s=300, conditional=True)
+    try:
+        got = gh.api("pulls/1")
+    except ReadError as e:
+        got = e
+    check("conditional: NEG an unsolicited 304 is a ReadError, never an empty answer", isinstance(got, ReadError), repr(got))
+    run_, calls = runner_of([(0, hdr("200 OK", '"e1"', link='<https://x?page=2>; rel="next"', body='[{"id": 1}]'), ""),
+                             (0, json.dumps([[{"id": 1}], [{"id": 2}]]), ""),
+                             (0, json.dumps([[{"id": 1}], [{"id": 2}]]), "")])
+    gh = Gh("o/r", runner=run_, sleep=clock.sleep, clock=clock.now, budget_s=300, conditional=True)
+    many = [gh.api("pulls/1/comments?per_page=100", paginate=True) for _ in range(2)]
+    check("conditional: a multi-page listing is read WHOLE (never page 1 alone), and plainly from then on",
+          many == [[{"id": 1}, {"id": 2}]] * 2 and len(calls) == 3 and "--paginate" in calls[2] and "-i" not in calls[2],
+          f"{many} {calls}")
+    check("conditional: an injected runner keeps the plain read unless it opts in", Gh("o/r", runner=run_).conditional is False)
 
     clock = _Clock()
     run_, calls = runner_of([(1, "", RATE_403), (0, json.dumps({"number": 7}), "")])
