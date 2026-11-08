@@ -69,7 +69,7 @@ The work splits across three areas, which the rest of this page walks through in
   <line x1="620" y1="94" x2="470" y2="120" stroke="#455a64" stroke-opacity="0.6" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arr)"/>
   <rect x="520" y="120" width="200" height="46" rx="10" fill="#2a1f1a" stroke="#f57c00" stroke-width="1.5"/>
   <text x="620" y="140" text-anchor="middle" fill="#ffb74d" font-size="12" font-weight="bold">Ollama (host)</text>
-  <text x="620" y="157" text-anchor="middle" fill="#ffa726" font-size="11">Metal GPU · qwen3.6</text>
+  <text x="620" y="157" text-anchor="middle" fill="#ffa726" font-size="11">Metal GPU · qwen3.8</text>
   <line x1="620" y1="94" x2="620" y2="120" stroke="#455a64" stroke-opacity="0.6" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arr)"/>
   <rect x="40" y="120" width="220" height="46" rx="10" fill="#263238" stroke="#455a64" stroke-width="1.5"/>
   <text x="150" y="140" text-anchor="middle" fill="#b0bec5" font-size="12" font-weight="bold">Microsoft Entra</text>
@@ -94,13 +94,12 @@ The VM and the local model both take host RAM, and nothing else checks it for yo
 
 | configuration | VM (`MEMEX_COLIMA_MEM`) | local model | host RAM, at least |
 |---|---|---|---|
-| default — portal, Postgres, observability, chat on qwen3.6 | 16 GiB | qwen3.6, ~23 GB, on the host GPU | **48 GB** |
+| default — portal, Postgres, observability, chat on qwen3.8 | 16 GiB | qwen3.8:27b-mlx, ~18 GB, on the host GPU | **48 GB** (the line `memex-local` draws: ≥ 32 GiB left beside the VM) |
+| a smaller Mac, or an Intel Mac | 16 GiB | qwen3:8b, ~5 GB (the automatic fallback) | **24 GB** |
 | no local chat model (`MEMEX_OLLAMA_MODEL=none`, or a hosted provider) | 16 GiB | none | **24 GB** |
 | smallest that boots | 8 GiB | none | **16 GB** — measured: the first boot's install peaks above 6 GiB in the portal pod and is OOM-killed once before the restart completes it; a rolling restart can exhaust 8 GiB again while the old pod drains |
 
-Only the last row is measured; the first two are that arithmetic — VM + about 6 GB for macOS + the model — rounded up, not a soak test. `up` pulls the model `MEMEX_OLLAMA_MODEL` names
-(default `qwen3.6`) and aliases it as `qwen3.6-code`, the id the portal is configured with; set a
-smaller tool-capable model on a smaller host, or `none` to skip the pull.
+Only the last row is measured; the others are that arithmetic — VM + about 6 GB for macOS + the model + its KV cache — rounded up, not a soak test. `up` and `update` pull the default chat model and the portal names it directly (no alias): `qwen3.8:27b-mlx` on Apple Silicon when at least 32 GiB are left beside the VM, otherwise `qwen3:8b`. `MEMEX_OLLAMA_MODEL` pins another tool-capable model, and `none` skips the pull. See §10.
 
 This brings up a single arm64 VM running both a Docker daemon and a k3s cluster. The key reason to enable k3s *with the Docker runtime* (rather than containerd) is that **k3s then shares Colima's Docker image store** — so an image you build and `docker tag` locally is immediately visible to the cluster's `IfNotPresent` pull policy, with **no registry push**. That is what makes the build loop in §4 fast.
 
@@ -244,8 +243,8 @@ config:
     Authentication__Microsoft__TenantId: "<entra-tenant-id>"
     Portal__InstanceName: "Local"           # tab title + favicon badge — see §13
     Portal__InstanceColor: "#f59e0b"
-    OpenAICompatible__Endpoint: "http://ollama:11434/v1"   # local LLM — see §11
-    OpenAICompatible__Models__0: "qwen3.6-code"
+    OpenAICompatible__Endpoint: "http://ollama.memex.svc.cluster.local:11434/v1"   # local LLM — see §10 (never the short name `ollama`: Ollama answers it 403)
+    OpenAICompatible__Models__0: "qwen3.8:27b-mlx"
     OpenAICompatible__ApiKey: "ollama"
 
 ingress:
@@ -396,28 +395,45 @@ Browsers make a **localhost exception** (they accept `Secure` cookies over `http
 
 ## 10. Local LLM — Qwen via Ollama
 
-The local LLM is wired through the chart's **`OpenAICompatible`** provider. The wrinkle on macOS is the **GPU**: Colima's arm64 VM has no Metal passthrough, so a containerized Ollama would run CPU-only. Therefore **Ollama runs on the host** (keeping the Metal GPU) and is exposed to the cluster by a stable in-cluster name.
+The local LLM is wired through the chart's **`OpenAICompatible`** provider, and it is the **default chat model on every memex-local install** — no key, no command. The wrinkle on macOS is the **GPU**: Colima's arm64 VM has no Metal passthrough, so a containerized Ollama would run CPU-only. Therefore **Ollama runs on the host** (keeping the Metal GPU), **bound to the Mac's loopback** (it has no authentication, so it is never exposed to the LAN or the private network), and the cluster reaches it through the VM's gateway.
 
-The chart's `deploy/helm/templates/ollama/service.yaml` (gated on `ollama.external.enabled`) creates a **selector-less `Service ollama` + a manual `Endpoints`** object pointing at the host gateway (`ollama.external.host`, e.g. Colima's `192.168.5.2:11434`). The portal then addresses Ollama by stable name instead of a brittle hardcoded IP:
+The chart's `deploy/helm/templates/ollama/service.yaml` (gated on `ollama.external.enabled`) creates a **selector-less `Service ollama` + a manual `Endpoints`** object pointing at the VM's gateway (`ollama.external.host`). `memex-local` resolves that gateway per install from inside the VM (Colima's is usually `192.168.5.2`, but it can differ). What the portal is configured with:
 
 ```text
-OpenAICompatible__Endpoint = http://ollama:11434/v1
-OpenAICompatible__Models__0 = qwen3.6-code
-OpenAICompatible__ApiKey    = ollama
+OpenAICompatible__Endpoint                       = http://ollama.memex.svc.cluster.local:11434/v1
+OpenAICompatible__Models__0                      = qwen3.8:27b-mlx      (this Mac's model)
+AI__Tiers__chat                                  = Provider/OpenAICompatible/qwen3.8:27b-mlx
+OpenAICompatible__ContextWindowTokens__0__Model  = qwen3.8:27b-mlx
+OpenAICompatible__ContextWindowTokens__0__Tokens = 262144               (what Ollama serves it with here)
+OpenAICompatible__ApiKey                         = ollama               (any non-empty token)
 ```
 
-Start Ollama on the host, bound to all interfaces so the VM's host-gateway can reach it, and alias the model to the id the config expects:
+> **🚨 The endpoint is the Service's cluster FQDN, never its short name.** Ollama bound to loopback checks the `Host` header of every request and answers **403** unless that host is an IP that is loopback or private, `localhost`, the machine's own hostname, or a name ending in `.localhost`, `.local` or `.internal`. Until 2026-11-08 every install called `http://ollama:11434/v1`, so every chat round was refused — the portal logged `[OpenAIWire] HTTP 403 … endpoint=ollama` and closed the provider (`PROVIDER_KEY_FAILING … Forbidden`). The same Service as `ollama.memex.svc.cluster.local` ends in `.local` and is admitted, with nothing about Ollama changed. Measured on a Mac Studio, Ollama 0.40.14: `Host: ollama:11434` → 403, `Host: ollama.memex.svc.cluster.local:11434` → 200, and from inside the portal pod the same split. Making Ollama listen LAN-wide (`OLLAMA_HOST=0.0.0.0`) would also silence the 403 — and expose an unauthenticated model server to every machine on the network. Do not.
 
-```bash
-OLLAMA_CONTEXT_LENGTH=16384 OLLAMA_HOST=0.0.0.0:11434 ollama serve   # 0.0.0.0 so the cluster can reach it; 16k ctx (see below)
-ollama pull qwen3.6                                # the Ollama-library model
-ollama cp qwen3.6 qwen3.6-code                     # alias to the id used by OpenAICompatible__Models__0
-```
+**Where each value comes from** (so an `upgrade` changes existing installs too):
 
-> **🚨 Set `OLLAMA_CONTEXT_LENGTH`.** Ollama loads every model at a default context of **4096 tokens** regardless of the model's real maximum. The agent system prompt alone is now larger than that, so a fresh thread fails with
-> `request (…tokens) exceeds the available context size (4096 tokens) … exceed_context_size_error` and the model "can't run." Ollama's OpenAI-compatible `/v1` endpoint does **not** accept a per-request `num_ctx`, so the **host** is the only lever: start `ollama serve` with `OLLAMA_CONTEXT_LENGTH=16384` (or higher — bounded by the model's trained max and your VRAM). On the Ollama macOS **app**, set it once with `launchctl setenv OLLAMA_CONTEXT_LENGTH 16384` and restart the app. Per-model alternative: a Modelfile with `PARAMETER num_ctx 16384` + `ollama create`.
->
-> **Pick a tool-capable model.** The agent round sends tool/function definitions. A pure roleplay/completion GGUF (e.g. `hf.co/TheBloke/Mythalion-13B-GGUF:Q4_K_M`) returns HTTP 400 *"does not support tools"*. The portal now probes Ollama's `/api/show` capabilities and stamps `SupportsTools=false` on such a model (so the round sends it a plain, tool-free chat request instead of erroring) — but for agent use, prefer a model whose `capabilities` include `tools` (qwen3.6 does).
+| value | layer | why there |
+|---|---|---|
+| the endpoint, `ollama.external.enabled` | `share/values.local.defaults.yaml` (tracked, ships with `brew upgrade`) | the same on every install |
+| the model, its context window, `AI__Tiers__chat`, `ollama.external.host` | `~/.memex-local/llm.auto.yaml`, regenerated by every `up`/`update` | per host: memory decides the model, Ollama decides the window, the VM decides the gateway |
+| anything the owner pins | `~/.memex-local/values.local.yaml` (the overlay, wins) | an explicit choice is never overwritten |
+
+An overlay generated before 2026-11-08 carries `OpenAICompatible__Endpoint: "http://ollama:11434/v1"`, `OpenAICompatible__Models__0: "qwen3.6-code"` and `host: "192.168.5.2"`. Because the overlay wins, those lines would keep the 403 forever, so the next `update` removes **exactly** those three stale template lines and keeps a copy (`values.local.yaml.bak-llm`). A value the owner wrote differently is left alone and still wins, and the chat tier and context window follow the owner's model. On such an install the old `qwen3.6-code` stays available as `Models__1`.
+
+**The model.** `qwen3.8:27b-mlx` (~18 GB of weights, Ollama's MLX engine, tools and vision, trained for a 262,144-token window) on Apple Silicon when at least **32 GiB** of unified memory remain beside the VM — a 48 GB Mac with the default 16 GiB VM, or a 64 GB Mac with the `mac-studio` profile's 32 GiB. Otherwise, or on an Intel Mac, `qwen3:8b` (~5 GB). The MLX build needs Ollama ≥ 0.32.12; an older Ollama is upgraded through Homebrew, or the host falls back. `MEMEX_OLLAMA_MODEL` pins another model, `none` pulls none. `update` pulls the model once on an existing install.
+
+**The context window is the one Ollama SERVES, not the trained one.** Ollama loads a model at its own default context, which it sizes from the GPU memory it sees (on a 128 GB Mac Studio its log reads `vram-based default context total_vram="107.5 GiB" default_num_ctx=262144`; a smaller Mac gets less) or from `OLLAMA_CONTEXT_LENGTH`. `memex-local` loads the model and reads the loaded context back from Ollama's `/api/ps`, and declares that. The portal's context-window guard is then armed at what the server accepts. A model Ollama cannot load gets no window; it stays undeclared and logged rather than guessed.
+
+**Ollama itself.** `memex-local` starts it as **Homebrew's service** (`brew services start ollama`), which binds `127.0.0.1:11434` and sets `OLLAMA_FLASH_ATTENTION=1` and `OLLAMA_KV_CACHE_TYPE=q8_0` (an 8-bit KV cache: half the memory per token of context). Where that service is not available, memex-local's own launchd agent (`com.memex.local.ollama`) carries the same settings. An Ollama already listening beyond loopback is rebound to loopback if it is memex-local's own, and named otherwise.
+
+**"Never 403" is checked, not hoped.**
+- `up`, `update` and `fleet join` end with a **real chat completion from inside the portal pod**, using the endpoint, model and key the pod itself was given (the key never leaves the pod). On a 403 or any other non-200 the command **fails** and names the cause: 403 is the Host check, 404 a model Ollama does not have, 000 an Ollama that is down or unreachable. `MEMEX_LLM_SMOKE=0` skips the check, loudly.
+- `memex-local status` runs the same check.
+- `memex-local doctor` runs it too, and first re-measures Ollama's Host rule on this Mac: the configured host must be answered 200, and `ollama:11434` must be answered 403. The second probe is the negative control that shows the check can fail.
+
+**Apple Intelligence is not an alternative from inside the cluster.** `MeshWeaver.AI.AppleIntelligence` reaches Apple's Foundation Models through a helper process (`applefm-bridge`) that it starts on the same machine, and it registers only where `OperatingSystem.IsMacOS()` is true. The portal runs on Linux inside the Colima VM, so the provider never registers there, and nothing bridges the pod to the Mac's Foundation Models today. It serves a portal that runs natively on macOS, not this one.
+
+> **Pick a tool-capable model.** The agent round sends tool/function definitions. A pure roleplay/completion GGUF (e.g. `hf.co/TheBloke/Mythalion-13B-GGUF:Q4_K_M`) returns HTTP 400 *"does not support tools"*. The portal probes Ollama's `/api/show` capabilities and stamps `SupportsTools=false` on such a model, so the round sends it a plain, tool-free chat request instead of erroring. For agent use, prefer a model whose `capabilities` include `tools`; both defaults do.
 
 > k3s v1.35 logs a deprecation warning for `Endpoints` (in favor of `EndpointSlice`), but the mirroring controller auto-creates the slice, so routing works.
 
@@ -435,7 +451,7 @@ Add to the local overlay `~/.memex-local/values.local.yaml` under `config: → m
 
 ```yaml
     Embedding__Provider: "Ollama"                  # → OllamaEmbeddingProvider ( /v1/embeddings )
-    Embedding__Endpoint: "http://ollama:11434/v1"  # same in-cluster name as the chat provider (§10)
+    Embedding__Endpoint: "http://ollama.memex.svc.cluster.local:11434/v1"  # same host-safe name as the chat provider (§10)
     Embedding__Model: "bge-m3"                      # no API key needed for Ollama
 ```
 
@@ -506,9 +522,10 @@ The result: every device trusts the cert out of the box (no mkcert CA install), 
 | Page returns empty reply / HTTP 000 after a portal rollout | The `kubectl port-forward` binds **one pod**; a `rollout restart` replaces it and the old forward goes stale. **Restart the port-forward** (or let the launchd agent's `KeepAlive` do it). |
 | A route 404s for ~1 second right after a Helm upgrade or ingress patch | ingress-nginx **reload lag** — the controller is reloading its config. Retry; it clears within a second. |
 | OAuth redirect URI mismatch | The redirect URI the portal built must exactly match one registered on the app (§9). Check you're hitting the host/port whose `/signin-microsoft` is registered. |
-| Ollama unreachable from the portal | Ollama must be started with `OLLAMA_HOST=0.0.0.0:11434` (not the default loopback bind), and `ollama.external.host` must be Colima's host-gateway IP (`192.168.5.2`). |
-| Local model errors `exceed_context_size_error` / `exceeds the available context size (4096 tokens)` | Ollama loads at a 4096-token default context, smaller than the agent prompt. Restart `ollama serve` with `OLLAMA_CONTEXT_LENGTH=16384` (macOS app: `launchctl setenv OLLAMA_CONTEXT_LENGTH 16384` + restart). The `/v1` endpoint can't set `num_ctx` per request — it's a host setting. See §10. |
-| Local model errors HTTP 400 `does not support tools` | The selected model is a completion-only/roleplay GGUF. The portal auto-stamps `SupportsTools=false` (round then omits tools), but for agent work pick a model whose Ollama `capabilities` include `tools` (e.g. qwen3.6). See §10. |
+| Chat fails; the portal logs `[OpenAIWire] … HTTP 403 … endpoint=ollama`, then `PROVIDER_KEY_FAILING … Forbidden` | Ollama's Host-header check: on loopback it refuses any Host that is not an IP, `localhost`, or `*.localhost`/`*.local`/`*.internal`, and the short Service name `ollama:11434` is none of those. The endpoint must be `http://ollama.memex.svc.cluster.local:11434/v1` (§10). `memex-local update` fixes an install whose overlay still carries the old line; `memex-local doctor` measures the rule on your Ollama and runs a real completion from inside the pod. |
+| Ollama unreachable from the portal (HTTP 000 in the chat smoke) | Ollama is not running (`brew services start ollama`), or the VM cannot reach the Mac's loopback at its gateway — `memex-local up` proves that from inside the VM and says what it did. `ollama.external.host` is the VM's gateway, resolved per install into `~/.memex-local/llm.auto.yaml`. |
+| Local model errors `exceed_context_size_error` / `exceeds the available context size (4096 tokens)` | This Ollama serves the model at a small default context (it sizes the default from the GPU memory it sees), smaller than the agent prompt. Set `OLLAMA_CONTEXT_LENGTH` for the service (e.g. 32768), restart Ollama, then run `memex-local update --skip-image` so the declared window follows what Ollama now serves. The `/v1` endpoint can't set `num_ctx` per request — it's a host setting. See §10. |
+| Local model errors HTTP 400 `does not support tools` | The selected model is a completion-only/roleplay GGUF. The portal auto-stamps `SupportsTools=false` (round then omits tools), but for agent work pick a model whose Ollama `capabilities` include `tools` (e.g. qwen3.8). See §10. |
 | Uploaded documents aren't searchable / `nodeType:Document` returns 0 / an agent can't find its input | Content **indexing** needs an embedding provider, which is separate from the chat model and off by default. Set `Embedding__Provider`/`Embedding__Endpoint`/`Embedding__Model` (§10.1) and **re-upload** — indexing fires on the upload event, so pre-existing files aren't retro-indexed. |
 | `memex-local` targets the **wrong cluster** — `helm` fails `kubernetes cluster unreachable: …privatelink…azmk8s.io`, or (worse) a reachable cloud cluster gets rolled | 🚨 `memex-local` uses the **ambient `kubectl` context**, not a pinned one. If your current context is an AKS cluster, `up`/`update` deploy *there*. Check with `kubectl config current-context` and switch: `kubectl config use-context colima`. It failed loudly here only because that cluster is private and unroutable — a reachable one would have been rolled silently. |
 | `https://memex.localhost:8443` refuses the connection although the pods are healthy | Same root cause as above: the launchd port-forward agent runs `kubectl port-forward` with **no context**, so an AKS current-context breaks it. Fix the context, then `memex-local port-forward`. |
