@@ -30,6 +30,7 @@ Because the mesh node is the durable source of truth (Postgres), durability is *
 |---|---|---|
 | **Trigger** | `TriggerType` | `NodeChange` \| `Timer` \| `NodeStatus` |
 | NodeChange | `TriggerNodeType`, `TriggerKind`, `MatchField`, `MatchValue` | fire when a node of this type is created/updated/deleted and its field matches |
+| NodeChange (exact path) | `TriggerPath` + `TriggerKind = Deleted` | fire when ONE exact node path is deleted — no type, no read-back (see "Trigger 1b") |
 | Timer | `FireAt` | fire once at/after this instant (a past time fires on the next boot) |
 | NodeStatus | `WatchPath`, `StatusField`, `RestingValues`, `RequireActiveFirst` | fire when the watched node's status enters a resting value |
 | **Effect** | `ContinuationType` | `GrantSpaceAccess` \| `AddToGroup` \| `PostThreadMessage` \| `PublishSocialPost` \| `RunScript` \| `DeliverToNode` |
@@ -62,6 +63,31 @@ EventSubscriptionOps.CreateSubscription(meshService, subscription).Subscribe();
 When the invitee onboards, their `User` node is created → the change feed fires the subscription live; the reconcile path is the safety net if the sign-up happened during downtime. The continuation (`GrantSpaceAccess`) creates the `{space}/_Access/{user}_Access` assignment and pins the Space — both idempotent create-or-updates, so live + reconcile can never double-grant. The subject is the **triggering node's id** (a `User` node's path IS the userId).
 
 The group twin is `AddToGroup` (written by `GroupInviteExtensions.InviteToGroup` / the bulk `InviteAllToGroup` behind the group's "Invite by Email" dialog): on sign-up it creates the `{group}/{user}_Membership` node, and — when the invite chose a `Role` — additionally the `{group}/_Access/{user}_Access` assignment (groups are not publicly readable, so the grant is what lets the new member see the group; `Admin` makes them a group manager). Same idempotent upserts, same deterministic id per invitee+group.
+
+## Trigger 1b — react to ONE exact path being deleted
+
+A type-matched `Deleted` trigger cannot express *"when THIS record is deleted"*: a delete event carries no authoritative node type, and the deleted node can no longer be read back to match a field. `TriggerPath` is the exact-path form. With `TriggerKind = Deleted` the subscription matches by path alone — `TriggerNodeType`, `MatchField` and `MatchValue` are not consulted — and the continuation's subject is the deleted node's id:
+
+```csharp
+new EventSubscription
+{
+    Id = $"revoke_{recordId}",                         // deterministic → re-arming upserts the same one
+    TriggerType = EventTriggerType.NodeChange,
+    TriggerKind = MeshChangeKind.Deleted,
+    TriggerPath = $"Admin/Subscriptions/{recordId}",   // exactly this node, never a sibling or a prefix
+    ContinuationType = EventContinuationType.DeliverToNode,
+    DeliverTo = ownerPath,                             // the owner re-decides with the record gone
+    CreatedBy = owner,
+};
+```
+
+**When it fires — every path is gated on an authoritative "it is gone" read.** Three paths can propose a firing, and none of them fires on its own word: each hands the subscription to one authoritative point read of the path (`GetMeshNodeOutcome`, as System), and only `Absent` — or `DeleteInProgress`, whose next answer is "gone", never "here again" — fires. `Present` never fires (the path was re-created, or the hint was stale); `Unavailable` is no evidence either way, so nothing fires and the check is released for a later emission or the next start.
+
+- **Live** — the change feed's `Deleted` event for exactly that path (ordinal, after trimming `/`). A sibling, a string prefix (`…/kee` for `…/keep`, or `…/keep-old`) and a descendant (`…/keep/child`) never match.
+- **Change-feed-independent** — one live child listing per distinct parent of a pending exact-path subscription, reacting only to `Removed` emissions; the twin of the trigger-node-type watch, for a delete committed on another silo whose feed event never arrived.
+- **Catch-up** — each exact-path subscription is checked against current state ONCE per runner lifetime: in the startup authoritative reconcile, and when the live pending set first lists it. A child listing per parent narrows the candidates (a path it still shows is left alone) and every path it does not show is confirmed by the point read, because a listing can trail a node written a moment ago. So a delete that happened **while the runner was down** — or **before the subscription was written** — still fires. The corollary: a subscription written for a path that does not exist fires at once. Write it for a node that exists.
+
+**The guarantee** is the runner's ordinary one: at most one continuation in flight per subscription (the `executing` reservation), the terminal `Fired` write gates re-entry across restarts, and a crash after the continuation landed but before `Fired` was written re-delivers on the next start — so a `DeliverToNode` receiver must be idempotent (re-deciding from current state is). A `TriggerPath` with any kind other than `Deleted` ends `Failed`, named, rather than being read as a type trigger with no type.
 
 ## Trigger 2 — react to a timer
 
@@ -135,4 +161,4 @@ The receiver re-checks `EventDelivery.CreatedBy` before it acts: the firing come
 
 ## Testing
 
-`test/MeshWeaver.Graph.Test/EventContinuationDeliverToNodeTest` covers `DeliverToNode` writing the new user's id onto the module's node, `DeliverToNode` without a node failing by name, an unknown value failing under its own number, and every earlier member keeping its number. `test/MeshWeaver.Graph.Test/EventSubscriptionRunnerTest` covers the NodeChange grant (fires when the matching user is created), the legacy migration, the Timer (a past-due timer fires + grants), and the NodeStatus trigger (a watched node flipped `Running → Idle` fires). `SpaceInviteServiceTest` covers the invite → subscription write.
+`test/MeshWeaver.Graph.Test/EventContinuationDeliverToNodeTest` covers `DeliverToNode` writing the new user's id onto the module's node, `DeliverToNode` without a node failing by name, an unknown value failing under its own number, and every earlier member keeping its number. `test/MeshWeaver.Graph.Test/EventSubscriptionRunnerTest` covers the NodeChange grant (fires when the matching user is created), the legacy migration, the Timer (a past-due timer fires + grants), and the NodeStatus trigger (a watched node flipped `Running → Idle` fires). `SpaceInviteServiceTest` covers the invite → subscription write. `test/MeshWeaver.Graph.Test/EventSubscriptionExactPathDeletionTest` covers the exact-path `Deleted` trigger: deleting the path delivers (subject = the deleted id); deleting a sibling, a string prefix or a descendant does not; a delete while no runner ran delivers when one starts; a path that still exists never delivers; and a path with another kind fails, named.
