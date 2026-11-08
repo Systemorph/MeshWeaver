@@ -36,6 +36,10 @@ come from the same tester digest the key names). The archive is read only throug
 beside it; a missing record, a mismatch, an archive without the entry's assembly or closure manifest,
 or any store error is a MISS. Fail-open: a miss builds as before; nothing here can red a run.
 
+WHO WRITES: only a trusted run (the default branch's push/schedule/dispatch) calls `save`; every run
+reads. A pull request controls its own workflow and build, so an entry it could write under a key the
+trunk later computes would put its bytes into the trunk's bundles (StandingBuildHosts §4).
+
 MERGE never overwrites a file this run's own build emitted (a sibling compiled now from the same
 sources wins over the cached copy), and appends each served entry's log under a header naming the key.
 """
@@ -92,11 +96,13 @@ def dirty_paths(repo: Path, lines: list[str]) -> list[str]:
             paths.append(parts[1])
     if not paths:
         return []
-    r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all", "--ignored=no", "--", *paths],
-                       capture_output=True, text=True)
+    # NUL-delimited (`-z`): a non-ASCII path would otherwise arrive C-quoted and name no file.
+    r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=no",
+                        "--", *paths], capture_output=True, text=True, errors="surrogateescape")
     if r.returncode != 0:
         return ["<git status failed>"]
-    return [l[3:] for l in r.stdout.splitlines() if l.strip()]
+    # Each record is `XY <path>`; a rename's source follows as its own NUL-terminated field.
+    return [rec[3:] for rec in r.stdout.split("\0") if len(rec) > 3 and rec[2] == " "]
 
 
 def plan(repo: Path, modules: list[dict], salt: str) -> list[dict]:

@@ -2709,8 +2709,16 @@ jobs:
             echo "::warning::uncarried-asset refusal NOT ENFORCED in this run — OBSERVE-ONLY: the pinned tester (tester-image-digest $TESTER_DIGEST) predates MeshWeaver#4445 and does not refuse a container bundle that lacks an asset for the target RID. It arms when the tester pin moves to a platform build carrying #4445."
           fi
       # Only after the postcondition: an entry is kept only from a build that emitted the complete set.
+      # 🚨 ONLY A TRUSTED RUN WRITES (StandingBuildHosts §4's cache contract: a pull request never
+      # writes a shared cache). A pull request's workflow and build are its author's to change, and an
+      # entry it wrote under a key main later computes would put the author's bytes into main's
+      # bundles. So the default branch's push, schedule and dispatch runs fill the cache; every run
+      # reads it. A PR's unchanged entries hit what main compiled under the same key.
       - name: Compile cache — keep what this run compiled
-        if: success() && steps.ccache.outputs.enabled == 'true' && steps.build.outputs.built == 'true'
+        if: >-
+          success() && steps.ccache.outputs.enabled == 'true' && steps.build.outputs.built == 'true'
+          && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+          && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'repository_dispatch')
         env:
           PLAN: ${{ steps.ccache.outputs.plan }}
           STORE: ${{ needs.select.outputs.artifact-store }}
