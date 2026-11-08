@@ -15,7 +15,11 @@ namespace MeshWeaver.Mesh.Security;
 ///
 /// <para><b>The rule.</b> A grant entry that names a plan licenses exactly the packages that plan
 /// covers: the package's declared tier must rank at or below the plan's, unless the plan is
-/// all-access (the dedicated instance's "no limit on packages"). An entry naming NO plan licenses
+/// all-access (the dedicated instance's "no limit on packages") — or the package is one of the plan's
+/// declared MEMBERS (<see cref="Members"/>, <c>content.members</c> on the tier node): a plan that ranks
+/// low but names a few higher-tier packages it includes, by id (the self-hosting plan: free, plus
+/// Hosting and the harnesses a self-hoster needs, never the rest of Pro). A member is covered by its
+/// plan whatever its tier, and by nothing else that the rank rule would not already cover. An entry naming NO plan licenses
 /// every tier — today's semantics, unchanged. Two deliberate asymmetries with the Store's
 /// user-facing rule (<c>SubscriptionFact.Covers</c>):</para>
 /// <list type="bullet">
@@ -41,6 +45,39 @@ public sealed record PlanTierRanks(
     public static readonly PlanTierRanks Empty = new(
         ImmutableDictionary.Create<string, int>(StringComparer.OrdinalIgnoreCase),
         ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The packages each plan includes BY NAME beside its rank — plan id → package ids, both matched
+    /// case-insensitively. Empty for every plan that declares none, which is every plan but a member-list
+    /// plan; a plan's members never widen any other plan.
+    /// </summary>
+    public ImmutableDictionary<string, ImmutableHashSet<string>> Members { get; init; } =
+        ImmutableDictionary.Create<string, ImmutableHashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>This ladder with <paramref name="members"/> as its plans' member lists (a plan's ids are
+    /// trimmed, blanks dropped; a plan named twice unions its lists). Pure.</summary>
+    public PlanTierRanks WithMembers(IEnumerable<(string Plan, IEnumerable<string> Packages)> members)
+    {
+        var builder = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (plan, packages) in members)
+        {
+            var key = Canonical(plan);
+            if (key.Length == 0)
+                continue;
+            var ids = packages.Select(p => (p ?? "").Trim()).Where(p => p.Length > 0);
+            builder[key] = builder.TryGetValue(key, out var existing)
+                ? existing.Union(ids)
+                : ImmutableHashSet.CreateRange(StringComparer.OrdinalIgnoreCase, ids);
+        }
+        return this with { Members = builder.ToImmutable() };
+    }
+
+    /// <summary>Whether <paramref name="packageId"/> is a declared member of <paramref name="plan"/>. Pure.</summary>
+    public bool IsMember(string? plan, string? packageId) =>
+        !string.IsNullOrWhiteSpace(packageId)
+        && Canonical(plan) is { Length: > 0 } key
+        && Members.TryGetValue(key, out var ids)
+        && ids.Contains(packageId.Trim());
 
     /// <summary>The rank a package with NO declared tier is read at — the platform baseline.</summary>
     public const int BaselineRank = 0;
@@ -86,6 +123,14 @@ public sealed record PlanTierRanks(
     /// Whether a grant entry scoped to <paramref name="planTier"/> covers a package declaring
     /// <paramref name="packageTier"/> — the rule in the type remarks, pure.
     /// </summary>
+    public bool Covers(string? planTier, string? packageTier, string? packageId) =>
+        Covers(planTier, packageTier)
+        || (!string.IsNullOrWhiteSpace(planTier) && RankOf(planTier) is not null && IsMember(planTier, packageId));
+
+    /// <summary>
+    /// The rank rule alone — <see cref="Covers(string?, string?, string?)"/> for a caller that knows no
+    /// package id, so a plan's members are NOT considered. Every registry surface passes the id.
+    /// </summary>
     public bool Covers(string? planTier, string? packageTier)
     {
         if (string.IsNullOrWhiteSpace(planTier))
@@ -110,7 +155,7 @@ public sealed record PlanTierRanks(
     /// <summary>
     /// Whether an INSTANCE on <paramref name="instancePlan"/> may pull a package declaring
     /// <paramref name="packageTier"/> — the licence rule every registry surface decides with
-    /// (#2804). This is <see cref="Covers"/> with the one difference that closes the hole: a
+    /// (#2804). This is <see cref="Covers(string?, string?, string?)"/> with the one difference that closes the hole: a
     /// blank plan is never "every tier", it is <see cref="BaselinePlan"/>. Everything else is the
     /// ladder rule — an all-access plan covers everything, an unknown plan or an unknown package
     /// tier licenses nothing, a package with no tier is the platform baseline.
@@ -128,6 +173,14 @@ public sealed record PlanTierRanks(
     /// refusal carries it (<see cref="IsUnknownPlan"/>, #5894). A RETIRED id is not unknown: it
     /// resolves to its successor (<see cref="RetiredPlans"/>).</para>
     /// </remarks>
+    public bool CoversInstance(string? instancePlan, string? packageTier, string? packageId) =>
+        CoversInstance(instancePlan, packageTier)
+        || IsMember(Canonical(instancePlan) is { Length: > 0 } named ? named : BaselinePlan, packageId);
+
+    /// <summary>
+    /// The rank rule alone — <see cref="CoversInstance(string?, string?, string?)"/> for a caller that
+    /// knows no package id, so a plan's members are NOT considered. Every registry surface passes the id.
+    /// </summary>
     public bool CoversInstance(string? instancePlan, string? packageTier)
     {
         var plan = Canonical(instancePlan) is { Length: > 0 } named ? named : BaselinePlan;
@@ -146,7 +199,7 @@ public sealed record PlanTierRanks(
     /// pro instance's access to one source at the free level — and it can never raise it, which
     /// is what made <c>Plugins/*@pro</c> on a free instance a licence the instance never bought.
     /// A blank cap is no cap; an unknown cap, like an unknown plan, reads as the baseline — the
-    /// narrowest level there is (<see cref="CoversInstance"/>).
+    /// narrowest level there is (<see cref="CoversInstance(string?, string?, string?)"/>).
     /// </summary>
     public string? Narrower(string? instancePlan, string? cap)
     {
@@ -167,7 +220,7 @@ public sealed record PlanTierRanks(
     /// 🚨 RETIRED plan ids and the plan each one now IS — an explicit, closed table of renames,
     /// never a fallback. A plan id that was once seeded and stamped on records, then renamed, must
     /// keep resolving to its successor: otherwise every record still carrying it reads as an
-    /// UNKNOWN plan, which decides at the baseline (<see cref="CoversInstance"/>) and silently
+    /// UNKNOWN plan, which decides at the baseline (<see cref="CoversInstance(string?, string?, string?)"/>) and silently
     /// strips the instance of everything it paid for (#5894 — <c>sme</c> was renamed to
     /// <c>dedicated</c> in the licence documents only, its tier node was deleted, and a dedicated
     /// instance was refused 18 packages as <c>free</c>).
@@ -197,7 +250,7 @@ public sealed record PlanTierRanks(
     /// <summary>
     /// Whether <paramref name="plan"/> — an instance record's plan — is UNKNOWN to this ladder:
     /// non-blank, not the baseline, not a retired id, and ranked by no tier node. Such a plan is
-    /// decided at the baseline (fail closed, <see cref="CoversInstance"/>), and that decision must
+    /// decided at the baseline (fail closed, <see cref="CoversInstance(string?, string?, string?)"/>), and that decision must
     /// never be silent: every surface that takes it names the stored id.
     /// </summary>
     public bool IsUnknownPlan(string? plan)

@@ -122,7 +122,7 @@ public record MeshWeaverInstance
     /// (<see cref="PlanTierRanks.BaselinePlan"/>) and never as "everything": a record that predates
     /// the field is a free instance, not an unlimited one (#2804). The registry decides every
     /// package it serves against this plan and the package's declared tier
-    /// (<see cref="PlanTierRanks.CoversInstance"/>); a <see cref="PluginGrant"/> entry says WHICH
+    /// (<see cref="PlanTierRanks.CoversInstance(string?, string?, string?)"/>); a <see cref="PluginGrant"/> entry says WHICH
     /// sources and packages, and can at most cap the plan, never raise it.
     /// </summary>
     public string? Plan { get; init; }
