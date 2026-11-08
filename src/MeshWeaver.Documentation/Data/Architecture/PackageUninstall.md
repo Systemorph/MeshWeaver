@@ -172,7 +172,10 @@ So nothing outside the record's own hub lands or removes a package's module
   `ModuleAdoptOutcome.Transient`, so a module reload records `Faulted` and is re-armed rather than a
   final `Failed`. That is the verdict a landing with no install record already reaches when it faults
   (`PluginBundleClient.LandingFaultOutcome`). A decided refusal (a retirement, a binding, a tombstone)
-  is never transient.
+  is never transient. A module head that cannot be read whole when the landing executes is a fault,
+  not a refusal: the read may succeed on the next pass, so the classifier decides, as it does when
+  `GetCheckedActivation` cannot read the activation whole. Only an uninstall the landing actually
+  observes is a decided refusal.
 
 **A person's install waits for a removal in flight.** A stamp or a person's clear is refused while
 ANY removal of the module is `Executing`, including one whose uninstall has already released its

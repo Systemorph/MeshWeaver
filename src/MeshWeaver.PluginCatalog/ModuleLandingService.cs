@@ -1242,7 +1242,10 @@ public sealed class ModuleLandingService : IDisposable
     /// entry is disabled), refuses instead of writing — the rule <see cref="ModuleUpdateDecision"/>
     /// applies at plan time (<see cref="ModuleUpdateAction.SkipUninstalled"/>), re-taken where the
     /// bytes are written, after a download that may have outlived the plan. A module head that cannot
-    /// be read whole refuses too: unreadable is never "not uninstalled". Cold.
+    /// be read whole FAULTS, naming why — unreadable is never "not uninstalled", and never a decided
+    /// refusal either: a read failure may clear, so the shared classifier
+    /// (<see cref="TransientRegistryFailure"/>) decides whether it is retried, exactly as for
+    /// <see cref="GetCheckedActivation"/> (MeshWeaver#7974 review, round 5). Cold.
     /// </summary>
     /// <param name="landing">The landing.</param>
     /// <param name="refuseOverUninstall">False only for a person's re-install the install record's
@@ -1251,12 +1254,21 @@ public sealed class ModuleLandingService : IDisposable
         => pool.InvokeBlocking(ct =>
             {
                 ValidateFileName(landing.Name, "module name");
-                var head = ModuleActivationSidecar.ReadModuleHead(baseDirectory, landing.Name,
-                    msg => logger?.LogError("{Message}", msg), platform);
+                var faults = ImmutableList<string>.Empty;
+                var head = ModuleActivationSidecar.ReadModuleHead(baseDirectory, landing.Name, msg =>
+                {
+                    faults = faults.Add(msg);
+                    logger?.LogError("{Message}", msg);
+                }, platform);
+                // 🚨 A FAULT, never a refusal (#7974 review, round 5): an activation record that could
+                // not be read now (a listing or read failure on the volume) may read whole on the next
+                // pass, and a refusal would make the reload a terminal Failed. Only an OBSERVED
+                // uninstall, below, is a decided refusal.
                 if (!head.Whole)
-                    return new ModuleLandingVerdict(false,
-                        $"refused: module '{landing.Name}''s activation records could not be read whole, so whether it "
-                        + "was uninstalled meanwhile is unknown — nothing was landed");
+                    throw new InvalidOperationException(
+                        $"module '{landing.Name}''s activation records could not be read whole, so whether it was "
+                        + $"uninstalled meanwhile is unknown — nothing was landed ({faults.Count} fault(s): "
+                        + $"{string.Join(" | ", faults)})");
                 if (refuseOverUninstall && head.Derived is { Enabled: false })
                     return new ModuleLandingVerdict(false,
                         $"refused: module '{landing.Name}' was uninstalled after this landing was planned — "

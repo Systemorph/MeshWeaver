@@ -780,6 +780,27 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         refused.Transient.Should().BeFalse("a decided refusal is final");
     }
 
+    /// <summary>
+    /// (17) An activation record the owner cannot read WHOLE at landing time is a FAULT, not a decided
+    /// refusal (#7974 review, round 5): the read may succeed on the next pass, so the answer is
+    /// not-applied AND transient, and a reload stays retryable. Negative control (measured): with the
+    /// unreadable head answered as a refusal again, the verdict reads Transient == false.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnUnreadableModuleHead_IsATransientFault_NotARefusal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Unreadable.Module";
+        await WriteRecord("LandUnreadable", module, ct);
+        Directory.CreateDirectory(ModuleActivationSidecar.EntriesDirectory(moduleRoot));
+        await File.WriteAllTextAsync(ModuleActivationSidecar.EntryPath(moduleRoot, module), "{ this is not an activation entry", ct);
+
+        var verdict = await Land(module, "1.0.0", RecordPath("LandUnreadable")).Timeout(TestTimeouts.Convergence).Await(ct);
+        verdict.Applied.Should().BeFalse("nothing lands over a head that could not be read");
+        verdict.Detail.Should().Contain("could not be read whole");
+        verdict.Transient.Should().BeTrue("an unreadable record may read whole on the next pass: " + verdict.Detail);
+    }
+
     /// <summary>A registry serving one bundle; its index response can be HELD (a worker the test
     /// deliberately parks, released through a volatile flag under a bounded spin).</summary>
     private sealed class FakeRegistry : HttpMessageHandler
