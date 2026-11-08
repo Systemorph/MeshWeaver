@@ -177,6 +177,18 @@ on:
         type: string
         default: ""
 
+    secrets:
+      # 🪣 A REST BUCKET OF ITS OWN (2026-11-08). The caller's job token shares ONE hourly bucket with every
+      # workflow of its repository; on MeshWeaver.Plugins the review lanes were the largest reader of it and it
+      # ran out after each reset, redding unrelated gates. When the caller passes an App here, every API step
+      # of this lane runs on that App's installation token — its own bucket — and the job token is untouched.
+      # The App must NOT be the one that merges or pushes (its bucket carries those paths): use the read App
+      # (`meshweaver-reader`, FLEET_READER_APP_ID / FLEET_READER_APP_PRIVATE_KEY). Absent: `github.token`,
+      # exactly as before. Needs `pull-requests: read`, `issues: read`, `checks: read`, `actions: write`.
+      api-app-id:
+        required: false
+      api-app-private-key:
+        required: false
 jobs:
   answered:
     # ⏳ The shape is chosen by NAME, never by skipping (a skipped required context counts as satisfied):
@@ -210,7 +222,27 @@ jobs:
       evaluated-at: ${{ steps.verdict-time.outputs.at }}
       # The writer's reading: success | pending | failure (empty in the job-shaped check).
       verdict-state: ${{ steps.judge.outputs.verdict-state }}
+    env:
+      API_APP_ID: ${{ secrets.api-app-id }}
+      API_APP_KEY_SET: ${{ secrets.api-app-private-key != '' && 'yes' || '' }}
     steps:
+      # A HALF opt-in is a red, never a silent fallback to the shared bucket (review of #8011): an id without a
+      # key fails inside the mint below; a key without an id is refused here.
+      - name: The caller passed both App secrets, or neither
+        if: env.API_APP_ID == '' && env.API_APP_KEY_SET != ''
+        run: |
+          echo "::error::the caller passes api-app-private-key but no api-app-id — the lane would quietly spend the shared job-token bucket. Pass both (the read App's FLEET_READER_APP_ID / FLEET_READER_APP_PRIVATE_KEY) or neither."
+          exit 1
+      # The lane's own bucket when the caller passes an App (see `secrets:` above); else the job token.
+      - name: Mint the lane's API token (its own REST bucket), when the caller passes an App
+        id: api
+        if: env.API_APP_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.api-app-id }}
+          private-key: ${{ secrets.api-app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       # The self-hosted scale set a private caller lands on does not promise a Python; every other
@@ -241,7 +273,7 @@ jobs:
       - name: Judge the pull request's automatic review
         id: judge
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.api.outputs.token || github.token }}
           GH_REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
@@ -306,7 +338,27 @@ jobs:
       contents: read
       pull-requests: read
       actions: write      # list this workflow's runs for the head; POST …/runs/{id}/rerun (whole run)
+    env:
+      API_APP_ID: ${{ secrets.api-app-id }}
+      API_APP_KEY_SET: ${{ secrets.api-app-private-key != '' && 'yes' || '' }}
     steps:
+      # A HALF opt-in is a red, never a silent fallback to the shared bucket (review of #8011): an id without a
+      # key fails inside the mint below; a key without an id is refused here.
+      - name: The caller passed both App secrets, or neither
+        if: env.API_APP_ID == '' && env.API_APP_KEY_SET != ''
+        run: |
+          echo "::error::the caller passes api-app-private-key but no api-app-id — the lane would quietly spend the shared job-token bucket. Pass both (the read App's FLEET_READER_APP_ID / FLEET_READER_APP_PRIVATE_KEY) or neither."
+          exit 1
+      # The lane's own bucket when the caller passes an App (see `secrets:` above); else the job token.
+      - name: Mint the lane's API token (its own REST bucket), when the caller passes an App
+        id: api
+        if: env.API_APP_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.api-app-id }}
+          private-key: ${{ secrets.api-app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - uses: actions/setup-python@v7
         with:
@@ -328,7 +380,7 @@ jobs:
       - name: Re-run every run of this check on the head that still carries an older red
         id: judge
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.api.outputs.token || github.token }}
           GH_REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
