@@ -1395,7 +1395,95 @@ def compile_parallelism(sets: int, override: "str | None", cpus: int,
     return max(1, min(width, sets)), why
 
 
-def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: bool, workers: int):
+# ── the verdict cache ──────────────────────────────────────────────────────────────────────────
+# A set's verdict is a pure function of what `dotnet build` is handed: the generated unit
+# (Combined.cs), the generated project, the BYTES of every reference assembly, the SDK, and this
+# checker (its rules shape both the unit and the project). On a pull request most sets are
+# unchanged — measured 2026-11-08 (MeshWeaver.Plugins run 42504770966): a 113-set unit took
+# 1037.5 s of build work, 267.9 s wall on 4 workers, for a diff that changed none of those types'
+# sources. With `MW_COMPILE_CHECK_VERDICT_CACHE=<dir>` a set whose key is in <dir> is NOT built:
+# its recorded verdict (errors, needs_external) is reused. Only verdicts with no infra error are
+# kept (an infra error is not a property of the inputs). A record that does not parse or does not
+# carry its own key is a miss; any I/O error is a miss; nothing here can change a verdict.
+VERDICT_CACHE_ENV = "MW_COMPILE_CHECK_VERDICT_CACHE"
+VERDICT_RECIPE = "compile-check-verdict/v1"
+
+
+def references_digest(refs: dict) -> str:
+    """sha256 over every reference assembly's NAME and BYTES — never its path (runners differ)."""
+    import hashlib
+    h = hashlib.sha256()
+    for name, path in sorted(refs.items()):
+        try:
+            data = Path(path).read_bytes()
+        except OSError:
+            data = b"<unreadable>"
+        h.update(f"{name} {hashlib.sha256(data).hexdigest()}\n".encode())
+    return h.hexdigest()
+
+
+def toolchain_identity() -> str:
+    """The SDK that builds every set (`dotnet --version`), and this checker's own bytes."""
+    import hashlib
+    try:
+        sdk = subprocess.run(["dotnet", "--version"], capture_output=True, text=True, timeout=60).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        sdk = ""
+    me = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    return f"sdk={sdk or 'unknown'} checker={me} wae={WARNINGS_AS_ERRORS}"
+
+
+def verdict_key(unit_text: str, csproj_text: str, refs_digest: str, toolchain: str,
+                ai_available: bool, impl_frameworks: bool) -> str:
+    """The content key of one set's verdict. Pure."""
+    import hashlib
+    h = hashlib.sha256()
+    for part in (VERDICT_RECIPE, toolchain, refs_digest, f"ai={ai_available} impl={impl_frameworks}",
+                 csproj_text, unit_text):
+        h.update(part.encode("utf-8"))
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def read_verdict(cache: Path, key: str):
+    """(errors, needs_external, None) recorded under `key`, or None (a miss)."""
+    try:
+        rec = json.loads((cache / key[:2] / f"{key}.json").read_text(encoding="utf-8"))
+        if rec.get("key") != key or not isinstance(rec.get("errors"), list):
+            return None
+        return [str(e) for e in rec["errors"]], bool(rec.get("needsExternal")), None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def write_verdict(cache: Path, key: str, outcome) -> None:
+    """Record a verdict atomically (temp file, then rename). Infra errors are never recorded."""
+    errors, needs_external, infra_error = outcome
+    if infra_error is not None:
+        return
+    try:
+        d = cache / key[:2]
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / f".{key}.{os.getpid()}.tmp"
+        tmp.write_text(json.dumps({"key": key, "recipe": VERDICT_RECIPE, "errors": list(errors),
+                                   "needsExternal": bool(needs_external)}), encoding="utf-8")
+        os.replace(tmp, d / f"{key}.json")
+    except OSError:
+        pass
+
+
+def set_key(sources, lam, ref_xml: str, impl_frameworks: bool, refs_digest: str, toolchain: str,
+            ai_available: bool) -> str:
+    """The key of one ((sources, lambda)) set: the unit and project exactly as compile_set writes them,
+    the project WITHOUT its reference paths (the digest names the references by content)."""
+    unit, _, _ = build_unit(sources, lam)
+    csproj = build_csproj(Path("."), "", impl_frameworks=impl_frameworks)
+    return verdict_key(unit, csproj, refs_digest, toolchain, ai_available, impl_frameworks)
+
+
+def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: bool, workers: int,
+                 cache: "Path | None" = None, refs_digest: str = "", toolchain: str = "",
+                 stats: "dict | None" = None):
     """Yield (item, compile_set result, seconds) for each ((sources, lambda), names) item, in the
     ORDER GIVEN, building up to `workers` sets at once. Each worker borrows one work directory for
     the duration of a build, so two builds never share a project file or an obj/ directory.
@@ -1416,14 +1504,33 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
     import time
     from concurrent.futures import ThreadPoolExecutor
 
+    keys = {}
+    cached = {}
+    if cache is not None:
+        for index, item in enumerate(ordered):
+            (sources, lam), _ = item
+            try:
+                keys[index] = set_key(sources, lam, ref_xml, impl_frameworks, refs_digest, toolchain,
+                                      ai_available)
+            except Exception:   # a key that cannot be computed is a miss, never a verdict
+                continue
+            hit = read_verdict(cache, keys[index])
+            if hit is not None:
+                cached[index] = hit
+    if stats is not None:
+        stats.update(hits=len(cached), keyed=len(keys))
+
     dirs = queue.Queue()
     restored = {}
-    for _ in range(max(1, workers)):
+    for _ in range(max(1, workers) if len(cached) < len(ordered) else 0):
         work = Path(tempfile.mkdtemp(prefix="compile-check-"))
         restored[work] = restore_dir(work, ref_xml, impl_frameworks) is None
         dirs.put(work)
 
-    def build(item):
+    def build(indexed):
+        index, item = indexed
+        if index in cached:
+            return cached[index], 0.0
         (sources, lam), _ = item
         work = dirs.get()
         try:
@@ -1433,6 +1540,8 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
             # CS errors still mean the restore worked; only an infra error (no CS diagnostic at
             # all) leaves this directory's restore in doubt, so its next build restores again.
             restored[work] = outcome[2] is None
+            if cache is not None and index in keys:
+                write_verdict(cache, keys[index], outcome)
             return outcome, time.time() - started
         finally:
             dirs.put(work)
@@ -1440,7 +1549,7 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         # `map` yields in submission order as each result is ready, so the log keeps the serial
         # order and streams while later sets are still building.
-        for item, (outcome, seconds) in zip(ordered, pool.map(build, ordered)):
+        for item, (outcome, seconds) in zip(ordered, pool.map(build, list(enumerate(ordered)))):
             yield item, outcome, seconds
 
 
@@ -2011,6 +2120,7 @@ def _self_test() -> int:
 
     _self_test_exit_codes(failures)
     _self_test_parallel(failures)
+    _self_test_verdict_cache(failures)
 
     if failures:
         print("✗ compile-check self-test FAILED:")
@@ -2043,6 +2153,74 @@ def _self_test() -> int:
           f"{EXIT_REFUSED_NOTHING_JUDGED} — each with one `REFUSED` line and no GREEN line; a "
           "NodeType-less --modules unit says NOTHING TO COMPILE; GREEN only over a judged count > 0")
     return 0
+
+
+def _self_test_verdict_cache(failures: list) -> None:
+    """The verdict cache serves a set only when EVERYTHING the build reads is unchanged."""
+    import tempfile
+
+    def check(label, ok):
+        print(f"  {'✓' if ok else '✗'} verdict cache: {label}")
+        if not ok:
+            failures.append(f"verdict cache: {label}")
+
+    base = verdict_key("class A {}", "<Project/>", "r1", "sdk=1", True, True)
+    check("the key is deterministic", base == verdict_key("class A {}", "<Project/>", "r1", "sdk=1", True, True))
+    check("a source change misses", base != verdict_key("class A { }", "<Project/>", "r1", "sdk=1", True, True))
+    check("a project change misses", base != verdict_key("class A {}", "<Project />", "r1", "sdk=1", True, True))
+    check("a reference-byte change misses", base != verdict_key("class A {}", "<Project/>", "r2", "sdk=1", True, True))
+    check("an SDK or checker change misses", base != verdict_key("class A {}", "<Project/>", "r1", "sdk=2", True, True))
+    check("the AI / framework mode is keyed", base != verdict_key("class A {}", "<Project/>", "r1", "sdk=1", False, True)
+          and base != verdict_key("class A {}", "<Project/>", "r1", "sdk=1", True, False))
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        a, b = d / "a.dll", d / "b.dll"
+        a.write_bytes(b"1"); b.write_bytes(b"2")
+        r1 = references_digest({"A.dll": str(a), "B.dll": str(b)})
+        moved = d / "x"; moved.mkdir(); (moved / "a.dll").write_bytes(b"1")
+        check("references are keyed by content, not path",
+              r1 == references_digest({"A.dll": str(moved / "a.dll"), "B.dll": str(b)}))
+        b.write_bytes(b"3")
+        check("a reference's bytes are keyed", r1 != references_digest({"A.dll": str(a), "B.dll": str(b)}))
+        cache = d / "cache"
+        write_verdict(cache, base, (["CS0001: x"], False, None))
+        check("a recorded verdict is read back", read_verdict(cache, base) == (["CS0001: x"], False, None))
+        other = verdict_key("class B {}", "<Project/>", "r1", "sdk=1", True, True)
+        write_verdict(cache, other, ([], False, "NU1101: infra"))
+        check("an infra error is never recorded", read_verdict(cache, other) is None)
+        (cache / base[:2] / f"{base}.json").write_text('{"key": "someone-else", "errors": []}')
+        check("a record that does not carry its own key is a miss", read_verdict(cache, base) is None)
+        (cache / base[:2] / f"{base}.json").write_text("{not json")
+        check("a corrupt record is a miss", read_verdict(cache, base) is None)
+        # compile_sets: a cached set is not built; a missed one is built and recorded.
+        calls = []
+        real = globals()["compile_set"]
+        real_restore = globals()["restore_dir"]
+        try:
+            globals()["compile_set"] = lambda work, srcs, *a, **k: (calls.append(srcs) or ([], False, None))
+            globals()["restore_dir"] = lambda *a, **k: None
+            src1, src2 = d / "One.cs", d / "Two.cs"
+            src1.write_text("class One {}"); src2.write_text("class Two {}")
+            items = [((frozenset([src1]), None), ["One"]), ((frozenset([src2]), None), ["Two"])]
+            cache2 = d / "cache2"
+            st: dict = {}
+            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st))
+            check("a cold cache builds every set and records it", len(calls) == 2 and st.get("hits") == 0)
+            calls.clear(); st = {}
+            out = list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st))
+            check("a warm cache builds nothing and returns the recorded verdicts in order",
+                  calls == [] and st.get("hits") == 2 and [o[0][1] for o in out] == [["One"], ["Two"]])
+            src2.write_text("class Two { int x; }")
+            calls.clear(); st = {}
+            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st))
+            check("a changed source is built again, the unchanged one is not",
+                  len(calls) == 1 and st.get("hits") == 1)
+            calls.clear()
+            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r-changed", toolchain="t", stats={}))
+            check("changed reference bytes rebuild every set", len(calls) == 2)
+        finally:
+            globals()["compile_set"] = real
+            globals()["restore_dir"] = real_restore
 
 
 def _self_test_parallel(failures: list) -> None:
@@ -2532,8 +2710,18 @@ def main() -> int:
     t0 = time.time()
     ordered = sorted(sets.items(), key=lambda kv: sorted(kv[1])[0])
     work_seconds = 0.0
+    cache_dir = os.environ.get(VERDICT_CACHE_ENV, "").strip()
+    cache = Path(cache_dir) if cache_dir else None
+    cache_stats: dict = {}
+    refs_digest = toolchain = ""
+    if cache is not None:
+        t_key = time.time()
+        refs_digest, toolchain = references_digest(refs), toolchain_identity()
+        print(f"compile-check: verdict cache {cache} — references {refs_digest[:12]} "
+              f"({len(refs)} assemblies, keyed in {time.time() - t_key:.1f}s), {toolchain.split(' checker=')[0]}")
     for i, (((s, lam), names), (errors, needs_external, infra_error), seconds) in enumerate(
-            compile_sets(ordered, ref_xml, ai_available, impl_frameworks, workers), 1):
+            compile_sets(ordered, ref_xml, ai_available, impl_frameworks, workers,
+                         cache=cache, refs_digest=refs_digest, toolchain=toolchain, stats=cache_stats), 1):
         work_seconds += seconds
         if infra_error:
             # nonzero build with no CS diagnostic (restore/SDK/MSBuild) — a real, gating failure.
@@ -2554,6 +2742,9 @@ def main() -> int:
         print(f"  [{i}/{len(sets)}] {tag:12} {lead}{extra}"
               + (f"    {errors[0]}" if errors else ""))
     elapsed = time.time() - t0
+    if cache is not None:
+        print(f"\ncompile-check: verdict cache — {cache_stats.get('hits', 0)} of {len(sets)} set(s) reused "
+              f"(not built), {len(sets) - cache_stats.get('hits', 0)} built")
     if sets:
         print(f"\ncompile-check: {len(sets)} build(s), {work_seconds:.1f}s of build work in "
               f"{elapsed:.1f}s wall on {workers} worker(s) — parallel speed-up "
