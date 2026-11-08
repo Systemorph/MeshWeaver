@@ -80,6 +80,7 @@ OUTPUT — JSON on stdout, the human report on stderr, plus $GITHUB_OUTPUT / $GI
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -218,6 +219,50 @@ def _invoke(root: Path, script: str, argv: list[str], say) -> dict | None:
     except json.JSONDecodeError:
         say(f"    {script}: answer is not JSON")
         return None
+
+
+def abi_filter_hits(root: Path, hits: dict[str, list[str]], src_files: list[str], say) -> dict[str, list[str]]:
+    """Drop, per entry, the changed projects that reach it only through a PUBLIC SURFACE that did not move.
+
+    MeshWeaver.Plugins, 2026-11-08 ("we are still building way too many packages"): the compiled half packed
+    every module whose closure holds a changed src/ project, a private body edit included. When the caller
+    hands this lane its ABI verdict (`MW_ABI_VERDICT`, abi-key.py `probe`), a changed project whose reference
+    assembly is byte-identical — every changed file of it in the verdict — keeps an entry only when
+    abi-key.py's `decide` keeps that entry's unit (its own project, an InternalsVisibleTo friend, a reader),
+    judged on the caller's own closure (`project-closure.py --closure`). Anything unreadable leaves `hits`
+    exactly as it was and says so."""
+    raw = os.environ.get("MW_ABI_VERDICT") or ""
+    if not raw.strip():
+        return hits
+    try:
+        verdict = json.loads(raw)
+        spec = importlib.util.spec_from_file_location("abi_key_for_scope", Path(__file__).with_name("abi-key.py"))
+        abi = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(abi)
+    except Exception as exc:  # noqa: BLE001 — a verdict that cannot be read narrows nothing
+        say(f"    ABI verdict not applied ({type(exc).__name__}: {exc}) — the compiled half as before")
+        return hits
+    if not isinstance(verdict, dict) or verdict.get("unavailable") or verdict.get("schema") != abi.SCHEMA:
+        say(f"    ABI verdict not applied ({(verdict or {}).get('unavailable') if isinstance(verdict, dict) else 'not an object'}) — the compiled half as before")
+        return hits
+    unchanged = {d: e for d, e in (verdict.get("projects") or {}).items() if e.get("unchanged")}
+    out = dict(hits)
+    for entry, touched in hits.items():
+        abi_only = [p for p in touched if p in unchanged
+                    and all(f in (unchanged[p].get("files") or []) for f in src_files if f.startswith(p + "/"))]
+        if not abi_only:
+            continue
+        closure = _invoke(root, PROJECTS, ["--closure", entry, "--json"], say)
+        unit = {"id": entry, "project": entry, **({"closure": list(closure)} if isinstance(closure, list) else {})}
+        try:
+            decision = abi.decide(root, verdict, [unit], set())[entry]
+        except Exception as exc:  # noqa: BLE001
+            say(f"    ABI decide failed for {entry} ({type(exc).__name__}) — kept")
+            continue
+        if decision.get("decision") == "skip":
+            out[entry] = [p for p in touched if p not in abi_only]
+            say(f"    {entry}: {', '.join(abi_only)} — {decision.get('reason')} — not packed for it")
+    return out
 
 
 def affected_packages(root: Path, changed: list[str], say) -> set[str] | None:
@@ -776,7 +821,7 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         if not isinstance(got, dict) or set(got) != set(hits):
             return full(f"{PROJECTS} answered for {len(got or {})} of {len(hits)} entries — "
                         "packing every module.")
-        hits = {k: list(v) for k, v in got.items()}
+        hits = abi_filter_hits(root, {k: list(v) for k, v in got.items()}, src_files, say)
 
     # 🚨 THE FLOOR IS NOT A SELECTION. The caller's gates COMPOSE a fixed set of module bundles
     # (the AI engine that registers Skill/Agent; the carved-out collaboration module) from THIS
@@ -1581,6 +1626,37 @@ def self_test() -> int:
         got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"])
         check("[modules] no project-closure.py in the caller repo ⇒ ALL",
               got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+
+    # ABI-keyed pack set (2026-11-08): an entry reached only through a changed project whose public
+    # surface did not move is not packed for it; an entry whose OWN project changed still is; anything
+    # unreadable leaves the hits alone.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for d, refs in (("src/Lib", []), ("src/App", ["Lib"]), ("src/Other", ["Lib"])):
+            (root / d).mkdir(parents=True)
+            items = "".join(f'<ProjectReference Include="../{r}/{r}.csproj" />' for r in refs)
+            (root / d / f"{Path(d).name}.csproj").write_text(f"<Project><ItemGroup>{items}</ItemGroup></Project>")
+        hits = {"src/App/App.csproj": ["src/Lib"], "src/Lib/Lib.csproj": ["src/Lib"], "src/Other/Other.csproj": ["src/Lib", "src/Other"]}
+        files = ["src/Lib/A.cs", "src/Other/O.cs"]
+        verdict = {"schema": "abi-verdict/1", "projects": {"src/Lib": {"unchanged": True, "files": ["src/Lib/A.cs"], "refasm": "a" * 64, "friends": []}}}
+        old_env = os.environ.get("MW_ABI_VERDICT")
+        try:
+            os.environ["MW_ABI_VERDICT"] = json.dumps(verdict)
+            got = abi_filter_hits(root, hits, files, lambda *_a: None)
+            check("[abi] a dependent reached only through an unchanged public surface is not packed for it",
+                  got["src/App/App.csproj"] == [], repr(got))
+            check("[abi] the changed project's own entry is still packed", got["src/Lib/Lib.csproj"] == ["src/Lib"], repr(got))
+            check("[abi] an entry another changed project reaches keeps that reach", got["src/Other/Other.csproj"] == ["src/Other"], repr(got))
+            os.environ["MW_ABI_VERDICT"] = json.dumps({**verdict, "projects": {"src/Lib": {**verdict["projects"]["src/Lib"], "unchanged": False}}})
+            check("[abi] NEGATIVE CONTROL: a public-API change keeps every hit", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
+            for bad in ("not json", json.dumps({"unavailable": "no mount"}), json.dumps({"schema": "other"})):
+                os.environ["MW_ABI_VERDICT"] = bad
+                check(f"[abi] an unusable verdict ({bad[:20]}) leaves the hits alone", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
+        finally:
+            if old_env is None:
+                os.environ.pop("MW_ABI_VERDICT", None)
+            else:
+                os.environ["MW_ABI_VERDICT"] = old_env
 
     if failures:
         print(f"\n::error title=node-repo-scope self-test failed::{len(failures)} case(s) — this "

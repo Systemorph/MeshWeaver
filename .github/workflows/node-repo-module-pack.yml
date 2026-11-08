@@ -1535,7 +1535,7 @@ jobs:
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
           # ABI-keyed rebuild: the caller's affected-modules.py (asked by node-repo-scope.py) reads these.
           MW_ABI_VERDICT: ${{ inputs.abi-verdict }}
-          MW_ABI_SCRIPT: build-logic/.github/scripts/abi-key.py
+          MW_ABI_SCRIPT: ${{ github.workspace }}/build-logic/.github/scripts/abi-key.py
         run: |
           set -euo pipefail
           printf '%s' "$MODULES" > "$RUNNER_TEMP/matrix.json"
