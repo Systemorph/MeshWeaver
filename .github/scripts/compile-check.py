@@ -1413,28 +1413,33 @@ VERDICT_CACHE_WRITE_ENV = "MW_COMPILE_CHECK_VERDICT_CACHE_WRITE"
 VERDICT_RECIPE = "compile-check-verdict/v1"
 
 
-def references_digest(refs: dict) -> str:
-    """sha256 over every reference assembly's NAME and BYTES — never its path (runners differ)."""
+def references_digest(refs: dict) -> "str | None":
+    """sha256 over every reference assembly's NAME and BYTES — never its path (runners differ).
+    None when any reference cannot be read: an unkeyable set turns the cache off, never a placeholder."""
     import hashlib
     h = hashlib.sha256()
     for name, path in sorted(refs.items()):
         try:
             data = Path(path).read_bytes()
         except OSError:
-            data = b"<unreadable>"
+            return None
         h.update(f"{name} {hashlib.sha256(data).hexdigest()}\n".encode())
     return h.hexdigest()
 
 
-def toolchain_identity() -> str:
-    """The SDK that builds every set (`dotnet --version`), and this checker's own bytes."""
+def toolchain_identity() -> "str | None":
+    """The SDK that builds every set (`dotnet --version`), and this checker's own bytes. None when the
+    SDK cannot be named: an unkeyable toolchain turns the cache off, never a shared placeholder."""
     import hashlib
     try:
-        sdk = subprocess.run(["dotnet", "--version"], capture_output=True, text=True, timeout=60).stdout.strip()
+        proc = subprocess.run(["dotnet", "--version"], capture_output=True, text=True, timeout=60)
+        sdk = proc.stdout.strip() if proc.returncode == 0 else ""
+        me = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     except (OSError, subprocess.SubprocessError):
-        sdk = ""
-    me = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    return f"sdk={sdk or 'unknown'} checker={me} wae={WARNINGS_AS_ERRORS}"
+        return None
+    if not re.fullmatch(r"\d+\.\d+\.\d+\S*", sdk):
+        return None
+    return f"sdk={sdk} checker={me} wae={WARNINGS_AS_ERRORS}"
 
 
 def verdict_key(unit_text: str, csproj_text: str, refs_digest: str, toolchain: str,
@@ -1526,7 +1531,8 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
 
     dirs = queue.Queue()
     restored = {}
-    for _ in range(max(1, workers) if len(cached) < len(ordered) else 0):
+    # Only as many work directories (and restores) as the MISSES can use: a cached set never borrows one.
+    for _ in range(min(len(ordered) - len(cached), max(1, workers))):
         work = Path(tempfile.mkdtemp(prefix="compile-check-"))
         restored[work] = restore_dir(work, ref_xml, impl_frameworks) is None
         dirs.put(work)
@@ -2186,6 +2192,8 @@ def _self_test_verdict_cache(failures: list) -> None:
               r1 == references_digest({"A.dll": str(moved / "a.dll"), "B.dll": str(b)}))
         b.write_bytes(b"3")
         check("a reference's bytes are keyed", r1 != references_digest({"A.dll": str(a), "B.dll": str(b)}))
+        check("an unreadable reference makes the set UNKEYABLE (cache off), never a placeholder",
+              references_digest({"A.dll": str(d / "missing.dll")}) is None)
         cache = d / "cache"
         write_verdict(cache, base, (["CS0001: x"], False, None))
         check("a recorded verdict is read back", read_verdict(cache, base) == (["CS0001: x"], False, None))
@@ -2202,7 +2210,8 @@ def _self_test_verdict_cache(failures: list) -> None:
         real_restore = globals()["restore_dir"]
         try:
             globals()["compile_set"] = lambda work, srcs, *a, **k: (calls.append(srcs) or ([], False, None))
-            globals()["restore_dir"] = lambda *a, **k: None
+            restores = []
+            globals()["restore_dir"] = lambda *a, **k: restores.append(1)
             src1, src2 = d / "One.cs", d / "Two.cs"
             src1.write_text("class One {}"); src2.write_text("class Two {}")
             items = [((frozenset([src1]), None), ["One"]), ((frozenset([src2]), None), ["Two"])]
@@ -2218,12 +2227,15 @@ def _self_test_verdict_cache(failures: list) -> None:
             out = list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st))
             check("a warm cache builds nothing and returns the recorded verdicts in order",
                   calls == [] and st.get("hits") == 2 and [o[0][1] for o in out] == [["One"], ["Two"]])
+            check("an all-hit run restores no work directory", restores.count(1) == 2 + 2)   # the two cold runs only
             src2.write_text("class Two { int x; }")
-            calls.clear(); st = {}
+            calls.clear(); st = {}; restores.clear()
             list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st,
                               cache_write=True))
             check("a changed source is built again, the unchanged one is not",
                   len(calls) == 1 and st.get("hits") == 1)
+            check("a partial hit restores only as many work directories as the misses use (1, not 2)",
+                  len(restores) == 1)
             calls.clear()
             list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r-changed", toolchain="t", stats={}))
             check("changed reference bytes rebuild every set", len(calls) == 2)
@@ -2727,6 +2739,12 @@ def main() -> int:
     if cache is not None:
         t_key = time.time()
         refs_digest, toolchain = references_digest(refs), toolchain_identity()
+        if refs_digest is None or toolchain is None:
+            print("compile-check: verdict cache OFF for this run — "
+                  + ("a reference assembly could not be read" if refs_digest is None else "the SDK version could not be read")
+                  + "; every set is built")
+            cache, refs_digest, toolchain = None, "", ""
+    if cache is not None:
         print(f"compile-check: verdict cache {cache} ({'read-write' if cache_write else 'read-only'}) — references {refs_digest[:12]} "
               f"({len(refs)} assemblies, keyed in {time.time() - t_key:.1f}s), {toolchain.split(' checker=')[0]}")
     for i, (((s, lam), names), (errors, needs_external, infra_error), seconds) in enumerate(
