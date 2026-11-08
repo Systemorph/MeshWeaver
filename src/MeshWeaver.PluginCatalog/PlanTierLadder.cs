@@ -134,10 +134,23 @@ public sealed class PlanTierLadder(IMessageHub hub, ILogger<PlanTierLadder> logg
                     rank = parsed;
                 allAccess = Property(content, "allAccess") is { ValueKind: JsonValueKind.True };
                 // The plan's declared members (content.members) — package ids it includes beside its rank.
-                if (Property(content, "members") is { ValueKind: JsonValueKind.Array } list)
-                    members.AddRange(list.EnumerateArray()
-                        .Where(m => m.ValueKind == JsonValueKind.String)
-                        .Select(m => m.GetString() ?? ""));
+                switch (Property(content, "members"))
+                {
+                    case { ValueKind: JsonValueKind.Array } list:
+                        foreach (var m in list.EnumerateArray())
+                            if (m.ValueKind == JsonValueKind.String && m.GetString() is { } id && !string.IsNullOrWhiteSpace(id))
+                                members.Add(id);
+                            else
+                                logger.LogWarning(
+                                    "Plan ladder: tier node {Path} lists a member that is not a package id ({Kind}) — skipped; the plan includes nothing for it",
+                                    node.Path, m.ValueKind);
+                        break;
+                    case { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } other:
+                        logger.LogWarning(
+                            "Plan ladder: tier node {Path} carries 'members' as {Kind}, not a list of package ids — ignored; the plan includes no member",
+                            node.Path, other.ValueKind);
+                        break;
+                }
             }
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)

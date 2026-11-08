@@ -72,7 +72,12 @@ public sealed record PlanTierRanks(
         return this with { Members = builder.ToImmutable() };
     }
 
-    /// <summary>Whether <paramref name="packageId"/> is a declared member of <paramref name="plan"/>. Pure.</summary>
+    /// <summary>
+    /// Whether <paramref name="packageId"/> is a declared member of <paramref name="plan"/>. Pure. The plan id is
+    /// read through <see cref="Canonical"/>, so a RETIRED id resolves to its successor's members exactly as it
+    /// resolves to the successor's rank. Both coverage overloads honour members only for a plan the ladder RANKS
+    /// (a member list on an unranked plan licenses nothing, like the plan itself).
+    /// </summary>
     public bool IsMember(string? plan, string? packageId) =>
         !string.IsNullOrWhiteSpace(packageId)
         && Canonical(plan) is { Length: > 0 } key
@@ -175,7 +180,7 @@ public sealed record PlanTierRanks(
     /// </remarks>
     public bool CoversInstance(string? instancePlan, string? packageTier, string? packageId) =>
         CoversInstance(instancePlan, packageTier)
-        || IsMember(Canonical(instancePlan) is { Length: > 0 } named ? named : BaselinePlan, packageId);
+        || (Canonical(instancePlan) is { Length: > 0 } named && RankOf(named) is not null && IsMember(named, packageId));
 
     /// <summary>
     /// The rank rule alone — <see cref="CoversInstance(string?, string?, string?)"/> for a caller that

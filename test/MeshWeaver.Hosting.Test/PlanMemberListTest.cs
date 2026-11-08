@@ -74,8 +74,11 @@ public class PlanMemberListTest(ITestOutputHelper output) : MonolithMeshTestBase
         // a caller with no package id decides by rank alone
         Assert.False(Ladder.CoversInstance("selfhosting", "enterprise"));
         Assert.False(Ladder.Covers("selfhosting", "pro"));
-        // an unknown plan named in a grant entry licenses nothing, members or not
+        // an unknown plan licenses nothing by its members either — in a grant entry and on an instance record
         Assert.False(Ladder.Covers("gold", "pro", "Hosting"));
+        var unranked = Ladder.WithMembers(new[] { ("gold", (System.Collections.Generic.IEnumerable<string>)new[] { "Hosting" }) });
+        Assert.False(unranked.Covers("gold", "enterprise", "Hosting"));
+        Assert.False(unranked.CoversInstance("gold", "enterprise", "Hosting"));
         // a ladder with no members is the old ladder
         var plain = PlanTierRanks.From(new[] { ("free", 0, false), ("pro", 20, false) });
         Assert.Empty(plain.Members);
