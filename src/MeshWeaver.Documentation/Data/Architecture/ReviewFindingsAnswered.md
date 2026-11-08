@@ -352,7 +352,7 @@ thinking"*. Policy [`internal-code-review`](../PolicyNotProse) is in force again
   reviewer for nothing, because the webhook starts every review. It reads whether the internal
   reviewer's review landed on the head, or on an earlier head with only clean merges of `main` since. If
   it did, Copilot is not requested. Copilot is requested **as the fallback** only for a head that has gone
-  `copilot-fallback-minutes` (60 by default) with no internal review. The scheduled sweep makes that
+  `copilot-fallback-minutes` with no internal review (60 until 2026-11-08; 0, retired, since). The scheduled sweep makes that
   request, through the unchanged review-on-real-change predicate (retired by default, see below). The lane reads reviews: its callers grant
   `pull-requests` and not `checks`, and a new grant would cause a `startup_failure` on every caller. Where
   the token can read check runs anyway (a public repository, or a caller that grants `checks: read`), the
