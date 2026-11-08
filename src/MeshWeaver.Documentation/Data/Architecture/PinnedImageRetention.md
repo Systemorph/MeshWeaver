@@ -309,8 +309,9 @@ here in some form:
   was caught doing the wrong thing.
 
 - **Never read "cannot reach" as "gone".** `az` exits non-zero both when a manifest is absent and
-  when the registry is unreachable or the credential is refused. Only the registry's own
-  `manifest unknown` counts as absence; every other answer is INDETERMINATE and fails the run
+  when the registry is unreachable or the credential is refused. Only the registry's own absence
+  answers — `manifest unknown` for a digest, `the specified tag does not exist` for a tag — count
+  as absence; every other answer is INDETERMINATE and fails the run
   naming the `az` output. A control probe runs first, so "every pin in the fleet is gone" can never
   be produced by a broken login.
 
@@ -691,7 +692,11 @@ Fail-closed throughout — an unswept repository must never read as a swept one:
   unchecked — there is no manifest to lock);
 - an overlay tag that does not resolve, or a pinned digest that is already gone;
 - an INDETERMINATE registry answer: `az` failing for any reason other than the registry's own
-  `manifest unknown`;
+  absence answer — `manifest unknown` for a digest, `the specified tag does not exist` for a tag
+  (which ACR also answers for a repository that was never created). Before MeshWeaver#7991 the tag
+  form read as INDETERMINATE, so an overlay pinning an image nobody had imported into the registry
+  was reported as "could not determine whether … exists" — still red, but pointing the reader at a
+  credential or network fault that never happened instead of at the missing image;
 - **ZERO pins on either axis**. Both were non-zero when this was written, so a zero means the
   extractor stopped matching, not that pinning stopped;
 - a lock that was requested and did not take.
