@@ -116,6 +116,14 @@ repos:
         job: validate
         lane: node-repo-validate.yml
         grants: {contents: read}
+      # ── Publication-lag ledger (MeshWeaver.Plugins#5205, 2026-11-08) — ARRIVING. An hourly reading of merged
+      # packages the registry was never handed (scripts/publication-lag.py) files its own `ci-publication-lag`
+      # ledger through this lane, under its own label so it never shares the "main is red" issue.
+      - workflow: publication-lag.yml
+        job: ledger
+        lane: node-repo-ci-failure.yml
+        grants: {contents: read, issues: write, actions: read}
+        pending: the caller lands with the MeshWeaver.Plugins pull request that follows #5205 (the publication-lag ledger)
       # ── Automatic review answered (MeshWeaver.Plugins#2727, MeshWeaver#4776 step 2) — LANDED (Plugins requires it). Plugins merged
       # pull requests past unanswered Copilot findings (#3115, #2962 on 2026-10-07) because nothing in its
       # protection requires them answered. The caller is a separate review-answered.yml (the lane header's
