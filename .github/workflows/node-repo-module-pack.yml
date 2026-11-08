@@ -2846,7 +2846,7 @@ jobs:
         with:
           repository: Systemorph/MeshWeaver
           ref: ${{ needs.select.outputs.build-logic-ref }}
-          path: build-logic
+          path: .compile-cache-logic
           sparse-checkout: .github/scripts
       - name: Sign what this run kept
         env:
@@ -2857,7 +2857,7 @@ jobs:
         run: |
           set -uo pipefail
           printf '%s' "$CLAIMS" > "$RUNNER_TEMP/ccache-claims.json"
-          python3 build-logic/.github/scripts/workspace-compile-cache.py sign \
+          python3 .compile-cache-logic/.github/scripts/workspace-compile-cache.py sign \
             --claims "@$RUNNER_TEMP/ccache-claims.json" --store "$STORE" --store-id "$STORE_ID" \
             || echo "::warning title=Compile cache not signed::the signature step failed — nothing this run kept is trusted"
 
