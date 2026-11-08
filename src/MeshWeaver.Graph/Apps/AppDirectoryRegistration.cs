@@ -21,7 +21,8 @@ public static class AppDirectoryRegistration
         builder.AddAutocompleteExcludedTypes(LauncherArrangementPaths.NodeType);
         builder.ConfigureHub(config => config
             .WithType<LauncherArrangement>(nameof(LauncherArrangement))
-            .WithType<LauncherEntry>(nameof(LauncherEntry)));
+            .WithType<LauncherEntry>(nameof(LauncherEntry))
+            .WithType<HomeSections>(nameof(HomeSections)));
         builder.ConfigureServices(services => services
             .AddSingleton<AppDirectory>()
             .AddSingleton<AppDirectoryCache>()

@@ -114,6 +114,10 @@ public static class UserActivityLayoutAreas
             .WithView(CatalogArea, CatalogAreaView)
             .WithView(ComposerArea, ComposerAreaView)
             .WithView(HomeCardsArea, HomeCardsAreaView)
+            // The type sections below the Apps band, and the owner's page to arrange them
+            // (policy home-is-composer-apps-types).
+            .WithView(HomeTypeSections.AreaName, HomeTypeSections.SectionsView)
+            .WithView(HomeTypeSections.CustomizeArea, HomeTypeSections.CustomizeView)
             // "/{user}/Chat" (ChatArea) is a well-known URL (thread-catalog Create-New, chat menu
             // links, the Threads app tile). Since ChatNodeType was removed there is NO {user}/Chat
             // node any more: the URL resolves to prefix={user} + remainder="Chat", which AreaPage
@@ -298,7 +302,7 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// The default home page shown until the owner authors their own <see cref="User.Body"/> — and
     /// nothing else: a heading welcoming the owner by first name, the message box (start a thread right
-    /// away), then the <b>Apps</b> grid, then the <b>Spaces</b> grid (policy <c>home-is-composer-apps-spaces</c>).
+    /// away), then the <b>Apps</b> grid, then the <b>type sections</b> (policy <c>home-is-composer-apps-types</c>).
     /// No contributed cards, no content list, no footer note. The regions that are no longer on it
     /// (<c>area/HomeCards</c>, <c>area/Threads</c>) stay registered, so an authored body embedding them
     /// keeps working. This is the single source of truth for "the default", shared by the render path
@@ -694,7 +698,7 @@ public static class UserActivityLayoutAreas
                             "[Home] Admin/HomeConfig names sort '{Sort}', which this build does not know — "
                             + "the home opens on its first sort and still offers every sort it knows", unknown);
                     return (UiControl?)BuildHome(ownerId, config, sharedTargets: null, user, locale, viewerScreen,
-                        appsFromDirectory);
+                        appsFromDirectory, host.Hub.Address);
                 })
             .Do(_ =>
             {
@@ -914,7 +918,7 @@ public static class UserActivityLayoutAreas
     internal static UiControl BuildHome(
         string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
         User? user = null, string? locale = null,
-        PresentationScreen? screen = null, bool appsFromDirectory = false)
+        PresentationScreen? screen = null, bool appsFromDirectory = false, Address? userAddress = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
         // 🚨 The viewer's presentation screen (#1803) is applied to the Shared-with-me band and the
@@ -935,17 +939,17 @@ public static class UserActivityLayoutAreas
         if (cfg.Style == HomeStyle.Catalog)
             return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy, spacePaths);
 
-        // TWO GRIDS, apps first, then spaces — both launchers, both painted from query rows. The
-        // searchable content list that used to sit below them is gone from the home (policy
-        // home-is-composer-apps-spaces); content is reached by opening a
-        // space and through search. Spaces is its own band rather than a filter inside the apps
-        // grid: a viewer should see where they work without choosing a filter first.
-        var shared = privacy.Retain(sharedTargets);
+        // The Apps grid, fixed at the top, then the TYPE SECTIONS (policy home-is-composer-apps-types):
+        // one section per node type the viewer has content of that no installed app catalogs —
+        // spaces are one such type, not a band of their own. The sections are their own area
+        // (HomeTypeSections) so their discovery never holds up the Apps grid's first paint, and so
+        // a section exists only once its type is known to have content.
         return Controls.Stack
             .WithWidth("100%")
             .WithStyle("gap: 24px; width: 100%;")
             .WithView(BuildAppsBand(nodeOwnerId, locale, appsFromDirectory))
-            .WithView(BuildSpacesBand(nodeOwnerId, locale, spacePaths, shared));
+            .WithView(Controls.LayoutArea(userAddress ?? new Address(nodeOwnerId), HomeTypeSections.AreaName)
+                .WithShowProgress(false), "TypeSections");
     }
 
     /// <summary>
@@ -1021,48 +1025,6 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// The <b>Spaces</b> band, below the Apps grid: the workspaces the viewer can reach, as an icon
-    /// grid, most recently used first. Its own band (it used to be a second filter inside the Apps
-    /// grid) because the home is the message box, apps, then spaces (policy
-    /// <c>home-is-composer-apps-spaces</c>). The
-    /// query is <see cref="SpacesQuery"/>: the profile's space manifest plus the spaces the viewer
-    /// was invited into (#385), never a mesh-wide read. Not sortable: the drag-and-drop arrangement
-    /// lives on app records, and a space has none. Painted from query rows. Pure, for tests.
-    /// </summary>
-    internal static MeshSearchControl BuildSpacesBand(
-        string nodeOwnerId, string? locale, IReadOnlyList<string>? spacePaths = null,
-        IReadOnlyList<string>? sharedTargets = null)
-    {
-        var label = LocalizationCatalog.Get("home.spaces", locale);
-        var query = SpacesQuery(nodeOwnerId, spacePaths, sharedTargets);
-        return Controls.MeshSearch
-            .WithTitle(label)
-            .WithHiddenQuery(query)
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(false)
-            .WithRenderMode(MeshSearchRenderMode.Icons)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithItemLimit(50)
-            .WithReactiveMode(true)
-            with
-            {
-                NavigateToMainNode = true,
-                // SortByAccess is a per-scope setting the view reads there, so the one scope carries it.
-                ScopeTabs =
-                [
-                    new MeshSearchScopeTab(label, query)
-                    {
-                        RenderMode = nameof(MeshSearchRenderMode.Icons),
-                        NavigateToMainNode = true,
-                        SortByAccess = true,
-                        Sortable = false,
-                    },
-                ],
-            };
-    }
-
-    /// <summary>
     /// The Apps band's query: the viewer's <c>{owner}/_App</c> records, or — from the directory —
     /// the virtual <c>{owner}/_Apps</c> rows minus the ones the viewer hid
     /// (<c>-content.hidden:true</c>, evaluated in memory by the directory provider, where an absent
@@ -1082,30 +1044,6 @@ public static class UserActivityLayoutAreas
 
     private static string DirectoryRowsQuery(string ownerId) =>
         $"path:{ownerId}/{LauncherArrangementPaths.DirectoryNamespace} scope:children nodeType:{AppNodeType.NodeType}";
-
-    /// <summary>
-    /// The launcher's <b>Spaces</b> scope query: the partition roots the reader can see (the
-    /// <see cref="RootTypeFilter">Space</see> allow-list — the same one the content list's root leg
-    /// uses, so the two cannot disagree about what a workspace is), plus, as a second UNION leg, the
-    /// spaces the viewer was invited into, which no scope query can reach (#385). Ordered by last
-    /// modified in the query and re-ordered by the viewer's own access log at paint
-    /// (<c>SortByAccess</c>), so "recently used" is the viewer's recency, not the mesh's. Pure.
-    /// </summary>
-    internal static string SpacesQuery(
-        string ownerId, IReadOnlyList<string>? spacePaths, IReadOnlyList<string>? sharedTargets)
-    {
-        var legs = new List<string>();
-        if (RootLeg(spacePaths, SortSuffixLastModified) is { } roots)
-            legs.Add(roots);
-        if (sharedTargets is { Count: > 0 })
-            legs.Add($"path:{string.Join("|", sharedTargets)} is:main is:content "
-                + $"-nodeType:User{SpacesDedupExclusions} {SortSuffixLastModified}");
-        // Both manifests empty (a first-ever logon whose refresh has not landed yet): the spaces
-        // inside the viewer's own home — anchored, usually short, never a mesh-wide fallback.
-        if (legs.Count == 0)
-            legs.Add($"namespace:{ownerId} is:main is:content{RootTypeFilter} {SortSuffixLastModified}");
-        return string.Join("\n", legs);
-    }
 
     /// <summary>The record content property the Apps grid groups by — <see cref="App.Group"/>.</summary>
     internal const string AppGroupProperty = nameof(App.Group);

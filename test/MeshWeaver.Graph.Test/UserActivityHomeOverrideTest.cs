@@ -38,8 +38,8 @@ public class UserActivityHomeOverrideTest
     [Fact]
     public void OwnerHome_WelcomeTemplate_IsTheMessageBoxThenTheLauncher_AndNothingElse()
     {
-        // Policy home-is-composer-apps-spaces: a welcome heading, the message box, apps, then spaces.
-        // The Catalog region is the Apps grid followed by the Spaces grid (BuildHome); the template
+        // Policy home-is-composer-apps-types: a welcome heading, the message box, apps, then the type sections.
+        // The Catalog region is the Apps grid followed by the type sections area (BuildHome); the template
         // carries only the heading, the composer and that region — no cards, no footer note.
         var md = UserActivityLayoutAreas.UserWelcomeMarkdown("Jane Roe");
 

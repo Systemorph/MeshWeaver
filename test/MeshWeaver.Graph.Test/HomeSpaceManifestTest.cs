@@ -27,14 +27,17 @@ public class HomeSpaceManifestTest
     private static IEnumerable<string> HomeQueries(IReadOnlyList<string>? spaces, IReadOnlyList<string>? shared)
     {
         var apps = UserActivityLayoutAreas.BuildAppsBand(Owner, null);
-        var spaceBand = UserActivityLayoutAreas.BuildSpacesBand(Owner, null, spaces, shared);
-        return new[] { apps, spaceBand }
+        var legs = HomeTypeSections.ContentLegs(Owner, spaces, shared);
+        var sections = new[] { "Space", "Markdown" }
+            .Select(type => HomeTypeSections.Section(new HomeTypeSections.TypeSection(type, 1, default), legs, null));
+        return new[] { apps }.Concat(sections)
             .SelectMany(c => new[] { c.HiddenQuery?.ToString() }
                 .Concat(c.ScopeTabs?.Select(t => t.Query) ?? [])
                 .Concat(c.ScopeTabs?.SelectMany(t => t.SortOptions?.Select(o => o.Query) ?? []) ?? [])
                 .Concat(c.SortOptions?.Select(o => o.Query) ?? []))
             .Where(q => !string.IsNullOrEmpty(q))
-            .Select(q => q!);
+            .Select(q => q!)
+            .Concat(HomeTypeSections.DiscoveryQueries(legs));
     }
 
     [Fact]
@@ -50,18 +53,19 @@ public class HomeSpaceManifestTest
     }
 
     [Fact]
-    public void The_spaces_band_reads_the_profiles_space_manifest()
+    public void The_spaces_section_reads_the_profiles_space_manifest()
     {
-        UserActivityLayoutAreas.BuildSpacesBand(Owner, null, ["Acme", "Globex"])
-            .HiddenQuery!.ToString().Should().Contain("path:Acme|Globex ").And.Contain("nodeType:Space");
+        var legs = HomeTypeSections.ContentLegs(Owner, ["Acme", "Globex"], null);
+        HomeTypeSections.SectionQuery(legs, "Space")
+            .Should().Contain("path:Acme|Globex ").And.Contain("nodeType:Space");
     }
 
     [Fact]
-    public void An_empty_manifest_falls_back_to_the_viewers_own_home_rather_than_a_fan_out()
+    public void An_empty_manifest_reads_the_viewers_own_home_rather_than_a_fan_out()
     {
-        UserActivityLayoutAreas.SpacesQuery(Owner, [], []).Should().Be(
-            $"namespace:{Owner} is:main is:content nodeType:Space sort:LastModified-desc",
-            "the Spaces band falls back to the viewer's own home, never to every partition");
+        HomeTypeSections.ContentLegs(Owner, [], []).Should().Equal(
+            [$"namespace:{Owner} is:main is:content -nodeType:Store/Plugin -nodeType:Store/Catalog"],
+            "with no manifest the sections are cut from the viewer's own home, never from every partition");
     }
 
     [Fact]
