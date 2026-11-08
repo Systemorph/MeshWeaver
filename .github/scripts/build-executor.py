@@ -197,6 +197,13 @@ def declared_stages(path: str) -> tuple[list[str], str]:
     if owes:
         return [], (f"{path} claims CI equivalence but still owes {len(owes)} item(s) (first: {owes[0][:100]}) — "
                     f"the claim is void until every item is paid")
+    # a stage that WITHHOLDS suites on the host (stage_withholds) leaves them to the Actions legs, which a repository-wide
+    # route skips: the claim is void while any stage withholds anything
+    held = stage_withholds(path)
+    if held:
+        first = next(iter(held))
+        return [], (f"{path} claims CI equivalence but stage {first} withholds {len(held[first])} suite(s) a build host cannot "
+                    f"run ({'; '.join(held[first])[:100]}) — only the Actions legs run them, so CI is not routed to the host")
     return names, ""
 
 
@@ -232,11 +239,14 @@ def stage_withholds(path: str) -> dict:
     stages = doc.get("stages") if isinstance(doc, dict) else None
     out: dict = {}
     for st in stages if isinstance(stages, list) else []:
-        if isinstance(st, dict) and isinstance(st.get("name"), str):
-            held = st.get("withholds")
-            # a malformed declaration withholds SOMETHING unreadable — the stage must not be routed on it
-            out[st["name"]] = ([w for w in held if isinstance(w, str) and w.strip()] or ["(malformed withholds)"]
-                               if isinstance(held, list) and held else (["(malformed withholds)"] if held not in (None, []) else []))
+        if isinstance(st, dict) and isinstance(st.get("name"), str) and "withholds" in st:
+            held = st["withholds"]
+            # a PRESENT key that is not a list of non-empty strings — null included — withholds something unreadable:
+            # the stage must not be routed on it; an absent key or an empty list withholds nothing
+            if isinstance(held, list) and all(isinstance(w, str) and w.strip() for w in held):
+                out[st["name"]] = list(held)
+            else:
+                out[st["name"]] = ["(malformed withholds)"]
     return {k: v for k, v in out.items() if v}
 
 
@@ -903,6 +913,26 @@ def self_test() -> int:
         json.dump({"stages": [{"name": "compile-check", "withholds": "docker"}, {"name": "gate", "withholds": [1]}]}, fh)
     check("stage/a malformed withholds is read as withholding (never routed on it)",
           stage_withholds(withholding) == {"compile-check": ["(malformed withholds)"], "gate": ["(malformed withholds)"]}, stage_withholds(withholding))
+    with open(withholding, "w") as fh:
+        json.dump({"stages": [{"name": "compile-check", "withholds": None}, {"name": "gate", "withholds": []}, {"name": "x"}]}, fh)
+    check("stage/an explicit null withholds is malformed (withholding); an empty list or an absent key withholds nothing",
+          stage_withholds(withholding) == {"compile-check": ["(malformed withholds)"]}, stage_withholds(withholding))
+    equiv_held = os.path.join(tmp, "equiv-held.json")
+    with open(equiv_held, "w") as fh:
+        json.dump({"ciEquivalent": True, "owes": [], "stages": [{"name": "compile-check"}, {"name": "portal-hosts", "withholds": ["src/Cosmos.Test (needs docker)"]}]}, fh)
+    names_h, why_h = declared_stages(equiv_held)
+    check("stage/NEGATIVE: a repository-wide ciEquivalent claim is VOID while a stage withholds suites (no route to the host)",
+          names_h == [] and "withholds 1 suite" in why_h and "Cosmos.Test" in why_h, (names_h, why_h))
+    with open(equiv_held, "w") as fh:
+        json.dump({"ciEquivalent": True, "owes": [], "stages": [{"name": "compile-check"}, {"name": "portal-hosts", "withholds": []}]}, fh)
+    with open(equiv_held, "w") as fh:
+        json.dump({"ciEquivalent": True, "owes": [], "stages": [{"name": "compile-check"}, {"name": "portal-hosts", "withholds": ["src/Cosmos.Test (needs docker)"]}]}, fh)
+    d = decide(with_(stages_file=equiv_held), host_q, ok_post, route("MeshWeaver.Plugins"))
+    check("stage/NEGATIVE: a claiming repository whose stage withholds is NOT routed to the host (no stage carries a host verdict)",
+          d.executor != HOST and all(v != HOST for v in (d.stages or {}).values()), (d.executor, d.stages))
+    with open(equiv_held, "w") as fh:
+        json.dump({"ciEquivalent": True, "owes": [], "stages": [{"name": "compile-check"}, {"name": "portal-hosts", "withholds": []}]}, fh)
+    check("stage/an empty withholds does not void the claim", declared_stages(equiv_held)[0] == ["compile-check", "portal-hosts"], declared_stages(equiv_held))
     d = decide(with_(stages_file=owing), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"gate": proven}}))
     check("stage/NEGATIVE: a later stage behind an unproven one stays in shadow (the host runs fail-fast)",
           d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED} and any("fail-fast" in l for l in d.lines), (d.stages, d.lines))
