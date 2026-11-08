@@ -4540,6 +4540,9 @@ jobs:
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
           MSBUILD_EVALUATION: ${{ needs.select.outputs.msbuild-evaluation }}
           KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
+          GITHUB_TOKEN_FOR_RUNS: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
@@ -4560,6 +4563,17 @@ jobs:
           if [ "$tip" != "$mine" ]; then
             # Two trees, no history needed: both commits are present in this shallow clone.
             changed=$(git diff --no-renames --name-only "$mine" "$tip" | paste -sd, -)
+          fi
+          # 🚨 Stand down only for a tip run that is EXECUTING (module-publication.py `superseded`): a
+          # queued trunk run is displaced by the next push, so "that commit's own run publishes it" is
+          # not true of it. Unreadable PUBLISHES — the shelf keeps the highest version as head (#3996).
+          tip_run="unreadable"
+          if [ "$tip" != "$mine" ]; then
+            workflow_path="${CALLER_WORKFLOW_REF#"$REPO"/}"; workflow_path="${workflow_path%%@*}"
+            if GH_TOKEN="$GITHUB_TOKEN_FOR_RUNS" gh api "repos/$REPO/actions/runs?head_sha=$tip&per_page=100" > "$RUNNER_TEMP/tip-runs.json" 2>/dev/null; then
+              tip_run=$(python3 build-logic/.github/scripts/module-publication.py tip-run --runs "@$RUNNER_TEMP/tip-runs.json" --workflow-path "$workflow_path")
+            fi
+            echo "trunk tip $tip: its run of $workflow_path is $tip_run"
           fi
           # 🚨 THIS run's evaluation ∪ the newer TIP's, the same union the scope takes: a file the tip
           # deleted is listed by this tree, one it added (or an import it now declares) only by the
@@ -4585,6 +4599,8 @@ jobs:
                 echo "this run's commit $mine IS the trunk tip — nothing newer; publishing $MODULE"
               elif [ -z "$changed" ]; then
                 echo "the trunk moved to $tip, but its tree equals this run's — nothing newer reaches $MODULE; publishing"
+              elif [ "$tip_run" != "in_progress" ]; then
+                echo "the trunk moved to $tip, but its run is $tip_run, not running — nothing guarantees it reaches its hand-over; publishing $MODULE (the shelf never lets an older upload displace its head, #3996)"
               else
                 mkdir -p "$RUNNER_TEMP/mods/$MODULE"
                 bk entry --module "$MODULE" --phase publish | jq '[.]' > "$RUNNER_TEMP/mods/$MODULE/newer-entry.json"

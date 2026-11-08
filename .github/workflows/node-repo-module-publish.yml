@@ -407,12 +407,31 @@ jobs:
           TRUNK: ${{ github.event.repository.default_branch }}
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
           [ -n "${TRUNK:-}" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
           git -C newest fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
           mine="$(git -C newest rev-parse HEAD)"
           tip="$(git -C newest rev-parse "refs/remotes/origin/$TRUNK")"
+          # 🚨 A stand-down rests on the tip's run REACHING its hand-over, and only a run that is
+          # executing will: a queued trunk run is displaced by the next push under a shared main
+          # concurrency group (MeshWeaver.Plugins 2026-11-08 — 42 of 42 modules stood down on every
+          # green run for 11 h). Read the state best-effort; a refused read (a caller that grants no
+          # `actions: read`) is `unreadable`, which PUBLISHES — safe because the registry's shelf never
+          # lets an older upload displace its head (#3996). See module-publication.py `superseded`.
+          tip_run="unreadable"
+          if [ "$tip" != "$mine" ]; then
+            workflow_path="${CALLER_WORKFLOW_REF#"$REPO"/}"; workflow_path="${workflow_path%%@*}"
+            if gh api "repos/$REPO/actions/runs?head_sha=$tip&per_page=100" > "$RUNNER_TEMP/tip-runs.json" 2>"$RUNNER_TEMP/tip-runs.err"; then
+              tip_run="$(python3 meshweaver/.github/scripts/module-publication.py tip-run --runs "@$RUNNER_TEMP/tip-runs.json" --workflow-path "$workflow_path")"
+            else
+              echo "the tip run's state could not be read ($(head -c 300 "$RUNNER_TEMP/tip-runs.err" | tr '\n' ' ')) — reading it as unreadable, which publishes"
+            fi
+            echo "trunk tip $tip: its run of $workflow_path is $tip_run"
+          fi
           changed=""
           if [ "$tip" != "$mine" ]; then
             # Two trees, no history needed: both commits are present in this shallow clone.
@@ -437,7 +456,7 @@ jobs:
           printf '%s' "$DECLARED" > "$RUNNER_TEMP/declared-newer.json"
           python3 meshweaver/.github/scripts/module-publication.py superseded \
             --staged "$RUNNER_TEMP/staged" --lane "$LANE" --declared "@$RUNNER_TEMP/declared-newer.json" \
-            --root newest --mine "$mine" --tip "$tip" --changed-list "$changed" \
+            --root newest --mine "$mine" --tip "$tip" --tip-run "$tip_run" --changed-list "$changed" \
             --scope-script meshweaver/.github/scripts/node-repo-scope.py ${scope[@]+"${scope[@]}"} \
             --out "$RUNNER_TEMP/superseded.json"
 

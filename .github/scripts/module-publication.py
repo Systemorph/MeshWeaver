@@ -1199,6 +1199,43 @@ def partition(staged: Path, lane: str, aside: Path) -> int:
 # ══════════════════════════════════ superseded ══════════════════════════════════
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
+#: The one tip-run state a stand-down may rest on: a run that is EXECUTING reaches its own hand-over.
+TIP_RUN_RUNNING = "in_progress"
+
+
+def tip_run_state(runs_doc, workflow_path: str) -> str:
+    """The state of the trunk tip's run of THIS workflow, from a `GET …/actions/runs?head_sha=` answer.
+
+    `in_progress` when any run of `workflow_path` for that commit is executing (the only state a
+    stand-down may rest on), else the most telling other state (`queued`, `waiting`, `pending`,
+    `requested`, `completed`), `none` when the commit has no such run, and `unreadable` when the
+    answer is not a runs listing. Pure, so the self-test drives it.
+    """
+    if not isinstance(runs_doc, dict) or not isinstance(runs_doc.get("workflow_runs"), list):
+        return "unreadable"
+    path = (workflow_path or "").strip()
+    statuses = [r.get("status") for r in runs_doc["workflow_runs"]
+                if isinstance(r, dict) and (not path or r.get("path") == path)]
+    if not statuses:
+        return "none"
+    for state in (TIP_RUN_RUNNING, "queued", "waiting", "pending", "requested", "completed"):
+        if state in statuses:
+            return state
+    return str(statuses[0] or "unreadable")
+
+
+def tip_run(a: argparse.Namespace) -> int:
+    """Print the tip run's state (see `tip_run_state`) from a runs listing (@file or JSON text).
+    An unreadable listing prints `unreadable` and exits 0: the caller publishes on it (see `superseded`)."""
+    raw = a.runs or ""
+    try:
+        text = Path(raw[1:]).read_text(encoding="utf-8") if raw.startswith("@") else raw
+        doc = json.loads(text) if text.strip() else None
+    except Exception:  # noqa: BLE001 — an unreadable answer is a state, said, never a crash
+        doc = None
+    print(tip_run_state(doc, a.workflow_path))
+    return 0
+
 
 def superseded(a: argparse.Namespace) -> int:
     """Which owed, staged modules does a NEWER trunk commit reach? (`publish-newest-only`, staged arm)
@@ -1211,6 +1248,21 @@ def superseded(a: argparse.Namespace) -> int:
     entry — and so is the safety argument: a module the tip reaches is in that commit's own run's
     selection (the tip's diff is part of every scope it computes), and that run publishes a tree
     containing this one. Every uncertainty is RED: "cannot tell" must never publish as "nothing newer".
+
+    🚨 **…but only while that commit's run is RUNNING** (`--tip-run`, MeshWeaver.Plugins 2026-11-08). The
+    safety argument above holds only if the tip's run actually reaches its own hand-over, and a caller
+    whose trunk runs share one concurrency group (`cancel-in-progress: false`) never gets that: while
+    this run is at its hand-over the tip's run is QUEUED, and GitHub displaces a queued run the moment
+    the next push queues another. Measured on MeshWeaver.Plugins 2026-11-08: every green main run from
+    08:11Z to 19:24Z printed `superseded: 42 of 42 owed module(s) stand down` for a tip whose run was
+    then `cancelled` with zero jobs, so the registry's shelf kept AI 1.49.1 while 1.51.x was tagged and
+    sealed, and no instance had anything newer to adopt. Standing down is therefore decided by the tip
+    run's STATE: only an `in_progress` run is one that will reach its hand-over; anything else — queued,
+    waiting, absent, completed, or a state the caller could not read — publishes. That is safe without
+    the stand-down, which is why "cannot tell" may publish HERE: the registry's shelf keeps the HIGHEST
+    version as the head and an older upload never displaces it (`ModuleLandingService.ShelveModule`,
+    #3996), and a version names one tree (`tag-modules.py`), so a late older hand-over cannot move any
+    module backwards. An empty `--tip-run` is the pre-change caller and keeps the old rule.
     """
     lane = (a.lane or "").strip()
     if not lane:
@@ -1228,11 +1280,19 @@ def superseded(a: argparse.Namespace) -> int:
     owed = sorted(m for m, r in records.items() if r.get("lane") == lane and r.get("owed") and m in declared)
     changed = [c for c in (a.changed_list or "").split(",") if c]
     decided: dict[str, str] = {}
+    tip_run = (getattr(a, "tip_run", "") or "").strip()
     if a.tip == a.mine:
         print(f"this run's commit {a.mine} IS the trunk tip — nothing newer; {len(owed)} owed module(s) publish")
     elif not changed:
         print(f"the trunk moved to {a.tip}, but its tree equals this run's — nothing newer reaches any of "
               f"the {len(owed)} owed module(s)")
+    elif tip_run and tip_run != TIP_RUN_RUNNING:
+        print("::notice title=Published although the trunk moved::"
+              + _inert(f"the trunk moved to {a.tip}, but its run is `{tip_run}`, not running — nothing "
+                       "guarantees it reaches its hand-over (a queued trunk run is displaced by the next "
+                       "push), so all " + str(len(owed)) + " owed module(s) publish from " + a.mine
+                       + ". The registry's shelf keeps the highest version as head (#3996), so this "
+                       "older tree cannot move any module backwards."))
     else:
         if not a.scope_script or not Path(a.scope_script).is_file():
             die(f"superseded: the scope script {a.scope_script!r} is not a file — the newer commit's reach "
@@ -2234,6 +2294,39 @@ jobs:
         check("superseded: a scope script that FAILS is RED, never 'nothing newer'",
               rc == 1 and "MeshWeaver.Boom" in out, out)
 
+        # THE HAND-OVER LIVELOCK (MeshWeaver.Plugins, 2026-11-08): a stand-down rests only on a RUNNING tip run.
+        asked.write_text("", encoding="utf-8")
+        rc, out = sup(tip_run="in_progress")
+        doc = json.loads((root / "superseded.json").read_text()) if rc == 0 else {}
+        check("superseded: a tip whose run is IN PROGRESS still stands the reached module down",
+              rc == 0 and set(doc.get("superseded", {})) == {"MeshWeaver.AI"}, out)
+        for state in ("queued", "waiting", "pending", "none", "completed", "unreadable"):
+            asked.write_text("", encoding="utf-8")
+            rc, out = sup(tip_run=state)
+            doc = json.loads((root / "superseded.json").read_text()) if rc == 0 else {}
+            check(f"superseded: a tip whose run is `{state}` stands NOTHING down (a queued trunk run is "
+                  "displaced by the next push) and asks no scope",
+                  rc == 0 and doc.get("superseded") == {} and asked.read_text() == ""
+                  and "Published although the trunk moved" in out, out)
+        rc, out = sup(tip_run="")
+        doc = json.loads((root / "superseded.json").read_text()) if rc == 0 else {}
+        check("superseded NEGATIVE CONTROL: no --tip-run keeps the pre-change rule (the reached module stands down)",
+              rc == 0 and set(doc.get("superseded", {})) == {"MeshWeaver.AI"}, out)
+        ci = ".github/workflows/ci.yml"
+        listing = {"workflow_runs": [
+            {"path": ".github/workflows/other.yml", "status": "in_progress"},
+            {"path": ci, "status": "queued"}]}
+        check("tip-run: another workflow's running run does not count; this workflow's queued run reads queued",
+              tip_run_state(listing, ci) == "queued", str(listing))
+        listing["workflow_runs"].append({"path": ci, "status": "in_progress"})
+        check("tip-run: a running run of this workflow wins over a queued one",
+              tip_run_state(listing, ci) == "in_progress", str(listing))
+        check("tip-run: a commit with no run of this workflow reads none",
+              tip_run_state({"workflow_runs": []}, ci) == "none")
+        check("tip-run: a refusal body (no workflow_runs) reads unreadable, never in_progress",
+              tip_run_state({"message": "Resource not accessible by integration"}, ci) == "unreadable"
+              and tip_run_state(None, ci) == "unreadable")
+
         # ── THE PUBLICATION PLAN (Plugins#4478 slice 3): decided once in `select`, applied to a host's offer ──
         print("== plan / apply-plan / publish --plan")
         sel3 = [{"module": "MeshWeaver.AI", "package": "AI"},
@@ -2394,7 +2487,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", nargs="?",
                    choices=("verdict", "check-caller", "check-callers", "publish", "lane-key", "partition",
-                            "superseded", "plan", "apply-plan"))
+                            "superseded", "tip-run", "plan", "apply-plan"))
     p.add_argument("--root", default="")
     p.add_argument("--verdicts", default="")
     p.add_argument("--required", default="")
@@ -2419,6 +2512,11 @@ def main() -> int:
                    help="publish: a `superseded` result (@file) — those modules stand down for a newer trunk commit")
     p.add_argument("--mine", default="", help="superseded: this run's commit")
     p.add_argument("--tip", default="", help="superseded: the trunk tip")
+    p.add_argument("--tip-run", dest="tip_run", default="",
+                   help="superseded: the tip run's state (`tip-run`); only `in_progress` may stand a module down")
+    p.add_argument("--runs", default="", help="tip-run: a GET …/actions/runs?head_sha= answer (@file or JSON)")
+    p.add_argument("--workflow-path", dest="workflow_path", default="",
+                   help="tip-run: the caller workflow's path (.github/workflows/ci.yml)")
     p.add_argument("--changed-list", dest="changed_list", default="",
                    help="superseded: the files the tip changed against --mine, comma-separated")
     p.add_argument("--scope-script", dest="scope_script", default="", help="superseded: node-repo-scope.py")
@@ -2477,6 +2575,8 @@ def main() -> int:
         if not a.staged or not a.aside or not a.plan:
             p.error("apply-plan needs --staged, --plan and --aside")
         return apply_plan(Path(a.staged), a.lane, a.plan, Path(a.aside))
+    if a.command == "tip-run":
+        return tip_run(a)
     if a.command == "superseded":
         if not a.staged:
             p.error("superseded needs --staged")
