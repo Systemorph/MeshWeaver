@@ -716,8 +716,9 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted reboot(s): {Paths}",
                         paths.Count, string.Join(", ", paths));
             })
-            // A package-uninstall restart whose dispatch CRASHED is retried on the same pass, with the
-            // same backoff — by its coordinator, never by repeating any request's phase 1 (#5055).
+            // A package-uninstall restart whose dispatch FAULTED is retried on the same pass, with the
+            // same backoff — by its coordinator, never by repeating any request's phase 1 (#5055). An
+            // Interrupted dispatch is final and never retried (a restart is asked at most once).
             .SelectMany(_ => PackageRestartCoordinator.RetryFaulted(hub, unit, now))
             .Do(ids =>
             {

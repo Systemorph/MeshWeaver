@@ -10,6 +10,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
@@ -332,5 +333,78 @@ public class OneRestartCoordinatorTest(ITestOutputHelper output) : MonolithMeshT
         Assert.True(request.Status == PackageUninstallStatus.AwaitingConfirmation, request.Failure ?? request.Status);
         Assert.Contains("already asked its one restart", request.ModuleOutcome ?? "");
         Assert.Equal(0, Volatile.Read(ref restarts));
+    }
+}
+
+/// <summary>
+/// 🚨 <b>Only the platform states restart facts</b> (#8008 review). A <c>Ready</c> on the coordinator
+/// drives an instance restart, and a <c>Pending</c> or <c>Withdraw</c> naming another request could
+/// hold its restart back. So an ordinary authenticated user, who holds no grant in the Admin
+/// partition, must not be able to state one. This class stands the mesh up WITHOUT the test base's
+/// public-admin grant (<see cref="MonolithMeshTestBase.ConfigureMeshBase"/>), so the identity writing
+/// is judged by the real row-level security. In-test control: the same kind of fact stated through
+/// the production writer, which runs as System, IS folded — the barrier read detects an accepted fact.
+/// </summary>
+public class ARestartFactFromAnOrdinaryUserIsRefusedTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Intruder = "ordinary-user-no-admin-grant";
+    private readonly ITestOutputHelper log = output;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => ConfigureMeshBase(builder).AddPluginCatalog();
+
+    private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
+    private IMessageHub Issuer => Mesh.NodeOperationExecutionHub() ?? Mesh;
+
+    private Task<PackageRestartCoordinatorState> Coordinator(Func<PackageRestartCoordinatorState, bool> until, CancellationToken ct) =>
+        Access.RunAsSystem(() => Mesh.GetMeshNodeStream(PackageRestartCoordinator.Path))
+            .Select(n => n.ContentAs<PackageRestartCoordinatorState>(Mesh.JsonSerializerOptions))
+            .OfType<PackageRestartCoordinatorState>()
+            .Where(until)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+    [Fact(Timeout = 180_000)]
+    public async Task AFactWrittenByAnOrdinaryUser_IsRefused_AndHasNoEffect()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string victim = PackageUninstallRequest.Namespace + "/victim-request";
+        const string forged = PackageUninstallRequest.Namespace + "/forged-request";
+        const string barrier = PackageUninstallRequest.Namespace + "/barrier-request";
+        // The coordinator exists, created by System through the production writer.
+        await PackageRestartCoordinator.Pending(Mesh, victim, "MeshWeaver.Victim", "a real uninstall", NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        await Coordinator(s => s.Members?.ContainsKey(victim) == true, ct);
+
+        // The intruder states a Ready for a request of its own (it would drive a restart) and a
+        // Withdraw for the victim (it would drop the victim's pending place), straight onto the node.
+        var write = await Access.RunAs(new AccessContext { ObjectId = Intruder, Name = "Ordinary User" },
+                () => Issuer.GetMeshNodeStream(PackageRestartCoordinator.Path)
+                    .Update<PackageRestartCoordinatorState>(s => s with
+                    {
+                        Facts = (s.Facts ?? ImmutableDictionary<string, PackageRestartFact>.Empty)
+                            .SetItem("ready-forged", new PackageRestartFact
+                            {
+                                Kind = PackageRestartFactKind.Ready, Request = forged, Module = "MeshWeaver.Forged", At = DateTimeOffset.UtcNow,
+                            })
+                            .SetItem("withdraw-forged", new PackageRestartFact
+                            {
+                                Kind = PackageRestartFactKind.Withdraw, Request = victim, At = DateTimeOffset.UtcNow,
+                            }),
+                    }))
+            .Take(1)
+            .Select(_ => (Exception?)null)
+            .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        log.WriteLine($"the intruder's write answered: {(write is null ? "SUCCESS" : $"{write.GetType().Name}: {write.Message}")}");
+
+        // Barrier: a later fact through the production writer. Once it is folded, any fact that had
+        // reached the node before it was folded too.
+        await PackageRestartCoordinator.Pending(Mesh, barrier, "MeshWeaver.Barrier", "barrier", NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        var state = await Coordinator(s => s.Members?.ContainsKey(barrier) == true && s.Facts is null, ct);
+
+        Assert.NotNull(write);
+        Assert.False(state.Members!.ContainsKey(forged), "an ordinary user's Ready never enrols a request");
+        Assert.True(state.Members.ContainsKey(victim), "an ordinary user's Withdraw never drops another request");
+        Assert.Null(state.Dispatches);
     }
 }
