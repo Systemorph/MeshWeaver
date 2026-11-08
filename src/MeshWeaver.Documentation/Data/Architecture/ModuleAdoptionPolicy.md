@@ -393,6 +393,17 @@ The rule is the consumer's "never roll back unattended", applied to the publish 
 
 **Covered: two replicas at once (#4026).** Landings are serialised within one process, and across replicas the rule used to be last-writer-wins: two replicas landing the same module within the same few seconds each decided against the entry they read before the other wrote. A landing no longer decides that way. It writes an immutable record of its own facts — its lane included, so the shelf's "never regress" and the adopt path's "an operator asked for it" both survive — and the head and fallback are DERIVED from every record present by replaying this rule in arrival order, so every replica reaches the same answer whatever order the writes landed in. [Module Activation Head Ownership](../ModuleActivationHeadOwnership) carries the on-disk format, why it stays readable by images already deployed, and the retention rule.
 
+## Who lands an installed package's module
+
+An adoption decides to land before it downloads, and lands after the download. That download can
+outlive an uninstall that started after the decision. So the landing of a package that has an install
+record is executed by the **record's own hub**, one module operation at a time, and decided there
+against the package's retirement. The uninstall's removal goes through the same hub and queues behind
+any landing in flight. Every landing also re-reads the module's head in the work item that writes the
+bytes, and refuses when its newest event is an uninstall. That is `SkipUninstalled`, taken again where
+it executes. A fresh package with no record lands where it is, under that same re-read. Full account:
+[Package Uninstall](../PackageUninstall) → "The module lands through the install record".
+
 ## What the platform roll gates on
 
 > 🚨 **No package answer gates the platform roll** — policy `platform-rolls-independently-of-packages`

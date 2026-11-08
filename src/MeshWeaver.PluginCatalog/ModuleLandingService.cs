@@ -921,6 +921,16 @@ public sealed class ModuleLandingService : IDisposable
     /// the derivation belongs to. Null in production.</summary>
     internal Action<long>? BeforeServedPublish { get; init; }
 
+    /// <summary>Seam for the answer-write pin (InternalsVisibleTo): runs inside the install record
+    /// owner's ANSWER update (<see cref="ModuleLandingOwner"/>), on the record as the owner holds it,
+    /// before the answer is folded in — a test throws from it to fail that write. Null in production.</summary>
+    internal Func<MeshNode, MeshNode>? OwnerAnswerSeam { get; init; }
+
+    /// <summary>Seam for the promotion pin (InternalsVisibleTo): runs inside the install record owner's
+    /// PROMOTION update of a queued operation (<see cref="ModuleLandingOwner"/>) — a test throws from it
+    /// to fail that write. Null in production.</summary>
+    internal Func<MeshNode, MeshNode>? OwnerPromoteSeam { get; init; }
+
     /// <summary>One derivation of the list, when it was taken, and the local-write generation it
     /// was taken in (a snapshot from before this process's latest write is never served).</summary>
     private sealed record ServedActivation(ModuleActivationList List, DateTimeOffset ReadAt, long Generation);
@@ -1103,6 +1113,181 @@ public sealed class ModuleLandingService : IDisposable
             return Unit.Default;
         })
         .Do(_ => AnnounceActivationChanged());
+
+    // ── Landing through the install record's owner (MeshWeaver.Plugins#5055) ────────────────────
+    // ModuleLandingOwner states a landing as a fact on the install record and the record's OWN hub
+    // executes it; the bytes cannot ride the node, so the writer STAGES them on the shared volume
+    // under the fact's key and the owner reads them back from there, on whichever replica it lives.
+
+    /// <summary>The folder under <c>modules/</c> staged landings wait in, one directory per fact key.
+    /// Not a generation (no <c>@</c>) and not transient, so the modules GC never collects it.</summary>
+    internal const string LandingRequestsFolder = ".landing-requests";
+
+    /// <summary>Where the landing staged under <paramref name="key"/> lives. Pure.</summary>
+    internal string StagedLandingDirectory(string key)
+    {
+        ValidateFileName(key, "staged landing key");
+        return Path.Combine(baseDirectory, "modules", LandingRequestsFolder, key);
+    }
+
+    /// <summary>
+    /// Writes a landing's bytes into <c>modules/.landing-requests/&lt;key&gt;/</c> — assemblies under
+    /// <c>a/</c>, static assets under <c>s/</c>, natives under <c>n/</c> — through a private
+    /// <c>.tmp-*</c> sibling renamed into place, so the owner reads a staged landing whole or not at
+    /// all. Validates exactly what <see cref="LandModule"/> validates before a byte is written. On
+    /// <see cref="ReadPool"/> (a private directory, never the cap-1 landing lane). Cold.
+    /// </summary>
+    internal IObservable<Unit> StageLanding(string key, ModuleLandingArguments landing)
+        => ReadPool.InvokeBlocking(ct =>
+        {
+            ValidateFileName(landing.Name, "module name");
+            foreach (var (relativePath, _) in landing.StaticAssets ?? [])
+                ValidateAssetPath(relativePath, landing.Name);
+            foreach (var (relativePath, _) in landing.NativeAssets ?? [])
+                ValidateNativePath(relativePath, landing.Name);
+            foreach (var (fileName, _) in landing.Assemblies)
+                ValidateFileName(fileName, $"assembly file of module '{landing.Name}'");
+            var target = StagedLandingDirectory(key);
+            var temporary = target + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
+            try
+            {
+                void Write(string folder, string relativePath, byte[] bytes)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var path = Path.Combine([temporary, folder, .. relativePath.Split('/')]);
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    File.WriteAllBytes(path, bytes);
+                }
+                foreach (var (fileName, bytes) in landing.Assemblies)
+                    Write("a", fileName, bytes);
+                foreach (var (relativePath, bytes) in landing.StaticAssets ?? [])
+                    Write("s", relativePath, bytes);
+                foreach (var (relativePath, bytes) in landing.NativeAssets ?? [])
+                    Write("n", relativePath, bytes);
+                Directory.CreateDirectory(temporary);
+                Directory.Move(temporary, target);
+            }
+            catch
+            {
+                if (Directory.Exists(temporary))
+                    Directory.Delete(temporary, recursive: true);
+                throw;
+            }
+            return Unit.Default;
+        });
+
+    /// <summary>Removes a staged landing — idempotent, best-effort by contract of its callers. Cold.</summary>
+    internal IObservable<Unit> DropStagedLanding(string key)
+        => ReadPool.InvokeBlocking(ct =>
+        {
+            // The pool's token is observed before the delete: a drain stops a drop that has not
+            // started, and a drop that did not happen leaves a stray folder, never a broken landing.
+            ct.ThrowIfCancellationRequested();
+            var target = StagedLandingDirectory(key);
+            if (Directory.Exists(target))
+                Directory.Delete(target, recursive: true);
+            return Unit.Default;
+        });
+
+    /// <summary>
+    /// The OWNER's landing of a staged module (<see cref="ModuleLandingOwner"/>): reads the staged
+    /// bytes back and lands them exactly as <see cref="LandModule"/> does — unless the module's
+    /// newest event is an UNINSTALL, which refuses it (<see cref="LandUnlessUninstalled"/>). Cold;
+    /// a refusal is an answer, a landing-service refusal (the link probe) faults as before.
+    /// </summary>
+    internal IObservable<ModuleLandingVerdict> LandStaged(string key, PackageModuleOperation operation)
+        => Observable.Defer(() =>
+        {
+            var directory = StagedLandingDirectory(key);
+            return ReadPool.InvokeBlocking(ct =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (!Directory.Exists(directory))
+                        return null;
+                    (string, byte[])[] Files(string folder)
+                    {
+                        var root = Path.Combine(directory, folder);
+                        return Directory.Exists(root)
+                            ? [.. Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                                .Order(StringComparer.Ordinal)
+                                // Between files: a drain stops the read at the next file, never
+                                // midway through one.
+                                .Select(f =>
+                                {
+                                    ct.ThrowIfCancellationRequested();
+                                    return (Path.GetRelativePath(root, f).Replace('\\', '/'), File.ReadAllBytes(f));
+                                })]
+                            : [];
+                    }
+                    var natives = Files("n");
+                    var assets = Files("s");
+                    return new ModuleLandingArguments(operation.Module, Files("a"))
+                    {
+                        FrameworkMvid = operation.FrameworkMvid,
+                        PackagePath = operation.PackagePath,
+                        Version = operation.Version,
+                        MinMeshVersion = operation.MinMeshVersion,
+                        SourceCommit = operation.SourceCommit,
+                        StaticAssets = assets.Length > 0 ? assets : null,
+                        NativeAssets = natives.Length > 0 ? natives : null,
+                    };
+                })
+                .SelectMany(landing => landing is null
+                    ? Observable.Return(new ModuleLandingVerdict(false,
+                        $"refused: the staged bytes of this landing are gone ({directory}) — nothing was landed"))
+                    // A person's re-install the owner authorized is carried out over a tombstone; every
+                    // other landing keeps the uninstall check.
+                    : LandUnlessUninstalled(landing, refuseOverUninstall: !operation.ReinstallByPerson));
+        });
+
+    /// <summary>
+    /// Lands <paramref name="landing"/> exactly as <see cref="LandModule"/> does, DECIDING AT
+    /// EXECUTION whether the module has been uninstalled since the landing was planned: one cap-1
+    /// work item reads the module's head and, when its newest event is an uninstall (the derived
+    /// entry is disabled), refuses instead of writing — the rule <see cref="ModuleUpdateDecision"/>
+    /// applies at plan time (<see cref="ModuleUpdateAction.SkipUninstalled"/>), re-taken where the
+    /// bytes are written, after a download that may have outlived the plan. A module head that cannot
+    /// be read whole FAULTS, naming why — unreadable is never "not uninstalled", and never a decided
+    /// refusal either: a read failure may clear, so the shared classifier
+    /// (<see cref="TransientRegistryFailure"/>) decides whether it is retried, exactly as for
+    /// <see cref="GetCheckedActivation"/> (MeshWeaver#7974 review, round 5). Cold.
+    /// </summary>
+    /// <param name="landing">The landing.</param>
+    /// <param name="refuseOverUninstall">False only for a person's re-install the install record's
+    /// owner authorized (<see cref="PackageModuleOperation.ReinstallByPerson"/>).</param>
+    internal IObservable<ModuleLandingVerdict> LandUnlessUninstalled(ModuleLandingArguments landing, bool refuseOverUninstall = true)
+        => pool.InvokeBlocking(ct =>
+            {
+                ValidateFileName(landing.Name, "module name");
+                var faults = ImmutableList<string>.Empty;
+                var head = ModuleActivationSidecar.ReadModuleHead(baseDirectory, landing.Name, msg =>
+                {
+                    faults = faults.Add(msg);
+                    logger?.LogError("{Message}", msg);
+                }, platform);
+                // 🚨 A FAULT, never a refusal (#7974 review, round 5): an activation record that could
+                // not be read now (a listing or read failure on the volume) may read whole on the next
+                // pass, and a refusal would make the reload a terminal Failed. Only an OBSERVED
+                // uninstall, below, is a decided refusal.
+                if (!head.Whole)
+                    throw new InvalidOperationException(
+                        $"module '{landing.Name}''s activation records could not be read whole, so whether it was "
+                        + $"uninstalled meanwhile is unknown — nothing was landed ({faults.Count} fault(s): "
+                        + $"{string.Join(" | ", faults)})");
+                if (refuseOverUninstall && head.Derived is { Enabled: false })
+                    return new ModuleLandingVerdict(false,
+                        $"refused: module '{landing.Name}' was uninstalled after this landing was planned — "
+                        + "nothing was landed");
+                LandCore(landing.Name, landing.Assemblies, landing.FrameworkMvid, landing.PackagePath,
+                    landing.Version, landing.MinMeshVersion, landing.StaticAssets, landing.SourceCommit,
+                    landing.NativeAssets, holdUnloadable: false, keepNewerHead: false, ct);
+                return new ModuleLandingVerdict(true, "landed");
+            })
+            .Do(verdict =>
+            {
+                if (verdict.Applied)
+                    AnnounceActivationChanged();
+            });
 
     /// <summary>
     /// The MeshWeaver.* assemblies in <paramref name="assemblies"/> — other than the module's own entry
