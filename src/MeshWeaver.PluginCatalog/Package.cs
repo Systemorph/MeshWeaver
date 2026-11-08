@@ -767,6 +767,14 @@ public record PackageManifest
     public ImmutableDictionary<string, PackageRecordFactOutcome>? FactOutcomes { get; init; }
 
     /// <summary>
+    /// 🚨 Install-record only: the module operations (landings, the uninstall's removal) the record's
+    /// OWN hub executes one at a time, keyed by the fact key their writer stated them under — set and
+    /// cleared ONLY by that hub (<see cref="ModuleLandingOwner"/>, MeshWeaver.Plugins#5055).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableDictionary<string, PackageModuleOperation>? ModuleOperations { get; init; }
+
+    /// <summary>
     /// Transport-only (never serialised): the <see cref="PackageRecordWriteIntent"/> the lane that
     /// handed this manifest to the install funnel writes its record with — so the funnel's signature
     /// does not change. Null is <see cref="PackageRecordWriteIntent.CreateAllowed"/>.

@@ -48,6 +48,14 @@ public static class PackageRecordFactKind
     /// removing the record, even when the install wrote nothing (an up-to-date package skips the
     /// record write entirely).</summary>
     public const string PersonClear = "PersonClear";
+
+    /// <summary>A writer asks the owner to LAND a module whose bytes it staged under the fact's key
+    /// (<see cref="ModuleLandingOwner"/>) — queued, then executed or refused by the owner.</summary>
+    public const string ModuleLand = "ModuleLand";
+
+    /// <summary>Phase 1 of an uninstall asks the owner to REMOVE the module — queued behind any landing
+    /// in flight, so the tombstone is written last (<see cref="ModuleLandingOwner"/>).</summary>
+    public const string ModuleRemove = "ModuleRemove";
 }
 
 /// <summary>Who is retiring a package, set and cleared only by the install record's OWN hub.</summary>
@@ -77,13 +85,28 @@ public sealed record PackageRecordFact
 
     /// <summary>When it was stated.</summary>
     public DateTimeOffset At { get; init; }
+
+    /// <summary>The module operation a <see cref="PackageRecordFactKind.ModuleLand"/> or
+    /// <see cref="PackageRecordFactKind.ModuleRemove"/> asks for.</summary>
+    public PackageModuleOperation? Module { get; init; }
 }
 
 /// <summary>The owner's answer to one fact, under the fact's key, for its writer to read and remove.</summary>
 /// <param name="Applied">Whether the owner applied it.</param>
 /// <param name="Detail">What the owner did, or why it refused.</param>
 /// <param name="At">When the owner decided.</param>
-public sealed record PackageRecordFactOutcome(bool Applied, string Detail, DateTimeOffset At);
+public sealed record PackageRecordFactOutcome(bool Applied, string Detail, DateTimeOffset At)
+{
+    /// <summary>
+    /// 🚨 Whether a NOT-applied answer is a fault that may clear on its own — an I/O error on the
+    /// shared volume, a timeout — classified by <see cref="TransientRegistryFailure"/>, so the work
+    /// that met it is retried (a module reload records it as <c>Faulted</c>, re-armed) instead of
+    /// final (<c>Failed</c>). A decided refusal (a retirement, a binding, a tombstone) is never
+    /// transient (MeshWeaver#7974 review, round 5). An init property, never a positional parameter:
+    /// a new parameter would replace the public constructor and its <c>Deconstruct</c>.
+    /// </summary>
+    public bool Transient { get; init; }
+}
 
 /// <summary>An install-record write the record's own hub refused — a refusal, never a silent success.</summary>
 /// <param name="path">The install record.</param>
@@ -162,6 +185,9 @@ public static class InstallRecordGate
 
         var retiring = record.RetiringBy;
         var content = record;
+        // Module operations are QUEUED here and decided when promoted (ModuleLandingOwner.Promote) —
+        // against the retirement as it stands then, not as it stood when the fact arrived.
+        var operations = record.ModuleOperations ?? ImmutableDictionary<string, PackageModuleOperation>.Empty;
         foreach (var (key, fact) in facts.OrderBy(kv => kv.Value.At).ThenBy(kv => kv.Key, StringComparer.Ordinal))
         {
             PackageRecordFactOutcome Answer(bool applied, string detail) => new(applied, detail, now);
@@ -198,6 +224,17 @@ public static class InstallRecordGate
                         ended = ended.SetItem(released, now);
                     outcomes = outcomes.SetItem(key, Answer(true, held ? "retirement released" : "nothing to release"));
                     break;
+                // 🚨 A removal of this package's module is EXECUTING (#7974 review, round 3): it may sit
+                // on the shared landing lane behind another module and disable the module after this
+                // person's install read it as current. Clearing the retirement now would keep the
+                // record and lose the module, so the person's install is refused until it finishes —
+                // the rule a retirement that is already removing the record follows.
+                case PackageRecordFactKind.PersonClear or PackageRecordFactKind.Stamp
+                    // ANY removal in flight, whoever's (#7974 review, round 4): an uninstall that timed out
+                    // and released its retirement (End) leaves its removal executing all the same.
+                    when ModuleRemovalExecuting(operations) is { } removing:
+                    outcomes = outcomes.SetItem(key, Answer(false, removing));
+                    break;
                 case PackageRecordFactKind.PersonClear when retiring is { Removing: true }:
                     outcomes = outcomes.SetItem(key, Answer(false, $"refused: {retiring.Request} is removing this install record now"));
                     break;
@@ -226,11 +263,42 @@ public static class InstallRecordGate
                         ? "applied"
                         : $"applied — a person's install cleared the retirement held by {cleared}"));
                     break;
+                case PackageRecordFactKind.ModuleLand or PackageRecordFactKind.ModuleRemove when fact.Module is not { Module.Length: > 0 }:
+                    outcomes = outcomes.SetItem(key, Answer(false, "refused: the module operation names no module"));
+                    break;
+                case PackageRecordFactKind.ModuleLand when fact.Intent is not null && !IsKnownIntent(fact.Intent):
+                    outcomes = outcomes.SetItem(key, Answer(false, $"refused: '{fact.Intent}' is not a write intent this owner knows"));
+                    break;
+                case PackageRecordFactKind.ModuleLand:
+                    operations = operations.SetItem(key, fact.Module! with
+                    {
+                        Kind = PackageModuleOperationKind.Land,
+                        Intent = fact.Intent,
+                        At = fact.At,
+                        State = PackageModuleOperationState.Queued,
+                        StartedAt = null,
+                        Refusal = null,
+                        ReinstallByPerson = false,
+                    });
+                    break;
+                case PackageRecordFactKind.ModuleRemove:
+                    operations = operations.SetItem(key, fact.Module! with
+                    {
+                        Kind = PackageModuleOperationKind.Remove,
+                        Request = fact.Request,
+                        At = fact.At,
+                        State = PackageModuleOperationState.Queued,
+                        StartedAt = null,
+                        Refusal = null,
+                        ReinstallByPerson = false,
+                    });
+                    break;
                 default:
                     outcomes = outcomes.SetItem(key, Answer(false, $"refused: unknown fact kind '{fact.Kind}'"));
                     break;
             }
         }
+        (operations, retiring) = ModuleLandingOwner.Promote(operations, retiring, content.Module, now);
 
         return node with
         {
@@ -238,6 +306,8 @@ public static class InstallRecordGate
             {
                 RetiringBy = retiring,
                 EndedRetirements = ended.IsEmpty ? null : ended,
+                // Never the stamp's: a stamp replaces the content, never the owner's queue.
+                ModuleOperations = operations.IsEmpty ? null : operations,
                 RecordFacts = null,
                 FactOutcomes = outcomes.IsEmpty ? null : outcomes,
                 WriteIntent = null,
@@ -287,7 +357,7 @@ public static class InstallRecordGate
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         var content = record.ContentAs<PackageManifest>(hub.JsonSerializerOptions)
                       ?? throw new ArgumentException($"{record.Path} carries no install record content", nameof(record));
-        var clean = content with { RetiringBy = null, RecordFacts = null, FactOutcomes = null, WriteIntent = null };
+        var clean = content with { RetiringBy = null, RecordFacts = null, FactOutcomes = null, WriteIntent = null, ModuleOperations = null };
         return storage.Read(record.Path, hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
             .SelectMany(existing =>
             {
@@ -314,6 +384,15 @@ public static class InstallRecordGate
                                 $"Recording install at '{record.Path}' failed: {response.Error}")));
             });
     }
+
+    /// <summary>Why a stamp or a person's clear must wait: a REMOVAL of the module is executing now
+    /// (promoted, not refused) — whether or not its uninstall still holds the retirement — or null. Pure.</summary>
+    internal static string? ModuleRemovalExecuting(ImmutableDictionary<string, PackageModuleOperation> operations) =>
+        operations.Values.FirstOrDefault(o => o.Kind == PackageModuleOperationKind.Remove
+                                              && o.State == PackageModuleOperationState.Executing
+                                              && o.Refusal is null) is { } removal
+            ? $"refused: {removal.Request} is removing this package's module now — install it again once the removal finishes"
+            : null;
 
     /// <summary>Whether <paramref name="intent"/> is one of the <see cref="PackageRecordWriteIntent"/> values. Pure.</summary>
     /// <param name="intent">The intent.</param>
@@ -396,13 +475,14 @@ public static class InstallRecordGate
     /// </summary>
     internal static IObservable<PackageRecordFactOutcome> Submit(
         IMessageHub hub, string path, string key, PackageRecordFact fact, ILogger? logger) =>
-        Submit(hub, path, key, fact, logger, removeAnswer: null);
+        Submit(hub, path, key, fact, logger, removeAnswer: null, budget: null);
 
     /// <summary><see cref="Submit(IMessageHub, string, string, PackageRecordFact, ILogger?)"/> with a
     /// test seam for the answer removal — the durability barrier — so its failure can be pinned.</summary>
+    /// <param name="budget">How long to wait for the answer; null is <see cref="AnswerBudget"/>.</param>
     internal static IObservable<PackageRecordFactOutcome> Submit(
         IMessageHub hub, string path, string key, PackageRecordFact fact, ILogger? logger,
-        Func<IObservable<Unit>>? removeAnswer)
+        Func<IObservable<Unit>>? removeAnswer, TimeSpan? budget = null)
     {
         var storageForRemoval = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         // 🚨 A delete of THIS record racing the submission does not always reach the timeout: the
@@ -410,7 +490,7 @@ public static class InstallRecordGate
         // NotFound, and the stating Update itself can fail on a deleted node (#7964 review). Each is
         // judged by the one fact that matters — is the record gone? — and becomes the typed refusal;
         // with the record still there the fault is unrelated and propagates unchanged.
-        return SubmitCore(hub, path, key, fact, logger, removeAnswer)
+        return SubmitCore(hub, path, key, fact, logger, removeAnswer, budget ?? AnswerBudget)
             .Catch((Exception ex) => storageForRemoval.Read(path, hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
                 .Catch((Exception _) => Observable.Throw<MeshNode?>(ex))
                 .SelectMany(node => node is null
@@ -421,7 +501,7 @@ public static class InstallRecordGate
 
     private static IObservable<PackageRecordFactOutcome> SubmitCore(
         IMessageHub hub, string path, string key, PackageRecordFact fact, ILogger? logger,
-        Func<IObservable<Unit>>? removeAnswer)
+        Func<IObservable<Unit>>? removeAnswer, TimeSpan budget)
     {
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
@@ -436,13 +516,13 @@ public static class InstallRecordGate
             .Where(outcome => outcome is not null)
             .Select(outcome => outcome!)
             .Take(1)
-            .Timeout(AnswerBudget)
+            .Timeout(budget)
             .Catch((TimeoutException _) => storage.Read(path, options).Take(1).DefaultIfEmpty(null)
                 .SelectMany(node => node is null
                     ? Observable.Return(new PackageRecordFactOutcome(false,
                         "the install record was removed before its owner answered", DateTimeOffset.UtcNow))
                     : Observable.Throw<PackageRecordFactOutcome>(new TimeoutException(
-                        $"the install record {path} did not answer the {fact.Kind} '{key}' within {AnswerBudget}"))));
+                        $"the install record {path} did not answer the {fact.Kind} '{key}' within {budget}"))));
         IObservable<Unit> RemoveAnswer() => removeAnswer?.Invoke()
             ?? access.RunAsSystem(() => issuer.GetMeshNodeStream(path)
                     .Update<PackageManifest>(current => current with
