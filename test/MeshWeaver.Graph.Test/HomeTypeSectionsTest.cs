@@ -118,6 +118,27 @@ public class HomeTypeSectionsTest
         new HomeSections().SetHidden("Markdown", true).SetHidden("markdown", false).Hidden.Should().BeEmpty();
     }
 
+    [Fact]
+    public void Two_moves_before_a_re_render_compose_against_the_stored_order()
+    {
+        // The customize page is a snapshot; a second click can land before it re-renders. Each move
+        // is computed from the arrangement it patches, never from the rendered order.
+        var arranged = HomeTypeSections.Arrange(HomeTypeSections.Discover(Rows, Cataloged), null, Legs);
+
+        // Rendered order: Documents, Decks, Spaces. Up on Spaces, then Up on Decks — both from the
+        // same, stale page.
+        var stored = new[]
+            {
+                HomeTypeSections.MoveChange(arranged, "Space", -1),
+                HomeTypeSections.MoveChange(arranged, "Slides/Deck", -1),
+            }
+            .Aggregate(new HomeSections(), (prefs, change) => change(prefs));
+
+        HomeTypeSections.Arrange(HomeTypeSections.Discover(Rows, Cataloged), stored, Legs)
+            .Shown.Select(s => s.NodeType).Should().Equal(["Markdown", "Slides/Deck", "Space"],
+                "Spaces moved above Decks; Decks, by then third, moved up one — from the stored order, not the page's");
+    }
+
     // ── The rendered sections ───────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -173,9 +194,8 @@ public class HomeTypeSectionsTest
     {
         var arranged = HomeTypeSections.Arrange(HomeTypeSections.Discover(Rows, Cataloged),
             new HomeSections().SetHidden("Space", true), Legs);
-        var changes = new List<Func<HomeSections, HomeSections>>();
-
-        var page = HomeTypeSections.BuildCustomize(arranged, Owner, null, changes.Add);
+        var page = HomeTypeSections.BuildCustomize(arranged, Owner, null,
+            _ => System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default));
 
         var text = string.Join("\n", Flatten(page).OfType<ButtonControl>().Select(b => b.Data?.ToString()));
         text.Should().Contain("Hide").And.Contain("Show").And.Contain("↑").And.Contain("↓");

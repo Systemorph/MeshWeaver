@@ -67,6 +67,16 @@ public static class HomeTypeSections
     /// <param name="Legs">The content legs every section query narrows.</param>
     public sealed record Arrangement(ImmutableList<TypeSection> Shown, ImmutableList<TypeSection> Hidden, ImmutableList<string> Legs)
     {
+        /// <summary>The discovered sections in their DEFAULT order, before the viewer's arrangement —
+        /// what a change re-arranges against, so a move is computed from the stored arrangement it
+        /// patches rather than from the page the click came from.</summary>
+        public ImmutableList<TypeSection> Discovered { get; init; } = [];
+
+        /// <summary>The shown types, top first, under <paramref name="prefs"/> — the order a move
+        /// shifts within. Pure.</summary>
+        public ImmutableList<string> VisibleOrder(HomeSections prefs) =>
+            [.. Arrange(Discovered, prefs, Legs).Shown.Select(s => s.NodeType)];
+
         /// <summary>Nothing to show and nothing hidden.</summary>
         public bool IsEmpty => Shown.Count == 0 && Hidden.Count == 0;
     }
@@ -140,7 +150,7 @@ public static class HomeTypeSections
             .Select(p => p.s)
             .ToImmutableList();
         var hidden = discovered.Where(s => prefs.IsHidden(s.NodeType)).ToImmutableList();
-        return new Arrangement(shown, hidden, legs);
+        return new Arrangement(shown, hidden, legs) { Discovered = discovered };
     }
 
     /// <summary>
@@ -201,13 +211,15 @@ public static class HomeTypeSections
     /// Hide / Move up / Move down; then the hidden ones with Show. Built from the platform's layout
     /// controls only (stack, label, button, nav link), so web, Blazor and the native app render the
     /// same editor from the same config. <paramref name="change"/> writes one change to the
-    /// viewer's arrangement. Pure apart from the click handlers it wires.
+    /// viewer's arrangement and completes when the write is confirmed. Pure apart from the click handlers it wires.
     /// </summary>
     public static UiControl BuildCustomize(
         Arrangement arrangement, string ownerId, string? locale,
-        Action<Func<HomeSections, HomeSections>> change)
+        Func<Func<HomeSections, HomeSections>, IObservable<System.Reactive.Unit>> change)
     {
-        var visibleOrder = arrangement.Shown.Select(s => s.NodeType).ToImmutableList();
+        // A move is computed INSIDE the change, from the stored arrangement the write patches — never
+        // from the order this page was rendered with, so two clicks that land before the re-render
+        // compose instead of the second one undoing the first.
         var page = Controls.Stack.WithWidth("100%").WithVerticalGap(16)
             .WithView(Controls.Title(LocalizationCatalog.Get("home.customizeTitle", locale), 2), "Title")
             .WithView(Controls.Markdown(LocalizationCatalog.Get("home.customizeHint", locale)), "Hint");
@@ -219,15 +231,15 @@ public static class HomeTypeSections
             var type = arrangement.Shown[i].NodeType;
             var row = SectionRow(arrangement.Shown[i], locale)
                 .WithView(Controls.Button(LocalizationCatalog.Get("home.sectionHide", locale))
-                    .WithClickAction((Action<UiActionContext>)(_ => change(p => p.SetHidden(type, true)))), "Hide");
+                    .WithReactiveClickAction(_ => change(p => p.SetHidden(type, true))), "Hide");
             if (i > 0)
                 row = row.WithView(Controls.Button("↑")
                     .WithLabel(LocalizationCatalog.Get("home.sectionUp", locale))
-                    .WithClickAction((Action<UiActionContext>)(_ => change(p => p.Move(type, -1, visibleOrder)))), "Up");
+                    .WithReactiveClickAction(_ => change(MoveChange(arrangement, type, -1))), "Up");
             if (i < arrangement.Shown.Count - 1)
                 row = row.WithView(Controls.Button("↓")
                     .WithLabel(LocalizationCatalog.Get("home.sectionDown", locale))
-                    .WithClickAction((Action<UiActionContext>)(_ => change(p => p.Move(type, 1, visibleOrder)))), "Down");
+                    .WithReactiveClickAction(_ => change(MoveChange(arrangement, type, 1))), "Down");
             shown = shown.WithView(row, "Shown-" + SectionId(type));
         }
         if (arrangement.Shown.Count > 0)
@@ -241,13 +253,21 @@ public static class HomeTypeSections
                 var type = section.NodeType;
                 hidden = hidden.WithView(SectionRow(section, locale)
                     .WithView(Controls.Button(LocalizationCatalog.Get("home.sectionShow", locale))
-                        .WithClickAction((Action<UiActionContext>)(_ => change(p => p.SetHidden(type, false)))), "Show"),
+                        .WithReactiveClickAction(_ => change(p => p.SetHidden(type, false))), "Show"),
                     "Hidden-" + SectionId(type));
             }
             page = page.WithView(hidden, "Hidden");
         }
         return page.WithView(Link(LocalizationCatalog.Get("home.backToHome", locale), $"/{ownerId}"), "Back");
     }
+
+    /// <summary>
+    /// The change one Move up / Move down click writes: <paramref name="nodeType"/> shifted by
+    /// <paramref name="delta"/> within the order the STORED arrangement produces when the change is
+    /// applied — never the order the page was rendered with. Pure.
+    /// </summary>
+    internal static Func<HomeSections, HomeSections> MoveChange(Arrangement arrangement, string nodeType, int delta) =>
+        prefs => prefs.Move(nodeType, delta, arrangement.VisibleOrder(prefs));
 
     private static StackControl SectionRow(TypeSection section, string? locale) =>
         Controls.Stack
@@ -326,10 +346,12 @@ public static class HomeTypeSections
         var locale = host.ViewerLocale();
         var arrangements = host.Hub.ServiceProvider.GetRequiredService<LauncherArrangementSource>();
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(HomeTypeSections));
-        void Change(Func<HomeSections, HomeSections> change) =>
-            arrangements.UpdateSections(ownerId, change).Subscribe(
-                _ => { },
-                exception => logger?.LogWarning(exception, "[Home] rearranging the home sections of {Owner} failed", ownerId));
+        // The click is acknowledged when the write is confirmed and refused with its error, so the
+        // button stays pending exactly as long as the write.
+        IObservable<System.Reactive.Unit> Change(Func<HomeSections, HomeSections> change) =>
+            arrangements.UpdateSections(ownerId, change)
+                .Do(_ => { }, exception => logger?.LogWarning(exception, "[Home] rearranging the home sections of {Owner} failed", ownerId))
+                .Select(_ => System.Reactive.Unit.Default);
         return Observe(host, ownerId).Select(a => (UiControl?)BuildCustomize(a, ownerId, locale, Change));
     }
 
