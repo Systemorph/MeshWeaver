@@ -1,4 +1,21 @@
-# Request a Copilot review on a REAL change — and none for a push that only merges the default branch.
+# The INTERNAL reviewer first; a Copilot review only as the overdue FALLBACK — and none for a push that only
+# merges the default branch.
+#
+# 🧭 POLICY internal-code-review (maintainer, 2026-11-08: "we can take code reviews on our side and do them,
+# e.g., with glm 5.3 in high thinking"). The reviewer is the control plane's internal reviewer — GLM-5.3 at
+# reasoning effort high, posting its review, its inline findings and the `internal-review` check run as the
+# reviewer's GitHub App (systemorph-com, app 4918443). The organisation webhook's pull-request events and the
+# control plane's own pull-request sweep START it, so this lane never asks it for anything: it READS whether
+# the internal reviewer has reviewed the head (`internal_review_state` in check-review-answered.py) and does
+# nothing while it has, or while it still has time. Only a head the internal reviewer left unreviewed for
+# `copilot-fallback-minutes` gets a Copilot review requested, by the scheduled sweep, through the
+# review-on-real-change predicate below. 🚨 The default is 0 — the Copilot path is RETIRED (2026-11-08): the
+# internal reviewer posted on 18 pull requests across four repositories within its first 20 minutes back, and
+# the bar was 10 (Doc/Architecture/ReviewFindingsAnswered → "The internal reviewer"). A caller re-arms the
+# fallback only deliberately, with a positive value. The rulesets' `copilot_code_review` rule is removed
+# everywhere, so nothing requests Copilot.
+#
+# THE COPILOT FALLBACK, as it was the primary path until 2026-11-08:
 #
 # 🚨 WHY (policy `review-on-real-change`, Doc/Architecture/PolicyNotProse). With the rulesets'
 # `copilot_code_review` rule at `review_on_push: true`, every push to a pull request — a merge of
@@ -53,6 +70,14 @@ name: Node repo request review on real change (reusable)
 on:
   workflow_call:
     inputs:
+      copilot-fallback-minutes:
+        description: >-
+          Minutes a head may wait for the INTERNAL reviewer before this lane requests a Copilot review as the
+          fallback (policy internal-code-review). 0 (the default since 2026-11-08) retires the Copilot path: the
+          internal reviewer is the only reviewer. A number, as a string.
+        required: false
+        type: string
+        default: "0"
       scripts-ref:
         description: >-
           The Systemorph/MeshWeaver ref check-review-answered.py is fetched at (the same contract as
@@ -99,17 +124,21 @@ jobs:
       - name: "Prove the predicate can say no (self-test)"
         run: python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" || { cat "$RUNNER_TEMP/self-test.log"; exit 1; }
 
-      - name: Request a Copilot review iff the pull request's own diff changed (or sweep, on schedule)
+      - name: Internal reviewer first; a Copilot review only as the overdue fallback (or sweep, on schedule)
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
           BEFORE: ${{ github.event.before }}
+          FALLBACK_MINUTES: ${{ inputs.copilot-fallback-minutes }}
         run: |
           set -euo pipefail
+          case "${FALLBACK_MINUTES:-}" in
+            ''|*[!0-9]*) echo "::error::copilot-fallback-minutes must be a whole number of minutes (0 retires the Copilot path), got '${FALLBACK_MINUTES:-}'"; exit 1 ;;
+          esac
           if [ "$EVENT_NAME" = "schedule" ]; then
-            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --request-review-sweep
+            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --request-review-sweep --copilot-fallback-minutes "$FALLBACK_MINUTES"
             exit $?
           fi
           if [ -z "${PR:-}" ]; then
@@ -117,7 +146,7 @@ jobs:
             exit 1
           fi
           if [ -n "${BEFORE:-}" ]; then
-            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --request-review-on-change --pr "$PR" --before "$BEFORE"
+            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --request-review-on-change --pr "$PR" --before "$BEFORE" --copilot-fallback-minutes "$FALLBACK_MINUTES"
           else
-            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --request-review-on-change --pr "$PR"
+            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --request-review-on-change --pr "$PR" --copilot-fallback-minutes "$FALLBACK_MINUTES"
           fi
