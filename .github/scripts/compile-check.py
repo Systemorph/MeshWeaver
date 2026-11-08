@@ -1405,7 +1405,11 @@ def compile_parallelism(sets: int, override: "str | None", cpus: int,
 # its recorded verdict (errors, needs_external) is reused. Only verdicts with no infra error are
 # kept (an infra error is not a property of the inputs). A record that does not parse or does not
 # carry its own key is a miss; any I/O error is a miss; nothing here can change a verdict.
+# 🚨 READ-ONLY unless `MW_COMPILE_CHECK_VERDICT_CACHE_WRITE=1`: the caller grants writes only to a
+# TRUSTED run (the default branch). A pull request controls its own workflow, and a "clean" record it
+# wrote under a key the trunk later computes would let a broken NodeType through the trunk's gate.
 VERDICT_CACHE_ENV = "MW_COMPILE_CHECK_VERDICT_CACHE"
+VERDICT_CACHE_WRITE_ENV = "MW_COMPILE_CHECK_VERDICT_CACHE_WRITE"
 VERDICT_RECIPE = "compile-check-verdict/v1"
 
 
@@ -1483,7 +1487,7 @@ def set_key(sources, lam, ref_xml: str, impl_frameworks: bool, refs_digest: str,
 
 def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: bool, workers: int,
                  cache: "Path | None" = None, refs_digest: str = "", toolchain: str = "",
-                 stats: "dict | None" = None):
+                 stats: "dict | None" = None, cache_write: bool = False):
     """Yield (item, compile_set result, seconds) for each ((sources, lambda), names) item, in the
     ORDER GIVEN, building up to `workers` sets at once. Each worker borrows one work directory for
     the duration of a build, so two builds never share a project file or an obj/ directory.
@@ -1540,7 +1544,7 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
             # CS errors still mean the restore worked; only an infra error (no CS diagnostic at
             # all) leaves this directory's restore in doubt, so its next build restores again.
             restored[work] = outcome[2] is None
-            if cache is not None and index in keys:
+            if cache is not None and cache_write and index in keys:
                 write_verdict(cache, keys[index], outcome)
             return outcome, time.time() - started
         finally:
@@ -2205,14 +2209,19 @@ def _self_test_verdict_cache(failures: list) -> None:
             cache2 = d / "cache2"
             st: dict = {}
             list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st))
-            check("a cold cache builds every set and records it", len(calls) == 2 and st.get("hits") == 0)
+            check("a READ-ONLY run (the default) records nothing", len(calls) == 2 and not any(cache2.rglob("*.json")))
+            calls.clear(); st = {}
+            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st,
+                              cache_write=True))
+            check("a cold cache builds every set and a trusted run records it", len(calls) == 2 and st.get("hits") == 0)
             calls.clear(); st = {}
             out = list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st))
             check("a warm cache builds nothing and returns the recorded verdicts in order",
                   calls == [] and st.get("hits") == 2 and [o[0][1] for o in out] == [["One"], ["Two"]])
             src2.write_text("class Two { int x; }")
             calls.clear(); st = {}
-            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st))
+            list(compile_sets(items, "", True, True, 2, cache=cache2, refs_digest="r", toolchain="t", stats=st,
+                              cache_write=True))
             check("a changed source is built again, the unchanged one is not",
                   len(calls) == 1 and st.get("hits") == 1)
             calls.clear()
@@ -2713,15 +2722,17 @@ def main() -> int:
     cache_dir = os.environ.get(VERDICT_CACHE_ENV, "").strip()
     cache = Path(cache_dir) if cache_dir else None
     cache_stats: dict = {}
+    cache_write = os.environ.get(VERDICT_CACHE_WRITE_ENV, "").strip() == "1"
     refs_digest = toolchain = ""
     if cache is not None:
         t_key = time.time()
         refs_digest, toolchain = references_digest(refs), toolchain_identity()
-        print(f"compile-check: verdict cache {cache} — references {refs_digest[:12]} "
+        print(f"compile-check: verdict cache {cache} ({'read-write' if cache_write else 'read-only'}) — references {refs_digest[:12]} "
               f"({len(refs)} assemblies, keyed in {time.time() - t_key:.1f}s), {toolchain.split(' checker=')[0]}")
     for i, (((s, lam), names), (errors, needs_external, infra_error), seconds) in enumerate(
             compile_sets(ordered, ref_xml, ai_available, impl_frameworks, workers,
-                         cache=cache, refs_digest=refs_digest, toolchain=toolchain, stats=cache_stats), 1):
+                         cache=cache, refs_digest=refs_digest, toolchain=toolchain, stats=cache_stats,
+                         cache_write=cache_write), 1):
         work_seconds += seconds
         if infra_error:
             # nonzero build with no CS diagnostic (restore/SDK/MSBuild) — a real, gating failure.
