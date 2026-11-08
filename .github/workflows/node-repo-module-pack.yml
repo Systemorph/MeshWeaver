@@ -1533,7 +1533,9 @@ jobs:
           # A shelf edit reaches every container-built module, though none references the shelf.
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
-          # ABI-keyed rebuild: the caller's affected-modules.py (asked by node-repo-scope.py) reads these.
+          # ABI-keyed rebuild: the caller's affected-modules.py (asked by node-repo-scope.py) reads these, and
+          # build-logic's node-repo-scope.py loads its sibling — the SAME file MW_ABI_SCRIPT names (one checkout,
+          # one ref). The caller caps the verdict at 60 kB (else `unavailable`), below the 128 KiB env limit.
           MW_ABI_VERDICT: ${{ inputs.abi-verdict }}
           MW_ABI_SCRIPT: ${{ github.workspace }}/build-logic/.github/scripts/abi-key.py
         run: |

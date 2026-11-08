@@ -342,7 +342,10 @@ def code_from_evaluation(root: Path, project_dir: Path, props: dict, items: dict
     in by targets) — but only in a project the Razor SDK compiles (a plain Microsoft.NET.Sdk project may carry
     a .razor Content item nobody compiles; default component items can be switched off), and never one
     copied to output or publish (an MVC/Razor Pages `.cshtml` with PreserveNewest) or embedded. Everything
-    else — the copied `.cshtml` included — stays payload, hashed into the non-code identity (review of #7995)."""
+    else — the copied `.cshtml` included — stays payload, hashed into the non-code identity (review of #7995).
+    Self-tested on synthetic JSON in the shape `dotnet msbuild` answers (this script's self-test runs where no SDK
+    is installed); verified by hand against a real Razor project. A drift in the SDK's names or metadata can
+    only DEGRADE markup to payload — lost narrowing, never a wrong skip."""
     def rel(kind: str, keep=lambda it: True) -> set[str]:
         out = set()
         for it in items.get(kind) or []:

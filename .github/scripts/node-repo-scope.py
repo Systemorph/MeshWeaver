@@ -280,6 +280,8 @@ def abi_filter_hits(root: Path, hits: dict[str, list[str]], src_files: list[str]
             say(f"    ABI decide failed for {entry} ({type(exc).__name__}) — kept")
             continue
         if decision.get("decision") == "skip":
+            # May be [] — the selection loop below reads `if hits.get(e["project"])`, so an emptied entry is
+            # UNREACHED exactly like one no changed project touched (only the always floor still builds it).
             out[entry] = [p for p in touched if p not in abi_only]
             say(f"    {entry}: {', '.join(abi_only)} — {decision.get('reason')} (verdict of {vhead[:12]}) — not packed for it")
     return out

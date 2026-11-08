@@ -872,6 +872,9 @@ jobs:
           if [ "$ADOPTED_VERDICT" = "off" ]; then ADOPTED_VERDICT=''; fi
           # ABI-keyed rebuild: the caller's verdict reaches its affected-modules.py with core's abi-key.py (and
           # the three siblings it loads) at the lane's scripts ref. Unfetchable ⇒ no ABI narrowing, said.
+          # This lane runs NO node-repo-scope.py: the only reader is the caller's selector, which loads exactly
+          # MW_ABI_SCRIPT — one abi-key.py per lane. The caller caps the verdict at 60 kB (else `unavailable`),
+          # far below the 128 KiB a single environment string may hold.
           if [ -n "${ABI_VERDICT:-}" ]; then
             abi_dir="$RUNNER_TEMP/abi-scripts"; mkdir -p "$abi_dir"; abi_ok=1
             for f in abi-key.py module-build-key.py node-repo-scope.py node-repo-project-scope.py; do
