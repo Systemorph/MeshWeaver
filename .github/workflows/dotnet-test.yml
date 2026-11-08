@@ -2926,6 +2926,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/msbuild-closure-key.py --self-test
 
+    # The module lane's compile cache (node-repo-module-pack.yml `build-workspace`): a change outside an
+    # entry's closure (a floor stamp included) keeps its key, one inside it or in the salt misses, an
+    # uncommitted or untracked closure path is no key, and a tampered, incomplete or escaping archive
+    # is a miss — never a wrong hit.
+    - name: "The workspace compile cache serves only an unchanged entry (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/workspace-compile-cache.py --self-test
+
     - name: "Own-store named artifacts preserve rerun inputs and reject corrupt archives"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test_ci_run_artifacts.py

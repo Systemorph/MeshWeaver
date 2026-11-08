@@ -2404,6 +2404,71 @@ jobs:
       - name: Keep the platform checkout out of the global compiler's source mount
         if: inputs.module-libraries-project != '' || inputs.build-extensions-project != ''
         run: rm -rf "${GITHUB_WORKSPACE:?}/.module-libs-platform"
+      # ⚡ THE COMPILE CACHE (MeshWeaver.Plugins Hosting/CiProfile.md → "Compile cache"). An entry whose
+      # compiler inputs are unchanged is served from our store instead of being compiled again:
+      # `workspace-compile-cache.py` keys each container entry by its project closure in THIS tree
+      # (msbuild-closure-key.py --no-targets, the platform roots external) salted with everything else
+      # the compiler reads (both image digests, the shelf and extension bytes, accept, superseded, the
+      # platform ref and the SDK). Measured before it: MeshWeaver.AI recompiled for 350 s of a 356.5 s
+      # workspace build on a pull request that touched nothing it compiles (run 42517167915).
+      # Fail-open: no key, a miss or any store error builds exactly as before; it can never red a run.
+      # Runs on our own store only (a `gha` store has no shared, content-addressed cache for this).
+      # The tools are copied OUT of the workspace and their checkout removed before the build mounts it.
+      - name: Check out the compile-cache tools at the build-logic ref
+        if: needs.select.outputs.artifact-store != 'gha'
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: .compile-cache-logic
+          sparse-checkout: .github/scripts
+      - name: Compile cache — reuse every unchanged container entry
+        id: ccache
+        if: needs.select.outputs.artifact-store != 'gha'
+        env:
+          MODULES: ${{ needs.select.outputs.build-modules }}
+          DIGEST: ${{ inputs.platform-image-digest }}
+          TESTER_DIGEST: ${{ inputs.tester-image-digest }}
+          SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
+          SHELF: ${{ steps.shelf.outputs.root }}
+          EXTENSION: ${{ steps.extension.outputs.root }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+          KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
+          STORE: ${{ needs.select.outputs.artifact-store }}
+          STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
+        run: |
+          set -uo pipefail
+          tools="$RUNNER_TEMP/compile-cache-tools"
+          rm -rf "$tools"; mkdir -p "$tools"
+          cp -R .compile-cache-logic/.github/scripts/. "$tools/"
+          rm -rf "${GITHUB_WORKSPACE:?}/.compile-cache-logic"
+          cc="$tools/workspace-compile-cache.py"
+          python3 "$cc" --self-test >/dev/null || { echo "::warning title=Compile cache off::workspace-compile-cache.py failed its self-test at the build-logic ref — every entry is compiled"; exit 0; }
+          if [ -z "$DIGEST" ] || [ -z "$TESTER_DIGEST" ]; then
+            echo "compile cache: off — no image digests to key on (the build step names why it cannot compile)"; exit 0
+          fi
+          printf '%s' "$MODULES" > "$RUNNER_TEMP/ccache-selection.json"
+          accept=$(jq -r '[.[] | select(.build == "container") | (.accept // "")] | unique | join("|")' <<< "$MODULES")
+          shelf_hash=$([ -n "$SHELF" ] && python3 "$cc" dir-hash "$SHELF" || echo none)
+          ext_hash=$([ -n "$EXTENSION" ] && python3 "$cc" dir-hash "$EXTENSION" || echo none)
+          salt="image=$DIGEST|tester=$TESTER_DIGEST|shelf=$shelf_hash|ext=$ext_hash|accept=$accept|superseded=$SUPERSEDED|platform=$PLATFORM_REF|sdk=$KEYED_SDK"
+          echo "compile cache salt: $salt"
+          plan="$RUNNER_TEMP/ccache-plan.json"
+          if ! python3 "$cc" plan --repo . --modules "@$RUNNER_TEMP/ccache-selection.json" --salt "$salt" --out "$plan"; then
+            echo "::warning title=Compile cache off::the plan failed — every entry is compiled"; exit 0
+          fi
+          if ! python3 "$cc" restore --plan "$plan" --store "$STORE" --store-id "$STORE_ID" \
+                 --stage "$RUNNER_TEMP/ccache-stage" --misses "$RUNNER_TEMP/ccache-misses.txt"; then
+            echo "::warning title=Compile cache off::the restore failed — every entry is compiled"; exit 0
+          fi
+          hits=$(jq '[.[] | select(.hit)] | length' "$plan")
+          total=$(jq 'length' "$plan")
+          echo "### Compile cache: $hits of $total container entr(y|ies) reused" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.[] | "- `\(.module)` — \(.reason)"' "$plan" >> "$GITHUB_STEP_SUMMARY"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "hits=$hits" >> "$GITHUB_OUTPUT"
+          echo "plan=$plan" >> "$GITHUB_OUTPUT"
+          echo "misses=$RUNNER_TEMP/ccache-misses.txt" >> "$GITHUB_OUTPUT"
       # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
       # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
@@ -2420,9 +2485,25 @@ jobs:
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
           ACR_LOGIN: ${{ inputs.acr-login }}
+          CCACHE_MISSES: ${{ steps.ccache.outputs.misses }}
+          CCACHE_HITS: ${{ steps.ccache.outputs.hits }}
         run: |
           set -euo pipefail
           mapfile -t projects < <(jq -r '.[] | select(.build == "container") | .project' <<< "$MODULES")
+          # The compile cache served some entries: compile only the rest (the merge step lays the served
+          # ones into the output). Every entry served ⇒ no compile at all, and no image to load.
+          if [ -n "${CCACHE_MISSES:-}" ] && [ -f "$CCACHE_MISSES" ] && [ "${CCACHE_HITS:-0}" -gt 0 ]; then
+            mapfile -t projects < <(grep -v '^$' "$CCACHE_MISSES" || true)
+            if [ "${#projects[@]}" -eq 0 ]; then
+              out="$RUNNER_TEMP/module-build"
+              rm -rf "$out"; mkdir -p "$out"; chmod 777 "$out"
+              : > "$out/workspace-build.log"
+              echo "global build: every container entry ($CCACHE_HITS) is served by the compile cache — nothing to compile"
+              echo "built=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "global build: $CCACHE_HITS entr(y|ies) served by the compile cache; compiling the other ${#projects[@]}"
+          fi
           if [ "${#projects[@]}" -eq 0 ]; then
             echo "no container entries to compile — the global build has nothing to do (sdk-only selection, or every container entry is reused from the ledger)"
             echo "built=false" >> "$GITHUB_OUTPUT"
@@ -2571,6 +2652,14 @@ jobs:
           ref: ${{ needs.select.outputs.build-logic-ref }}
           path: build-logic
           sparse-checkout: .github/scripts
+      - name: Compile cache — lay the reused entries into the workspace
+        if: steps.ccache.outputs.enabled == 'true' && steps.ccache.outputs.hits != '0'
+        env:
+          PLAN: ${{ steps.ccache.outputs.plan }}
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/compile-cache-tools/workspace-compile-cache.py" merge \
+            --plan "$PLAN" --stage "$RUNNER_TEMP/ccache-stage" --out "$RUNNER_TEMP/module-build"
       # ───────────── THE BUILD ASSERTS ITS OWN POSTCONDITION (Plugins#1051) ─────────────
       # A green here used to mean "the compiler did not throw" and was read as "the selected set
       # was emitted". Those are different claims, and the gap between them surfaced N JOBS LATER:
@@ -2619,6 +2708,22 @@ jobs:
           else
             echo "::warning::uncarried-asset refusal NOT ENFORCED in this run — OBSERVE-ONLY: the pinned tester (tester-image-digest $TESTER_DIGEST) predates MeshWeaver#4445 and does not refuse a container bundle that lacks an asset for the target RID. It arms when the tester pin moves to a platform build carrying #4445."
           fi
+      # Only after the postcondition: an entry is kept only from a build that emitted the complete set.
+      - name: Compile cache — keep what this run compiled
+        if: success() && steps.ccache.outputs.enabled == 'true' && steps.build.outputs.built == 'true'
+        env:
+          PLAN: ${{ steps.ccache.outputs.plan }}
+          STORE: ${{ needs.select.outputs.artifact-store }}
+          STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
+        run: |
+          set -uo pipefail
+          tools="$RUNNER_TEMP/compile-cache-tools"
+          python3 "$tools/workspace-compile-cache.py" save --plan "$PLAN" --out "$RUNNER_TEMP/module-build" \
+            --store "$STORE" --store-id "$STORE_ID" \
+            || echo "::warning title=Compile cache not kept::the save failed — this run is unaffected"
+          # BOUNDED, like cache/module-pack-tool/: entries older than 7 days are evicted (a miss).
+          python3 "$tools/ci-artifact-store.py" prune --store "$STORE" --prefix cache/workspace-compile/ --older-than 7 \
+            || echo "::warning title=Compile cache not pruned::the prune of cache/workspace-compile/ failed — this run is unaffected"
       # ───────── THE LEDGER HEARS ABOUT THIS JOB — a heartbeat on success, the verdict on failure ─────────
       # A claim taken in `select` must stay fresh across this job (queue + up to 30 min of compile);
       # a heartbeat here keeps a follower from taking the key over mid-build. On failure the verdict
