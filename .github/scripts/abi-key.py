@@ -92,7 +92,7 @@ CLI
         {schema, base, head, projects: {dir: {assembly, eligible, unchanged, refasm, baseRefasm,
         files[], friends[], reason}}, deterministic}. Leaves every probed project built at HEAD.
   abi-key.py decide --root R --verdict V --units U.json [--reselected ids.json] [--out decision.json]
-      U.json = [{id, project, reads?: [prefix|glob …]}]; ids.json = ids still selected when the
+      U.json = [{id, project, reads?: [prefix|glob …], closure?: [dir …]}] (closure: the caller's own graph); ids.json = ids still selected when the
       verdict's unchanged files are removed from the diff (the caller's own selector). REQUIRED for any
       skip: without it every unit is kept (nothing outside the verdict's files is known unchanged).
       → {id: {decision: "skip"|"keep", reason, dependencies[]}}; skip reasons read exactly
@@ -581,7 +581,10 @@ def decide(root: Path, verdict: dict, units: list[dict], reselected: set[str] | 
         uid, project = unit["id"], unit["project"]
         if not (root / project).is_file():
             raise ValueError(f"unit {uid}: project {project} does not exist")
-        closure = _MBK.closure_dirs(root, project)
+        # A caller whose selector owns a WIDER graph (MeshWeaver.Plugins' project-closure.py: the build+test
+        # closure, Condition-guarded references included) hands it in as `closure`, so `decide` judges the
+        # same edges the selector reached the unit by; absent, module-build-key.py's closure.
+        closure = list(unit.get("closure") or _MBK.closure_dirs(root, project))
         own = own_dirs(root, project)
         hit = [d for d in closure if d in projects]
         if reselected is None:
@@ -850,6 +853,9 @@ def self_test() -> int:
                                                           "friends": []},
                                                "src/Shared": {"unchanged": True, "files": ["src/Shared/S.cs"], "refasm": "b" * 64,
                                                               "friends": []}}}
+        wide = decide(root, fake, [{"id": "W", "project": "src/App.Test/App.Test.csproj", "closure": ["src/App.Test", "src/App", "src/Lib", "src/Shared"]}], set())["W"]
+        check(wide["decision"] == "skip" and set(wide["dependencies"]) == {"src/Lib", "src/Shared"},
+              f"a caller-supplied closure is the one decide judges: {wide}")
         dl = decide(root, fake, [{"id": "L", "project": "src/Linker/Linker.csproj"}], set())["L"]
         check(dl["decision"] == "keep" and "src/Shared/S.cs" in dl["reason"],
               f"decide keeps a unit that links a probed file outside its closure: {dl}")
