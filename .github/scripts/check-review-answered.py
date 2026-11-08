@@ -494,7 +494,8 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
     # "never reviewed" — bound to the head, so policy review-on-real-change holds by construction (the
     # control plane reviews every head whose own diff changed and carries the review across a clean
     # merge of the base branch itself). Its threads stay under condition 2 like Copilot's.
-    internal = real_review_run(check_runs, head) if head else None
+    # `as_of` replays the gate: a run completed after that instant was not there (#7994 review).
+    internal = real_review_run([c for c in check_runs or () if not_after(c.get("completed_at"), as_of)], head) if head else None
     if internal is not None:
         title = ((internal.get("output") or {}).get("title") or "").strip()
         notes.append(f"internal review landed on head {head[:10]}: `{DEGRADATION_CHECK_NAME}` {internal.get('conclusion')} "
@@ -506,6 +507,17 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
             not_copilot = (f"review {r.get('id')} by @{(r.get('user') or {}).get('login')} at {r.get('submitted_at')} "
                            f"on {str(r.get('commit_id'))[:10]} found nothing, but head {head[:10] or '(unknown)'} carries no "
                            f"`{DEGRADATION_CHECK_NAME}` review run of the reviewer's App")
+            landed = []
+        # 🚨 An internal review of an EARLIER head does not cover this one (#7994 review): the internal
+        # reviewer reviews every head and carries its review across a clean merge of main with a
+        # `Review carried from …` run ON the head (1a), so a head without that run owes its review —
+        # answered threads from an earlier head included. Only a Copilot review is judged by the any-head
+        # rules below (copilot_currency), and only when one landed.
+        if landed and newest_landed_copilot_review(reviews, as_of) is None:
+            r = landed[-1]
+            not_copilot = (f"review {r.get('id')} by @{(r.get('user') or {}).get('login')} at {r.get('submitted_at')} "
+                           f"on {str(r.get('commit_id'))[:10]} is the internal reviewer's, and head {head[:10] or '(unknown)'} "
+                           f"carries no `{DEGRADATION_CHECK_NAME}` review run of the reviewer's App")
             landed = []
         if landed:
             r = clean_copilot if (clean_copilot is not None and not roots) else landed[-1]
@@ -2028,22 +2040,40 @@ def copilot_review_pending(timeline) -> bool:
 COPILOT_FALLBACK_MINUTES = 60
 
 
-def head_since(pr: dict, timeline, head: str) -> datetime.datetime | None:
-    """When `head` became the pull request's head, read off the REST timeline: the newest of the pull request's
-    creation, its last `ready_for_review` / `reopened` / `head_ref_force_pushed`, and the committer date of the
-    `committed` event for `head`. None when nothing readable — the caller then treats the head as overdue (the
-    fallback asks Copilot rather than waiting on a clock it cannot read). Pure."""
-    stamps = [parse_stamp(pr.get("created_at"))]
+def head_since(pr: dict, timeline, head: str, pushed_at: str | None = None) -> datetime.datetime | None:
+    """When `head` became the pull request's head, from SERVER-observed stamps only (#7994 review): the
+    push that made it the branch tip (`pushed_at`, the repository activity API's `timestamp` for the push
+    whose `after` is `head`), and the pull request's creation and its last `ready_for_review` / `reopened` /
+    `head_ref_force_pushed`. A commit's committer date is NOT used: it records when the commit was written,
+    so a commit prepared yesterday would look overdue at once and a future-dated one would never be. None
+    when nothing is readable; the caller then treats the head as overdue, so the fallback asks Copilot
+    instead of waiting on a clock it cannot read. Pure."""
+    stamps = [parse_stamp(pr.get("created_at")), parse_stamp(pushed_at)]
     for e in timeline or ():
-        if not isinstance(e, dict):
-            continue
-        kind = e.get("event")
-        if kind in ("ready_for_review", "reopened", "head_ref_force_pushed"):
+        if isinstance(e, dict) and e.get("event") in ("ready_for_review", "reopened", "head_ref_force_pushed"):
             stamps.append(parse_stamp(e.get("created_at")))
-        elif kind == "committed" and head and e.get("sha") == head:
-            stamps.append(parse_stamp(((e.get("committer") or {}).get("date"))))
     stamps = [t for t in stamps if t is not None]
     return max(stamps) if stamps else None
+
+
+def head_pushed_at(gh, pr: dict) -> str | None:
+    """The server's timestamp of the push that made the pull request's head the tip of its branch: the
+    repository activity API (`activity?ref=…&activity_type=push`, readable with `contents: read`), the entry
+    whose `after` is the head. None when the branch lives in a fork, the entry is not in the newest page, or
+    the read fails — `head_since` then falls back to the pull request's own stamps, which can only make the
+    head look OLDER, so the Copilot fallback comes sooner, never later."""
+    head = (pr.get("head") or {})
+    if str((head.get("repo") or {}).get("full_name") or "") != str(((pr.get("base") or {}).get("repo") or {}).get("full_name") or ""):
+        return None
+    ref, sha = str(head.get("ref") or ""), str(head.get("sha") or "")
+    if not ref or not sha:
+        return None
+    try:
+        entries = gh.api(f"activity?ref={urllib.parse.quote('refs/heads/' + ref, safe='')}&activity_type=push&per_page=30")
+    except ReadError:
+        return None
+    hit = [e for e in entries or () if isinstance(e, dict) and e.get("after") == sha and e.get("timestamp")]
+    return min(str(e.get("timestamp")) for e in hit) if hit else None
 
 
 def landed_internal_reviews(reviews) -> list:
@@ -2058,7 +2088,8 @@ def landed_internal_reviews(reviews) -> list:
             and classify_review_body(r.get("body")) == "landed"]
 
 
-def internal_review_state(pr: dict, reviews, carry: Carry | None, timeline, now: str, fallback_minutes: int) -> tuple[str, str]:
+def internal_review_state(pr: dict, reviews, carry: Carry | None, timeline, now: str, fallback_minutes: int,
+                          pushed_at: str | None = None) -> tuple[str, str]:
     """Policy internal-code-review — what the request lane does about the INTERNAL reviewer for the current head:
     ('covered', why) when the internal reviewer's review landed ON the head, or on an earlier head that `carry`
     (merge_only_same_diff from that review's head, as a Carry) shows reaches the head through clean merges of the
@@ -2083,7 +2114,7 @@ def internal_review_state(pr: dict, reviews, carry: Carry | None, timeline, now:
     if fallback_minutes <= 0:
         return "waiting", (f"head {short} has no internal review yet — the internal reviewer is the only reviewer (the Copilot "
                            "fallback is retired); the control plane reviews it, and the merge gate waits for it")
-    since, t_now = head_since(pr, timeline, head), parse_stamp(now)
+    since, t_now = head_since(pr, timeline, head, pushed_at), parse_stamp(now)
     if since is not None and t_now is not None:
         waited = (t_now - since).total_seconds() / 60
         if waited < fallback_minutes:
@@ -2363,6 +2394,20 @@ def read_inputs(gh: Gh, number: int, as_of: str | None):
     pr = gh.api(f"pulls/{number}")  # FIRST: its review_comments count bounds the listing below
     if not isinstance(pr, dict) or pr.get("number") != number:
         raise ReadError(f"pulls/{number} did not return pull request #{number}")
+    # 🚨 The head's `internal-review` runs are read BEFORE the reviews and the comments (policy
+    # internal-code-review, #7994 review). The reviewer's App posts its review and its inline findings
+    # first and the check run last, so a run this read sees has its threads already posted, and the
+    # comment listing read AFTER it contains them. Read the other way round, a review completing between
+    # the two reads could pair "1 blocking finding(s)" with a snapshot holding no thread, and the gate
+    # would turn green over an unanswered finding.
+    head_sha = (pr.get("head") or {}).get("sha") or ""
+    if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+        raise ReadError(f"pulls/{number} reported no head sha, so its `{DEGRADATION_CHECK_NAME}` check runs cannot be read")
+    listing = gh.api(f"commits/{head_sha}/check-runs?check_name={DEGRADATION_CHECK_NAME}&filter=all&per_page=100")
+    check_runs = (listing or {}).get("check_runs") if isinstance(listing, dict) else None
+    if not isinstance(check_runs, list) or not isinstance(listing.get("total_count"), int) \
+            or len(check_runs) < listing["total_count"]:
+        raise ReadError(f"commits/{head_sha[:10]}/check-runs did not return the complete `{DEGRADATION_CHECK_NAME}` listing")
     reviews = gh.api(f"pulls/{number}/reviews?per_page=100", paginate=True)
     comments = gh.api(f"pulls/{number}/comments?per_page=100", paginate=True)
     events = tuple(e for e in gh.api(f"issues/{number}/events?per_page=100", paginate=True)
@@ -2380,14 +2425,6 @@ def read_inputs(gh: Gh, number: int, as_of: str | None):
     # request's HEAD (pr.head.sha) on every path — for a merge-queue entry too, whose own sha is the
     # queue's merge commit, where the reviewer never posts. `filter=all` so `--as-of` can see a run
     # that a newer one has since superseded.
-    head_sha = (pr.get("head") or {}).get("sha") or ""
-    if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
-        raise ReadError(f"pulls/{number} reported no head sha, so its `{DEGRADATION_CHECK_NAME}` check runs cannot be read")
-    listing = gh.api(f"commits/{head_sha}/check-runs?check_name={DEGRADATION_CHECK_NAME}&filter=all&per_page=100")
-    check_runs = (listing or {}).get("check_runs") if isinstance(listing, dict) else None
-    if not isinstance(check_runs, list) or not isinstance(listing.get("total_count"), int) \
-            or len(check_runs) < listing["total_count"]:
-        raise ReadError(f"commits/{head_sha[:10]}/check-runs did not return the complete `{DEGRADATION_CHECK_NAME}` listing")
     files = commits = None
     if is_generated_bot(pr.get("user")):
         # Only for the generated-files App's own pull requests — what `generated_only` judges provenance by.
@@ -3147,7 +3184,8 @@ def run_request_review(repo: str, number: int, before: str | None, gh=None, swee
         internal_ref = str((newest_internal or {}).get("commit_id") or "")
         internal_carry = (read_diff_carry(gh, pr, internal_ref, newest_internal)
                           if newest_internal is not None and internal_ref and internal_ref != head else None)
-        state, internal_why = internal_review_state(pr, reviews, internal_carry, timeline, now or utc_now(), fallback_minutes)
+        state, internal_why = internal_review_state(pr, reviews, internal_carry, timeline, now or utc_now(), fallback_minutes,
+                                                    head_pushed_at(gh, pr))
         print(f"  #{number}: {internal_why}")
         if state != "fallback":
             _append("GITHUB_STEP_SUMMARY", f"Review on real change — #{number}: none — {internal_why}\n")
@@ -3996,9 +4034,21 @@ def self_test() -> int:
     case("the internal reviewer at CHANGES_REQUESTED with no thread is not the evidence either", ("has not landed on this head",), _pr(0),
          [_review("**Internal review (GLM-5.3)** — 1 blocking finding.", user=INTERNAL_REVIEWER_USER, state="CHANGES_REQUESTED")], [])
     case("an internal-reviewer thread with no reply is unanswered", (UNANSWERED,), _pr(1),
-         [_review(user=INTERNAL_REVIEWER_USER)], [_comment(1, INTERNAL_REVIEWER_USER)], mention=("1 of 1",))
-    case("an internal-reviewer thread answered by a person is green", GREEN, _pr(2),
-         [_review(user=INTERNAL_REVIEWER_USER)], [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")])
+         [_review(user=INTERNAL_REVIEWER_USER)], [_comment(1, INTERNAL_REVIEWER_USER)], mention=("1 of 1",), check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=983, sha="a" * 40)])
+    case("an internal-reviewer thread answered by a person, with its review run on the head, is green", GREEN, _pr(2),
+         [_review(user=INTERNAL_REVIEWER_USER)], [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")],
+         check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=979, sha="a" * 40)])
+    case("NEG (#7994 review): answered internal threads of an EARLIER head, no run on this head -> the head owes its review",
+         ("has not landed on this head",), _pr(2),
+         [dict(_review(user=INTERNAL_REVIEWER_USER), commit_id="b" * 40)],
+         [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")],
+         check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=980, sha="b" * 40)],
+         mention=("is the internal reviewer's",))
+    case("NEG (#7994 review): as_of BEFORE the clean run completed -> not yet reviewed", (NOT_LANDED,), _pr(0), [], [],
+         as_of="2026-09-14T12:00:00Z",
+         check_runs=[_check_run(conclusion="success", title="No blocking findings", crid=981, sha="a" * 40, at="2026-09-14T14:00:00Z")])
+    case("as_of AFTER the clean run completed -> reviewed", GREEN, _pr(0), [], [], as_of="2026-09-14T15:00:00Z",
+         check_runs=[_check_run(conclusion="success", title="No blocking findings", crid=982, sha="a" * 40, at="2026-09-14T14:00:00Z")])
     case("either reviewer lands it; BOTH reviewers' threads need replies", (UNANSWERED,), _pr(3),
          [_review(), _review(user=INTERNAL_REVIEWER_USER, rid=2)],
          [_comment(1), _comment(2, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")], mention=("1 of 2",))
@@ -4013,14 +4063,14 @@ def self_test() -> int:
     OLD_LOGIN_ONLY = {"login": "systemorph-com[bot]", "type": "Bot", "id": 900000002}
     STRANGER_BOT = {"login": "some-other-app[bot]", "type": "Bot", "id": 900000003}
     case("RENAME: a systemorph[bot] thread with no reply is unanswered", (UNANSWERED,), _pr(1),
-         [_review(user=RENAMED_REVIEWER_USER)], [_comment(1, RENAMED_REVIEWER_USER)], mention=("1 of 1",))
+         [_review(user=RENAMED_REVIEWER_USER)], [_comment(1, RENAMED_REVIEWER_USER)], mention=("1 of 1",), check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=983, sha="a" * 40)])
     case("RENAME: a systemorph[bot] thread answered by a person is green", GREEN, _pr(2),
          [_review(user=RENAMED_REVIEWER_USER)],
-         [_comment(1, RENAMED_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")])
+         [_comment(1, RENAMED_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")], check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=983, sha="a" * 40)])
     case("RENAME: the new login is the reviewer by LOGIN alone", (UNANSWERED,), _pr(1),
-         [_review(user=RENAMED_LOGIN_ONLY)], [_comment(1, RENAMED_LOGIN_ONLY)], mention=("1 of 1",))
+         [_review(user=RENAMED_LOGIN_ONLY)], [_comment(1, RENAMED_LOGIN_ONLY)], mention=("1 of 1",), check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=983, sha="a" * 40)])
     case("RENAME: the old login stays the reviewer by LOGIN alone", (UNANSWERED,), _pr(1),
-         [_review(user=OLD_LOGIN_ONLY)], [_comment(1, OLD_LOGIN_ONLY)], mention=("1 of 1",))
+         [_review(user=OLD_LOGIN_ONLY)], [_comment(1, OLD_LOGIN_ONLY)], mention=("1 of 1",), check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=983, sha="a" * 40)])
     case("RENAME NEG: another App's bot is not the reviewer", (NOT_LANDED,), _pr(0), [_review(user=STRANGER_BOT)], [])
     case("RENAME NEG: a User account named systemorph[bot] is not the reviewer", (NOT_LANDED,), _pr(0),
          [_review(user={"login": "systemorph[bot]", "type": "User", "id": 8})], [])
@@ -4801,6 +4851,15 @@ def self_test() -> int:
         "pulls/1/comments": [_comment(1), _comment(11, PERSON, 1)], "pulls/1": dict(MPR, base={"ref": "main"}, review_comments=2)}),
         True, "answered by a person: 1")
 
+    # #7994 review: the head's `internal-review` runs are read BEFORE the reviews and the comments, so a
+    # run the gate sees always has its threads in the comment listing read after it.
+    order_stub = _RestStub(cop_routes)
+    read_inputs(order_stub, 1, None)
+    idx = {k: next((i for i, c in enumerate(order_stub.calls) if c.startswith(k)), -1)
+           for k in (f"commits/{M}/check-runs", "pulls/1/reviews", "pulls/1/comments")}
+    ok = -1 < idx[f"commits/{M}/check-runs"] < idx["pulls/1/reviews"] < idx["pulls/1/comments"]
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} {'read order: check runs, then reviews, then comments':60} {idx}")
     # ── the REVIEW-ON-CHANGE lane (step 1): request ONE review exactly when the head owes one.
     RPR = dict(MPR, node_id="PR_node", head={"sha": M, "repo": {"full_name": "Systemorph/MeshWeaver"}})
     COVERED = copilot_carry_over(M, NEW_CMP, OLD_CMP, COP_O)
@@ -4917,7 +4976,7 @@ def self_test() -> int:
         return {"id": rid, "user": user or IREV, "state": state, "body": body, "commit_id": commit,
                 "submitted_at": "2026-11-08T10:20:00Z"}
     CARRIES = Carry(True, "review 991 of bbbbbbbbbb covers the head: 1 clean merge of main", sha("b"))
-    for name, pr_, reviews_, carry_, timeline_, now_, minutes, expect, says in [
+    for name, pr_, reviews_, carry_, timeline_, now_, minutes, expect, says, *pushed in [
         ("internal: its review on the head -> covered", FRESH, [irev(M)], None, [], NOW, 60, "covered", "review 991"),
         ("internal: the App under its renamed login -> covered", FRESH,
          [irev(M, user={"login": "systemorph[bot]", "type": "Bot", "id": 1})], None, [], NOW, 60, "covered", "reviewed head"),
@@ -4934,18 +4993,20 @@ def self_test() -> int:
         ("internal NEG: Copilot's review is not the internal one", FRESH, [dict(COP_O, commit_id=M)], None, [], NOW, 60, "waiting", "no internal"),
         ("internal: no review, 30 of 60 min -> waiting, no Copilot", FRESH, [], None, [], NOW, 60, "waiting", "30 of 60 min"),
         ("internal NEG: no review, 61 min -> fallback", FRESH, [], None, [], "2026-11-08T11:01:00Z", 60, "fallback", "COPILOT FALLBACK"),
-        ("internal: a later commit restarts the clock", FRESH, [], None,
+        ("NEG (#7994 review): a commit's committer date is NOT the push time", FRESH, [], None,
          [{"event": "committed", "sha": M, "committer": {"date": "2026-11-08T11:00:00Z"}}], "2026-11-08T11:30:00Z", 60,
-         "waiting", "30 of 60"),
+         "fallback", "90 min"),
         ("internal: a force-push restarts the clock", FRESH, [], None,
          [{"event": "head_ref_force_pushed", "created_at": "2026-11-08T11:10:00Z"}], "2026-11-08T11:30:00Z", 60, "waiting", "20 of 60"),
-        ("internal: another sha's commit does not restart the clock", FRESH, [], None,
-         [{"event": "committed", "sha": O, "committer": {"date": "2026-11-08T11:00:00Z"}}], "2026-11-08T11:30:00Z", 60,
+        ("internal: the server's push time restarts the clock", FRESH, [], None, [], "2026-11-08T11:30:00Z", 60,
+         "waiting", "30 of 60", "2026-11-08T11:00:00Z"),
+        ("internal NEG: a future-dated commit cannot delay the fallback (only server stamps count)", FRESH, [], None,
+         [{"event": "committed", "sha": M, "committer": {"date": "2026-11-09T11:00:00Z"}}], "2026-11-08T11:30:00Z", 60,
          "fallback", "90 min"),
         ("internal NEG: an unreadable clock -> fallback (asks, never waits on a guess)", RPR, [], None, [], NOW, 60, "fallback", "unreadable"),
         ("internal: fallback 0 retires Copilot -> waiting even when overdue", RPR, [], None, [], NOW, 0, "waiting", "fallback is retired"),
     ]:
-        got, why = internal_review_state(pr_, reviews_, carry_, timeline_, now_, minutes)
+        got, why = internal_review_state(pr_, reviews_, carry_, timeline_, now_, minutes, pushed[0] if pushed else None)
         ok = got == expect and says in why
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got} ({why[:60]})")
@@ -5875,7 +5936,9 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
             if path == "pulls/7":
                 return dict(_pr(0, [WAIVER_LABEL] if self.waived() else []), number=7, base={"ref": "main"})
             if path.startswith("pulls/7/reviews"):
-                if self.calls[-2:-1] != ["pulls/7"]:   # a probe, not the full read (which reads pulls/7 first)
+                # A probe, not the full read — the full read reads pulls/7 first, then the head's check runs
+                # (read_inputs reads them before the reviews, #7994 review), then the reviews.
+                if "pulls/7" not in self.calls[-3:-1]:
                     self.probes += 1
                 return self.reviews()
             if path.startswith("pulls/7/comments"):
