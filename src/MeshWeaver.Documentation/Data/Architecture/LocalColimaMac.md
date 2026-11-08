@@ -443,6 +443,47 @@ Then `memex-local up` to apply, and **re-upload** your documents — indexing fi
 
 > **Dimensions are fixed per portal.** The pgvector column + HNSW index are sized to the model (`bge-m3` = 1024, `embed-v-4-0` = 1536; a model not in the built-in lookup defaults to 1536). Changing `Embedding__Model` to a different-dimension model re-migrates the column + HNSW index on the next startup — expected, but not free on a large store.
 
+### 10.2 Ingestion — OCR, descriptions, icons, tables (on by default)
+
+Once §10 and §10.1 are in place, every file the instance ingests is also **enriched** — on by default,
+on every instance, inside the instance and on these local models
+(MeshWeaver.Plugins `Indexing/DocumentEnrichment`, `Hosting/MacStudioOnboarding` → *Ingestion*):
+
+- a **PDF is taken apart** into section, table and figure nodes; tables become typed rows and columns
+  shown in a grid; scanned pages are read by OCR first and their tables taken from the transcription;
+- a **picture is read** (OCR) and described;
+- the document's **Description** gets a summary (a picture: what it shows and the gist of its text),
+  and it gets an **icon** (a picture: a simplified thumbnail; a document: a sanitised SVG the model
+  draws) — never over a description or icon a person set;
+- every part is **searchable**, full text and semantic.
+
+**Nothing to configure when the chat model can see.** memex-local declares the OCR engine itself: when the
+§10 chat model (or the second model it names) reports `vision` in Ollama's `capabilities` — qwen3.6 and
+qwen3.8 do; check with `curl -s localhost:11434/api/show -d '{"name":"qwen3.6"}'` — every `up`/`update`
+writes these keys into `~/.memex-local/llm.auto.yaml`, and `memex-local doctor` reports whether it did
+(MeshWeaver.Deploy, `MEMEX_OCR=none` turns it off):
+
+```yaml
+config:
+  memex_portal:
+    Ocr__Engine: "OllamaVision"
+    Ocr__OllamaVision__Endpoint: "http://ollama.memex.svc.cluster.local:11434/v1"   # the host-safe name; a host Ollama answers the short name 403
+    Ocr__OllamaVision__Model: "qwen3.6"
+```
+
+**Write them yourself only to read with a DIFFERENT model** — the chat model has no vision, or you want a
+dedicated OCR model. Put the same block, with your model, in the overlay `~/.memex-local/values.local.yaml`
+(under `config: → memex_portal:`, like the embedding keys of §10.1). The overlay is applied after
+`llm.auto.yaml`, so its value wins. With a chat model that has no vision, pictures are still read (OCR)
+but not described, and the document summaries and icons still come from the chat model.
+
+Table and section detection, figure extraction and the picture icons run in-process — nothing more to
+install. To turn enrichment off for one instance: `ContentIndexing__Enrichment__Enabled: "false"` in the overlay.
+
+**Verify:** upload a photo and a PDF with a table, open the file's page under `…/_Documents/`: the
+**Enrichment** panel goes `Running (step) → Done` with per-step timings, the page shows the summary,
+the recognised text and the icon, and the table is a `Table-001` child rendered as a grid.
+
 ---
 
 ## 11. Observability
