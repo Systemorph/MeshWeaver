@@ -195,7 +195,8 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
             .Where(v => byId.TryGetValue(v.PackageId, out var record) && RepairRefusal(record, v) is null)
             .Select(v => new InstanceAutoRegistrationService.ReassertTarget(
                 v.PackageId, byId[v.PackageId].Partition, byId[v.PackageId].Manifest.ModuleVersion!,
-                byId[v.PackageId].Manifest.Source))
+                byId[v.PackageId].Manifest.Source,
+                DeclaredDisabledRetirement.RetireKeyFor(byId[v.PackageId].Manifest)))
             .OrderBy(t => t.PackageId, StringComparer.Ordinal)
             .ToImmutableList();
         if (toReassert.Count == 0)

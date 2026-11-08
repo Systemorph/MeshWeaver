@@ -1442,6 +1442,25 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     private IObservable<LandedModule?> AdoptOne(
         PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath,
         PackageManifest? record, Func<IObservable<PackageManifest?>> servedListing) =>
+        // 🚨 An install a flag is RETIRING never has its module (re-)landed (MeshWeaver.Plugins#5055):
+        // a landing after phase 1's tombstone is a FIRST landing and would bring the module back on
+        // every replica. The retirement's actual state — the same rule the content lane and the
+        // repair consult (DeclaredDisabledRetirement.IsRetiring); a refused retire still lands.
+        record is null
+            ? AdoptOneUnchecked(bundles, registryName, packageId, moduleName, recordPath, record, servedListing)
+            : DeclaredDisabledRetirement.RetiringInstalls(hub, logger).SelectMany(retiring =>
+            {
+                if (!DeclaredDisabledRetirement.IsRetiring(record, retiring))
+                    return AdoptOneUnchecked(bundles, registryName, packageId, moduleName, recordPath, record, servedListing);
+                logger.LogInformation(
+                    "[RegistryUpdate] {Name}: {Package} is being retired by a feature flag declared off, so its module {Module} is not landed.",
+                    registryName, packageId, moduleName);
+                return Observable.Return<LandedModule?>(null);
+            });
+
+    private IObservable<LandedModule?> AdoptOneUnchecked(
+        PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath,
+        PackageManifest? record, Func<IObservable<PackageManifest?>> servedListing) =>
         // 🚨 policy packages-auto-update — the module lands on TWO inputs only: a newer version was
         // published, and its declared platform floor is met (the floor is decided inside the adopt,
         // ModuleUpdateDecision). The package's own policy still speaks (an administrator's

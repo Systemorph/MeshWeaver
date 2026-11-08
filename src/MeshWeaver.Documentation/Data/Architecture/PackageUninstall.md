@@ -55,7 +55,8 @@ whether a storage provider reports a per-partition store (Postgres: the schema),
 From this point **no unattended pass installs the package again** — not the seed, not the platform
 baseline, not a feature flag (`InstanceAutoRegistrationService.InstallAll` consults
 `PackageUninstallExecutor.UninstalledHere`). A person installing it again lifts that: the block only
-applies while no install record exists.
+applies while no install record exists. A request a feature flag issued (`RetiredByFlag`) blocks
+nothing — the flag's own exclusion governs, so the record decides.
 
 ## The install record decides who may write it
 
@@ -240,8 +241,8 @@ fresh keys, and the coordinator's own hub decides.
 
 | fact | stated by | the coordinator |
 |---|---|---|
-| `Pending` | phase 1, after the retirement is granted and before the module is touched, when a restart can follow (a declared module this process holds, and a restart path on the host) | records the request as pending. While any member is pending (for at most `PendingBudget`, 15 minutes), no NEW restart is dispatched, so the restart that follows covers this request too |
-| `Ready` | phase 1, once the module's generation is disabled and it could not be retired live | records the request as ready. A request that is already covered stays covered: stating `Ready` again (a resumed phase 1) never dispatches again |
+| `Pending` | phase 1, after the retirement is granted and before the module is touched, when a restart can follow (a declared module this process holds, and a restart path on the host); for a flag-issued request the boot pass, before it writes the request, and phase 1 again whether or not this process holds the module (see below) | records the request as pending. While any member is pending (for at most `PendingBudget`, 15 minutes), no NEW restart is dispatched, so the restart that follows covers this request too |
+| `Ready` | phase 1, once the module's generation is disabled and it could not be retired live; for a flag-issued request, once the generation is disabled durably, whether or not it was retired live here (a sibling replica may hold it) | records the request as ready. A request that is already covered stays covered: stating `Ready` again (a resumed phase 1) never dispatches again |
 | `Withdraw` | phase 1, when no restart is needed after all (retired live, not loaded here, no restart path, a request that already asked its restart before the coordinator existed) or when phase 1 stops | removes a pending member. A ready or covered member keeps its place, because its module IS disabled |
 | `Retry` | the plugin catalog's reconcile pass (`PackageRestartCoordinator.RetryFaulted`), once a faulted dispatch's backoff is due | dispatches that faulted dispatch again. With no dispatch named, it only decides again, so a ready member held back by a pending member that went stale is dispatched |
 
@@ -277,9 +278,26 @@ written. A request persisted by an earlier build may carry it: such a request as
 itself. When its phase 1 resumes on this build, it finds the stamp and withdraws, so it is never
 restarted again. Requests without the stamp go through the coordinator.
 
-**For a boot pass that retires several packages** (the feature-flag retirement, #7959): state
-`Pending` for every request it writes before any of them can become ready. The coordinator then
-dispatches ONE restart once the last of them is ready or withdrawn.
+**Flag retirements: one restart for the whole batch.** The boot pass that retires every installed
+package a feature flag declared off (`DeclaredDisabledRetirement`, [Environment
+Composition](../EnvironmentComposition) → "A disabled flag retires what is installed") walks its
+packages one at a time, each phase 1 settled before the next is decided. So before it writes the
+FIRST request, it states `Pending` for every request it will run phase 1 for: a new attempt, or the
+install's active attempt that is still in phase 1, of a package that declares a module, on a host
+with a restart path. An attempt already past phase 1 is not enrolled again, because nothing would
+ever resolve that pending member. Each phase 1 (`RetireOnEveryReplica`) then states `Ready` once the
+module's generation is disabled durably, or `Withdraw` when there was nothing to disable or it
+failed. It does not wait for the dispatch, because the dispatch waits for the batch's last request
+and an earlier one would only spend `AnswerBudget` (`PackageRestartCoordinator.StateReady`). When
+the walk ends, the boot pass withdraws every enrolment whose request was never written: refused by
+validation, a create that faulted, or a package that a staying package requires. The coordinator
+dispatches ONE restart once no member of the batch is pending. A request carries no restart field of
+its own, and a later boot that finds every request settled enrols nothing, so it never restarts again.
+
+The batching is pinned by `ADisabledFlagRetiresAnInstalledPackageTest.TwoPackagesDeclaredOff_RestartTheInstanceOnce`:
+two packages declared off, each with a landed module, give one dispatch covering both requests and
+one restart. Without the boot pass's enrolment (negative control, measured) the first request
+dispatches alone and the second dispatches again, so the instance restarts twice.
 
 ## Phase 2 — drop the data, on confirmation
 
@@ -302,7 +320,8 @@ teardown sentence and ends `Done`. Never raw SQL.
 | surface | how |
 |---|---|
 | MCP `uninstall_package` (MeshWeaver.Plugins) | `MeshOperations.UninstallPackage(package, reason)` answers the preview and the exact confirmation string; `UninstallPackage(requestPath: …, confirmation: …)` confirms. Platform admins only. |
-| the platform's own code | `PackageUninstall.Request` / `PackageUninstall.Confirm` |
+| the platform's own code | `PackageUninstall.Request` / `PackageUninstall.Confirm`; `PackageUninstall.RequestAt` writes at a caller-chosen id so several writers deciding the same thing collide on one node |
+| a feature flag declared off | the boot pass runs phase 1 for every installed package the flag names ([Environment Composition](../EnvironmentComposition) → "A disabled flag retires what is installed"). The request carries `RetiredByFlag` (so it blocks no re-install) and `RetireOnEveryReplica` — the module's landed generation must be disabled durably or the request FAILS with the install record kept, and phase 1 never restarts by itself: it records `ModuleDisabled` and states `Ready` on the restart coordinator, which dispatches ONE restart for the boot pass's whole batch ("One restart for every retirement" above). It names no requester, so phase 2 can never run. |
 
 ## What is NOT established
 
