@@ -457,10 +457,11 @@ on every instance, inside the instance and on these local models
   draws) — never over a description or icon a person set;
 - every part is **searchable**, full text and semantic.
 
-The only addition to the overlay (`~/.memex-local/values.local.yaml`, under `config: → memex_portal:`
-like the embedding keys of §10.1) is the OCR engine, pointed at the same host Ollama and a model whose
-`capabilities` include `vision` (qwen3.6 and qwen3.8 do — check with `curl -s localhost:11434/api/show
--d '{"name":"qwen3.6"}'`):
+**Nothing to configure when the chat model can see.** memex-local declares the OCR engine itself: when the
+§10 chat model (or the second model it names) reports `vision` in Ollama's `capabilities` — qwen3.6 and
+qwen3.8 do; check with `curl -s localhost:11434/api/show -d '{"name":"qwen3.6"}'` — every `up`/`update`
+writes these keys into `~/.memex-local/llm.auto.yaml`, and `memex-local doctor` reports whether it did
+(MeshWeaver.Deploy, `MEMEX_OCR=none` turns it off):
 
 ```yaml
 config:
@@ -470,11 +471,14 @@ config:
     Ocr__OllamaVision__Model: "qwen3.6"
 ```
 
-memex-local writes exactly these keys by itself (`~/.memex-local/llm.auto.yaml`) when the chat model reports
-`vision`, and `memex-local doctor` reports whether it does (MeshWeaver.Deploy `MEMEX_OCR`). Table and section
-detection, figure extraction and the picture icons run in-process — nothing more to
-install. Summaries and the SVG icon use the default chat model of §10 (it must have `vision` for the
-picture descriptions too). To turn enrichment off for one instance: `ContentIndexing__Enrichment__Enabled: "false"`.
+**Write them yourself only to read with a DIFFERENT model** — the chat model has no vision, or you want a
+dedicated OCR model. Put the same block, with your model, in the overlay `~/.memex-local/values.local.yaml`
+(under `config: → memex_portal:`, like the embedding keys of §10.1). The overlay is applied after
+`llm.auto.yaml`, so its value wins. With a chat model that has no vision, pictures are still read (OCR)
+but not described, and the document summaries and icons still come from the chat model.
+
+Table and section detection, figure extraction and the picture icons run in-process — nothing more to
+install. To turn enrichment off for one instance: `ContentIndexing__Enrichment__Enabled: "false"` in the overlay.
 
 **Verify:** upload a photo and a PDF with a table, open the file's page under `…/_Documents/`: the
 **Enrichment** panel goes `Running (step) → Done` with per-step timings, the page shows the summary,
