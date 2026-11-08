@@ -337,10 +337,52 @@ FINAL_BAKE_RECEIPT = re.compile(
 
 # ───────────────────────────── GitHub REST (public core repo) ─────────────────────────────
 
-def github_fetch_with(token: str) -> Fetch:
+# 🚨 A SPENT REST BUCKET IS INFRA, NEVER A VERDICT (2026-11-08). The caller's Actions token shares ONE
+# hourly bucket with every workflow of its repository; on MeshWeaver.Plugins it was spent at 08:33Z and
+# this resolver answered "HTTP 403 … a revoked token, an exhausted rate limit, or a renamed workflow"
+# after waiting at most 3 × 120 s for a reset that was ~40 min away. A capacity refusal now waits for
+# the reset GitHub names (`retry-after`, else `x-ratelimit-reset` when `x-ratelimit-remaining` is 0,
+# else a minute for a secondary limit), bounded by MW_RATE_LIMIT_WAIT_SECONDS (default 600) per
+# resolution, and past that bound says INFRA_RATE_LIMITED first — the sentence a dependent's transient
+# steward re-runs on. A 403 that names no rate limit is still the verdict it always was.
+INFRA_RATE_LIMITED = "INFRA (rate limited, MeshWeaver#7187), not a finding about this change"
+
+
+def rate_limit_wait(code: int, headers, body: str, now: float) -> float | None:
+    """Seconds until a refused call can succeed, or None when the refusal was not for capacity. Pure."""
+    if code not in (403, 429):
+        return None
+    get = (lambda k: headers.get(k)) if headers is not None else (lambda k: None)
+    retry_after, remaining, reset = get("retry-after"), get("x-ratelimit-remaining"), get("x-ratelimit-reset")
+    if retry_after is None and remaining != "0" and "rate limit" not in (body or "").lower():
+        return None
+    try:
+        if retry_after is not None:
+            return max(0.0, float(retry_after)) + 1.0
+        if remaining == "0" and reset is not None:
+            return max(5.0, float(reset) - now + 2.0)
+    except (TypeError, ValueError):
+        pass
+    return 60.0
+
+
+def rate_limit_budget() -> float:
+    raw = os.environ.get("MW_RATE_LIMIT_WAIT_SECONDS", "")
+    try:
+        return max(0.0, min(float(raw), 1800.0)) if raw.strip() else 600.0
+    except ValueError:
+        return 600.0
+
+
+def github_fetch_with(token: str, sleep=None) -> Fetch:
+    budget, waited = rate_limit_budget(), [0.0]
+    sleep = sleep or time.sleep
+
     def fetch(path: str) -> dict | list | str:
         last: Exception | None = None
-        for attempt in range(4):
+        attempt = -1
+        while attempt < 3:
+            attempt += 1
             request = urllib.request.Request(
                 f"{GITHUB_API}{path}",
                 headers={
@@ -385,13 +427,22 @@ def github_fetch_with(token: str) -> Fetch:
                         f"job log {path} is unavailable (HTTP {error.code})") from error
                 # A rate limit is transient by definition; wait for it, bounded. Anything else is
                 # a verdict about the path or the token.
-                if error.code in (403, 429) and attempt < 3:
-                    reset = error.headers.get("x-ratelimit-reset")
-                    wait = 30.0
-                    if reset and reset.isdigit():
-                        wait = min(max(int(reset) - time.time() + 1, 5.0), 120.0)
-                    print(f"GET {path} → HTTP {error.code} (rate limited) — waiting {wait:.0f}s")
-                    time.sleep(wait)
+                try:
+                    body = (error.read() or b"").decode("utf-8", "replace")[:500]
+                except (OSError, AttributeError):
+                    body = ""
+                wait = rate_limit_wait(error.code, error.headers, body, time.time())
+                if wait is not None:
+                    if waited[0] + wait > budget:
+                        raise ResolutionError(
+                            f"{INFRA_RATE_LIMITED}: GET {path} → HTTP {error.code} ({body.strip()[:200]}) — "
+                            f"{int(waited[0])}s of this resolution's {int(budget)}s rate-limit wait spent, the "
+                            f"next {int(wait)}s are beyond it. Re-run once the limit has reset.") from error
+                    print(f"GET {path} → HTTP {error.code} (rate limited) — waiting {wait:.0f}s for the reset "
+                          f"({int(waited[0])}s of {int(budget)}s spent)")
+                    sleep(wait)
+                    waited[0] += wait
+                    attempt -= 1          # a capacity wait is not a failed attempt
                     last = error
                     continue
                 # 🚨 A 5xx is GitHub failing to answer, not an answer — the same class as the
@@ -4312,6 +4363,53 @@ def self_test() -> int:
                 failures.append(f"{label}: ok={ok} calls={calls['n']} message={text[:160]!r}")
     finally:
         urllib.request.urlopen, time.sleep = real_urlopen, real_sleep
+
+    # ── A spent REST bucket waits for ITS reset and then answers; past the bound it is INFRA (2026-11-08)
+    import email.message
+
+    def limited(remaining: str, body: bytes):
+        h = email.message.Message()
+        h["x-ratelimit-remaining"] = remaining
+        h["x-ratelimit-reset"] = str(int(time.time()) + 300)
+        return urllib.error.HTTPError("https://api.github.com/x", 403, "Forbidden", h, io.BytesIO(body))
+
+    def opener_of(errors: list):
+        calls = {"n": 0}
+
+        def urlopen(request, timeout=0):
+            calls["n"] += 1
+            if errors:
+                raise errors.pop(0)
+            return io.BytesIO(b'{"ok": true}')
+        return urlopen, calls
+    saved_budget = os.environ.get("MW_RATE_LIMIT_WAIT_SECONDS")
+    try:
+        os.environ["MW_RATE_LIMIT_WAIT_SECONDS"] = "600"
+        for label, errors, want in (
+            ("a spent bucket waits for its reset (~300 s), then answers",
+             [limited("0", b'{"message":"API rate limit exceeded for installation."}')], "ok"),
+            ("NEG: a permission 403 is a verdict on the first answer, never a wait",
+             [limited("4000", b'{"message":"Resource not accessible by integration"}')], "verdict"),
+            ("a reset beyond the bound is INFRA, said first",
+             [limited("0", b'{"message":"API rate limit exceeded"}')] * 3, "infra"),
+        ):
+            total += 1
+            slept: list[float] = []
+            opener, calls = opener_of(list(errors))
+            urllib.request.urlopen = opener                     # type: ignore[assignment]
+            try:
+                github_fetch_with("t", sleep=slept.append)("/repos/x/y")
+                got = "ok"
+            except ResolutionError as error:
+                got = "infra" if str(error).startswith(INFRA_RATE_LIMITED) else "verdict"
+            if got != want or (want == "ok" and not (290 <= sum(slept) <= 310)) or (want == "verdict" and slept):
+                failures.append(f"{label}: got={got} slept={slept}")
+    finally:
+        urllib.request.urlopen = real_urlopen
+        if saved_budget is None:
+            os.environ.pop("MW_RATE_LIMIT_WAIT_SECONDS", None)
+        else:
+            os.environ["MW_RATE_LIMIT_WAIT_SECONDS"] = saved_budget
 
     # ── 🚨 THE REGISTRY GETS THE SAME TREATMENT GITHUB DOES (Copilot review on
     #    MeshWeaver.Manufacturing#82 and MeshWeaver.SocialMedia#181) ─────────────────────────────
