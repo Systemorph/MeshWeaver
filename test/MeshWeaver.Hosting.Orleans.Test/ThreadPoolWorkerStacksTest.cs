@@ -115,8 +115,14 @@ public class ThreadPoolWorkerStacksTest
                 .Should().BeGreaterThan(ThreadPoolStall.FramesPerGroup,
                     "the outer caller must sit below the innermost {0} frames, or this test could pass on a 12-frame line",
                     ThreadPoolStall.FramesPerGroup);
-            stacks.OtherThreads.Should().Contain(stack => stack.Contains(nameof(HolderLeaf), StringComparison.Ordinal),
+            stacks.OtherThreads.Should().NotBeNull("this reader reads every managed thread");
+            (stacks.OtherThreads ?? []).Should().Contain(stack => stack.Contains(nameof(HolderLeaf), StringComparison.Ordinal),
                 "the holder is a dedicated thread, so only the non-worker half of the capture can show it");
+
+            // The workers-only path keeps its old per-stack cap: the outer-frame change widens only the stall capture.
+            new ThreadPoolWorkerStacks().CaptureWorkerStacks()
+                .Should().OnlyContain(stack => stack.Split(Environment.NewLine).Length <= BlockedThreadStacks.MaxFrames,
+                    "CaptureThreadPoolWorkers still renders at most {0} frames per stack", BlockedThreadStacks.MaxFrames);
 
             var reading = ProcessLiveness.Read(
                 new ProcessLivenessSample(1, TimeSpan.FromSeconds(10), 0, 0, 0, TimeSpan.Zero, 0, true, Held, 0, 1_000),

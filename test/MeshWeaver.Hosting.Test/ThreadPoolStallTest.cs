@@ -152,7 +152,21 @@ public class ThreadPoolStallTest
     [Fact]
     public void AMonitorGroupWithNoThreadInsideTheLockSite_SaysTheHolderIsOutsideTheCapture()
         => ThreadPoolStall.Describe(Stalled(), [Stack([.. ZipWaiter(), "Worker.Loop()"])], null, [])
-            .Should().Contain("NO captured thread is inside that method without waiting there");
+            .Should().Contain("NO captured thread is inside that method without waiting there — every managed thread was read");
+
+    /// <summary>
+    /// When the other threads were NOT read (null), an empty holder list must not be blamed on native
+    /// code — the line says the non-pool threads were not searched. Control: the read-and-empty case above.
+    /// </summary>
+    [Fact]
+    public void AMonitorGroupWhoseOtherThreadsWereNotRead_SaysSo_InsteadOfBlamingNativeCode()
+    {
+        var line = ThreadPoolStall.Describe(Stalled(), [Stack([.. ZipWaiter(), "Worker.Loop()"])], null, otherThreads: null);
+
+        line.Should().Contain("the other threads were NOT read");
+        line.Should().Contain("a holder on a non-pool thread (a timer, a scheduler) cannot be named by this capture");
+        line.Should().NotContain("every managed thread was read");
+    }
 
     /// <summary>A group that is not waiting on a monitor prints no lock section.</summary>
     [Fact]

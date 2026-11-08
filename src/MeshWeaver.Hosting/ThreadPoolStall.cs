@@ -23,11 +23,12 @@ public interface IThreadPoolWorkerStacks
     /// The pool workers' stacks AND every other managed thread's, from ONE dump — the other threads are
     /// where a lock the workers wait on may be held (a timer thread, a scheduler thread), so the
     /// <c>[POOLSTALL]</c> line can name the candidate holder (MeshWeaver#5388). The default answers the
-    /// workers alone, so a reader that cannot see the other threads keeps working unchanged.
+    /// workers alone and reports the other threads as NOT READ (null), so a reader that cannot see them
+    /// keeps working and the line does not mistake "not read" for "read, and no holder there".
     /// Blocking, and throws, exactly as <see cref="CaptureWorkerStacks"/>.
     /// </summary>
     /// <returns>The workers' stacks and the other threads' stacks.</returns>
-    ThreadPoolStacks CaptureStacks() => new(CaptureWorkerStacks(), []);
+    ThreadPoolStacks CaptureStacks() => new(CaptureWorkerStacks(), null);
 }
 
 /// <summary>
@@ -35,8 +36,9 @@ public interface IThreadPoolWorkerStacks
 /// thread's. Each entry is one thread's frames, innermost first, one <c>at …</c> per line.
 /// </summary>
 /// <param name="Workers">The ThreadPool worker threads' stacks.</param>
-/// <param name="OtherThreads">Every other live managed thread's stack — where a lock holder may stand.</param>
-public sealed record ThreadPoolStacks(IReadOnlyList<string> Workers, IReadOnlyList<string> OtherThreads);
+/// <param name="OtherThreads">Every other live managed thread's stack — where a lock holder may stand — or
+/// null when the reader did not read them (an empty list means it read them and there were none).</param>
+public sealed record ThreadPoolStacks(IReadOnlyList<string> Workers, IReadOnlyList<string>? OtherThreads);
 
 /// <summary>
 /// The <c>[POOLSTALL]</c> reading (MeshWeaver#5388): when a whole heartbeat period passes in which
@@ -139,7 +141,8 @@ public static class ThreadPoolStall
     /// <param name="reading">The stalled tick's reading.</param>
     /// <param name="stacks">The workers' stacks, or null when none could be captured.</param>
     /// <param name="failure">Why no stacks were captured, when <paramref name="stacks"/> is null.</param>
-    /// <param name="otherThreads">The process's other managed threads' stacks, searched for lock holders.</param>
+    /// <param name="otherThreads">The process's other managed threads' stacks, searched for lock holders;
+    /// null when they were not read, which the line then says instead of blaming the holder's location.</param>
     /// <returns>The line.</returns>
     public static string Describe(
         ProcessLivenessReading reading, IReadOnlyList<string>? stacks, string? failure,
@@ -171,12 +174,14 @@ public static class ThreadPoolStall
 
         line.Append(CultureInfo.InvariantCulture, $". {stacks.Count} worker stack(s) in {groups.Length} distinct shape(s), ")
             .Append(CultureInfo.InvariantCulture, $"largest first (grouped by the innermost {FramesPerGroup} frames, each distinct caller in full; ")
-            .Append(CultureInfo.InvariantCulture, $"{otherThreads?.Count ?? 0} other thread(s) searched for lock holders):");
+            .Append(otherThreads is null
+                ? "the other threads were NOT read, so only pool workers are searched for lock holders):"
+                : string.Create(CultureInfo.InvariantCulture, $"{otherThreads.Count} other thread(s) searched for lock holders):"));
 
         var printed = 0;
         foreach (var group in groups.Take(MaxGroups))
         {
-            var rendered = RenderGroup(group.ToArray(), everyThread);
+            var rendered = RenderGroup(group.ToArray(), everyThread, otherThreadsRead: otherThreads is not null);
             if (line.Length + rendered.Length > MaxLineChars)
                 break;
             line.Append(rendered);
@@ -194,7 +199,7 @@ public static class ThreadPoolStall
     }
 
     /// <summary>One group: its shared inner frames, each distinct outer caller, and its lock site's candidate holders.</summary>
-    private static string RenderGroup(IReadOnlyList<string[]> members, IReadOnlyList<string[]> everyThread)
+    private static string RenderGroup(IReadOnlyList<string[]> members, IReadOnlyList<string[]> everyThread, bool otherThreadsRead)
     {
         var text = new StringBuilder();
         text.Append(Environment.NewLine).Append(CultureInfo.InvariantCulture, $"  ×{members.Count}:");
@@ -227,8 +232,11 @@ public static class ThreadPoolStall
             .ToArray();
         text.Append(Environment.NewLine).Append("     LOCK waiting to enter a monitor at ").Append(site).Append(": ")
             .Append(holders.Length == 0
-                ? "NO captured thread is inside that method without waiting there — the holder is outside the capture "
-                  + "(in native code, or it left the method still holding the lock); a Normal dump records no monitor owner."
+                ? otherThreadsRead
+                    ? "NO captured thread is inside that method without waiting there — every managed thread was read, "
+                      + "so the holder is in native code or left the method still holding the lock; a Normal dump records no monitor owner."
+                    : "NO pool worker is inside that method without waiting there — and the other threads were NOT read, "
+                      + "so a holder on a non-pool thread (a timer, a scheduler) cannot be named by this capture."
                 : holders.Sum(h => h.Count()).ToString(CultureInfo.InvariantCulture)
                   + " thread(s) are inside it without waiting there — the candidate holder(s) "
                   + "(a Normal dump records no monitor owner, so a candidate may hold another instance's gate):");
