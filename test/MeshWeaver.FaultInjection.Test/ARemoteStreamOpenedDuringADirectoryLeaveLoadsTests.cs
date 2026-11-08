@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -114,8 +113,14 @@ public class ARemoteStreamOpenedDuringADirectoryLeaveLoadsTest(ARemoteStreamOpen
                 .WithPostingIdentity(PostingIdentity.System)
                 .AddData()
                 .WithInitialization(h => h.RegisterForDisposal(((IRoutingService)readerRouting).RegisterStream(h))),
-            HostedHubCreation.Always)!;
-        await (readerRouting.PodHubClaimSettled(readerAddress) ?? Observable.Return(Unit.Default)).Take(1)
+            HostedHubCreation.Always);
+        Assert.NotNull(reader);
+        // No fallback: a null settle signal means the reader took no pod-hub claim at all, and the
+        // window below would then inject nothing. Fail by name instead of waiting on nothing.
+        var claimSettled = readerRouting.PodHubClaimSettled(readerAddress);
+        if (claimSettled is null)
+            Assert.Fail($"'{readerAddress}' must take the pod-hub leg (a claim to settle) — otherwise this case measures nothing");
+        await claimSettled.Take(1)
             .Should().Within(TestTimeouts.Convergence).Emit($"the reader's claim of '{readerAddress}' lands", ct);
 
         // ── The window: the reader's directory partition leaves, its re-assertion is held ─────────
@@ -158,7 +163,8 @@ public class ARemoteStreamOpenedDuringADirectoryLeaveLoadsTest(ARemoteStreamOpen
                 + "SubscribeRequest budget that ended production's CollaborativeMarkdownView read (#7842)", ct);
             loaded.Kind.Should().Be(System.Reactive.NotificationKind.OnNext,
                 $"the read must deliver the node, not end with {loaded.Exception?.GetType().Name}: {loaded.Exception?.Message}");
-            loaded.Value!.Name.Should().Be("v1");
+            Assert.NotNull(loaded.Value);
+            loaded.Value.Name.Should().Be("v1");
         }
         finally
         {

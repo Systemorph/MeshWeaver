@@ -365,8 +365,10 @@ delivers nothing within 10 s of the re-assertion landing, because nothing re-ask
 waits for its own 60 s budget, which is the production failure.
 
 So on current code, a reply lost in this window delays a read by the window plus at most one re-ask
-pace. The read no longer ends in a timeout. A window longer than the ride-out (16 × 500 ms) ends the
-stream with a named `SyncStreamOwnerRefusedException`, never with a 60 s timeout.
+pace. The read no longer ends in a timeout. A window longer than the ride-out (16 × 500 ms) should end
+the stream with a named `SyncStreamOwnerRefusedException` instead of a 60 s timeout. That is reasoned
+from `JsonSynchronizationStream`'s route-refusal budget, not tested: no case holds the window past the
+ride-out.
 
 ### Part 1 (moving to `DistributedGrainDirectory`): DECIDED AGAINST, parked
 
