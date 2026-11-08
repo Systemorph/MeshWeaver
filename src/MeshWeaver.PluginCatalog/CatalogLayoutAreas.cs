@@ -854,8 +854,12 @@ public static partial class CatalogLayoutAreas
             || (source as RegistryPackageSource)?.Bundles is not { } bundles
                 ? install
                 : install.SelectMany(result => bundles
-                    .AdoptModule(pkg.Id, pkg.Module!,
-                        $"{PackageInstaller.InstalledPartition}/{pkg.Id}")
+                    // The lane's write intent rides to the install record's owner, which lands the
+                    // module (ModuleLandingOwner): a person's install lands while a retirement has not
+                    // started removing the record; every other lane is refused while it is retired.
+                    .AdoptModuleOutcomeAs(pkg.Id, pkg.Module!,
+                        $"{PackageInstaller.InstalledPartition}/{pkg.Id}",
+                        unattended: false, policyDecline: null, intent: pkg.WriteIntent)
                     // 🚨 #3395 — a one-package install IS a landing wave, and a wave that does not
                     // propose its module set never activates: boot loads the mesh's set, not the
                     // activation record it was derived from. Never fails the install: an

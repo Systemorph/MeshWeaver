@@ -2140,9 +2140,13 @@ def internal_review_state(pr: dict, reviews, carry: Carry | None, timeline, now:
     short = head[:10] or "(unknown)"
     landed = landed_internal_reviews(reviews)
     on_head = [r for r in landed if head and r.get("commit_id") == head]
-    if check_runs is not None and head and real_review_run(check_runs, head) is None:
-        # The gate's evidence is not on the head: a review alone (its run lost) or a carry without its run.
-        landed, on_head, carry = [], [], None
+    if check_runs is not None and head:
+        # Where the runs are readable, require exactly what the gate requires: a review run on the head that
+        # belongs to THIS pull request (`internal_run_unbound`, #7994 review). Otherwise the gate's evidence is
+        # not there — a review whose run was lost, a carry without its run, or a run carried from another head.
+        run = real_review_run(check_runs, head)
+        if run is None or internal_run_unbound(run, reviews, head, None):
+            landed, on_head, carry = [], [], None
     if on_head:
         r = max(on_head, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0))
         return "covered", (f"the internal reviewer reviewed head {short} (review {r.get('id')} at {r.get('submitted_at')}) — "
@@ -5071,6 +5075,12 @@ def self_test() -> int:
          None, [_check_run(conclusion="success", title="No blocking findings", crid=996, sha=M)]),
         ("internal NEG (#7994 review, runs readable): the review but its run LOST -> not covered, the fallback can come", FRESH,
          [irev(M)], None, [], "2026-11-08T11:30:00Z", 60, "fallback", "COPILOT FALLBACK", None, []),
+        ("internal NEG (#7994 review, runs readable): a carry B->A, but A's run is carried from C -> not covered", FRESH,
+         [irev(sha("b"))], CARRIES, [], "2026-11-08T11:30:00Z", 60, "fallback", "COPILOT FALLBACK", None,
+         [_check_run(conclusion="success", title=f"Review carried from {sha('c')[:10]}", crid=999, sha=M)]),
+        ("internal (runs readable): a carry B->A with A's run carried from B -> covered", FRESH,
+         [irev(sha("b"))], CARRIES, [], "2026-11-08T11:30:00Z", 60, "covered", "only the default branch", None,
+         [_check_run(conclusion="success", title=f"Review carried from {sha('b')[:10]}", crid=1000, sha=M)]),
     ]:
         got, why = internal_review_state(pr_, reviews_, carry_, timeline_, now_, minutes, pushed[0] if pushed else None,
                                          pushed[1] if len(pushed) > 1 else None)
