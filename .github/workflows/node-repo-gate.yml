@@ -453,6 +453,16 @@ on:
         required: false
         type: boolean
         default: true
+      abi-verdict:
+        description: >-
+          Optional: the caller's ABI verdict (core .github/scripts/abi-key.py `probe`, compact JSON). The
+          caller's scripts/affected-modules.py reads it through MW_ABI_VERDICT / MW_ABI_SCRIPT and drops a
+          dependent realm whose only reach is a src/ project whose PUBLIC API did not change
+          (Doc/Architecture/ModuleBuildArchitecture → ABI-keyed rebuild). Empty (the default): no ABI
+          narrowing — every caller behaves exactly as before.
+        required: false
+        type: string
+        default: ''
       push-base:
         description: >-
           Optional, `push` events only (with affected-narrowing): a 40-hex commit — the newest
@@ -841,6 +851,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           REF_NAME: ${{ github.ref_name }}
           PUSH_BASE: ${{ inputs.push-base }}
+          ABI_VERDICT: ${{ inputs.abi-verdict }}
         # 🎯 PRs (and a main push given `push-base`) gate only the AFFECTED dependency closure — changed modules, plus every
         # transitive DEPENDENT, plus the affected set's own dependencies (the fresh gate mesh
         # needs them present to install and to resolve `shared=@…`).
@@ -859,6 +870,16 @@ jobs:
             fi
           fi
           if [ "$ADOPTED_VERDICT" = "off" ]; then ADOPTED_VERDICT=''; fi
+          # ABI-keyed rebuild: the caller's verdict reaches its affected-modules.py with core's abi-key.py (and
+          # the three siblings it loads) at the lane's scripts ref. Unfetchable ⇒ no ABI narrowing, said.
+          if [ -n "${ABI_VERDICT:-}" ]; then
+            abi_dir="$RUNNER_TEMP/abi-scripts"; mkdir -p "$abi_dir"; abi_ok=1
+            for f in abi-key.py module-build-key.py node-repo-scope.py node-repo-project-scope.py; do
+              "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/$f" > "$abi_dir/$f" || abi_ok=0
+            done
+            if [ "$abi_ok" = 1 ]; then export MW_ABI_VERDICT="$ABI_VERDICT" MW_ABI_SCRIPT="$abi_dir/abi-key.py"
+            else echo "::warning title=ABI narrowing off::core's abi-key.py could not be fetched at ${SCRIPTS_REF} — the affected closure is computed without the ABI verdict"; fi
+          fi
           if [ -n "$ADOPTED_VERDICT" ] && [ "$EVENT" = "pull_request" ]; then
             # The caller adopted a green run's verdict: this head is that run's content plus main's
             # merge and regenerated locks. Nothing to gate — said so, with the run, in the proof.

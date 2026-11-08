@@ -117,6 +117,9 @@ from pathlib import Path
 from typing import Callable
 
 ABI_RECIPE = "1"
+# What the compiler reads: C# and Razor sources (a `.razor`/`.cshtml` markup edit compiles into a method
+# BODY — BuildRenderTree — unless it adds a `[Parameter]`/public member, which the reference assembly shows).
+CODE_EXTS = (".cs", ".razor", ".cshtml")
 SCHEMA = "abi-verdict/1"
 SKIP_PREFIX = "public API unchanged"
 _HERE = Path(__file__).resolve().parent
@@ -217,7 +220,7 @@ def payload_risk(root: Path, rel_dir: str) -> bool:
 def is_code(root: Path, rel_path: str, rel_dir: str, code: set[str] | None) -> bool:
     """Is this file compiler input of the project at rel_dir? `code` = MSBuild's evaluated Compile items
     under rel_dir (minus resources/content) when known; otherwise a `.cs` with no payload risk."""
-    if not rel_path.endswith(".cs"):
+    if not rel_path.endswith(CODE_EXTS):
         return False
     if code is not None:
         return rel_path in code
@@ -328,16 +331,25 @@ def _msbuild_paths(root: Path, csproj: Path, configuration: str, msbuild_args: l
     props = doc.get("Properties") or {}
     items = doc.get("Items") or {}
 
-    def rel(kind: str) -> set[str]:
+    def rel(kind: str, keep=lambda it: True) -> set[str]:
         out = set()
         for it in items.get(kind) or []:
+            if not keep(it):
+                continue
             try:
                 out.add(Path(it.get("FullPath") or "").resolve().relative_to(root.resolve()).as_posix())
             except ValueError:
                 continue
         return out
     prefix = csproj.parent.resolve().relative_to(root.resolve()).as_posix() + "/"
-    code = {f for f in rel("Compile") - rel("EmbeddedResource") - rel("Content") if f.startswith(prefix)}
+    # Razor markup is a `Content` item the Razor SDK compiles (RazorComponent is only filled in by targets);
+    # one copied to output or publish is payload, not compiler input.
+    def razor(it: dict) -> bool:
+        return (str(it.get("FullPath") or "").endswith((".razor", ".cshtml"))
+                and (it.get("CopyToOutputDirectory") or "Never") == "Never"
+                and (it.get("CopyToPublishDirectory") or "Never") == "Never")
+    copied = rel("Content", lambda it: not razor(it))
+    code = {f for f in (rel("Compile") | rel("Content", razor)) - rel("EmbeddedResource") - copied if f.startswith(prefix)}
     return {"ref": props.get("TargetRefPath") or "", "full": props.get("TargetPath") or "",
             "assembly": props.get("AssemblyName") or csproj.stem, "code": sorted(code)}
 
@@ -456,9 +468,9 @@ def probe(root: Path, base: str, head: str, files: list[str], build: Builder, re
         names = sorted(assembly_names(root, d))
         entry = {"assembly": names[0] if names else Path(d).name, "files": sorted(fs), "eligible": False,
                  "unchanged": False, "refasm": "", "baseRefasm": "", "friends": sorted(friends_from_source(root, d))}
-        other = [f for f in fs if not f.endswith(".cs")]
+        other = [f for f in fs if not f.endswith(CODE_EXTS)]
         if other:
-            entry["reason"] = f"a non-C# input changed ({other[0]}{f' +{len(other) - 1}' if len(other) > 1 else ''}) — not described by the reference assembly"
+            entry["reason"] = f"a non-code input changed ({other[0]}{f' +{len(other) - 1}' if len(other) > 1 else ''}) — not described by the reference assembly"
         else:
             entry["eligible"] = True
             eligible.append(d)
@@ -704,6 +716,7 @@ def _fixture(root: Path) -> None:
     (root / "src/Lib/A.cs").write_text("public class A { public int F() => 1; }\n")
     (root / "src/App/B.cs").write_text("public class B { public int G() => new A().F(); }\n")
     (root / "src/Lib/data.json").write_text("{}\n")
+    (root / ".gitignore").write_text("bin/\nobj/\n")
 
 
 def _fake_builder(root: Path, log: list, nondeterministic: set[str] | None = None):
@@ -713,11 +726,11 @@ def _fake_builder(root: Path, log: list, nondeterministic: set[str] | None = Non
 
     def build(d: str, with_refs: bool) -> bool:
         log.append((d, with_refs))
-        src = sorted((root / d).rglob("*.cs"))
+        src = sorted(p for ext in ("*.cs", "*.razor") for p in (root / d).rglob(ext))
         text = "".join(p.read_text() for p in src)
         if "SYNTAX ERROR" in text:
             return False
-        public = sorted(set(re.findall(r"public (?:class \w+|[\w<>]+ \w+\([^)]*\))", text)))
+        public = sorted(set(re.findall(r"public (?:class \w+|[\w<>?]+ \w+\([^)]*\)|[\w<>?]+ \w+ \{)", text)))
         friends = sorted(friends_from_source(root, d))
         blob = b"InternalsVisibleToAttribute" + b"".join(b"\x01\x00" + bytes([len(f)]) + f.encode() + b"\x00\x00" for f in friends)
         counter["n"] += 1
@@ -884,9 +897,33 @@ def self_test() -> int:
         (root / "src/Lib/data.json").write_text('{"x": 1}\n')
         commit("content")
         v, log = run_probe()
-        check(not v["projects"]["src/Lib"]["eligible"] and log == [] and "non-C#" in v["projects"]["src/Lib"]["reason"],
+        check(not v["projects"]["src/Lib"]["eligible"] and log == [] and "non-code" in v["projects"]["src/Lib"]["reason"],
               f"a content edit is not a reference-assembly question: {v['projects']['src/Lib']}")
         check(decide(root, v, units, set())["App.Test"]["decision"] == "keep", "…so dependents rebuild")
+
+        # ── Razor markup: a body edit keeps the surface, a [Parameter] is surface ──
+        base = git(root, "rev-parse", "HEAD").strip()
+        (root / "src/Lib/V.razor").write_text("<div>hello</div>\n@code { private int n = 1; }\n")
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
+        commit("a razor view")
+        base = git(root, "rev-parse", "HEAD").strip()
+        (root / "src/Lib/V.razor").write_text("<section class=\"x\">hello again</section>\n@code { private int n = 2; }\n")
+        commit("razor markup")
+        v, _ = run_probe()
+        check(v["projects"]["src/Lib"]["eligible"] and v["projects"]["src/Lib"]["unchanged"],
+              f"a .razor markup/body edit is eligible and keeps the public surface: {v['projects']['src/Lib']}")
+        base = git(root, "rev-parse", "HEAD").strip()
+        (root / "src/Lib/V.razor").write_text("<section>@Title</section>\n@code { [Parameter] public string? Title { get; set; } }\n")
+        commit("razor parameter")
+        v, _ = run_probe()
+        check(v["projects"]["src/Lib"]["eligible"] and not v["projects"]["src/Lib"]["unchanged"],
+              f"a new [Parameter] in .razor is a public-API change: {v['projects']['src/Lib']}")
+        (root / "src/Lib/V.razor.css").write_text(".x { color: red; }\n")
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
+        base = git(root, "rev-parse", "HEAD").strip()
+        commit("scoped css")
+        v, log = run_probe()
+        check(not v["projects"]["src/Lib"]["eligible"] and log == [], "scoped CSS (.razor.css) is an asset, never eligible")
 
         # ── C# that is PAYLOAD, not compiler input: never eligible ──
         base = git(root, "rev-parse", "HEAD").strip()
