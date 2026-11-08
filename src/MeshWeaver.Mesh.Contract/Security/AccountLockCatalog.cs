@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -182,7 +183,11 @@ public sealed class AccountLockCatalog : IDisposable
                 return current.Answers;
             var generation = new Generation();
             current = generation;
-            generation.Subscription.Disposable = AccountLocks.EffectivelyLocked(hub, PlatformRegister()).Subscribe(
+            // 🚨 Owned for the mesh's lifetime by the IoPool registry (#7992): this read lives as long as
+            // the mesh, and this singleton is disposed only with the container — AFTER the pools are
+            // cancelled (on a silo, long after). Without the registry's ownership the read was still
+            // attached at every pool cancel and was reported as an unowned leak.
+            generation.Subscription.Disposable = hub.OwnUntilIoDrain(AccountLocks.EffectivelyLocked(hub, PlatformRegister()).Subscribe(
                 locked =>
                 {
                     lock (gate)
@@ -204,8 +209,10 @@ public sealed class AccountLockCatalog : IDisposable
                         current = null;
                         Volatile.Write(ref snapshot, null);
                     }
-                    // 🚨 The MESH going away ends the read — the teardown drain completes every pooled
-                    // query — and that is not a verdict about anyone. It ENDS the verdict streams
+                    // 🚨 The MESH going away ends the read, and that is not a verdict about anyone.
+                    // (The pool's drain no longer completes a pooled query, #7968, and the registry's
+                    // release DISPOSES this read before any cancel, #7992 — that path delivers no
+                    // terminal here; a fault that arrives while the hub disposes lands here.) It ENDS the verdict streams
                     // instead of faulting them: a fault would make every live read gated on the lock
                     // tear its provider down mid-teardown, ahead of the module teardown that owns those
                     // subscriptions (ModuleLeasesAtMeshTeardownTest). Nothing new is admitted on an
@@ -224,7 +231,7 @@ public sealed class AccountLockCatalog : IDisposable
                             + "and the next use re-opens the read");
                     // Every current waiter receives the fault; the next use opens a new generation.
                     generation.Answers.OnError(ex);
-                });
+                }), nameof(AccountLockCatalog));
             return generation.Answers;
         }
     }

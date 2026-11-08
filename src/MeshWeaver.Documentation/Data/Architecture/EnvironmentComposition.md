@@ -117,10 +117,83 @@ untouched, and the two coexist.
 Reconciling costs an up-to-date instance nothing: the content-identity gate in
 `CatalogLayoutAreas.InstallOrUpdate` turns the pass into one catalog listing and no writes.
 
-**Disabling a flag does not uninstall.** It stops the environment *asserting* the packages, and (via
-the exclusion rule) keeps them out of every future selection. It does not delete a partition full of
-user content — an unattended uninstall racing per-node hubs on boot is not a default anybody wants.
-Removing content that is already there stays a deliberate act on the catalog surface.
+### A disabled flag retires what is installed
+
+A flag declared off **in so many words** — `Enabled` present and the boolean `false` — also
+**retires an installed copy** of every package it names, at boot, through **phase 1** of the
+[package uninstall request](../PackageUninstall): the module is retired, the install record is
+removed, and **no data is dropped**. That is how an estate turns a pre-installed package (MCP, a
+harness) off through its record alone, with no call to the endpoint it wants gone
+(MeshWeaver.Plugins#5055). The record is the source of truth: under policy `declared-not-derived`
+pruning removes what the declaration dropped, and an explicit `false` is such a declaration.
+
+| the flag | install selection | an installed copy |
+|---|---|---|
+| declared, `Enabled` absent or `true` | included | kept |
+| declared, `Enabled: false` | excluded | **retired** (phase 1) |
+| declared, `Enabled` not a boolean (`no`, `0`, `off`) | excluded, named at Warning | kept — an unreadable value is not a declaration |
+| **not declared at all** | — | kept — an absent contributor is never a removal |
+
+How it runs (`DeclaredDisabledRetirement`, called by the boot pass before the install selection):
+
+- **Only the declaration counts.** It reads `FeatureComposition.Retired` — the patterns of flags whose
+  `FeatureFlag.DeclaredDisabled` is set — matched against the install records with the same
+  source-scoped `PluginGrantEntry` as every other lane (`DeclaredDisabledRetirement.CoveredBy`, the ONE
+  rule every lane below uses). A record that names no source matches no source-scoped pattern and is
+  **not** retired; it is named at Warning. The install records are read authoritatively: a listing
+  names the record paths, and each manifest is read from its own node before anything is decided.
+- **A package another installed package requires is REFUSED, by name.** Retiring `Mcp` while
+  `Essentials` (which requires it) stays installed would leave `Essentials` failing at use, so the
+  retire is refused and logged at **Error** naming the flag, the package and every dependent — an
+  Error the instance's error telemetry carries as a signature, on every boot until it is resolved.
+  Declaring the dependents off as well retires them together. The refusal propagates: a refused
+  package stays installed, so what *it* requires is refused too.
+- **Dependents first, each one settled.** The retire set is walked in reverse dependency order, and
+  each request's phase 1 is **observed to its settlement** before the next package is decided. A
+  dependent whose phase 1 is refused (user data, a shared partition, a module it cannot disable)
+  therefore stays installed — and what it requires is refused, not retired. Every refusal is logged
+  at **Error** naming the flag and the package on the **same** boot, and returned in the outcome. A
+  request that does not settle within its budget counts as staying, said at Error.
+- **One active attempt per install, on every replica.** Requests are keyed by the install's identity —
+  a SHA-256 over a length-prefixed encoding of package id, `installedAtUtc` and version
+  (`DeclaredDisabledRetirement.RetireKeyFor`; ids that sanitize alike, such as `Mcp.Host` and
+  `Mcp-Host`, never share a key) — and numbered per attempt (`…-a1`, `…-a2`). Replicas deciding the
+  same attempt collide on ONE `Admin/_PackageUninstall/flag-retire-…` node and the loser joins it. An
+  attempt still running is joined, a settled one counted, and a **failed** one re-evaluated by the
+  next boot under the current declaration with a new attempt — so a cause that has gone away no
+  longer blocks the retire. A later boot that finds the record gone decides nothing.
+- **Every replica drops the module — with ONE restart, never a loop.** The request carries
+  `RetireOnEveryReplica`. Phase 1 then disables the module's landed generation **durably** on the
+  volume all replicas share, or **fails** the request with the install record kept — an unreadable
+  activation record, a host with no landing service to read it, or a module loaded here that the store lane never landed (an image-carried
+  module is the deployment's). Phase 1 never restarts by itself: it records `ModuleDisabled` and
+  states `Ready` on the instance's ONE restart coordinator (`Admin/_PackageUninstall/RestartCoordinator`),
+  whose own hub dispatches the restart. Before the boot pass writes its first request it enrols every
+  request it will run phase 1 for as `Pending`, so the coordinator waits for the batch's last one and
+  ONE restart covers them all; an enrolment whose request was never written is withdrawn when the walk
+  ends. A covered request is never dispatched again, so a re-activated executor or a later boot never
+  rolls the deployment twice ([Package Uninstall](../PackageUninstall) → "One restart for every
+  retirement"). No sibling keeps the module, or the routes it mapped such as `/mcp`, past that one
+  restart. Where no restart path exists the request says so, and siblings drop it at their next
+  restart.
+- **Never phase 2.** The request names no requester, and phase 2 refuses a confirmation for such a
+  request — a flag can never drop a partition.
+- **No unattended writer re-writes it — keyed on the retirement's STATE, not the flag.** Phase 1 can
+  still be running when the boot pass completes (a settle wait that timed out, a request an earlier
+  boot left in flight), and a webhook-driven lane can run at any time. So every unattended writer of an
+  install record or a module consults ONE rule, `DeclaredDisabledRetirement.IsRetiring`: is there a
+  flag-issued request for THIS install's identity (`RetireKeyFor`) whose status is not `Failed`? The
+  boot repair's `ReassertInstalled` (it lists records before it waits for the default install,
+  reported on the summary's `Skipped`), the unattended update lane
+  (`PackageUpdateReconciler.ReconcileInstalled`) and the registry's module lane (`AdoptOne`, where a
+  landing after phase 1's tombstone would be a FIRST landing) all skip such an install. A package
+  whose retire was **refused** — required by a dependent (no request) or a phase-1 safety refusal (a
+  failed one) — is not retiring, so it stays repairable and updatable; and a person's later
+  re-install has a new identity, so it is not skipped either. A person's install from the catalog is
+  never blocked — and is retired again by the next boot while the flag stays off.
+- **It blocks no re-install.** A flag-issued request (`RetiredByFlag`) is not counted by
+  `PackageUninstallExecutor.UninstalledHere`: while the flag stays off its exclusion keeps the package
+  out, and once the record stops declaring it off the package's own lanes bring it back.
 
 **An exclusion is applied last, after the dependency closure**, so it also removes a package the
 closure pulled back in as somebody's requirement — the operator's explicit statement outranks an

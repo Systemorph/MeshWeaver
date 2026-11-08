@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -122,14 +123,17 @@ public sealed class UiContributionCatalog : IDisposable
             var open = openCatalog ?? Open;
             // 🚨 A STANDING watch: the hub watcher re-opens the query after a fault, so a stall or a
             // dropped connection freezes the set only until the re-opened query lists it again.
-            subscription = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            // 🚨 Owned for the mesh's lifetime by the IoPool registry (#7992): this singleton is disposed
+            // only with the container — AFTER the pools are cancelled (on a silo, long after) — so the
+            // registry releases the watch before its pools go, instead of the cancel finding it attached.
+            subscription = hub.OwnUntilIoDrain(ActivityControlPlaneExtensions.SubscribeHubWatcher(
                 hub,
                 () => Observable.Defer(open).Do(_ => { }, OnFault),
                 OnChange,
                 logger,
                 "UiContribution catalog query",
                 scheduleReEstablish: scheduleReopen,
-                onPoisonedContent: OnFault);
+                onPoisonedContent: OnFault), nameof(UiContributionCatalog));
         }
     }
 

@@ -4,6 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -125,6 +126,11 @@ public sealed class EventSubscriptionRunner(
     private IDisposable? legacySub;
     // One-shot cold-start reconcile seeded from an authoritative storage read (see StartAsync) — disposed on stop.
     private IDisposable? startupSub;
+    // 🚨 The runner, owned until the IoPool drain (#7992). Its watches live as long as the mesh, and on a
+    // silo the pools are cancelled at the silo's stop — before any host StopAsync or container disposal
+    // reaches this runner — so its trigger-node watches were still attached at the cancel and were
+    // reported as unowned leaks. The registry runs Dispose() before any pool is cancelled.
+    private IDisposable? ownedUntilIoDrain;
 
     /// <summary>Test seam: opens the runner's live workspace queries (id, query). Null in production,
     /// where each opens the workspace's synced query as system.</summary>
@@ -170,6 +176,8 @@ public sealed class EventSubscriptionRunner(
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        ownedUntilIoDrain = hub.OwnUntilIoDrain(Disposable.Create(Dispose), nameof(EventSubscriptionRunner));
+
         // Fold any legacy ScheduledAction nodes into EventSubscription nodes so nothing in-flight is
         // lost when this runner replaces ScheduledActionRunner.
         MigrateLegacyScheduledActions();
@@ -1135,6 +1143,8 @@ public sealed class EventSubscriptionRunner(
     public void Dispose()
     {
         disposed = true;
+        // Ends the ownership (a stop before the drain); a no-op when the drain's release is the caller.
+        Interlocked.Exchange(ref ownedUntilIoDrain, null)?.Dispose();
         pendingSub?.Dispose();
         feedSub?.Dispose();
         legacySub?.Dispose();

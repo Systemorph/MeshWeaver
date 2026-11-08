@@ -587,6 +587,25 @@ public static class PackageRestartCoordinator
 
     /// <summary>
     /// States <see cref="PackageRestartFactKind.Ready"/> — <paramref name="request"/> disabled
+    /// <paramref name="module"/> and needs a restart — and completes once the fact is on the
+    /// coordinator, WITHOUT waiting for the dispatch. For a requester whose batch is still pending by
+    /// design (a boot pass enrolled every request it writes first, <see cref="DeclaredDisabledRetirement"/>):
+    /// the dispatch waits for the batch's last request, so an earlier one waiting for it would only
+    /// spend <see cref="AnswerBudget"/>. Cold.
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="request">The request (path).</param>
+    /// <param name="module">The module it disabled.</param>
+    /// <param name="reason">Why.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static IObservable<Unit> StateReady(IMessageHub hub, string request, string module, string? reason, ILogger? logger) =>
+        Observable.Defer(() => State(hub, new PackageRestartFact
+        {
+            Kind = PackageRestartFactKind.Ready, Request = request, Module = module, Reason = reason, At = DateTimeOffset.UtcNow,
+        }, logger));
+
+    /// <summary>
+    /// States <see cref="PackageRestartFactKind.Ready"/> — <paramref name="request"/> disabled
     /// <paramref name="module"/> and needs a restart — and emits the dispatch that covers it once that
     /// dispatch has ANSWERED (accepted, faulted, unavailable or interrupted), or null when none did
     /// within <paramref name="budget"/> (another request's phase 1 may still hold it back; the
@@ -605,10 +624,7 @@ public static class PackageRestartCoordinator
             var access = hub.ServiceProvider.GetRequiredService<AccessService>();
             var options = hub.JsonSerializerOptions;
             var issuer = hub.NodeOperationExecutionHub() ?? hub;
-            return State(hub, new PackageRestartFact
-                {
-                    Kind = PackageRestartFactKind.Ready, Request = request, Module = module, Reason = reason, At = DateTimeOffset.UtcNow,
-                }, logger)
+            return StateReady(hub, request, module, reason, logger)
                 .SelectMany(_ => access.RunAsSystem(() => issuer.GetMeshNodeStream(Path))
                     .Select(node => DispatchFor(node.ContentAs<PackageRestartCoordinatorState>(options), request))
                     .Where(d => d is not null && PackageRestartDispatchState.HasAnswered(d.State))
