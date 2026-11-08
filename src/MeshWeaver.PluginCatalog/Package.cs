@@ -767,6 +767,25 @@ public record PackageManifest
     public ImmutableDictionary<string, PackageRecordFactOutcome>? FactOutcomes { get; init; }
 
     /// <summary>
+    /// 🚨 Install-record only: the module operations (landings, the uninstall's removal) the record's
+    /// OWN hub executes one at a time, keyed by the fact key their writer stated them under — set and
+    /// cleared ONLY by that hub (<see cref="ModuleLandingOwner"/>, MeshWeaver.Plugins#5055).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableDictionary<string, PackageModuleOperation>? ModuleOperations { get; init; }
+
+    /// <summary>
+    /// 🚨 Install-record only: WHICH install this record is — minted once, when the gate CREATES the
+    /// record (<see cref="InstallRecordGate.Write"/>), and kept by every stamp. An uninstall removes
+    /// the record and a re-install creates a new one with a new value, so a landing planned against
+    /// the earlier install is told apart from one planned against this one, although both name the
+    /// same path (<see cref="PackageModuleOperation.RecordIncarnation"/>, MeshWeaver#7974 review).
+    /// Null on a record created before the value existed.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Incarnation { get; init; }
+
+    /// <summary>
     /// Transport-only (never serialised): the <see cref="PackageRecordWriteIntent"/> the lane that
     /// handed this manifest to the install funnel writes its record with — so the funnel's signature
     /// does not change. Null is <see cref="PackageRecordWriteIntent.CreateAllowed"/>.
