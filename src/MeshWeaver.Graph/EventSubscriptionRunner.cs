@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -41,6 +42,13 @@ namespace MeshWeaver.Graph;
 /// with a past <c>FireAt</c> firing on the next startup — restart-safe at-least-once), and
 /// <see cref="EventTriggerType.NodeStatus"/> (a self-healing node-stream watch that fires when the
 /// watched node's status reaches a resting value).</para>
+///
+/// <para>A NodeChange subscription that names an exact <see cref="EventSubscription.TriggerPath"/>
+/// fires on that path's <see cref="MeshChangeKind.Deleted"/> alone — proposed by the change feed, by a
+/// live listing of its scope (its parent's children, or a top-level path itself), or by the
+/// once-per-lifetime catch-up — and every proposal is gated
+/// on an authoritative "it is gone" read (<see cref="ConfirmGoneAndFire"/>), so it never fires for a
+/// path that still exists.</para>
 /// </summary>
 public sealed class EventSubscriptionRunner(
     IMessageHub hub,
@@ -79,6 +87,39 @@ public sealed class EventSubscriptionRunner(
     // when the subscription leaves the pending set — so it stays bounded by the pending set rather than
     // growing for the runner's whole uptime.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> executing = new();
+    // Exact-path Deleted subscriptions (EventSubscription.TriggerPath) already checked against current
+    // state since this runner started — keyed by subscription id, pruned with the pending set, so each
+    // is reconciled ONCE per runner lifetime (on startup, or when it first appears) and not on every
+    // unrelated Admin/EventSubscription write. Released when the check could not be completed, so a
+    // later emission retries it.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> deletionChecked = new();
+    // Live listings, one per DISTINCT deletion scope of a pending exact-path Deleted subscription — its
+    // parent's children, or the path itself for a top-level path (keyed by that scope's query, so bounded
+    // by the number of scopes, not of subscriptions) — the change-feed-INDEPENDENT path for a delete, the
+    // twin of nodeChangeSubs. Same lifecycle contract.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IDisposable> deletionWatchSubs = new();
+    // 🚨 The ONE confirm-and-fire per exact-path subscription. Every proposal (feed, scope watch,
+    // catch-up) reserves the subscription's slot with TryAdd BEFORE its read, so two proposals can never
+    // run two reads — the slower of which used to answer after the Fired write had pruned `executing`
+    // and deliver a second time. The slot owns the read's subscription (disposed on stop, so a reply
+    // that lands after StopAsync starts nothing). A read that settles without firing releases the slot
+    // so a later proposal reads again; a slot that FIRED is held until the subscription leaves the
+    // pending set. Instance-scoped, bounded by the pending set.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ConfirmSlot> confirmSubs = new();
+    // The catch-up listings in flight — owned, so a stop disposes them and none issues a read after it.
+    private readonly CompositeDisposable catchUpSubs = new();
+    // Set by Dispose: every callback that could start work checks it, because a reply can be in the
+    // scheduler's hands when its subscription is disposed.
+    private volatile bool disposed;
+
+    /// <summary>One confirm-and-fire in flight (or fired and held) for one exact-path subscription.</summary>
+    private sealed class ConfirmSlot : IDisposable
+    {
+        public SingleAssignmentDisposable Read { get; } = new();
+        /// <summary>The read confirmed "gone" and handed the subscription to Execute.</summary>
+        public volatile bool Fired;
+        public void Dispose() => Read.Dispose();
+    }
     private IDisposable? pendingSub;
     private IDisposable? feedSub;
     private IDisposable? legacySub;
@@ -93,6 +134,18 @@ public sealed class EventSubscriptionRunner(
     /// where the hub watcher's own cadence applies.</summary>
     internal Func<Action, IDisposable>? ScheduleReopen { get; set; }
 
+    /// <summary>Test seam: the authoritative read of an exact-path subscription's TARGET path. Null in
+    /// production, where it is <c>GetMeshNodeOutcome</c> as system.</summary>
+    internal Func<string, IObservable<NodeReadOutcome>>? ReadPathOverride { get; set; }
+
+    /// <summary>Test seam: opens the deletion catch-up listing (purpose <see cref="CatchUpPurpose"/>) and the
+    /// live deletion watch (<see cref="WatchPurpose"/>) as (purpose, query). Null in production, where each
+    /// is <c>IMeshService.Query</c> as system.</summary>
+    internal Func<string, string, IObservable<QueryResultChange<MeshNode>>>? OpenMeshQueryOverride { get; set; }
+
+    internal const string CatchUpPurpose = "deletion-catch-up";
+    internal const string WatchPurpose = "deletion-watch";
+
     /// <summary>The outstanding subscriptions as the live query last listed them.</summary>
     internal IReadOnlyList<EventSubscription> PendingSnapshot
     {
@@ -105,6 +158,14 @@ public sealed class EventSubscriptionRunner(
     // evicted the faulted chain, so the re-open reads fresh.
     private IObservable<IEnumerable<MeshNode>> OpenQuery(string id, string query)
         => OpenQueryOverride?.Invoke(id, query) ?? AsSystem(() => hub.GetWorkspace().GetQuery(id, query));
+
+    private IObservable<QueryResultChange<MeshNode>> OpenMeshQuery(string purpose, string query)
+        => AsSystem(() => OpenMeshQueryOverride?.Invoke(purpose, query)
+                          ?? meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(query)));
+
+    private IObservable<NodeReadOutcome> ReadPath(string path)
+        => AsSystem(() => ReadPathOverride?.Invoke(path)
+                          ?? hub.GetMeshNodeOutcome(path, TimeSpan.FromSeconds(10), ReadTimeoutBehavior.EmitNull));
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -137,9 +198,28 @@ public sealed class EventSubscriptionRunner(
                 lock (gate) pending = list;
 
                 // Reconcile NodeChange/Created subscriptions against current state (catch missed triggers).
-                foreach (var s in list.Where(s => s is
-                             { TriggerType: EventTriggerType.NodeChange, TriggerKind: MeshChangeKind.Created }))
+                foreach (var s in list.Where(s => IsTypeTrigger(s) && s.TriggerKind == MeshChangeKind.Created))
                     Reconcile(s);
+
+                // Exact-path Deleted subscriptions: each is checked against current state ONCE — the
+                // first time this runner sees it — so a delete that happened before the subscription
+                // was written, or while the runner was down, still fires.
+                var pathDeletions = list.Where(s => IsPathDeletion(s) && DeletionScope(s) is not null).ToList();
+                ReconcileDeletedPaths(pathDeletions.Where(s => deletionChecked.TryAdd(s.Id, 0)).ToList());
+                var neededScopes = pathDeletions
+                    .Select(s => DeletionScope(s)!)
+                    .ToHashSet(StringComparer.Ordinal);
+                foreach (var scope in neededScopes)
+                    WatchDeletions(scope);
+                foreach (var scope in deletionWatchSubs.Keys.Where(q => !neededScopes.Contains(q)).ToList())
+                    if (deletionWatchSubs.TryRemove(scope, out var dw))
+                        dw.Dispose();
+                // A TriggerPath this runner cannot honour — another kind, no path left once normalised,
+                // or a path the query language cannot write — is failed, named, rather than left to fall
+                // into the type paths as a type trigger with no type.
+                foreach (var s in list)
+                    if (PathRefusal(s) is { } reason)
+                        Refuse(s, reason);
 
                 // Schedule one-shot timers + NodeStatus watches for pending subscriptions; cancel any whose
                 // subscription left the pending set (fired / cancelled elsewhere).
@@ -153,8 +233,7 @@ public sealed class EventSubscriptionRunner(
                 // when a matching node is created even if the change-feed event never reaches this runner —
                 // the memex 2026-07-20 stranded-invite root cause (cross-silo relay dropped the create).
                 var neededNodeTypes = list
-                    .Where(s => s is { TriggerType: EventTriggerType.NodeChange, TriggerKind: MeshChangeKind.Created,
-                        TriggerNodeType.Length: > 0 })
+                    .Where(s => IsTypeTrigger(s) && s is { TriggerKind: MeshChangeKind.Created, TriggerNodeType.Length: > 0 })
                     .Select(s => s.TriggerNodeType!)
                     .ToHashSet(StringComparer.Ordinal);
                 foreach (var nodeType in neededNodeTypes)
@@ -174,6 +253,14 @@ public sealed class EventSubscriptionRunner(
                 // That keeps `executing` bounded by the pending set instead of the runner's uptime.
                 foreach (var id in executing.Keys.Where(id => !pendingIds.Contains(id)).ToList())
                     executing.TryRemove(id, out _);
+                foreach (var id in deletionChecked.Keys.Where(id => !pendingIds.Contains(id)).ToList())
+                    deletionChecked.TryRemove(id, out _);
+                // A confirm slot that FIRED is held until here, so no second proposal reads again while
+                // the Fired write round-trips. A slot still READING is left alone: it settles on its own
+                // (and the cold-start reconcile proposes before this list is warm).
+                foreach (var (id, slot) in confirmSubs.Where(kv => kv.Value.Fired && !pendingIds.Contains(kv.Key)).ToList())
+                    if (confirmSubs.TryRemove(new KeyValuePair<string, ConfirmSlot>(id, slot)))
+                        slot.Dispose();
             },
             logger,
             "Event-subscriptions query",
@@ -198,11 +285,19 @@ public sealed class EventSubscriptionRunner(
                 .Take(1))
             .Subscribe(items =>
             {
-                foreach (var node in items ?? [])
-                    if (ReadSubscription(node) is
-                        { Status: EventSubscriptionStatus.Pending,
-                          TriggerType: EventTriggerType.NodeChange, TriggerKind: MeshChangeKind.Created } s)
-                        Reconcile(s);
+                var outstanding = (items ?? [])
+                    .Select(ReadSubscription)
+                    .Where(s => s is { Status: EventSubscriptionStatus.Pending })
+                    .Select(s => s!)
+                    .ToList();
+                foreach (var s in outstanding.Where(s => IsTypeTrigger(s) && s.TriggerKind == MeshChangeKind.Created))
+                    Reconcile(s);
+                // The restart-between-delete-and-delivery case: the delete event was published while
+                // nothing was listening, so the only evidence left is that the path is gone now.
+                ReconcileDeletedPaths(outstanding
+                    .Where(s => IsPathDeletion(s) && DeletionScope(s) is not null)
+                    .Where(s => deletionChecked.TryAdd(s.Id, 0))
+                    .ToList());
             }, ex => logger?.LogWarning(ex, "Startup authoritative reconcile failed"));
 
         // Live: fire on the actual change event.
@@ -212,10 +307,24 @@ public sealed class EventSubscriptionRunner(
 
     private void OnChange(MeshChangeEvent e)
     {
+        if (e.Kind == MeshChangeKind.Deleted && NormalizePath(e.Path) is { Length: > 0 } deletedPath)
+        {
+            // Exact-path Deleted subscriptions match on the path alone — the event carries no
+            // authoritative type and the node cannot be read back. The fire is still gated on an
+            // authoritative "it is gone" read (ConfirmGoneAndFire): the path may already be back.
+            List<EventSubscription> byPath;
+            lock (gate)
+                byPath = pending
+                    .Where(s => IsPathDeletion(s) && string.Equals(ExactPath(s), deletedPath, StringComparison.Ordinal))
+                    .ToList();
+            foreach (var s in byPath)
+                ConfirmGoneAndFire(s);
+        }
+
         List<EventSubscription> candidates;
         lock (gate)
             candidates = pending
-                .Where(s => s.TriggerType == EventTriggerType.NodeChange
+                .Where(s => IsTypeTrigger(s)
                             && s.TriggerKind == e.Kind
                             && string.Equals(s.TriggerNodeType, e.NodeType, StringComparison.Ordinal))
                 .ToList();
@@ -300,7 +409,7 @@ public sealed class EventSubscriptionRunner(
                     List<EventSubscription> candidates;
                     lock (gate)
                         candidates = pending
-                            .Where(s => s is { TriggerType: EventTriggerType.NodeChange, TriggerKind: MeshChangeKind.Created }
+                            .Where(s => IsTypeTrigger(s) && s.TriggerKind == MeshChangeKind.Created
                                         && string.Equals(s.TriggerNodeType, nodeType, StringComparison.Ordinal))
                             .ToList();
                     foreach (var s in candidates)
@@ -334,6 +443,278 @@ public sealed class EventSubscriptionRunner(
                 });
     }
 
+    /// <summary>The subscription's <see cref="EventSubscription.TriggerPath"/>, normalised (trimmed, no
+    /// leading or trailing <c>/</c>), or null when it names none.</summary>
+    private static string? ExactPath(EventSubscription subscription)
+        => NormalizePath(subscription.TriggerPath) is { Length: > 0 } path ? path : null;
+
+    private static string? NormalizePath(string? path) => path?.Trim().Trim('/');
+
+    private static string ParentOf(string path)
+        => path.LastIndexOf('/') is var i and > 0 ? path[..i] : "";
+
+    /// <summary>
+    /// The listing that covers an exact-path subscription's target: its parent's children, or — for a
+    /// top-level path, which has no parent to list — the path itself (an anchored exact-scope query).
+    /// The path is written as a quoted literal (<see cref="QueryParser.TryPathLiteral"/>), so a space or
+    /// query syntax inside it is data. Null when the subscription names no path, or one the query
+    /// language cannot write (<see cref="PathRefusal"/> fails it).
+    /// </summary>
+    private static string? DeletionScope(EventSubscription subscription)
+    {
+        if (ExactPath(subscription) is not { } path)
+            return null;
+        var parent = ParentOf(path);
+        return parent.Length > 0
+            ? QueryParser.TryPathLiteral(parent, out var parentLiteral) ? $"path:{parentLiteral} scope:children" : null
+            : QueryParser.TryPathLiteral(path, out var pathLiteral) ? $"path:{pathLiteral} scope:exact" : null;
+    }
+
+    /// <summary>Why a NodeChange subscription's <see cref="EventSubscription.TriggerPath"/> cannot be
+    /// honoured, or null when it names none or can be.</summary>
+    private static string? PathRefusal(EventSubscription s)
+    {
+        if (s.TriggerType != EventTriggerType.NodeChange || s.TriggerPath is null)
+            return null;
+        if (ExactPath(s) is null)
+            return $"Event subscription {s.Id} names TriggerPath '{s.TriggerPath}', which is not a node path "
+                   + "once trimmed of whitespace and '/'.";
+        if (s.TriggerKind != MeshChangeKind.Deleted)
+            return $"Event subscription {s.Id} names TriggerPath '{s.TriggerPath}' with TriggerKind "
+                   + $"{s.TriggerKind}; an exact-path trigger is honoured for {MeshChangeKind.Deleted} only.";
+        if (DeletionScope(s) is null)
+            return $"Event subscription {s.Id} names TriggerPath '{s.TriggerPath}', which the query language "
+                   + "cannot write as one literal, so its deletion cannot be watched.";
+        return null;
+    }
+
+    private static string IdOf(string path)
+        => path.LastIndexOf('/') is var i and >= 0 ? path[(i + 1)..] : path;
+
+    /// <summary>A NodeChange subscription matched by node TYPE (the original shape) — every type-based
+    /// firing path draws only these, so a subscription that names ANY <see cref="EventSubscription.TriggerPath"/>
+    /// (an exact-path one, or one <see cref="PathRefusal"/> fails) never reaches them.</summary>
+    private static bool IsTypeTrigger(EventSubscription subscription)
+        => subscription.TriggerType == EventTriggerType.NodeChange && subscription.TriggerPath is null;
+
+    /// <summary>A NodeChange subscription on the <see cref="MeshChangeKind.Deleted"/> of ONE exact path.</summary>
+    private static bool IsPathDeletion(EventSubscription subscription)
+        => subscription is { TriggerType: EventTriggerType.NodeChange, TriggerKind: MeshChangeKind.Deleted }
+           && ExactPath(subscription) is not null;
+
+    /// <summary>
+    /// Checks exact-path Deleted subscriptions against CURRENT state and fires each whose path is gone —
+    /// the catch-up for a delete nobody heard (it happened while the runner was down, or before the
+    /// subscription was written). One listing per deletion scope (<see cref="DeletionScope"/>) narrows the
+    /// candidates cheaply; a path the listing still shows is left alone, and every path it does NOT show
+    /// is confirmed by an authoritative read before anything fires (<see cref="ConfirmGoneAndFire"/>),
+    /// because a listing can trail a node that was written a moment ago. A listing that fails releases
+    /// its subscriptions' checks so a later emission retries them. Each listing is owned by the runner
+    /// (<see cref="catchUpSubs"/>), so a stop disposes it.
+    /// </summary>
+    private void ReconcileDeletedPaths(IReadOnlyList<EventSubscription> subscriptions)
+    {
+        foreach (var group in subscriptions.GroupBy(s => DeletionScope(s)!, StringComparer.Ordinal))
+        {
+            if (disposed)
+                return;
+            var members = group.ToList();
+            var slot = new SingleAssignmentDisposable();
+            catchUpSubs.Add(slot);
+            slot.Disposable = OpenMeshQuery(CatchUpPurpose, group.Key)
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .Select(c => c.Items)
+                .Take(1)
+                // Completed, faulted or disposed: drop it from the owned set (a no-op after Dispose).
+                .Finally(() => catchUpSubs.Remove(slot))
+                .Subscribe(items =>
+                {
+                    if (disposed)
+                        return;
+                    var listed = (items ?? [])
+                        .Select(n => NormalizePath(n.Path))
+                        .Where(p => p is { Length: > 0 })
+                        .ToHashSet(StringComparer.Ordinal);
+                    foreach (var s in members.Where(s => !listed.Contains(ExactPath(s)!)))
+                        ConfirmGoneAndFire(s);
+                }, ex =>
+                {
+                    foreach (var s in members)
+                        deletionChecked.TryRemove(s.Id, out _);
+                    logger?.LogWarning(ex,
+                        "Listing {Scope} to reconcile {Count} exact-path deletion subscription(s) failed — "
+                        + "released, so a later emission retries", group.Key, members.Count);
+                });
+        }
+    }
+
+    /// <summary>
+    /// Fires an exact-path Deleted subscription only once an AUTHORITATIVE read of its path says the node
+    /// is gone: <see cref="NodeReadStatus.Absent"/> with no <see cref="NodeReadOutcome.HiddenBy"/> verdict,
+    /// or <see cref="NodeReadStatus.DeleteInProgress"/> (directional — its next answer is "gone", never
+    /// "here again"). A path that reads <see cref="NodeReadStatus.Present"/> never fires — it was
+    /// re-created, or the hint that sent us here was stale. A node a read validator HID is no evidence of
+    /// a delete — the owner runs read validators only over a node it still holds — and neither is
+    /// <see cref="NodeReadStatus.Unavailable"/>: nothing fires, and the check is released so a later
+    /// pending-set emission (or the next startup) retries.
+    ///
+    /// <para>The whole confirm-and-fire is reserved per subscription (<see cref="confirmSubs"/>) before the
+    /// read, owned by the runner, and re-reads the SUBSCRIPTION before firing — it must still be Pending,
+    /// the rule <see cref="ScheduleTimer"/> applies at fire time — so a proposal that raced the terminal
+    /// write, or a reply that lands after the runner stopped, delivers nothing.</para>
+    /// </summary>
+    private void ConfirmGoneAndFire(EventSubscription subscription)
+    {
+        if (disposed)
+            return;
+        var slot = new ConfirmSlot();
+        if (!confirmSubs.TryAdd(subscription.Id, slot))
+            return;   // another proposal owns this subscription's confirm-and-fire
+        var path = ExactPath(subscription)!;
+        slot.Read.Disposable = ReadPath(path)
+            .Take(1)
+            .SelectMany(outcome => outcome is { Status: NodeReadStatus.Absent, HiddenBy: null }
+                                   or { Status: NodeReadStatus.DeleteInProgress }
+                ? ReadSubscriptionNow(subscription.Id).Select(live => (outcome, live))
+                : Observable.Return((outcome, live: (EventSubscription?)null)))
+            .Subscribe(result =>
+            {
+                if (disposed)
+                    return;
+                var (outcome, live) = result;
+                switch (outcome)
+                {
+                    case { Status: NodeReadStatus.Absent, HiddenBy: null }:
+                    case { Status: NodeReadStatus.DeleteInProgress }:
+                        if (live is not { Status: EventSubscriptionStatus.Pending })
+                        {
+                            // Fired, Cancelled or Failed meanwhile — or unreadable: nothing to deliver here.
+                            Release(subscription.Id, slot, recheck: live is null);
+                            logger?.LogDebug(
+                                "Exact-path deletion subscription {Id}: {Path} is gone but the subscription is {Status} — not firing",
+                                subscription.Id, path, live?.Status.ToString() ?? "unreadable");
+                            return;
+                        }
+                        slot.Fired = true;
+                        Execute(live, IdOf(path));
+                        break;
+                    case { Status: NodeReadStatus.Present }:
+                        Release(subscription.Id, slot, recheck: false);
+                        logger?.LogDebug(
+                            "Exact-path deletion subscription {Id}: {Path} still exists — not firing",
+                            subscription.Id, path);
+                        break;
+                    case { Status: NodeReadStatus.Absent }:
+                        Release(subscription.Id, slot, recheck: true);
+                        logger?.LogWarning(
+                            "Exact-path deletion subscription {Id}: {Path} exists but a read validator hid it ({Verdict}) — "
+                            + "not firing; released so a later emission retries", subscription.Id, path, outcome.HiddenBy);
+                        break;
+                    default:
+                        Release(subscription.Id, slot, recheck: true);
+                        logger?.LogWarning(outcome.Failure,
+                            "Exact-path deletion subscription {Id}: could not establish whether {Path} is gone — "
+                            + "not firing; released so a later emission retries", subscription.Id, path);
+                        break;
+                }
+            }, ex =>
+            {
+                Release(subscription.Id, slot, recheck: true);
+                logger?.LogWarning(ex,
+                    "Exact-path deletion subscription {Id}: reading {Path} failed — not firing; released so a "
+                    + "later emission retries", subscription.Id, path);
+            });
+    }
+
+    /// <summary>Frees a confirm slot that settled without firing, pair-exact (a later proposal may already
+    /// hold a fresh one); <paramref name="recheck"/> also releases the subscription's catch-up check.</summary>
+    private void Release(string id, ConfirmSlot slot, bool recheck)
+    {
+        if (confirmSubs.TryRemove(new KeyValuePair<string, ConfirmSlot>(id, slot)))
+            slot.Dispose();
+        if (recheck)
+            deletionChecked.TryRemove(id, out _);
+    }
+
+    /// <summary>The subscription as its owner holds it NOW (null when it cannot be read) — the fire-time
+    /// re-read.</summary>
+    private IObservable<EventSubscription?> ReadSubscriptionNow(string id)
+        => AsSystem(() => hub.GetMeshNodeOutcome(
+                EventSubscriptionNodeType.Path(id), TimeSpan.FromSeconds(10), ReadTimeoutBehavior.EmitNull))
+            .Take(1)
+            .Select(o => o.Status == NodeReadStatus.Present ? ReadSubscription(o.Node!) : null);
+
+    /// <summary>
+    /// A LIVE listing of one deletion scope (<see cref="DeletionScope"/> — a parent's children, or a
+    /// top-level path itself) that proposes every pending exact-path Deleted subscription in that scope
+    /// to <see cref="ConfirmGoneAndFire"/> when the listing says its path is gone: a <c>Removed</c> delta
+    /// naming it, or an <c>Initial</c>/<c>Reset</c> snapshot that no longer holds it (a delete between the
+    /// catch-up and this watch opening, or while a faulted watch was being re-opened, emits no Removed).
+    /// The change-feed-INDEPENDENT path for a delete, the twin of <see cref="WatchTriggerNodeType"/>: a
+    /// synced query re-emits through the storage layer, so a delete committed on another silo still
+    /// reaches this runner when the change feed's best-effort relay drops it. One watch per scope,
+    /// disposed when no pending subscription needs it, dropped from the registry on a terminal fault so
+    /// the next emission re-opens it.
+    /// </summary>
+    private void WatchDeletions(string scope)
+    {
+        if (deletionWatchSubs.ContainsKey(scope))
+            return;
+        var slot = new SingleAssignmentDisposable();
+        if (!deletionWatchSubs.TryAdd(scope, slot))
+            return;
+        slot.Disposable = OpenMeshQuery(WatchPurpose, scope)
+            // Removed: its Items are the deleted nodes. Initial/Reset: the full snapshot, in which a
+            // pending path that is MISSING is gone. Added/Updated say only that something exists.
+            .Where(c => c.ChangeType is QueryChangeType.Removed or QueryChangeType.Initial or QueryChangeType.Reset)
+            .Subscribe(
+                change =>
+                {
+                    if (disposed)
+                        return;
+                    var paths = (change.Items ?? [])
+                        .Select(n => NormalizePath(n.Path))
+                        .Where(p => p is { Length: > 0 })
+                        .ToHashSet(StringComparer.Ordinal);
+                    var removed = change.ChangeType == QueryChangeType.Removed;
+                    List<EventSubscription> candidates;
+                    lock (gate)
+                        candidates = pending
+                            .Where(s => IsPathDeletion(s)
+                                        && string.Equals(DeletionScope(s), scope, StringComparison.Ordinal)
+                                        && paths.Contains(ExactPath(s)!) == removed)
+                            .ToList();
+                    foreach (var s in candidates)
+                        ConfirmGoneAndFire(s);
+                },
+                ex =>
+                {
+                    // Pair-exact, for the reason WatchTriggerNodeType's terminal arm is.
+                    deletionWatchSubs.TryRemove(new KeyValuePair<string, IDisposable>(scope, slot));
+                    slot.Dispose();
+                    logger?.LogWarning(ex,
+                        "Deletion watch {Scope} failed — dropped from the watch registry, so the next "
+                        + "emission that needs it opens a fresh one", scope);
+                });
+    }
+
+    /// <summary>Ends a subscription this runner cannot honour as <c>Failed</c>, with
+    /// <paramref name="reason"/> on <see cref="EventSubscription.LastError"/>. Reserved like a firing, so
+    /// repeated pending-set emissions issue one write.</summary>
+    private void Refuse(EventSubscription subscription, string reason)
+    {
+        if (!executing.TryAdd(subscription.Id, 0))
+            return;
+        logger?.LogWarning("Event subscription {Id} refused: {Reason}", subscription.Id, reason);
+        AsSystem(() => EventSubscriptionOps.SetStatus(
+                hub, EventSubscriptionNodeType.Path(subscription.Id), EventSubscriptionStatus.Failed, reason))
+            .Subscribe(_ => { }, ex =>
+            {
+                executing.TryRemove(subscription.Id, out _);
+                logger?.LogWarning(ex, "Recording the refusal of event subscription {Id} failed", subscription.Id);
+            });
+    }
+
     /// <summary>
     /// Reads a node's content as an <see cref="EventSubscription"/> through the sanctioned
     /// bad-data-tolerant accessor: a typed instance (the workspace <c>GetQuery</c> path) passes
@@ -365,7 +746,7 @@ public sealed class EventSubscriptionRunner(
         // At-most-once per subscription: reserve the id BEFORE building the chain (see `executing`).
         // Whichever firing path gets here first owns this subscription's continuation; the others —
         // which are looking at the same still-Pending snapshot — must not launch a duplicate.
-        if (!executing.TryAdd(subscription.Id, 0))
+        if (disposed || !executing.TryAdd(subscription.Id, 0))
             return;
         BuildContinuation(subscription, userId)
             // A REPEATER has no terminal state: instead of Fired it records its next slot and stays
@@ -753,14 +1134,20 @@ public sealed class EventSubscriptionRunner(
     /// <inheritdoc />
     public void Dispose()
     {
+        disposed = true;
         pendingSub?.Dispose();
         feedSub?.Dispose();
         legacySub?.Dispose();
         startupSub?.Dispose();
-        foreach (var subs in new[] { timerSubs, statusSubs, nodeChangeSubs })
+        foreach (var subs in new[] { timerSubs, statusSubs, nodeChangeSubs, deletionWatchSubs })
             foreach (var id in subs.Keys.ToList())
                 if (subs.TryRemove(id, out var d))
                     d.Dispose();
+        foreach (var id in confirmSubs.Keys.ToList())
+            if (confirmSubs.TryRemove(id, out var confirm))
+                confirm.Dispose();
+        catchUpSubs.Dispose();
         executing.Clear();
+        deletionChecked.Clear();
     }
 }

@@ -162,6 +162,26 @@ public record EventSubscription
     /// <summary>[NodeChange] The value <see cref="MatchField"/> must equal (case-insensitive) to match.</summary>
     public string? MatchValue { get; init; }
 
+    /// <summary>
+    /// [NodeChange] ONE exact node path whose <see cref="MeshChangeKind.Deleted"/> fires this — the
+    /// "react when THIS record is deleted" trigger. When set, the subscription matches by path alone:
+    /// <see cref="TriggerNodeType"/>, <see cref="MatchField"/> and <see cref="MatchValue"/> are not
+    /// consulted, because a delete event carries no authoritative node type and the deleted node can
+    /// no longer be read back. The subject handed to the continuation is the deleted node's id.
+    ///
+    /// <para>Honoured with <see cref="TriggerKind"/> = <see cref="MeshChangeKind.Deleted"/> only; any
+    /// other kind with a path ends <see cref="EventSubscriptionStatus.Failed"/>, named, rather than
+    /// being read as a type trigger with no type.</para>
+    ///
+    /// <para>🚨 It fires only when an authoritative read of the path says it is gone (absent, or its
+    /// delete is in flight) — never for a path that still exists — and the runner also checks every
+    /// such subscription against current state on startup and when it first sees it. So a delete
+    /// that happened while the runner was down, or before the subscription was written, still fires;
+    /// the corollary is that a subscription written for a path that does not exist (yet) fires at
+    /// once. Write it for a node that exists.</para>
+    /// </summary>
+    public string? TriggerPath { get; init; }
+
     // Timer trigger
     /// <summary>[Timer] Fire at (or after) this instant. A time already in the past fires on the
     /// next startup reconcile (at-least-once, restart-safe). With <see cref="RepeatEvery"/> set this

@@ -3611,7 +3611,8 @@ public static class MeshNodeStreamExtensions
     ///   <item><see cref="NodeReadStatus.Present"/> — a node came back.</item>
     ///   <item><see cref="NodeReadStatus.Absent"/> — routing said
     ///     <see cref="ErrorType.NotFound"/>, the owner answered with no data, a read validator
-    ///     hid it (a hidden node is invisible by contract), or the reader is a TRANSIENT NODE
+    ///     hid it (a hidden node is invisible by contract — that outcome carries the verdict on
+    ///     <see cref="NodeReadOutcome.HiddenBy"/>), or the reader is a TRANSIENT NODE
     ///     PROBE being asked for its OWN address, which by contract is never a mesh node — that
     ///     one is answered without a round-trip at all (see the guard in the body).</item>
     ///   <item><see cref="NodeReadStatus.DeleteInProgress"/> — the owner answered with its delete
@@ -4050,7 +4051,10 @@ public static class MeshNodeStreamExtensions
                                             hub.ServiceProvider.GetService<ILoggerFactory>()
                                                 ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode")
                                                 ?.LogDebug("GetMeshNode read-validator filtered {Path}: {Error}", path, resp.Error);
-                                            EmitOnce(NodeReadOutcome.Absent);
+                                            // Still Absent — but SAY it was hidden: the validator ran
+                                            // over a node the owner holds, so this is no evidence of a
+                                            // delete (NodeReadOutcome.HiddenBy).
+                                            EmitOnce(NodeReadOutcome.Hidden(resp.Error));
                                             return;
                                         }
                                         if (resp.Data is null)
