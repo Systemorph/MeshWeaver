@@ -1,22 +1,94 @@
 # The Apps Home
 
 The default user home is, top to bottom: a heading welcoming the owner by first name
-("Welcome back, Jane"), the **message box** (start a thread), the **Apps** grid, then the **Spaces**
-grid — and nothing else (policy [`home-is-composer-apps-spaces`](../PolicyNotProse)). The welcome
-template is that heading, `@@("area/Composer")`, then `@@("area/Catalog")`; there is no contributed
-card, no searchable content list and no footer note. Content is reached by opening a space, or through search.
+("Welcome back, Jane"), the **message box** (start a thread), the **Apps** grid, then the **type
+sections** — one per kind of content the viewer has that no app of theirs catalogs — and nothing
+else (policy [`home-is-composer-apps-types`](../PolicyNotProse)). The welcome template is that
+heading, `@@("area/Composer")`, then `@@("area/Catalog")`; there is no contributed card, no
+searchable content list and no footer note.
 
 | Band | Contents | Order |
 |---|---|---|
-| **Apps** | the APP DIRECTORY (the apps the viewer can see through access, `{owner}/_Apps`) — every app exactly once, as an ICON grid, grouped and rearrangeable by drag and drop; a **Hidden** filter lists the apps the viewer hid. The viewer's own `{owner}/_App` records only under the explicit `Home:AppSource = Records` compatibility path | last used |
-| **Spaces** | the workspaces the viewer can reach, as an ICON grid: the profile's space manifest (`User.SpacePaths`) plus the spaces the viewer was invited into (`User.SharedPaths`, #385); never a mesh-wide read | last used |
+| **Apps** | the APP DIRECTORY (the apps the viewer can see through access, `{owner}/_Apps`) — every app exactly once, as an ICON grid, grouped and rearrangeable by drag and drop; a **Hidden** filter lists the apps the viewer hid. The viewer's own `{owner}/_App` records only under the explicit `Home:AppSource = Records` compatibility path. Fixed: always first, below the message box | last used |
+| **Type sections** | one titled icon grid per node TYPE the viewer has content of — the spaces they can reach (`User.SpacePaths`), the things in their own home, what was shared with them (`User.SharedPaths`, #385) — leaving out every type an installed app CATALOGS. Spaces are one of these types, not a band of their own. Only non-empty sections render. The viewer hides, shows and reorders them | the viewer's order, then newest change first |
 
-Both bands are launchers: no search box, painted from the query rows (no per-tile hub). Both are
-built by `UserActivityLayoutAreas.BuildHome` → `BuildAppsBand` / `BuildSpacesBand`
-(`src/MeshWeaver.Graph`), pure and unit-tested (`HomeTabsTest`); the reactive shell is
-`CatalogAreaView`. The presentation screen (#1803) drops a marked space or grant before the Spaces
-query is built. The regions that left the default (`area/HomeCards`, `area/Threads`) stay
-registered, so an authored home `Body` that embeds them keeps working.
+The Apps band is a launcher (no search box, painted from the query rows, no per-tile hub), built by
+`UserActivityLayoutAreas.BuildHome` → `BuildAppsBand` (`src/MeshWeaver.Graph`), pure and
+unit-tested (`HomeTabsTest`); the reactive shell is `CatalogAreaView`. The type sections are their
+own area on the user hub (`HomeTypeSections`, area `HomeSections`), embedded by the Catalog region
+so their discovery never holds up the Apps grid. The presentation screen (#1803) drops a marked
+space or grant before any section query is built. The regions that left the default
+(`area/HomeCards`, `area/Threads`) stay registered, so an authored home `Body` that embeds them
+keeps working.
+
+## Type sections (2026-11-08)
+
+Maintainer, 2026-11-08, on a home whose band below Apps read "Spaces" over a filter "All (0)", a
+"Filter apps…" box, three view toggles and *"No apps yet — install apps from the Store."*: *"can we
+generalize the filters below? apps is good, we want it fixed. below, we can have filters by type,
+customizable to the user. maybe we bring all types which are not excluded (typically the ones who
+are shown in some catalog app, which is clearly preferred design: you create your own catalog app.
+we do this for emails with inbox, for threads with threads app, … crm for clients, ...) unstructured
+rest gets added below only if count > 0"*.
+
+The old Spaces band was an icon grid that navigated to each row's main node, which every renderer
+treats as a LAUNCHER — so it carried the launcher's filter, its "Filter apps…" box, its view switch
+and the launcher's empty copy, about apps, on a band about spaces. It is gone (`BuildSpacesBand` and
+`SpacesQuery` were removed); spaces are a type section like any other.
+
+| Rule | Mechanism |
+|---|---|
+| **A type an installed app catalogs gets no section.** The preferred design is a catalog app per kind of content (mail → Inbox, threads → Threads, CRM clients → the CRM app); that app is where its types are browsed | the app DECLARES them — see *Declaring "my catalog app owns type X"* below. `AppDirectory.CatalogedTypes()` is the live, process-wide union over the INSTALLED roots (a `hostedIn` section included — its host is then where the type is browsed) and the module-declared apps |
+| **The home's own plumbing gets no section** | `HomeTypeSections.NeverSectioned`: `User`, `InstalledApp` (an app record), `LauncherArrangement`, `Store/Plugin`, `Store/Catalog` (store items are apps, shown once, on Apps). Not a list of content types — those opt out by being catalogued |
+| **Only non-empty sections render** | the sections are DISCOVERED from rows: `HomeTypeSections.Discover` groups the content rows by `NodeType` and a type with no row has no section. Nothing at all renders when there is nothing (no title, no empty band, no Customize link); each section is `ShowEmptyMessage = false`, and a renderer hides a titled band whose query answers empty (MeshWeaver.Plugins#5142) |
+| **No wrong copy** | a section is titled by its OWN type — `nav.section.{type}` when the catalog has it (`Space` → "Spaces", `Markdown` → "Documents"), else the type's last segment made plural (`IndexSections.Label`, the side index's own rule). It is a plain icon grid, never a launcher (`NavigateToMainNode` unset): no app filter, no view switch, no search box, no "No apps yet" |
+| **Content, anchored** | `HomeTypeSections.ContentLegs`: the profile's space manifest (Space roots only), `namespace:{owner} is:main is:content`, and the shared paths — never a mesh-wide read. Discovery reads them projected (`select:path,id,namespace,nodeType,lastModified`, newest first, `limit:500` per leg); each section's query is the same legs narrowed to `nodeType:{type}` |
+| **Default order** | newest change first (the newest row of each type) |
+
+### The viewer's arrangement — hide, show, reorder
+
+The owner's sections end with a quiet **Customize sections** link to `/{owner}/CustomizeHome`
+(area `HomeTypeSections.CustomizeArea`, owner only — anyone else gets access denied): every
+discovered type with its count, the shown ones in order with **Hide**, **↑** and **↓**, then the
+hidden ones with **Show**. The page is built from the platform's own controls (stack, label,
+button, markdown link) and wired by server click actions, so the web client, Blazor and the native
+app render the same editor from the same config — no renderer carries a section editor of its own.
+
+| Piece | What it does |
+|---|---|
+| `LauncherArrangement.Sections` (`HomeSections`) | stored in the viewer's launcher arrangement, `{user}/_Settings/Launcher` → `sections: { hidden: [type…], order: [type…] }` — the home's other per-viewer arrangement, written the same way |
+| `HomeSections.SetHidden` / `Move` | pure; a move writes the whole VISIBLE order, so it survives a later change of the defaults; past either end it is a no-op |
+| `HomeTypeSections.Arrange` | hidden types apart; then the viewer's order; then the rest newest first. A preference for a type with no content changes nothing — it waits for content |
+| `LauncherArrangementSource.UpdateSections(owner, change)` | a merge patch on the arrangement node when it exists, a create-if-absent (as the owner) when it does not; an "already exists" race falls back to the patch. Existence is read from the live listing, never a point read of a possibly absent node |
+
+Hiding is a home preference and nothing else: the content stays where it is, readable and searchable.
+
+### Declaring "my catalog app owns type X"
+
+A package whose app is the catalog of some node types declares them on its ROOT, beside `app: true`:
+
+```json
+{
+  "nodeType": "Store/Plugin",
+  "content": {
+    "$type": "PluginContent",
+    "app": true,
+    "entryPoint": "Crm/Clients",
+    "catalogs": ["Crm/Client", "Crm/Contact"]
+  }
+}
+```
+
+A module that declares its app in code (`DeclaredApp`, *Declared apps* below) sets
+`Catalogs = CatalogedTypeSet.Of("Thread")`. The declaration lives with the app that serves the
+catalog, so it holds exactly where that app is installed: uninstall the app and its types come back
+to the home as sections. Read shape-tolerantly (`AppRoot.Catalogs` — a string array; blanks dropped,
+entries trimmed) and compared as a SET, so an unchanged re-read is quiet.
+
+Pinned by `HomeTypeSectionsTest` (excluded types never appear, empty types never appear, each section
+titled by its type and free of launcher chrome, the arrangement applied, the customize page) and
+`HomeTypeSectionsMeshTest` (the catalogued types come from installed apps only; the customization
+persists in the arrangement and applies), both in `MeshWeaver.Graph.Test`.
 
 ## Installed apps — `{user}/_App/{appId}` records, the `Records` compatibility path
 
@@ -282,7 +354,7 @@ The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reload
   group; `Render: Grouped` stays the admin's explicit choice. Location order stays in the Sort
   control either way.
 
-**The dedup rule:** an app is represented exactly once. The Spaces band's invitation leg
+**The dedup rule:** an app is represented exactly once. The type sections' invitation leg
 excludes `-nodeType:Store/Plugin -nodeType:Store/Catalog` and `-nodeType:User` — a grant that resolves to another user's home partition must not list that
 person's space as shared content. **The Store itself is an app** (a config default); only the
 anonymous header keeps a Store link.
@@ -339,8 +411,8 @@ reactively while staying searchable and reopenable. Closing never deletes.
 The Pinned scope query and the Shared-with-me band interpolate viewer paths, so the screen filters
 them BEFORE the query is built. The Apps records query is generic — no app path can reach a query
 string or URL — so the screen filters **at paint**, keyed by each tile's navigation target (the
-record's `MainNode`): a marked app's tile is simply not drawn. The Spaces/All queries stay untouched
-and filter where results are painted.
+record's `MainNode`): a marked app's tile is simply not drawn. The type sections drop a marked space
+or grant before their legs are built.
 
 ## See also
 
