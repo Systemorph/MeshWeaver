@@ -353,9 +353,15 @@ thinking"*. Policy [`internal-code-review`](../PolicyNotProse) is in force again
   reviewer's review landed on the head, or on an earlier head with only clean merges of `main` since. If
   it did, Copilot is not requested. Copilot is requested **as the fallback** only for a head that has gone
   `copilot-fallback-minutes` (60 by default) with no internal review. The scheduled sweep makes that
-  request, through the unchanged review-on-real-change predicate. The lane reads reviews, not check
-  runs: its callers grant `pull-requests` and not `checks`, and a new grant would cause a
-  `startup_failure` on every caller.
+  request, through the unchanged review-on-real-change predicate. The lane reads reviews: its callers grant
+  `pull-requests` and not `checks`, and a new grant would cause a `startup_failure` on every caller. Where
+  the token can read check runs anyway (a public repository, or a caller that grants `checks: read`), the
+  lane also requires the review run on the head, as the gate does. A review whose run write was lost
+  then reaches the fallback instead of reading as covered.
+- **Bound to this pull request.** A check run is commit-scoped, so the gate counts the internal run only
+  when this pull request carries the internal reviewer's review it belongs to (`internal_run_unbound`):
+  on the head for a review run, and on the named head for `Review carried from <sha>`. A second pull
+  request at the same commit cannot borrow it.
 - **Retiring the fallback.** Once the internal reviewer has posted on 10 pull requests across the
   repositories, set `copilot-fallback-minutes` to `0`. The internal reviewer is then the only reviewer.
 - **The rulesets.** `copilot_code_review` was removed from every ruleset on 2026-11-08. Every other rule

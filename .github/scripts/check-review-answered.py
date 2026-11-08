@@ -453,6 +453,27 @@ def degradation_of(check_runs, as_of: str | None) -> dict | None:
     return run if title.startswith(DEGRADATION_TITLE_PREFIX) else None
 
 
+CARRIED_FROM = re.compile(r"^Review carried from (?P<sha>[0-9a-f]{7,40})\b")
+
+
+def internal_run_unbound(run: dict, reviews, head: str, as_of: str | None) -> str:
+    """'' when the internal review `run` on `head` belongs to THIS pull request, else why not. Pure.
+
+    Check runs are commit-scoped, so a run alone says nothing about which pull request it reviewed. The
+    reviewer posts its pull-request review (findings inline) before its run, so a run of this pull request
+    has the internal reviewer's landed review on this pull request beside it. For a review run, that review
+    is on `head`. For a carried run (`Review carried from <sha> …`), it is on the head the title names."""
+    title = ((run.get("output") or {}).get("title") or "").strip()
+    mine = [r for r in landed_internal_reviews(reviews) if not_after(r.get("submitted_at"), as_of)]
+    carried = CARRIED_FROM.match(title)
+    want = carried.group("sha") if carried else head
+    if want and any(str(r.get("commit_id") or "").startswith(want) for r in mine):
+        return ""
+    return (f"`{DEGRADATION_CHECK_NAME}` run {run.get('id')} (\"{title}\") on head {head[:10]} is NOT counted for this pull request: "
+            f"no review of the internal reviewer on this pull request at {want[:10] or '(unknown)'} — a check run is commit-scoped, "
+            "so another pull request at the same commit could have posted it (policy internal-code-review)")
+
+
 def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str | None = None,
              check_runs: list | tuple = (), files: list | None = None, commits: list | None = None,
              copilot_carry: Carry | None = None) -> Verdict:
@@ -496,6 +517,13 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
     # merge of the base branch itself). Its threads stay under condition 2 like Copilot's.
     # `as_of` replays the gate: a run completed after that instant was not there (#7994 review).
     internal = real_review_run([c for c in check_runs or () if not_after(c.get("completed_at"), as_of)], head) if head else None
+    # 🚨 A check run is COMMIT-scoped, a review is PULL-REQUEST-scoped (#7994 review): two pull requests at
+    # one sha would otherwise share one run, and the second could turn green on the first one's findings.
+    # The run counts only when THIS pull request carries the internal reviewer's review it belongs to.
+    unbound = internal_run_unbound(internal, reviews, head, as_of) if internal is not None else ""
+    if unbound:
+        notes.append(unbound)
+        internal = None
     if internal is not None:
         title = ((internal.get("output") or {}).get("title") or "").strip()
         notes.append(f"internal review landed on head {head[:10]}: `{DEGRADATION_CHECK_NAME}` {internal.get('conclusion')} "
@@ -2089,7 +2117,7 @@ def landed_internal_reviews(reviews) -> list:
 
 
 def internal_review_state(pr: dict, reviews, carry: Carry | None, timeline, now: str, fallback_minutes: int,
-                          pushed_at: str | None = None) -> tuple[str, str]:
+                          pushed_at: str | None = None, check_runs=None) -> tuple[str, str]:
     """Policy internal-code-review — what the request lane does about the INTERNAL reviewer for the current head:
     ('covered', why) when the internal reviewer's review landed ON the head, or on an earlier head that `carry`
     (merge_only_same_diff from that review's head, as a Carry) shows reaches the head through clean merges of the
@@ -2097,11 +2125,18 @@ def internal_review_state(pr: dict, reviews, carry: Carry | None, timeline, now:
     `fallback_minutes` is 0 (the Copilot path retired); ('fallback', why) when it is overdue — the caller then judges
     a Copilot request exactly as before (`review_request_action`). The lane reads REVIEWS, not check runs: its
     callers grant `pull-requests`, not `checks` (.github/lane-caller-grants.yml), and a new grant would be a
-    `startup_failure` on every caller that has not added it yet. Pure."""
+    `startup_failure` on every caller that has not added it yet. Where the token CAN read them (`check_runs` not
+    None — a public repository, or a caller that grants `checks: read`), a review counts as covered only with the
+    reviewer's REVIEW run on the head beside it, exactly what the merge gate requires (#7994 review): a review
+    whose run write was lost would otherwise read covered here and missing there, and never reach the fallback.
+    Pure."""
     head = str((pr.get("head") or {}).get("sha") or "")
     short = head[:10] or "(unknown)"
     landed = landed_internal_reviews(reviews)
     on_head = [r for r in landed if head and r.get("commit_id") == head]
+    if check_runs is not None and head and real_review_run(check_runs, head) is None:
+        # The gate's evidence is not on the head: a review alone (its run lost) or a carry without its run.
+        landed, on_head, carry = [], [], None
     if on_head:
         r = max(on_head, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0))
         return "covered", (f"the internal reviewer reviewed head {short} (review {r.get('id')} at {r.get('submitted_at')}) — "
@@ -3184,8 +3219,14 @@ def run_request_review(repo: str, number: int, before: str | None, gh=None, swee
         internal_ref = str((newest_internal or {}).get("commit_id") or "")
         internal_carry = (read_diff_carry(gh, pr, internal_ref, newest_internal)
                           if newest_internal is not None and internal_ref and internal_ref != head else None)
+        try:
+            # Read where the token may (a public repository, or a caller granting `checks: read`); a refusal
+            # leaves the review-based reading, which is what every private caller's grant allows today.
+            head_runs = internal_review_listing(gh, head)
+        except ReadError:
+            head_runs = None
         state, internal_why = internal_review_state(pr, reviews, internal_carry, timeline, now or utc_now(), fallback_minutes,
-                                                    head_pushed_at(gh, pr))
+                                                    head_pushed_at(gh, pr), head_runs)
         print(f"  #{number}: {internal_why}")
         if state != "fallback":
             _append("GITHUB_STEP_SUMMARY", f"Review on real change — #{number}: none — {internal_why}\n")
@@ -4047,7 +4088,8 @@ def self_test() -> int:
     case("NEG (#7994 review): as_of BEFORE the clean run completed -> not yet reviewed", (NOT_LANDED,), _pr(0), [], [],
          as_of="2026-09-14T12:00:00Z",
          check_runs=[_check_run(conclusion="success", title="No blocking findings", crid=981, sha="a" * 40, at="2026-09-14T14:00:00Z")])
-    case("as_of AFTER the clean run completed -> reviewed", GREEN, _pr(0), [], [], as_of="2026-09-14T15:00:00Z",
+    case("as_of AFTER the clean run completed -> reviewed", GREEN, _pr(0),
+         [_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)], [], as_of="2026-09-14T15:00:00Z",
          check_runs=[_check_run(conclusion="success", title="No blocking findings", crid=982, sha="a" * 40, at="2026-09-14T14:00:00Z")])
     case("either reviewer lands it; BOTH reviewers' threads need replies", (UNANSWERED,), _pr(3),
          [_review(), _review(user=INTERNAL_REVIEWER_USER, rid=2)],
@@ -4154,13 +4196,15 @@ def self_test() -> int:
     # Policy internal-code-review (maintainer, 2026-11-08): the internal reviewer's head-bound `internal-review`
     # REVIEW run is the evidence — zero findings turns the gate green by itself, with no Copilot review at all.
     INTERNAL_CLEAN = _check_run(conclusion="success", title="No blocking findings", crid=970, sha="a" * 40)
-    case("INTERNAL: a clean `internal-review` run on the head, no Copilot, no review body -> green", GREEN, _pr(0), [], [],
+    case("INTERNAL: a clean `internal-review` run on the head + the App's review on this PR, no Copilot -> green", GREEN, _pr(0),
+         [_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)], [],
          check_runs=[INTERNAL_CLEAN], mention=("internal review landed on head aaaaaaaaaa", "reviewed, nothing found",
                                                 "check run 970", "policy internal-code-review"))
     case("INTERNAL: the clean run + the App's clean review body -> green", GREEN, _pr(0),
          [_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)], [],
          check_runs=[INTERNAL_CLEAN], never_says=("must land",))
-    case("INTERNAL: a carried review run on the head -> green", GREEN, _pr(0), [], [],
+    case("INTERNAL: a carried review run on the head, the review it carries on this PR -> green", GREEN, _pr(0),
+         [dict(_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER), commit_id="b" * 40)], [],
          check_runs=[_check_run(conclusion="success", title="Review carried from bbbbbbbbbb — No blocking findings", crid=971,
                                 sha="a" * 40)], mention=("Review carried from",))
     case("INTERNAL: blocking findings on the head, every thread answered -> green", GREEN, _pr(2),
@@ -4170,6 +4214,13 @@ def self_test() -> int:
     case("INTERNAL NEG: blocking findings on the head, a thread unanswered -> red", (UNANSWERED,), _pr(1),
          [_review(user=INTERNAL_REVIEWER_USER)], [_comment(1, INTERNAL_REVIEWER_USER)],
          check_runs=[_check_run(conclusion="failure", title="1 blocking finding(s)", crid=973, sha="a" * 40)])
+    case("INTERNAL NEG (#7994 review): a clean run on the head, but NO internal review on this PR (same sha, other PR)",
+         (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(conclusion="success", title="No blocking findings", crid=984, sha="a" * 40)],
+         mention=("NOT counted for this pull request",))
+    case("INTERNAL NEG (#7994 review): a carried run whose source review is not on this PR", (NOT_LANDED,), _pr(0),
+         [_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)], [],
+         check_runs=[_check_run(conclusion="success", title="Review carried from cccccccccc — No blocking findings", crid=985, sha="a" * 40)])
     case("INTERNAL NEG: a clean run on ANOTHER head is not this head's review", (NOT_LANDED,), _pr(0), [], [],
          check_runs=[_check_run(conclusion="success", title="No blocking findings", crid=974, sha="b" * 40)])
     case("INTERNAL NEG: the 'Reviewer unavailable' degradation is no review", (NOT_LANDED,), _pr(0), [], [],
@@ -4958,7 +5009,8 @@ def self_test() -> int:
         ("sweep NEG: the internal reviewer reviewed the head -> no mutation", dict(race_routes, **{
             "pulls/1/reviews": [COP_O, {"id": 990, "user": {"login": "systemorph-com[bot]", "type": "Bot", "id": INTERNAL_REVIEWER_ACCOUNT_ID},
                                         "state": "COMMENTED", "body": "Internal review — no blocking findings.", "commit_id": M,
-                                        "submitted_at": "2026-11-08T10:20:00Z"}]}), 0),
+                                        "submitted_at": "2026-11-08T10:20:00Z"}],
+            f"commits/{M}/check-runs": listing([_check_run(conclusion="success", title="No blocking findings", crid=990, sha=M)])}), 0),
         ("sweep NEG: the head is reviewed -> no mutation", dict(race_routes, **{"pulls/1/reviews": [dict(COP_O, commit_id=M)]}), 0),
     ]:
         stub = _ReqGh(dict(routes, **{"pulls?state=open": [{"number": 1, "draft": False}, {"number": 2, "draft": True}]}), ANSWER_OK)
@@ -5005,17 +5057,28 @@ def self_test() -> int:
          "fallback", "90 min"),
         ("internal NEG: an unreadable clock -> fallback (asks, never waits on a guess)", RPR, [], None, [], NOW, 60, "fallback", "unreadable"),
         ("internal: fallback 0 retires Copilot -> waiting even when overdue", RPR, [], None, [], NOW, 0, "waiting", "fallback is retired"),
+        ("internal (runs readable): review + its run on the head -> covered", FRESH, [irev(M)], None, [], NOW, 60, "covered", "review 991",
+         None, [_check_run(conclusion="success", title="No blocking findings", crid=996, sha=M)]),
+        ("internal NEG (#7994 review, runs readable): the review but its run LOST -> not covered, the fallback can come", FRESH,
+         [irev(M)], None, [], "2026-11-08T11:30:00Z", 60, "fallback", "COPILOT FALLBACK", None, []),
     ]:
-        got, why = internal_review_state(pr_, reviews_, carry_, timeline_, now_, minutes, pushed[0] if pushed else None)
+        got, why = internal_review_state(pr_, reviews_, carry_, timeline_, now_, minutes, pushed[0] if pushed else None,
+                                         pushed[1] if len(pushed) > 1 else None)
         ok = got == expect and says in why
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got} ({why[:60]})")
     changed = dict(req_routes, **{f"compare/{sha('b')}...{M}": dict(NEW_CMP, files=files(PATCH_RESOLVED))})
     for name, routes, now_, minutes, expect_mutations, says in [
-        ("lane internal: a real change, but the head is internally reviewed -> no Copilot",
-         dict(changed, **{"pulls/1/reviews": [COP_O, irev(M)]}), NOW, 60, 0, "internal reviewer reviewed head"),
-        ("lane internal: the internal review of an earlier head, main-only merge since -> no Copilot",
-         dict(req_routes, **{"pulls/1/reviews": [irev(O)], "pulls/1": dict(FRESH, base={"ref": "main"})}), "2026-11-08T11:30:00Z",
+        ("lane internal: a real change, but the head is internally reviewed (review + run) -> no Copilot",
+         dict(changed, **{"pulls/1/reviews": [COP_O, irev(M)], f"commits/{M}/check-runs": listing([
+             _check_run(conclusion="success", title="No blocking findings", crid=997, sha=M)])}), NOW, 60, 0, "internal reviewer reviewed head"),
+        ("lane internal: the review is on the head, the runs UNREADABLE (a private caller) -> no Copilot",
+         dict({k: v for k, v in changed.items() if k != f"commits/{M}/check-runs"}, **{"pulls/1/reviews": [COP_O, irev(M)]}),
+         NOW, 60, 0, "internal reviewer reviewed head"),
+        ("lane internal: the internal review of an earlier head, main-only merge, carried run on the head -> no Copilot",
+         dict(req_routes, **{"pulls/1/reviews": [irev(O)], "pulls/1": dict(FRESH, base={"ref": "main"}),
+                             f"commits/{M}/check-runs": listing([_check_run(conclusion="success", title=f"Review carried from {O[:10]}",
+                                                                            crid=998, sha=M)])}), "2026-11-08T11:30:00Z",
          60, 0, "only the default branch was merged in"),
         ("lane internal: a real change on a fresh head -> no Copilot yet",
          dict(changed, **{"pulls/1": dict(FRESH, base={"ref": "main"})}), NOW, 60, 0, "30 of 60 min"),
