@@ -73,6 +73,13 @@ public sealed record PackageModuleOperation
     /// <summary>Landing argument: the producing repository's commit.</summary>
     public string? SourceCommit { get; init; }
 
+    /// <summary>Landing argument: the install record's <see cref="PackageManifest.Incarnation"/> the
+    /// writer's adoption read when it BEGAN, before its download — or null when there was no record
+    /// then, or one created before incarnations existed. A landing naming an incarnation the record
+    /// no longer has was planned against an EARLIER install, which an uninstall removed while the
+    /// bytes travelled, and the owner refuses it (MeshWeaver#7974 review).</summary>
+    public string? RecordIncarnation { get; init; }
+
     /// <summary>When the writer stated it — the owner executes in this order.</summary>
     public DateTimeOffset At { get; init; }
 
@@ -172,10 +179,11 @@ public static class ModuleLandingOwner
     /// <param name="retiring">The record's retirement.</param>
     /// <param name="recordModule">The module the install record declares — the only module its owner
     /// lands or removes.</param>
+    /// <param name="recordIncarnation">The record's <see cref="PackageManifest.Incarnation"/>.</param>
     /// <param name="now">The decision time.</param>
     internal static (ImmutableDictionary<string, PackageModuleOperation> Operations, PackageRetirement? Retiring) Promote(
         ImmutableDictionary<string, PackageModuleOperation> operations, PackageRetirement? retiring, string? recordModule,
-        DateTimeOffset now)
+        string? recordIncarnation, DateTimeOffset now)
     {
         if (operations.Values.Any(o => o.State == PackageModuleOperationState.Executing))
             return (operations, retiring);
@@ -195,6 +203,9 @@ public static class ModuleLandingOwner
             case PackageModuleOperationKind.Land or PackageModuleOperationKind.Remove
                 when BindingRefusal(operation, recordModule) is { } unbound:
                 refusal = unbound;
+                break;
+            case PackageModuleOperationKind.Land when IncarnationRefusal(operation, recordIncarnation) is { } stale:
+                refusal = stale;
                 break;
             case PackageModuleOperationKind.Land when retiring is not null
                                                      && !(operation.Intent == PackageRecordWriteIntent.Person && !retiring.Removing):
@@ -244,6 +255,18 @@ public static class ModuleLandingOwner
                 ? $"refused: module '{operation.Module}' is not this package's module ('{recordModule}')"
                 : null;
 
+    /// <summary>Why a landing planned against an EARLIER install of this package must not land on the
+    /// record as it is now, or null (MeshWeaver#7974 review): the package was uninstalled and installed
+    /// again while the landing's bytes travelled, so its bytes are the old install's and would replace
+    /// what the new install landed. A landing that names no incarnation is not checked. Pure.</summary>
+    internal static string? IncarnationRefusal(PackageModuleOperation operation, string? recordIncarnation) =>
+        operation.Kind == PackageModuleOperationKind.Land
+        && operation.RecordIncarnation is { Length: > 0 } planned
+        && !string.Equals(planned, recordIncarnation, StringComparison.Ordinal)
+            ? "refused: this landing was planned against an earlier install of this package — it was uninstalled "
+              + "and installed again while the module travelled; nothing was landed"
+            : null;
+
     /// <summary>
     /// Whether the hub at <paramref name="path"/> is an AUTHORITATIVE install record —
     /// <c>Plugins/{package}</c>, one segment under the installed partition — the only kind of node
@@ -275,6 +298,8 @@ public static class ModuleLandingOwner
             return "refused: the install record is gone";
         if (BindingRefusal(operation, record.Module) is { } unbound)
             return unbound;
+        if (IncarnationRefusal(operation, record.Incarnation) is { } stale)
+            return stale;
         return operation.Kind == PackageModuleOperationKind.Remove
                && (record.RetiringBy is null
                    || !string.Equals(record.RetiringBy.Request, operation.Request, StringComparison.Ordinal))
@@ -296,7 +321,7 @@ public static class ModuleLandingOwner
             return node;
         var (operations, retiring) = Promote(
             (record.ModuleOperations ?? ImmutableDictionary<string, PackageModuleOperation>.Empty).Remove(key),
-            record.RetiringBy, record.Module, now);
+            record.RetiringBy, record.Module, record.Incarnation, now);
         return node with
         {
             Content = record with
@@ -345,6 +370,7 @@ public static class ModuleLandingOwner
         // again — the resume path a new activation takes, and idempotent the same way (a landing
         // re-reads the same staged bytes, which the writer drops only on an answer).
         var unanswered = new Subject<Exception>();
+        var promoteSeam = hub.ServiceProvider.GetService<ModuleLandingService>()?.OwnerPromoteSeam;
         hub.RegisterForDisposal(ActivityControlPlaneExtensions.SubscribeHubWatcher(
             hub,
             () => workspace.GetMeshNodeStream()
@@ -375,9 +401,17 @@ public static class ModuleLandingOwner
                 }
                 else if (head.Queued > 0)
                     workspace.GetMeshNodeStream()
-                        .Update(node => PromoteNode(node, options, DateTimeOffset.UtcNow))
-                        .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
-                            "[ModuleLandingOwner] promoting the next module operation on {Address} failed", hub.Address));
+                        .Update(node => PromoteNode(promoteSeam?.Invoke(node) ?? node, options, DateTimeOffset.UtcNow))
+                        .Subscribe(_ => { }, ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "[ModuleLandingOwner] promoting the next module operation on {Address} failed — "
+                                + "re-reading the record to promote it again", hub.Address);
+                            // 🚨 The same recovery as a failed answer (#7974 review): an unchanged queue
+                            // is never re-emitted through DistinctUntilChanged, so the watcher is
+                            // re-established and reads the queue anew.
+                            unanswered.OnNext(ex);
+                        });
             },
             logger,
             "module landing owner"));
@@ -420,7 +454,7 @@ public static class ModuleLandingOwner
         var record = node.ContentAs<PackageManifest>(options);
         if (record?.ModuleOperations is not { Count: > 0 } operations)
             return node;
-        var (promoted, retiring) = Promote(operations, record.RetiringBy, record.Module, now);
+        var (promoted, retiring) = Promote(operations, record.RetiringBy, record.Module, record.Incarnation, now);
         return ReferenceEquals(promoted, operations)
             ? node
             : node with { Content = record with { ModuleOperations = promoted, RetiringBy = retiring } };
@@ -497,9 +531,13 @@ public static class ModuleLandingOwner
     /// LOST its owner (an uninstall removed it while the bytes travelled) and is refused; only a
     /// landing that never had a record is a fresh package's.</param>
     /// <param name="logger">Diagnostics.</param>
+    /// <param name="incarnationAtPlan">🚨 The install record's <see cref="PackageManifest.Incarnation"/>
+    /// when this adoption began, or null (#7974 review): carried on the operation, so a record that was
+    /// REPLACED meanwhile (uninstall, then re-install) refuses the landing instead of taking old bytes
+    /// over the new install's module.</param>
     internal static IObservable<ModuleLandingVerdict> Land(
         IMessageHub hub, ModuleLandingService landing, ModuleLandingArguments arguments, string? intent,
-        bool recordAtPlan, ILogger? logger)
+        bool recordAtPlan, ILogger? logger, string? incarnationAtPlan = null)
     {
         var path = arguments.PackagePath;
         if (intent is not null && !InstallRecordGate.IsKnownIntent(intent))
@@ -538,6 +576,7 @@ public static class ModuleLandingOwner
                         Version = arguments.Version,
                         MinMeshVersion = arguments.MinMeshVersion,
                         SourceCommit = arguments.SourceCommit,
+                        RecordIncarnation = recordAtPlan ? incarnationAtPlan : null,
                     },
                 };
                 return landing.StageLanding(key, arguments)

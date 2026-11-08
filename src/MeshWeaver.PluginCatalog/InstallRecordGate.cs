@@ -258,7 +258,9 @@ public static class InstallRecordGate
                 case PackageRecordFactKind.Stamp:
                     var cleared = retiring?.Request;
                     retiring = null;
-                    content = fact.Stamp;
+                    // A stamp replaces the content, never WHICH install this is: the incarnation is
+                    // the record's own, minted at creation (#7974 review).
+                    content = fact.Stamp with { Incarnation = record.Incarnation };
                     outcomes = outcomes.SetItem(key, Answer(true, cleared is null
                         ? "applied"
                         : $"applied — a person's install cleared the retirement held by {cleared}"));
@@ -298,7 +300,7 @@ public static class InstallRecordGate
                     break;
             }
         }
-        (operations, retiring) = ModuleLandingOwner.Promote(operations, retiring, content.Module, now);
+        (operations, retiring) = ModuleLandingOwner.Promote(operations, retiring, content.Module, content.Incarnation, now);
 
         return node with
         {
@@ -372,7 +374,12 @@ public static class InstallRecordGate
                     return Observable.Throw<MeshNode>(new PackageRecordWriteRefusedException(record.Path,
                         "there is no install record — a re-stamp never re-creates a removed record"));
                 return access.RunAsSystem(() => hub.NodeOperationIssuingHub()
-                        .Observe<CreateNodeResponse>(new CreateNodeRequest(record with { Content = clean })))
+                        // A NEW install: its own incarnation, so a landing planned against an earlier
+                        // install of the same package is refused by this record's owner (#7974 review).
+                        .Observe<CreateNodeResponse>(new CreateNodeRequest(record with
+                        {
+                            Content = clean with { Incarnation = Guid.NewGuid().ToString("N") },
+                        })))
                     .FirstAsync()
                     .Select(d => d.Message)
                     .SelectMany(response => response.Success

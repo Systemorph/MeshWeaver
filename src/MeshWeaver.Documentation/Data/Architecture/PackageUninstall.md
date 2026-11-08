@@ -163,7 +163,8 @@ So nothing outside the record's own hub lands or removes a package's module
   the operation and faults its own watcher. The watcher re-opens (its usual paced re-open; there is no
   separate timer or retry loop), reads the record anew, finds the `Executing` operation not started,
   and runs it again. This is the resume path a new activation takes, so it is idempotent the same way,
-  and the operations queued behind it are not held until a recycle.
+  and the operations queued behind it are not held until a recycle. A failed promotion of a queued
+  operation recovers the same way: an unchanged queue would never wake the owner again.
 - **A refusal is an answer, and a fault says whether it may clear.** A refused landing reaches the
   adoption as its named `Failure`, with nothing landed. A removal the owner did not carry out faults
   with the owner's words. A landing that FAULTS on the owner (an I/O error on the volume, a timeout)
@@ -197,6 +198,15 @@ exists when it STARTS, before the plan reads the registry index and the activati
 the download. If the record existed then and is gone when the bytes arrive,
 an uninstall removed it while the module was downloading, and the landing is refused. This holds even
 for a module that never landed, where no tombstone exists to refuse it.
+
+**A landing planned against an earlier install is refused.** Knowing that a record existed is not
+enough: an uninstall followed by a re-install leaves a record at the same path, with no retirement
+and the module enabled. So each install record carries an `Incarnation`, minted when the gate
+creates the record and kept by every stamp. The adoption reads it when it starts, and the landing
+carries it on its operation. The owner refuses, at promotion and again at execution, a landing whose
+incarnation is not the record's. Without that, a download held across the uninstall and the
+re-install would replace the new install's module with the old install's bytes. A record created
+before incarnations existed has none, and a landing planned against it is not checked this way.
 
 **A package with no install record has no owner.** The boot's modules-first wave lands a fresh
 package's module before any record exists. A retirement lives on the record and ends when the record

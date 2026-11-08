@@ -631,9 +631,10 @@ public sealed class PluginBundleClient
         packagePath = string.IsNullOrWhiteSpace(packagePath)
             ? $"{PackageInstaller.InstalledPartition}/{pluginId}"
             : packagePath;
-        return RecordExists(packagePath)
-            .SelectMany(hadRecord => PlanModuleAdoption(pluginId, moduleName, unattended, policyDecline, landing, intent)
-                .SelectMany(plan => ExecuteModuleAdoption(plan, pluginId, moduleName, packagePath, intent, hadRecord)))
+        return RecordAtPlan(packagePath)
+            .SelectMany(atPlan => PlanModuleAdoption(pluginId, moduleName, unattended, policyDecline, landing, intent)
+                .SelectMany(plan => ExecuteModuleAdoption(plan, pluginId, moduleName, packagePath, intent,
+                    atPlan.Exists, atPlan.Incarnation)))
             .Catch((Exception ex) =>
             {
                 // A distribution hiccup must not fail the install/reconcile that asked — the module
@@ -751,10 +752,12 @@ public sealed class PluginBundleClient
     /// <param name="intent">The <see cref="PackageRecordWriteIntent"/> the landing is stated under at
     /// the install record's owner; null for every lane that is not a person's install.</param>
     /// <param name="recordAtPlan">Whether the install record existed when the adoption BEGAN —
-    /// read before the plan (<see cref="RecordExists"/>); null reads it here, before the download.</param>
+    /// read before the plan (<see cref="RecordAtPlan"/>); null reads it here, before the download.</param>
+    /// <param name="incarnationAtPlan">That record's <see cref="PackageManifest.Incarnation"/>, read with
+    /// <paramref name="recordAtPlan"/>; ignored when <paramref name="recordAtPlan"/> is null.</param>
     internal IObservable<ModuleAdoptOutcome> ExecuteModuleAdoption(
         ModuleAdoptionPlan plan, string pluginId, string moduleName, string? packagePath, string? intent = null,
-        bool? recordAtPlan = null)
+        bool? recordAtPlan = null, string? incarnationAtPlan = null)
     {
         if (!plan.Lands)
             return Observable.Return(plan.Decided);
@@ -769,8 +772,10 @@ public sealed class PluginBundleClient
         // that belonged to a record and finds it gone when the bytes arrive has lost its owner to an
         // uninstall, and is refused (ModuleLandingOwner.Land) — only a landing that never had a record
         // is a fresh package's. Callers read it BEFORE planning; null reads it here.
-        var hadRecordAtStart = recordAtPlan is { } known ? Observable.Return(known) : RecordExists(packagePath);
-        return hadRecordAtStart.SelectMany(hadRecord => Download(pluginId, advertised, index)
+        var atStart = recordAtPlan is { } known
+            ? Observable.Return((Exists: known, Incarnation: incarnationAtPlan))
+            : RecordAtPlan(packagePath);
+        return atStart.SelectMany(hadRecord => Download(pluginId, advertised, index)
             .SelectMany(result => result.Bytes is null
                 ? Miss(pluginId, result.Kind, result.Reason)
                     .Select(_ => decided with
@@ -783,7 +788,7 @@ public sealed class PluginBundleClient
                     })
                 : LandFromBundleOutcome(
                         pluginId, moduleName, packagePath, advertised.Version, result.Bytes,
-                        advertised.FrameworkMvid, intent, hadRecord)
+                        advertised.FrameworkMvid, intent, hadRecord.Exists, hadRecord.Incarnation)
                     .Select(landed => decided with
                     {
                         FilesLanded = landed.Count,
@@ -806,6 +811,19 @@ public sealed class PluginBundleClient
         return string.IsNullOrWhiteSpace(packagePath) || storage is null
             ? Observable.Return(false)
             : storage.Read(packagePath, _hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null).Select(n => n is not null);
+    }
+
+    /// <summary>Whether an install record exists at <paramref name="packagePath"/> and WHICH install it
+    /// is (<see cref="PackageManifest.Incarnation"/>) — read from storage when an adoption BEGINS, so its
+    /// landing is refused by a record that was replaced while the bytes travelled (#7974 review). Cold.</summary>
+    /// <param name="packagePath">The install record's path, or null.</param>
+    internal IObservable<(bool Exists, string? Incarnation)> RecordAtPlan(string? packagePath)
+    {
+        var storage = _hub.ServiceProvider.GetService<IStorageAdapter>();
+        return string.IsNullOrWhiteSpace(packagePath) || storage is null
+            ? Observable.Return((Exists: false, Incarnation: (string?)null))
+            : storage.Read(packagePath, _hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
+                .Select(n => (Exists: n is not null, Incarnation: n?.ContentAs<PackageManifest>(_hub.JsonSerializerOptions)?.Incarnation));
     }
 
     /// <summary>A planned adoption: what was decided, and — when it lands — the exact bundle and the
@@ -877,7 +895,8 @@ public sealed class PluginBundleClient
     /// </summary>
     internal IObservable<(int Count, string? Version, string? Refusal, bool Transient)> LandFromBundleOutcome(
         string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes,
-        string? advertisedFrameworkMvid = null, string? intent = null, bool recordAtPlan = false) =>
+        string? advertisedFrameworkMvid = null, string? intent = null, bool recordAtPlan = false,
+        string? incarnationAtPlan = null) =>
         // Not atomic: the closure is one decompression per declared assembly, checked between them.
         _httpPool.InvokeBlocking(ct => BundleReader.ReadModule(bundleBytes, ct))
             .SelectMany(payload =>
@@ -973,7 +992,7 @@ public sealed class PluginBundleClient
                         NativeAssets = BundleReader.ReadModuleNativeAssets(bundleBytes) is { Count: > 0 } natives
                             ? [.. natives.Select(n => (n.RelativePath, n.Bytes))]
                             : null,
-                    }, intent, recordAtPlan, _logger)
+                    }, intent, recordAtPlan, _logger, incarnationAtPlan)
                     .Select(verdict => verdict.Applied
                         ? (Count: files.Count, Version: (string?)declaredVersion, Refusal: (string?)null, Transient: false)
                         : (Count: 0, Version: (string?)null, Refusal: (string?)verdict.Detail, Transient: verdict.Transient))

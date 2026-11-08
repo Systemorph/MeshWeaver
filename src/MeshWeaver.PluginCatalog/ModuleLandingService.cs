@@ -926,6 +926,11 @@ public sealed class ModuleLandingService : IDisposable
     /// before the answer is folded in — a test throws from it to fail that write. Null in production.</summary>
     internal Func<MeshNode, MeshNode>? OwnerAnswerSeam { get; init; }
 
+    /// <summary>Seam for the promotion pin (InternalsVisibleTo): runs inside the install record owner's
+    /// PROMOTION update of a queued operation (<see cref="ModuleLandingOwner"/>) — a test throws from it
+    /// to fail that write. Null in production.</summary>
+    internal Func<MeshNode, MeshNode>? OwnerPromoteSeam { get; init; }
+
     /// <summary>One derivation of the list, when it was taken, and the local-write generation it
     /// was taken in (a snapshot from before this process's latest write is never served).</summary>
     private sealed record ServedActivation(ModuleActivationList List, DateTimeOffset ReadAt, long Generation);

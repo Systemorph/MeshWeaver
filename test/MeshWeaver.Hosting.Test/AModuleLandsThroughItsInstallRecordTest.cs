@@ -52,6 +52,8 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
     private int failAnswerOnce;
     private int answerFailures;
     private int failRecordingOnce;
+    private int failPromoteOnce;
+    private int promoteFailures;
     private ModuleLandingService? landing;
     private readonly FakeRegistry registry = new();
 
@@ -79,6 +81,13 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
                     SpinWait.SpinUntil(() => releaseRemoval == 1, TestTimeouts.Convergence);
                 })
                 {
+                    OwnerPromoteSeam = node =>
+                    {
+                        if (Interlocked.Exchange(ref failPromoteOnce, 0) != 1)
+                            return node;
+                        Interlocked.Increment(ref promoteFailures);
+                        throw new InvalidOperationException("the owner's promotion write failed (test fault)");
+                    },
                     OwnerAnswerSeam = node =>
                     {
                         if (Interlocked.Exchange(ref failAnswerOnce, 0) != 1)
@@ -801,6 +810,91 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         verdict.Transient.Should().BeTrue("an unreadable record may read whole on the next pass: " + verdict.Detail);
     }
 
+    /// <summary>
+    /// (18) A failed PROMOTION of a persisted queued operation does not strand it (#7974 review): the
+    /// record holds a Queued landing no fact will wake (its writer is gone), the owner's promotion
+    /// write fails once, and the owner — never recycled — promotes, executes and answers it anyway.
+    /// Negative control, in the test: the seam fired exactly once. Negative control (measured): with
+    /// the promotion failure only logged, the landing is never answered and this times out red.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AFailedPromotion_OfAPersistedQueuedOperation_IsPromotedAgain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Unpromoted.Module";
+        const string key = "module-land-unpromoted";
+        await Landing.StageLanding(key, Bytes(module, "1.0.0", RecordPath("LandUnpromoted")))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        Interlocked.Exchange(ref failPromoteOnce, 1);
+        var record = Record("LandUnpromoted", module);
+        await Create(record with
+        {
+            Content = record.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)! with
+            {
+                ModuleOperations = ImmutableDictionary<string, PackageModuleOperation>.Empty.Add(key, new PackageModuleOperation
+                {
+                    Kind = PackageModuleOperationKind.Land,
+                    Module = module,
+                    PackagePath = RecordPath("LandUnpromoted"),
+                    Version = "1.0.0",
+                    State = PackageModuleOperationState.Queued,
+                    At = DateTimeOffset.UtcNow.AddMinutes(-1),
+                }),
+            },
+        }, ct);
+
+        var answered = await Live("LandUnpromoted", r => r.FactOutcomes?.ContainsKey(key) == true, ct);
+        Volatile.Read(ref promoteFailures).Should().Be(1, "the owner's first promotion write failed");
+        answered.FactOutcomes![key].Applied.Should().BeTrue(answered.FactOutcomes[key].Detail);
+        answered.ModuleOperations.Should().BeNull("nothing is left queued");
+    }
+
+    /// <summary>
+    /// (19) A download planned against an EARLIER install does not land on its REPLACEMENT (#7974
+    /// review): v2's download is held across an uninstall (the record removed) and a re-install that
+    /// lands v3; released, v2 is refused by the new record's owner — the record's incarnation is not
+    /// the one the adoption began with — and v3 stays. Negative control, in the test: the same funnel
+    /// with no replacement lands (the precondition's v1 adoption). Negative control (measured): with
+    /// the incarnation check removed, the old download replaces v3 with v2.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ADownloadHeldAcrossUninstallAndReinstall_DoesNotLandOnTheNewInstall()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Reinstalled.Module";
+        await WriteRecord("LandAba", module, ct);
+        registry.Serve("LandAba", "1.0.0", module, ModuleBundle("LandAba", module, "1.0.0"));
+        (await Bundles.AdoptModuleOutcome("LandAba", module, RecordPath("LandAba")).Timeout(TestTimeouts.Convergence).Await(ct))
+            .FilesLanded.Should().BeGreaterThan(0, "precondition: v1 lands through its record");
+
+        registry.Serve("LandAba", "2.0.0", module, ModuleBundle("LandAba", module, "2.0.0"));
+        registry.HoldBundle = 1;
+        try
+        {
+            var adopt = Bundles.AdoptModuleOutcome("LandAba", module, RecordPath("LandAba")).Replay();
+            using var connection = adopt.Connect();
+            SpinWait.SpinUntil(() => registry.BundleEntered == 1, TestTimeouts.Convergence)
+                .Should().BeTrue("v2's download is in flight");
+
+            // Uninstall (the record removed), then a re-install that lands v3 through the NEW record.
+            (await PackageInstaller.RemoveInstalledRecord(Mesh, "LandAba", NullLogger.Instance).Take(1)
+                .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeTrue();
+            await WriteRecord("LandAba", module, ct);
+            (await Land(module, "3.0.0", RecordPath("LandAba"), PackageRecordWriteIntent.Person, recordAtPlan: true)
+                .Timeout(TestTimeouts.Convergence).Await(ct)).Applied.Should().BeTrue("the re-install lands v3");
+
+            registry.HoldBundle = 0;
+            var released = await adopt.Timeout(TestTimeouts.Convergence).Await(ct);
+            released.FilesLanded.Should().Be(0, released.Failure ?? "");
+            (released.Failure ?? "").Should().Contain("earlier install");
+        }
+        finally
+        {
+            registry.HoldBundle = 0;
+        }
+        (await Entry(module, ct))!.Version.Should().Be("3.0.0", "the new install's module stays");
+    }
+
     /// <summary>A registry serving one bundle; its index response can be HELD (a worker the test
     /// deliberately parks, released through a volatile flag under a bounded spin).</summary>
     private sealed class FakeRegistry : HttpMessageHandler
@@ -810,6 +904,8 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         private volatile byte[] bundle = [];
         public volatile int HoldIndex;
         public volatile int IndexEntered;
+        public volatile int HoldBundle;
+        public volatile int BundleEntered;
 
         public void Serve(string plugin, string version, string module, byte[] bytes)
         {
@@ -834,7 +930,19 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
                 }, cancellationToken);
             }
             if (path.StartsWith(PluginBundleClient.RoutePrefix + "/", StringComparison.Ordinal))
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bundle) });
+            {
+                // The bytes are taken when the request ARRIVES — a download in flight carries the
+                // bundle it asked for, whatever is served after it.
+                var served = bundle;
+                if (HoldBundle == 0)
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(served) });
+                BundleEntered = 1;
+                return Task.Run(() =>
+                {
+                    SpinWait.SpinUntil(() => HoldBundle == 0, TestTimeouts.Convergence);
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(served) };
+                }, cancellationToken);
+            }
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         }
 
