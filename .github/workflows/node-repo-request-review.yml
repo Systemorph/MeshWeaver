@@ -8,11 +8,12 @@
 # control plane's own pull-request sweep START it, so this lane never asks it for anything: it READS whether
 # the internal reviewer has reviewed the head (`internal_review_state` in check-review-answered.py) and does
 # nothing while it has, or while it still has time. Only a head the internal reviewer left unreviewed for
-# `copilot-fallback-minutes` (60 by default) gets a Copilot review requested, by the scheduled sweep, through
-# the review-on-real-change predicate below. `copilot-fallback-minutes: 0` retires the Copilot path entirely —
-# the step that follows once the internal reviewer has posted on 10 pull requests across the repositories
-# (Doc/Architecture/ReviewFindingsAnswered → "The internal reviewer"). The rulesets' `copilot_code_review`
-# rule is removed everywhere, so nothing else requests Copilot.
+# `copilot-fallback-minutes` gets a Copilot review requested, by the scheduled sweep, through the
+# review-on-real-change predicate below. 🚨 The default is 0 — the Copilot path is RETIRED (2026-11-08): the
+# internal reviewer posted on 18 pull requests across four repositories within its first 20 minutes back, and
+# the bar was 10 (Doc/Architecture/ReviewFindingsAnswered → "The internal reviewer"). A caller re-arms the
+# fallback only deliberately, with a positive value. The rulesets' `copilot_code_review` rule is removed
+# everywhere, so nothing requests Copilot.
 #
 # THE COPILOT FALLBACK, as it was the primary path until 2026-11-08:
 #
@@ -72,11 +73,11 @@ on:
       copilot-fallback-minutes:
         description: >-
           Minutes a head may wait for the INTERNAL reviewer before this lane requests a Copilot review as the
-          fallback (policy internal-code-review). 0 retires the Copilot path: the internal reviewer is then the
-          only reviewer. A number, as a string.
+          fallback (policy internal-code-review). 0 (the default since 2026-11-08) retires the Copilot path: the
+          internal reviewer is the only reviewer. A number, as a string.
         required: false
         type: string
-        default: "60"
+        default: "0"
       scripts-ref:
         description: >-
           The Systemorph/MeshWeaver ref check-review-answered.py is fetched at (the same contract as
