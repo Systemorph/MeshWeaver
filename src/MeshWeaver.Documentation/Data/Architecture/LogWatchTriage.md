@@ -1173,13 +1173,14 @@ to the triage thread that wrote it.
 
 Everything red becomes a ticket, so **the level a call site chooses is a ticketing decision**, not a
 verbosity knob (AGENTS.md: never edit a level to dial a debugging session up or down; fix it
-permanently, with the reason, or leave it). Three outcomes are routinely mistaken for faults, and
+permanently, with the reason, or leave it). These outcomes are routinely mistaken for faults, and
 each produced a steady ticket stream:
 
 | Outcome | Why it is not a fault | Where |
 |---|---|---|
 | **Cooperative cancellation** — the caller went away, a partition cleanup cascaded, the host is shutting down, the I/O pool drained | Nothing failed and nothing was written. `MeshWeaver.Mesh.CreateNode` logged 491 of these in three days (#2152); `MeshWeaver.Mesh.MeshNode` logged `[DeleteNode] unexpected … partial-deleted=0` (#2182) — a counter that says the node was never touched. | `CancellationClassifier.IsCooperativeCancellation` |
 | **A client that disconnected mid-stream** | gRPC finalises the request and answers the next write with `InvalidOperationException("Can't write the message because the request is complete.")`; the client is already gone (#2138 / #2139). | `MeshGrpcService.WritePumpAsync` |
+| **A client that reset its request stream** — the READ-path arm of the row above | On an HTTP/2 `RST_STREAM` Kestrel faults the request-body pipe with `IOException("The client reset the request stream.")` at once, but cancels `RequestAborted` through a callback it SCHEDULES on the thread pool. A read can therefore see the reset before the call token says *cancelled* — and gRPC's own classifier (`ProcessHandlerError`, which calls an `IOException` "canceled" only when the token is already cancelled) loses the same race and logs `fail: Error when executing service method 'Open'`. One event, three verdicts by scheduler luck: silent, an Information "canceled", or an Error. The verdict is the condition: an `IOException` out of the request-stream READ is the transport ending under it (#7990). Only the read and only `IOException` are classified; a fault in a frame's handling still propagates. | `MeshGrpcService.MoveNextOrClientGone` (MeshWeaver.Plugins) |
 | **Hosted-hub creation that raced pod teardown** | A hub activates while its pod is stopping and the service scope dies UNDER the build (an `ObjectDisposedException` from the closed scope). Nothing failed, nothing was written, and the next access re-activates the node on a live host (#3243). | `HostedHubsCollection.CreateHub` → `HostedHubOutcome.HostShuttingDown` |
 
 🚨 **The rule is narrow on purpose, and the exceptions to it are the point:**
