@@ -21,8 +21,8 @@ namespace MeshWeaver.PluginCatalog;
 /// package with no install record here; a target partition another installed package also uses; a
 /// partition the platform never tears down (<see cref="PartitionTeardown.Refusal"/>); a partition
 /// holding nodes created by anyone but the installer (user data). Then: retires the module (live
-/// through <see cref="IModuleLiveActivation.Retire"/>, else exactly one restart through
-/// <see cref="IModuleActivationRestart"/>), closes the partition's hubs, removes the install record
+/// through <see cref="IModuleLiveActivation.Retire"/>, else by the ONE restart the instance's
+/// <see cref="PackageRestartCoordinator"/> dispatches), closes the partition's hubs, removes the install record
 /// — which, with this request on record, keeps every unattended pass from installing it again
 /// (<see cref="UninstalledHere"/>) — and records exactly what phase 2 would destroy.</para>
 ///
@@ -208,7 +208,8 @@ public static class PackageUninstallExecutor
         /// removal to the record's owner, remove the record. A fault RELEASES the retirement before the
         /// request goes red, so the package is repairable again.</summary>
         private IObservable<Unit> Retire(PackageUninstallRequest request, PackageManifest record, string partition, PackageUninstallPartition preview) =>
-            RetireModule(request, record)
+            EnrollPending(request, record)
+                .SelectMany(_ => RetireModule(request, record))
                             .SelectMany(retired => CloseHubs(partition).Select(closed => (moduleOutcome: retired.Outcome, retired.Disabled, closed)))
                             // Announce the removal: from the owner's answer on, a person's install is
                             // refused too. A refusal here means a PERSON installed it meanwhile — the
@@ -219,7 +220,8 @@ public static class PackageUninstallExecutor
                                 ? Finish(PackageUninstallStatus.Failed,
                                     $"stopped: {displaced}; the install record is kept (module: {x.moduleOutcome})")
                                 : RemoveAndPreview(record, partition, preview, x.moduleOutcome, x.Disabled, x.closed))
-                .Catch((Exception ex) => InstallRecordGate.EndRetirement(hub, record.Id, RequestPath, logger)
+                .Catch((Exception ex) => WithdrawPending()
+                    .SelectMany(_ => InstallRecordGate.EndRetirement(hub, record.Id, RequestPath, logger))
                     .Select(_ => "released")
                     .Catch((Exception endFault) => Observable.Return($"NOT released ({endFault.Message})"))
                     .SelectMany(released => Finish(PackageUninstallStatus.Failed,
@@ -317,7 +319,7 @@ public static class PackageUninstallExecutor
 
         /// <summary>
         /// Retires the package's module: disables its landed generation, then unloads it live where the
-        /// process can, else asks for exactly ONE restart (stamped first).
+        /// process can, else states it on the instance's ONE restart coordinator, which dispatches the restart.
         ///
         /// <para>🚨 The activation is read WHOLE or not at all (<see cref="ModuleLandingService.GetCheckedActivation"/>,
         /// #7959 review): a read that dropped an unreadable record would make a landed module look
@@ -359,8 +361,7 @@ public static class PackageUninstallExecutor
                         _ => ModuleLandingOwner.Remove(hub, record.Id, module, RequestPath, logger)
                             .Select(_ => new ModuleRetired("landed generation disabled", true)),
                     });
-            var agent = hub.ServiceProvider.GetService<ModuleReloadAgent>();
-            var loaded = (agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()).Contains(module);
+            var loaded = LoadedHere(module);
             return removed
                 // 🚨 What is on disk is recorded the moment it is true (#7972 review): a later step
                 // (the live retire, the restart, the hub close, the record removal) that fails ends
@@ -373,30 +374,103 @@ public static class PackageUninstallExecutor
                     .Select(outcome => retired with { Outcome = outcome }));
         }
 
-        private IObservable<string> RetireLoaded(PackageUninstallRequest request, string module, bool loaded, string landed)
+        private bool LoadedHere(string module)
         {
-            {
-                if (!loaded)
-                    return Observable.Return($"{module}: {landed}; not loaded in this process — nothing to unload");
-                var reason = $"package uninstall {ModuleReloadExecutor.PathOf(hub)}: {request.Reason}";
-                var live = hub.ServiceProvider.GetService<IModuleLiveActivation>();
-                var liveTry = live is not null && live.CanSwap(module)
-                    ? live.Retire(module, reason).Take(1).Catch((Exception ex) => Observable.Return(new ModuleReloadSwapOutcome(false, ex.Message)))
-                    : Observable.Return(new ModuleReloadSwapOutcome(false, live is null ? "this process has no live module loader" : "it cannot be unloaded in place"));
-                return liveTry.SelectMany(outcome => outcome.Swapped
-                    ? Observable.Return($"{module}: {landed}; retired LIVE")
-                    : Restart(reason).Select(restart => $"{module}: {landed}; not retired live ({outcome.Failure}) — {restart}"));
-            }
+            var agent = hub.ServiceProvider.GetService<ModuleReloadAgent>();
+            return (agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()).Contains(module);
         }
 
-        private IObservable<string> Restart(string reason)
+        /// <summary>Set once this run stated <see cref="PackageRestartFactKind.Pending"/>: its exits
+        /// then withdraw it, so a stopped phase 1 never holds another request's restart back.</summary>
+        private int pendingStated;
+
+        /// <summary>
+        /// 🚨 Tells the instance's ONE restart coordinator (<see cref="PackageRestartCoordinator"/>,
+        /// MeshWeaver.Plugins#5055) that this request MAY need a restart — before its module is
+        /// touched, so a restart another request asks for meanwhile waits for this one and covers both.
+        /// Only when a restart can follow: the package declares a module this process holds and the
+        /// host has a restart path. Not reaching the coordinator weakens only the batching, never phase 1.
+        /// </summary>
+        private IObservable<Unit> EnrollPending(PackageUninstallRequest request, PackageManifest record)
         {
-            var restart = hub.ServiceProvider.GetService<IModuleActivationRestart>();
-            if (restart is null)
-                return Observable.Return("no self-update restart path on this host: it unloads at the next restart");
-            return Write(r => r with { RestartRequestedAt = DateTimeOffset.UtcNow }, Line("requesting ONE restart to unload the module"))
-                .SelectMany(_ => restart.RequestRestart(reason).Take(1))
-                .Select(o => $"one restart requested ({o.Kind}: {o.Detail})");
+            var module = record.Module?.Trim();
+            if (string.IsNullOrWhiteSpace(module)
+                || hub.ServiceProvider.GetService<IModuleActivationRestart>() is null
+                || !LoadedHere(module))
+                return Observable.Return(Unit.Default);
+            return PackageRestartCoordinator.Pending(hub, RequestPath, module, request.Reason, logger)
+                .Do(_ => Interlocked.Exchange(ref pendingStated, 1))
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex, "[PackageUninstall] {Path}: the restart coordinator could not be told this request is pending — "
+                                           + "a restart another request asks for meanwhile may not cover it", RequestPath);
+                    return Observable.Return(Unit.Default);
+                });
+        }
+
+        /// <summary>Withdraws this run's pending enrolment (a no-op when it stated none, or when it
+        /// is already ready or covered). Never faults.</summary>
+        private IObservable<Unit> WithdrawPending() =>
+            Volatile.Read(ref pendingStated) == 0
+                ? Observable.Return(Unit.Default)
+                : PackageRestartCoordinator.Withdraw(hub, RequestPath, logger)
+                    .Catch((Exception ex) =>
+                    {
+                        logger?.LogWarning(ex, "[PackageUninstall] {Path}: withdrawing from the restart coordinator failed — "
+                                               + "it stops holding other restarts back after its pending budget", RequestPath);
+                        return Observable.Return(Unit.Default);
+                    });
+
+        private IObservable<string> RetireLoaded(PackageUninstallRequest request, string module, bool loaded, string landed)
+        {
+            // 🚨 A request persisted before the restart coordinator existed may already have asked its
+            // one restart itself (it stamped RestartRequestedAt first): never asked again — the
+            // compatibility rule for in-flight requests across the upgrade.
+#pragma warning disable CS0618 // read-only for requests written before the coordinator
+            var legacy = request.RestartRequestedAt;
+#pragma warning restore CS0618
+            if (legacy is { } askedAt)
+                return WithdrawPending().Select(_ =>
+                    $"{module}: {landed}; this request already asked its one restart at {askedAt:u} (before the restart coordinator) — not asked again");
+            if (!loaded)
+                return WithdrawPending().Select(_ => $"{module}: {landed}; not loaded in this process — nothing to unload");
+            var reason = $"package uninstall {ModuleReloadExecutor.PathOf(hub)}: {request.Reason}";
+            var live = hub.ServiceProvider.GetService<IModuleLiveActivation>();
+            var liveTry = live is not null && live.CanSwap(module)
+                ? live.Retire(module, reason).Take(1).Catch((Exception ex) => Observable.Return(new ModuleReloadSwapOutcome(false, ex.Message)))
+                : Observable.Return(new ModuleReloadSwapOutcome(false, live is null ? "this process has no live module loader" : "it cannot be unloaded in place"));
+            return liveTry.SelectMany(outcome => outcome.Swapped
+                ? WithdrawPending().Select(_ => $"{module}: {landed}; retired LIVE")
+                : Restart(module, request.Reason).Select(restart => $"{module}: {landed}; not retired live ({outcome.Failure}) — {restart}"));
+        }
+
+        /// <summary>
+        /// 🚨 The restart is NOT this request's to issue (MeshWeaver.Plugins#5055): it states
+        /// <see cref="PackageRestartFactKind.Ready"/> on the instance's ONE restart coordinator, whose
+        /// own hub dispatches ONE restart for every request ready at that moment, records the outcome,
+        /// retries a faulted dispatch without repeating this phase, and never dispatches an accepted
+        /// one again. This waits for the dispatch's answer only to say it in the module outcome.
+        /// </summary>
+        private IObservable<string> Restart(string module, string reason)
+        {
+            if (hub.ServiceProvider.GetService<IModuleActivationRestart>() is null)
+                return WithdrawPending().Select(_ => "no self-update restart path on this host: it unloads at the next restart");
+            return PackageRestartCoordinator.Ready(hub, RequestPath, module, reason, logger)
+                .Select(dispatch => dispatch switch
+                {
+                    null => $"a restart is enrolled with the restart coordinator {PackageRestartCoordinator.Path}; its dispatch was not "
+                            + $"decided within {PackageRestartCoordinator.AnswerBudget} (another uninstall may still be retiring its module) — "
+                            + "the coordinator dispatches it",
+                    { State: PackageRestartDispatchState.Accepted } d =>
+                        $"one restart requested ({d.Kind}: {d.Detail}) — dispatched by the restart coordinator as {d.Id}, "
+                        + $"covering {d.Covers.Count} request(s)",
+                    { State: PackageRestartDispatchState.Faulted } d =>
+                        $"one restart requested from the restart coordinator; its dispatch {d.Id} faulted ({d.Detail}) and is retried "
+                        + "by the reconcile pass — this phase is not repeated",
+                    { State: PackageRestartDispatchState.Interrupted } d =>
+                        $"one restart requested; its dispatch {d.Id} was interrupted after it was asked — never asked again",
+                    var d => $"no restart could be requested ({d.Kind}: {d.Detail}): it unloads at the next restart",
+                });
         }
 
         /// <summary>Disposes every hub this process hosts at or under <paramref name="partition"/> —

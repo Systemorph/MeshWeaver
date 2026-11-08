@@ -52,15 +52,16 @@ public class PhaseOneReadsTheActivationWholeTest(ITestOutputHelper output) : Mon
                     ? ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, Module)
                     : ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase),
             })
-            .AddSingleton<IModuleActivationRestart, FailingRestart>());
+            .AddSingleton<IModuleActivationRestart>(_ => new ScriptedRestart(this)));
 
-    /// <summary>A restart lane that is down — the step AFTER the removal that fails.</summary>
-    private sealed class FailingRestart : IModuleActivationRestart
+    /// <summary>What the restart lane does when the restart coordinator asks it — a test sets it.</summary>
+    private Func<IObservable<ModuleRestartOutcome>>? onRestart;
+
+    /// <summary>The restart lane: runs <see cref="onRestart"/>, else takes the restart.</summary>
+    private sealed class ScriptedRestart(PhaseOneReadsTheActivationWholeTest test) : IModuleActivationRestart
     {
-        public const string Message = "the restart lane is down";
-
         public IObservable<ModuleRestartOutcome> RequestRestart(string reason) =>
-            Observable.Throw<ModuleRestartOutcome>(new InvalidOperationException(Message));
+            test.onRestart?.Invoke() ?? Observable.Return(new ModuleRestartOutcome(ModuleRestartKinds.Restarted, "rolled (test)"));
     }
 
     private bool EntryFileEnabled()
@@ -192,9 +193,11 @@ public class PhaseOneReadsTheActivationWholeTest(ITestOutputHelper output) : Mon
     }
 
     /// <summary>
-    /// A step AFTER the removal that fails (here the one restart) ends the request Failed — and it
-    /// still records that the module IS disabled on disk. Negative control (measured): without the
-    /// write right after the removal, ModuleDisabled is false.
+    /// A step AFTER the removal that stops phase 1 ends the request Failed — and it still records that
+    /// the module IS disabled on disk. Here a person installs the package again while the restart is
+    /// being taken (the restart itself is no longer phase 1's to fail: the restart coordinator records
+    /// and retries it), so the removal of the install record is refused. Negative control (measured):
+    /// without the write right after the removal, ModuleDisabled is false.
     /// </summary>
     [Fact(Timeout = 180_000)]
     public async Task AFailureAfterTheRemoval_StillRecordsModuleDisabled()
@@ -203,13 +206,16 @@ public class PhaseOneReadsTheActivationWholeTest(ITestOutputHelper output) : Mon
         await Land(ct);
         await Installed("RetireThenFail", ct);
         moduleLoaded = true;
+        onRestart = () => InstallRecordGate.ClearForPerson(Mesh, "RetireThenFail", NullLogger.Instance)
+            .Select(_ => new ModuleRestartOutcome(ModuleRestartKinds.Restarted, "rolled (test)"));
 
         var request = await Uninstall("RetireThenFail", ct);
 
         Assert.Equal(PackageUninstallStatus.Failed, request.Status);
-        Assert.Contains(FailingRestart.Message, request.Failure ?? "");
+        Assert.Contains("stopped", request.Failure ?? "");
         Assert.True(request.ModuleDisabled, request.Failure ?? "");
         Assert.False(EntryFileEnabled());
+        Assert.True(await RecordExists("RetireThenFail", ct), "the person's install record is kept");
     }
 
     /// <summary>

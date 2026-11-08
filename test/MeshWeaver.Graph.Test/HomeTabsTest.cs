@@ -11,10 +11,10 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// The home's Catalog region (<see cref="UserActivityLayoutAreas.BuildHome"/>) — two icon grids,
-/// <b>Apps</b> (the viewer's own app records or the app directory, single partition, painted from
-/// the query rows) then <b>Spaces</b> (the profile's space manifest plus the spaces the viewer was
-/// invited into), and nothing else (policy <c>home-is-composer-apps-spaces</c>). <see cref="HomeStyle.Catalog"/>
+/// The home's Catalog region (<see cref="UserActivityLayoutAreas.BuildHome"/>) — the <b>Apps</b>
+/// icon grid (the viewer's own app records or the app directory, single partition, painted from
+/// the query rows), then the TYPE SECTIONS area (<see cref="HomeTypeSections"/>), and nothing else
+/// (policy <c>home-is-composer-apps-types</c>; the sections themselves: <see cref="HomeTypeSectionsTest"/>). <see cref="HomeStyle.Catalog"/>
 /// switches back to the legacy single list (covered by <see cref="HomeCatalogTest"/>).
 /// </summary>
 public class HomeTabsTest
@@ -24,30 +24,34 @@ public class HomeTabsTest
     // ── Structure: Apps, then Spaces — and nothing else ─────────────────────────────────────────
 
     [Fact]
-    public void Home_IsAppsThenSpaces_TwoIconGrids()
+    public void Home_IsAppsThenTheTypeSections()
     {
-        // Policy home-is-composer-apps-spaces: the message box, apps, then spaces. The message
-        // box is the welcome template's Composer region; this is the Catalog region below it.
+        // Policy home-is-composer-apps-types: the message box, apps, then one section per type of
+        // content. The message box is the welcome template's Composer region; this is the Catalog
+        // region below it. Spaces are no band of their own any more — they are one of the types.
         var home = UserActivityLayoutAreas.BuildHome(NodePath, sharedTargets: ["OrgA/Module"]);
 
         var stack = home.Should().BeOfType<StackControl>().Subject;
         // The container keeps its child views protected; read them the way the layout renderer receives them.
-        var bands = ((System.Collections.IEnumerable)typeof(StackControl).BaseType!
+        var views = ((System.Collections.IEnumerable)typeof(StackControl).BaseType!
                 .GetProperty("Views", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
                 .GetValue(stack)!)
-            .OfType<MeshSearchControl>().ToArray();
-        bands.Select(b => b.Title!.ToString()).Should().Equal("Apps", "Spaces");
-        bands.Should().OnlyContain(b => Equals(b.RenderMode, MeshSearchRenderMode.Icons), "both are launchers");
-        bands.Should().OnlyContain(b => Equals(b.ShowSearchBox, false), "a launcher, not a search surface");
-        bands[1].HiddenQuery!.ToString().Should().Contain("path:OrgA/Module",
-            "a space someone shared with the viewer is a space they can open (#385)");
+            .Cast<object>().ToArray();
+        views.Should().HaveCount(2);
+        var apps = views[0].Should().BeOfType<MeshSearchControl>().Subject;
+        apps.Title!.ToString().Should().Be("Apps");
+        apps.RenderMode.Should().Be(MeshSearchRenderMode.Icons);
+        apps.ShowSearchBox.Should().Be(false, "a launcher, not a search surface");
+        var sections = views[1].Should().BeOfType<LayoutAreaControl>().Subject;
+        sections.Reference.Area.Should().Be(HomeTypeSections.AreaName,
+            "the sections are their own area, so their discovery never holds up the Apps grid");
     }
 
     [Fact]
     public void Apps_NoLongerCarriesTheSpacesFilter()
     {
         UserActivityLayoutAreas.BuildAppsBand(NodePath, null).ScopeTabs!.Select(t => t.Label)
-            .Should().Equal(["Apps"], "spaces have their own band below the apps");
+            .Should().Equal(["Apps"], "spaces are a type section below the apps, never an apps filter");
         UserActivityLayoutAreas.BuildAppsBand(NodePath, null, fromDirectory: true).ScopeTabs!.Select(t => t.Label)
             .Should().Equal("Apps", "Hidden");
     }
@@ -63,7 +67,8 @@ public class HomeTabsTest
         var sections = new[]
         {
             UserActivityLayoutAreas.BuildAppsBand(NodePath, null),
-            UserActivityLayoutAreas.BuildSpacesBand(NodePath, null, ["Acme"], ["OrgA/Module"]),
+            HomeTypeSections.Section(new HomeTypeSections.TypeSection("Space", 1, default),
+                HomeTypeSections.ContentLegs(NodePath, ["Acme"], ["OrgA/Module"]), null),
             UserActivityLayoutAreas.BuildSharedBand(["OrgA/Module"], null)!,
         };
 
@@ -156,35 +161,6 @@ public class HomeTabsTest
         var scope = apps.ScopeTabs![0];
         scope.Sortable.Should().BeTrue("the view reads the per-scope setting while the scope is active");
         scope.SortByAccess.Should().BeTrue("tiles the viewer has never placed keep the phone order behind the placed ones");
-    }
-
-    [Fact]
-    public void Spaces_AreAnIconGridOfTheViewersSpaces_RecentlyUsedFirst()
-    {
-        // "can we also integrate spaces in this? recently used? show an icon for each space?" — and
-        // now in a band of their own, below the apps (policy home-is-composer-apps-spaces).
-        var band = UserActivityLayoutAreas.BuildSpacesBand(NodePath, null, ["Globex", "Initech"], ["Acme", "Contoso"]);
-
-        band.Title!.ToString().Should().Be("Spaces");
-        band.NavigateToMainNode.Should().Be(true);
-        var spaces = band.ScopeTabs!.Should().ContainSingle().Subject;
-        spaces.RenderMode.Should().Be(nameof(MeshSearchRenderMode.Icons), "an icon for each space");
-        spaces.NavigateToMainNode.Should().BeTrue();
-        spaces.SortByAccess.Should().BeTrue("recently used first, from the viewer's own access log");
-        spaces.Sortable.Should().BeFalse(
-            "the arrangement lives on App records — a space has none, so a drop would have nowhere to write");
-        band.HiddenQuery!.ToString().Should().Be(spaces.Query);
-
-        var legs = spaces.Query.Split('\n');
-        legs.Should().HaveCount(2, "the viewer's space manifest, then the spaces the viewer was invited into");
-        legs[0].Should().Contain("nodeType:Space").And.Contain("path:Globex|Initech");
-        legs[1].Should().Contain("path:Acme|Contoso");
-        spaces.Query.Should().NotContain(ParsedQuery.CrossPartitionQualifier,
-            "both legs are anchored on the profile's manifests — no mesh-wide read on the home");
-
-        UserActivityLayoutAreas.SpacesQuery(NodePath, ["Globex"], null).Should().NotContain("\n",
-            "with no invitations there is only the manifest leg");
-        UserActivityLayoutAreas.SpacesQuery(NodePath, ["Globex"], []).Should().NotContain("\n");
     }
 
     [Fact]

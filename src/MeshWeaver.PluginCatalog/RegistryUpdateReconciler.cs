@@ -716,6 +716,16 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted reboot(s): {Paths}",
                         paths.Count, string.Join(", ", paths));
             })
+            // A package-uninstall restart whose dispatch FAULTED is retried on the same pass, with the
+            // same backoff — by its coordinator, never by repeating any request's phase 1 (#5055). An
+            // Interrupted dispatch is final and never retried (a restart is asked at most once).
+            .SelectMany(_ => PackageRestartCoordinator.RetryFaulted(hub, unit, now))
+            .Do(ids =>
+            {
+                if (!ids.IsEmpty)
+                    logger.LogInformation("[RegistryUpdate] retried {Count} faulted package-uninstall restart(s): {Ids}",
+                        ids.Count, string.Join(", ", ids));
+            })
             // AFTER the re-arm, so a faulted reboot due for its retry is retried, never ended: a reboot
             // that recorded no progress within its declared execution window is ended as Failed, naming
             // the stall — it never stays open, holding every pod's self-reboot back (MeshWeaver#6625).

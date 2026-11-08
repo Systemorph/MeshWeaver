@@ -82,7 +82,15 @@ public record PackageUninstallRequest
     /// still holds it until it restarts. Executor-owned.</summary>
     public bool ModuleDisabled { get; init; }
 
-    /// <summary>When the ONE restart was requested, if the module needed one. Executor-owned.</summary>
+    /// <summary>
+    /// RETIRED — never written any more. A request no longer issues its own restart: the instance's
+    /// ONE restart coordinator (<c>PackageRestartCoordinator</c> at
+    /// <c>Admin/_PackageUninstall/RestartCoordinator</c>) dispatches one restart for every retirement
+    /// that needs one (<c>Doc/Architecture/PackageUninstall</c> → "One restart for every retirement").
+    /// Kept only so a request persisted before the coordinator existed still reads correctly: a phase 1
+    /// that resumes such a request and finds this stamped never asks for a restart again.
+    /// </summary>
+    [Obsolete("Retired: the package restart coordinator dispatches the restart. Read only for requests persisted before it; never write it.")]
     public DateTimeOffset? RestartRequestedAt { get; init; }
 
     /// <summary>Exactly what phase 2 destroys, per partition. Executor-owned.</summary>

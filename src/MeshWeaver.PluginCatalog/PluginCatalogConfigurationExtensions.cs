@@ -476,8 +476,21 @@ public static class PluginCatalogConfigurationExtensions
                 .AddMeshDataSource(source => source.WithContentType<PackageUninstallRequest>())
                 .WithInitialization(PackageUninstallExecutor.Arm),
         });
+        // 🚨 The ONE restart coordinator (MeshWeaver.Plugins#5055): every retirement that needs a
+        // restart states it on this node, and THIS hub dispatches one restart for the batch.
+        builder.AddMeshNodes(new MeshNode(PackageRestartCoordinator.NodeType)
+        {
+            Name = "Package Restart Coordinator",
+            Icon = "/static/NodeTypeIcons/box.svg",
+            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            HubConfiguration = config => config
+                .AddDefaultLayoutAreas()
+                .AddMeshDataSource(source => source.WithContentType<PackageRestartCoordinatorState>())
+                .WithInitialization(PackageRestartCoordinator.Arm),
+        });
         builder.AddAutocompleteExcludedTypes(ModuleReloadRequest.NodeType);
         builder.AddAutocompleteExcludedTypes(PackageUninstallRequest.NodeType);
+        builder.AddAutocompleteExcludedTypes(PackageRestartCoordinator.NodeType);
         builder.ConfigureServices(services => services.AddSingleton<ModuleReloadAgent>());
         builder.ConfigureHub(config => AddModuleReloadTypes(config)
             .WithInitialization(hub => hub.ServiceProvider.GetRequiredService<ModuleReloadAgent>().Arm(hub)));
@@ -490,7 +503,11 @@ public static class PluginCatalogConfigurationExtensions
         .WithType<ModuleReloadItem>(nameof(ModuleReloadItem))
         .WithType<ModuleReloadReplica>(nameof(ModuleReloadReplica))
         .WithType<PackageUninstallRequest>(nameof(PackageUninstallRequest))
-        .WithType<PackageUninstallPartition>(nameof(PackageUninstallPartition));
+        .WithType<PackageUninstallPartition>(nameof(PackageUninstallPartition))
+        .WithType<PackageRestartCoordinatorState>(nameof(PackageRestartCoordinatorState))
+        .WithType<PackageRestartFact>(nameof(PackageRestartFact))
+        .WithType<PackageRestartMember>(nameof(PackageRestartMember))
+        .WithType<PackageRestartDispatch>(nameof(PackageRestartDispatch));
 
     /// <summary>
     /// Registers the instance reboot (<c>Doc/Architecture/InstanceReboot</c>): the request node type —
