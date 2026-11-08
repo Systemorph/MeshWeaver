@@ -63,6 +63,18 @@ on:
         type: number
         default: 120
 
+    secrets:
+      # 🪣 A REST BUCKET OF ITS OWN (2026-11-08). The caller's job token shares ONE hourly bucket with every
+      # workflow of its repository; on MeshWeaver.Plugins the review lanes were the largest reader of it and it
+      # ran out after each reset, redding unrelated gates. When the caller passes an App here, every API step
+      # of this lane runs on that App's installation token — its own bucket — and the job token is untouched.
+      # The App must NOT be the one that merges or pushes (its bucket carries those paths): use the read App
+      # (`meshweaver-reader`, FLEET_READER_APP_ID / FLEET_READER_APP_PRIVATE_KEY). Absent: `github.token`,
+      # exactly as before. Needs `pull-requests: read`, `issues: read`, `checks: read`, `actions: write`.
+      api-app-id:
+        required: false
+      api-app-private-key:
+        required: false
 jobs:
   advance:
     name: Start stage 2 when stage 1 is green
@@ -75,7 +87,19 @@ jobs:
       pull-requests: read
       checks: read
       actions: write
+    env:
+      API_APP_ID: ${{ secrets.api-app-id }}
     steps:
+      # The lane's own bucket when the caller passes an App (see `secrets:` above); else the job token.
+      - name: Mint the lane's API token (its own REST bucket), when the caller passes an App
+        id: api
+        if: env.API_APP_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.api-app-id }}
+          private-key: ${{ secrets.api-app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - name: Fetch the platform's review predicate at the lane's scripts ref
@@ -92,7 +116,7 @@ jobs:
 
       - name: Re-run the held run iff stage 1 is green for the current head
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.api.outputs.token || github.token }}
           GH_REPO: ${{ github.repository }}
           WORKFLOW: ${{ inputs.workflow }}
           MODE: ${{ inputs.mode }}
