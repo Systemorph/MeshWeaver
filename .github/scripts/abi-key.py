@@ -220,11 +220,11 @@ def payload_risk(root: Path, rel_dir: str) -> bool:
 def is_code(root: Path, rel_path: str, rel_dir: str, code: set[str] | None) -> bool:
     """Is this file compiler input of the project at rel_dir? `code` = MSBuild's evaluated Compile items
     under rel_dir (minus resources/content) when known; otherwise a `.cs` with no payload risk."""
-    if not rel_path.endswith(CODE_EXTS):
-        return False
     if code is not None:
         return rel_path in code
-    return not payload_risk(root, rel_dir)
+    # Unevaluated (`--glob`, no SDK): C# only — a `.razor`/`.cshtml` is compiler input only when MSBuild
+    # SAYS so (review of core #7995: a literal EmbeddedResource of a Page.cshtml is payload).
+    return rel_path.endswith(".cs") and not payload_risk(root, rel_dir)
 
 
 def noncode_hash(root: Path, rel_dir: str, code: set[str] | None = None) -> str:
@@ -323,6 +323,7 @@ def friends_from_source(root: Path, rel_dir: str) -> set[str]:
 def _msbuild_paths(root: Path, csproj: Path, configuration: str, msbuild_args: list[str]) -> dict:
     cmd = ["dotnet", "msbuild", str(csproj), "-nologo", f"-p:Configuration={configuration}",
            "-getProperty:TargetRefPath", "-getProperty:TargetPath", "-getProperty:AssemblyName",
+           "-getProperty:UsingMicrosoftNETSdkRazor", "-getProperty:EnableDefaultRazorComponentItems",
            "-getItem:Compile", "-getItem:EmbeddedResource", "-getItem:Content", *msbuild_args]
     proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:
@@ -344,8 +345,13 @@ def _msbuild_paths(root: Path, csproj: Path, configuration: str, msbuild_args: l
     prefix = csproj.parent.resolve().relative_to(root.resolve()).as_posix() + "/"
     # Razor markup is a `Content` item the Razor SDK compiles (RazorComponent is only filled in by targets);
     # one copied to output or publish is payload, not compiler input.
+    # …and only in a project the Razor SDK compiles (review of core #7995): a plain Microsoft.NET.Sdk project
+    # may carry a .razor Content item nobody compiles, and default component items can be switched off.
+    razor_sdk = (str(props.get("UsingMicrosoftNETSdkRazor") or "").lower() == "true"
+                 and str(props.get("EnableDefaultRazorComponentItems") or "true").lower() != "false")
+
     def razor(it: dict) -> bool:
-        return (str(it.get("FullPath") or "").endswith((".razor", ".cshtml"))
+        return razor_sdk and (str(it.get("FullPath") or "").endswith((".razor", ".cshtml"))
                 and (it.get("CopyToOutputDirectory") or "Never") == "Never"
                 and (it.get("CopyToPublishDirectory") or "Never") == "Never")
     copied = rel("Content", lambda it: not razor(it))
@@ -749,7 +755,13 @@ def _fake_builder(root: Path, log: list, nondeterministic: set[str] | None = Non
 
     def read(d: str) -> dict:
         csproj = sorted((root / d).glob("*.csproj"))[0]
-        return manifest_entry(root, d, _glob_paths(root, csproj, "Release"))
+        paths = _glob_paths(root, csproj, "Release")
+        # Explicit compiler membership, as MSBuild's evaluation would hand it: C# and Razor sources of a
+        # project with no payload risk (the fake compiler reads exactly these).
+        if not payload_risk(root, d):
+            paths["code"] = sorted(p.relative_to(root).as_posix() for ext in ("*.cs", "*.razor") for p in (root / d).rglob(ext)
+                                   if not (set(p.relative_to(root / d).parts) & {"bin", "obj"}))
+        return manifest_entry(root, d, paths)
 
     return build, read
 
@@ -930,6 +942,8 @@ def self_test() -> int:
         commit("scoped css")
         v, log = run_probe()
         check(not v["projects"]["src/Lib"]["eligible"] and log == [], "scoped CSS (.razor.css) is an asset, never eligible")
+        check(not is_code(root, "src/Lib/V.razor", "src/Lib", None) and is_code(root, "src/Lib/A.cs", "src/Lib", None),
+              "unevaluated (--glob): C# only — a .razor needs MSBuild's word that the Razor SDK compiles it")
 
         # ── C# that is PAYLOAD, not compiler input: never eligible ──
         base = git(root, "rev-parse", "HEAD").strip()
