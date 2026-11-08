@@ -27,7 +27,9 @@ public enum NodeReadStatus
     /// <summary>
     /// The node is genuinely not there: routing answered <see cref="Messaging.ErrorType.NotFound"/>,
     /// the owner answered with no data, or a read validator hid it (a filtered node is INVISIBLE
-    /// to the reader by contract — that is what hiding means).
+    /// to the reader by contract — that is what hiding means). The last case is told apart by
+    /// <see cref="NodeReadOutcome.HiddenBy"/>, for the caller that must not read "hidden" as
+    /// "deleted".
     /// </summary>
     Absent,
 
@@ -68,6 +70,18 @@ public sealed record NodeReadOutcome
     /// <see cref="NodeReadStatus.Unavailable"/>.</summary>
     public Exception? Failure { get; init; }
 
+    /// <summary>
+    /// The read validator's verdict when the node EXISTS but a validator hid it from this reader;
+    /// null otherwise. Set only with <see cref="NodeReadStatus.Absent"/>, which is what a hidden node
+    /// reads as by contract, so every consumer that treats hidden as absent is unaffected.
+    ///
+    /// <para>🚨 A caller that acts on "the node was DELETED" — not merely "I cannot see it" — must
+    /// check this: the owning hub runs read validators only over a node it still holds, so a set
+    /// verdict is positive evidence the node is there. The exact-path delete trigger
+    /// (<c>EventSubscriptionRunner</c>) fired for an existing node on exactly that confusion.</para>
+    /// </summary>
+    public string? HiddenBy { get; init; }
+
     /// <summary>The node was read.</summary>
     /// <param name="node">The node that was read.</param>
     /// <returns>A <see cref="NodeReadStatus.Present"/> outcome.</returns>
@@ -78,6 +92,13 @@ public sealed record NodeReadOutcome
     // (NoStaticState.md: "if it never takes a write after construction it's a constant").
     /// <summary>The node is genuinely not there.</summary>
     public static NodeReadOutcome Absent { get; } = new() { Status = NodeReadStatus.Absent };
+
+    /// <summary>The node exists, but a read validator hid it from this reader — reads as
+    /// <see cref="NodeReadStatus.Absent"/>, with the verdict on <see cref="HiddenBy"/>.</summary>
+    /// <param name="verdict">The validator's verdict, as the owner reported it.</param>
+    /// <returns>An <see cref="NodeReadStatus.Absent"/> outcome carrying the verdict.</returns>
+    public static NodeReadOutcome Hidden(string verdict) =>
+        new() { Status = NodeReadStatus.Absent, HiddenBy = verdict };
 
     /// <summary>The node's delete is in flight; the owner answered with its read tombstone.</summary>
     public static NodeReadOutcome DeleteInProgress { get; } =
