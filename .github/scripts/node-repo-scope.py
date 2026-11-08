@@ -80,6 +80,7 @@ OUTPUT — JSON on stdout, the human report on stderr, plus $GITHUB_OUTPUT / $GI
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -218,6 +219,72 @@ def _invoke(root: Path, script: str, argv: list[str], say) -> dict | None:
     except json.JSONDecodeError:
         say(f"    {script}: answer is not JSON")
         return None
+
+
+def abi_filter_hits(root: Path, hits: dict[str, list[str]], src_files: list[str], say) -> dict[str, list[str]]:
+    """Drop, per entry, the changed projects that reach it only through a PUBLIC SURFACE that did not move.
+
+    MeshWeaver.Plugins, 2026-11-08 ("we are still building way too many packages"): the compiled half packed
+    every module whose closure holds a changed src/ project, a private body edit included. When the caller
+    hands this lane its ABI verdict (`MW_ABI_VERDICT`, abi-key.py `probe`), a changed project whose reference
+    assembly is byte-identical — every changed file of it in the verdict — keeps an entry only when
+    abi-key.py's `decide` keeps that entry's unit (its own project, an InternalsVisibleTo friend, a reader),
+    judged on the caller's own closure (`project-closure.py --closure`). Anything unreadable leaves `hits`
+    exactly as it was and says so."""
+    raw = os.environ.get("MW_ABI_VERDICT") or ""
+    if not raw.strip():
+        return hits
+    try:
+        verdict = json.loads(raw)
+        spec = importlib.util.spec_from_file_location("abi_key_for_scope", Path(__file__).with_name("abi-key.py"))
+        abi = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(abi)
+    except Exception as exc:  # noqa: BLE001 — a verdict that cannot be read narrows nothing
+        say(f"    ABI verdict not applied ({type(exc).__name__}: {exc}) — the compiled half as before")
+        return hits
+    if not isinstance(verdict, dict) or verdict.get("unavailable") or verdict.get("schema") != abi.SCHEMA:
+        say(f"    ABI verdict not applied ({(verdict or {}).get('unavailable') if isinstance(verdict, dict) else 'not an object'}) — the compiled half as before")
+        return hits
+    # The verdict must describe THIS tree (review of #7995): its head is the probed commit, which is HEAD or an
+    # ancestor of it (the fresh merge of that head onto main). A verdict from another head is not applied.
+    vhead = str(verdict.get("head") or "")
+    known_head = subprocess.run(["git", "merge-base", "--is-ancestor", vhead, "HEAD"], cwd=root,
+                                capture_output=True).returncode == 0 if re.fullmatch(r"[0-9a-f]{40}", vhead) else False
+    if not known_head:
+        say(f"    ABI verdict not applied (its head {vhead[:12] or '<none>'} is not this tree's HEAD or an ancestor of it) — the compiled half as before")
+        return hits
+    def same_tree(d: str) -> bool:
+        """The probed project's directory is byte-identical at the verdict's head and at HEAD — a fresh merge
+        whose main side changed the project (or a later commit) invalidates the verdict for it (review of #7995)."""
+        trees = [subprocess.run(["git", "rev-parse", f"{ref}:{d}"], cwd=root, capture_output=True, text=True)
+                 for ref in (vhead, "HEAD")]
+        return all(t.returncode == 0 for t in trees) and trees[0].stdout.strip() == trees[1].stdout.strip()
+
+    unchanged = {d: e for d, e in (verdict.get("projects") or {}).items() if e.get("unchanged") and same_tree(d)}
+    out = dict(hits)
+    for entry, touched in hits.items():
+        abi_only = [p for p in touched if p in unchanged
+                    and all(f in (unchanged[p].get("files") or []) for f in src_files if f.startswith(p + "/"))]
+        if not abi_only:
+            continue
+        closure = _invoke(root, PROJECTS, ["--closure", entry, "--json"], say)
+        if not isinstance(closure, list) or not closure or not all(isinstance(d, str) for d in closure):
+            # Without the caller's own graph, decide would judge a NARROWER closure and could miss an
+            # InternalsVisibleTo friend or a reader (review of #7995): keep the entry's hits.
+            say(f"    {entry}: the caller's closure could not be read — kept")
+            continue
+        unit = {"id": entry, "project": entry, "closure": list(closure)}
+        try:
+            decision = abi.decide(root, verdict, [unit], set())[entry]
+        except Exception as exc:  # noqa: BLE001
+            say(f"    ABI decide failed for {entry} ({type(exc).__name__}) — kept")
+            continue
+        if decision.get("decision") == "skip":
+            # May be [] — the selection loop below reads `if hits.get(e["project"])`, so an emptied entry is
+            # UNREACHED exactly like one no changed project touched (only the always floor still builds it).
+            out[entry] = [p for p in touched if p not in abi_only]
+            say(f"    {entry}: {', '.join(abi_only)} — {decision.get('reason')} (verdict of {vhead[:12]}) — not packed for it")
+    return out
 
 
 def affected_packages(root: Path, changed: list[str], say) -> set[str] | None:
@@ -777,6 +844,10 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
             return full(f"{PROJECTS} answered for {len(got or {})} of {len(hits)} entries — "
                         "packing every module.")
         hits = {k: list(v) for k, v in got.items()}
+        # ABI narrowing is for VALIDATION runs only (review of #7995): a publication diff packs by tree,
+        # because a reused dependent bundle beside a rebuilt dependency would ship old sibling bytes.
+        if not publication_diff:
+            hits = abi_filter_hits(root, hits, src_files, say)
 
     # 🚨 THE FLOOR IS NOT A SELECTION. The caller's gates COMPOSE a fixed set of module bundles
     # (the AI engine that registers Skill/Agent; the carved-out collaboration module) from THIS
@@ -1581,6 +1652,61 @@ def self_test() -> int:
         got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"])
         check("[modules] no project-closure.py in the caller repo ⇒ ALL",
               got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+
+    # ABI-keyed pack set (2026-11-08): an entry reached only through a changed project whose public
+    # surface did not move is not packed for it; an entry whose OWN project changed still is; anything
+    # unreadable leaves the hits alone.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for d, refs in (("src/Lib", []), ("src/App", ["Lib"]), ("src/Other", ["Lib"])):
+            (root / d).mkdir(parents=True)
+            items = "".join(f'<ProjectReference Include="../{r}/{r}.csproj" />' for r in refs)
+            (root / d / f"{Path(d).name}.csproj").write_text(f"<Project><ItemGroup>{items}</ItemGroup></Project>")
+        hits = {"src/App/App.csproj": ["src/Lib"], "src/Lib/Lib.csproj": ["src/Lib"], "src/Other/Other.csproj": ["src/Lib", "src/Other"]}
+        (root / PROJECTS).parent.mkdir(parents=True, exist_ok=True)
+        closure_stub = (
+            "import json, sys\n"
+            "closures = {'src/App/App.csproj': ['src/App', 'src/Lib'], 'src/Lib/Lib.csproj': ['src/Lib'],\n"
+            "            'src/Other/Other.csproj': ['src/Other', 'src/Lib']}\n"
+            "print(json.dumps(closures[sys.argv[sys.argv.index('--closure') + 1]]))\n")
+        (root / PROJECTS).write_text(closure_stub, encoding="utf-8")
+        files = ["src/Lib/A.cs", "src/Other/O.cs"]
+        for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", "fixture"]):
+            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=root, check=True, capture_output=True)
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+        verdict = {"schema": "abi-verdict/1", "head": head,
+                   "projects": {"src/Lib": {"unchanged": True, "files": ["src/Lib/A.cs"], "refasm": "a" * 64, "friends": []}}}
+        old_env = os.environ.get("MW_ABI_VERDICT")
+        try:
+            os.environ["MW_ABI_VERDICT"] = json.dumps(verdict)
+            got = abi_filter_hits(root, hits, files, lambda *_a: None)
+            check("[abi] a dependent reached only through an unchanged public surface is not packed for it",
+                  got["src/App/App.csproj"] == [], repr(got))
+            check("[abi] the changed project's own entry is still packed", got["src/Lib/Lib.csproj"] == ["src/Lib"], repr(got))
+            check("[abi] an entry another changed project reaches keeps that reach", got["src/Other/Other.csproj"] == ["src/Other"], repr(got))
+            os.environ["MW_ABI_VERDICT"] = json.dumps({**verdict, "projects": {"src/Lib": {**verdict["projects"]["src/Lib"], "unchanged": False}}})
+            check("[abi] NEGATIVE CONTROL: a public-API change keeps every hit", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
+            os.environ["MW_ABI_VERDICT"] = json.dumps(verdict)
+            (root / PROJECTS).write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
+            check("[abi] the caller's closure cannot be read ⇒ the entry keeps its hits (decide never judges a narrower graph)",
+                  abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
+            os.environ["MW_ABI_VERDICT"] = json.dumps({**verdict, "head": "f" * 40})
+            check("[abi] a verdict computed at another head is not applied", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
+            os.environ["MW_ABI_VERDICT"] = json.dumps(verdict)
+            (root / PROJECTS).write_text(closure_stub, encoding="utf-8")
+            (root / "src/Lib/Later.cs").write_text("// main changed Lib after the probed head\n")
+            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "later"], cwd=root, check=True, capture_output=True)
+            check("[abi] a project whose tree moved since the verdict's head is not narrowed (stale verdict)",
+                  abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
+            for bad in ("not json", json.dumps({"unavailable": "no mount"}), json.dumps({"schema": "other"})):
+                os.environ["MW_ABI_VERDICT"] = bad
+                check(f"[abi] an unusable verdict ({bad[:20]}) leaves the hits alone", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
+        finally:
+            if old_env is None:
+                os.environ.pop("MW_ABI_VERDICT", None)
+            else:
+                os.environ["MW_ABI_VERDICT"] = old_env
 
     if failures:
         print(f"\n::error title=node-repo-scope self-test failed::{len(failures)} case(s) — this "

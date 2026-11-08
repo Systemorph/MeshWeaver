@@ -566,6 +566,16 @@ on:
         type: string
         required: false
         default: ''
+      abi-verdict:
+        description: >-
+          Optional: the caller's ABI verdict (core .github/scripts/abi-key.py `probe`, compact JSON). The
+          caller's scripts/affected-modules.py reads it through MW_ABI_VERDICT / MW_ABI_SCRIPT and drops a
+          dependent realm whose only reach is a src/ project whose PUBLIC API did not change
+          (Doc/Architecture/ModuleBuildArchitecture → ABI-keyed rebuild). Empty (the default): no ABI
+          narrowing — every caller behaves exactly as before.
+        required: false
+        type: string
+        default: ''
       test-modules:
         description: >
           Which of the selected modules RUN THEIR SUITE in this call: `*` (the default) = every
@@ -1523,6 +1533,11 @@ jobs:
           # A shelf edit reaches every container-built module, though none references the shelf.
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+          # ABI-keyed rebuild: the caller's affected-modules.py (asked by node-repo-scope.py) reads these, and
+          # build-logic's node-repo-scope.py loads its sibling — the SAME file MW_ABI_SCRIPT names (one checkout,
+          # one ref). The caller caps the verdict at 60 kB (else `unavailable`), below the 128 KiB env limit.
+          MW_ABI_VERDICT: ${{ inputs.abi-verdict }}
+          MW_ABI_SCRIPT: ${{ github.workspace }}/build-logic/.github/scripts/abi-key.py
         run: |
           set -euo pipefail
           printf '%s' "$MODULES" > "$RUNNER_TEMP/matrix.json"
