@@ -157,8 +157,22 @@ So nothing outside the record's own hub lands or removes a package's module
   activation of the record's hub finds an executing operation it did not start, and runs it again. A
   landing re-reads the same staged bytes, and a removal writes one more tombstone. Neither changes the
   outcome by running twice.
-- **A refusal is an answer.** A refused landing reaches the adoption as its named `Failure`, with
-  nothing landed. A removal the owner did not carry out faults with the owner's words.
+- **A failed answer does not latch the queue.** The answer and the promotion of the next operation
+  are one update. If that update fails, storage still holds the operation as `Executing`, and nothing
+  else changes on the record to prompt the owner to look again. So the owner forgets that it started
+  the operation and faults its own watcher. The watcher re-opens (its usual paced re-open; there is no
+  separate timer or retry loop), reads the record anew, finds the `Executing` operation not started,
+  and runs it again. This is the resume path a new activation takes, so it is idempotent the same way,
+  and the operations queued behind it are not held until a recycle.
+- **A refusal is an answer, and a fault says whether it may clear.** A refused landing reaches the
+  adoption as its named `Failure`, with nothing landed. A removal the owner did not carry out faults
+  with the owner's words. A landing that FAULTS on the owner (an I/O error on the volume, a timeout)
+  is also answered not-applied, but its answer carries `PackageRecordFactOutcome.Transient`, decided by
+  the shared classifier `TransientRegistryFailure`. The adoption carries it to
+  `ModuleAdoptOutcome.Transient`, so a module reload records `Faulted` and is re-armed rather than a
+  final `Failed`. That is the verdict a landing with no install record already reaches when it faults
+  (`PluginBundleClient.LandingFaultOutcome`). A decided refusal (a retirement, a binding, a tombstone)
+  is never transient.
 
 **A person's install waits for a removal in flight.** A stamp or a person's clear is refused while
 ANY removal of the module is `Executing`, including one whose uninstall has already released its

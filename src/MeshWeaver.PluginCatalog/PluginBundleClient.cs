@@ -789,6 +789,10 @@ public sealed class PluginBundleClient
                         FilesLanded = landed.Count,
                         LandedVersion = landed.Count > 0 ? landed.Version : null,
                         Failure = landed.Refusal,
+                        // 🚨 An owner's answer that is a transient FAULT (an I/O error landing the
+                        // staged bytes) stays retryable — Faulted, re-armed — never a terminal Failed
+                        // (#7974 review, round 5). Decided refusals carry false.
+                        Transient = landed.Refusal is not null && landed.Transient,
                     })));
     }
 
@@ -871,7 +875,7 @@ public sealed class PluginBundleClient
     /// mislabel, a module-name drift, an empty payload). A landing-service refusal (the link probe)
     /// still faults, exactly as before, and the caller's catch names it.
     /// </summary>
-    internal IObservable<(int Count, string? Version, string? Refusal)> LandFromBundleOutcome(
+    internal IObservable<(int Count, string? Version, string? Refusal, bool Transient)> LandFromBundleOutcome(
         string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes,
         string? advertisedFrameworkMvid = null, string? intent = null, bool recordAtPlan = false) =>
         // Not atomic: the closure is one decompression per declared assembly, checked between them.
@@ -896,8 +900,8 @@ public sealed class PluginBundleClient
                     _logger?.LogInformation(
                         "Module bundle for {Plugin} carries no (complete) module payload — nothing landed",
                         pluginId);
-                    return Observable.Return<(int, string?, string?)>(
-                        (0, null, "the bundle carries no (complete) module payload — nothing landed"));
+                    return Observable.Return<(int, string?, string?, bool)>(
+                        (0, null, "the bundle carries no (complete) module payload — nothing landed", false));
                 }
 
                 // 🚨 MeshWeaver#6067 — the generation is stamped with the version the BUNDLE
@@ -912,7 +916,7 @@ public sealed class PluginBundleClient
                     _logger?.LogError(
                         "Module bundle for {Plugin} REFUSED — nothing landed: {Mislabel}",
                         pluginId, mislabel);
-                    return Observable.Return<(int, string?, string?)>((0, null, $"the bundle was refused — {mislabel}"));
+                    return Observable.Return<(int, string?, string?, bool)>((0, null, $"the bundle was refused — {mislabel}", false));
                 }
                 var declaredVersion = DeclaredModuleVersion(manifest) ?? version;
 
@@ -924,8 +928,8 @@ public sealed class PluginBundleClient
                     _logger?.LogWarning(
                         "Module bundle for {Plugin} declares module '{Declared}' but the package "
                         + "declares '{Expected}' — nothing landed", pluginId, declared, moduleName);
-                    return Observable.Return<(int, string?, string?)>((0, null,
-                        $"the bundle declares module '{declared}' but the package declares '{moduleName}' — nothing landed"));
+                    return Observable.Return<(int, string?, string?, bool)>((0, null,
+                        $"the bundle declares module '{declared}' but the package declares '{moduleName}' — nothing landed", false));
                 }
 
                 var landing = _hub.ServiceProvider.GetRequiredService<ModuleLandingService>();
@@ -971,8 +975,8 @@ public sealed class PluginBundleClient
                             : null,
                     }, intent, recordAtPlan, _logger)
                     .Select(verdict => verdict.Applied
-                        ? (Count: files.Count, Version: (string?)declaredVersion, Refusal: (string?)null)
-                        : (Count: 0, Version: (string?)null, Refusal: (string?)verdict.Detail))
+                        ? (Count: files.Count, Version: (string?)declaredVersion, Refusal: (string?)null, Transient: false)
+                        : (Count: 0, Version: (string?)null, Refusal: (string?)verdict.Detail, Transient: verdict.Transient))
                     .Do(landed =>
                     {
                         if (landed.Count > 0)

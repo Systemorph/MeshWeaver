@@ -47,6 +47,11 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
     private volatile int parkRemoval;
     private volatile int removalParked;
     private volatile int releaseRemoval;
+    // Fault seams (#7974 review, round 5), each armed for ONE hit and read through Interlocked: the
+    // owner's ANSWER write fails once; a landing's recording throws an I/O fault once.
+    private int failAnswerOnce;
+    private int answerFailures;
+    private int failRecordingOnce;
     private ModuleLandingService? landing;
     private readonly FakeRegistry registry = new();
 
@@ -60,6 +65,8 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
                 // Registered AFTER the catalog's own, so this is the instance every hub resolves.
                 .AddSingleton(_ => landing ??= new ModuleLandingService(null, moduleRoot, beforeRecording: _ =>
                 {
+                    if (Interlocked.Exchange(ref failRecordingOnce, 0) == 1)
+                        throw new IOException("the shared module volume hiccupped (test fault)");
                     if (parkFirst == 0 || Interlocked.Increment(ref entered) != 1)
                         return;
                     parked = 1;
@@ -70,7 +77,16 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
                         return;
                     removalParked = 1;
                     SpinWait.SpinUntil(() => releaseRemoval == 1, TestTimeouts.Convergence);
-                })));
+                })
+                {
+                    OwnerAnswerSeam = node =>
+                    {
+                        if (Interlocked.Exchange(ref failAnswerOnce, 0) != 1)
+                            return node;
+                        Interlocked.Increment(ref answerFailures);
+                        throw new InvalidOperationException("the owner's answer write failed (test fault)");
+                    },
+                }));
 
     private ModuleLandingService Landing => Mesh.ServiceProvider.GetRequiredService<ModuleLandingService>();
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -700,6 +716,68 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         done.Status.Should().Be(PackageUninstallStatus.AwaitingConfirmation, done.Failure ?? done.ModuleOutcome ?? "");
         done.ModuleDisabled.Should().BeTrue(done.ModuleOutcome ?? "");
         (await Entry(module, ct))!.Enabled.Should().BeFalse("the module landed first, then the uninstall removed it");
+    }
+
+    /// <summary>
+    /// (15) A FAILED ANSWER WRITE does not latch the queue (#7974 review, round 5): the owner's
+    /// answer update faults once, the operation stays Executing in storage, and the owner — still
+    /// alive, never recycled — executes it again and answers it; a later submission is answered too.
+    /// Negative control, in the test: the seam fired exactly once, so the answer really failed.
+    /// Negative control (measured): with the recovery removed (the key kept, the watcher's source
+    /// not faulted), the first landing is never answered and this times out red.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AFailedAnswerWrite_IsExecutedAgain_TheQueueDoesNotLatch()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Unanswered.Module";
+        await WriteRecord("LandUnanswered", module, ct);
+        Interlocked.Exchange(ref failAnswerOnce, 1);
+
+        var first = await Land(module, "1.0.0", RecordPath("LandUnanswered")).Timeout(TestTimeouts.Convergence).Await(ct);
+        Volatile.Read(ref answerFailures).Should().Be(1, "the owner's first answer write failed");
+        first.Applied.Should().BeTrue(first.Detail);
+
+        var second = await Land(module, "1.1.0", RecordPath("LandUnanswered")).Timeout(TestTimeouts.Convergence).Await(ct);
+        second.Applied.Should().BeTrue("a later submission is not queued behind a latched operation: " + second.Detail);
+        (await Live("LandUnanswered", r => r.ModuleOperations is null, ct)).ModuleOperations.Should().BeNull("nothing is left executing");
+        (await Entry(module, ct))!.Version.Should().Be("1.1.0");
+    }
+
+    /// <summary>
+    /// (16) A TRANSIENT fault while the owner lands stays RETRYABLE (#7974 review, round 5): an
+    /// <see cref="IOException"/> on the volume is answered not-applied WITH
+    /// <see cref="PackageRecordFactOutcome.Transient"/>, which the bundle funnel carries to
+    /// <see cref="ModuleAdoptOutcome.Transient"/> — so a reload records Faulted, re-armed, not a
+    /// terminal Failed. Negative control, in the test: a DECIDED refusal (the package is being retired)
+    /// through the same funnel is not transient. Negative control (measured): with the classification
+    /// not carried, the I/O fault reads Transient == false.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ATransientLandingFault_StaysRetryable_ARefusalDoesNot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.Flaky.Module";
+        await WriteRecord("LandFlaky", module, ct);
+        registry.Serve("LandFlaky", "1.0.0", module, ModuleBundle("LandFlaky", module, "1.0.0"));
+        Interlocked.Exchange(ref failRecordingOnce, 1);
+
+        var faulted = await Bundles.AdoptModuleOutcome("LandFlaky", module, RecordPath("LandFlaky"))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        Volatile.Read(ref failRecordingOnce).Should().Be(0, "the landing met the I/O fault");
+        faulted.FilesLanded.Should().Be(0);
+        (faulted.Failure ?? "").Should().Contain("faulted");
+        faulted.Transient.Should().BeTrue("an I/O fault on the volume may clear on its own: " + faulted.Failure);
+
+        const string retired = "Acme.Retired.Module";
+        await WriteRecord("LandRetired", retired, ct);
+        (await InstallRecordGate.BeginRetirement(Mesh, "LandRetired", "Admin/_PackageUninstall/req-retired", "test", NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull();
+        registry.Serve("LandRetired", "1.0.0", retired, ModuleBundle("LandRetired", retired, "1.0.0"));
+        var refused = await Bundles.AdoptModuleOutcome("LandRetired", retired, RecordPath("LandRetired"))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        (refused.Failure ?? "").Should().Contain("being retired by");
+        refused.Transient.Should().BeFalse("a decided refusal is final");
     }
 
     /// <summary>A registry serving one bundle; its index response can be HELD (a worker the test

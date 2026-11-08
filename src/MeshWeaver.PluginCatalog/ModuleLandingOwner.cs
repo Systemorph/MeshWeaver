@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -107,7 +108,10 @@ internal sealed record ModuleLandingArguments(string Name, IReadOnlyList<(string
 /// <summary>What became of one landing: landed, or the named refusal.</summary>
 /// <param name="Applied">Whether it landed.</param>
 /// <param name="Detail">What happened, or why not.</param>
-internal sealed record ModuleLandingVerdict(bool Applied, string Detail);
+/// <param name="Transient">A not-applied verdict that is a FAULT which may clear on its own
+/// (<see cref="TransientRegistryFailure"/>), never a decided refusal — carried to
+/// <see cref="ModuleAdoptOutcome.Transient"/> so a reload that met it is retried.</param>
+internal sealed record ModuleLandingVerdict(bool Applied, string Detail, bool Transient = false);
 
 /// <summary>
 /// 🚨 <b>A module lands — and is removed — through its install record's OWN hub</b>
@@ -330,11 +334,23 @@ public static class ModuleLandingOwner
         // dead one left executing), never static. Keys are fresh per submission, so the set only grows
         // by what this activation executed.
         var started = new StartedOperations();
+        // 🚨 A FAILED ANSWER WRITE must not latch the queue (#7974 review, round 5). The answer and
+        // the promotion of the next operation are ONE update (Complete); when it faults, storage
+        // still holds the operation Executing and nothing changes the head, so the watcher — which
+        // runs a key once per activation and sees the head through DistinctUntilChanged — would
+        // never look again, and every later submission would queue behind it until a recycle. So a
+        // failed execution FORGETS its key and FAULTS the watcher's source: SubscribeHubWatcher
+        // re-establishes it (its own paced re-open — no timer or retry loop here), the fresh
+        // subscription reads the head anew, and the Executing operation, no longer started, runs
+        // again — the resume path a new activation takes, and idempotent the same way (a landing
+        // re-reads the same staged bytes, which the writer drops only on an answer).
+        var unanswered = new Subject<Exception>();
         hub.RegisterForDisposal(ActivityControlPlaneExtensions.SubscribeHubWatcher(
             hub,
             () => workspace.GetMeshNodeStream()
                 .Select(node => Head(node, options))
-                .DistinctUntilChanged(),
+                .DistinctUntilChanged()
+                .Merge(unanswered.Take(1).SelectMany(ex => Observable.Throw<OperationHead>(ex))),
             head =>
             {
                 if (head.ExecutingKey is { } key && head.Executing is { } operation)
@@ -345,8 +361,16 @@ public static class ModuleLandingOwner
                         executions.Add(execution);
                         execution.Disposable = Execute(hub, key, operation, logger)
                             .Finally(() => executions.Remove(execution))
-                            .Subscribe(_ => { }, ex => logger?.LogWarning(ex,
-                                "[ModuleLandingOwner] the module operation '{Key}' on {Address} could not be answered", key, hub.Address));
+                            .Subscribe(_ => { }, ex =>
+                            {
+                                logger?.LogWarning(ex,
+                                    "[ModuleLandingOwner] the module operation '{Key}' on {Address} could not be answered — "
+                                    + "re-reading the record to execute it again", key, hub.Address);
+                                // Forget FIRST, then fault: whichever subscription reads the head next
+                                // — the re-established one, or one already re-opening — runs it again.
+                                started.Forget(key);
+                                unanswered.OnNext(ex);
+                            });
                     }
                 }
                 else if (head.Queued > 0)
@@ -374,6 +398,9 @@ public static class ModuleLandingOwner
             });
             return added;
         }
+
+        /// <summary>An execution that could not write its answer: the key may be started again.</summary>
+        public void Forget(string key) => ImmutableInterlocked.Update(ref keys, set => set.Remove(key));
     }
 
     private sealed record OperationHead(string? ExecutingKey, PackageModuleOperation? Executing, int Queued);
@@ -436,13 +463,18 @@ public static class ModuleLandingOwner
                 })
             .Take(1)
             // A landing the link probe refuses faults — an answer like any other, never an operation
-            // left executing for ever.
-            .Catch((Exception ex) => Observable.Return(Answer(false, $"the {operation.Kind} faulted: {ex.Message}")))
+            // left executing for ever. 🚨 Classified by the ONE shared classifier (#7974 review,
+            // round 5): an I/O fault on the volume is TRANSIENT, so the writer's reload is Faulted and
+            // re-armed rather than terminally Failed — the same verdict the record-less path reaches
+            // through PluginBundleClient.LandingFaultOutcome. A decided refusal above is never one.
+            .Catch((Exception ex) => Observable.Return(Answer(false, $"the {operation.Kind} faulted: {ex.Message}")
+                with { Transient = TransientRegistryFailure.IsTransient(ex) }))
             .Do(outcome => logger?.LogInformation(
                 "[ModuleLandingOwner] {Address}: {Kind} of module '{Module}' ({Key}) — {Detail}",
                 hub.Address, operation.Kind, operation.Module, key, outcome.Detail))
             .SelectMany(outcome => workspace.GetMeshNodeStream()
-                .Update(node => Complete(node, key, outcome, hub.JsonSerializerOptions, DateTimeOffset.UtcNow))
+                .Update(node => Complete(landing?.OwnerAnswerSeam?.Invoke(node) ?? node, key, outcome,
+                    hub.JsonSerializerOptions, DateTimeOffset.UtcNow))
                 .Take(1))
             .Select(_ => Unit.Default);
     }
@@ -517,7 +549,7 @@ public static class ModuleLandingOwner
                     // folder is the cost, never an accepted landing whose bytes were pulled away.
                     .SelectMany(_ => InstallRecordGate.Submit(hub, path, key, fact, logger, removeAnswer: null, budget: OperationBudget))
                     .SelectMany(outcome => Drop(landing, key, logger)
-                        .Select(_ => new ModuleLandingVerdict(outcome.Applied, outcome.Detail)));
+                        .Select(_ => new ModuleLandingVerdict(outcome.Applied, outcome.Detail, outcome.Transient)));
             });
     }
 

@@ -95,7 +95,18 @@ public sealed record PackageRecordFact
 /// <param name="Applied">Whether the owner applied it.</param>
 /// <param name="Detail">What the owner did, or why it refused.</param>
 /// <param name="At">When the owner decided.</param>
-public sealed record PackageRecordFactOutcome(bool Applied, string Detail, DateTimeOffset At);
+public sealed record PackageRecordFactOutcome(bool Applied, string Detail, DateTimeOffset At)
+{
+    /// <summary>
+    /// 🚨 Whether a NOT-applied answer is a fault that may clear on its own — an I/O error on the
+    /// shared volume, a timeout — classified by <see cref="TransientRegistryFailure"/>, so the work
+    /// that met it is retried (a module reload records it as <c>Faulted</c>, re-armed) instead of
+    /// final (<c>Failed</c>). A decided refusal (a retirement, a binding, a tombstone) is never
+    /// transient (MeshWeaver#7974 review, round 5). An init property, never a positional parameter:
+    /// a new parameter would replace the public constructor and its <c>Deconstruct</c>.
+    /// </summary>
+    public bool Transient { get; init; }
+}
 
 /// <summary>An install-record write the record's own hub refused — a refusal, never a silent success.</summary>
 /// <param name="path">The install record.</param>
