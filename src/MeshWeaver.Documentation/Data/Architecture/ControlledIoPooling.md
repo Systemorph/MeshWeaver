@@ -894,6 +894,51 @@ the area, activities are quiesced before teardown (`ActivityTracker`), and a que
 to whichever hub or service subscribed it. One that has no owner is now named instead of being silently
 completed on the wrong thread.
 
+### 🚨 A mesh-lifetime reader is owned UNTIL THE DRAIN — its service and its hub end too late (#7992)
+
+**The incident.** Once the leak report above shipped, EVERY silo stop on both production portals logged
+`IoPoolSiloTeardown: pool 'Query' was cancelled with 7–11 subscription(s) still attached`, naming the same
+readers each time: `AccountLockCatalog`, `InstanceSecretCatalog`, `UiContributionCatalog`,
+`InstanceAdminRecordCatalog` (both content types), `EventSubscriptionRunner.WatchTriggerNodeType`,
+`UserIdentityCache.OpenDirectorySubscription` — and, from MeshWeaver.Plugins, `EaGraphAuth.AddedAccountIds`
+and `PluginBundleIndexSources`. Ages up to 10,000 s: subscribed at boot, never released.
+
+**Why "belongs to whichever hub or service subscribed it" was not enough.** Each of those HAD an owner —
+a singleton's `Dispose`, or `hub.RegisterForDisposal` on the mesh hub (`UserIdentityCache` did exactly
+that). Both owners end AFTER the pools:
+
+- **On a silo**, `IoPoolSiloTeardown` disposes the registry at the silo's stop (`ServiceLifecycleStage.First`).
+  The mesh hub is disposed only by `MeshTeardownHostedService` in the host's `StoppedAsync`, and the
+  singletons only when the host disposes its container — both strictly later. "The pool stops LAST" is true
+  of the SILO's lifecycle, not of the mesh's.
+- **In mesh teardown**, `DrainAll()` runs between `DisposalCompleted` and scope disposal, so a singleton's
+  `Dispose` again comes after the cancel.
+
+So every reader that lives as long as the mesh was, by construction, still attached at every cancel.
+
+**The contract now.** A service that holds a pooled subscription for the mesh's lifetime hands it to
+`hub.OwnUntilIoDrain(subscription, owner)` (`IoPoolRegistry.OwnUntilDrain`) and keeps the returned handle
+in its place. Every drain entry point — `Dispose()` (the silo) and `DrainAll()` (mesh teardown) — FIRST
+disposes everything so owned, on the drain caller's thread, outside every pool gate, and only then closes
+a lane or cancels a pool. That is the owner's release (`.Finally` runs on that thread), not consumer code
+on the canceller: the #7968 rule stands. It logs one Information line naming the owners; a dispose that
+throws is logged at Error and does not stop the rest. Owned after the release began, a subscription is
+disposed at once. A hub with no registry (a bare test mesh) has no pools, and the subscription is returned
+as is.
+
+The six core readers above adopt it; the two MeshWeaver.Plugins readers adopt it in their own repository
+once this platform build is their floor. A new mesh-lifetime reader that does not is named by the leak
+report at the next stop — which is the report working.
+
+**Pinned by** `MeshLifetimeReadsReleasedBeforeThePoolCancelTest` (MeshWeaver.Graph.Test): a real mesh opens
+`AccountLockCatalog`, `InstanceSecretCatalog` and `UiContributionCatalog`, plus an UNOWNED control query
+the report must name (so its silence about the catalogs proves something), then disposes the registry
+while the mesh lives — the silo's order. **Negative control, measured:** with the three consumers'
+`OwnUntilIoDrain` reverted, the test fails with the production line verbatim — `pool 'Query' was cancelled
+with 5 subscription(s) still attached`. Also `IoPoolOwnUntilDrainTest` (MeshWeaver.Hosting.Test): release
+before the cancel on both drains, the `.Finally` on the drain caller's thread, the unowned shape as its
+negative control, an early dispose ending the leg once, and a late own disposed at once.
+
 **What this does NOT cover, stated so nobody reads it as covered.** `Invoke` and `InvokeStream` link
 each leaf's token to the pool's. A leaf awaiting I/O whose cancellation completes inline (a
 `Task.Delay(ct)`, some drivers) resumes its async body on the canceller, and the body's fault then
