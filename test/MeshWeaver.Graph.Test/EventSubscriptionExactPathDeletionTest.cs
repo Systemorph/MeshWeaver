@@ -157,7 +157,13 @@ public class EventSubscriptionExactPathDeletionTest(ITestOutputHelper output) : 
 
         var settled = await Settled(witness.Id);
         Assert.True(settled.Status == EventSubscriptionStatus.Fired, $"witness ended {settled.Status}: {settled.LastError}");
-        Assert.Equal(EventSubscriptionStatus.Pending, (await Current(guarded.Id)).Status);
+        // The witness and the guarded subscription are checked in the same pass, but the guarded one's
+        // terminal write (were it to fire) can land just after the witness's — so the guarded one must
+        // stay Pending over a window, not merely at one read.
+        await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(guarded.Id))
+            .Select(n => n?.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
+            .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
+            .Should().NotEmit(5.Seconds(), "the record still exists", ct);
     }
 
     /// <summary>A path with a kind other than Deleted is not read as a type trigger with no type: it ends
