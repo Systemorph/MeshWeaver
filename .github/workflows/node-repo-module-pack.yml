@@ -2449,8 +2449,15 @@ jobs:
           fi
           printf '%s' "$MODULES" > "$RUNNER_TEMP/ccache-selection.json"
           accept=$(jq -r '[.[] | select(.build == "container") | (.accept // "")] | unique | join("|")' <<< "$MODULES")
-          shelf_hash=$([ -n "$SHELF" ] && python3 "$cc" dir-hash "$SHELF" || echo none)
-          ext_hash=$([ -n "$EXTENSION" ] && python3 "$cc" dir-hash "$EXTENSION" || echo none)
+          # An absent shelf/extension is `none`; one that EXISTS but cannot be hashed turns the cache off
+          # (never `none`, which would let two unhashable shelves share a salt component).
+          shelf_hash=none; ext_hash=none
+          if [ -n "$SHELF" ]; then
+            shelf_hash=$(python3 "$cc" dir-hash "$SHELF") || { echo "::warning title=Compile cache off::the shelf $SHELF could not be hashed — every entry is compiled"; exit 0; }
+          fi
+          if [ -n "$EXTENSION" ]; then
+            ext_hash=$(python3 "$cc" dir-hash "$EXTENSION") || { echo "::warning title=Compile cache off::the build extension $EXTENSION could not be hashed — every entry is compiled"; exit 0; }
+          fi
           salt="image=$DIGEST|tester=$TESTER_DIGEST|shelf=$shelf_hash|ext=$ext_hash|accept=$accept|superseded=$SUPERSEDED|platform=$PLATFORM_REF|sdk=$KEYED_SDK"
           echo "compile cache salt: $salt"
           plan="$RUNNER_TEMP/ccache-plan.json"
