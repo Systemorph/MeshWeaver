@@ -4570,8 +4570,12 @@ jobs:
           tip_run="unreadable"
           if [ "$tip" != "$mine" ]; then
             workflow_path="${CALLER_WORKFLOW_REF#"$REPO"/}"; workflow_path="${workflow_path%%@*}"
-            if GH_TOKEN="$GITHUB_TOKEN_FOR_RUNS" gh api "repos/$REPO/actions/runs?head_sha=$tip&per_page=100" > "$RUNNER_TEMP/tip-runs.json" 2>/dev/null; then
-              tip_run=$(python3 build-logic/.github/scripts/module-publication.py tip-run --runs "@$RUNNER_TEMP/tip-runs.json" --workflow-path "$workflow_path")
+            if GH_TOKEN="$GITHUB_TOKEN_FOR_RUNS" gh api "repos/$REPO/actions/runs?head_sha=$tip&per_page=100" > "$RUNNER_TEMP/tip-runs.json" 2>"$RUNNER_TEMP/tip-runs.err"; then
+              # A build-logic ref that predates `tip-run` cannot classify: that is `unreadable` (publishes), never a dead step.
+              tip_run=$(python3 build-logic/.github/scripts/module-publication.py tip-run --runs "@$RUNNER_TEMP/tip-runs.json" --workflow-path "$workflow_path") \
+                || { echo "the tip run's state could not be classified (build-logic without \`tip-run\`?) — reading it as unreadable, which publishes"; tip_run="unreadable"; }
+            else
+              echo "the tip run's state could not be read ($(head -c 300 "$RUNNER_TEMP/tip-runs.err" | tr '\n' ' ')) — reading it as unreadable, which publishes"
             fi
             echo "trunk tip $tip: its run of $workflow_path is $tip_run"
           fi

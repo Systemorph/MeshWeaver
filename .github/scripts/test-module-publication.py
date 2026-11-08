@@ -92,6 +92,34 @@ def run_step(body: str, env: dict[str, str], workspace: Path) -> subprocess.Comp
                           capture_output=True, text=True)
 
 
+# ── the tip run's state, as the `newer` step reads it (`gh api …/actions/runs?head_sha=`) ──────
+#: The caller workflow the harness poses as; the stub answers runs of THIS path.
+CALLER_WORKFLOW = ".github/workflows/ci.yml"
+
+
+def tip_run_env(ws: Path, status: str) -> dict[str, str]:
+    """Env for the `newer` step with a stub `gh` on PATH whose runs listing reports the trunk tip's
+    run of CALLER_WORKFLOW as `status`. The step reads the tip run's STATE before it may stand a module
+    down (only `in_progress` may), so a harness that supplies no listing tests nothing but `unreadable`."""
+    bindir = ws / "_bin"
+    bindir.mkdir(exist_ok=True)
+    listing = ws / "_temp" / "fake-tip-runs.json"
+    listing.parent.mkdir(exist_ok=True)
+    listing.write_text(json.dumps({"total_count": 1, "workflow_runs": [
+        {"path": CALLER_WORKFLOW, "status": status}]}))
+    gh = bindir / "gh"
+    gh.write_text("#!/usr/bin/env bash\n"
+                  "case \"$1 $2\" in\n"
+                  "  \"api repos/Systemorph/Acme/actions/runs?\"*) cat \"$FAKE_TIP_RUNS\" ;;\n"
+                  "  *) echo \"stub gh: unexpected call: $*\" >&2; exit 2 ;;\n"
+                  "esac\n")
+    gh.chmod(0o755)
+    return {"REPO": "Systemorph/Acme",
+            "CALLER_WORKFLOW_REF": f"Systemorph/Acme/{CALLER_WORKFLOW}@refs/heads/main",
+            "FAKE_TIP_RUNS": str(listing),
+            "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
 # ── the stub registry ───────────────────────────────────────────────────────────────────────
 class Registry:
     """Records every request. 'The registry was left untouched' is read off THIS, never off an
@@ -392,7 +420,8 @@ def main() -> int:  # noqa: C901
         (temp / "staged" / "MeshWeaver.AI.publication.json").write_text(json.dumps(
             {"lane": LANE, "module": "MeshWeaver.AI", "owed": True}))
         env = {"LANE": LANE, "DECLARED": json.dumps(MODULES), "TRUNK": "main",
-               "SHELF_PROJECT": "", "EXTENSIONS_PROJECT": "", "GITHUB_WORKSPACE": str(ws)}
+               "SHELF_PROJECT": "", "EXTENSIONS_PROJECT": "", "GITHUB_WORKSPACE": str(ws),
+               **tip_run_env(ws, "in_progress")}
 
         def decided() -> dict:
             return json.loads((temp / "superseded.json").read_text())["superseded"]
@@ -406,6 +435,11 @@ def main() -> int:  # noqa: C901
         check("a newer trunk commit reaching the module stands it down (the step fetched the tip itself)",
               r.returncode == 0 and set(decided()) == {"MeshWeaver.AI"}
               and git("rev-parse", "HEAD", cwd=ws / "newest") == mine, r.stdout + r.stderr)
+        # THE HAND-OVER LIVELOCK: the same newer commit, but its run is QUEUED (displaceable by the
+        # next push) — the step must read that state itself and publish rather than stand down.
+        r = run_step(newer_body, dict(env, **tip_run_env(ws, "queued")), ws)
+        check("a newer trunk commit whose run is only QUEUED stands NOTHING down (the step read the tip run's state)",
+              r.returncode == 0 and decided() == {} and "is queued" in (r.stdout + r.stderr), r.stdout + r.stderr)
         r = run_step(newer_body, dict(env, TRUNK=""), ws)
         check("no default branch on the event is RED ('cannot tell' never publishes)", r.returncode == 1,
               r.stdout + r.stderr)
@@ -453,7 +487,8 @@ def main() -> int:  # noqa: C901
                 {"lane": LANE, "module": entry["module"], "owed": True}))
         every = {e["module"] for e in scope_mod._MATRIX}
         env = {"LANE": LANE, "DECLARED": json.dumps(scope_mod._MATRIX), "TRUNK": "main",
-               "SHELF_PROJECT": shelf, "EXTENSIONS_PROJECT": "", "GITHUB_WORKSPACE": str(ws)}
+               "SHELF_PROJECT": shelf, "EXTENSIONS_PROJECT": "", "GITHUB_WORKSPACE": str(ws),
+               **tip_run_env(ws, "in_progress")}
 
         def decided() -> dict:
             return json.loads((temp / "superseded.json").read_text())["superseded"]

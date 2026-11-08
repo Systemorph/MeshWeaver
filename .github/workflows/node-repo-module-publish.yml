@@ -426,7 +426,8 @@ jobs:
           if [ "$tip" != "$mine" ]; then
             workflow_path="${CALLER_WORKFLOW_REF#"$REPO"/}"; workflow_path="${workflow_path%%@*}"
             if gh api "repos/$REPO/actions/runs?head_sha=$tip&per_page=100" > "$RUNNER_TEMP/tip-runs.json" 2>"$RUNNER_TEMP/tip-runs.err"; then
-              tip_run="$(python3 meshweaver/.github/scripts/module-publication.py tip-run --runs "@$RUNNER_TEMP/tip-runs.json" --workflow-path "$workflow_path")"
+              tip_run="$(python3 meshweaver/.github/scripts/module-publication.py tip-run --runs "@$RUNNER_TEMP/tip-runs.json" --workflow-path "$workflow_path")" \
+                || { echo "the tip run's state could not be classified — reading it as unreadable, which publishes"; tip_run="unreadable"; }
             else
               echo "the tip run's state could not be read ($(head -c 300 "$RUNNER_TEMP/tip-runs.err" | tr '\n' ' ')) — reading it as unreadable, which publishes"
             fi

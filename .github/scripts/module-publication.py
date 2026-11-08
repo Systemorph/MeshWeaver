@@ -1209,13 +1209,18 @@ def tip_run_state(runs_doc, workflow_path: str) -> str:
     `in_progress` when any run of `workflow_path` for that commit is executing (the only state a
     stand-down may rest on), else the most telling other state (`queued`, `waiting`, `pending`,
     `requested`, `completed`), `none` when the commit has no such run, and `unreadable` when the
-    answer is not a runs listing. Pure, so the self-test drives it.
+    answer is not a runs listing — or when no `workflow_path` names THIS workflow: another
+    workflow's executing run says nothing about whether this one reaches its hand-over, so an
+    unnamed path never matches "any run" (it publishes, the safe direction). Pure, so the self-test
+    drives it.
     """
     if not isinstance(runs_doc, dict) or not isinstance(runs_doc.get("workflow_runs"), list):
         return "unreadable"
     path = (workflow_path or "").strip()
+    if not path:
+        return "unreadable"
     statuses = [r.get("status") for r in runs_doc["workflow_runs"]
-                if isinstance(r, dict) and (not path or r.get("path") == path)]
+                if isinstance(r, dict) and r.get("path") == path]
     if not statuses:
         return "none"
     for state in (TIP_RUN_RUNNING, "queued", "waiting", "pending", "requested", "completed"):
@@ -1280,15 +1285,15 @@ def superseded(a: argparse.Namespace) -> int:
     owed = sorted(m for m, r in records.items() if r.get("lane") == lane and r.get("owed") and m in declared)
     changed = [c for c in (a.changed_list or "").split(",") if c]
     decided: dict[str, str] = {}
-    tip_run = (getattr(a, "tip_run", "") or "").strip()
+    tip_state = (getattr(a, "tip_run", "") or "").strip()
     if a.tip == a.mine:
         print(f"this run's commit {a.mine} IS the trunk tip — nothing newer; {len(owed)} owed module(s) publish")
     elif not changed:
         print(f"the trunk moved to {a.tip}, but its tree equals this run's — nothing newer reaches any of "
               f"the {len(owed)} owed module(s)")
-    elif tip_run and tip_run != TIP_RUN_RUNNING:
+    elif tip_state and tip_state != TIP_RUN_RUNNING:
         print("::notice title=Published although the trunk moved::"
-              + _inert(f"the trunk moved to {a.tip}, but its run is `{tip_run}`, not running — nothing "
+              + _inert(f"the trunk moved to {a.tip}, but its run is `{tip_state}`, not running — nothing "
                        "guarantees it reaches its hand-over (a queued trunk run is displaced by the next "
                        "push), so all " + str(len(owed)) + " owed module(s) publish from " + a.mine
                        + ". The registry's shelf keeps the highest version as head (#3996), so this "
@@ -2321,6 +2326,9 @@ jobs:
         listing["workflow_runs"].append({"path": ci, "status": "in_progress"})
         check("tip-run: a running run of this workflow wins over a queued one",
               tip_run_state(listing, ci) == "in_progress", str(listing))
+        check("tip-run: NO workflow path is unreadable — another workflow's running run never counts",
+              tip_run_state(listing, "") == "unreadable" and tip_run_state(listing, "  ") == "unreadable",
+              str(listing))
         check("tip-run: a commit with no run of this workflow reads none",
               tip_run_state({"workflow_runs": []}, ci) == "none")
         check("tip-run: a refusal body (no workflow_runs) reads unreadable, never in_progress",
