@@ -457,17 +457,22 @@ on every instance, inside the instance and on these local models
   draws) — never over a description or icon a person set;
 - every part is **searchable**, full text and semantic.
 
-The only addition to the overlay is the OCR engine, pointed at the same host Ollama and a model whose
+The only addition to the overlay (`~/.memex-local/values.local.yaml`, under `config: → memex_portal:`
+like the embedding keys of §10.1) is the OCR engine, pointed at the same host Ollama and a model whose
 `capabilities` include `vision` (qwen3.6 and qwen3.8 do — check with `curl -s localhost:11434/api/show
 -d '{"name":"qwen3.6"}'`):
 
 ```yaml
+config:
+  memex_portal:
     Ocr__Engine: "OllamaVision"
-    Ocr__OllamaVision__Endpoint: "http://ollama:11434/v1"
+    Ocr__OllamaVision__Endpoint: "http://ollama.memex.svc.cluster.local:11434/v1"   # the host-safe name; a host Ollama answers the short name 403
     Ocr__OllamaVision__Model: "qwen3.6"
 ```
 
-Table and section detection, figure extraction and the picture icons run in-process — nothing more to
+memex-local writes exactly these keys by itself (`~/.memex-local/llm.auto.yaml`) when the chat model reports
+`vision`, and `memex-local doctor` reports whether it does (MeshWeaver.Deploy `MEMEX_OCR`). Table and section
+detection, figure extraction and the picture icons run in-process — nothing more to
 install. Summaries and the SVG icon use the default chat model of §10 (it must have `vision` for the
 picture descriptions too). To turn enrichment off for one instance: `ContentIndexing__Enrichment__Enabled: "false"`.
 
