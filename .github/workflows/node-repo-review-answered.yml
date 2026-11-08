@@ -224,7 +224,15 @@ jobs:
       verdict-state: ${{ steps.judge.outputs.verdict-state }}
     env:
       API_APP_ID: ${{ secrets.api-app-id }}
+      API_APP_KEY_SET: ${{ secrets.api-app-private-key != '' && 'yes' || '' }}
     steps:
+      # A HALF opt-in is a red, never a silent fallback to the shared bucket (review of #8011): an id without a
+      # key fails inside the mint below; a key without an id is refused here.
+      - name: The caller passed both App secrets, or neither
+        if: env.API_APP_ID == '' && env.API_APP_KEY_SET != ''
+        run: |
+          echo "::error::the caller passes api-app-private-key but no api-app-id — the lane would quietly spend the shared job-token bucket. Pass both (the read App's FLEET_READER_APP_ID / FLEET_READER_APP_PRIVATE_KEY) or neither."
+          exit 1
       # The lane's own bucket when the caller passes an App (see `secrets:` above); else the job token.
       - name: Mint the lane's API token (its own REST bucket), when the caller passes an App
         id: api
@@ -332,7 +340,15 @@ jobs:
       actions: write      # list this workflow's runs for the head; POST …/runs/{id}/rerun (whole run)
     env:
       API_APP_ID: ${{ secrets.api-app-id }}
+      API_APP_KEY_SET: ${{ secrets.api-app-private-key != '' && 'yes' || '' }}
     steps:
+      # A HALF opt-in is a red, never a silent fallback to the shared bucket (review of #8011): an id without a
+      # key fails inside the mint below; a key without an id is refused here.
+      - name: The caller passed both App secrets, or neither
+        if: env.API_APP_ID == '' && env.API_APP_KEY_SET != ''
+        run: |
+          echo "::error::the caller passes api-app-private-key but no api-app-id — the lane would quietly spend the shared job-token bucket. Pass both (the read App's FLEET_READER_APP_ID / FLEET_READER_APP_PRIVATE_KEY) or neither."
+          exit 1
       # The lane's own bucket when the caller passes an App (see `secrets:` above); else the job token.
       - name: Mint the lane's API token (its own REST bucket), when the caller passes an App
         id: api
