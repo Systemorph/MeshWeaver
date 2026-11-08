@@ -568,9 +568,11 @@ project and then that package's `requires` dependents. Both shared lanes now tak
 (`node-repo-gate.yml`, `node-repo-module-pack.yml`) and hand it, with the lane's own copy of
 `abi-key.py`, to the caller's selector as `MW_ABI_VERDICT` / `MW_ABI_SCRIPT`; the selector asks
 `decide` which reached packages keep (their own module project, an InternalsVisibleTo friend, a
-reader) and drops the rest — with them, their dependents. Empty input = no change. `.razor`/`.cshtml`
-markup is eligible since the same day: an evaluated `Content` item the Razor SDK compiles, never one
-copied to output (measured: a markup edit keeps the reference assembly, a new `[Parameter]` moves it).
+reader) and drops the rest — with them, their dependents. Empty input = no change. `.razor` markup is
+eligible since the same day: an evaluated `Content` item in a project the Razor SDK compiles, never one
+copied or embedded (measured: a markup edit keeps the reference assembly, a new `[Parameter]` moves it;
+a plain-SDK `.razor` Content item is payload). `.cshtml` qualifies only when it evaluates the same way —
+not measured on an MVC/Razor Pages project, where `PreserveNewest` keeps it payload (no skip).
 
 The bundle key above is deliberately UNCHANGED: a bundle carries its module-owned siblings, so a
 reused dependent bundle beside a rebuilt dependency would put one assembly into the composed set at
