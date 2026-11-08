@@ -354,7 +354,10 @@ def rate_limit_wait(code: int, headers, body: str, now: float) -> float | None:
         return None
     get = (lambda k: headers.get(k)) if headers is not None else (lambda k: None)
     retry_after, remaining, reset = get("retry-after"), get("x-ratelimit-remaining"), get("x-ratelimit-reset")
-    if retry_after is None and remaining != "0" and "rate limit" not in (body or "").lower():
+    # The SENTENCE decides, not the headers: `x-ratelimit-*` rides on every answer, so a permission 403
+    # landing while the bucket reads 0 stays a verdict. Only an empty body is judged by `remaining`.
+    text = (body or "").lower()
+    if retry_after is None and "rate limit" not in text and not (remaining == "0" and not text.strip()):
         return None
     try:
         if retry_after is not None:
@@ -4390,6 +4393,8 @@ def self_test() -> int:
              [limited("0", b'{"message":"API rate limit exceeded for installation."}')], "ok"),
             ("NEG: a permission 403 is a verdict on the first answer, never a wait",
              [limited("4000", b'{"message":"Resource not accessible by integration"}')], "verdict"),
+            ("NEG: a permission 403 while the bucket reads 0 is still a verdict",
+             [limited("0", b'{"message":"Resource not accessible by integration"}')], "verdict"),
             ("a reset beyond the bound is INFRA, said first",
              [limited("0", b'{"message":"API rate limit exceeded"}')] * 3, "infra"),
         ):
