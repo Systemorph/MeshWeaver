@@ -213,7 +213,8 @@ internal sealed class ProcessLivenessHeartbeatService(
             return ThreadPoolStall.Describe(reading, null, null);
         try
         {
-            return ThreadPoolStall.Describe(reading, workerStacks.CaptureWorkerStacks(), null);
+            var stacks = workerStacks.CaptureStacks();
+            return ThreadPoolStall.Describe(reading, stacks.Workers, null, stacks.OtherThreads);
         }
         catch (Exception exception)
         {

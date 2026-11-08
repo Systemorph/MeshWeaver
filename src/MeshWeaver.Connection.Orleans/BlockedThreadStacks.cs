@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using MeshWeaver.Hosting;
 using Microsoft.Diagnostics.NETCore.Client;
 using Microsoft.Diagnostics.Runtime;
 
@@ -111,14 +112,45 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
     /// Blocking: run it off any scheduler that matters.
     /// </summary>
     /// <returns>One entry per worker: its frames, innermost first, one per line.</returns>
-    public IReadOnlyList<string> CaptureThreadPoolWorkers()
-        => Read(runtime => runtime.Threads
-            .Where(thread => thread.IsAlive)
-            .Select(thread => (thread, frames: Frames(thread, int.MaxValue)))
-            .Where(t => t.thread.State.HasFlag(ClrThreadState.TS_TPWorkerThread)
-                        || t.frames.Any(frame => frame.Contains(PoolWorkerLoop, StringComparison.Ordinal)))
-            .Select(t => string.Join(Environment.NewLine, t.frames.Take(MaxFrames).Select(frame => "at " + frame)))
-            .ToArray());
+    public IReadOnlyList<string> CaptureThreadPoolWorkers() => CaptureThreadPool().Workers;
+
+    /// <summary>
+    /// Every live managed thread's stack from ONE dump, split into the ThreadPool workers (as
+    /// <see cref="CaptureThreadPoolWorkers"/>) and every other thread — the other threads are where a
+    /// monitor the workers wait on may be held. Each stack is captured to
+    /// <see cref="MaxStallFrames"/> frames, so the OUTER caller that led a worker into its blocking frame
+    /// is in the reading (the 2026-11-07 capture, cut at 12 frames, named the gate but not its caller).
+    /// The capture thread itself is left out. Throws when the dump cannot be written or read.
+    /// Blocking: run it off any scheduler that matters.
+    /// </summary>
+    /// <returns>The workers' and the other threads' stacks, frames innermost first, one per line.</returns>
+    public ThreadPoolStacks CaptureThreadPool()
+    {
+        var self = Environment.CurrentManagedThreadId;
+        return Read(runtime =>
+        {
+            var threads = runtime.Threads
+                .Where(thread => thread.IsAlive && thread.ManagedThreadId != self)
+                .Select(thread => (thread, frames: Frames(thread, int.MaxValue)))
+                .Where(t => t.frames.Count > 0)
+                .ToArray();
+            bool IsWorker((ClrThread thread, IReadOnlyList<string> frames) t) =>
+                t.thread.State.HasFlag(ClrThreadState.TS_TPWorkerThread)
+                || t.frames.Any(frame => frame.Contains(PoolWorkerLoop, StringComparison.Ordinal));
+            string Render((ClrThread thread, IReadOnlyList<string> frames) t) =>
+                string.Join(Environment.NewLine, t.frames.Take(MaxStallFrames).Select(frame => "at " + frame));
+            return new ThreadPoolStacks(
+                threads.Where(IsWorker).Select(Render).ToArray(),
+                threads.Where(t => !IsWorker(t)).Select(Render).ToArray());
+        });
+    }
+
+    /// <summary>
+    /// How many frames of each thread a <c>[POOLSTALL]</c> capture keeps — enough for a whole Rx chain
+    /// down to the pool's worker loop. It guards against a corrupt, looping stack walk, not against size:
+    /// the line bounds its own size (<c>ThreadPoolStall.MaxLineChars</c>).
+    /// </summary>
+    internal const int MaxStallFrames = 512;
 
     /// <summary>The portable ThreadPool's worker loop — on the outermost frames of every worker it runs.</summary>
     internal const string PoolWorkerLoop = "PortableThreadPool+WorkerThread";
