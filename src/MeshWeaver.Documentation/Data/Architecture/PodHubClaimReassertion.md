@@ -348,7 +348,14 @@ chain on production's directory: `ARemoteStreamOpenedDuringADirectoryLeaveLoadsT
 - The READER is a real hub (`silohub/…`) on silo 0. Its id is chosen so that its directory entry lives
   on a second silo. The rig's `cache/…` is declared client-hosted, so it cannot take the pod-hub leg.
   `silohub` is the rig's type that does, and it is the leg production's `cache/…` takes.
-- The node's per-node owner is activated on the third silo.
+- The node's per-node owner is activated on the third silo. Its path is chosen, by the same ring
+  calculation, so that the NODE's own directory entry is not on the leaving silo. Left to chance it
+  landed there about one run in three, and the case went red on core pull requests: the read found no
+  entry for the node, Orleans placed a fresh activation of it on the reader's silo, and that activation
+  answered the reader in-process, without ever looking the reader up. The read loaded inside the
+  window, so the case measured nothing about the lost READER entry. Measured locally: every red had the
+  node's partition on the leaving silo, and no green did. The case now also asserts that the reader's
+  silo hosts no copy of the node once the window has passed.
 - The second silo is held in `ShuttingDown`, and the reader's re-assertion is held.
 - Once both remaining directories have moved the entry off the leaving silo, the reader opens the
   node's raw subscription (`GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>`). That is the

@@ -38,7 +38,9 @@ namespace MeshWeaver.FaultInjection.Test;
 /// <para><b>The shape.</b> Three multi-silo silos on <c>LocalGrainDirectory</c>. The reader is a real
 /// hub (<c>silohub/…</c>, the rig's pod-hub type, the leg <c>cache/…</c> takes in production) on silo 0,
 /// under an id whose directory registration lives on a second silo, chosen by the directory's own ring
-/// calculation. The node's owner is activated on the third silo. The reader's re-assertion is held
+/// calculation. The node's owner is activated on the third silo, under a path whose own directory
+/// registration is NOT on the leaving silo (same ring calculation) — otherwise the read re-activates
+/// the node next to the reader and is answered in-process, past the window this case is about. The reader's re-assertion is held
 /// (<see cref="ClaimHold"/>), the second silo begins a graceful stop and is held in
 /// <c>ShuttingDown</c> (<see cref="ShutdownHold"/>), and once every remaining directory has moved the
 /// entry off it the reader opens the node's stream. While the hold lasts the stream delivers nothing:
@@ -91,8 +93,22 @@ public class ARemoteStreamOpenedDuringADirectoryLeaveLoadsTest(ARemoteStreamOpen
         var owner = Enumerable.Range(0, Silos).Single(i => i != Reader && i != leaving);
 
         // ── The node, activated on the owner silo ──────────────────────────────────────────────────
-        var ns = $"leave-read-{Guid.NewGuid():N}";
-        var path = $"{ns}/Doc";
+        // 🚨 Its OWN directory registration must stay put through the leave: placed, like the
+        // reader's, by the directory's own ring calculation. Left to chance, the node's entry lands
+        // on the leaving silo about one run in three; the read then finds no entry for the NODE,
+        // Orleans places a fresh activation of it on the reader's silo, and that activation answers
+        // the reader in-process — no directory lookup of the reader at all — so the read loads
+        // inside the window and the case measured nothing about a lost READER entry (measured
+        // locally: 4 of 4 reds had the node's partition on the leaving silo, 6 of 6 greens did not).
+        string ns;
+        string path;
+        do
+        {
+            ns = $"leave-read-{Guid.NewGuid():N}";
+            path = $"{ns}/Doc";
+        } while (PodHubRoles.DirectoryPartition(mesh, Reader, factory.GetGrain<IMessageHubGrain>(path).GetGrainId())
+                     .Owner is not { } nodePartition
+                 || nodePartition.Equals(addresses[leaving]));
         var ownerServices = mesh.Silo(owner);
         var ownerAccess = ownerServices.GetRequiredService<AccessService>();
         await ownerAccess.RunAsSystem(() => ownerServices.GetRequiredService<IMeshService>().CreateNode(
@@ -154,6 +170,12 @@ public class ARemoteStreamOpenedDuringADirectoryLeaveLoadsTest(ARemoteStreamOpen
             await read.Select(n => n.Exception?.ToString() ?? n.Kind.ToString()).Should().NotEmit(Window,
                 $"while '{readerAddress}' has no directory entry the owner's answer is refused on the way back, so "
                 + "the read neither loads nor fails — it rides the refusal out", ct);
+
+            // …and it was the window, not a second activation of the node next to the reader, that held
+            // the read: an answer from such an activation never needs the reader's directory entry.
+            mesh.Hub(Reader).GetHostedHub(new Address(path), HostedHubCreation.Never).Should().BeNull(
+                $"the node must still be served only by its owner on silo {owner}, never re-activated on the "
+                + $"reader's silo {Reader} — its directory entry was placed off the leaving silo {leaving}");
 
             reassertion.Release();
 
