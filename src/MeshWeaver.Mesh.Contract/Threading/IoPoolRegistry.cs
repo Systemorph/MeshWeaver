@@ -342,6 +342,7 @@ public sealed class IoPoolRegistry : IDisposable
             // registered — but a leaf that unwinds during the join must not be reported, so this
             // is read after Drain and reflects what is genuinely still running.
             var residual = kvp.Value.Drain();
+            ReportUnownedLeaks(kvp.Key, kvp.Value, "IoPoolDrain");
             var wedged = kvp.Value.LeavesCancelledAfterGrace;
             if (wedged != 0)
             {
@@ -375,6 +376,36 @@ public sealed class IoPoolRegistry : IDisposable
         byPool = residuals;
         cancelledByPool = cancelled;
         return leaked;
+    }
+
+    /// <summary>
+    /// The pools whose cancel found subscriptions still attached (<see cref="IoPool.UnownedLeaks"/>),
+    /// each with the leak lines as its sites. Empty on a clean teardown. Read-only.
+    /// </summary>
+    public IReadOnlyList<PoolResidual> UnownedLeaks() =>
+        // After Dispose() the pools live on in _draining only (Dispose clears _pools).
+        (_draining.Count > 0 ? _draining : _pools.ToArray())
+            .Where(kvp => kvp.Value.UnownedLeaks > 0)
+            .Select(kvp => new PoolResidual(kvp.Key, kvp.Value.UnownedLeaks) { Sites = kvp.Value.UnownedLeakSites })
+            .ToArray();
+
+    /// <summary>
+    /// Says, at Error, every subscription <paramref name="pool"/>'s cancel found still attached — a
+    /// subscription its owner never disposed, torn down with NO terminal because the pool never runs
+    /// consumer code on its canceller (#7968). Error, not Warning: the consumer's own teardown
+    /// (its <c>.Finally</c>, its bookkeeping) did not run, and the line names the code to give an owner.
+    /// </summary>
+    internal void ReportUnownedLeaks(string poolName, IoPool pool, string prefix)
+    {
+        var leaks = pool.UnownedLeakSites;
+        if (leaks.Count == 0)
+            return;
+        _logger?.LogError(
+            "{Prefix}: pool '{PoolName}' was cancelled with {Count} subscription(s) still attached — their "
+            + "owners never disposed them, so the pool tore down its side and delivered NO terminal (the "
+            + "pool runs no consumer code on its canceller, #7968). Give each an owner that disposes it "
+            + "before the pool drains. Unowned: {Leaks}",
+            prefix, poolName, leaks.Count, string.Join(" | ", leaks));
     }
 
     /// <summary>
@@ -513,7 +544,14 @@ public sealed class IoPoolRegistry : IDisposable
         foreach (var kvp in pools)
         {
             var name = kvp.Key;
-            kvp.Value.Disposed.Subscribe(_ => _reported[name] = 0);
+            var pool = kvp.Value;
+            // The unowned leaks this pool's cancel found (#7968) are said when its Disposed fires —
+            // by then the cancel has returned, so the list is complete.
+            pool.Disposed.Subscribe(_ =>
+            {
+                _reported[name] = 0;
+                ReportUnownedLeaks(name, pool, "IoPoolSiloTeardown");
+            });
         }
 
         // Zip: one emission once EVERY pool has reported. A pool whose leaf never unwinds never

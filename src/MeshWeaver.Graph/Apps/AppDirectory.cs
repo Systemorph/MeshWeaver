@@ -89,6 +89,14 @@ public sealed record AppRoot(
     /// </summary>
     public bool AdminOnly { get; init; }
 
+    /// <summary>
+    /// The content's <c>catalogs</c>: the node types this app is the CATALOG of (a string array of
+    /// NodeType paths, e.g. <c>["Crm/Client"]</c>). An installed app's catalogued types get no section
+    /// of their own on the home below the Apps band — the app is where they are browsed
+    /// (Doc/Architecture/AppsHome → "Type sections"). Absent = catalogs nothing.
+    /// </summary>
+    public CatalogedTypeSet Catalogs { get; init; } = CatalogedTypeSet.Empty;
+
     /// <summary>Where the tile opens: the entry point, else the root.</summary>
     public string OpenPath => string.IsNullOrWhiteSpace(EntryPoint) ? Path : EntryPoint!.Trim('/');
 
@@ -431,6 +439,58 @@ public sealed class AppDirectory
             .DistinctUntilChanged(RootListComparer.Instance);
 
     /// <summary>
+    /// The node types the apps INSTALLED on this instance catalog — live, process-wide, viewer
+    /// independent: the union of every installed root's <see cref="AppRoot.Catalogs"/> (a section of
+    /// another app — <c>hostedIn</c> — included: the host is then where its types are browsed) and
+    /// every installed module's <see cref="AppCatalogDeclaration"/>. The home leaves these types out
+    /// of its type sections (Doc/Architecture/AppsHome → "Type sections").
+    /// </summary>
+    public IObservable<CatalogedTypeSet> CatalogedTypes()
+    {
+        var services = hub.ServiceProvider;
+        var declared = moduleVersions
+            .Select(_ => 0L)
+            .StartWith(0L)
+            .Select(_ => SafeReadCatalogs(services))
+            .DistinctUntilChanged();
+        return Roots()
+            .CombineLatest(Installed(), declared,
+                (roots, installed, code) => CatalogedTypesOf(roots.Where(r => installed.IsInstalled(r.Path)), [code]))
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>The union of what <paramref name="roots"/> and <paramref name="declared"/> catalog. Pure.</summary>
+    public static CatalogedTypeSet CatalogedTypesOf(IEnumerable<AppRoot> roots, IEnumerable<CatalogedTypeSet> declared) =>
+        roots.Select(r => r.Catalogs)
+            .Concat(declared)
+            .Aggregate(CatalogedTypeSet.Empty, (acc, set) => acc.Union(set));
+
+    /// <summary>The module declarations as they stand NOW, absence-aware (as <see cref="ReadDeclarations"/>),
+    /// folded into one set. Pure over the provider.</summary>
+    internal static CatalogedTypeSet ReadCatalogDeclarations(IServiceProvider services) =>
+        (services.GetService<InstalledModules>() is { } installed
+            ? installed.CurrentSet<AppCatalogDeclaration>(services)
+            : services.GetServices<AppCatalogDeclaration>())
+        .Select(d => d.Types)
+        .Aggregate(CatalogedTypeSet.Empty, (acc, set) => acc.Union(set));
+
+    // A read that fails is "no code declarations this time", logged — the home then gives those
+    // types a section rather than failing; the next module swap reads again.
+    private CatalogedTypeSet SafeReadCatalogs(IServiceProvider services)
+    {
+        try
+        {
+            return ReadCatalogDeclarations(services);
+        }
+        catch (Exception exception)
+        {
+            logger?.LogError(exception,
+                "[AppDirectory] the app catalog declarations could not be read; the home serves without them until the next module change");
+            return CatalogedTypeSet.Empty;
+        }
+    }
+
+    /// <summary>
     /// Whether an app root is a launcher tile: it is INSTALLED here (<see cref="InstallEvidence.IsInstalled"/>)
     /// and it is not hosted in another app — a package declaring <c>hostedIn</c> is a section of its
     /// host (a tab of the Examples app, a game of the Games app) and gets no tile, except a package
@@ -760,6 +820,11 @@ public sealed class AppDirectory
             ? parsedOrder
             : 0;
         var adminOnly = Property(content, "adminOnly") is { ValueKind: JsonValueKind.True };
+        var catalogs = Property(content, "catalogs") is { ValueKind: JsonValueKind.Array } c
+            ? CatalogedTypeSet.Of(c.EnumerateArray()
+                .Where(t => t.ValueKind == JsonValueKind.String)
+                .Select(t => t.GetString()))
+            : CatalogedTypeSet.Empty;
         return new AppRoot(
             node.Path,
             string.IsNullOrWhiteSpace(node.Name) ? node.Path : node.Name!,
@@ -772,6 +837,7 @@ public sealed class AppDirectory
             LauncherGroup = launcherGroup,
             LauncherGroupOrder = groupOrder,
             AdminOnly = adminOnly,
+            Catalogs = catalogs,
         };
     }
 

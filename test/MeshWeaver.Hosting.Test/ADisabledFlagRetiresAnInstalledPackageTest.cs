@@ -415,19 +415,42 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         Assert.False(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "retired on re-evaluation");
     }
 
+    /// <summary>The restart coordinator once it satisfies <paramref name="until"/>. It may not exist
+    /// yet, so its existence is re-read from storage first — never a point read of an absent node.</summary>
+    private async Task<PackageRestartCoordinatorState> Coordinator(Func<PackageRestartCoordinatorState, bool> until, CancellationToken ct)
+    {
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Storage.Read(PackageRestartCoordinator.Path, Mesh.JsonSerializerOptions).Take(1).DefaultIfEmpty(null))
+            .Where(n => n is not null)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        return await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(PackageRestartCoordinator.Path))
+            .Select(n => n.ContentAs<PackageRestartCoordinatorState>(Mesh.JsonSerializerOptions))
+            .OfType<PackageRestartCoordinatorState>()
+            .Where(until)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+    }
+
+    private Task Landed(string module, string package, CancellationToken ct) =>
+        Landing.LandModule(module, [(module + ".dll", System.IO.File.ReadAllBytes(typeof(BundleReader).Assembly.Location))],
+                packagePath: $"{PackageInstaller.InstalledPartition}/{package}", version: "1.0.0")
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+    private static bool AllAnswered(PackageRestartCoordinatorState s) =>
+        s.Dispatches is { Count: > 0 } d && d.Values.All(x => PackageRestartDispatchState.HasAnswered(x.State))
+        && s.Members?.Values.All(m => m.State == PackageRestartMemberState.Covered) == true;
+
     /// <summary>
-    /// #7959 review (a real landed module): the activation entry is disabled DURABLY, and exactly ONE
-    /// restart is asked for — after phase 1 is persisted — and never again on a later boot.
-    /// Negative control: before the boot retire asks, no restart has happened (phase 1 alone never rolls).
+    /// #7959 review (restart after a failed durable disable): a LANDED module is disabled durably on
+    /// the shared volume, and the restart that makes every replica drop it is the instance's ONE
+    /// restart coordinator's — dispatched once, covering the request, although the module is not
+    /// loaded in THIS process (a sibling may hold it) — and never again on a later boot.
     /// </summary>
     [Fact(Timeout = 240_000)]
     public async Task ALandedModule_IsDisabledDurably_AndExactlyOneRestartRollsEveryReplica()
     {
         var ct = TestContext.Current.CancellationToken;
         const string module = "MeshWeaver.FlagRetireProbe";
-        await Landing.LandModule(module, [(module + ".dll", System.IO.File.ReadAllBytes(typeof(BundleReader).Assembly.Location))],
-                packagePath: $"{PackageInstaller.InstalledPartition}/{Package}", version: "1.0.0")
-            .Timeout(TestTimeouts.Convergence).Await(ct);
+        await Landed(module, Package, ct);
         Assert.Contains((await Landing.GetActivation().Take(1).Timeout(TestTimeouts.Convergence).Await(ct)).Entries,
             e => e.Enabled && e.Name == module);
         await Installed(Package, ct, partition: Package, module: module);
@@ -435,25 +458,90 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
 
         var outcome = await Retire(composition, ct);
         var path = Assert.Single(outcome.Requested);
-        var restarted = await Read(path, r => r.ModuleOutcome?.Contains("one restart requested") == true, ct);
+        var retired = await Settled(path, ct);
 
-        Assert.True(restarted.ModuleDisabled, restarted.ModuleOutcome ?? "");
-        Assert.Equal(path, restarted.RestartCoveredBy);
-        Assert.Contains("one restart requested", restarted.ModuleOutcome ?? "");
+        Assert.Equal(PackageUninstallStatus.AwaitingConfirmation, retired.Status);
+        Assert.True(retired.ModuleDisabled, retired.ModuleOutcome ?? "");
+        Assert.Contains("restart coordinator", retired.ModuleOutcome ?? "");
         Assert.DoesNotContain((await Landing.GetActivation().Take(1).Timeout(TestTimeouts.Convergence).Await(ct)).Entries,
             e => e.Enabled && e.Name == module);
+        var state = await Coordinator(AllAnswered, ct);
+        var dispatch = Assert.Single(state.Dispatches!.Values);
+        Assert.Equal(PackageRestartDispatchState.Accepted, dispatch.State);
+        Assert.Equal([path], dispatch.Covers);
         Assert.Equal(1, restart.Count);
 
         // The next boot (every replica, after the roll): nothing is decided, nothing restarts again.
         var again = await Retire(composition, ct);
         Assert.Empty(again.Requested);
+        Assert.Single((await Coordinator(s => s.Facts is null, ct)).Dispatches!.Values);
         Assert.Equal(1, restart.Count);
+    }
+
+    /// <summary>
+    /// 🚨 ONE restart for a BATCH of flag retirements (PR C, <see cref="PackageRestartCoordinator"/>):
+    /// two packages declared off, each with a landed module, are retired one after the other — and
+    /// the instance restarts ONCE, the one dispatch covering both requests. The boot pass enrols
+    /// every request it will write as pending BEFORE the first runs, so the first request's ready
+    /// cannot dispatch a restart the second would need again. Negative control (measured): with the
+    /// boot pass's enrolment removed, the first request dispatches alone and the second dispatches
+    /// again — two restarts, two dispatches.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TwoPackagesDeclaredOff_RestartTheInstanceOnce()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string moduleA = "MeshWeaver.FlagRetireProbeA";
+        const string moduleB = "MeshWeaver.FlagRetireProbeB";
+        const string other = "FlagRetireOther";
+        await Landed(moduleA, Package, ct);
+        await Landed(moduleB, other, ct);
+        await Installed(Package, ct, partition: Package, module: moduleA);
+        await Installed(other, ct, partition: other, module: moduleB);
+
+        var outcome = await Retire(Declared("off", enabled: false, $"Plugins/{Package}", $"Plugins/{other}"), ct);
+
+        Assert.Equal(2, outcome.Requested.Count);
+        var requests = await Task.WhenAll(outcome.Requested.Select(p => Settled(p, ct)));
+        Assert.All(requests, r => Assert.True(r.Status == PackageUninstallStatus.AwaitingConfirmation && r.ModuleDisabled,
+            $"{r.Package}: {r.Status} {r.Failure ?? r.ModuleOutcome}"));
+        var state = await Coordinator(AllAnswered, ct);
+        var dispatch = Assert.Single(state.Dispatches!.Values);
+        Assert.Equal(outcome.Requested.Order(StringComparer.Ordinal), dispatch.Covers.Order(StringComparer.Ordinal));
+        Assert.Equal(1, restart.Count);
+    }
+
+    /// <summary>
+    /// An enrolment whose request is never written — the package is required by one that stays —
+    /// is WITHDRAWN when the walk ends, so it holds no other restart back for the pending budget.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AnEnrolmentWhoseRequestIsNeverWritten_IsWithdrawn()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "MeshWeaver.FlagRetireProbe";
+        await Landed(module, Package, ct);
+        await Installed(Package, ct, partition: Package, module: module);
+        // The dependent is declared off too, but its own phase 1 is refused (it shares its partition
+        // with a third package), so it stays — and what it requires is never written.
+        await Installed(Dependent, ct, partition: Dependent, module: null, $"{Package}@^1.0");
+        await Installed("FlagRetireSharer", ct, partition: Dependent, module: null);
+
+        var outcome = await Retire(Declared("off", enabled: false, $"Plugins/{Package}", $"Plugins/{Dependent}"), ct);
+
+        Assert.Contains(outcome.Refused, line => line.StartsWith(Package + ":"));
+        Assert.Contains(Dependent, Assert.Single(outcome.Requested), StringComparison.OrdinalIgnoreCase);
+        Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "refused, so still installed");
+        var state = await Coordinator(s => s.Facts is null, ct);
+        Assert.True(state.Members is null || state.Members.Values.All(m => m.State != PackageRestartMemberState.Pending),
+            "no pending enrolment is left behind: " + string.Join(", ", state.Members?.Keys ?? []));
+        Assert.Equal(0, restart.Count);
     }
 
     /// <summary>
     /// #7959 review (restart after a failed durable disable): a module LOADED here that the store lane
     /// never landed cannot be disabled durably, so the flag retire FAILS — install record kept, no
-    /// restart. Negative control: <see cref="ALandedModule_IsDisabledDurably_AndExactlyOneRestartRollsEveryReplica"/>.
+    /// restart — and no pending enrolment is left behind. Negative control: <see cref="ALandedModule_IsDisabledDurably_AndExactlyOneRestartRollsEveryReplica"/>.
     /// </summary>
     [Fact(Timeout = 240_000)]
     public async Task AModuleThatCannotBeDisabledDurably_FailsTheRetire_AndRestartsNothing()
@@ -468,6 +556,10 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         Assert.Contains("not landed by the store lane", request.Failure ?? "");
         Assert.Contains(outcome.Refused, line => line.StartsWith(Package + ":"));
         Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "the install record is kept");
+        // The boot pass enrolled the request; its failed phase 1 withdrew it.
+        var state = await Coordinator(s => s.Facts is null, ct);
+        Assert.True(state.Members is null || state.Members.Values.All(m => m.State != PackageRestartMemberState.Pending),
+            "no pending enrolment is left behind: " + string.Join(", ", state.Members?.Keys ?? []));
         Assert.Equal(0, restart.Count);
     }
 

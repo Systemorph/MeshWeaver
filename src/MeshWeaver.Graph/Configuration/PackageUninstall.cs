@@ -82,7 +82,15 @@ public record PackageUninstallRequest
     /// still holds it until it restarts. Executor-owned.</summary>
     public bool ModuleDisabled { get; init; }
 
-    /// <summary>When the ONE restart was requested, if the module needed one. Executor-owned.</summary>
+    /// <summary>
+    /// RETIRED — never written any more. A request no longer issues its own restart: the instance's
+    /// ONE restart coordinator (<c>PackageRestartCoordinator</c> at
+    /// <c>Admin/_PackageUninstall/RestartCoordinator</c>) dispatches one restart for every retirement
+    /// that needs one (<c>Doc/Architecture/PackageUninstall</c> → "One restart for every retirement").
+    /// Kept only so a request persisted before the coordinator existed still reads correctly: a phase 1
+    /// that resumes such a request and finds this stamped never asks for a restart again.
+    /// </summary>
+    [Obsolete("Retired: the package restart coordinator dispatches the restart. Read only for requests persisted before it; never write it.")]
     public DateTimeOffset? RestartRequestedAt { get; init; }
 
     /// <summary>Exactly what phase 2 destroys, per partition. Executor-owned.</summary>
@@ -130,29 +138,17 @@ public record PackageUninstallRequest
     /// Whether every replica must drop the module, not only the process executing the request. Set
     /// for a flag-issued retire. Phase 1 then (a) FAILS the request, keeping the install record, when
     /// the module's landed generation cannot be disabled DURABLY (an unreadable activation record, or
-    /// a module loaded here that the store lane never landed), and (b) never restarts by itself: it
-    /// records <see cref="ModuleDisabled"/> and leaves the ONE restart to
-    /// <see cref="RequestedRestart"/>, which is honoured only after phase 1 has been persisted, at
-    /// most once per request.
+    /// a module loaded here that the store lane never landed, or a host with no landing service to read it), and (b) states its restart on the
+    /// instance's ONE restart coordinator (<c>PackageRestartCoordinator</c>) whether or not this
+    /// process holds the module, because a sibling replica may: the boot pass enrolled the request
+    /// as pending before writing it, phase 1 states it ready once <see cref="ModuleDisabled"/> is
+    /// recorded, and the coordinator dispatches ONE restart for the whole batch.
     /// </summary>
     public bool RetireOnEveryReplica { get; init; }
 
     /// <summary>The flag retire's install identity, shared by every attempt at retiring the same
     /// install (each attempt is its own request). Null for a person's request.</summary>
     public string? RetireKey { get; init; }
-
-    /// <summary>
-    /// Ask this request's executor for the ONE restart that makes every replica drop what phase 1
-    /// disabled (<see cref="RetireOnEveryReplica"/>). Honoured only while the request is
-    /// <see cref="PackageUninstallStatus.AwaitingConfirmation"/> — phase 1 already persisted — and
-    /// only while <see cref="PackageUninstallRequest.RestartRequestedAt"/> is unset; the executor
-    /// stamps that BEFORE it dispatches, so a resumed or re-activated executor never restarts twice.
-    /// </summary>
-    public bool RequestedRestart { get; init; }
-
-    /// <summary>The request whose restart covers this one's disabled module — set on every request a
-    /// single restart answers, so no later boot asks for another. Null until a restart is asked for.</summary>
-    public string? RestartCoveredBy { get; init; }
 }
 
 /// <summary>One partition an uninstall would tear down — measured before anything is destroyed.</summary>

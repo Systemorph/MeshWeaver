@@ -165,15 +165,17 @@ How it runs (`DeclaredDisabledRetirement`, called by the boot pass before the in
 - **Every replica drops the module — with ONE restart, never a loop.** The request carries
   `RetireOnEveryReplica`. Phase 1 then disables the module's landed generation **durably** on the
   volume all replicas share, or **fails** the request with the install record kept — an unreadable
-  activation record, or a module loaded here that the store lane never landed (an image-carried
-  module is the deployment's). Phase 1 never restarts by itself: it records `ModuleDisabled`, and
-  once every request this boot handled has settled, the retire marks the uncovered ones
-  `RestartCoveredBy` the first of them and sets `RequestedRestart` on it. That request's own executor
-  — one brain per request — honours it only while it is `AwaitingConfirmation` (phase 1 persisted)
-  and `RestartRequestedAt` is unset, and stamps that BEFORE it dispatches, so a re-activated
-  executor or a later boot never rolls the deployment twice. No sibling keeps the module, or the
-  routes it mapped such as `/mcp`, past that one restart. Where no restart path exists the request
-  says so, and siblings drop it at their next restart.
+  activation record, a host with no landing service to read it, or a module loaded here that the store lane never landed (an image-carried
+  module is the deployment's). Phase 1 never restarts by itself: it records `ModuleDisabled` and
+  states `Ready` on the instance's ONE restart coordinator (`Admin/_PackageUninstall/RestartCoordinator`),
+  whose own hub dispatches the restart. Before the boot pass writes its first request it enrols every
+  request it will run phase 1 for as `Pending`, so the coordinator waits for the batch's last one and
+  ONE restart covers them all; an enrolment whose request was never written is withdrawn when the walk
+  ends. A covered request is never dispatched again, so a re-activated executor or a later boot never
+  rolls the deployment twice ([Package Uninstall](../PackageUninstall) → "One restart for every
+  retirement"). No sibling keeps the module, or the routes it mapped such as `/mcp`, past that one
+  restart. Where no restart path exists the request says so, and siblings drop it at their next
+  restart.
 - **Never phase 2.** The request names no requester, and phase 2 refuses a confirmation for such a
   request — a flag can never drop a partition.
 - **No unattended writer re-writes it — keyed on the retirement's STATE, not the flag.** Phase 1 can

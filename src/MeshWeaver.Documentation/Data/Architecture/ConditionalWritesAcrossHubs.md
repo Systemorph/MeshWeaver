@@ -154,6 +154,13 @@ record's own hub, grants or releases the retirement and applies or refuses each 
 consumed, and every one is answered under its key, so a refusal reaches its writer and is never a
 silent success. See [Package Uninstall](../PackageUninstall).
 
+**The restart after an uninstall (MeshWeaver.Plugins#5055).** Each uninstall used to restart the
+instance on its own, so two at once restarted it twice. Now one per-instance node,
+`Admin/_PackageUninstall/RestartCoordinator`, holds the restart batch. Uninstalls state `Pending`,
+`Ready` or `Withdraw` under their own keys, and `PackageRestartCoordinator.Fold`, on that node's own
+hub, decides one dispatch for the batch and records its outcome. See
+[Package Uninstall](../PackageUninstall) → "One restart for every retirement".
+
 ## Related
 
 - [Data Access Patterns](/Doc/Architecture/DataAccessPatterns) — the one mutation API and its read counterparts.

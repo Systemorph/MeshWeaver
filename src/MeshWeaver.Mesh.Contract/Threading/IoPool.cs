@@ -537,7 +537,7 @@ public sealed class IoPool : IIoPool, IDisposable
 
     /// <summary>The site the canceller reports under in <see cref="PendingSynchronousLeaves"/>.</summary>
     internal const string CancellerSite =
-        "IoPool-cancel (the pool token's cancel, running a subscriber's registered teardown callback)";
+        "IoPool-cancel (the pool token's cancel, running a pooled subscription's registered teardown callback)";
 
     /// <summary>
     /// Whether the pool token's cancel has been requested and has NOT returned yet — the canceller
@@ -664,8 +664,9 @@ public sealed class IoPool : IIoPool, IDisposable
     /// </summary>
     internal const string CancelJoinResidualSite =
         "IoPool: the pool token's cancel had not returned when the join expired — a registered teardown "
-        + "callback is parked (a subscriber's OnCompleted or unsubscribe waiting on a lock the callback "
-        + "holds; see Doc/Architecture/ControlledIoPooling → 'A residual with NO site is the CANCEL join')";
+        + "callback is parked (the pool's own teardown of a source waiting on something — since #7968 the "
+        + "pool delivers no subscriber terminal there; see Doc/Architecture/ControlledIoPooling → "
+        + "'A residual with NO site is the CANCEL join')";
 
     // Set by Drain() when its cancel join expires; read by PendingLeafSites, which the registry
     // consults right after Drain() returns. Never cleared — Drain is terminal.
@@ -687,6 +688,104 @@ public sealed class IoPool : IIoPool, IDisposable
 
     /// <summary>The call sites of the leaves counted by <see cref="LeavesCancelledAfterGrace"/>.</summary>
     public IReadOnlyList<string> CancelledLeafSites => _cancelledLeafSites;
+
+    // What the pool tore down WITHOUT a terminal because its subscriber was still attached when the
+    // pool was cancelled — see RecordUnownedLeak. Immutable list swapped atomically (instance state
+    // that dies with the pool; never static).
+    private System.Collections.Immutable.ImmutableList<string> _unownedLeaks =
+        System.Collections.Immutable.ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// How many subscriptions were still attached when this pool's token was cancelled — pooled
+    /// subscriptions (<see cref="SubscribeThroughPool{T}"/>) whose source was open, and blocking
+    /// leaves still queued with a waiting subscriber. Each is a subscription its OWNER never
+    /// disposed: the pool tore down its own side and delivered NOTHING, because the cancel runs on
+    /// the pool's canceller thread and the pool never runs consumer code there (#7968).
+    /// Zero on a clean teardown.
+    /// </summary>
+    public int UnownedLeaks => Volatile.Read(ref _unownedLeaks).Count;
+
+    /// <summary>
+    /// One line per <see cref="UnownedLeaks"/> entry: the leaf's site, how long it had been
+    /// subscribed, the code that opened it (when <see cref="IoPoolOptions.CaptureLeafOpeners"/> is
+    /// on) and the subscriber's operator chain down to the consumer's own delegates — read at the
+    /// moment of the leak, so it names the consumer even when no opener was captured.
+    /// </summary>
+    public IReadOnlyList<string> UnownedLeakSites => Volatile.Read(ref _unownedLeaks);
+
+    /// <summary>
+    /// Records a subscription the pool's cancel found still attached. Runs on the canceller (or on
+    /// the setup leaf's pool thread) and touches NOTHING of the subscriber's except to READ its
+    /// observer chain by reflection — no call into it, no lock taken.
+    /// </summary>
+    private void RecordUnownedLeak(object work, string? opener, object observer, long startedAt)
+    {
+        string line;
+        try
+        {
+            var age = startedAt == 0
+                ? "still queued for a slot"
+                : string.Create(CultureInfo.InvariantCulture,
+                    $"subscribed {Stopwatch.GetElapsedTime(startedAt).TotalSeconds:0.0} s");
+            line = $"{SiteOf(work)} — {age} when the pool was cancelled, opened by {opener ?? UncapturedOpener}; "
+                   + $"subscriber chain: {DescribeObserverChain(observer)}";
+        }
+        catch (Exception ex)
+        {
+            // A diagnostic must never be the reason a teardown fails — but it says why it is short.
+            line = $"{work.GetType().FullName} — (leak description unavailable: {ex.GetType().Name}: {ex.Message})";
+        }
+        System.Collections.Immutable.ImmutableInterlocked.Update(ref _unownedLeaks, l => l.Add(line));
+    }
+
+    /// <summary>
+    /// The subscriber's observer chain as the operator types it passes through, plus every delegate
+    /// held along the way named by its method — a <c>SelectMany</c>'s selector, a <c>Finally</c>'s
+    /// action, the final <c>Subscribe</c>'s handlers. Compiler-generated lambda names carry their
+    /// ENCLOSING method, so this names the consumer. Read by reflection over fields that hold the
+    /// next observer; bounded, and best-effort by design (it is a diagnostic over library internals).
+    /// </summary>
+    private static string DescribeObserverChain(object observer)
+    {
+        const int maxDepth = 24;
+        var steps = System.Collections.Immutable.ImmutableList<string>.Empty;
+        var seen = System.Collections.Immutable.ImmutableHashSet.Create<object>(ReferenceEqualityComparer.Instance);
+        object? current = observer;
+        for (var depth = 0; current is not null && depth < maxDepth && !seen.Contains(current); depth++)
+        {
+            seen = seen.Add(current);
+            var type = current.GetType();
+            // A type nested in a generic one is itself generic but carries no arity suffix (Rx's
+            // `SelectMany`2+ObservableSelector+_` is named `_`), so strip the suffix only where it is.
+            static string Bare(string n) => n.IndexOf('`') is var tick and >= 0 ? n[..tick] : n;
+            var name = Bare(type.Name);
+            var outer = type.DeclaringType is { } d ? Bare(d.Name) + "." : "";
+            var delegates = System.Collections.Immutable.ImmutableList<string>.Empty;
+            object? next = null;
+            for (var t = type; t is not null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var f in t.GetFields(System.Reflection.BindingFlags.Instance
+                                              | System.Reflection.BindingFlags.NonPublic
+                                              | System.Reflection.BindingFlags.Public
+                                              | System.Reflection.BindingFlags.DeclaredOnly))
+                {
+                    object? value;
+                    try { value = f.GetValue(current); }
+                    catch { continue; }   // a field reflection cannot read is skipped, never fatal
+                    if (value is Delegate del && del.Method.DeclaringType is { } owner
+                        && !(owner.FullName ?? owner.Name).StartsWith("System.", StringComparison.Ordinal))
+                        delegates = delegates.Add($"{owner.FullName ?? owner.Name}.{del.Method.Name}");
+                    else if (next is null && value is not null && value != current
+                             && value.GetType().GetInterfaces().Any(i =>
+                                 i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IObserver<>)))
+                        next = value;
+                }
+            }
+            steps = steps.Add(delegates.Count == 0 ? outer + name : $"{outer}{name} ({string.Join(", ", delegates)})");
+            current = next;
+        }
+        return steps.Count == 0 ? "(unavailable)" : string.Join(" → ", steps);
+    }
 
     /// <summary>
     /// Runs an async I/O leaf off the calling scheduler under the pool's concurrency gate.
@@ -1277,9 +1376,25 @@ public sealed class IoPool : IIoPool, IDisposable
                                 // thread (#4530). Nothing of this leaf ever ran in that case — no
                                 // delegate, no slot — so it is a refusal in all but name, and it
                                 // travels the refusal's path, with the refusal's stated trade.
+                                //
+                                // 🚨 …AND NEVER ON THE CANCELLER (#7968). A leaf still QUEUED on the
+                                // limited-concurrency scheduler when the pool cancels is dequeued and
+                                // cancelled INSIDE the token's callback, and this continuation is
+                                // ExecuteSynchronously — so it runs on the IoPool-cancel thread, inside
+                                // `_poolCts.Cancel()`. Delivering there is the defect #7968 removed from
+                                // SubscribeThroughPool: the subscriber's operators run on a thread that
+                                // is not theirs, and a lock they wait on parks the cancel. A subscriber
+                                // still waiting on queued work when the pool is cancelled is one its
+                                // owner never disposed (the drain's grace already let every queued leaf
+                                // that could run, run), so it is named as an UNOWNED LEAK and served
+                                // nothing. Every other cancellation of a queued leaf — the subscriber's
+                                // own, a leaf attached to an already-cancelled token — is not on the
+                                // canceller and keeps its terminal.
                                 if (Volatile.Read(ref unsubscribed) == 0)
                                 {
-                                    if (Environment.CurrentManagedThreadId == subscriberThreadId)
+                                    if (Environment.CurrentManagedThreadId == _canceller.ManagedThreadId)
+                                        RecordUnownedLeak(work, opener, observer, startedAt: 0);
+                                    else if (Environment.CurrentManagedThreadId == subscriberThreadId)
                                         RefuseOffSubscriber(observer, DrainedMessage);
                                     else
                                         observer.OnError(new OperationCanceledException(DrainedMessage));
@@ -1420,36 +1535,31 @@ public sealed class IoPool : IIoPool, IDisposable
                 // whichever producer takes it owns the terminal.
                 var terminated = 0;
 
-                // If the pool drains AFTER the subscribe completed, tear the live subscription down too
-                // — and TERMINATE the observer, which disposing it does not do.
+                // If the pool drains AFTER the subscribe completed, tear the pool's side of the live
+                // subscription down too — its subscription to the source — and deliver NOTHING to the
+                // observer (#7968, which reverses #1789's terminal; see the callback below).
                 //
-                // 🚨 THE OTHER HALF OF THE SAME LEAK — issue #1789. The setup leaf's error arm (below)
-                // covers a leg the drain cancels BEFORE or DURING `source.Subscribe(observer)`: its gate
-                // wait throws OperationCanceledException and the arm turns that into OnCompleted. A leg
-                // cancelled AFTER the subscribe completed never goes near that arm — it arrives here, and
-                // this registration used to call `inner.Dispose()` and nothing else. Disposing a
-                // subscription EMITS NOTHING: no OnCompleted, no OnError. So the observable returned by
-                // SubscribeThroughPool terminated in neither direction and every `.Finally(...)` hung off
-                // it never ran — exactly the bookkeeping that decrements RoutingGrain's `inFlightRoutes`
-                // and advances OrderedRouteDispatcher's per-destination FIFO. The slot leaked and the
-                // destination's queue stranded PERMANENTLY, which is also why `cleared after` became
-                // structurally impossible to log (it needs in-flight to fall back below half the
-                // threshold). Prod, 2026-08-17: two saturation Criticals ten minutes apart at identical
-                // depth, both emitted deep inside the termination grace period — i.e. after
-                // IoPool.Drain() had cancelled `_poolCts` — with no clear line in the whole window.
-                //
-                // OnCompleted, not OnError, for the same reason the arm below chose it: a drain is
-                // expected teardown, not a fault.
+                // History, because the reversal is deliberate. #1789 (prod 2026-08-17) found that a leg
+                // cancelled here never terminated, so a `.Finally(...)` hung off it — RoutingGrain's
+                // in-flight decrement, OrderedRouteDispatcher's FIFO advance — never ran, and added
+                // `observer.OnCompleted()` to this callback. That ran the consumer's teardown on the
+                // IoPool-cancel thread, and #7968 is the price: a consumer lock held elsewhere parked
+                // the cancel for the whole silo join. The bookkeeping #1789 needed is now released by
+                // its OWNER disposing the leg before the pool drains (RoutingQuiescence owns every
+                // routing leg and releases them at the silo stage just before IoPoolSiloTeardown) —
+                // Rx runs `.Finally` on dispose as well as on a terminal, on the disposer's thread. A
+                // leg nobody owns is reported as a leak instead of being served.
                 //
                 // This does NOT change IoPool.Drain()'s join reasoning: a leg past its subscribe holds
-                // no gate permit and is not counted in `_inFlight`, so terminating it moves neither the
+                // no gate permit and is not counted in `_inFlight`, so tearing it down moves neither the
                 // permit count Drain re-acquires nor the residual it reports.
                 //
                 // 🚨 REGISTERED DISARMED, AND BEFORE THE SETUP LEAF IS STARTED — issue #4524.
                 // `Register` on a token that is ALREADY cancelled registers nothing: it runs the callback
                 // synchronously, on the REGISTERING thread. That is this subscribe's thread — a hub action
-                // block, a grain turn, OrderedRouteDispatcher.DrainNext — and the callback is this
-                // subscription's whole downstream teardown. It happens whenever the drain's cancel lands
+                // block, a grain turn, OrderedRouteDispatcher.DrainNext — and the callback was then this
+                // subscription's whole downstream teardown (since #7968 it is the source's teardown and
+                // the leak record, still no business of the subscriber's thread). It happens whenever the drain's cancel lands
                 // between the build-time `_draining` refusal and this line: Drain() never sets
                 // `_disposing`, so the region above admits the subscribe. StartCanceller (#2394) moved the
                 // CALL to Cancel() off the caller; a callback registered LATE ran on the caller anyway.
@@ -1473,15 +1583,42 @@ public sealed class IoPool : IIoPool, IDisposable
                 // exactly the window the region now closes: _poolCts cannot be disposed while this
                 // subscribe holds a region, so reading its Token is safe by construction. Catching it
                 // would only hide a region that was never entered.
+                // When the setup leaf's `source.Subscribe(observer)` RETURNED (a Stopwatch timestamp);
+                // 0 while the source has not been opened. Published by the leaf with a full fence and
+                // read by the drain callback — see below for the hand-off it decides.
+                var subscribedAt = 0L;
                 var drainReg = _poolCts.Token.Register(() =>
                 {
                     if (Volatile.Read(ref armed) == 0) return;
-                    if (Interlocked.Exchange(ref terminated, 1) != 0) return;
-                    // This producer now OWNS the terminal, so nothing may skip it: a throwing
-                    // source-subscription Dispose would otherwise leave the latch taken and the observer
-                    // unterminated. The exception still propagates to whoever runs the cancel.
+                    // 🚨 THE DRAIN RUNS NO CONSUMER CODE — issue #7968. This callback runs inline on the
+                    // IoPool-cancel thread, inside `_poolCts.Cancel()`. It used to end with
+                    // `observer.OnCompleted()` (#1789), i.e. the subscriber's whole downstream teardown
+                    // — every operator, every lock, every `.Finally` — ran on the canceller. A consumer
+                    // whose operator lock another thread held (prod 2026-11-07: a SelectMany's gate,
+                    // `SelectMany.ObservableSelector._.Final()` → `Monitor.Enter`) parked the cancel,
+                    // the silo join expired after 30 s, and the pool released over live work. Any
+                    // consumer code on a thread that is not the consumer's own is the same defect
+                    // waiting for its lock; the cure is that the pool never runs it.
+                    //
+                    // So: dispose the pool's OWN resource — its subscription to the source, which stops
+                    // the pooled producer — and deliver NOTHING. A subscription still live when the pool
+                    // is cancelled is one its subscriber never disposed: every owner (a hub, a grain,
+                    // the routing quiescence gauge, an area host) disposes its subscriptions before the
+                    // pool drains (mesh teardown: DisposalCompleted precedes DrainAll; silo stop: the
+                    // pool stops LAST). It is therefore an UNOWNED LEAK, named at Error with the code
+                    // that opened it, never served. See ControlledIoPooling → "The drain runs no
+                    // consumer code".
                     try { inner.Dispose(); }
-                    finally { observer.OnCompleted(); }
+                    finally
+                    {
+                        // Only a leg whose source is OPEN is a leak. One cancelled before or during
+                        // `source.Subscribe` is the setup leaf's to terminate (from a pool thread, as a
+                        // refusal is): its gate wait throws, or it sees the cancel right after the
+                        // subscribe returned. The latch decides exactly one of the two.
+                        var at = Volatile.Read(ref subscribedAt);
+                        if (at != 0 && Interlocked.Exchange(ref terminated, 1) == 0)
+                            RecordUnownedLeak(source, opener, observer, at);
+                    }
                 });
                 Interlocked.Exchange(ref armed, 1);
 
@@ -1523,6 +1660,16 @@ public sealed class IoPool : IIoPool, IDisposable
                                 // Draining before we even subscribed → do not open providers / create hubs.
                                 ct.ThrowIfCancellationRequested();
                                 inner.Disposable = source.Subscribe(observer);
+                                // Publish "the source is open" BEFORE reading the pool token: the
+                                // canceller publishes the token's state before it runs the drain
+                                // callback, which reads this. Both are full fences, so at least one
+                                // side sees the other — a cancel that landed while the source was being
+                                // subscribed is caught here (and terminated as a refusal is, by the
+                                // error arm on this pool thread), one landing after it is the drain
+                                // callback's to name as a leak. Never both: they share `terminated`.
+                                Interlocked.Exchange(ref subscribedAt, Stopwatch.GetTimestamp());
+                                if (_poolCts.IsCancellationRequested)
+                                    throw new OperationCanceledException(DrainedMessage);
                             }
                             finally
                             {
@@ -1899,6 +2046,10 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <c>IoPoolTest.TheCancellerThreadIsStartedWithThePool_NotAtTeardown</c>.
     /// </summary>
     internal bool CancellerIsAlive => _canceller.IsAlive;
+
+    /// <summary>Test seam (InternalsVisibleTo) — the managed id of the canceller thread, so a test can
+    /// assert that nothing of a subscriber's ran on it (#7968).</summary>
+    internal int CancellerThreadId => _canceller.ManagedThreadId;
 
     /// <summary>
     /// The blocking lane's live threads, parked ones included (dedicated mode). Kept between bursts

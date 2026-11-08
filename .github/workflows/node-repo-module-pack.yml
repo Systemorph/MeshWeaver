@@ -566,6 +566,16 @@ on:
         type: string
         required: false
         default: ''
+      abi-verdict:
+        description: >-
+          Optional: the caller's ABI verdict (core .github/scripts/abi-key.py `probe`, compact JSON). The
+          caller's scripts/affected-modules.py reads it through MW_ABI_VERDICT / MW_ABI_SCRIPT and drops a
+          dependent realm whose only reach is a src/ project whose PUBLIC API did not change
+          (Doc/Architecture/ModuleBuildArchitecture → ABI-keyed rebuild). Empty (the default): no ABI
+          narrowing — every caller behaves exactly as before.
+        required: false
+        type: string
+        default: ''
       test-modules:
         description: >
           Which of the selected modules RUN THEIR SUITE in this call: `*` (the default) = every
@@ -1523,6 +1533,11 @@ jobs:
           # A shelf edit reaches every container-built module, though none references the shelf.
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+          # ABI-keyed rebuild: the caller's affected-modules.py (asked by node-repo-scope.py) reads these, and
+          # build-logic's node-repo-scope.py loads its sibling — the SAME file MW_ABI_SCRIPT names (one checkout,
+          # one ref). The caller caps the verdict at 60 kB (else `unavailable`), below the 128 KiB env limit.
+          MW_ABI_VERDICT: ${{ inputs.abi-verdict }}
+          MW_ABI_SCRIPT: ${{ github.workspace }}/build-logic/.github/scripts/abi-key.py
         run: |
           set -euo pipefail
           printf '%s' "$MODULES" > "$RUNNER_TEMP/matrix.json"
@@ -1855,13 +1870,78 @@ jobs:
         with:
           path: ${{ runner.temp }}/pack-tool
           key: pack-tool-${{ inputs.platform-ref }}
+      # ⚡ CONTENT-ADDRESSED IN OUR OWN STORE (MeshWeaver.Plugins Hosting/CiProfile.md #4). The gha cache
+      # above runs only on the `gha` store; every caller on our store re-published the tool on EVERY run
+      # (MeshWeaver.Plugins 2026-11-07: ~117 runs/day, 90-110 s each). The key is the tool's input
+      # closure in the CHECKED-OUT platform (msbuild-closure-key.py; never the input string) plus the
+      # toolchain (runner OS/arch + the SDK line, 10.0). A miss,
+      # an unreadable object or a tar without the tool's entry point publishes afresh; never a red.
+      - name: Restore the module-pack tool from our store (platform commit + toolchain)
+        if: needs.select.outputs.build-modules != '[]' && needs.select.outputs.artifact-store != 'gha'
+        id: tool-store
+        env:
+          STORE: ${{ needs.select.outputs.artifact-store }}
+          STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
+          PY: build-logic/.github/scripts/ci-artifact-store.py
+        run: |
+          set -uo pipefail
+          # The tool's CONTENT address — its project closure + the root MSBuild inputs, not the whole commit
+          # (measured 2026-11-07: 0 of 14 core main commits in 24 h touched them, while a per-commit key
+          # missed on every core merge). A refusal (an input the key cannot see) falls back to the commit.
+          salt="${RUNNER_OS}-${RUNNER_ARCH}-sdk10.0"
+          if ck=$(python3 build-logic/.github/scripts/msbuild-closure-key.py --repo meshweaver \
+                    --project src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj --salt "$salt" | sed -n 's/^key=//p') \
+             && [[ "$ck" =~ ^[0-9a-f]{64}$ ]]; then
+            key="cache/module-pack-tool/closure-${ck}.tar"
+          else
+            key="cache/module-pack-tool/$(git -C meshweaver rev-parse HEAD)-${salt}.tar"
+          fi
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          tool="$RUNNER_TEMP/pack-tool"
+          # The archive is read ONLY against the digest `put` recorded beside it (`<key>.sha256`): a
+          # missing record, an unreadable one or a mismatch is a miss — never a damaged tool reused.
+          sha=""
+          if python3 "$PY" probe --store "$STORE" --locator "$STORE/$key.sha256" >/dev/null 2>&1 \
+             && python3 "$PY" get --store "$STORE" --expect-store-id "$STORE_ID" --locator "$STORE/$key.sha256" --out "$RUNNER_TEMP/pack-tool.sha256" >/dev/null; then
+            sha=$(tr -d '[:space:]' < "$RUNNER_TEMP/pack-tool.sha256")
+          fi
+          if [[ "$sha" =~ ^[0-9a-f]{64}$ ]] \
+             && python3 "$PY" get --store "$STORE" --expect-store-id "$STORE_ID" --locator "$STORE/$key#sha256=$sha" --out "$RUNNER_TEMP/pack-tool.tar" >/dev/null \
+             && mkdir -p "$tool" && tar -xf "$RUNNER_TEMP/pack-tool.tar" -C "$tool" \
+             && [ -f "$tool/MeshWeaver.Plugin.Build.dll" ]; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+            echo "module-pack tool: reused $key — no publish"
+          else
+            rm -rf "$tool"
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            echo "module-pack tool: $key is not in the store — publishing it"
+          fi
       - uses: actions/setup-dotnet@v6
-        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true'
+        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true' && steps.tool-store.outputs.hit != 'true'
         with:
           dotnet-version: "10.0.x"
       - name: Publish the module-pack tool (once for every pack job)
-        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true'
+        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true' && steps.tool-store.outputs.hit != 'true'
         run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
+      - name: Keep the module-pack tool in our store for the next run on this commit
+        if: needs.select.outputs.build-modules != '[]' && steps.tool-store.outputs.hit == 'false'
+        env:
+          STORE: ${{ needs.select.outputs.artifact-store }}
+          STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
+          PY: build-logic/.github/scripts/ci-artifact-store.py
+          KEY: ${{ steps.tool-store.outputs.key }}
+        run: |
+          set -uo pipefail
+          # The archive first, then its digest record — a reader that finds the record finds the archive.
+          tar -cf "$RUNNER_TEMP/pack-tool.tar" -C "$RUNNER_TEMP/pack-tool" . \
+            && sha256sum "$RUNNER_TEMP/pack-tool.tar" | cut -d' ' -f1 > "$RUNNER_TEMP/pack-tool.sha256" \
+            && python3 "$PY" put --store "$STORE" --expect-store-id "$STORE_ID" --key "$KEY" --file "$RUNNER_TEMP/pack-tool.tar" \
+            && python3 "$PY" put --store "$STORE" --expect-store-id "$STORE_ID" --key "$KEY.sha256" --file "$RUNNER_TEMP/pack-tool.sha256" \
+            || echo "::warning title=Module-pack tool not kept::could not store $KEY — this run is unaffected; the next run on this commit publishes the tool again"
+          # BOUNDED: the writer evicts this cache's entries older than 7 days (a `file:` store has no
+          # server lifecycle — CiArtifactStorage.md → Lifecycle, `cache/`); an evicted entry is a miss.
+          python3 "$PY" prune --store "$STORE" --prefix cache/module-pack-tool/ --older-than 7 \
+            || echo "::warning title=Module-pack tool cache not pruned::the prune of cache/module-pack-tool/ failed — this run is unaffected"
       # Lane-scoped like every other artifact this workflow drops: two calls in one run publish
       # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
       # with the other call's builder.

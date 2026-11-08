@@ -41,8 +41,17 @@ namespace MeshWeaver.PluginCatalog;
 /// are keyed by the install's identity (<see cref="RetireKeyFor"/>) and numbered per attempt
 /// (<see cref="RequestIdFor"/>), so replicas deciding the same attempt collide on ONE node; at most
 /// one attempt per install is active, a FAILED attempt is re-evaluated by the next boot under the
-/// current declaration, and a later boot that finds the install record gone decides nothing. The
-/// ONE every-replica restart is asked for only after phase 1 is persisted, and at most once.</para>
+/// current declaration, and a later boot that finds the install record gone decides nothing.</para>
+///
+/// <para><b>One restart for the whole batch.</b> The restart that makes every replica drop the
+/// retired modules is NOT this pass's, nor any one request's, to issue: before the first request is
+/// written, every request this boot will run phase 1 for is enrolled
+/// <see cref="PackageRestartFactKind.Pending"/> on the instance's ONE restart coordinator
+/// (<see cref="PackageRestartCoordinator"/>, <c>Doc/Architecture/PackageUninstall</c> → "One restart
+/// for every retirement"). Each phase 1 states <see cref="PackageRestartFactKind.Ready"/> once its
+/// module is durably disabled, or withdraws; the coordinator's own hub dispatches ONE restart once no
+/// member of the batch is pending. An enrolment whose request was never written (refused, or required
+/// by a package that stays) is withdrawn when the walk ends.</para>
 /// </summary>
 public static class DeclaredDisabledRetirement
 {
@@ -240,9 +249,9 @@ public static class DeclaredDisabledRetirement
     /// Reads the install records AUTHORITATIVELY (CQRS: a listing names which records exist, each
     /// manifest is read from its own node), decides (<see cref="Decide"/>), and retires each package
     /// through phase 1 — DEPENDENTS FIRST, each one's phase 1 observed to its settlement before the
-    /// next is decided, so a dependent that phase 1 refuses keeps what it requires installed. Then
-    /// asks for the ONE restart that makes every replica drop the disabled modules. Never faults.
-    /// Cold; emits once.
+    /// next is decided, so a dependent that phase 1 refuses keeps what it requires installed. Every
+    /// request whose phase 1 may need a restart is enrolled on the instance's ONE restart coordinator
+    /// first, so the coordinator dispatches ONE restart for the batch. Never faults. Cold; emits once.
     /// </summary>
     /// <param name="hub">The mesh hub.</param>
     /// <param name="composition">The environment's composition, read once for this boot pass.</param>
@@ -315,11 +324,81 @@ public static class DeclaredDisabledRetirement
             .ToImmutableList();
 
         return ExistingRequests(hub)
-            .SelectMany(existing => Walk(hub, installed, order, existing, logger, settleBudget, new Progress(refusedLines))
-                .SelectMany(progress => RequestOneRestart(hub,
-                        [.. existing.Select(x => x.Path), .. progress.Requested, .. progress.AlreadyRequested], logger)
-                    .Select(_ => progress.ToOutcome())));
+            .SelectMany(existing =>
+            {
+                // 🚨 The WHOLE batch is pending on the coordinator before its first request runs, so
+                // the first one's ready never dispatches a restart the later ones would need again.
+                var enrolled = order.Where(c => NeedsRestartEnrolment(hub, c, existing))
+                    .Select(c => (Path: Attempt(c, existing).Path, Covered: c))
+                    .ToImmutableList();
+                return Enrol(hub, enrolled, logger)
+                    .SelectMany(_ => Walk(hub, installed, order, existing, logger, settleBudget, new Progress(refusedLines)))
+                    .SelectMany(progress => WithdrawUnwritten(hub,
+                            [.. enrolled.Select(e => e.Path).Except([.. progress.Requested, .. progress.AlreadyRequested], StringComparer.Ordinal)],
+                            logger)
+                        .Select(_ => progress.ToOutcome()));
+            });
     }
+
+    /// <summary>The attempt <paramref name="covered"/> is retired by on this boot: the install's ACTIVE
+    /// attempt when one exists (joined, never duplicated), else the next one. Pure.</summary>
+    private static (string Path, PackageUninstallRequest? Live, int Number, ImmutableList<(string Path, PackageUninstallRequest Request)> Failed) Attempt(
+        Covered covered, ImmutableList<(string Path, PackageUninstallRequest Request)> existing)
+    {
+        var key = RetireKeyFor(covered.Record);
+        var attempts = existing.Where(x => string.Equals(x.Request.RetireKey, key, StringComparison.Ordinal)).ToImmutableList();
+        var live = attempts.FirstOrDefault(x => x.Request.Status != PackageUninstallStatus.Failed);
+        if (live.Path is not null)
+            return (live.Path, live.Request, 0, []);
+        var number = attempts.Count + 1;
+        return (PackageUninstall.PathAt(RequestIdFor(key, number)), null, number, attempts);
+    }
+
+    /// <summary>Whether this boot runs phase 1 for <paramref name="covered"/>'s attempt and that phase 1
+    /// may need a restart: the package declares a module, the host has a restart path, and the attempt
+    /// is new or still in its phase 1 — an attempt already past phase 1 states nothing again, and a
+    /// pending enrolment nobody resolves would hold every other restart back. Pure.</summary>
+    private static bool NeedsRestartEnrolment(IMessageHub hub, Covered covered,
+        ImmutableList<(string Path, PackageUninstallRequest Request)> existing) =>
+        !string.IsNullOrWhiteSpace(covered.Record.Module)
+        && hub.ServiceProvider.GetService<IModuleActivationRestart>() is not null
+        && Attempt(covered, existing).Live is null or { Status: PackageUninstallStatus.Requested or PackageUninstallStatus.Uninstalling };
+
+    /// <summary>States <see cref="PackageRestartFactKind.Pending"/> for each enrolled request, in order.
+    /// Never faults: an enrolment that cannot be stated weakens only the batching (a restart may be
+    /// dispatched before a later request is ready), never a retire.</summary>
+    private static IObservable<Unit> Enrol(IMessageHub hub, ImmutableList<(string Path, Covered Covered)> enrolled, ILogger logger) =>
+        enrolled.Select(e => PackageRestartCoordinator.Pending(hub, e.Path, e.Covered.Record.Module!.Trim(),
+                    $"declared off by the feature flag '{e.Covered.Flag}'", logger)
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "[FlagRetire] {Path} could not be enrolled with the restart coordinator {Coordinator}: {Reason}. "
+                        + "Its retire runs all the same; a restart dispatched before it is ready may not cover it.",
+                        e.Path, PackageRestartCoordinator.Path, ex.Message);
+                    return Observable.Return(Unit.Default);
+                }))
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .LastAsync();
+
+    /// <summary>Withdraws the enrolment of every request this boot enrolled but never wrote, so it does
+    /// not hold the batch's restart back for the pending budget. A withdraw of a member that is ready or
+    /// covered is a no-op on the coordinator. Never faults.</summary>
+    private static IObservable<Unit> WithdrawUnwritten(IMessageHub hub, IReadOnlyList<string> paths, ILogger logger) =>
+        paths.Select(path => PackageRestartCoordinator.Withdraw(hub, path, logger)
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "[FlagRetire] withdrawing {Path}, which was never written, from the restart coordinator failed: {Reason}. "
+                        + "It stops holding the batch's restart back after {Budget}.",
+                        path, ex.Message, PackageRestartCoordinator.PendingBudget);
+                    return Observable.Return(Unit.Default);
+                }))
+            .ToObservable()
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .LastAsync();
 
     /// <summary>What the walk has done so far — retired ids (settled), written and read request paths, refusals.</summary>
     private sealed record Progress(ImmutableList<string> Refused)
@@ -378,21 +457,6 @@ public static class DeclaredDisabledRetirement
     /// create was refused or failed for any reason other than a collision (#7959 review).</param>
     private sealed record Step(string Path, bool Written, bool Retired, string? Failure, bool Exists = true);
 
-    /// <summary>The requests at <paramref name="paths"/> (each known to exist), read from their own nodes.</summary>
-    private static IObservable<ImmutableList<(string Path, PackageUninstallRequest Request)>> ReadRequests(IMessageHub hub, IReadOnlyList<string> paths)
-    {
-        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
-        return paths.ToObservable()
-            .Select(path => access.RunAsSystem(() => hub.GetMeshNodeStream(path).Take(1).Timeout(ActivationRecycle.ReadBudget))
-                .Select(node => (Path: path, Request: node.ContentAs<PackageUninstallRequest>(hub.JsonSerializerOptions))))
-            .MergeBounded(8)
-            .ToList()
-            .Select(read => read
-                .Where(x => x.Request is { RetireKey: not null })
-                .Select(x => (x.Path, x.Request!))
-                .ToImmutableList());
-    }
-
     /// <summary>Every flag-issued request, read authoritatively (listing for paths, each from its node).</summary>
     private static IObservable<ImmutableList<(string Path, PackageUninstallRequest Request)>> ExistingRequests(IMessageHub hub)
     {
@@ -428,18 +492,15 @@ public static class DeclaredDisabledRetirement
         ILogger logger, TimeSpan settleBudget)
     {
         var key = RetireKeyFor(covered.Record);
-        var attempts = existing.Where(x => string.Equals(x.Request.RetireKey, key, StringComparison.Ordinal)).ToList();
-        var live = attempts.FirstOrDefault(x => x.Request.Status != PackageUninstallStatus.Failed);
-        if (live.Path is not null)
-            return Settle(hub, covered, live.Path, logger, settleBudget).Select(s => s with { Written = false });
-        foreach (var failed in attempts)
+        var (path, live, attempt, failedAttempts) = Attempt(covered, existing);
+        if (live is not null)
+            return Settle(hub, covered, path, logger, settleBudget).Select(s => s with { Written = false });
+        foreach (var failed in failedAttempts)
             logger.LogError(
                 "[FlagRetire] {Package}, declared off by the feature flag '{Flag}': the earlier retire {Path} was refused — {Failure}. "
                 + "Re-evaluating under the current declaration with a new attempt.",
                 covered.Record.Id, covered.Flag, failed.Path, failed.Request.Failure ?? "(no reason recorded)");
-        var attempt = attempts.Count + 1;
         var id = RequestIdFor(key, attempt);
-        var path = PackageUninstall.PathAt(id);
         var request = new PackageUninstallRequest
         {
             Package = covered.Record.Id,
@@ -516,49 +577,4 @@ public static class DeclaredDisabledRetirement
                 return Observable.Return(new Step(path, true, false, $"did not settle: {ex.Message}"));
             });
     }
-
-    /// <summary>
-    /// 🚨 The ONE every-replica restart (#7959 review): every flag-issued request whose phase 1
-    /// durably disabled a module and that no restart has covered yet is marked covered by the FIRST
-    /// of them, which is asked to restart (<see cref="PackageUninstallRequest.RequestedRestart"/>);
-    /// that request's own executor stamps <see cref="PackageUninstallRequest.RestartRequestedAt"/>
-    /// before dispatching, at most once. Every write is idempotent (the same values from every
-    /// replica), and a covered request is never asked again — so no boot can loop a roll.
-    /// </summary>
-    private static IObservable<Unit> RequestOneRestart(IMessageHub hub, IReadOnlyList<string> paths, ILogger logger) =>
-        ReadRequests(hub, paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList())
-            .Select(all => all
-                .Where(x => x.Request is { ModuleDisabled: true, RestartCoveredBy: null, RestartRequestedAt: null }
-                            && x.Request.Status is PackageUninstallStatus.AwaitingConfirmation)
-                .OrderBy(x => x.Path, StringComparer.Ordinal)
-                .ToImmutableList())
-            .SelectMany(uncovered =>
-            {
-                if (uncovered.IsEmpty)
-                    return Observable.Return(Unit.Default);
-                var access = hub.ServiceProvider.GetRequiredService<AccessService>();
-                var leader = uncovered[0].Path;
-                logger.LogInformation(
-                    "[FlagRetire] asking {Leader} for ONE restart so every replica drops the module(s) disabled by [{Covered}]",
-                    leader, string.Join(", ", uncovered.Select(x => x.Path)));
-                return uncovered.ToObservable()
-                    .Select(x => access.RunAsSystem(() => hub.GetMeshNodeStream(x.Path)
-                            .Update<PackageUninstallRequest>(r => r with
-                            {
-                                RestartCoveredBy = leader,
-                                RequestedRestart = string.Equals(x.Path, leader, StringComparison.Ordinal),
-                            }))
-                        .Take(1))
-                    .Concat()
-                    .DefaultIfEmpty()
-                    .LastAsync()
-                    .Select(_ => Unit.Default);
-            })
-            .Catch((Exception ex) =>
-            {
-                logger.LogError(ex,
-                    "[FlagRetire] the restart that makes every replica drop the retired module(s) could not be asked for: {Reason}. "
-                    + "Sibling replicas drop them at their next restart.", ex.Message);
-                return Observable.Return(Unit.Default);
-            });
 }
