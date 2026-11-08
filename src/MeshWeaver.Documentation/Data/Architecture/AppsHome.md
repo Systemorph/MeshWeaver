@@ -38,7 +38,7 @@ and the launcher's empty copy, about apps, on a band about spaces. It is gone (`
 
 | Rule | Mechanism |
 |---|---|
-| **A type an installed app catalogs gets no section.** The preferred design is a catalog app per kind of content (mail → Inbox, threads → Threads, CRM clients → the CRM app); that app is where its types are browsed | the app DECLARES them — see *Declaring "my catalog app owns type X"* below. `AppDirectory.CatalogedTypes()` is the live, process-wide union over the INSTALLED roots (a `hostedIn` section included — its host is then where the type is browsed) and the module-declared apps |
+| **A type an installed app catalogs gets no section.** The preferred design is a catalog app per kind of content (mail → Inbox, threads → Threads, CRM clients → the CRM app); that app is where its types are browsed | the app DECLARES them — see *Declaring "my catalog app owns type X"* below. `AppDirectory.CatalogedTypes()` is the live, process-wide union over the INSTALLED roots (a `hostedIn` section included — its host is then where the type is browsed) and the installed modules' `AppCatalogDeclaration`s |
 | **The home's own plumbing gets no section** | `HomeTypeSections.NeverSectioned`: `User`, `InstalledApp` (an app record), `LauncherArrangement`, `Store/Plugin`, `Store/Catalog` (store items are apps, shown once, on Apps). Not a list of content types — those opt out by being catalogued |
 | **Only non-empty sections render** | the sections are DISCOVERED from rows: `HomeTypeSections.Discover` groups the content rows by `NodeType` and a type with no row has no section. Nothing at all renders when there is nothing (no title, no empty band, no Customize link); each section is `ShowEmptyMessage = false`, and a renderer hides a titled band whose query answers empty (MeshWeaver.Plugins#5142) |
 | **No wrong copy** | a section is titled by its OWN type — `nav.section.{type}` when the catalog has it (`Space` → "Spaces", `Markdown` → "Documents"), else the type's last segment made plural (`IndexSections.Label`, the side index's own rule). It is a plain icon grid, never a launcher (`NavigateToMainNode` unset): no app filter, no view switch, no search box, no "No apps yet" |
@@ -79,10 +79,19 @@ A package whose app is the catalog of some node types declares them on its ROOT,
 }
 ```
 
-A module that declares its app in code (`DeclaredApp`, *Declared apps* below) sets
-`Catalogs = CatalogedTypeSet.Of("Thread")`. The declaration lives with the app that serves the
-catalog, so it holds exactly where that app is installed: uninstall the app and its types come back
-to the home as sections. Read shape-tolerantly (`AppRoot.Catalogs` — a string array; blanks dropped,
+When the app browsing the types is no package root of its own — the built-in Inbox browses the
+Essentials mailboxes and mail; the Threads app on a device mesh runs from the AI engine without its
+package — the MODULE that serves the types declares it in code:
+
+```csharp
+builder.AddAppCatalog(AppDirectory.InboxId, "Essentials/Mailbox", "Essentials/Email");
+builder.AddAppCatalog(ThreadsLauncherApp.Id, "Thread");
+```
+
+(`AppCatalogDeclaration`, `MeshWeaver.Graph/Apps`, read absence-aware like `DeclaredApp`, re-read on
+every module swap.) Either way the declaration lives with what serves the catalog, so it holds
+exactly where that is installed: uninstall the app or the module and its types come back to the home
+as sections. Read shape-tolerantly (`AppRoot.Catalogs` — a string array; blanks dropped,
 entries trimmed) and compared as a SET, so an unchanged re-read is quiet.
 
 Pinned by `HomeTypeSectionsTest` (excluded types never appear, empty types never appear, each section

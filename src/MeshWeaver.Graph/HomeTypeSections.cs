@@ -20,7 +20,7 @@ namespace MeshWeaver.Graph;
 /// <para><b>A type an app catalogs is not here.</b> The preferred design is that every kind of
 /// content gets its own catalog app (mail → Inbox, threads → Threads, CRM clients → the CRM app);
 /// such an app DECLARES the types it catalogs (<see cref="AppRoot.Catalogs"/> — the package root's
-/// <c>catalogs</c> — or <see cref="DeclaredApp.Catalogs"/>), and while it is installed those types
+/// <c>catalogs</c> — or a module's <see cref="AppCatalogDeclaration"/>), and while it is installed those types
 /// get no section. What is left — the unstructured rest — is listed by type.</para>
 /// <para><b>The viewer arranges them</b>: hide, show and reorder, stored in their launcher
 /// arrangement (<see cref="LauncherArrangement.Sections"/>, <c>{user}/_Settings/Launcher</c>), on the
