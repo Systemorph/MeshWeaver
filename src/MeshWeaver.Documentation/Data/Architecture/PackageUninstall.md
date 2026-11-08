@@ -39,8 +39,9 @@ disabled** counts as done: a phase 1 resumed after its removal records `ModuleDi
 landed".
 
 Then, in order: the **module** is retired (its landed generation disabled; unloaded live through
-`IModuleLiveActivation.Retire` where the loader can, else exactly one automatic restart through the
-self-update restart path, stamped first); the partition's **hubs are closed** (`DisposeRequest` to
+`IModuleLiveActivation.Retire` where the loader can, else by the ONE restart the instance's restart
+coordinator dispatches, see "One restart for every retirement" below);
+the partition's **hubs are closed** (`DisposeRequest` to
 every hosted hub at or under it, from the off-router issuing hub); the **install record is
 removed**; and the request moves to `AwaitingConfirmation` with the **preview** — per partition:
 whether a storage provider reports a per-partition store (Postgres: the schema), rows per table
@@ -226,6 +227,60 @@ disposed, and on a single process the successor's landing queues behind it on th
 A staged landing whose writer died before taking its answer, or whose submission's outcome is
 unknown, is not collected by the modules GC.
 
+## One restart for every retirement
+
+A module that some process still holds is unloaded by a restart. A request does not issue that
+restart itself any more. Two uninstalls running at once used to restart the instance twice, and a
+request that resumed after the restart it had asked for could not tell whether to ask again. So the
+instance has ONE restart coordinator, a node at `Admin/_PackageUninstall/RestartCoordinator`
+(`PackageRestartCoordinator`, content `PackageRestartCoordinatorState`). It is written only through
+its own stream, and it follows the same facts-to-owner shape as the install record
+([Conditional Writes Across Hubs](../ConditionalWritesAcrossHubs)): requesters state facts under
+fresh keys, and the coordinator's own hub decides.
+
+| fact | stated by | the coordinator |
+|---|---|---|
+| `Pending` | phase 1, after the retirement is granted and before the module is touched, when a restart can follow (a declared module this process holds, and a restart path on the host) | records the request as pending. While any member is pending (for at most `PendingBudget`, 15 minutes), no NEW restart is dispatched, so the restart that follows covers this request too |
+| `Ready` | phase 1, once the module's generation is disabled and it could not be retired live | records the request as ready. A request that is already covered stays covered: stating `Ready` again (a resumed phase 1) never dispatches again |
+| `Withdraw` | phase 1, when no restart is needed after all (retired live, not loaded here, no restart path, a request that already asked its restart before the coordinator existed) or when phase 1 stops | removes a pending member. A ready or covered member keeps its place, because its module IS disabled |
+| `Retry` | the plugin catalog's reconcile pass (`PackageRestartCoordinator.RetryFaulted`), once a faulted dispatch's backoff is due | dispatches that faulted dispatch again. With no dispatch named, it only decides again, so a ready member held back by a pending member that went stale is dispatched |
+
+**The decision** (`Decide`, pure, on the coordinator's own hub): every ready member joins a dispatch
+that faulted, because that dispatch restarted nothing and its retry covers them too. Otherwise, while
+no dispatch is in flight and no member is pending, ONE new dispatch covers every ready member.
+
+**The dispatch** follows `ModuleReloadExecutor.IssueRestart`:
+
+- It is persisted as `Dispatching` BEFORE the restart lane (`IModuleActivationRestart`) is asked, and
+  only the activation that wrote it asks, once.
+- The structured outcome is recorded on the dispatch: a scheduled restart (`Restarted`, `HandedOver`)
+  is `Accepted` and final; `Faulted`, or a lane that throws, is `Faulted` and retryable; anything
+  else (`Unavailable`, or no restart path registered) is `Unavailable` and final.
+- A faulted dispatch is retried by the reconcile pass with the same backoff as a faulted module
+  reload: the safety-net interval, doubled per attempt. The request's phase 1 is **not** repeated;
+  it already reached `AwaitingConfirmation`, and its `ModuleOutcome` says the dispatch faulted and is
+  retried.
+- An accepted dispatch is never dispatched again, also not after the coordinator's hub is recycled.
+
+**Resume-safe across a process restart.** Everything lives on the node. A dispatch that another
+activation left `Dispatching` (most often because the restart it asked for rolled that very process
+before the answer was written) becomes `Interrupted` and is never asked again: a restart is asked
+at most once. There is no leader election: the coordinator is one node, so one hub decides.
+
+Phase 1 waits for the answer of the dispatch that covers it (up to `AnswerBudget`) only to state it
+in `ModuleOutcome` (`one restart requested (Restarted: …) — dispatched by the restart coordinator as
+restart-N`). If no dispatch answers in time, for example because another uninstall is still pending,
+phase 1 continues and says so; the coordinator dispatches all the same.
+
+**Retired per-request field.** `PackageUninstallRequest.RestartRequestedAt` is `[Obsolete]` and never
+written. A request persisted by an earlier build may carry it: such a request asked its one restart
+itself. When its phase 1 resumes on this build, it finds the stamp and withdraws, so it is never
+restarted again. Requests without the stamp go through the coordinator.
+
+**For a boot pass that retires several packages** (the feature-flag retirement, #7959): state
+`Pending` for every request it writes before any of them can become ready. The coordinator then
+dispatches ONE restart once the last of them is ready or withdrawn.
+
 ## Phase 2 — drop the data, on confirmation
 
 `ConfirmationRequired` is the partition name. The requester sends it back (`PackageUninstall.Confirm`,
@@ -262,6 +317,13 @@ teardown sentence and ends `Done`. Never raw SQL.
 - **Other replicas' hubs.** Hubs are closed on the executor's process; a hub another replica hosts
   under the partition is torn down by the store drop's write refusal and its next activation, not
   by a `DisposeRequest` from here.
+- **The restart coordinator on more than one replica.** Its tests run on the monolith. On Orleans the
+  coordinator is one grain, so one activation decides. That was not exercised here.
+- **Two uninstalls minutes apart restart twice.** The coordinator batches requests whose phase 1
+  overlaps. A request that becomes ready after an accepted dispatch gets a dispatch of its own; it
+  does not ride the earlier one, because the earlier roll may already have passed some replicas.
+- **An interrupted dispatch that never reached the lane** is not retried. At-most-once is chosen
+  over at-least-once, because the usual cause of an interruption is the restart itself.
 - **A resumed phase 1.** If the executor's activation dies after removing the install record but
   before recording the preview, the resumed phase 1 reads no install record and fails by name; the
   partition is untouched and a new request is needed for phase 2.
