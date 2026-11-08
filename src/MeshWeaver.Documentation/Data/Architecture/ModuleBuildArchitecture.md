@@ -672,6 +672,23 @@ keeps the supersede model in the next section.
    pack call that asks for `publish-newest-only` while its publisher does not, or a publisher asking
    the scope without the pack call's shelf, is refused before merge by `module-publication.py
    check-callers`.
+   **A stand-down rests only on a tip run that is RUNNING (2026-11-08).** "That commit's own run
+   publishes it" is true only if that run reaches its hand-over, and under a shared trunk
+   concurrency group it usually does not: while this run is at its hand-over the tip's run is
+   QUEUED, and GitHub cancels a queued run as soon as the next push queues another. Measured on
+   MeshWeaver.Plugins on 2026-11-08: every green main run from 08:11Z to 19:24Z printed
+   `superseded: 42 of 42 owed module(s) stand down`, each for a tip whose run was then cancelled
+   with zero jobs. The registry's shelf kept `MeshWeaver.AI` 1.49.1, `MeshWeaver.AI.OpenAI` 1.6.195
+   and Hosting's module 1.81.4 while AI 1.51, OpenAI 1.6.199 and Hosting 1.84.2 were tagged and
+   sealed, so no instance had anything newer to adopt. Both checks (the staged publisher and the
+   direct leg) now read the tip run's state (`GET …/actions/runs?head_sha=`, filtered to the
+   caller's workflow path; `module-publication.py tip-run`) and stand a module down only when that
+   run is `in_progress`. Any other state publishes: queued, waiting, absent, completed, or
+   `unreadable` (a caller that grants no `actions: read`). Publishing on "cannot tell" is safe here
+   because of two other rules. The shelf's head is the highest version it holds, and an older upload
+   never displaces it (#3996, [Module Adoption Policy](../ModuleAdoptionPolicy) → "The registry
+   shelf"). And a version names one tree (`tag-modules.py`). So a late hand-over of an older tree
+   cannot move any module backwards.
    **A staged publisher survives by-design upstream skips.** GitHub's default job condition is
    transitive (actions/runner#2205): one skipped ancestor anywhere — a scoped leg, a wait with
    nothing to wait for — skips the publisher, and the run publishes nothing behind green checks. So
