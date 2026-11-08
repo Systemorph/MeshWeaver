@@ -964,6 +964,32 @@ def self_test() -> int:
               "a plain Microsoft.NET.Sdk project: its .razor Content is payload")
         check(code_from_evaluation(root, root / "src/Lib", {**razor_props, "EnableDefaultRazorComponentItems": "false"}, evaluation)
               == {"src/Lib/A.cs"}, "default Razor component items switched off: payload")
+        # …and END TO END through probe(): a copied .cshtml edit (MVC/Razor Pages, PreserveNewest) is never
+        # `unchanged` — the evaluated membership marks the project ineligible after the head build.
+        (root / "src/Web").mkdir()
+        (root / "src/Web/Web.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk.Razor"></Project>')
+        (root / "src/Web/W.cs").write_text("public class W { }\n")
+        (root / "src/Web/Page.cshtml").write_text("<p>one</p>\n")
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "src/Web"], cwd=root, check=True)
+        commit("web project")
+        base = git(root, "rev-parse", "HEAD").strip()
+        (root / "src/Web/Page.cshtml").write_text("<p>two</p>\n")
+        commit("page edit")
+        wlog: list = []
+        wbuild, wread = _fake_builder(root, wlog)
+
+        def web_read(d: str) -> dict:
+            if d != "src/Web":
+                return wread(d)
+            paths = _glob_paths(root, sorted((root / d).glob("*.csproj"))[0], "Release")
+            paths["code"] = sorted(code_from_evaluation(root, root / d, {"UsingMicrosoftNETSdkRazor": "true"}, {
+                "Compile": [{"FullPath": str(root / "src/Web/W.cs")}],
+                "Content": [{"FullPath": str(root / "src/Web/Page.cshtml"), "CopyToPublishDirectory": "PreserveNewest"}]}))
+            return manifest_entry(root, d, paths)
+        v = probe(root, base, git(root, "rev-parse", "HEAD").strip(), changed_files(root, base), wbuild, web_read)
+        web = v["projects"]["src/Web"]
+        check(not web["eligible"] and not web["unchanged"] and "not compiler input" in web["reason"],
+              f"a copied .cshtml edit is payload end to end, never `unchanged`: {web}")
 
         # ── C# that is PAYLOAD, not compiler input: never eligible ──
         base = git(root, "rev-parse", "HEAD").strip()
