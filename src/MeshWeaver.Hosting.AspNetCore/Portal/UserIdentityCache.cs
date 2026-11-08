@@ -7,6 +7,7 @@ using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
@@ -184,6 +185,11 @@ public sealed class UserIdentityCache : IDisposable
     // container) AND disposed by this singleton's own Dispose(), whichever the container reaches
     // first; both are idempotent.
     private readonly CompositeDisposable _connections = new();
+    // 🚨 The same connections, owned until the IoPool drain (#7992). The hub's ShutDown phase comes
+    // too late on a silo: IoPoolSiloTeardown cancels the pools at the silo's stop, while the mesh hub
+    // lives on until the host's StoppedAsync — so the directory read was still attached at the cancel
+    // and was reported as an unowned leak. The registry disposes it before any pool is cancelled.
+    private readonly IDisposable _ownedUntilIoDrain;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ILogger<UserIdentityCache> _logger;
 
@@ -320,6 +326,7 @@ public sealed class UserIdentityCache : IDisposable
         _mesh = mesh;
         IndexChanged = _indexChanged.AsObservable();
         hub.RegisterForDisposal(_connections);
+        _ownedUntilIoDrain = hub.OwnUntilIoDrain(_connections, nameof(UserIdentityCache));
         OpenDirectorySubscription();
     }
 
@@ -636,5 +643,9 @@ public sealed class UserIdentityCache : IDisposable
         UserIdentityLookup.UntilDetermined(IndexChanged, () => Lookup(email));
 
     /// <summary>Disposes the underlying query subscription, stopping further cache updates.</summary>
-    public void Dispose() => _connections.Dispose();
+    public void Dispose()
+    {
+        _ownedUntilIoDrain.Dispose();
+        _connections.Dispose();
+    }
 }

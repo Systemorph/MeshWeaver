@@ -8,6 +8,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MeshWeaver.Mesh.Threading;
 
 namespace MeshWeaver.GitSync;
 
@@ -145,7 +146,10 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
                 MarkLoaded();
                 return;
             }
-            subscription = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            // 🚨 Owned for the mesh's lifetime by the IoPool registry (#7992): this singleton is disposed
+            // only with the container — AFTER the pools are cancelled (on a silo, long after) — so the
+            // registry releases the watch before its pools go, instead of the cancel finding it attached.
+            subscription = hub.OwnUntilIoDrain(ActivityControlPlaneExtensions.SubscribeHubWatcher(
                 hub,
                 () => Observable.Defer(() => accessService.RunAsSystem(
                         () => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(query))))
@@ -154,7 +158,7 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
                 logger,
                 $"[{name}] catalog query",
                 onTransientFault: OnFault,
-                onPoisonedContent: _ => OnFault());
+                onPoisonedContent: _ => OnFault()), GetType().Name);
         }
     }
 
