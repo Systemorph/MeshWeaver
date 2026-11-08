@@ -245,6 +245,14 @@ def abi_filter_hits(root: Path, hits: dict[str, list[str]], src_files: list[str]
     if not isinstance(verdict, dict) or verdict.get("unavailable") or verdict.get("schema") != abi.SCHEMA:
         say(f"    ABI verdict not applied ({(verdict or {}).get('unavailable') if isinstance(verdict, dict) else 'not an object'}) — the compiled half as before")
         return hits
+    # The verdict must describe THIS tree (review of #7995): its head is the probed commit, which is HEAD or an
+    # ancestor of it (the fresh merge of that head onto main). A verdict from another head is not applied.
+    vhead = str(verdict.get("head") or "")
+    known_head = subprocess.run(["git", "merge-base", "--is-ancestor", vhead, "HEAD"], cwd=root,
+                                capture_output=True).returncode == 0 if re.fullmatch(r"[0-9a-f]{40}", vhead) else False
+    if not known_head:
+        say(f"    ABI verdict not applied (its head {vhead[:12] or '<none>'} is not this tree's HEAD or an ancestor of it) — the compiled half as before")
+        return hits
     unchanged = {d: e for d, e in (verdict.get("projects") or {}).items() if e.get("unchanged")}
     out = dict(hits)
     for entry, touched in hits.items():
@@ -266,7 +274,7 @@ def abi_filter_hits(root: Path, hits: dict[str, list[str]], src_files: list[str]
             continue
         if decision.get("decision") == "skip":
             out[entry] = [p for p in touched if p not in abi_only]
-            say(f"    {entry}: {', '.join(abi_only)} — {decision.get('reason')} — not packed for it")
+            say(f"    {entry}: {', '.join(abi_only)} — {decision.get('reason')} (verdict of {vhead[:12]}) — not packed for it")
     return out
 
 
@@ -1653,7 +1661,11 @@ def self_test() -> int:
             "            'src/Other/Other.csproj': ['src/Other', 'src/Lib']}\n"
             "print(json.dumps(closures[sys.argv[sys.argv.index('--closure') + 1]]))\n", encoding="utf-8")
         files = ["src/Lib/A.cs", "src/Other/O.cs"]
-        verdict = {"schema": "abi-verdict/1", "projects": {"src/Lib": {"unchanged": True, "files": ["src/Lib/A.cs"], "refasm": "a" * 64, "friends": []}}}
+        for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", "fixture"]):
+            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=root, check=True, capture_output=True)
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+        verdict = {"schema": "abi-verdict/1", "head": head,
+                   "projects": {"src/Lib": {"unchanged": True, "files": ["src/Lib/A.cs"], "refasm": "a" * 64, "friends": []}}}
         old_env = os.environ.get("MW_ABI_VERDICT")
         try:
             os.environ["MW_ABI_VERDICT"] = json.dumps(verdict)
@@ -1668,6 +1680,8 @@ def self_test() -> int:
             (root / PROJECTS).write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
             check("[abi] the caller's closure cannot be read ⇒ the entry keeps its hits (decide never judges a narrower graph)",
                   abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
+            os.environ["MW_ABI_VERDICT"] = json.dumps({**verdict, "head": "f" * 40})
+            check("[abi] a verdict computed at another head is not applied", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
             for bad in ("not json", json.dumps({"unavailable": "no mount"}), json.dumps({"schema": "other"})):
                 os.environ["MW_ABI_VERDICT"] = bad
                 check(f"[abi] an unusable verdict ({bad[:20]}) leaves the hits alone", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)

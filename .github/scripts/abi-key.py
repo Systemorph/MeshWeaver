@@ -92,7 +92,7 @@ CLI
         {schema, base, head, projects: {dir: {assembly, eligible, unchanged, refasm, baseRefasm,
         files[], friends[], reason}}, deterministic}. Leaves every probed project built at HEAD.
   abi-key.py decide --root R --verdict V --units U.json [--reselected ids.json] [--out decision.json]
-      U.json = [{id, project, reads?: [prefix|glob …], closure?: [dir …]}] (closure: the caller's own graph); ids.json = ids still selected when the
+      U.json = [{id, project, reads?: [prefix|glob …], closure?: [dir …]}] (closure: the caller's own graph; [] means "no dependencies"); ids.json = ids still selected when the
       verdict's unchanged files are removed from the diff (the caller's own selector). REQUIRED for any
       skip: without it every unit is kept (nothing outside the verdict's files is known unchanged).
       → {id: {decision: "skip"|"keep", reason, dependencies[]}}; skip reasons read exactly
@@ -590,7 +590,7 @@ def decide(root: Path, verdict: dict, units: list[dict], reselected: set[str] | 
         # A caller whose selector owns a WIDER graph (MeshWeaver.Plugins' project-closure.py: the build+test
         # closure, Condition-guarded references included) hands it in as `closure`, so `decide` judges the
         # same edges the selector reached the unit by; absent, module-build-key.py's closure.
-        closure = list(unit.get("closure") or _MBK.closure_dirs(root, project))
+        closure = list(unit["closure"]) if unit.get("closure") is not None else _MBK.closure_dirs(root, project)
         own = own_dirs(root, project)
         hit = [d for d in closure if d in projects]
         if reselected is None:
