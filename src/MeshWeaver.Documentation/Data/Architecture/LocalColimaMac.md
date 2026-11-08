@@ -443,6 +443,38 @@ Then `memex-local up` to apply, and **re-upload** your documents — indexing fi
 
 > **Dimensions are fixed per portal.** The pgvector column + HNSW index are sized to the model (`bge-m3` = 1024, `embed-v-4-0` = 1536; a model not in the built-in lookup defaults to 1536). Changing `Embedding__Model` to a different-dimension model re-migrates the column + HNSW index on the next startup — expected, but not free on a large store.
 
+### 10.2 Ingestion — OCR, descriptions, icons, tables (on by default)
+
+Once §10 and §10.1 are in place, every file the instance ingests is also **enriched** — on by default,
+on every instance, inside the instance and on these local models
+(MeshWeaver.Plugins `Indexing/DocumentEnrichment`, `Hosting/MacStudioOnboarding` → *Ingestion*):
+
+- a **PDF is taken apart** into section, table and figure nodes; tables become typed rows and columns
+  shown in a grid; scanned pages are read by OCR first and their tables taken from the transcription;
+- a **picture is read** (OCR) and described;
+- the document's **Description** gets a summary (a picture: what it shows and the gist of its text),
+  and it gets an **icon** (a picture: a simplified thumbnail; a document: a sanitised SVG the model
+  draws) — never over a description or icon a person set;
+- every part is **searchable**, full text and semantic.
+
+The only addition to the overlay is the OCR engine, pointed at the same host Ollama and a model whose
+`capabilities` include `vision` (qwen3.6 and qwen3.8 do — check with `curl -s localhost:11434/api/show
+-d '{"name":"qwen3.6"}'`):
+
+```yaml
+    Ocr__Engine: "OllamaVision"
+    Ocr__OllamaVision__Endpoint: "http://ollama:11434/v1"
+    Ocr__OllamaVision__Model: "qwen3.6"
+```
+
+Table and section detection, figure extraction and the picture icons run in-process — nothing more to
+install. Summaries and the SVG icon use the default chat model of §10 (it must have `vision` for the
+picture descriptions too). To turn enrichment off for one instance: `ContentIndexing__Enrichment__Enabled: "false"`.
+
+**Verify:** upload a photo and a PDF with a table, open the file's page under `…/_Documents/`: the
+**Enrichment** panel goes `Running (step) → Done` with per-step timings, the page shows the summary,
+the recognised text and the icon, and the table is a `Table-001` child rendered as a grid.
+
 ---
 
 ## 11. Observability
