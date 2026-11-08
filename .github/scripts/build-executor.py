@@ -220,6 +220,26 @@ def stage_debt(path: str) -> tuple[list[str], list[str]]:
     return names, owes
 
 
+def stage_withholds(path: str) -> dict:
+    """{stage name: [what it withholds]} — the suites a stage declares it does NOT run on a build host (`"withholds"` on
+    the stage in .github/build-stages.json: a requirement the host lacks, e.g. a container daemon), which only the
+    Actions legs run. Empty when the file is unreadable or nothing is declared. Never raises."""
+    try:
+        with open(path) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    stages = doc.get("stages") if isinstance(doc, dict) else None
+    out: dict = {}
+    for st in stages if isinstance(stages, list) else []:
+        if isinstance(st, dict) and isinstance(st.get("name"), str):
+            held = st.get("withholds")
+            # a malformed declaration withholds SOMETHING unreadable — the stage must not be routed on it
+            out[st["name"]] = ([w for w in held if isinstance(w, str) and w.strip()] or ["(malformed withholds)"]
+                               if isinstance(held, list) and held else (["(malformed withholds)"] if held not in (None, []) else []))
+    return {k: v for k, v in out.items() if v}
+
+
 def routing_document(routing: Optional[Routing]) -> tuple[Optional[dict], str]:
     """The owner's routing decision as read from core main, or (None, why not). Read ONCE per decision."""
     if routing is None:
@@ -265,11 +285,13 @@ def evidence_problem(evidence: object) -> str:
     return ""
 
 
-def equivalent_stages(doc: Optional[dict], repo_name: str, names: list) -> tuple[list, list]:
+def equivalent_stages(doc: Optional[dict], repo_name: str, names: list, withholds: Optional[dict] = None) -> tuple[list, list]:
     """(the declared stages whose verdict the HOST carries, notes on every declaration that was NOT honoured).
     A stage is honoured only when `equivalentStages.<repo>.<stage>` declares evidence that meets the bar AND every
     stage declared BEFORE it is honoured too: the host runs its stages fail-fast in the declared order, so a later
     stage behind a shadow one could read `not run` and turn a required context red for a reason it never checked.
+    A stage that WITHHOLDS suites on the host (`withholds`, stage_withholds) is never honoured: the host's green would
+    stand for suites it did not run, and with the Actions legs skipped nobody would run them.
     Pure."""
     if doc is None:
         return [], []
@@ -288,6 +310,10 @@ def equivalent_stages(doc: Optional[dict], repo_name: str, names: list) -> tuple
             gap = gap or name
             continue
         problem = evidence_problem(entries[name])
+        held = (withholds or {}).get(name) or []
+        if held and not problem:
+            problem = (f"the stage withholds {len(held)} suite(s) a build host cannot run ({'; '.join(held)[:200]}) — only the "
+                       f"Actions legs run them, so they keep the verdict")
         if problem:
             notes.append(f"stage {name} is declared equivalent, but {problem} — it stays in shadow")
             gap = gap or name
@@ -448,7 +474,7 @@ def decide_forced(i: Inputs, get: Get, post: Post, api: str, route_only: bool, d
             queued = "NOT queued on the host (no webhook pair or an unsafe inbox in this context)"
     # 🧩 Per-stage equivalence: only on a run the host really holds (queued AND verified) — a stage whose verdict the
     # host is to carry on a run it never received would leave its required context waiting on nothing.
-    honoured, notes = equivalent_stages(doc, repo_name, names)
+    honoured, notes = equivalent_stages(doc, repo_name, names, stage_withholds(i.stages_file))
     host_stages = honoured if verified else []
     if honoured and not verified:
         notes.append(f"stage(s) {', '.join(honoured)} are declared equivalent, but this run is {queued} — they stay on Actions for this run")
@@ -864,6 +890,19 @@ def self_test() -> int:
         d = decide(with_(stages_file=owing), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": ev}}))
         check(f"stage/NEGATIVE: evidence with {label} is refused — the stage stays in shadow",
               d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED} and any(phrase in l for l in d.lines), (d.stages, d.lines))
+    withholding = os.path.join(tmp, "withholding.json")
+    with open(withholding, "w") as fh:
+        json.dump({"owes": ["x"], "stages": [{"name": "compile-check", "withholds": ["src/Cosmos.Test (needs docker)"]}, {"name": "gate"}]}, fh)
+    d = decide(with_(stages_file=withholding), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}))
+    check("stage/NEGATIVE: a proven stage that WITHHOLDS suites on the host stays in shadow, said (only Actions runs them)",
+          d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED} and any("withholds 1 suite" in l and "Cosmos.Test" in l for l in d.lines), (d.stages, d.lines))
+    check("stage/withholds are read per stage; a malformed declaration withholds something",
+          stage_withholds(withholding) == {"compile-check": ["src/Cosmos.Test (needs docker)"]} and stage_withholds(owing) == {}
+          and stage_withholds(os.path.join(tmp, "absent.json")) == {}, stage_withholds(withholding))
+    with open(withholding, "w") as fh:
+        json.dump({"stages": [{"name": "compile-check", "withholds": "docker"}, {"name": "gate", "withholds": [1]}]}, fh)
+    check("stage/a malformed withholds is read as withholding (never routed on it)",
+          stage_withholds(withholding) == {"compile-check": ["(malformed withholds)"], "gate": ["(malformed withholds)"]}, stage_withholds(withholding))
     d = decide(with_(stages_file=owing), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"gate": proven}}))
     check("stage/NEGATIVE: a later stage behind an unproven one stays in shadow (the host runs fail-fast)",
           d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED} and any("fail-fast" in l for l in d.lines), (d.stages, d.lines))
