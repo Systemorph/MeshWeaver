@@ -87,7 +87,7 @@ public record PluginGrant
     /// <paramref name="now"/> to an instance on <paramref name="instancePlan"/>: some entry matches
     /// the pair, is within its term, and the package's tier is COVERED by the instance's plan under
     /// <paramref name="ranks"/> — narrowed by the entry's own cap when it names one
-    /// (<see cref="PlanTierRanks.Narrower"/>, <see cref="PlanTierRanks.CoversInstance"/>). This is
+    /// (<see cref="PlanTierRanks.Narrower"/>, <see cref="PlanTierRanks.CoversInstance(string?, string?, string?)"/>). This is
     /// the overload every registry surface decides with (#2804).
     ///
     /// <para>🚨 The licence is the INSTANCE's plan, never the entry's. Until #2804 a plan-less entry
@@ -101,7 +101,7 @@ public record PluginGrant
         string? instancePlan, DateTimeOffset now) =>
         !IsRevoked && Entries.Any(e =>
             e.Matches(sourceName, packageId) && e.IsValidAt(now)
-            && ranks.CoversInstance(ranks.Narrower(instancePlan, e.Tier), packageTier));
+            && ranks.CoversInstance(ranks.Narrower(instancePlan, e.Tier), packageTier, packageId));
 
     /// <summary>
     /// 🚨 The typed PLAN-TIER refusal (#4097): the plan the decision was taken at when this grant
@@ -212,7 +212,7 @@ public record PluginGrantEntry
     /// a tier ranked at or below the plan's, a baseline package declaring none, and — on an
     /// all-access plan — everything. That is what lets one <c>Plugins/*@personal</c> entry express
     /// "the platform repo, as far as the Personal plan reaches" instead of an admin enumerating
-    /// packages, and it is decided by <see cref="PlanTierRanks.Covers"/> against the ladder the
+    /// packages, and it is decided by <see cref="PlanTierRanks.Covers(string?, string?, string?)"/> against the ladder the
     /// registry reads from its tier nodes. Null keeps today's meaning exactly: the whole source,
     /// whatever tier its packages declare.</para>
     /// </summary>
