@@ -29,6 +29,19 @@ cannot be established: a project or import `git` cannot resolve at HEAD; a file 
 any property expression; and any other item path (`Include`/`Update`/`Remove`) that is absolute,
 uses a property expression, or normalises to outside its own project directory. A caller treats a
 refusal as "no cache" (the commit key), never as a red.
+
+EXTERNAL ROOTS (`--external NAME`, repeatable). A caller that builds against something OUTSIDE the
+checkout — the platform image's `/app` in the module lane's container build, reached through
+`$(MeshWeaverRoot)` / `$(MeshWeaverRefs)` — may declare those property names external: an
+`<Import>`, ProjectReference or item path that STARTS with `$(NAME)` (and carries no further
+expression) is then not followed but recorded as an `external` line, and the caller asserts that its
+SALT identifies everything such a path can reach (an image digest does; a branch name does not). A
+property not declared stays a refusal, and nothing in a `$(NAME)` path is ever read from the checkout.
+
+NO TARGETS (`--no-targets`). A caller whose builder EVALUATES project files but runs no MSBuild target
+(the module lane's `mw-plugin-test build-project`, a Roslyn workspace with no MSBuild) may say so: the
+contents of every `<Target>` are then not scanned, because nothing inside a target is ever executed by
+that builder. A caller that runs `dotnet build`/`publish` must never pass it.
 """
 from __future__ import annotations
 
@@ -100,18 +113,48 @@ def is_path_like(value: str) -> bool:
     return "/" in v or "\\" in v or v.startswith(".") or "$(" in v or os.path.isabs(v)
 
 
-def scan(repo: Path, path: str, project_dir: str) -> tuple[list[str], list[str]]:
+def external_root(value: str, externals: frozenset[str]) -> bool:
+    """True when `value` starts with `$(NAME)` for a declared external NAME and has no other expression."""
+    v = value.strip()
+    for name in externals:
+        prefix = f"$({name})"
+        if v.startswith(prefix):
+            rest = v[len(prefix):]
+            return "$(" not in rest and "@(" not in rest and "%(" not in rest
+    return False
+
+
+def _elements(root: ET.Element, no_targets: bool):
+    """Every element of one MSBuild file — without the insides of a <Target> when `no_targets`."""
+    stack = [root]
+    while stack:
+        el = stack.pop()
+        yield el
+        if no_targets and isinstance(el.tag, str) and local(el.tag) == "Target":
+            continue
+        stack.extend(reversed(list(el)))
+
+
+def scan(repo: Path, path: str, project_dir: str,
+         externals: frozenset[str] = frozenset(),
+         no_targets: bool = False) -> tuple[list[str], list[str], list[str], list[str]]:
     """(ProjectReferences, Imports) of one MSBuild file as evaluated by the project in `project_dir`.
     MSBuild resolves an <Import Project> against the IMPORTING FILE's directory, but every item path
     (Include/Update/Remove — ProjectReference included) against the PROJECT's directory, wherever the
-    item is declared; an item path must stay inside that project directory."""
+    item is declared; an item path must stay inside that project directory. The third list is every path
+    rooted at a declared external property (see EXTERNAL ROOTS)."""
     here = str(PurePosixPath(path).parent)
     refs: list[str] = []
     imports: list[str] = []
-    for el in parse(repo, path).iter():
+    external: list[str] = []
+    inputs: list[str] = []
+    for el in _elements(parse(repo, path), no_targets):
         tag = local(el.tag) if isinstance(el.tag, str) else ""
         if tag == "Import":
             proj = (el.get("Project") or "").strip()
+            if external_root(proj, externals):
+                external.append(proj)
+                continue
             rel = proj[len(THIS_DIR):] if proj.startswith(THIS_DIR) else proj
             if not rel or "$(" in rel or "@(" in rel or "%(" in rel or "*" in rel:
                 raise Refused(f"{path}: <Import Project=\"{proj}\"> cannot be resolved to a file in the repository")
@@ -125,6 +168,9 @@ def scan(repo: Path, path: str, project_dir: str) -> tuple[list[str], list[str]]
             if raw is None:
                 continue
             for value in (v for v in raw.split(";") if v.strip()):
+                if external_root(value, externals):
+                    external.append(value.strip())
+                    continue
                 if tag == "ProjectReference":
                     if "$(" in value or "@(" in value or "%(" in value:
                         raise Refused(f"{path}: ProjectReference \"{value}\" uses an expression")
@@ -144,12 +190,32 @@ def scan(repo: Path, path: str, project_dir: str) -> tuple[list[str], list[str]]
                         break
                 if not head:
                     continue   # the project's own directory or its outputs
+                if head.startswith(THIS_DIR):
+                    # Rooted at the DECLARING file's directory (a shared Directory.Build.targets
+                    # compiling `$(MSBuildThisFileDirectory)Shared/X.cs` into every project): a repository
+                    # path like any other, hashed as an input (a glob by its fixed directory's tree).
+                    rest = head[len(THIS_DIR):]
+                    if "$(" in rest or "@(" in rest or "%(" in rest:
+                        raise Refused(f"{path}: <{tag} {attr}=\"{value}\"> uses an expression after $(MSBuildThisFileDirectory)")
+                    fixed = rest.replace("\\", "/").split("*", 1)[0]
+                    fixed = fixed if "*" not in rest else fixed.rsplit("/", 1)[0] if "/" in fixed else ""
+                    target = resolve(here, fixed) if fixed else here
+                    if not target:
+                        raise Refused(f"{path}: <{tag} {attr}=\"{value}\"> points outside the repository")
+                    inputs.append(target)
+                    continue
                 if "$(" in value or "@(" in value or "%(" in value or os.path.isabs(value.strip()):
                     raise Refused(f"{path}: <{tag} {attr}=\"{value}\"> uses an expression or an absolute path")
-                target = resolve(project_dir, value)
-                if not target or not (target == project_dir or target.startswith(project_dir + "/")):
-                    raise Refused(f"{path}: <{tag} {attr}=\"{value}\"> reaches outside {project_dir}/")
-    return refs, imports
+                rel = value.strip().replace("\\", "/")
+                fixed = rel.split("*", 1)[0].rsplit("/", 1)[0] if "*" in rel else rel
+                target = resolve(project_dir, fixed) if fixed else project_dir
+                if not target:
+                    raise Refused(f"{path}: <{tag} {attr}=\"{value}\"> points outside the repository")
+                if not (target == project_dir or target.startswith(project_dir + "/")):
+                    # A linked item from elsewhere in the repository (`<Compile Include="../Other/X.cs"/>`):
+                    # hashed as an input of its own — a glob by its fixed directory's tree.
+                    inputs.append(target)
+    return refs, imports, external, inputs
 
 
 def implicit_files(repo: Path, project_dir: str) -> list[str]:
@@ -167,7 +233,8 @@ def implicit_files(repo: Path, project_dir: str) -> list[str]:
     return found
 
 
-def evaluate(repo: Path, project: str) -> tuple[list[str], set[str]]:
+def evaluate(repo: Path, project: str,
+             externals: frozenset[str] = frozenset(), no_targets: bool = False) -> tuple[list[str], set[str], set[str], set[str]]:
     """(every project in the ProjectReference closure, every file any of them EVALUATES).
 
     A project evaluates its own file, the implicit files on its path, and — recursively, whatever their
@@ -175,6 +242,8 @@ def evaluate(repo: Path, project: str) -> tuple[list[str], set[str]]:
     against the project directory), and a ProjectReference found in ANY of them joins the closure."""
     projects: set[str] = set()
     evaluated: set[str] = set()
+    external: set[str] = set()
+    inputs: set[str] = set()
     stack = [str(PurePosixPath(project))]
     while stack:
         p = stack.pop()
@@ -192,15 +261,24 @@ def evaluate(repo: Path, project: str) -> tuple[list[str], set[str]]:
             if not object_hash(repo, f):
                 raise Refused(f"{f} (evaluated by {p}) does not exist at HEAD")
             evaluated.add(f)
-            refs, imports = scan(repo, f, pdir)
+            refs, imports, ext, extra = scan(repo, f, pdir, externals, no_targets)
             stack.extend(refs)
             files.extend(imports)
-    return sorted(projects), evaluated
+            external.update(ext)
+            inputs.update(extra)
+    return sorted(projects), evaluated, external, inputs
 
 
-def key(repo: Path, project: str, salt: str = "") -> tuple[str, list[str]]:
+def key(repo: Path, project: str, salt: str = "",
+        externals: frozenset[str] | set[str] = frozenset(), no_targets: bool = False) -> tuple[str, list[str]]:
+    externals = frozenset(externals)
     lines = [f"salt {salt}"]
-    projects, evaluated = evaluate(repo, project)
+    if no_targets:
+        lines.append("builder runs no targets")
+    if externals:
+        # Declared, so the same tree keyed with and without a declaration never shares a key.
+        lines.append("externals " + ",".join(sorted(externals)))
+    projects, evaluated, external, inputs = evaluate(repo, project, externals, no_targets)
     dirs = sorted({str(PurePosixPath(p).parent) for p in projects})
     for d in dirs:
         h = object_hash(repo, d)
@@ -219,6 +297,12 @@ def key(repo: Path, project: str, salt: str = "") -> tuple[str, list[str]]:
         h = object_hash(repo, f)
         if h:
             lines.append(f"file {f} {h}")
+    for f in sorted(inputs):
+        if any(f == d or f.startswith(d + "/") for d in dirs):
+            continue   # already in that directory's tree hash
+        # A path that does not exist at HEAD is recorded as absent: it is an input the moment it appears.
+        lines.append(f"input {f} {object_hash(repo, f) or 'absent'}")
+    lines.extend(f"external {e}" for e in sorted(external))
     return hashlib.sha256("\n".join(lines).encode()).hexdigest(), lines
 
 
@@ -287,7 +371,15 @@ def self_test() -> int:
                 check(f"REFUSED: {label}", False)
             except Refused:
                 check(f"REFUSED: {label}", True)
-        refused("a Compile item outside its directory (single quotes)", "<Project><ItemGroup><Compile Include='../Shared/S.cs' /></ItemGroup></Project>")
+        write("src/Shared/S.cs", "class S {}")
+        write("src/Lib/Lib.csproj", "<Project><ItemGroup><Compile Include='../Shared/S.cs' /></ItemGroup></Project>")
+        g("add", "."); g("commit", "-qm", "linked")
+        kl, lines = key(repo, "src/Tool/Tool.csproj", "s")
+        check("a linked item from elsewhere in the repository is hashed as an input (single quotes)",
+              any(l.startswith("input src/Shared/S.cs ") for l in lines))
+        write("src/Shared/S.cs", "class S { int k; }"); g("commit", "-qam", "linked-edit")
+        check("editing a linked item changes the key", key(repo, "src/Tool/Tool.csproj", "s")[0] != kl)
+        refused("a linked item climbing out of the repository", "<Project><ItemGroup><Compile Include='../../../S.cs' /></ItemGroup></Project>")
         refused("a Compile item with a property path", '<Project><ItemGroup><Compile Include="$(Root)/S.cs" /></ItemGroup></Project>')
         refused("an absolute item path", '<Project><ItemGroup><None Include="/etc/passwd" /></ItemGroup></Project>')
         refused("an Import with a computed path", '<Project><Import Project="$([MSBuild]::GetPathOfFileAbove(x.props))" /></Project>')
@@ -302,11 +394,9 @@ def self_test() -> int:
         write("src/Lib/Lib.csproj", '<Project><Import Project="local.targets" /></Project>')
         write("src/Lib/local.targets", '<Project><ItemGroup><Compile Include="../Shared/S.cs" /></ItemGroup></Project>')
         g("add", "."); g("commit", "-qm", "imported-item")
-        try:
-            key(repo, "src/Tool/Tool.csproj")
-            check("REFUSED: an IMPORTED file's item outside the importing project's directory", False)
-        except Refused:
-            check("REFUSED: an IMPORTED file's item outside the importing project's directory", True)
+        _, lines = key(repo, "src/Tool/Tool.csproj")
+        check("an IMPORTED file's item resolves against the PROJECT's directory and is hashed",
+              any(l.startswith("input src/Shared/S.cs ") for l in lines))
         write("build/inner.props", "<Project/>")
         write("src/Lib/local.targets", '<Project><Import Project="local.xml" /></Project>')
         write("src/Lib/local.xml", '<Project><Import Project="../../build/inner.props" /></Project>')
@@ -331,6 +421,86 @@ def self_test() -> int:
             check("an item rooted at the project's OUTPUT dir ($(TargetDir)) is accepted", True)
         except Refused as ex:
             check(f"an item rooted at the project's OUTPUT dir ($(TargetDir)) is accepted — {ex}", False)
+        # ── EXTERNAL ROOTS ──
+        write("src/Lib/Lib.csproj", '<Project><Import Project="$(PlatRefs)/refs.props" Condition="Exists(\'x\')" />'
+              '<ItemGroup><ProjectReference Include="$(PlatRoot)/src/Core/Core.csproj" />'
+              '<Compile Include="$(PlatRoot)/samples/S.cs" /></ItemGroup></Project>')
+        g("commit", "-qam", "external")
+        try:
+            key(repo, "src/Tool/Tool.csproj", "s")
+            check("REFUSED: an UNDECLARED property root stays a refusal", False)
+        except Refused:
+            check("REFUSED: an UNDECLARED property root stays a refusal", True)
+        try:
+            key(repo, "src/Tool/Tool.csproj", "s", {"PlatRoot"})
+            check("REFUSED: declaring ONE property does not cover another", False)
+        except Refused:
+            check("REFUSED: declaring ONE property does not cover another", True)
+        ke, lines = key(repo, "src/Tool/Tool.csproj", "s", {"PlatRoot", "PlatRefs"})
+        check("declared external roots are recorded, not followed",
+              "external $(PlatRoot)/src/Core/Core.csproj" in lines and "external $(PlatRefs)/refs.props" in lines
+              and not any(l.startswith("dir src/Core") for l in lines))
+        check("the external declaration is part of the key", key(repo, "src/Tool/Tool.csproj", "s", {"PlatRoot", "PlatRefs", "X"})[0] != ke)
+        check("the salt still keys an external build (it is what identifies the outside)",
+              key(repo, "src/Tool/Tool.csproj", "t", {"PlatRoot", "PlatRefs"})[0] != ke)
+        write("src/Lib/A.cs", "class A { int z; }"); g("commit", "-qam", "ext-src")
+        check("an in-repo change still changes an externally-rooted key",
+              key(repo, "src/Tool/Tool.csproj", "s", {"PlatRoot", "PlatRefs"})[0] != ke)
+        write("src/Lib/Lib.csproj", '<Project><ItemGroup><Compile Include="$(PlatRoot)/$(Other)/S.cs" /></ItemGroup></Project>')
+        g("commit", "-qam", "ext-nested")
+        try:
+            key(repo, "src/Tool/Tool.csproj", "s", {"PlatRoot"})
+            check("REFUSED: a declared root followed by ANOTHER expression", False)
+        except Refused:
+            check("REFUSED: a declared root followed by ANOTHER expression", True)
+        write("src/Lib/Lib.csproj", "<Project/>"); g("commit", "-qam", "ext-reset")
+        # ── items rooted at the DECLARING file's directory ──
+        write("shared/X.cs", "class X {}")
+        write("Directory.Build.targets", '<Project><ItemGroup><Compile Include="$(MSBuildThisFileDirectory)shared/X.cs" /></ItemGroup></Project>')
+        g("add", "."); g("commit", "-qm", "this-dir-item")
+        kt, lines = key(repo, "src/Tool/Tool.csproj", "s")
+        check("an item rooted at $(MSBuildThisFileDirectory) is hashed as an input", any(l.startswith("input shared/X.cs ") for l in lines))
+        write("shared/X.cs", "class X { int q; }"); g("commit", "-qam", "this-dir-edit")
+        check("editing a $(MSBuildThisFileDirectory) item changes the key", key(repo, "src/Tool/Tool.csproj", "s")[0] != kt)
+        write("Directory.Build.targets", '<Project><ItemGroup><Compile Include="$(MSBuildThisFileDirectory)shared/**/*.cs" /></ItemGroup></Project>')
+        g("commit", "-qam", "this-dir-glob")
+        kg, lines = key(repo, "src/Tool/Tool.csproj", "s")
+        check("a $(MSBuildThisFileDirectory) glob is hashed by its fixed directory's tree", any(l.startswith("input shared ") for l in lines))
+        write("shared/deep/Y.cs", "class Y {}"); g("add", "."); g("commit", "-qm", "this-dir-glob-add")
+        check("a file ADDED under a $(MSBuildThisFileDirectory) glob changes the key", key(repo, "src/Tool/Tool.csproj", "s")[0] != kg)
+        write("Directory.Build.targets", '<Project><ItemGroup><Compile Include="$(MSBuildThisFileDirectory)../../outside.cs" /></ItemGroup></Project>')
+        g("commit", "-qam", "this-dir-out")
+        try:
+            key(repo, "src/Tool/Tool.csproj", "s")
+            check("REFUSED: a $(MSBuildThisFileDirectory) item climbing out of the repository", False)
+        except Refused:
+            check("REFUSED: a $(MSBuildThisFileDirectory) item climbing out of the repository", True)
+        write("Directory.Build.targets", "<Project/>"); g("commit", "-qam", "this-dir-reset")
+        # ── --no-targets ──
+        write("src/Lib/Lib.csproj", '<Project><Target Name="T"><ItemGroup><X Include="@(Y->\'$(Q)/%(Filename)\')" /></ItemGroup></Target></Project>')
+        g("commit", "-qam", "target-items")
+        try:
+            key(repo, "src/Tool/Tool.csproj", "s")
+            check("REFUSED: an expression inside a <Target> for a builder that RUNS targets", False)
+        except Refused:
+            check("REFUSED: an expression inside a <Target> for a builder that RUNS targets", True)
+        try:
+            kn1 = key(repo, "src/Tool/Tool.csproj", "s", no_targets=True)[0]
+            check("--no-targets: a <Target>'s contents are not scanned", True)
+            check("--no-targets yields a key", len(kn1) == 64)
+        except Refused as ex:
+            check(f"--no-targets: a <Target>'s contents are not scanned — {ex}", False)
+        write("src/Lib/Lib.csproj", '<Project><Target Name="T"/><ItemGroup><Compile Include="$(Q)/S.cs" /></ItemGroup></Project>')
+        g("commit", "-qam", "outside-target")
+        try:
+            key(repo, "src/Tool/Tool.csproj", "s", no_targets=True)
+            check("REFUSED: --no-targets still refuses an evaluated item OUTSIDE a target", False)
+        except Refused:
+            check("REFUSED: --no-targets still refuses an evaluated item OUTSIDE a target", True)
+        write("src/Lib/Lib.csproj", "<Project/>"); g("commit", "-qam", "target-reset")
+        kp = key(repo, "src/Tool/Tool.csproj", "s")[0]
+        check("--no-targets changes the key (a key for one builder never serves the other)",
+              kp != key(repo, "src/Tool/Tool.csproj", "s", no_targets=True)[0])
         try:
             key(repo, "src/Missing/Missing.csproj")
             check("an unresolvable project is REFUSED", False)
@@ -348,6 +518,10 @@ def main() -> int:
     ap.add_argument("--repo", default=".")
     ap.add_argument("--project")
     ap.add_argument("--salt", default="")
+    ap.add_argument("--external", action="append", default=[], metavar="NAME",
+                    help="a property naming a root OUTSIDE the checkout that the salt identifies (repeatable)")
+    ap.add_argument("--no-targets", action="store_true",
+                    help="the caller's builder evaluates project files but runs no MSBuild target")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
     if a.self_test:
@@ -355,7 +529,7 @@ def main() -> int:
     if not a.project:
         ap.error("--project is required")
     try:
-        k, lines = key(Path(a.repo), a.project, a.salt)
+        k, lines = key(Path(a.repo), a.project, a.salt, set(a.external), a.no_targets)
     except Refused as ex:
         print(f"msbuild-closure-key: refused — {ex}")
         return 2
