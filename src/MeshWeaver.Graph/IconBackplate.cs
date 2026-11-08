@@ -336,9 +336,13 @@ public static partial class IconBackplate
     {
         if (AttrOf(attrs, "style") is not { } style)
             return null;
-        var css = CssComment().Replace(style, " ");
-        if (css.IndexOfAny(['"', '\'', '\\']) >= 0 && css.Contains(property, StringComparison.OrdinalIgnoreCase))
+        // Strings, escapes and a url() token can hide a "/*" that is not a comment opener; this reader
+        // does not model them, so it refuses them BEFORE stripping comments rather than misreading.
+        if (style.Contains(property, StringComparison.OrdinalIgnoreCase)
+            && (style.IndexOfAny(['"', '\'', '\\']) >= 0
+                || (style.Contains("url(", StringComparison.OrdinalIgnoreCase) && style.Contains("/*", StringComparison.Ordinal))))
             return Unreadable;
+        var css = CssComment().Replace(style, " ");
         string? last = null, important = null;
         foreach (var declaration in css.Split(';'))
         {
@@ -419,7 +423,8 @@ public static partial class IconBackplate
     {
         // COMPLETE attributes, left to right, compared by their actual name: text inside another
         // quoted value (data-note="fill='#fff'") is never read as an attribute, and a short name never
-        // matches inside a longer one (x / rx, width / stroke-width). Singleline: a value may span lines.
+        // matches inside a longer one (x / rx, width / stroke-width). A value may span lines: the
+        // negated classes [^"]* / [^']* match newlines.
         foreach (Match attribute in Attribute().Matches(attrs))
             if (string.Equals(attribute.Groups["n"].Value, name, StringComparison.OrdinalIgnoreCase))
                 return (attribute.Groups["d"].Success ? attribute.Groups["d"].Value : attribute.Groups["s"].Value).Trim();
@@ -461,7 +466,7 @@ public static partial class IconBackplate
     [GeneratedRegex(@"<!\[CDATA\[.*?\]\]>|<!--.*?-->", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
     private static partial Regex XmlComment();
 
-    [GeneratedRegex(@"(?<n>[^\s=/>""']+)\s*=\s*(?:""(?<d>[^""]*)""|'(?<s>[^']*)')", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?<n>[^\s=/>""']+)\s*=\s*(?:""(?<d>[^""]*)""|'(?<s>[^']*)')", RegexOptions.CultureInvariant)]
     private static partial Regex Attribute();
 
     [GeneratedRegex(@"/\*.*?\*/", RegexOptions.Singleline | RegexOptions.CultureInvariant)]

@@ -253,6 +253,9 @@ public class OfficialMarkTest
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' style='--hint:fill:#fff'/></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#fff' style='fill:var(--x)'/></svg>", false)]
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' style='stroke:none; fill:#ffffff'/></svg>", true)]
+    // A "/*" inside a CSS string or a url() token is no comment opener: refused, never misread.
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#fff' style='--a:\"/*\"; fill:#111827; --b:\"*/\"'/></svg>", false)]
+    [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' fill='#fff' style='fill:url(#/*) #111827; /* note */'/></svg>", false)]
     // Attribute-like text inside another quoted value is not an attribute.
     [InlineData("<svg viewBox='0 0 24 24'><path d='M0 0h1v1z' data-note=\"fill='#fff'\"/></svg>", false)]
     // A malformed colour is unreadable — never a throw.
