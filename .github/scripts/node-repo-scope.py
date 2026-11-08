@@ -253,7 +253,14 @@ def abi_filter_hits(root: Path, hits: dict[str, list[str]], src_files: list[str]
     if not known_head:
         say(f"    ABI verdict not applied (its head {vhead[:12] or '<none>'} is not this tree's HEAD or an ancestor of it) — the compiled half as before")
         return hits
-    unchanged = {d: e for d, e in (verdict.get("projects") or {}).items() if e.get("unchanged")}
+    def same_tree(d: str) -> bool:
+        """The probed project's directory is byte-identical at the verdict's head and at HEAD — a fresh merge
+        whose main side changed the project (or a later commit) invalidates the verdict for it (review of #7995)."""
+        trees = [subprocess.run(["git", "rev-parse", f"{ref}:{d}"], cwd=root, capture_output=True, text=True)
+                 for ref in (vhead, "HEAD")]
+        return all(t.returncode == 0 for t in trees) and trees[0].stdout.strip() == trees[1].stdout.strip()
+
+    unchanged = {d: e for d, e in (verdict.get("projects") or {}).items() if e.get("unchanged") and same_tree(d)}
     out = dict(hits)
     for entry, touched in hits.items():
         abi_only = [p for p in touched if p in unchanged
@@ -1655,11 +1662,12 @@ def self_test() -> int:
             (root / d / f"{Path(d).name}.csproj").write_text(f"<Project><ItemGroup>{items}</ItemGroup></Project>")
         hits = {"src/App/App.csproj": ["src/Lib"], "src/Lib/Lib.csproj": ["src/Lib"], "src/Other/Other.csproj": ["src/Lib", "src/Other"]}
         (root / PROJECTS).parent.mkdir(parents=True, exist_ok=True)
-        (root / PROJECTS).write_text(
+        closure_stub = (
             "import json, sys\n"
             "closures = {'src/App/App.csproj': ['src/App', 'src/Lib'], 'src/Lib/Lib.csproj': ['src/Lib'],\n"
             "            'src/Other/Other.csproj': ['src/Other', 'src/Lib']}\n"
-            "print(json.dumps(closures[sys.argv[sys.argv.index('--closure') + 1]]))\n", encoding="utf-8")
+            "print(json.dumps(closures[sys.argv[sys.argv.index('--closure') + 1]]))\n")
+        (root / PROJECTS).write_text(closure_stub, encoding="utf-8")
         files = ["src/Lib/A.cs", "src/Other/O.cs"]
         for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", "fixture"]):
             subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=root, check=True, capture_output=True)
@@ -1682,6 +1690,13 @@ def self_test() -> int:
                   abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
             os.environ["MW_ABI_VERDICT"] = json.dumps({**verdict, "head": "f" * 40})
             check("[abi] a verdict computed at another head is not applied", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
+            os.environ["MW_ABI_VERDICT"] = json.dumps(verdict)
+            (root / PROJECTS).write_text(closure_stub, encoding="utf-8")
+            (root / "src/Lib/Later.cs").write_text("// main changed Lib after the probed head\n")
+            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "later"], cwd=root, check=True, capture_output=True)
+            check("[abi] a project whose tree moved since the verdict's head is not narrowed (stale verdict)",
+                  abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
             for bad in ("not json", json.dumps({"unavailable": "no mount"}), json.dumps({"schema": "other"})):
                 os.environ["MW_ABI_VERDICT"] = bad
                 check(f"[abi] an unusable verdict ({bad[:20]}) leaves the hits alone", abi_filter_hits(root, hits, files, lambda *_a: None) == hits)
