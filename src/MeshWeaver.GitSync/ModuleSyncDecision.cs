@@ -143,6 +143,17 @@ public sealed record ModuleSyncOutcome(
     /// <summary>The newer platform this instance knew of when it held a module on an unverified floor
     /// (<see cref="FloorUnverified"/>); null otherwise.</summary>
     public string? AvailablePlatform { get; init; }
+
+    /// <summary>
+    /// 🚨 The condition this module was <see cref="ModuleSyncOutcomeKind.Declined"/> under
+    /// (<see cref="ModuleSyncDecision.DeclineCondition"/>): the running platform, the newer platform
+    /// an unverified floor waited on, or the loaded version of the dependency an unmet requirement
+    /// names. Re-deciding the same commit under the same condition re-derives the same decline, so the
+    /// unattended triggers skip it until the condition changes or the repository moves
+    /// (<c>Doc/Architecture/GitSyncTriggerCost</c> → "A decline waits for what blocks it"). Null for
+    /// an outcome that is not a decline, and on one recorded before this field existed.
+    /// </summary>
+    public string? DeclinedUnder { get; init; }
 }
 
 /// <summary>
@@ -180,6 +191,84 @@ public static class ModuleSyncDecision
     /// <summary>The manifest sidecar's file name (<c>ModuleManifest.FileName</c> in the catalog;
     /// restated here because GitSync is below the catalog in the dependency graph).</summary>
     public const string ManifestFileName = "manifest.lock";
+
+    /// <summary>
+    /// 🚨 <b>What a declined module waits for</b>, as one comparable string — the ONE function both the
+    /// import (stamping <see cref="ModuleSyncOutcome.DeclinedUnder"/>) and the unattended triggers
+    /// (asking whether that condition still holds) call, so the two can never disagree about whether
+    /// a re-attempt could change anything. Pure.
+    ///
+    /// <list type="bullet">
+    ///   <item><description>An unmet requirement waits for its dependency: the dependency's id and the
+    ///   version this process has LOADED for it (<c>unloaded</c> when none) — a module activation, live
+    ///   or after a restart, changes it.</description></item>
+    ///   <item><description>An unverified floor waits for the stamp (a new commit) or the roll: the
+    ///   running platform and the newer one this instance knows of.</description></item>
+    ///   <item><description>A platform floor above the running one waits for the roll: the running
+    ///   platform.</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="declined">A declined outcome (its kind is read from its own fields).</param>
+    /// <param name="runningPlatformVersion">The platform this instance runs, or null when unknown.</param>
+    /// <param name="newerPlatform">A newer platform this instance knows is available, or null.</param>
+    /// <param name="loaded">Package id → the module this process has loaded for it.</param>
+    /// <returns>The condition, e.g. <c>platform=3.1.12859</c>.</returns>
+    internal static string DeclineCondition(
+        ModuleSyncOutcome declined, string? runningPlatformVersion, string? newerPlatform,
+        IReadOnlyDictionary<string, LoadedPackageModule> loaded)
+    {
+        ArgumentNullException.ThrowIfNull(declined);
+        ArgumentNullException.ThrowIfNull(loaded);
+        if (declined.UnmetRequirement is { Length: > 0 } requirement)
+        {
+            var dependency = PackageRequirement.DependencyId(requirement);
+            var version = loaded.TryGetValue(dependency, out var exact) ? exact.Version
+                : loaded.FirstOrDefault(kv => string.Equals(kv.Key, dependency, StringComparison.OrdinalIgnoreCase))
+                    .Value?.Version;
+            return $"{declined.Module}:requires {dependency}={(string.IsNullOrWhiteSpace(version) ? "unloaded" : version.Trim())}";
+        }
+        return declined.FloorUnverified
+            ? $"{declined.Module}:platform={runningPlatformVersion ?? "unknown"};newer={newerPlatform ?? "none"}"
+            : $"{declined.Module}:platform={runningPlatformVersion ?? "unknown"}";
+    }
+
+    /// <summary>
+    /// The condition a whole attempt's declines wait for — every declined outcome's
+    /// <see cref="ModuleSyncOutcome.DeclinedUnder"/>, ordinal and distinct, joined — or null when the
+    /// attempt declined nothing, or when any decline carries no recorded condition (an outcome from
+    /// before the field existed never licenses a skip). Pure.
+    /// </summary>
+    /// <param name="outcomes">An attempt's per-module outcomes.</param>
+    internal static string? AttemptDeclineCondition(IEnumerable<ModuleSyncOutcome>? outcomes)
+    {
+        var declined = (outcomes ?? []).Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined).ToList();
+        var conditions = declined
+            .Select(m => m.DeclinedUnder)
+            .OfType<string>()
+            .Where(c => c.Length > 0)
+            .ToList();
+        // Every decline must carry its condition: one recorded before the field existed licenses nothing.
+        if (declined.Count == 0 || conditions.Count != declined.Count)
+            return null;
+        return string.Join("|", conditions.Distinct(StringComparer.Ordinal).OrderBy(c => c, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The same condition, recomputed under the CURRENT inputs for every module the attempt declined
+    /// — what a trigger compares against <see cref="GitHubSyncConfig.LastAttemptDeclinedUnder"/>. Null
+    /// when the outcomes declined nothing. Pure.
+    /// </summary>
+    /// <param name="outcomes">The recorded per-module outcomes of the last attempt.</param>
+    /// <param name="runningPlatformVersion">The platform this instance runs now.</param>
+    /// <param name="newerPlatform">The newer platform this instance knows of now, or null.</param>
+    /// <param name="loaded">What this process has loaded now.</param>
+    internal static string? CurrentDeclineCondition(
+        IEnumerable<ModuleSyncOutcome>? outcomes, string? runningPlatformVersion, string? newerPlatform,
+        IReadOnlyDictionary<string, LoadedPackageModule> loaded)
+        => AttemptDeclineCondition((outcomes ?? [])
+            .Select(m => m.Outcome == ModuleSyncOutcomeKind.Declined
+                ? m with { DeclinedUnder = DeclineCondition(m, runningPlatformVersion, newerPlatform, loaded) }
+                : m));
 
     /// <summary>
     /// Decides every module of an incoming tree.

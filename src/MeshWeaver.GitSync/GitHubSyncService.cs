@@ -635,6 +635,13 @@ public sealed class GitHubSyncService
                                 // recorded as final.
                                 attemptWasFinal: x.Result.VerdictIsFinal && !anyDeclined,
                                 attemptedConfig: config,
+                                // 🚨 MeshWeaver#8020 — …but a decline is not "retry on every pass"
+                                // either. When the declines are the ONLY thing keeping this verdict
+                                // from being final, the condition they wait for is recorded, and the
+                                // triggers skip this commit until it changes (or the repo moves).
+                                attemptDeclinedUnder: x.Result.VerdictIsFinal && anyDeclined
+                                    ? ModuleSyncDecision.AttemptDeclineCondition(x.Modules)
+                                    : null,
                                 // 🚨 The hold is on the RECORD, not only in the log (#4063's lesson
                                 // one level down): a held source that says nothing is
                                 // indistinguishable from one that is up to date, and this list is
@@ -724,13 +731,60 @@ public sealed class GitHubSyncService
     /// <returns><c>true</c> when re-reading that commit under this configuration re-derives the
     /// recorded verdict, so the fetch can accomplish nothing.</returns>
     internal static bool HasFinalVerdictAt(GitHubSyncConfig? config, string? commitSha)
-        => config is { LastAttemptWasFinal: true, LastAttemptedCommitSha: { Length: > 0 } attempted }
+        => config is { LastAttemptWasFinal: true }
+           && AttemptedUnderCurrentConfig(config, commitSha);
+
+    /// <summary>
+    /// 🚨 <b>Whether this source's last attempt at <paramref name="commitSha"/> was final but for
+    /// module DECLINES, and every one of them still waits on the same condition</b> (MeshWeaver#8020)
+    /// — the sibling of <see cref="HasFinalVerdictAt"/> for the one verdict that is about the RUNNING
+    /// platform rather than the bytes.
+    ///
+    /// <para>A decline is never recorded final, because a roll (or a dependency activation) changes
+    /// it at the same commit. Read as merely "not final", it made the branch reconcile re-fetch the
+    /// declined commit and mint a new Activity on every pass, on every replica: measured on
+    /// memex-cloud 2026-11-02, the same decline 14 and 9 times in one day. So the attempt records the
+    /// condition (<see cref="GitHubSyncConfig.LastAttemptDeclinedUnder"/>) and a trigger recomputes it
+    /// under the CURRENT inputs (<paramref name="currentCondition"/>, from
+    /// <see cref="ModuleSyncDecision.CurrentDeclineCondition"/>): equal — skip, the attempt would
+    /// re-derive the same decline; different — attempt. Same commit and configuration scoping as
+    /// <see cref="HasFinalVerdictAt"/>, so a new commit or an operator's edit re-attempts at once.</para>
+    /// </summary>
+    /// <param name="config">The source's config, or null when unreadable (never settled).</param>
+    /// <param name="commitSha">The commit a trigger is about to import.</param>
+    /// <param name="currentCondition">The decline condition recomputed under the inputs this instance
+    /// has NOW; null when it could not be computed (never settles).</param>
+    internal static bool HasDeclineVerdictAt(GitHubSyncConfig? config, string? commitSha, string? currentCondition)
+        => config is { LastAttemptWasFinal: false, LastAttemptDeclinedUnder: { Length: > 0 } recorded }
+           && currentCondition is { Length: > 0 }
+           && string.Equals(recorded, currentCondition, StringComparison.Ordinal)
+           && AttemptedUnderCurrentConfig(config, commitSha);
+
+    /// <summary>The commit + configuration half both verdict predicates share: the last attempt read
+    /// <paramref name="commitSha"/> (prefix match, ≥ 7 hex) under the configuration the source
+    /// carries now.</summary>
+    private static bool AttemptedUnderCurrentConfig(GitHubSyncConfig config, string? commitSha)
+        => config is { LastAttemptedCommitSha: { Length: > 0 } attempted }
            && commitSha is { Length: > 0 }
            && Math.Min(attempted.Length, commitSha.Length) >= 7
            && (attempted.StartsWith(commitSha, StringComparison.OrdinalIgnoreCase)
                || commitSha.StartsWith(attempted, StringComparison.OrdinalIgnoreCase))
            && string.Equals(config.LastAttemptedConfigFingerprint, SourceFingerprint(config),
                StringComparison.Ordinal);
+
+    /// <summary>
+    /// The inputs a decline condition is computed from, as this instance has them NOW — the running
+    /// platform, the newer platform it knows of, and the modules it has loaded — read through the
+    /// same two readers an import uses (each degrades to "nothing known" on a fault, said at
+    /// Warning). Read once per trigger pass, and only when a candidate carries a recorded decline.
+    /// </summary>
+    internal IObservable<Func<IEnumerable<ModuleSyncOutcome>?, string?>> DeclineConditionNow()
+        => LoadedPackageModulesNow().SelectMany(loaded => NewerPlatformNow().Select(newer =>
+        {
+            var running = PrebuiltAdoptionPolicy.RunningPlatformVersion;
+            return (Func<IEnumerable<ModuleSyncOutcome>?, string?>)(outcomes =>
+                ModuleSyncDecision.CurrentDeclineCondition(outcomes, running, newer, loaded));
+        }));
 
     /// <summary>
     /// The fingerprint of everything in a source's configuration that decides what an import at a
@@ -1185,6 +1239,14 @@ public sealed class GitHubSyncService
             readings,
             running,
             newerPlatform);
+        // 🚨 MeshWeaver#8020 — every decline carries the condition it waits for, stamped with the
+        // SAME function the unattended triggers ask (ModuleSyncDecision.DeclineCondition), so a
+        // re-attempt under an unchanged condition is skipped rather than re-fetched every pass.
+        modules = modules
+            .Select(m => m.Outcome == ModuleSyncOutcomeKind.Declined
+                ? m with { DeclinedUnder = ModuleSyncDecision.DeclineCondition(m, running, newerPlatform, loaded) }
+                : m)
+            .ToImmutableList();
         var notWritten = modules
             .Where(m => m.Outcome is ModuleSyncOutcomeKind.Unchanged or ModuleSyncOutcomeKind.Declined)
             .ToList();
@@ -1708,6 +1770,7 @@ public sealed class GitHubSyncService
         string? sourceId = null, string? note = null,
         string? attemptedCommitSha = null, bool attemptWasFinal = false,
         GitHubSyncConfig? attemptedConfig = null,
+        string? attemptDeclinedUnder = null,
         ImmutableList<BundleHeldNodeType>? bundleHeld = null,
         ImmutableList<ModuleSyncOutcome>? modules = null,
         ImmutableDictionary<string, string>? moduleVersions = null)
@@ -1744,6 +1807,9 @@ public sealed class GitHubSyncService
                         attemptedCommitSha is { Length: > 0 } && attemptedConfig is not null
                             ? SourceFingerprint(attemptedConfig)
                             : null,
+                    // 🚨 MeshWeaver#8020 — what a decline-only verdict waits for, cleared with the
+                    // pair: a condition attached to no attempt would licence a skip of nothing.
+                    LastAttemptDeclinedUnder = attemptedCommitSha is { Length: > 0 } ? attemptDeclinedUnder : null,
                     // 🚨 #3845 hole 4 — the NodeTypes whose sources this attempt held back, with the
                     // fingerprint each waits for. Written on EVERY conclusion like the attempt pair
                     // above (null clears it), because it describes the LAST attempt: a stale entry

@@ -401,6 +401,12 @@ internal sealed class SealedPublicationSyncReconciler(
                 .Select(inventoryReading => (Match: match, Inventory: inventoryReading)))
             .SelectMany(read => DriftReadings(read.Match, read.Inventory, declinedTypePaths)
                 .Select(drift => (read.Match, read.Inventory, Drift: drift)))
+            // MeshWeaver#8020 — a Space whose package a feature flag declares retired is not imported
+            // by this trigger either (the same live classifier the push / reconcile fan-out asks).
+            .SelectMany(read => (hub.ServiceProvider.GetService<RetiredPackageSyncGate>()?.Classifier()
+                    ?? Observable.Return<Func<string, GitHubSyncConfig?, RetiredSyncSource?>>((_, _) => null))
+                .Take(1)
+                .Select(retired => (read.Match, read.Inventory, read.Drift, Retired: retired)))
             .Select(read =>
             {
                 var match = read.Match;
@@ -416,11 +422,21 @@ internal sealed class SealedPublicationSyncReconciler(
                 // longer frozen, which is the only thing the census claims.
                 var gateLetSomethingThrough = false;
                 var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+                // 🚨 Every candidate this pass leaves alone because its package is retired is NAMED,
+                // once per pass (review on #8053): a reconcile that reports only what it dispatched
+                // cannot be audited — "dispatched 0" reads the same whether nothing was behind or
+                // everything was retired (#1326's lesson, the same census the push fan-out prints).
+                var retiredSkips = new List<string>();
                 foreach (var node in match.Configs)
                 {
                     if (GitHubWebhookProcessor.ToPushTarget(node) is not { } target)
                         continue;
                     var config = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
+                    if (read.Retired(node.Path, config) is { } retired)
+                    {
+                        retiredSkips.Add($"{node.Path} ({RetiredPackageSyncGate.SkipPhrase(retired)})");
+                        continue;
+                    }
                     // 🚨 The caller's measurement, or THIS pass's own (#4620). `declinedTypePaths`
                     // null means the caller did not compare the partition against the commit's
                     // tree; `read.Drift` is that comparison, taken above. Either way what reaches
@@ -472,6 +488,10 @@ internal sealed class SealedPublicationSyncReconciler(
                             break;
                     }
                 }
+                if (retiredSkips.Count > 0)
+                    logger?.LogInformation(
+                        "[SealedSync] seal of '{Source}' at {Sha}: {Count} sync source(s) not considered — {Detail}.",
+                        sealedSource.Source, commit, retiredSkips.Count, string.Join("; ", retiredSkips));
                 if (gateLetSomethingThrough)
                     hub.ServiceProvider.GetService<SealedSyncCensus>()?.RecordRelease(repo.ToString());
                 return dispatched;
