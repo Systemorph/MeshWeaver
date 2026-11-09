@@ -376,6 +376,10 @@ apply, whose measured interlock re-checks the lock lane at apply time. Once appl
 nightly and logs what the 30-day window would delete, deleting nothing. `purge-old-ci-releases`
 stays Disabled.
 
+**The report is LIVE.** The approved apply [`Ops/Actions/registry-retention-apply-20261102-3438-unpause`](https://control.systemorph.com/Ops/Actions/registry-retention-apply-20261102-3438-unpause) ([Memex run 41442507393](https://github.com/Systemorph/Memex/actions/runs/41442507393), 2026-11-02 12:12Z) passed the measured interlock (the lock lane green 11.2 h earlier) and enabled `purge-old-images`; its re-verify reported both tasks as *matches the record byte for byte*, and the core pull request that followed deleted the re-declared `recordAheadOfRegistry`. So `purge-old-images` now runs at 03:00 as a `--dry-run` report and deletes nothing.
+
+**What still stands between the report and a deleting purge** is the `dryRun` block's `liftWhen`: a nightly run's output read back, every tag and manifest it lists checked against what the fleet references, and only then ONE reviewed diff that drops `--dry-run` and the `dryRun` block together, re-declares `recordAheadOfRegistry`, and goes through one more approved apply. No governed action reads an ACR task RUN log today — `RegistryRetention` compares task DEFINITIONS and lists no manifests — so that read-back is the owner's, and nothing about the dry-run report should be read as "zero deletions" until it has happened.
+
 **A task's schedule is a timer trigger, not a task property.** `apply` writes the definition with
 `az acr task update --file` and the schedule with `az acr task timer update` on the trigger the task
 carries, or `timer add` when it carries none. `az acr task update` has no `--schedule` option. The
