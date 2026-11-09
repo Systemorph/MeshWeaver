@@ -109,6 +109,52 @@ public static class PackageDependencyGraph
     }
 
     /// <summary>
+    /// The dependency LEVEL of every package — 0 for one that requires nothing among
+    /// <paramref name="packages"/>, else one more than the highest level it requires — so the
+    /// packages of one level have no dependency on each other and may be worked on AT ONCE, while
+    /// a level still waits for every level below it (leaves first, a level is a barrier).
+    ///
+    /// <para>Same tolerance as <see cref="InDependencyOrder"/>: a dependency outside
+    /// <paramref name="packages"/> is ignored, and a cycle's closing back edge is dropped (warned
+    /// there), so every package gets exactly one level and the result never throws. Every
+    /// satisfiable edge holds: a package's level is strictly above every level it requires.</para>
+    /// </summary>
+    /// <param name="packages">The packages to level.</param>
+    /// <returns>Package id → level, for every package.</returns>
+    public static IReadOnlyDictionary<string, int> DependencyLevels(IReadOnlyList<PackageManifest> packages)
+    {
+        ArgumentNullException.ThrowIfNull(packages);
+        var byId = packages
+            .GroupBy(p => p.Id, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var levels = new Dictionary<string, int>(StringComparer.Ordinal);
+        var visiting = new HashSet<string>(StringComparer.Ordinal);
+
+        int Level(PackageManifest pkg)
+        {
+            if (levels.TryGetValue(pkg.Id, out var known))
+                return known;
+            // A back edge (cycle) contributes nothing — the same edge InDependencyOrder drops.
+            if (!visiting.Add(pkg.Id))
+                return -1;
+            var level = 0;
+            foreach (var requirement in pkg.Requires)
+            {
+                var depId = DependencyId(requirement);
+                if (depId.Length > 0 && byId.TryGetValue(depId, out var dep) && !ReferenceEquals(dep, pkg))
+                    level = Math.Max(level, Level(dep) + 1);
+            }
+            visiting.Remove(pkg.Id);
+            levels[pkg.Id] = level;
+            return level;
+        }
+
+        foreach (var pkg in packages)
+            Level(pkg);
+        return levels.ToImmutableDictionary(StringComparer.Ordinal);
+    }
+
+    /// <summary>
     /// Names a dependency cycle among <paramref name="packages"/>, or <c>null</c> when the graph is
     /// acyclic. The message walks the cycle so it can be read without opening the repo — e.g.
     /// <c>"A → B → A"</c>. Only dependencies present in <paramref name="packages"/> participate:

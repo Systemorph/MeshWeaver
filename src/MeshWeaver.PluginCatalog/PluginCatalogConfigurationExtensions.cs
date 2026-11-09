@@ -240,6 +240,20 @@ public static class PluginCatalogConfigurationExtensions
                 // 🚨 Constructed with the resolved MODULE ROOT, never the default: the default is
                 // AppContext.BaseDirectory, which is READ-ONLY in the container, so a landing there
                 // fails with a denied-path error the publisher sees as HTTP 409. See ModuleRoot.
+                // The boot's progress (BootProgress): what the boot page and memex-local render
+                // while the portal is not ready. Persisted under the CONFIGURED module root only —
+                // the default root is the read-only app directory.
+                .AddSingleton(sp =>
+                {
+                    var configured = sp.GetService<IConfiguration>()?[ModuleRoot.ConfigKey];
+                    return string.IsNullOrWhiteSpace(configured)
+                        ? new BootProgress()
+                        : new BootProgress(
+                            System.IO.Path.Combine(ModuleRoot.Resolve(configured), "boot"),
+                            sp.GetService<Mesh.Threading.IoPoolRegistry>()?.Get(Mesh.Threading.IoPoolNames.FileSystem),
+                            sp.GetService<ILogger<BootProgress>>());
+                })
+                .AddSingleton<BundleOfferingMemo>()
                 .AddSingleton(sp => new ModuleLandingService(
                     sp.GetService<ILogger<ModuleLandingService>>(),
                     ModuleRoot.Resolve(sp.GetService<IConfiguration>()))
