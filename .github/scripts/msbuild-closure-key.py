@@ -190,6 +190,12 @@ def scan(repo: Path, path: str, project_dir: str,
                         break
                 if not head:
                     continue   # the project's own directory or its outputs
+                segs = head.replace("\\", "/").split("/")
+                if segs[0].lower() in ("bin", "obj") and ".." not in segs:
+                    # The project's OWN build output (`bin\$(Configuration)\…\X.xml`): produced by the
+                    # build, never a source input (gitignored, so nothing a commit can carry). Whatever
+                    # expressions follow the first segment only pick WHICH output.
+                    continue
                 if head.startswith(THIS_DIR):
                     # Rooted at the DECLARING file's directory (a shared Directory.Build.targets
                     # compiling `$(MSBuildThisFileDirectory)Shared/X.cs` into every project): a repository
@@ -498,6 +504,22 @@ def self_test() -> int:
         except Refused:
             check("REFUSED: --no-targets still refuses an evaluated item OUTSIDE a target", True)
         write("src/Lib/Lib.csproj", "<Project/>"); g("commit", "-qam", "target-reset")
+        # ── the project's OWN build output is not an input ──
+        write("src/Lib/Lib.csproj", '<Project><ItemGroup><EmbeddedResource Include="bin\\$(Configuration)\\$(TargetFramework)\\$(AssemblyName).xml" /></ItemGroup></Project>')
+        g("commit", "-qam", "own-output")
+        try:
+            ko = key(repo, "src/Tool/Tool.csproj", "s", no_targets=True)[0]
+            check("an item under the project's own bin/ or obj/ (expressions after it) is an output, not an input", len(ko) == 64)
+        except Refused as ex:
+            check(f"an item under the project's own bin/ or obj/ is an output, not an input — {ex}", False)
+        write("src/Lib/Lib.csproj", '<Project><ItemGroup><EmbeddedResource Include="bin/../../Shared/$(X).cs" /></ItemGroup></Project>')
+        g("commit", "-qam", "own-output-climb")
+        try:
+            key(repo, "src/Tool/Tool.csproj", "s")
+            check("REFUSED: a bin/ path that climbs out with `..`", False)
+        except Refused:
+            check("REFUSED: a bin/ path that climbs out with `..`", True)
+        write("src/Lib/Lib.csproj", "<Project/>"); g("commit", "-qam", "own-output-reset")
         kp = key(repo, "src/Tool/Tool.csproj", "s")[0]
         check("--no-targets changes the key (a key for one builder never serves the other)",
               kp != key(repo, "src/Tool/Tool.csproj", "s", no_targets=True)[0])
