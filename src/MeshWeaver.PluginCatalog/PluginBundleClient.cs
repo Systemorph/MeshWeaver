@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -83,6 +84,13 @@ public sealed class PluginBundleClient
     // pass, each paying the whole stall on its own. See SharedIndex.
     private readonly PromiseSlot<BundleIndex> _index = new();
 
+    // The boot's progress recorder (what the boot page and memex-local show), when the host has one.
+    private readonly BootProgress? _bootProgress;
+
+    // What a module landing already READ about a bundle, so the NodeType adoption of the same
+    // package does not download the same bytes again only to learn it ships no NodeTypes.
+    private readonly BundleOfferingMemo? _offerings;
+
     /// <summary>
     /// How long any stage of a transfer may go SILENT before it is refused — the response start
     /// and the body alike. Defaults to <see cref="TransferStallBudget"/>; a test sets it low so a
@@ -154,6 +162,8 @@ public sealed class PluginBundleClient
         // named early failure instead of a compile fallback. See RequirePrebuiltConfigKey.
         _requirePrebuilt = PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider);
         _closedTypeSet = hub.ServiceProvider.IsClosedTypeSet();
+        _bootProgress = hub.ServiceProvider.GetService<BootProgress>();
+        _offerings = hub.ServiceProvider.GetService<BundleOfferingMemo>();
     }
 
     /// <summary>What the registry advertises: the framework its assemblies were built against, and
@@ -401,6 +411,21 @@ public sealed class PluginBundleClient
                     return Miss(pluginId, BundleAdoptionKind.NotAdvertised,
                         $"{_registryUrl} advertises {index.Bundles?.Count ?? 0} package(s) to this "
                         + "instance, and this is not one of them");
+                }
+
+                // 🚨 The module landing of this very package read this very bundle minutes ago and
+                // found it declares nothing to adopt (BundleOfferingMemo). Measured on a local Mac
+                // instance 2026-11-09: every module-only package was downloaded TWICE per pass —
+                // once to land its module, once more here to learn "declares no NodeTypes" — e.g.
+                // AzureFoundry, 22,988,649 bytes, 22.0 s and again 22.4 s. Same request (this
+                // process's identity and architecture, the same version), same answer.
+                if (_offerings?.NothingToAdopt(_registryUrl, pluginId, bundle.Version) is { } offering)
+                {
+                    _logger?.LogInformation(
+                        "Bundle for {Plugin}@{Version} declares no NodeTypes ({Offering}) — known from "
+                        + "its module landing in this process, so it is not downloaded again; nothing to "
+                        + "adopt, and nothing is compiled here in its place", pluginId, bundle.Version, offering);
+                    return Nothing(pluginId, $"the package ships {offering}, no NodeTypes");
                 }
 
                 return Download(pluginId, bundle, index)
@@ -902,6 +927,11 @@ public sealed class PluginBundleClient
             .SelectMany(payload =>
             {
                 var (manifest, files) = payload;
+                // Exactly the condition under which SeedAll would answer "declares no NodeTypes":
+                // a manifest this lane does not decline, no stated miss, no NodeType assembly.
+                if (PrebuiltAssemblySeeder.DeclineReason(manifest?.FrameworkMvid) is null
+                    && BundleReader.DeclaresNothingToAdopt(manifest))
+                    _offerings?.Remember(_registryUrl, pluginId, version, BundleOffering.OfferingOf(manifest));
 
                 // 🚨 #3648 — ADVISORY, not a refusal. "Module bundle for {Plugin} DECLINED:
                 // {Reason} — nothing landed" stood here and returned 0; on 2026-09-07 it declined
@@ -1152,6 +1182,7 @@ public sealed class PluginBundleClient
 
         return Observable.Defer(() =>
         {
+            var started = Stopwatch.GetTimestamp();
             var client = new OciRegistryClient(
                 _hub, reference.Registry, _credential,
                 httpClientName: InstanceRegistrationClient.BundleHttpClientName, logger: _logger);
@@ -1173,6 +1204,8 @@ public sealed class PluginBundleClient
                             _logger?.LogInformation(
                                 "Bundle for {Plugin}@{Version}: {Bytes} byte(s) fetched from {Artifact}, "
                                 + "digest-verified", pluginId, version, receipt.Size, artifact);
+                            _bootProgress?.BundleDownloaded(pluginId, version, receipt.Size,
+                                Stopwatch.GetElapsedTime(started));
                             return new FetchResult(buffer.ToArray(), BundleAdoptionKind.Adopted);
                         });
                 });
@@ -1255,6 +1288,7 @@ public sealed class PluginBundleClient
                 pluginId, version, receipt.Body.Length, _registryUrl,
                 (long)receipt.Elapsed.TotalMilliseconds,
                 ThroughputKibPerSecond(receipt.Body.Length, receipt.Elapsed));
+            _bootProgress?.BundleDownloaded(pluginId, version, receipt.Body.Length, receipt.Elapsed);
 
             return new FetchResult(receipt.Body, BundleAdoptionKind.Adopted);
         }));
