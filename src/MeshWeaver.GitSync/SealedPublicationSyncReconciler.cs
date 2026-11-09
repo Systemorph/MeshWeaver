@@ -401,6 +401,12 @@ internal sealed class SealedPublicationSyncReconciler(
                 .Select(inventoryReading => (Match: match, Inventory: inventoryReading)))
             .SelectMany(read => DriftReadings(read.Match, read.Inventory, declinedTypePaths)
                 .Select(drift => (read.Match, read.Inventory, Drift: drift)))
+            // MeshWeaver#8020 — a Space whose package a feature flag declares retired is not imported
+            // by this trigger either (the same live classifier the push / reconcile fan-out asks).
+            .SelectMany(read => (hub.ServiceProvider.GetService<RetiredPackageSyncGate>()?.Classifier()
+                    ?? Observable.Return<Func<string, GitHubSyncConfig?, RetiredSyncSource?>>((_, _) => null))
+                .Take(1)
+                .Select(retired => (read.Match, read.Inventory, read.Drift, Retired: retired)))
             .Select(read =>
             {
                 var match = read.Match;
@@ -421,6 +427,8 @@ internal sealed class SealedPublicationSyncReconciler(
                     if (GitHubWebhookProcessor.ToPushTarget(node) is not { } target)
                         continue;
                     var config = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
+                    if (read.Retired(node.Path, config) is not null)
+                        continue;
                     // 🚨 The caller's measurement, or THIS pass's own (#4620). `declinedTypePaths`
                     // null means the caller did not compare the partition against the commit's
                     // tree; `read.Drift` is that comparison, taken above. Either way what reaches

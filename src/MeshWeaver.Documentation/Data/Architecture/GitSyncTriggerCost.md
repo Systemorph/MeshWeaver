@@ -91,6 +91,8 @@ built repository is nevertheless left alone:
 | `branch 'X' != built branch 'Y'` | the build is not on the branch this source tracks |
 | **`already at this commit`** | **`lastSyncCommitSha == headSha`** |
 | **`already attempted at this commit with a final verdict`** | **`lastAttemptedCommitSha == headSha` AND `lastAttemptWasFinal` AND `lastAttemptedConfigFingerprint` matches the source's current configuration** (§7) |
+| **`already declined at this commit under the condition that still holds`** | the same commit and configuration, and `lastAttemptDeclinedUnder` equals the decline condition recomputed now (§7, "A decline waits for what blocks it") |
+| `package … retired by feature flag '…'` | a feature flag declared off names this Space's package ([GitHub Sync](/Doc/Architecture/GitHubSync), "A retired package is not synced") |
 
 Only the last two are a *work* saving. Until the second one existed the saving was keyed on exactly
 one field, so deliveries two and three of a merge, and every cron tick until the next merge, were
@@ -407,6 +409,45 @@ service, the importer and the node streams are real.
   faults with the production connect-timeout shape, so the pass is `ImportedWithErrors` with
   `VerdictIsFinal == false`; the same green build then **must** reach GitHub. This is the control
   that could falsify the first: a fix that skips everything strands every self-healing source.
+
+### 🚨 A decline waits for what blocks it (#8020)
+
+A module **decline** (policy `module-sync-per-manifest-hash`) is the one verdict about the RUNNING
+platform rather than about the bytes: a module whose floor is above the running platform, whose
+floor was not stamped for these sources while a newer platform exists, or whose `requires` the loaded
+dependency does not meet. A roll or a dependency activation can change that verdict at the same
+commit, so it is never recorded as `lastAttemptWasFinal`.
+
+Read as merely "not final", it was retried on every pass. The branch reconcile runs every 10 minutes
+on every replica, and each pass re-fetched the declined commit and minted a new Activity for the same
+decline. Measured on memex-cloud on 2026-11-02: one declined commit was attempted 14 times and
+another 9 times in one day (`Hosting/_Activity/96cb4ef6` is one of them: "platform floor not
+stamped, instance runs 3.1.12859 while 3.1.12863 is available").
+
+So the attempt now records **what the decline waits for**, `lastAttemptDeclinedUnder`, beside the
+attempt pair. It is written only when the declines are the only thing keeping the verdict from being
+final, and it is cleared with the pair. Each declined module contributes one condition
+(`ModuleSyncDecision.DeclineCondition`):
+
+| Decline | Waits for | Recorded as |
+|---|---|---|
+| floor above the running platform | a roll | `{module}:platform={running}` |
+| floor not stamped for these sources | the stamp (a new commit) or a roll | `{module}:platform={running};newer={newer}` |
+| unmet `requires` | the dependency being loaded | `{module}:requires {dependency}={loaded version}` |
+
+Both unattended triggers recompute that condition from what the instance has **now** (the running
+platform, the newer-platform reading, the loaded modules) and skip the commit while it is unchanged:
+`already declined at this commit under the condition that still holds`. The same function stamps the
+condition and recomputes it, so the two cannot disagree. A changed condition, a new commit or an edit
+of the source re-attempts at once, with the same commit and configuration scoping as
+`HasFinalVerdictAt` (`GitHubSyncService.HasDeclineVerdictAt`). The decline is therefore recorded once,
+with its reason on `lastSyncNote` and on the one activity that found it.
+
+A decline recorded before this field existed carries no condition and licenses no skip, so each such
+source is attempted once more and records it. The test is
+`ASyncedPartitionDoesNotGrowWithoutBoundTest.AFloorDecline_IsNotReattempted_UntilItsConditionChanges`:
+the same push of the declined commit triggers nothing, and its control changes the newer platform and
+sees the same push re-attempt.
 
 ## 8. Why the cron probe stays in the allow-list
 
