@@ -486,10 +486,15 @@ public sealed class GitHubWebhookProcessor
     private IObservable<IReadOnlyList<BuildImport>> MatchingSyncTargets(
         RepoIdentity repo, string branch, string headSha, string trigger)
         => ConfigsTargeting(repo, $"{trigger} of {branch}")
-            .SelectMany(match => GateInputs(match.Configs).Select(gate => (match, gate)))
+            // Each candidate's content is parsed ONCE per delivery and threaded through: the gate's
+            // inputs and the classification loop below read the same parse (review on #8053).
+            .Select(match => (Match: match, Parsed: match.Configs
+                .Select(node => (Node: node, Config: node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)))
+                .ToList()))
+            .SelectMany(read => GateInputs(read.Parsed.Select(p => p.Config)).Select(gate => (read.Match, read.Parsed, gate)))
             .Select(read =>
             {
-                var (match, gate) = read;
+                var (match, parsed, gate) = read;
                 // 🚨 Classify EVERY candidate and say what happened to it. A fan-out that reports
                 // only its winners cannot be audited: "updated 34" and "updated 34 of 43" look
                 // identical in the log, which is how #1326 stayed invisible for days. One line per
@@ -532,9 +537,8 @@ public sealed class GitHubWebhookProcessor
                 string? heldReason = null;
                 var picked = new List<BuildImport>();
                 var skipped = new List<string>();
-                foreach (var node in match.Configs)
+                foreach (var (node, cfg) in parsed)
                 {
-                    var cfg = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
                     // 🚨 Only the CONFIGURATION half here; the per-commit skips are asked about the
                     // commit that would LAND, after the gate has named it (review on #4576).
                     if (ConfigurationSkipReason(cfg, branch) is { } reason)
@@ -547,8 +551,7 @@ public sealed class GitHubWebhookProcessor
                     // changes the answer, only the flag does (read live, so turning it on resumes).
                     if (gate.Retired(node.Path, cfg) is { } retired)
                     {
-                        skipped.Add($"{node.Path} (package {retired.SourceName}/{retired.PackageId} retired by "
-                            + $"feature flag '{retired.Flag}')");
+                        skipped.Add($"{node.Path} ({RetiredPackageSyncGate.SkipPhrase(retired)})");
                         continue;
                     }
                     gateEvaluated++;
@@ -770,13 +773,12 @@ public sealed class GitHubWebhookProcessor
         Func<string, GitHubSyncConfig?, RetiredSyncSource?> Retired,
         Func<IEnumerable<ModuleSyncOutcome>?, string?>? DeclineConditionNow);
 
-    private IObservable<FanOutGate> GateInputs(IReadOnlyList<MeshNode> configs)
+    private IObservable<FanOutGate> GateInputs(IEnumerable<GitHubSyncConfig?> configs)
     {
         var retired = hub.ServiceProvider.GetService<RetiredPackageSyncGate>() is { } gate
             ? gate.Classifier()
             : Observable.Return<Func<string, GitHubSyncConfig?, RetiredSyncSource?>>((_, _) => null);
-        var needsDecline = configs.Any(n =>
-            n.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)?.LastAttemptDeclinedUnder is { Length: > 0 });
+        var needsDecline = configs.Any(c => c?.LastAttemptDeclinedUnder is { Length: > 0 });
         var decline = needsDecline && hub.ServiceProvider.GetService<GitHubSyncService>() is { } sync
             ? sync.DeclineConditionNow().Select(f => (Func<IEnumerable<ModuleSyncOutcome>?, string?>?)f)
             : Observable.Return<Func<IEnumerable<ModuleSyncOutcome>?, string?>?>(null);

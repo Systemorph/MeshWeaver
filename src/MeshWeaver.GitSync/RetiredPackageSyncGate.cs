@@ -82,7 +82,7 @@ internal sealed class RetiredPackageSyncGate(
                 {
                     var hit = retired.Count == 0 || config is null
                         ? null
-                        : CoveredBy(SpaceOf(configPath), config, retired, SourceNameOf);
+                        : CoveredBy(SpaceOf(configPath), IsPrimary(configPath), config, retired, SourceNameOf);
                     Announce(configPath, hit);
                     return hit;
                 });
@@ -90,22 +90,31 @@ internal sealed class RetiredPackageSyncGate(
 
     /// <summary>
     /// THE rule: the declared-off pattern covering the package a sync source imports, or null. Pure.
+    ///
+    /// <para>🚨 <b>The package is the SOURCE's, never merely the Space's</b> (review on #8053). The
+    /// source must be read from a repository a package source names, and its package id is the last
+    /// folder of its subdirectory. The Space's own name counts as the package id only for the Space's
+    /// PRIMARY source (<c>{space}/_GitSync</c>) — the one a package install writes, whose Space is the
+    /// package's target partition. An ADDITIONAL source of the same Space
+    /// (<c>{space}/_GitSync/{sourceId}</c>) mirrors some other folder or repository, and retiring the
+    /// Space's package says nothing about it, so it keeps syncing.</para>
     /// </summary>
     /// <param name="space">The Space the source imports into.</param>
+    /// <param name="primary">Whether this is the Space's primary source (<c>{space}/_GitSync</c>).</param>
     /// <param name="config">The source.</param>
     /// <param name="retired">The declared-off patterns (<see cref="FeatureComposition.Retired"/>).</param>
     /// <param name="sourceNameOf">Repository URL → the package source name it is configured as, or null.</param>
     internal static RetiredSyncSource? CoveredBy(
-        string space, GitHubSyncConfig config, IReadOnlyList<FeaturePackage> retired,
+        string space, bool primary, GitHubSyncConfig config, IReadOnlyList<FeaturePackage> retired,
         Func<string?, string?> sourceNameOf)
     {
         if (retired.Count == 0 || sourceNameOf(config.RepositoryUrl) is not { Length: > 0 } sourceName)
             return null;
-        var candidates = new[] { space, LastSegment(config.Subdirectory) }
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Select(id => id!)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        var candidates = new List<string>();
+        if (LastSegment(config.Subdirectory) is { } folder)
+            candidates.Add(folder);
+        if (primary && !string.IsNullOrWhiteSpace(space) && !candidates.Contains(space, StringComparer.Ordinal))
+            candidates.Add(space);
         foreach (var pattern in retired)
         {
             if (PluginGrantEntry.TryParse(pattern.Package) is not { } entry)
@@ -129,11 +138,12 @@ internal sealed class RetiredPackageSyncGate(
         if (configuration is not null)
         {
             var listed = configuration.GetSection(GitSourceCredentials.SourcesSection).GetChildren()
-                .Where(s => !string.IsNullOrWhiteSpace(s["RepoPath"]))
+                .Select(s => (RepoPath: s["RepoPath"]?.Trim(), Name: s["Name"]?.Trim()))
+                .Where(s => s.RepoPath is { Length: > 0 })
                 .ToList();
-            foreach (var source in listed)
-                if (SameRepository(source["RepoPath"], repositoryUrl))
-                    return string.IsNullOrWhiteSpace(source["Name"]) ? source["RepoPath"]!.Trim() : source["Name"]!.Trim();
+            foreach (var (repoPath, name) in listed)
+                if (repoPath is { Length: > 0 } path && SameRepository(path, repositoryUrl))
+                    return name is { Length: > 0 } declared ? declared : path;
             if (listed.Count == 0
                 && SameRepository(configuration[GitSourceCredentials.LegacySourceRepoPathKey], repositoryUrl))
                 return LegacySourceName;
@@ -154,6 +164,16 @@ internal sealed class RetiredPackageSyncGate(
                && GitHubRepoIdentityResolver.Parse(right) is { } y
                && string.Equals(x.ToString(), y.ToString(), StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>Whether a config path is a Space's PRIMARY source — it ENDS in <c>_GitSync</c>.</summary>
+    internal static bool IsPrimary(string configPath)
+        => configPath.Split('/') is { Length: > 1 } parts
+           && string.Equals(parts[^1], GitHubSyncService.ConfigId, StringComparison.Ordinal);
+
+    /// <summary>The census phrase a skipped source is named with — the same words in every trigger's
+    /// census line, so a reader can grep one sentence across the push, reconcile and seal passes.</summary>
+    internal static string SkipPhrase(RetiredSyncSource retired)
+        => $"package {retired.SourceName}/{retired.PackageId} retired by feature flag '{retired.Flag}'";
 
     /// <summary>The Space a config path (<c>{space}/_GitSync[/{sourceId}]</c>) configures.</summary>
     private static string SpaceOf(string configPath)

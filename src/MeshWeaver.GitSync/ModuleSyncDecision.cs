@@ -242,10 +242,15 @@ public static class ModuleSyncDecision
     internal static string? AttemptDeclineCondition(IEnumerable<ModuleSyncOutcome>? outcomes)
     {
         var declined = (outcomes ?? []).Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined).ToList();
-        if (declined.Count == 0 || declined.Any(m => string.IsNullOrEmpty(m.DeclinedUnder)))
+        var conditions = declined
+            .Select(m => m.DeclinedUnder)
+            .OfType<string>()
+            .Where(c => c.Length > 0)
+            .ToList();
+        // Every decline must carry its condition: one recorded before the field existed licenses nothing.
+        if (declined.Count == 0 || conditions.Count != declined.Count)
             return null;
-        return string.Join("|", declined.Select(m => m.DeclinedUnder!)
-            .Distinct(StringComparer.Ordinal).OrderBy(c => c, StringComparer.Ordinal));
+        return string.Join("|", conditions.Distinct(StringComparer.Ordinal).OrderBy(c => c, StringComparer.Ordinal));
     }
 
     /// <summary>

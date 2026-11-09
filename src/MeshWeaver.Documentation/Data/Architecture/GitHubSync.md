@@ -751,8 +751,14 @@ How a source is matched to a package:
   when that list names no repository, or an instance-local package source. These are the names
   install records use. A repository that no source names matches nothing, so a source-scoped
   pattern fails closed.
-- **The package id** is the Space (the partition a package is installed into) or the last segment
-  of the source's subdirectory (the package folder).
+- **The package id** is the last segment of the source's subdirectory (the package folder). For the
+  Space's PRIMARY source (`{space}/_GitSync`, the one a package install writes) the Space itself also
+  counts, because it is the package's target partition. An ADDITIONAL source of the same Space
+  (`{space}/_GitSync/{sourceId}`) mirrors another folder or repository, so retiring the Space's package
+  does not retire it.
+
+Every trigger names the sources it leaves alone: the push and reconcile census line, and the seal
+reconciler's own per-pass line (`[SealedSync] seal of '…' at …: N sync source(s) not considered — …`).
 
 The flags are read live on every decision, so turning the flag back on resumes the sync on the next
 push or reconcile pass, with one Information line saying so. A person's own **Update** or

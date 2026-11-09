@@ -388,7 +388,7 @@ public class ASyncedPartitionDoesNotGrowWithoutBoundTest(ITestOutputHelper outpu
 
     /// <summary>The GitHub transport: a staged tree per commit, and how often each commit was fetched.
     /// Everything else throws, so a future caller is told rather than served a fake answer.</summary>
-    private sealed class ScriptedRepoClient : IGitHubRepoClient
+    internal sealed class ScriptedRepoClient : IGitHubRepoClient
     {
         private ImmutableDictionary<string, IReadOnlyList<RepoFile>> trees =
             ImmutableDictionary<string, IReadOnlyList<RepoFile>>.Empty;
