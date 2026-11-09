@@ -22,9 +22,10 @@ THE KEY of one entry = sha256 over:
     linked item, the repository-root MSBuild inputs — with the platform roots (`$(MeshWeaverRoot)`,
     `$(MeshWeaverRefs)`, …) declared EXTERNAL, because in the container build they resolve to the
     image, which the salt names by digest;
-  * the caller's SALT: the platform image digest, the tester digest, the content hash of the
-    module-libraries shelf and of the build extension published for this run, the accept and
-    superseded flags, the platform ref and the SDK — everything else the compiler reads;
+  * the SALT — TOOLCHAIN identity only (`salt`): the platform image digest, the tester digest, the
+    accept and superseded flags, the platform ref, the SDK, and the module-libraries shelf and build
+    extension by their INPUT closure keys (never the published bytes: two publishes of unchanged inputs
+    differ, which moved every key on every run);
   * the entry's module name and project path, and this script's RECIPE version.
 A refusal (an input the closure key cannot establish) or a closure path that differs from HEAD in the
 working tree is NO KEY: the entry is built, never served.
@@ -109,6 +110,30 @@ def dirty_paths(repo: Path, lines: list[str]) -> list[str]:
         return ["<git status failed>"]
     # Each record is `XY <path>`; a rename's source follows as its own NUL-terminated field.
     return [rec[3:] for rec in r.stdout.split("\0") if len(rec) > 3 and rec[2] == " "]
+
+
+def toolchain_salt(repo: Path, image: str, tester: str, accept: str, superseded: str, platform: str, sdk: str,
+                   tool_projects: list[str]) -> tuple[str | None, str]:
+    """The SALT every entry's key shares — the TOOLCHAIN only, never a run- or tree-wide output hash.
+
+    Measured (MeshWeaver.Plugins main runs 42601509542 → 42612488062, a two-file diff touching no
+    module): every key moved, because the salt carried the sha256 of the PUBLISHED shelf and build
+    extension, and those bytes differ between two publishes of unchanged inputs. A tool project now
+    enters the salt by its INPUT closure key (msbuild-closure-key, the platform roots external — the
+    platform ref names them), exactly like an entry's own project. Returns (salt, '') or (None, why)."""
+    parts = [f"image={image}", f"tester={tester}", f"accept={accept}", f"superseded={superseded}",
+             f"platform={platform}", f"sdk={sdk}"]
+    for proj in tool_projects:
+        if not proj:
+            continue
+        ck, lines, why = closure_key(repo, proj, f"tool|platform={platform}|sdk={sdk}")
+        if ck is None:
+            return None, f"{proj}: {why}"
+        dirty = dirty_paths(repo, lines)
+        if dirty:
+            return None, f"{proj}: the working tree differs from HEAD under its closure ({dirty[0]})"
+        parts.append(f"tool:{proj}={ck}")
+    return "|".join(parts), ""
 
 
 def plan(repo: Path, modules: list[dict], salt: str) -> list[dict]:
@@ -385,6 +410,31 @@ def self_test() -> int:
         check("a change OUTSIDE the closure (incl. a floor stamp in a package's index.json) keeps the key",
               plan(repo, sel, "image=a")[0]["key"] == k1)
         check("the salt (image digest, tester, shelf …) is part of the key", plan(repo, sel, "image=b")[0]["key"] != k1)
+        # ── the SALT is toolchain identity only: a change to ANOTHER module keeps every key ──
+        write("src/Shelf/Shelf.csproj", '<Project><ItemGroup><ProjectReference Include="../Lib/Lib.csproj" /></ItemGroup></Project>')
+        write("src/Shelf/S.cs", "class Sh {}")
+        write("src/ModX/ModX.csproj", "<Project/>"); write("src/ModX/X.cs", "class X {}")
+        g("add", "."); g("commit", "-qm", "tool+modx")
+        two = sel + [{"module": "ModX", "project": "src/ModX/ModX.csproj", "build": "container"}]
+        s1, why1 = toolchain_salt(repo, "img", "tst", "", "", "p1", "10.0.1", ["src/Shelf/Shelf.csproj"])
+        check("the toolchain salt is computed (a tool project keys like an entry)", s1 is not None and "tool:src/Shelf/Shelf.csproj=" in s1)
+        before = {e["module"]: e["key"] for e in plan(repo, two, s1 or "")}
+        write("src/ModX/X.cs", "class X { int changed; }"); g("commit", "-qam", "modx-only")
+        s2, _ = toolchain_salt(repo, "img", "tst", "", "", "p1", "10.0.1", ["src/Shelf/Shelf.csproj"])
+        after = {e["module"]: e["key"] for e in plan(repo, two, s2 or "")}
+        check("two trees differing ONLY in module X: the salt is identical", s1 == s2)
+        check("…and every module that does not depend on X keeps its key", before["Mod"] == after["Mod"])
+        check("…while X itself misses", before["ModX"] != after["ModX"])
+        write("src/Shelf/S.cs", "class Sh { int t; }"); g("commit", "-qam", "shelf-src")
+        s3, _ = toolchain_salt(repo, "img", "tst", "", "", "p1", "10.0.1", ["src/Shelf/Shelf.csproj"])
+        check("a change to a TOOL project's own inputs (the shelf) moves the salt — every key misses", s3 != s2)
+        s4, _ = toolchain_salt(repo, "img", "tst", "", "", "p2", "10.0.1", ["src/Shelf/Shelf.csproj"])
+        check("a different platform ref moves the salt", s4 != s3)
+        write("src/Shelf/Shelf.csproj", '<Project><ItemGroup><Compile Include="$(Unknown)/S.cs" /></ItemGroup></Project>')
+        g("commit", "-qam", "shelf-refused")
+        s5, why5 = toolchain_salt(repo, "img", "tst", "", "", "p2", "10.0.1", ["src/Shelf/Shelf.csproj"])
+        check("a tool project the closure key refuses turns the cache OFF (no salt), never a partial salt", s5 is None and "refused" in why5)
+        write("src/Shelf/Shelf.csproj", "<Project/>"); g("commit", "-qam", "shelf-reset")
         write("src/Lib/L.cs", "class L { int y; }"); g("commit", "-qam", "c3")
         k3 = plan(repo, sel, "image=a")[0]["key"]
         check("a change in a REFERENCED project changes the key", k3 != k1)
@@ -531,6 +581,9 @@ def main() -> int:
     p = sub.add_parser("sign"); p.add_argument("--claims", required=True); p.add_argument("--store", required=True)
     p.add_argument("--store-id", default="")
     p = sub.add_parser("dir-hash"); p.add_argument("dir")
+    p = sub.add_parser("salt"); p.add_argument("--repo", default="."); p.add_argument("--image", required=True)
+    p.add_argument("--tester", required=True); p.add_argument("--accept", default=""); p.add_argument("--superseded", default="")
+    p.add_argument("--platform", required=True); p.add_argument("--sdk", default=""); p.add_argument("--tool-project", action="append", default=[])
     a = ap.parse_args()
     if a.self_test:
         return self_test()
@@ -569,6 +622,13 @@ def main() -> int:
             return 0
         n = sign_claims(load_json(a.claims), Store(a.store, a.store_id), key)
         say(f"compile cache: {n} entr(y|ies) signed with the trunk key")
+        return 0
+    if a.cmd == "salt":
+        salt, why = toolchain_salt(Path(a.repo), a.image, a.tester, a.accept, a.superseded, a.platform, a.sdk, a.tool_project)
+        if salt is None:
+            print(f"compile cache: no salt — {why}", file=sys.stderr)
+            return 2
+        print(salt)
         return 0
     if a.cmd == "dir-hash":
         print(dir_hash(Path(a.dir)))
