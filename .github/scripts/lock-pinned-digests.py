@@ -1155,6 +1155,15 @@ def pmap(function, items, label: str = "", workers: int | None = None) -> list:
 
 # ── The registry, behind one seam so the self-test can drive it offline ─────────────────────────
 
+# The registry's OWN answers that a TAG is absent. A digest lookup that misses says `manifest
+# unknown` (the shared `ABSENT_MARKERS`), but `az acr repository show --image <repo>:<tag>` says
+# `the specified tag does not exist` — for a missing tag AND for a repository that was never
+# created (measured 2026-11-08 against `dockerhub/tailscale/tailscale:v1.104.4`, MeshWeaver#7991).
+# Without it the registry's authoritative absence read as INDETERMINATE, so the lane said "could
+# not determine whether … exists" about an image that provably was never put in the registry —
+# still red, but sending the reader after a credential or network fault that did not happen.
+TAG_ABSENT_MARKERS = consistency.ABSENT_MARKERS + ("the specified tag does not exist",)
+
 
 class Registry:
     """Every registry interaction this job makes. Read methods first, then the one write."""
@@ -1221,7 +1230,7 @@ class Registry:
             result = (None, f"INDETERMINATE: az answered 0 but no digest: {public_diagnostic(out, 120)!r}")
         else:
             blob = err.lower()
-            if any(marker in blob for marker in consistency.ABSENT_MARKERS):
+            if any(marker in blob for marker in TAG_ABSENT_MARKERS):
                 result = (None, "absent")
             else:
                 result = (None, "INDETERMINATE: " + public_diagnostic(err, 300))
@@ -6100,6 +6109,27 @@ def self_test() -> int:
                        ("whisper-swiss-german", "1.7.4"): (WHISPER, "")}))
     check(any("Indeterminate is not a pass" in b for b in plan.blockers),
           "ARM 8b: an INDETERMINATE registry answer was smoothed into a verdict")
+
+    # ── ARM 8c: the registry's OWN tag-absence answer is ABSENT, not INDETERMINATE (#7991) ──────
+    # Drives the REAL `Registry.resolve_tag` (the fake above never reaches the az parsing), with
+    # az's literal stderr for a tag — or a whole repository — that was never put in the registry.
+    _saved_az_8c = consistency.az
+    try:
+        consistency.az = lambda _args: (
+            1, "", "ERROR: 2026-11-08 01:30:52.748941 Error: the specified tag does not exist. "
+                   "Correlation ID: 70eb2d8a-8560-44d5-9ca6-c1cbbd2ed187.")
+        check(Registry(REGISTRY_DEFAULT).resolve_tag("dockerhub/tailscale/tailscale", "v1.104.4")
+              == (None, "absent"),
+              "ARM 8c: ACR's 'the specified tag does not exist' was read as INDETERMINATE — the "
+              "lane then blames a credential or network fault for an image that was never imported")
+        # Negative control: a credential fault is NEVER evidence of absence.
+        consistency.az = lambda _args: (
+            1, "", "ERROR: unauthorized: authentication required, visit https://aka.ms/acr/authorization")
+        _digest_8c, _detail_8c = Registry(REGISTRY_DEFAULT).resolve_tag("memex-portal-ai", "3.0.0")
+        check(_digest_8c is None and _detail_8c.startswith("INDETERMINATE"),
+              "ARM 8c (negative control): an authentication failure was read as 'absent'")
+    finally:
+        consistency.az = _saved_az_8c
 
     # ── ARM 9: a registry that cannot be enumerated ⇒ RED, not 'everything is unpinned' ─────────
     plan, _, registry = _drive(axis1, axis2,

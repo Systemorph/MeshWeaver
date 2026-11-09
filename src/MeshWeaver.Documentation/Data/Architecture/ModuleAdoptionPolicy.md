@@ -393,6 +393,36 @@ The rule is the consumer's "never roll back unattended", applied to the publish 
 
 **Covered: two replicas at once (#4026).** Landings are serialised within one process, and across replicas the rule used to be last-writer-wins: two replicas landing the same module within the same few seconds each decided against the entry they read before the other wrote. A landing no longer decides that way. It writes an immutable record of its own facts — its lane included, so the shelf's "never regress" and the adopt path's "an operator asked for it" both survive — and the head and fallback are DERIVED from every record present by replaying this rule in arrival order, so every replica reaches the same answer whatever order the writes landed in. [Module Activation Head Ownership](../ModuleActivationHeadOwnership) carries the on-disk format, why it stays readable by images already deployed, and the retention rule.
 
+## How a published module reaches a running instance
+
+Each hop below must happen before the next one can. A missing hop is silent at every later one: an
+instance whose registry never received a bundle reads "up to date" and logs nothing above Debug.
+
+| # | Hop | Where | What you read to prove it |
+|---|---|---|---|
+| 1 | **Hand-over.** The producing repository's main run POSTs the bundle to the registry (`POST /api/plugins/bundles/{plugin}`). | `node-repo-module-publish.yml` → `module-publication.py publish` | The hand-over job log. `superseded: N of N owed module(s) stand down` means nothing was posted. |
+| 2 | **Shelf.** The registry lands it as the module's head when it is the highest version it holds. | `ModuleLandingService.ShelveModule` | A new `activation.d/<Module>/<Module>@<hash>.*.json` record on the registry's volume, carrying the new `version`. |
+| 3 | **Index.** The registry's `/api/plugins/bundles/index.json` lists the head first for each plugin. | `PluginBundleEndpoints.Index` | The index read with the instance's key: `bundles[] \| select(.plugin=="AI")`. |
+| 4 | **Land.** Each consumer's unattended module lane compares the index entry with its own activation entry and lands a newer one. It checks the platform floor, its dependencies' floors and the listing-to-bundle binding before landing (#6192). | `RegistryUpdateReconciler.AdoptOne` → `PluginBundleClient.PlanModuleAdoption` | `Module 'X' of P landed (…, version V) — RESTART REQUIRED`. Every verdict other than `SkipUpToDate` is logged at Information. `SkipUpToDate` is logged at Debug, so silence means the index offered nothing newer. |
+| 5 | **Set.** The wave ends by proposing the module set the activation record describes. | `ModuleDependencyFloor.ProposeChecked` | A new `sets/<seq>-<hash>.proposed.json`. |
+| 6 | **Load.** A process loads the newest proposed set at boot, from a per-process pinned copy, and the wave's reload request restarts it. | `ModuleReload` | The `[ModuleLoad] <Module> ← …/<Module>@<hash>/…` line names the new generation. |
+
+The boot default install (`InstanceAutoRegistrationService`) is **not** on this path for an
+installed package. Its log line `X is HELD, not installed — … could only resolve 'HEAD', which no
+publication sealed for this instance names` is about the package's **nodes**: a partition that a
+sync source keeps current has one writer, its sync, under policy `module-sync-per-manifest-hash`.
+Its `proposing NO module set — withheld` line only means that this pass makes no proposal. The
+module lane (hop 4) still lands and proposes on its own, and policy `packages-auto-update` keeps
+the module half from waiting for the partition's sync.
+
+**Measured 2026-11-08: hop 1 failed for 11 hours.** On every instance, the module lane
+answered `SkipUpToDate` for AI and logged nothing. The registry's index for identity `c003e001`
+listed AI 1.49.1, OpenAI 1.6.195 and the Hosting module at 1.81.4. Its shelf's newest AI record had
+been written at 08:11Z. Meanwhile AI 1.51, OpenAI 1.6.199 and Hosting 1.84.2 were tagged and
+sealed. Every green MeshWeaver.Plugins main run had stood its modules down for a newer trunk tip
+whose own run was then cancelled while queued. The fix is in
+[Module Build Architecture](../ModuleBuildArchitecture) → "Newest wins, per module".
+
 ## Who lands an installed package's module
 
 An adoption decides to land before it downloads, and lands after the download. That download can

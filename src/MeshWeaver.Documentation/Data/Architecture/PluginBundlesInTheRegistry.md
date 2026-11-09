@@ -452,6 +452,15 @@ consumer's update pass lands it.
   `MaxRequestBodySize`; neither core nor the Plugins host raises that limit.
   `BundleReaderTest.AModuleReadFromDiskAllocatesEachEntryOnce` pins that per-entry bound; the old
   reader allocated about 5x the entry.
+  An upload over that bound gets a **named 413**, and the module is not shelved. Kestrel enforces
+  the bound by throwing `BadHttpRequestException` out of the spool's first read. The route answers
+  that with the server's status and a JSON `error` that names the bound and the declared
+  `Content-Length`, or says the body was chunked, and logs it at Warning. Before this answer
+  existed, the exception left the endpoint unhandled. The portal logged an Error, and the
+  publisher's hand-over read `registry refused … (HTTP 500): <!DOCTYPE html>`, with no word of
+  size (MeshWeaver#8026, `ModulePublishBodyBoundTest` in MeshWeaver.Plugins). The 413 does not
+  change the bound. A bundle that outgrows it has to get smaller, or the bound has to be declared
+  differently on purpose.
 * **`POST /api/instances/register`** and **`POST /api/instances/token`** — registration and the
   key exchange; the edge depends on the second.
 

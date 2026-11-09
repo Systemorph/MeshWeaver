@@ -148,6 +148,17 @@ How it runs (`DeclaredDisabledRetirement`, called by the boot pass before the in
   Error the instance's error telemetry carries as a signature, on every boot until it is resolved.
   Declaring the dependents off as well retires them together. The refusal propagates: a refused
   package stays installed, so what *it* requires is refused too.
+  **That Error reports a declaration that contradicts itself. It is not a platform fault, and the
+  fix belongs in the record.** Measured on memex-cloud (MeshWeaver#8020): `fleetops` declares
+  `Plugins/Hosting` off, but `BuildServer` (which `requires: Hosting@^1.0.0`) stays declared. Both
+  were installed before the flag existed, `Hosting` in August and `BuildServer` in September, so the
+  install selection's exclusion never saw them. Once retirement shipped, every boot of every replica
+  logged `[FlagRetire] Hosting is declared off by the feature flag 'fleetops' but is NOT retired: the
+  installed package(s) BuildServer require it`. That was 57 boots in the first twelve hours. There
+  are exactly two resolutions, and the deployment owner chooses one: add the dependent to the flag
+  (`"packages": ["Plugins/Hosting", "Plugins/BuildServer"]`), which retires both through phase 1,
+  or enable the flag. Deriving the dependent's retirement from the requirement edge would be the
+  `declared-not-derived` violation this lane exists to avoid.
 - **Dependents first, each one settled.** The retire set is walked in reverse dependency order, and
   each request's phase 1 is **observed to its settlement** before the next package is decided. A
   dependent whose phase 1 is refused (user data, a shared partition, a module it cannot disable)

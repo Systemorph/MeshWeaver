@@ -17,6 +17,9 @@ internal sealed class ThreadPoolWorkerStacks : IThreadPoolWorkerStacks
 
     /// <inheritdoc />
     public IReadOnlyList<string> CaptureWorkerStacks() => Stacks.CaptureThreadPoolWorkers();
+
+    /// <inheritdoc />
+    public ThreadPoolStacks CaptureStacks() => Stacks.CaptureThreadPool();
 }
 
 /// <summary>Registers <see cref="ThreadPoolWorkerStacks"/>.</summary>
