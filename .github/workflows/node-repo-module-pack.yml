@@ -2461,6 +2461,8 @@ jobs:
           SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
           SHELF: ${{ steps.shelf.outputs.root }}
           EXTENSION: ${{ steps.extension.outputs.root }}
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
+          EXTENSION_PROJECT: ${{ inputs.build-extensions-project }}
           PLATFORM_REF: ${{ inputs.platform-ref }}
           KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
           STORE: ${{ needs.select.outputs.artifact-store }}
@@ -2482,16 +2484,24 @@ jobs:
           fi
           printf '%s' "$MODULES" > "$RUNNER_TEMP/ccache-selection.json"
           accept=$(jq -r '[.[] | select(.build == "container") | (.accept // "")] | unique | join("|")' <<< "$MODULES")
-          # An absent shelf/extension is `none`; one that EXISTS but cannot be hashed turns the cache off
-          # (never `none`, which would let two unhashable shelves share a salt component).
-          shelf_hash=none; ext_hash=none
-          if [ -n "$SHELF" ]; then
-            shelf_hash=$(python3 "$cc" dir-hash "$SHELF") || { echo "::warning title=Compile cache off::the shelf $SHELF could not be hashed — every entry is compiled"; exit 0; }
+          # 🚨 THE SALT IS TOOLCHAIN IDENTITY ONLY (`salt`): image, tester, accept, superseded, platform ref,
+          # SDK, and the shelf / build-extension PROJECTS by their input closure keys. Never the published
+          # bytes: two publishes of unchanged inputs differ, which moved EVERY key on every run (Plugins main
+          # runs 42601509542 → 42612488062: 39 entries signed, 0 reused). A tool project the closure key
+          # cannot key turns the cache off for this run.
+          tools_args=()
+          # A published tool must be keyed by its project — never silently left out of the salt (two runs
+          # with different shelves would then share a salt). The shelf/extension steps only run when their
+          # project input is set, so a mismatch is a wiring defect: the cache is off, never a partial salt.
+          if { [ -n "$SHELF" ] && [ -z "$SHELF_PROJECT" ]; } || { [ -n "$EXTENSION" ] && [ -z "$EXTENSION_PROJECT" ]; }; then
+            echo "::warning title=Compile cache off::a shelf or build extension was published without its project input — it cannot be keyed, so every entry is compiled"; exit 0
           fi
-          if [ -n "$EXTENSION" ]; then
-            ext_hash=$(python3 "$cc" dir-hash "$EXTENSION") || { echo "::warning title=Compile cache off::the build extension $EXTENSION could not be hashed — every entry is compiled"; exit 0; }
+          [ -n "$SHELF" ] && tools_args+=(--tool-project "$SHELF_PROJECT")
+          [ -n "$EXTENSION" ] && tools_args+=(--tool-project "$EXTENSION_PROJECT")
+          if ! salt=$(python3 "$cc" salt --repo . --image "$DIGEST" --tester "$TESTER_DIGEST" --accept "$accept" \
+                        --superseded "$SUPERSEDED" --platform "$PLATFORM_REF" --sdk "$KEYED_SDK" ${tools_args[@]+"${tools_args[@]}"}); then
+            echo "::warning title=Compile cache off::no toolchain salt for this run (above) — every entry is compiled"; exit 0
           fi
-          salt="image=$DIGEST|tester=$TESTER_DIGEST|shelf=$shelf_hash|ext=$ext_hash|accept=$accept|superseded=$SUPERSEDED|platform=$PLATFORM_REF|sdk=$KEYED_SDK"
           echo "compile cache salt: $salt"
           plan="$RUNNER_TEMP/ccache-plan.json"
           if ! python3 "$cc" plan --repo . --modules "@$RUNNER_TEMP/ccache-selection.json" --salt "$salt" --out "$plan"; then
