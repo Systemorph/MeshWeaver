@@ -788,11 +788,42 @@ def _lock_at(root: Path, rev: str, module: str) -> dict | None:
     return lock if isinstance(lock, dict) else None
 
 
+ANNOTATED_CONTENT = re.compile(r"\(content ([0-9A-Za-z]+)\)\s*$", re.M)
+
+
+def _tag_annotated_content(root: Path, tag: str) -> str | None:
+    """The `(content <hash>)` a tag's ANNOTATION claims, or None when it carries none.
+
+    tag-modules.py writes every tag it cuts as `<Module> <version> (content <hash>)`, labelled with
+    the content it RELEASED — and reads its own claims annotation-first (`tagged_content_hash`).
+    """
+    out = git(root, ["for-each-ref", f"refs/tags/{tag}", "--format=%(objecttype)%00%(contents)"])
+    kind, _, contents = (out or "").partition("\0")
+    if kind.strip() != "tag":
+        return None       # a LIGHTWEIGHT tag: %(contents) is the commit's message, not a claim
+    claimed = ANNOTATED_CONTENT.search(contents)
+    return claimed.group(1) if claimed else None
+
+
 def tag_baseline(root: Path, module: str, major: int, minor: int,
                  as_of: str | None = None) -> tuple[int, str | None, str] | None:
-    """`(patch, recorded moduleVersion, label)` of the highest PUBLISHED release in the series
-    (reachable from `as_of` when given — see released_versions)."""
+    """`(patch, released moduleVersion, label)` of the highest PUBLISHED release in the series
+    (reachable from `as_of` when given — see released_versions).
+
+    🚨 THE ANNOTATION FIRST, the lock committed at the tagged commit only as the fallback. Under
+    `lockOwner: main` a package is published (and tagged) from the FEATURE merge that moved it —
+    its first claim of `committed + 1` (MeshWeaver.Plugins#5205) — and that commit's committed lock
+    still names the PREVIOUS release's content; the settle PR records the released one afterwards.
+    Reading the lock there called the tag's own content "moved" and derived `patch + 1` for the
+    very tree the tag released, so `--check-versions` went red on every settle merge after a
+    first-claim tag and the publication hand-over never ran (MeshWeaver.Plugins main, 2026-11-09:
+    `AI/v1.51.5` annotated `content db7ff9…`, cut at 9560158 whose lock said 1.51.4 = 7364d8…).
+    For a tag cut at a settled commit the two agree, so the order changes nothing there.
+    """
     for patch, tag in released_versions(root, module, major, minor, as_of):
+        annotated = _tag_annotated_content(root, tag)
+        if annotated is not None:
+            return patch, annotated, f"tag {tag}"
         lock = _lock_at(root, tag, module)
         if lock is not None:
             return patch, lock.get("moduleVersion"), f"tag {tag}"
@@ -2562,6 +2593,55 @@ def _self_test_published_tag_wins(repo: Path) -> list[str]:
         got, basis = derive_release(repo, plugin, content, trunk="main")
         if got != want:
             failures.append(f"trunk-only window — {name}: expected {want}, derived {got} ({basis})")
+    failures.extend(_self_test_first_claim_tag(repo.parent / "first-claim"))
+    return failures
+
+
+def _self_test_first_claim_tag(repo: Path) -> list[str]:
+    """A tag cut at an UNSETTLED commit is read by its annotation, not by that commit's lock.
+
+    The shape MeshWeaver.Plugins main reached on 2026-11-09: `AI/v1.51.5` was cut (first claim,
+    #5205) at the feature merge whose committed lock still said 1.51.4; the settle PR then
+    committed 1.51.5 for the tagged content, and `--check-versions` demanded 1.51.6 for it.
+    """
+    failures: list[str] = []
+
+    def g(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+                              text=True, check=False).stdout
+
+    (repo / "Mod").mkdir(parents=True)
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "t")
+    (repo / "Mod" / "index.json").write_text('{"content": {"version": "1.51"}}\n')
+    (repo / "Mod" / "manifest.lock").write_text('{"moduleVersion": "P4", "version": "1.51.4"}\n')
+    g("add", "-A")
+    g("commit", "-qm", "settled 1.51.4 = P4")
+    (repo / "Mod" / "src.cs").write_text("feature\n")
+    g("add", "-A")
+    g("commit", "-qm", "feature merge moves Mod to content N; its lock still says 1.51.4 = P4")
+    g("tag", "-a", "Mod/v1.51.5", "-m", "Mod 1.51.5 (content N)")
+    (repo / "Mod" / "manifest.lock").write_text('{"moduleVersion": "N", "version": "1.51.5"}\n')
+    g("commit", "-qam", "settle: 1.51.5 = N")
+
+    plugin = repo / "Mod"
+    for name, content, want in [("the tagged tree N on the settled trunk (the defect)", "N", "1.51.5"),
+                                ("a further change M", "M", "1.51.6"),
+                                ("the pre-feature tree P4 (NEGATIVE CONTROL)", "P4", "1.51.6")]:
+        got, basis = derive_release(repo, plugin, content, trunk="main")
+        if got != want:
+            failures.append(f"first-claim tag — {name}: expected {want}, derived {got} ({basis})")
+
+    # The fallback still holds: an UN-annotated (lightweight) tag is read by its committed lock —
+    # even when the COMMIT it points at carries a `(content …)` line (%(contents) would return it).
+    g("commit", "-q", "--allow-empty", "-m", "settle: Mod 1.51.5 (content X)")
+    g("tag", "Mod/v1.51.6", "HEAD")
+    for name, content, want in [("lightweight tag, its lock's tree N", "N", "1.51.6"),
+                                ("lightweight tag, another tree M", "M", "1.51.7")]:
+        got, basis = derive_release(repo, plugin, content, trunk="main")
+        if got != want:
+            failures.append(f"lightweight-tag fallback — {name}: expected {want}, derived {got} ({basis})")
     return failures
 
 

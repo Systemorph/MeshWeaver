@@ -135,6 +135,17 @@ vouches for itself. Before this rule, "either witness recorded this hash" let ma
 8deea0be3cad66db"*. The trunk-only case is unchanged: in the window between a merge and its tag
 job, the trunk's own record still counts as released.
 
+🚨 **A tag's content is read from its ANNOTATION first.** `tag-modules` writes every tag as
+`<Module> <version> (content <hash>)`. Under `lockOwner: main` a moved package is tagged from the
+FEATURE merge that moved it — its first claim (MeshWeaver.Plugins#5205) — and the lock committed
+at that commit still names the previous release; the settle PR records the released one after.
+So the tag witness reads the annotation, and the lock at the tagged commit only for a tag that
+carries none. Reading the lock first called the tag's own tree "moved" and demanded `patch+1` on
+every settle merge after a first-claim tag: MeshWeaver.Plugins main, 2026-11-09, *"AI:
+manifest.lock records version '1.51.5', but this tree's content requires '1.51.6'"* — `AI/v1.51.5`
+was annotated `content db7ff9…` and cut at a commit whose lock said 1.51.4 = `7364d8…`. Validate
+stayed red, so no package was handed to the registry. Self-test: `_self_test_first_claim_tag`.
+
 **The hash input is the Git-visible package tree:** tracked files plus non-ignored untracked files
 in the working tree. Git-ignored local outputs (for example, a test `.trx` file under a package)
 are not package content and do not affect `moduleVersion`. This keeps a developer's post-merge lock
@@ -621,8 +632,8 @@ which pull requests do not write locks. So:
 `--materialize` derives the version from the **committed** lock alone — same patch when the content
 hash still matches it, +1 when it moved, `.0` for a new series or a new module. That is
 `derive_release` with its trunk witness already on disk: a main-owned tree's committed lock IS the
-last settled claim it descends from, and no published tag outranks it (tags are cut from settled
-commits). Being pure is the point — every job of one run materializes independently and must arrive
+last settled claim it descends from, and no published tag outranks it (a first-claim tag is cut
+from an unsettled commit, but for the number the settle then commits for that same content). Being pure is the point — every job of one run materializes independently and must arrive
 at the same bytes, which a derivation reading the live remote could not promise. `--settle` derives
 with the verified remote (both witnesses, as ever) and **asserts** that its numbers equal what
 `--materialize` gives from the committed lock whenever the trunk it derived against is the checkout
