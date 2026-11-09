@@ -131,6 +131,7 @@ JOB_LOG_LINE = re.compile(r"^﻿?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ", re
 SIGNATURES = re.compile(
     r"##\[error\]ci-run-artifacts: NOT MEASURED — artifact store miss \(infra\)"
     r"|##\[error\]shared-rules: NO VERDICT — sibling AGENTS\.md unreadable \(infra\)"
+    r"|##\[error\]fleet-read: NO VERDICT — sibling unreadable after retries \(infra\)"
     r"|meshweaver\.azurecr\.io.*connection refused"
     r"|dial tcp .*: connect: connection refused"
     r"|registry answered 503 for https://memex\.meshweaver\.cloud"
@@ -1122,6 +1123,11 @@ def _self_test_cases(live_summary: str | None) -> int:
           decide("o/r", "9", _fake({1: sr_infra, 2: sr_consolidate})).retry)
     check("…but real shared-rule DRIFT does not retry, even with Consolidate's echo",
           not decide("o/r", "9", _fake({1: sr_drift, 2: sr_consolidate})).retry)
+    probe_infra = REAL_LOG_HEAD + (
+        "2026-11-09T12:57:01.3848388Z ##[error]fleet-read: NO VERDICT — sibling unreadable after retries (infra): "
+        "Systemorph/MeshWeaver.SocialMedia -> 404 after 3 retries: no AGENTS.md, or the App is not installed\n")
+    check("the fleet-read probe's INFRA 404 retries, with Consolidate's echo of it",
+          decide("o/r", "9", _fake({1: probe_infra, 2: sr_consolidate})).retry)
     check("Consolidate's echo ALONE never retries",
           not decide("o/r", "9", _fake({1: sr_consolidate})).retry)
     check("a CONSEQUENTIAL red ALONE never retries (it names no cause)",

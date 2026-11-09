@@ -35,6 +35,14 @@ import time
 
 _READER = Path(__file__).resolve().parents[2] / "scripts" / "read-current-pr-body.py"
 OK, REFUSED, OUTAGE = 0, 1, 3
+# 🚨 A 404 IS RETRIED BEFORE IT COUNTS, and one that persists is labelled INFRA. Measured on core PRs
+# #8040 (run 42584371667: Education + Reinsurance) and #8050 (runs 42620429389 and its re-run:
+# Manufacturing, then SocialMedia): the App token's read answered 404 for ONE sibling per run, a
+# different one each time, while main passed minutes before and after — not a missing installation.
+# Still a red (no pass on partial evidence), but under a name the re-run lane recognises.
+RETRY_404 = 3
+RETRY_BACKOFF_S = (2, 6, 18)
+INFRA_404_PREFIX = "fleet-read: NO VERDICT — sibling unreadable after retries (infra)"
 
 
 def _load_reader():
@@ -65,20 +73,31 @@ def probe(repos, path_template, capability, what, token, reader, budget_seconds,
     refused, outages = [], []
     for repo in repos:
         path = path_template.format(repo=repo)
-        try:
-            reader.api_get(path, token=token, budget_seconds=max(0, deadline - clock()),
-                           urlopen=urlopen, sleep=sleep, clock=clock)
-            out(f"  ok   {repo}")
-        except reader.ApiUnavailable as e:
-            outages.append(repo)
-            out(f"::error title=NO VERDICT — GitHub API::{repo} -> {e.sentence()}")
-        except reader.ApiRefused as e:
-            refused.append(repo)
+        attempt = 0
+        while True:
             try:
-                status = int(str(e).split()[1])
-            except (IndexError, ValueError):
-                status = 0
-            out(f"::error::{repo} -> {status}: {refusal_sentence(status, capability, what)}")
+                reader.api_get(path, token=token, budget_seconds=max(0, deadline - clock()),
+                               urlopen=urlopen, sleep=sleep, clock=clock)
+                out(f"  ok   {repo}" + (f" (after {attempt} retr{'y' if attempt == 1 else 'ies'} of a 404)" if attempt else ""))
+            except reader.ApiUnavailable as e:
+                outages.append(repo)
+                out(f"::error title=NO VERDICT — GitHub API::{repo} -> {e.sentence()}")
+            except reader.ApiRefused as e:
+                try:
+                    status = int(str(e).split()[1])
+                except (IndexError, ValueError):
+                    status = 0
+                if status == 404 and attempt < RETRY_404:
+                    sleep(RETRY_BACKOFF_S[min(attempt, len(RETRY_BACKOFF_S) - 1)])
+                    attempt += 1
+                    continue
+                refused.append(repo)
+                if status == 404:
+                    out(f"::error::{INFRA_404_PREFIX}: {repo} -> 404 after {RETRY_404} retries: "
+                        f"{refusal_sentence(status, capability, what)}")
+                else:
+                    out(f"::error::{repo} -> {status}: {refusal_sentence(status, capability, what)}")
+            break
     if len(repos) < 2:
         out(f"::error::The probe examined only {len(repos)} repo(s) — the register did not expand. Refusing to report success.")
         return REFUSED
@@ -163,8 +182,20 @@ def self_test() -> int:
     check("a permission 403 -> 1, naming the missing capability", code == REFUSED and "lacks pull-requests:read" in said
           and slept == [] and "NO VERDICT" not in said, said)
 
-    code, said, _ = run({"o/a": [err(404, '{"message":"Not Found"}')], "o/b": [err(502, "x")] * 20})
+    code, said, _ = run({"o/a": [err(404, '{"message":"Not Found"}')] * 4, "o/b": [err(502, "x")] * 20})
     check("a refusal beats an outage -> 1", code == REFUSED and "not installed" in said, said)
+
+    # A transient 404 is retried with backoff and then read; a persistent one is labelled INFRA.
+    nf = '{"message":"Not Found"}'
+    code, said, slept = run({"o/a": [err(404, nf), err(404, nf), _Ok()], "o/b": [_Ok()]})
+    check("a transient 404 is retried with backoff and the read then succeeds -> 0",
+          code == OK and slept[:2] == [RETRY_BACKOFF_S[0], RETRY_BACKOFF_S[1]] and "after 2 retries" in said, said)
+    code, said, slept = run({"o/a": [err(404, nf)] * (RETRY_404 + 1), "o/b": [_Ok()]})
+    check("a persistent 404 is a red under the INFRA label after the retries -> 1",
+          code == REFUSED and f"{INFRA_404_PREFIX}: o/a -> 404 after {RETRY_404} retries" in said, said)
+    code, said, slept = run({"o/a": [err(403, '{"message":"Resource not accessible by integration"}')], "o/b": [_Ok()]})
+    check("…while a permission 403 is not retried and carries no INFRA label",
+          code == REFUSED and slept == [] and INFRA_404_PREFIX not in said, said)
 
     code, said, _ = run({"o/a": [_Ok()]})
     check("one repo is a register that did not expand -> 1", code == REFUSED, said)
