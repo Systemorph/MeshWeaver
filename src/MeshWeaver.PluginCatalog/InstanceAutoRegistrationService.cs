@@ -2605,9 +2605,7 @@ public sealed class InstanceAutoRegistrationService(
         if (carriers.Count == 0 || persistence is null)
         {
             hub.ServiceProvider.GetService<BootProgress>()?.PhaseEnded(BootPhaseIds.Modules, BootStepStates.Skipped,
-                carriers.Count == 0
-                    ? "no selected package carries a module"
-                    : "this host has no storage adapter to read install records with, so no module lands ahead of its content");
+                SkipCause(installable.Count(c => !string.IsNullOrWhiteSpace(c.Package.Module)), carriers.Count, persistence is not null));
             return Observable.Return((ImmutableList<string>.Empty, none, none, false));
         }
 
@@ -2831,6 +2829,22 @@ public sealed class InstanceAutoRegistrationService(
                 return Observable.Return((ImmutableList<string>.Empty, allCarriers, none, true));
             });
     }
+
+    /// <summary>
+    /// Why the module phase landed nothing ahead of the content — the sentence the boot page shows.
+    /// Three causes, each named as itself (measured on the registry instance 2026-11-09: 31 packages
+    /// carried a module and the page said "no selected package carries a module", because the
+    /// registry serves its own sources and holds no bundle client for them). Pure.
+    /// </summary>
+    /// <param name="withModule">Selected packages that declare a module.</param>
+    /// <param name="carriers">Those whose source has a bundle client to fetch it with.</param>
+    /// <param name="hasStorage">Whether this host can read install records.</param>
+    internal static string SkipCause(int withModule, int carriers, bool hasStorage) =>
+        withModule == 0 ? "no selected package carries a module"
+        : carriers == 0 ? $"the {withModule} package(s) carrying a module come from sources with no bundle registry "
+                          + "(an instance that serves its own sources) — each module follows its content on the install funnel"
+        : hasStorage ? $"{carriers} module(s) to land"
+        : "this host has no storage adapter to read install records with, so no module lands ahead of its content";
 
     /// <summary>
     /// The module-phase close: propose the set the activation record describes, checked against the
