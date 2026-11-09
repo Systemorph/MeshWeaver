@@ -805,9 +805,12 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
             ci_note = (f" A selector that predates policy ci-paths-owe-no-module-leg answers ALL "
                        f"for a CI path ({len(ci_files)} here, first: {ci_files[0]}); teach it the "
                        "policy to narrow them.") if ci_files else ""
-            owned_note = (f" It answers ALL for {len(owned_files)} path(s) outside every package "
-                          f"(first: {owned_files[0]}) — it found them read by a build, claimed by "
-                          "no other lane, or predates the owned-elsewhere rule.") if owned_files else ""
+            # Worded to stay true whichever of the three it was — a refusal and a parse failure
+            # are no answer either, so "it answers ALL" would misreport them.
+            owned_note = (f" It gave no narrowed answer for {len(owned_files)} path(s) outside "
+                          f"every package (first: {owned_files[0]}) — if it answered ALL, it found "
+                          "them read by a build, claimed by no other lane, or predates the "
+                          "owned-elsewhere rule.") if owned_files else ""
             return full(f"{SELECTOR} could not narrow the node-package closure (it refused, "
                         f"answered ALL, or could not be parsed) — running the full set."
                         f"{ci_note}{owned_note}")
