@@ -36,6 +36,11 @@ repositories — the storage (PostgreSql, Cosmos, Snowflake) and transport (gRPC
 MeshWeaver.Plugins — build on the same machinery instead of a copy. The namespace stays
 `MeshWeaver.Hosting.Orleans.Test` on purpose: it is the machinery that moved, not its identity.
 
-An xunit `[CollectionDefinition]` must live in the assembly that declares the tests, so each test
-project declares its own collection over `SharedOrleansFixture` (see
-`test/MeshWeaver.Hosting.Orleans.Test/OrleansClusterCollection.cs`).
+An xunit `[CollectionDefinition]` must live in the assembly that declares the tests, so a test
+project that wants one cluster shared across several classes declares its own collection over
+`SharedOrleansFixture` — `[CollectionDefinition(nameof(X))] public class X :
+ICollectionFixture<SharedOrleansFixture>;` — AND puts `[Collection(typeof(X))]` on those classes.
+Core's own Orleans suite declares none: its classes derive from `OrleansMeshTestBase`, which gives
+each class a cluster leased from `OrleansMeshPool` or dedicated to it. A definition nothing
+references is dead code and, since xunit.v3 4.0.3, the build error `xUnit1073` under
+`-warnaserror` — delete it, never suppress it.
