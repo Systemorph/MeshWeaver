@@ -86,6 +86,47 @@ public class DataVolumeFreeSpaceTest
     }
 
     [Fact]
+    public void APathNotCreatedYet_IsMeasuredOnTheVolumeMountedAboveIt_AndIsHealthy()
+    {
+        // The control instance, 2026-11-09: PreWarm:PrebuiltBundleRoot=/artifacts/linux-x64/prebuilt-bundles
+        // on a mounted /artifacts that holds no bundle yet — DriveInfo threw DriveNotFoundException.
+        var mount = Environment.CurrentDirectory;
+        var absent = System.IO.Path.Combine(mount, "dvfs-" + Guid.NewGuid().ToString("N"), "prebuilt-bundles");
+
+        var reading = DataVolumeFreeSpace.ProbeWithin(absent, [mount]);
+
+        reading.Fault.Should().BeNull();
+        reading.NotCreatedYet.Should().BeTrue();
+        reading.TotalBytes!.Value.Should().BeGreaterThan(0);
+        var verdict = DataVolumeFreeSpace.Evaluate([absent], _ => reading, 0);
+        verdict.Degraded.Should().BeFalse();
+        verdict.Description.Should().Contain("not created yet");
+    }
+
+    [Fact]
+    public void APathNotCreatedYet_WithNoVolumeMountedAboveIt_IsAFault()
+    {
+        // The negative control: the root filesystem is never a data volume — that is a dropped mount.
+        var absent = System.IO.Path.Combine(Environment.CurrentDirectory, "dvfs-" + Guid.NewGuid().ToString("N"));
+        var rootFs = System.IO.Path.GetPathRoot(absent)!;
+
+        var reading = DataVolumeFreeSpace.ProbeWithin(absent, [rootFs]);
+
+        reading.Fault.Should().Contain("no volume is mounted above it");
+        DataVolumeFreeSpace.Evaluate([absent], _ => reading, 0).Degraded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void MountAbove_PicksTheDeepestMount_AndNeverTheRootFilesystem()
+    {
+        DataVolumeFreeSpace.MountAbove("/artifacts/linux-x64/prebuilt-bundles", ["/", "/artifacts", "/data"])
+            .Should().Be("/artifacts");
+        DataVolumeFreeSpace.MountAbove("/data/dumps/x", ["/", "/data", "/data/dumps"]).Should().Be("/data/dumps");
+        DataVolumeFreeSpace.MountAbove("/artifactsX/a", ["/", "/artifacts"]).Should().BeNull();
+        DataVolumeFreeSpace.MountAbove("/nowhere", ["/"]).Should().BeNull();
+    }
+
+    [Fact]
     public void DuplicatePaths_AreMeasuredOnce()
     {
         var probed = 0;
