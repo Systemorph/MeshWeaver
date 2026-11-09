@@ -842,12 +842,13 @@ on:
         default: ''
       cache-signing-environment:
         description: >
-          The caller's GitHub ENVIRONMENT holding `CI_CACHE_SIGNING_KEY` (Ed25519 private key, PEM) for
-          the workspace compile cache. Its deployment policy MUST admit the default branch only: that is
-          what keeps the key out of every pull-request job, whatever the PR's workflow says. Empty (the
-          default): nothing is ever signed, so the cache serves nothing — it can never serve an entry a
-          pull request planted. Readers trust the public key(s) in the content repo's
-          `.github/ci-cache-signing.pub` (Plugins Hosting/CiProfile.md §11).
+          ACCEPTED AND UNUSED — kept so a caller that still passes it is not refused. The workspace compile
+          cache's claims are now SIGNED BY THE CALLER (outputs `ccache-claims` / `ccache-build-logic-ref`):
+          a job of this reusable workflow that declared the caller's environment did NOT receive its
+          secret (measured, MeshWeaver.Plugins main runs 42563861810 and 42580826046: the env var was
+          empty, "Secret source: Actions"), while a caller job in the same environment does
+          (Plugins compile-check legs: "189 of 189 claim(s) signed"). Readers trust the public key(s)
+          in the content repo's `.github/ci-cache-signing.pub` (Plugins Hosting/CiProfile.md §11).
         required: false
         type: string
         default: ''
@@ -939,11 +940,6 @@ on:
         type: string
         default: ''
     secrets:
-      CI_CACHE_SIGNING_KEY:
-        description: >-
-          Never passed by a caller: read from `cache-signing-environment` by the one job that declares it
-          (`compile-cache-sign`), on a trusted run only.
-        required: false
       publish-token:
         description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
         required: false
@@ -982,6 +978,19 @@ on:
         description: Private key (PEM) of that App.
         required: false
     outputs:
+      ccache-claims:
+        description: >-
+          The workspace compile cache's CLAIMS of this run ([{entry, sha256}] JSON): what `build-workspace`
+          kept in the store on a trusted run, to be SIGNED BY THE CALLER in a job that runs in its
+          main-only signing environment (`workspace-compile-cache.py sign`). Empty or `[]` on every
+          other run. A claim names the digest the producing job computed — never sign bytes read back
+          from the share, which every job can write.
+        value: ${{ jobs.build-workspace.outputs.ccache-claims }}
+      ccache-build-logic-ref:
+        description: >-
+          The core commit whose `.github/scripts/workspace-compile-cache.py` wrote the claims — the
+          caller's signer checks out exactly this ref, so the claim format and the signer agree.
+        value: ${{ jobs.select.outputs.build-logic-ref }}
       bundles-built:
         description: >
           "true" when EVERY selected module bundle of THIS CALL exists as a COMPOSABLE artifact —
@@ -2820,46 +2829,6 @@ jobs:
           path: ${{ runner.temp }}/module-build
           retention-days: 1
           if-no-files-found: error
-
-  # ═══════════ THE COMPILE CACHE'S TRUNK SIGNATURE ═══════════
-  # The ONLY job that holds `CI_CACHE_SIGNING_KEY`: it declares the caller's signing environment, whose
-  # deployment policy admits the default branch only, so no pull-request job can ever obtain the key —
-  # whatever its own workflow says. It signs the CLAIMS `build-workspace` handed over through job
-  # outputs (entry + the sha256 that job computed of the bytes it put), never bytes read back from the
-  # share. A reader serves an entry only when a pinned trunk key signed its digest and the fetched
-  # bytes match it (workspace-compile-cache.py, ci_cache_signature.py). Off the pack legs' path.
-  compile-cache-sign:
-    name: Compile cache — trunk signature
-    needs: [select, build-workspace]
-    if: >-
-      needs.build-workspace.result == 'success'
-      && needs.build-workspace.outputs.ccache-claims != '' && needs.build-workspace.outputs.ccache-claims != '[]'
-      && inputs.cache-signing-environment != ''
-      && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-      && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'repository_dispatch')
-    environment: ${{ inputs.cache-signing-environment }}
-    runs-on: ${{ inputs.runner }}
-    timeout-minutes: 10
-    steps:
-      - name: Check out the compile-cache tools at the build-logic ref
-        uses: actions/checkout@v7
-        with:
-          repository: Systemorph/MeshWeaver
-          ref: ${{ needs.select.outputs.build-logic-ref }}
-          path: .compile-cache-logic
-          sparse-checkout: .github/scripts
-      - name: Sign what this run kept
-        env:
-          CI_CACHE_SIGNING_KEY: ${{ secrets.CI_CACHE_SIGNING_KEY }}
-          CLAIMS: ${{ needs.build-workspace.outputs.ccache-claims }}
-          STORE: ${{ needs.select.outputs.artifact-store }}
-          STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
-        run: |
-          set -uo pipefail
-          printf '%s' "$CLAIMS" > "$RUNNER_TEMP/ccache-claims.json"
-          python3 .compile-cache-logic/.github/scripts/workspace-compile-cache.py sign \
-            --claims "@$RUNNER_TEMP/ccache-claims.json" --store "$STORE" --store-id "$STORE_ID" \
-            || echo "::warning title=Compile cache not signed::the signature step failed — nothing this run kept is trusted"
 
   # ═══════════ THE PACK LEGS — N MODULES PER RUNNER, ONE VERDICT PER MODULE (2026-09-12) ═══════════
   # 🚨 A BATCH IS A RUNNER-SHARING DEVICE, NOT A COUPLING. Every step below that used to read
