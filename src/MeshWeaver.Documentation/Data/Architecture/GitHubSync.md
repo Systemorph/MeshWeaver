@@ -523,6 +523,28 @@ When you click **Sync now (commit)**, **Update to latest (checkout)**, **Re-impo
   normal activity feed — the same place every other operation in the platform records its
   history. You can revisit the log later.
 
+#### What an unattended attempt leaves behind
+
+A push or the periodic branch reconcile also runs as an activity, at `{space}/_Activity/{id}`, so
+it has the same progress feed and Cancel while it runs. What it **concluded** is always recorded on
+the sync source itself, by the one write path every conclusion takes: `lastSyncAttemptAt`,
+`lastSyncOutcome`, `lastAttemptedCommitSha`, `lastSyncNote` and the per-module outcomes.
+
+🚨 **An unattended attempt that changed nothing does not keep its activity.** When the import wrote,
+pruned, failed, preserved, held and declined nothing (`Skipped`, or a tree whose every module is
+unchanged), the sync source already says everything the activity could, so the activity is removed
+once it has finished. An attempt with any effect or finding keeps its activity, because that is the
+record a person reads. A person's own **Update**, **Re-import** or **Check** always keeps its
+activity, whatever it found.
+
+Why: a push fans out to every Space that syncs the repository, and for nearly all of them the answer
+is "unchanged". Before this rule every such answer stayed as a node. Measured on memex-cloud in
+#8020, `Hosting/_Activity` gained 76 records in 7.6 h and was never pruned, and the partition grew
+past the uninstall's 20,000-node verification bound. The test is
+`ASyncedPartitionDoesNotGrowWithoutBoundTest`; its control is an attempt that writes, whose activity
+stays. Removing the activity is best-effort: a failed delete is logged at Warning and leaves the node
+as before. Records written before this change are not removed by it.
+
 Under the hood this is the platform's standard **[Activity Control Plane](/Doc/Architecture/ActivityControlPlane)**: the GitHub work runs off the message hub (so the portal stays responsive), progress streams onto the activity node, and Cancel flips `RequestedStatus = Cancelled`. Developers trigger the exact same activities through one unified `IMessageHub` API — `hub.CommitToGitHub(...)`, `hub.UpdateToLatestFromGitHub(...)`, `hub.ReimportFromGitHub(...)`, `hub.CreateBranchOnGitHub(...)`, `hub.OpenPullRequestOnGitHub(...)`, `hub.CheckBranchStateOnGitHub(...)` — each returns the activity path to watch; the GUI and tests call these same methods.
 
 > **Delegate to GitHub — don't replicate.** Every Git operation is performed *on
@@ -703,6 +725,42 @@ is indistinguishable from a healthy mesh with nothing to do, which is how ten co
 served four-day-stale content while every delivery reported success.
 
 ---
+
+#### 🚨 A retired package is not synced
+
+A feature flag declared off with an explicit `false` retires the packages it names (see
+[Environment Composition](/Doc/Architecture/EnvironmentComposition), "A disabled flag retires what is
+installed"). Retiring a package keeps its data, so its Space and its `{space}/_GitSync` source stay.
+An uninstall can also be refused outright, for example for a partition above the uninstall's
+verification bound. Either way, the source must not keep importing the package.
+
+So **no unattended trigger imports a Space whose package is declared retired**: not a push, not the
+branch reconcile, not a seal arrival. Nothing is fetched and no activity is created. The fan-out
+names the skip in its census line, and one Information line names the flag when a source is first
+found retired:
+
+```text
+[GitSync] Hosting/_GitSync is not synced: its package Plugins/Hosting is retired by feature flag
+'fleetops' (Features:Flags:fleetops:Enabled=false, pattern 'Plugins/Hosting'). …
+```
+
+How a source is matched to a package:
+
+- **The package source** is the configured source that names the repository: the entry of
+  `PluginCatalog:Sources` (its `Name`, else its `RepoPath`), the legacy single source (`registry`)
+  when that list names no repository, or an instance-local package source. These are the names
+  install records use. A repository that no source names matches nothing, so a source-scoped
+  pattern fails closed.
+- **The package id** is the Space (the partition a package is installed into) or the last segment
+  of the source's subdirectory (the package folder).
+
+The flags are read live on every decision, so turning the flag back on resumes the sync on the next
+push or reconcile pass, with one Information line saying so. A person's own **Update** or
+**Re-import** is not refused: somebody asked. Measured on memex-cloud in #8020, the `Hosting`
+partition kept growing while its record declared
+`features.fleetops: {enabled:false, packages:[Plugins/Hosting, Plugins/BuildServer]}`. The rule is
+`RetiredPackageSyncGate`; the test is `ASyncedPartitionDoesNotGrowWithoutBoundTest`, whose control
+turns the flag on and sees the Space import again.
 
 ## 7. Operator setup (enabling the feature)
 
