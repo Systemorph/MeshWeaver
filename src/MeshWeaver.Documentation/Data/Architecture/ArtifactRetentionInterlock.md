@@ -786,9 +786,10 @@ agent files or approves it:
    2026-11-02, and the declaration deleted.
 4. Lift `pause` and record `purge-old-images` as `Enabled` in a reviewed diff, then run another
    approved `RegistryRetention` apply. The apply interlock refuses unless the lock lane's newest run
-   on main is green and under 36 hours old. The task now runs nightly **as a report**. **Record
-   half done** (the pause is lifted and `recordAheadOfRegistry` re-declared for the task); the
-   approved apply that follows its merge is what enables the live task.
+   on main is green and under 36 hours old. The task now runs nightly **as a report**. **Done:**
+   enabled by the approved apply in
+   [Memex run 41442507393](https://github.com/Systemorph/Memex/actions/runs/41442507393) on
+   2026-11-02, and the re-declared `recordAheadOfRegistry` deleted.
 5. Read back at least one nightly run. When nothing it lists is a tag or manifest the fleet
    references, one reviewed diff drops `--dry-run` and the `dryRun` block together. Re-declare
    `recordAheadOfRegistry`, and apply once more with approval.
