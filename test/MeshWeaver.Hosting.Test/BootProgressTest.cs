@@ -217,6 +217,9 @@ public class BootProgressTest
         Assert.StartsWith("the 31 package(s) carrying a module come from sources with no bundle registry",
             InstanceAutoRegistrationService.SkipCause(31, 0, true));
         Assert.StartsWith("this host has no storage adapter", InstanceAutoRegistrationService.SkipCause(31, 31, false));
+        var both = InstanceAutoRegistrationService.SkipCause(31, 0, false);
+        Assert.Contains("no bundle registry", both);
+        Assert.Contains("no storage adapter", both);
     }
 
     [Fact]

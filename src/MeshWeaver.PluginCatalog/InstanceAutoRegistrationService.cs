@@ -2844,19 +2844,27 @@ public sealed class InstanceAutoRegistrationService(
 
     /// <summary>
     /// Why the module phase landed nothing ahead of the content — the sentence the boot page shows.
-    /// Three causes, each named as itself (measured on the registry instance 2026-11-09: 31 packages
+    /// Called only when the phase is skipped (no carrier, or no store). Each cause that holds is
+    /// named as itself (measured on the registry instance 2026-11-09: 31 packages
     /// carried a module and the page said "no selected package carries a module", because the
     /// registry serves its own sources and holds no bundle client for them). Pure.
     /// </summary>
     /// <param name="withModule">Selected packages that declare a module.</param>
     /// <param name="carriers">Those whose source has a bundle client to fetch it with.</param>
     /// <param name="hasStorage">Whether this host can read install records.</param>
-    internal static string SkipCause(int withModule, int carriers, bool hasStorage) =>
-        withModule == 0 ? "no selected package carries a module"
-        : carriers == 0 ? $"the {withModule} package(s) carrying a module come from sources with no bundle registry "
-                          + "(an instance that serves its own sources) — each module follows its content on the install funnel"
-        : hasStorage ? $"{carriers} module(s) to land"
-        : "this host has no storage adapter to read install records with, so no module lands ahead of its content";
+    internal static string SkipCause(int withModule, int carriers, bool hasStorage)
+    {
+        if (withModule == 0)
+            return "no selected package carries a module";
+        // Every cause that holds is named — a host can lack both a bundle registry and a store.
+        var causes = ImmutableList<string>.Empty
+            .AddRange(carriers == 0
+                ? [$"the {withModule} package(s) carrying a module come from sources with no bundle registry "
+                   + "(an instance that serves its own sources)"]
+                : [])
+            .AddRange(hasStorage ? [] : ["this host has no storage adapter to read install records with"]);
+        return string.Join("; and ", causes) + " — each module follows its content on the install funnel";
+    }
 
     /// <summary>
     /// The module-phase close: propose the set the activation record describes, checked against the
