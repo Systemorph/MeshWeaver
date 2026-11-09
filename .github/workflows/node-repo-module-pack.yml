@@ -2490,8 +2490,14 @@ jobs:
           # runs 42601509542 → 42612488062: 39 entries signed, 0 reused). A tool project the closure key
           # cannot key turns the cache off for this run.
           tools_args=()
-          [ -n "$SHELF" ] && [ -n "$SHELF_PROJECT" ] && tools_args+=(--tool-project "$SHELF_PROJECT")
-          [ -n "$EXTENSION" ] && [ -n "$EXTENSION_PROJECT" ] && tools_args+=(--tool-project "$EXTENSION_PROJECT")
+          # A published tool must be keyed by its project — never silently left out of the salt (two runs
+          # with different shelves would then share a salt). The shelf/extension steps only run when their
+          # project input is set, so a mismatch is a wiring defect: the cache is off, never a partial salt.
+          if { [ -n "$SHELF" ] && [ -z "$SHELF_PROJECT" ]; } || { [ -n "$EXTENSION" ] && [ -z "$EXTENSION_PROJECT" ]; }; then
+            echo "::warning title=Compile cache off::a shelf or build extension was published without its project input — it cannot be keyed, so every entry is compiled"; exit 0
+          fi
+          [ -n "$SHELF" ] && tools_args+=(--tool-project "$SHELF_PROJECT")
+          [ -n "$EXTENSION" ] && tools_args+=(--tool-project "$EXTENSION_PROJECT")
           if ! salt=$(python3 "$cc" salt --repo . --image "$DIGEST" --tester "$TESTER_DIGEST" --accept "$accept" \
                         --superseded "$SUPERSEDED" --platform "$PLATFORM_REF" --sdk "$KEYED_SDK" ${tools_args[@]+"${tools_args[@]}"}); then
             echo "::warning title=Compile cache off::no toolchain salt for this run (above) — every entry is compiled"; exit 0
