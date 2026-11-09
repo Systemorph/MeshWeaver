@@ -670,6 +670,14 @@ public sealed class InstanceAutoRegistrationService(
         // unconfigured deployment never touches the consent record.
         var open = bootstrapKey.Length == 0 && !string.IsNullOrWhiteSpace(options.InstanceId);
         var consent = open ? ConsentGiven(wait: false) : Observable.Return(true);
+        // 🚨 The boot page names this wait (measured 2026-11-09: a fresh instance with an OPEN
+        // registration sat 30 min awaiting consent while its boot progress showed nothing after the
+        // bake — a spinner in the one place the person could have been told what to do).
+        var progress = hub.ServiceProvider.GetService<BootProgress>();
+        progress?.PhaseStarted(BootPhaseIds.Register, "Registering with the plugin registry", registry.Url);
+        IObservable<Unit> Registered(IObservable<Unit> registration) => registration
+            .Do(_ => progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Done, $"registered at {registry.Url}"),
+                ex => progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Failed, ex.Message));
 
         return consent.SelectMany(consentGiven =>
         {
@@ -680,12 +688,16 @@ public sealed class InstanceAutoRegistrationService(
                 case RegistrationPreflight.Skip:
                     if (reason is not null)
                         logger.LogInformation("{Reason}", reason);
+                    progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Done, reason ?? "already registered");
                     return Observable.Return(Unit.Default);
                 case RegistrationPreflight.Abort:
                     logger.LogError("{Reason}", reason);
+                    progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Failed, reason);
+                    progress?.Error($"registration: {reason}");
                     return Observable.Empty<Unit>();       // misconfigured → do not go on to install
                 case RegistrationPreflight.AwaitConsent:
                     logger.LogInformation("{Reason}", reason);
+                    progress?.PhaseStarted(BootPhaseIds.Register, "Waiting for an administrator's consent to register", reason);
                     // The instance has asked; now it waits for the answer — the consent record a
                     // platform admin writes from Settings — and registers the moment it lands.
                     // Ordering on the actual precondition: no timer, no restart, no poll.
@@ -695,9 +707,9 @@ public sealed class InstanceAutoRegistrationService(
                         .Do(_ => logger.LogInformation(
                             "Consent recorded — registering this installation as '{InstanceId}' at {Url}.",
                             options.InstanceId!.Trim(), registry.Url))
-                        .SelectMany(_ => Register(options, registry, bootstrapKey));
+                        .SelectMany(_ => Registered(Register(options, registry, bootstrapKey)));
             }
-            return Register(options, registry, bootstrapKey);
+            return Registered(Register(options, registry, bootstrapKey));
         });
     }
 
