@@ -579,7 +579,7 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
 
     /// <summary>
     /// 🚨 Names a plan the registry is about to decide with WITHOUT knowing it (#5894). An unknown
-    /// stored plan is decided at the baseline (<see cref="PlanTierRanks.CoversInstance"/>, fail
+    /// stored plan is decided at the baseline (<see cref="PlanTierRanks.CoversInstance(string?, string?, string?)"/>, fail
     /// closed) and a RETIRED one as its successor (<see cref="PlanTierRanks.RetiredPlans"/>) — or, when
     /// the ladder does not rank that successor either, at the baseline, and it is reported as such; both
     /// are facts an operator has to act on — re-set the plan on the Instance grants tab — and
@@ -1115,7 +1115,7 @@ public sealed record AuthenticatedInstance(MeshWeaverInstance Instance, PluginGr
 
     /// <summary>
     /// The registry's plan ladder at resolution time — what a plan-scoped grant entry is decided
-    /// against (<see cref="PlanTierRanks.Covers"/>). <see cref="PlanTierRanks.Empty"/> on a host
+    /// against (<see cref="PlanTierRanks.Covers(string?, string?, string?)"/>). <see cref="PlanTierRanks.Empty"/> on a host
     /// with no tier nodes or when the read failed: plan-scoped entries then license nothing.
     /// </summary>
     public PlanTierRanks Ranks { get; init; } = PlanTierRanks.Empty;
