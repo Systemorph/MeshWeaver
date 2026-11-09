@@ -751,6 +751,18 @@ on:
         description: The registry that will serve these bundles onward.
         type: string
         default: https://memex.meshweaver.cloud
+      registry-max-bundle-bytes:
+        description: >-
+          The largest module upload `registry-url` accepts, in bytes — its server's request-body
+          bound, which the registry names in its 413 ("this registry accepts a module upload of at
+          most N bytes"). Every packed bundle is measured against it where it is MADE: over it is
+          RED with the per-file breakdown, at 80 % of it a warning (check-module-bundle-size.py).
+          Plugins main run 42641639266 learned it from the registry instead — two Mail bundles of
+          ~33.4 MB refused with 413 at the very end of the run, after an earlier run's unlabelled
+          500 for the same bytes. Declare a different value only together with the registry that
+          really has it; never to make a red go away (Doc/Architecture/ModuleClosureAccounting).
+        type: number
+        default: 30000000
       content-repository:
         description: >-
           The repository whose packages are packed. Empty = the caller (today's behaviour). The
@@ -2897,6 +2909,11 @@ jobs:
       # reading a gate the lane itself introduced out of THAT tree is a file-not-found on every
       # satellite whose pin has not moved yet. A gate ships with the workflow that calls it.
       BUNDLE_STATIC_ASSETS: ${{ github.workspace }}/build-logic/.github/scripts/check-bundle-static-assets.py
+      # The required-module prune (container path) and the registry-bound size gate — build logic,
+      # from the same ref and for the same reason as the static-asset assertion above.
+      MODULE_REQUIRED_CLOSURE: ${{ github.workspace }}/build-logic/.github/scripts/module-required-closure.py
+      BUNDLE_SIZE: ${{ github.workspace }}/build-logic/.github/scripts/check-module-bundle-size.py
+      REGISTRY_MAX_BUNDLE_BYTES: ${{ inputs.registry-max-bundle-bytes }}
     # Inherit the caller's least-privilege map; declaring OIDC here rejects basic-auth callers at
     # graph creation time, before this job's `acr-login` mode can choose its conditional steps.
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
@@ -3703,6 +3720,22 @@ jobs:
                       echo "closure: $native RIDES — a native payload of the module's private closure (deps.json-derived, from the image or the shelf)"
                     done < "$packdir/module-natives.txt"
                   fi
+                  # 🚨 WHAT A REQUIRED MODULE SERVES IS NOT CARRIED (Plugins main run 42641639266:
+                  # Gmail and Mail at ~33.4 MB, refused by the registry with 413). The lists above
+                  # are the module's whole in-tree graph, so a module whose package REQUIRES another
+                  # in-repo module re-shipped that module's entry and its entire closure — 19 MB of
+                  # AI in Mail, 32.5 MB of Mail + AI in Gmail. The loader serves another installed
+                  # module's entry from that module's own context (ModuleLoadContext step 2), and a
+                  # required module is installed wherever its dependent is. The script keeps exactly
+                  # the AssemblyRef closure of this module's own code, stopping at those entries;
+                  # with no required in-repo module in reach it changes nothing and runs no dotnet.
+                  test -f "$MODULE_REQUIRED_CLOSURE" || { echo "::error::the resolved build-logic ref carries no .github/scripts/module-required-closure.py — move build-logic-ref to a commit that carries it."; exit 1; }
+                  python3 "$MODULE_REQUIRED_CLOSURE" \
+                    --repo-root "$GITHUB_WORKSPACE" \
+                    --package "$(bk get --module "$MODULE" package)" \
+                    --module "$MODULE" \
+                    --packdir "$packdir" \
+                    --pack-args "$packargs"
                   echo "closure: NO --deps-closure on the container path — there is no SDK deps.json to derive one from."
                   echo "closure: complete BY RECORD instead — the builder walked the module's own package references over the image's and the shelf's deps.json and copied everything the shared framework does not supply; it refuses BY NAME anything neither supplies, and this lane passes no --extra-refs."
                   # 🚨 THE BINDING IDENTITY, CHECKED (MeshWeaver#143): the expected value is the one
@@ -4096,6 +4129,10 @@ jobs:
                 --project "$GITHUB_WORKSPACE/$PROJECT" \
                 --manifest "$manifest" \
                 --build-output "$PACKDIR"
+              # 🚨 THE REGISTRY'S BOUND, MEASURED WHERE THE BUNDLE IS MADE — never learned from a 413
+              # at the end of a trunk run (Plugins main run 42641639266). Both lanes, no `if`.
+              test -f "$BUNDLE_SIZE" || { echo "::error::the resolved build-logic ref carries no .github/scripts/check-module-bundle-size.py — move build-logic-ref to a commit that carries it."; exit 1; }
+              python3 "$BUNDLE_SIZE" --bundle "$bundle" --limit "$REGISTRY_MAX_BUNDLE_BYTES"
               bk set --module "$MODULE" "bundle=$bundle"
               echo "bundle OK ($MODULE):"; jq . "$manifest"
             )
