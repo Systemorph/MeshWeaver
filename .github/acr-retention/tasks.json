@@ -62,7 +62,9 @@
         "many words. `lock-pinned-digests.py --check-retention-record` now asserts it on every",
         "pull request. APPLIED on 2026-11-02 by the governed `RegistryRetention` apply",
         "(control `Ops/Actions/registry-retention-apply-20261101b-3438`, Memex run 41419066636):",
-        "the live task now matches this record byte for byte, still Disabled under `pause`.",
+        "the live task then matched this record byte for byte, still Disabled under `pause`. ENABLED",
+        "(as the dry-run report) by the next approved apply, control `Ops/Actions/registry-retention-apply-20261102-3438-unpause`,",
+        "Memex run 41442507393, whose re-verify read `matches the record byte for byte` (MeshWeaver#3438).",
         "Both steps share ONE 3600 s task budget; the per-step `timeout` is a per-step ceiling.",
         "🚨 NEITHER STEP PASSES `--include-locked`, and that is the whole of the pin protection:",
         "`acr purge` skips locked manifests by default. Adding that flag would delete every",
@@ -95,17 +97,6 @@
       ]
     }
   ],
-  "recordAheadOfRegistry": {
-    "inForce": true,
-    "since": "2026-11-02",
-    "tasks": [
-      "purge-old-images"
-    ],
-    "what": "The record lifts the pause: `purge-old-images` is recorded `Enabled` (the live task is `Disabled`), and its YAML comment no longer says the record is ahead of the registry. The window, the filters and `--dry-run` on both steps are unchanged from what the 2026-11-02 apply installed (control `Ops/Actions/registry-retention-apply-20261101b-3438`, Memex run 41419066636). `purge-old-ci-releases` stays Disabled and unchanged. 🚨 This declaration excuses the DEFINITION drift (the YAML comment) only, never the STATUS: `verify` compares `status` outside the declared-drift path and reds on `Enabled` vs live `Disabled` until the apply. That is deliberate — the status is what switches the purge on, and an exemption keyed on a task name must never cover it.",
-    "why": "Lifting the pause is a reviewed diff followed by an approved `RegistryRetention` apply; between the two the record is ahead. `pause.reEnableWhen` was: lock-pinned-digests green on a fleet whose tag references and index closures are locked (MeshWeaver#4081). #4081 is closed, and the lock lane's scheduled runs on main are green (41370289769 on 2026-11-02, 41259318478 on 2026-11-01). The apply's own interlock re-measures that at apply time (newest completed run green and under 36 h old).",
-    "clearedBy": "the next approved `acr-retention-tasks.sh apply` — after which `verify` finds no drift on `purge-old-images` and reds on THIS declaration being stale; delete it in a core pull request.",
-    "issue": "MeshWeaver#3438"
-  },
   "dryRun": {
     "inForce": true,
     "tasks": [

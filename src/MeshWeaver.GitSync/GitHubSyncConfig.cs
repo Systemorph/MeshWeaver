@@ -241,6 +241,26 @@ public record GitHubSyncConfig
     public string? LastAttemptedConfigFingerprint { get; init; }
 
     /// <summary>
+    /// 🚨 <b>What the attempt at <see cref="LastAttemptedCommitSha"/> is waiting for, when the only
+    /// thing that kept its verdict from being final is a module DECLINE</b>
+    /// (<c>ModuleSyncDecision.AttemptDeclineCondition</c>; MeshWeaver#8020).
+    ///
+    /// <para>A decline is a verdict about the RUNNING platform, not about the bytes, so it is never
+    /// recorded as <see cref="LastAttemptWasFinal"/> — a roll changes it at the same commit. But
+    /// treating it as merely "not final" made the branch reconcile (every 10 minutes, on every
+    /// replica) re-fetch the same commit and mint a new Activity for the same decline on every pass:
+    /// measured on memex-cloud 2026-11-02, one declined commit 14 times and another 9 times. This
+    /// field names the condition — the running platform, the newer platform an unverified floor waits
+    /// on, the loaded version of an unmet requirement's dependency — so the triggers skip the commit
+    /// while that condition holds and re-attempt the moment it changes, or the repository moves.</para>
+    ///
+    /// <para>Written only when everything else about the attempt was final; null otherwise, and
+    /// cleared with the attempt pair. Set by the sync operation; not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public string? LastAttemptDeclinedUnder { get; init; }
+
+    /// <summary>
     /// WHY the last attempt did not move the source — the hold reason of the sealed-publication
     /// gate ("built at X, not sealed for this instance …"), or the reconciler's finding — so an
     /// operator reading the config sees the cause rather than only the outcome. Cleared by the
