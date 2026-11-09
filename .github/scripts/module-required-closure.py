@@ -188,14 +188,32 @@ def walk(entry: str, refs: dict[str, set[str]], carried: set[str], stop: set[str
     return reached, through
 
 
+def is_satellite(value: str) -> bool:
+    """A culture-satellite resource assembly. ResourceManager PROBES for it — no AssemblyRef ever
+    names it, and a missing one fails no load — so the walk cannot vouch for it either way."""
+    return value.endswith(".resources.dll")
+
+
+def walked(value: str) -> bool:
+    """A `--with` entry the AssemblyRef walk decides: a managed assembly that is not a satellite."""
+    return value.endswith(".dll") and not is_satellite(value)
+
+
 def prune(entry: str, pairs: list[tuple[str, str | None]], refs: dict[str, set[str]], stop: set[str]):
     """Returns (kept pairs, dropped pairs with reasons, the stop names the walk crossed into)."""
-    managed = {stem(v) for f, v in pairs if f == "--with" and v and v.endswith(".dll")}
+    for flag, value in pairs:
+        # 🚨 Everything here is keyed by the file's STEM, which is sound only because `--with`
+        # names FLAT files (module-pack refuses a path component there). Assert it rather than
+        # let two same-named files in different directories be kept or dropped together.
+        if flag == "--with" and value is not None and ("/" in value or "\\" in value):
+            raise SystemExit(f"::error::--with '{value}' carries a path; the closure walk keys files by name and "
+                             "module-pack accepts only flat --with entries")
+    managed = {stem(v) for f, v in pairs if f == "--with" and v and walked(v)}
     reached, through = walk(entry, refs, managed, stop)
     kept: list[tuple[str, str | None]] = []
     dropped: list[tuple[str, str, str]] = []
     for flag, value in pairs:
-        if flag == "--with" and value is not None and value.endswith(".dll"):
+        if flag == "--with" and value is not None and walked(value):
             name = stem(value)
             if name in reached:
                 kept.append((flag, value))
@@ -246,7 +264,7 @@ def main(argv: list[str]) -> int:
 
     stop_chains = required_modules(args.repo_root, args.package)
     pairs = parse_pack_args(args.pack_args.read_text(encoding="utf-8"))
-    named = [v for f, v in pairs if f == "--with" and v and v.endswith(".dll")]
+    named = [v for f, v in pairs if f == "--with" and v and walked(v)]
     if not stop_chains:
         print(f"required-closure: {args.package} requires no module of this repository — {args.module}'s closure unchanged")
         return 0
@@ -357,6 +375,17 @@ def self_test() -> int:
     check("a transitive reference of a kept file rides too",
           ("--with", "Deep.dll") in prune("M", [("--with", "A.dll"), ("--with", "Deep.dll")],
                                          parse_refs("M.dll\tA\nA.dll\tDeep\nDeep.dll\t\n"), {"X"})[0])
+
+    print("== satellites and paths: never decided by the walk")
+    kept3, dropped3, _ = prune("M", [("--with", "M.resources.dll"), ("--with", "Dep.dll")],
+                               parse_refs("M.dll\tDep\nDep.dll\t\n"), {"Dep"})
+    check("a culture-satellite resource assembly keeps riding (probed, never referenced)",
+          ("--with", "M.resources.dll") in kept3, (kept3, dropped3))
+    try:
+        prune("M", [("--with", "de/M.resources.dll")], {}, {"X"})
+        check("a --with carrying a path is refused", False, "no refusal")
+    except SystemExit as refusal:
+        check("a --with carrying a path is refused", "carries a path" in str(refusal), refusal)
 
     print("== the CLI: untouched when nothing required is in reach; rewritten when it is; refuses missing files")
     with tempfile.TemporaryDirectory() as tmp:

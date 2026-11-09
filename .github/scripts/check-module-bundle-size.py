@@ -31,6 +31,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+# ONE depth for every verdict, so the lane log reads the same run over run.
 TOP = 25
 
 
@@ -65,7 +66,7 @@ def check(bundle: Path, limit: int, warn_ratio: float, out=print) -> int:
         out(f"::warning::{headline} — within {1 - share:.0%} of the bound. Largest files:")
     else:
         out(f"bundle size: {headline}. Largest files:")
-    for line in report(rows, top=10):
+    for line in report(rows):
         out(line)
     return 0
 
