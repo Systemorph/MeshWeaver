@@ -35,7 +35,55 @@ Two corollaries, both deliberate:
   bind by a strictly synchronised `AssemblyVersion`; a bundled copy is the same-identity trap
   (MeshWeaver#143). The deliberate exception is a **module-owned** `MeshWeaver.*` sibling — one
   whose source lives in the module's own repo and is therefore nowhere in `/app` — which rides,
-  **and whose own package closure rides with it**.
+  **and whose own package closure rides with it** — *unless that sibling is the entry of a module
+  the package REQUIRES* (next section).
+
+## A module the package REQUIRES is served, not carried
+
+Since every module runs in its own collectible load context (2026-10-05), a name that is the
+**entry assembly of another installed module** is served from that module's own context
+(`ModuleLoadContext` step 2, before the module's own directory), and what that entry needs in turn
+is resolved by *its* context, from *its* directory. A module the package `requires` (transitively,
+through `content.requires`) is installed wherever the dependent is. So a dependent bundle that
+carries the required module's entry carries bytes the loader never reads — and carries that
+module's whole closure with them.
+
+That is not a theoretical cost. Plugins main run 42641639266 (2026-11-09): the registry refused
+`MeshWeaver.Mail.Gmail@1.14.49` (33,470,132 bytes) and `MeshWeaver.Mail.MicrosoftGraph@1.28.17`
+(33,400,061 bytes) with **413** against its 30,000,000-byte upload bound, so no Mail update reached
+any instance (an earlier run had the same bytes refused with an unlabelled 500). Measured over
+Gmail's own files: **19.0 MB** was `MeshWeaver.AI` + `MeshWeaver.Markdown.Collaboration` and their
+closure (`libSkiaSharp.so` 4.8 MB, OpenXml, FluentUI icons, PdfPig …), **13.5 MB** was
+`MeshWeaver.Mail.MicrosoftGraph` and its closure (`Microsoft.Graph.dll` alone 9.3 MB), and
+**0.13 MB** was Gmail. Google requires Mail, Mail requires AI: every byte but the last was another
+module's.
+
+**The rule, on the container path** (`.github/scripts/module-required-closure.py`, run by the pack
+lane after the builder's lists are read):
+
+> rides = the **AssemblyRef closure of the module's own entry DLL** over the files the builder
+> named, **stopping at the entry of every module the package requires**.
+
+It is a walk over metadata, not over packages, because metadata is exactly what the module's own
+context will be asked to resolve. A file the module's **own** code references keeps riding even when
+a required module carries it too — nothing the dependent binds by itself changes. Only what is
+reached *through* a required module's entry is dropped, and that is the required module's to carry
+(its own bundle keeps it, by the same rule). A native payload goes with its managed owner
+(`libSkiaSharp.so` with `SkiaSharp.dll`); one with no attributable owner keeps riding.
+
+Measured on the same two bundles: **Mail 33.4 → ~15.7 MB**, **Gmail 33.5 → ~0.6 MB**.
+
+What it does not touch: a package that requires no in-repo module keeps its closure byte-for-byte
+(the walk does not even run); a required package from **another** repository has no `index.json`
+in the checkout, so nothing is dropped for it; and the SDK path's `--deps-closure` is the packer's
+own walk and is not rewritten.
+
+**And the registry's bound is measured where the bundle is made.** Every packed bundle goes through
+`.github/scripts/check-module-bundle-size.py` against the caller-declared
+`registry-max-bundle-bytes` (default 30,000,000 — the registry's request-body bound, which its 413
+names): over it is red with the per-file breakdown, at 80 % a warning. Never raise the bound to
+make that red go away — carry less; a registry that genuinely needs more declares it there and in
+the input together.
 
 ## Why `/app` is not the boundary
 
