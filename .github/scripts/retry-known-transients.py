@@ -123,8 +123,14 @@ JOB_LOG_LINE = re.compile(r"^﻿?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ", re
 #     ci-failure-ledger.py --artifact-misses). The job measured nothing about the diff; its producer had succeeded (a
 #     consumer whose producer FAILED reports that red once instead, and the failed producer vetoes
 #     the retry on its own log). Matched on the EMITTED annotation title, never the echoed source.
+#   shared-rules: NO VERDICT — sibling AGENTS.md unreadable (infra) — check-shared-rules.py, AFTER its
+#     own 3 retries with backoff: the App token's read of a sibling AGENTS.md answered 404, a different
+#     repo each time, while main passed minutes before and after (core #8040 run 42584371667:
+#     Education + Reinsurance; #8050 run 42620429389: Manufacturing); the re-run passed. Matched on
+#     the EMITTED record, never the echoed source. A real DRIFT prints no such line.
 SIGNATURES = re.compile(
     r"##\[error\]ci-run-artifacts: NOT MEASURED — artifact store miss \(infra\)"
+    r"|##\[error\]shared-rules: NO VERDICT — sibling AGENTS\.md unreadable \(infra\)"
     r"|meshweaver\.azurecr\.io.*connection refused"
     r"|dial tcp .*: connect: connection refused"
     r"|registry answered 503 for https://memex\.meshweaver\.cloud"
@@ -163,6 +169,9 @@ def stage_gate_emits_hold(lane_text: str) -> bool:
 
 CONSEQUENTIAL_SIGNATURES = re.compile(
     r"The test matrix concluded 'skipped' — at least one shard did not succeed"
+    # Consolidate repeating the shared-rules gate's red: consequential — that job is judged on its OWN
+    # log (an infra NO VERDICT retries; real drift names no signature and declines the whole run).
+    r"|##\[error\]The 'AGENTS\.md shared rule blocks' gate concluded 'failure'"
     r"|##\[error\]red because .+ — see (?:it|them)\."
     r"|##\[error\]" + re.escape(STAGE0_HOLD_LINE)
 )
@@ -1101,6 +1110,20 @@ def _self_test_cases(live_summary: str | None) -> int:
     ):
         check(f"...but {name} does NOT retry",
               not decide("o/r", "9", _fake({1: REAL_LOG_HEAD + "2026-10-09T17:51:46.0Z " + line + "\n"})).retry)
+    # ── the shared-rules gate: an unreadable sibling is infra; drift is not ──
+    sr_infra = REAL_LOG_HEAD + (
+        "2026-11-09T12:51:16.8829626Z ##[error]shared-rules: NO VERDICT — sibling AGENTS.md unreadable (infra): "
+        "Systemorph/MeshWeaver.Manufacturing: could not read Systemorph/MeshWeaver.Manufacturing/AGENTS.md: HTTP 404\n")
+    sr_drift = REAL_LOG_HEAD + (
+        "2026-11-09T12:51:16.8829626Z ##[error]Systemorph/MeshWeaver.Plugins: block 'rest-not-graphql' differs from the hub\n")
+    sr_consolidate = REAL_LOG_HEAD + (
+        "2026-11-09T12:55:00.0000000Z ##[error]The 'AGENTS.md shared rule blocks' gate concluded 'failure' — see that job\n")
+    check("an UNREADABLE sibling (infra NO VERDICT) retries, with Consolidate's echo of it",
+          decide("o/r", "9", _fake({1: sr_infra, 2: sr_consolidate})).retry)
+    check("…but real shared-rule DRIFT does not retry, even with Consolidate's echo",
+          not decide("o/r", "9", _fake({1: sr_drift, 2: sr_consolidate})).retry)
+    check("Consolidate's echo ALONE never retries",
+          not decide("o/r", "9", _fake({1: sr_consolidate})).retry)
     check("a CONSEQUENTIAL red ALONE never retries (it names no cause)",
           not decide("o/r", "9", _fake({1: consolidate})).retry)
     check("a CONSEQUENTIAL red beside a REAL red never retries",
