@@ -133,7 +133,7 @@ new TemplateColumnControl(Controls.Button("View"))
 A grid that declares no widths is laid out by its CONTENT. Nothing per page is needed:
 
 - **The grid fills its container's width.** Columns never stop short of the page.
-- **Every column is as wide as its content.** A text or template column is an `auto` track: as wide as its widest cell (or header) when the room exists, and the room left over is shared among these columns. A number, date or duration column (`PropertyColumnControl<int>`, `<decimal>`, `<DateTime>`, `<TimeSpan>`, …) is exactly its widest cell (`max-content`) and right-aligned.
+- **Every column is as wide as its content.** A text column is an `auto` track: as wide as its widest cell (or header) when the room exists, and the room left over is shared among the text columns. A number, date or duration column (`PropertyColumnControl<int>`, `<decimal>`, `<DateTime>`, `<TimeSpan>`, …) is exactly its widest cell (`max-content`) and right-aligned; a template column (row actions, badges) is `max-content` too. A grid with no text column gives every column `auto`, so it still fills its container.
 - **A text cell that has to ellipsize shows its full value as a tooltip.**
 - **On a narrow screen the grid scrolls horizontally inside its own box**; the page never overflows.
 - **A grid ends with spacing below it**, so the next heading never sits on its last row.
