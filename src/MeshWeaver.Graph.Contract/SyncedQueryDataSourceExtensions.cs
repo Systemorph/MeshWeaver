@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Reactive;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -370,21 +371,54 @@ public static class SyncedQueryDataSourceExtensions
     /// long as the view is open. That is the same permanent, signal-free stall #2377 fixed on the
     /// storage read paths, one layer up — and note it strands an EMPTY snapshot too, since even a
     /// zero-element sequence has to schedule its <c>OnCompleted</c>.</para>
+    ///
+    /// <para>🚨 <b>The NEWEST snapshot is always the last one emitted</b> — one filter at a time, and
+    /// every snapshot that arrives while one is in flight folds into ONE follow-up over the latest
+    /// (<see cref="MeshWeaver.Reactive.CoalesceWhileRunningExtensions.CoalesceWhileRunning{TTrigger, TResult}"/>).
+    /// Each snapshot is the WHOLE result set, so a filter's answer replaces the previous one; the
+    /// filter used to be a plain <c>SelectMany</c>, which emits each snapshot's answer whenever its
+    /// permission probes finish. A probe is slower on a cold permission fold than on a warm one, so
+    /// the first snapshot of a listing (cold) routinely finished AFTER the next one (warm): the stale
+    /// answer was emitted last, every <c>Replay(1)</c> consumer held it, and with no further write
+    /// under the query nothing ever corrected it — a node the reader may read stayed absent from
+    /// their listing for as long as the view was open, with no error and no log line. Measured in
+    /// Plugins <c>SyncedQueryTest.DeleteAccessAssignment_RemovesFromSyncedCollection</c>: the
+    /// 16-node Initial went in first, the 17-node frame second, and they came out 17 then 16. See
+    /// Doc/Architecture/SyncedMeshNodeQueries → "The per-user filter emits the newest snapshot
+    /// last".</para>
+    ///
+    /// <para>Not a <c>Switch</c>: dropping the in-flight filter for every newer snapshot never emits
+    /// at all while snapshots arrive faster than one filter completes — a busy listing on a cold
+    /// fold would stay blank. The coalesced follow-up always runs, after the last snapshot that
+    /// arrived, so the reader sees every in-flight answer in order and then the newest.</para>
     /// </summary>
     /// <param name="upstream">The System-loaded snapshots to filter.</param>
     /// <param name="canRead">Whether the subscriber may Read the given node.</param>
-    /// <returns>The same stream, with each snapshot narrowed to the readable nodes.</returns>
+    /// <returns>The same stream, with each snapshot narrowed to the readable nodes, in order, the
+    /// newest snapshot's answer last.</returns>
     internal static IObservable<IEnumerable<MeshNode>> FilterByReadPermission(
         IObservable<IEnumerable<MeshNode>> upstream,
         Func<MeshNode, IObservable<bool>> canRead) =>
-        upstream.SelectMany(snapshot =>
-            snapshot.ToInlineObservable()
-                .SelectMany(node => canRead(node)
-                    .Take(1)
-                    .Where(hasPerm => hasPerm)
-                    .Select(_ => node))
-                .ToList()
-                .Select(filtered => (IEnumerable<MeshNode>)filtered));
+        Observable.Defer(() =>
+        {
+            // Per SUBSCRIPTION: the snapshot the next filter run reads. Written before the trigger it
+            // rides on is handled, so a run always starts over the newest snapshot delivered so far.
+            IEnumerable<MeshNode> latest = Array.Empty<MeshNode>();
+            return upstream
+                .Do(snapshot => Volatile.Write(ref latest, snapshot))
+                .CoalesceWhileRunning(() => FilterSnapshot(Volatile.Read(ref latest), canRead));
+        });
+
+    // One snapshot through the probe: the subset Read is granted on, as one list.
+    private static IObservable<IEnumerable<MeshNode>> FilterSnapshot(
+        IEnumerable<MeshNode> snapshot, Func<MeshNode, IObservable<bool>> canRead) =>
+        snapshot.ToInlineObservable()
+            .SelectMany(node => canRead(node)
+                .Take(1)
+                .Where(hasPerm => hasPerm)
+                .Select(_ => node))
+            .ToList()
+            .Select(filtered => (IEnumerable<MeshNode>)filtered);
 }
 
 /// <summary>

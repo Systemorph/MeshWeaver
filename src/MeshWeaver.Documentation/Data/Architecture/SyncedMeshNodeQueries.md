@@ -182,6 +182,14 @@ nodeType filter, varying namespaces and scopes. See [ModelProviders.md](/Doc/Arc
 
 > **NEVER issue a partition-scoped `GetQuery` from a server-side `LayoutAreaHost.Hub`** (a per-node layout hub). That hub's `AccessContext` is the **hub principal**, not the user, so per-user RLS strips the `{user}`/`{space}` namespaces (the combobox renders **empty**) AND the cross-partition subscribe under a denied identity **storms the portal into a wedge**. This was a 2026-06-17 production-portal outage: a server-side agent combobox in `ThreadComposerView` injected `namespace:{user}/Agent|{space}/Agent|Agent` from the composer-node layout hub. The fix: drive selection from the GUI (`ThreadChatView.OpenPicker` on the portal hub) and from the engine (`AgentChatClient` on the thread hub) — both context-local. A **public** query (`namespace:Agent`, `namespace:Skill`) is exempt — it has no partition-scoped namespace to gate, so it is safe from any hub.
 
+### 🚨 The per-user filter emits the newest snapshot last
+
+Every frame the shared upstream emits is the WHOLE result set, so for a `Replay(1)` consumer the last frame out IS the listing. The per-user filter (`FilterByReadPermission`) runs one `Read` probe per node per frame, and a probe answers at the speed of the permission fold behind it — slow when the fold is cold, fast once it is warm. So the filter runs **one frame at a time**, and every frame that arrives while one is in flight folds into **one follow-up over the latest** (`CoalesceWhileRunning`): answers come out in upstream order, and the newest frame's answer always comes out last.
+
+It used to be a plain `SelectMany`, which emits each frame's answer whenever *its* probes finish. A listing's first frame (cold fold) routinely finished after the next one (warm fold), so the stale set came out last, every `Replay(1)` consumer held it, and — with no further write under the query to move it — a node the reader may read stayed absent from their listing for as long as the view was open. Nothing errored and nothing logged. It surfaced as an intermittent Plugins test red, `SyncedQueryTest.DeleteAccessAssignment_RemovesFromSyncedCollection`: a 16-node Initial went in, a 17-node frame went in, they came out 17 then 16, and the test waited 15 s for a node the upstream had already delivered. The forced interleaving is pinned in core by `SyncedQueryRlsSnapshotOrderTest` (the first probe is held open, every later one answers at once — red on the `SelectMany`, green on the coalesced filter).
+
+It is deliberately not a `Switch`: dropping the in-flight frame for every newer one never emits at all while frames arrive faster than one filter completes, so a busy listing on a cold fold would stay blank. The coalesced follow-up always runs, after the last frame that arrived.
+
 ---
 
 ## Caching by id
