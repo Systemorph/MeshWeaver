@@ -435,6 +435,18 @@ public sealed class BootProgress : IDisposable
             }).ToImmutableList(),
         });
 
+    /// <summary>Takes back one failed unit of a phase that is about to RETRY it, so the retry's own
+    /// step is not counted twice.</summary>
+    public void PhaseRetrying(string id) =>
+        Update(s => s with
+        {
+            Phases = s.Phases.Select(p => p.Id != id ? p : p with
+            {
+                Done = Math.Max(0, (p.Done ?? 0) - 1),
+                Failed = Math.Max(0, (p.Failed ?? 0) - 1),
+            }).ToImmutableList(),
+        });
+
     /// <summary>Ends a phase in <paramref name="stateValue"/> (one of <see cref="BootStepStates"/>).</summary>
     public void PhaseEnded(string id, string stateValue, string? detail = null) =>
         Update(s => s with
@@ -483,6 +495,16 @@ public sealed class BootProgress : IDisposable
         if (error is not null && stateValue == BootModuleStates.Failed)
             Error($"{package}: {error}");
     }
+
+    /// <summary>Ends every module still queued or running as failed with <paramref name="reason"/> —
+    /// for a phase that faulted and will not decide them, so no row stays "running" for ever.</summary>
+    public void ModulesAbandoned(string reason) =>
+        Update(s => s with
+        {
+            Modules = s.Modules.Select(m => m.State is BootModuleStates.Queued or BootModuleStates.Running
+                ? m with { State = BootModuleStates.Failed, EndedAt = clock.GetUtcNow(), Error = reason }
+                : m).ToImmutableList(),
+        });
 
     /// <summary>Names an error of this boot.</summary>
     public void Error(string message) =>

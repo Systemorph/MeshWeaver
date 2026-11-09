@@ -75,13 +75,18 @@ registry's fixed per-request latency dominates, so landing ~48 modules back to b
    `PackageDependencyGraph.DependencyLevels` over the WHOLE selection, each level a barrier, and up to
    `PluginCatalog:ModuleLandingConcurrency` modules at once within a level (default 4, clamped to
    1…16, where 1 restores the old behaviour). The volume writes still serialise on
-   `ModuleLandingService`'s own cap-1 lane.
+   `ModuleLandingService`'s own cap-1 lane. The levels honour every DECLARED `requires`. A module
+   whose link probe needs a sibling its package never declared used to land only because the
+   one-at-a-time order happened to put that sibling first, so every fresh module the wave could not
+   land is retried ONCE, one at a time, after every level has landed. A registry 503 gets its second
+   chance there too.
 2. **Every module-only bundle downloaded twice.** The node install's `PluginBundleClient.Adopt`
    downloaded the same bundle again only to log "declares no NodeTypes". For example, AzureFoundry
-   (22,988,649 bytes) took 22.0 s, then 22.4 s. `BundleOfferingMemo` now remembers, for 30 minutes,
-   what the module landing read (registry, package, version, and that the bundle declares nothing to
-   adopt). `Adopt` answers from the memo without a request. A bundle that states a miss or carries
-   NodeType assemblies is downloaded as before. `AModuleOnlyBundleIsDownloadedOncePerPassTest` pins
+   (22,988,649 bytes) took 22.0 s, then 22.4 s. `BundleOfferingMemo` now remembers, for 10 minutes
+   (one pass), what the module landing read. The key is the registry, package, version and the
+   index's per-bundle module identity, so a rebuild re-advertised under the same version is a
+   different key. `Adopt` answers from the memo without a request. A bundle that states a miss or
+   carries NodeType assemblies is never remembered and is downloaded as before. `AModuleOnlyBundleIsDownloadedOncePerPassTest` pins
    both directions.
 
 ## Not established

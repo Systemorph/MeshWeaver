@@ -2605,7 +2605,9 @@ public sealed class InstanceAutoRegistrationService(
         if (carriers.Count == 0 || persistence is null)
         {
             hub.ServiceProvider.GetService<BootProgress>()?.PhaseEnded(BootPhaseIds.Modules, BootStepStates.Skipped,
-                "no selected package carries a module");
+                carriers.Count == 0
+                    ? "no selected package carries a module"
+                    : "this host has no storage adapter to read install records with, so no module lands ahead of its content");
             return Observable.Return((ImmutableList<string>.Empty, none, none, false));
         }
 
@@ -2715,16 +2717,23 @@ public sealed class InstanceAutoRegistrationService(
             hub.ServiceProvider.GetService<PluginCatalogOptions>()?.ModuleLandingConcurrency
                 ?? PluginCatalogOptions.DefaultModuleLandingConcurrency, 1, 16);
         var progress = hub.ServiceProvider.GetService<BootProgress>();
-        progress?.ModulesPlanned(carriers.Select(x => new BootModuleStep(x.Candidate.Package.Id, x.Candidate.Package.Module!)
+        // The carriers with their module and bundle client stated as non-null — the filter above
+        // guarantees both, and this says so once instead of forgiving it at every use.
+        var wave = carriers
+            .SelectMany(x => x.Candidate.Package.Module is { Length: > 0 } module && x.Bundles is { } bundles
+                ? new[] { (x.Candidate, Bundles: bundles, Module: module) }
+                : [])
+            .ToList();
+        progress?.ModulesPlanned(wave.Select(x => new BootModuleStep(x.Candidate.Package.Id, x.Module)
         {
             Level = levels.GetValueOrDefault(x.Candidate.Package.Id),
         }));
         progress?.PhaseStarted(BootPhaseIds.Modules, "Landing modules",
-            $"{carriers.Count} module(s) in {carriers.Select(x => levels.GetValueOrDefault(x.Candidate.Package.Id)).Distinct().Count()} "
-            + $"dependency level(s), up to {degree} at once", carriers.Count, degree);
+            $"{wave.Count} module(s) in {wave.Select(x => levels.GetValueOrDefault(x.Candidate.Package.Id)).Distinct().Count()} "
+            + $"dependency level(s), up to {degree} at once", wave.Count, degree);
 
         IObservable<(bool Fresh, string? Landed, string? Blocked, string Module)> Measured(
-            InstallCandidate candidate, PluginBundleClient bundles) =>
+            InstallCandidate candidate, PluginBundleClient bundles, string module) =>
             Observable.Defer(() =>
                 {
                     progress?.ModuleStarted(candidate.Package.Id);
@@ -2740,12 +2749,39 @@ public sealed class InstanceAutoRegistrationService(
                         error: state == BootModuleStates.Failed ? "did not land — the content phase decides the package" : null);
                     progress?.PhaseStep(BootPhaseIds.Modules, failed: state == BootModuleStates.Failed);
                 })
-                .Select(o => (o.Fresh, o.Landed, o.Blocked, Module: candidate.Package.Module!));
+                .Select(o => (o.Fresh, o.Landed, o.Blocked, Module: module));
+
+        // 🚨 ONE sequential retry of every fresh carrier the wave could not land. The levels honour
+        // every DECLARED `requires`; a module whose link probe needs a sibling its package never
+        // declared used to land only because the one-at-a-time order happened to put that sibling
+        // first. In a wave it can race the sibling and be refused — so once every level has landed,
+        // the refused ones go again, one at a time, against everything that did land. A registry
+        // that answered 503 gets its second chance here too.
+        IObservable<IList<(bool Fresh, string? Landed, string? Blocked, string Module)>> RetryRefused(
+            IList<(bool Fresh, string? Landed, string? Blocked, string Module)> first)
+        {
+            var again = wave.Where(x => first.Any(o => o.Module == x.Module && o.Fresh && o.Blocked is not null)).ToList();
+            if (again.Count == 0)
+                return Observable.Return(first);
+            logger.LogInformation(
+                "[DefaultInstall] module phase: {Count} module(s) did not land in the wave — retrying them one at a "
+                + "time now that every level has landed: [{Modules}]", again.Count, string.Join(", ", again.Select(x => x.Module)));
+            var retried = again.Select(x => x.Module).ToImmutableHashSet(StringComparer.Ordinal);
+            return again.Select(x => Observable.Defer(() =>
+                    {
+                        progress?.PhaseRetrying(BootPhaseIds.Modules);
+                        return Measured(x.Candidate, x.Bundles, x.Module);
+                    }))
+                .Concat().ToList()
+                .Select(second => (IList<(bool Fresh, string? Landed, string? Blocked, string Module)>)
+                    first.Where(o => !retried.Contains(o.Module)).Concat(second).ToList());
+        }
 
         return accessService.RunAsSystem(() => LevelledWave.Run(
-                    carriers, x => levels.GetValueOrDefault(x.Candidate.Package.Id), degree,
-                    x => Measured(x.Candidate, x.Bundles!))
+                    wave, x => levels.GetValueOrDefault(x.Candidate.Package.Id), degree,
+                    x => Measured(x.Candidate, x.Bundles, x.Module))
                 .ToList()
+                .SelectMany(RetryRefused)
                 .Do(outcomes => progress?.PhaseEnded(BootPhaseIds.Modules,
                     outcomes.Any(o => o.Blocked is not null) ? BootStepStates.Failed : BootStepStates.Done,
                     $"{outcomes.Count(o => o.Landed is not null)} landed, "
@@ -2781,6 +2817,7 @@ public sealed class InstanceAutoRegistrationService(
                 }))
             .Catch((Exception ex) =>
             {
+                progress?.ModulesAbandoned($"the module phase faulted: {ex.Message}");
                 progress?.PhaseEnded(BootPhaseIds.Modules, BootStepStates.Failed, $"the module phase faulted: {ex.Message}");
                 progress?.Error($"module phase: {ex.Message}");
                 logger.LogError(ex,

@@ -419,7 +419,7 @@ public sealed class PluginBundleClient
                 // once to land its module, once more here to learn "declares no NodeTypes" — e.g.
                 // AzureFoundry, 22,988,649 bytes, 22.0 s and again 22.4 s. Same request (this
                 // process's identity and architecture, the same version), same answer.
-                if (_offerings?.NothingToAdopt(_registryUrl, pluginId, bundle.Version) is { } offering)
+                if (_offerings?.NothingToAdopt(_registryUrl, pluginId, bundle.Version, bundle.FrameworkMvid) is { } offering)
                 {
                     _logger?.LogInformation(
                         "Bundle for {Plugin}@{Version} declares no NodeTypes ({Offering}) — known from "
@@ -931,7 +931,7 @@ public sealed class PluginBundleClient
                 // a manifest this lane does not decline, no stated miss, no NodeType assembly.
                 if (PrebuiltAssemblySeeder.DeclineReason(manifest?.FrameworkMvid) is null
                     && BundleReader.DeclaresNothingToAdopt(manifest))
-                    _offerings?.Remember(_registryUrl, pluginId, version, BundleOffering.OfferingOf(manifest));
+                    _offerings?.Remember(_registryUrl, pluginId, version, advertisedFrameworkMvid, BundleOffering.OfferingOf(manifest));
 
                 // 🚨 #3648 — ADVISORY, not a refusal. "Module bundle for {Plugin} DECLINED:
                 // {Reason} — nothing landed" stood here and returned 0; on 2026-09-07 it declined

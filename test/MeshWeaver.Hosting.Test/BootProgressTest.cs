@@ -189,6 +189,28 @@ public class BootProgressTest
     }
 
     [Fact]
+    public void AFaultedPhaseSettlesEveryRowItWillNotDecide_AndARetryIsNotCountedTwice()
+    {
+        using var progress = new BootProgress();
+        progress.ModulesPlanned([new BootModuleStep("A", "M.A"), new BootModuleStep("B", "M.B"), new BootModuleStep("C", "M.C")]);
+        progress.PhaseStarted(BootPhaseIds.Modules, "Landing modules", total: 3);
+        progress.ModuleStarted("A");
+        progress.ModuleEnded("A", BootModuleStates.Failed, error: "refused");
+        progress.PhaseStep(BootPhaseIds.Modules, failed: true);
+        progress.PhaseRetrying(BootPhaseIds.Modules);
+        progress.ModuleEnded("A", BootModuleStates.Landed);
+        progress.PhaseStep(BootPhaseIds.Modules);
+        var phase = progress.Current.Phase(BootPhaseIds.Modules)!;
+        Assert.Equal((1, 0), (phase.Done, phase.Failed));
+
+        progress.ModuleStarted("B");
+        progress.ModulesAbandoned("the module phase faulted: boom");
+        Assert.Equal([BootModuleStates.Landed, BootModuleStates.Failed, BootModuleStates.Failed],
+            progress.Current.Modules.Select(m => m.State));
+        Assert.All(progress.Current.Modules.Skip(1), m => Assert.Equal("the module phase faulted: boom", m.Error));
+    }
+
+    [Fact]
     public void ErrorsAreBounded()
     {
         using var progress = new BootProgress();
@@ -257,17 +279,18 @@ public class BootProgressTest
     // ── The download memo ───────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void AModuleOnlyBundleIsRememberedForItsVersionAndRegistryOnlyAndOnlyForAWhile()
+    public void AModuleOnlyBundleIsRememberedForItsVersionIdentityAndRegistryOnlyAndOnlyForAWhile()
     {
         var clock = new ManualClock(T0);
         var memo = new BundleOfferingMemo(clock);
-        memo.Remember("https://memex.meshweaver.cloud/", "Mcp", "1.7.14", "module 'MeshWeaver.Mcp'");
+        memo.Remember("https://memex.meshweaver.cloud/", "Mcp", "1.7.14", "c003e001", "module 'MeshWeaver.Mcp'");
 
-        Assert.Equal("module 'MeshWeaver.Mcp'", memo.NothingToAdopt("https://memex.meshweaver.cloud", "mcp", "1.7.14"));
-        Assert.Null(memo.NothingToAdopt("https://memex.meshweaver.cloud", "Mcp", "1.7.15"));
-        Assert.Null(memo.NothingToAdopt("https://other.example.com", "Mcp", "1.7.14"));
+        Assert.Equal("module 'MeshWeaver.Mcp'", memo.NothingToAdopt("https://memex.meshweaver.cloud", "mcp", "1.7.14", "c003e001"));
+        Assert.Null(memo.NothingToAdopt("https://memex.meshweaver.cloud", "Mcp", "1.7.15", "c003e001"));
+        Assert.Null(memo.NothingToAdopt("https://memex.meshweaver.cloud", "Mcp", "1.7.14", "a260bb2a")); // a rebuild under the same version
+        Assert.Null(memo.NothingToAdopt("https://other.example.com", "Mcp", "1.7.14", "c003e001"));
         clock.Now = T0 + BundleOfferingMemo.Lifetime;
-        Assert.Null(memo.NothingToAdopt("https://memex.meshweaver.cloud", "Mcp", "1.7.14"));
+        Assert.Null(memo.NothingToAdopt("https://memex.meshweaver.cloud", "Mcp", "1.7.14", "c003e001"));
     }
 
     [Fact]
