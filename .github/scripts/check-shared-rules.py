@@ -169,31 +169,64 @@ def word_diff(hub_text: str, spoke_text: str, hub_label: str, spoke_label: str) 
 # ───────────────────────────────────── fetching ──────────────────────────────────────────
 
 
-def fetch_agents_md(repo: str, token: str | None, urlopen=None, sleep=None, clock=None) -> str:
+# 🚨 A SIBLING THAT CANNOT BE READ IS INFRA, NOT DRIFT. Measured on core PRs #8040 (run 42584371667,
+# Education + Reinsurance) and #8050 (run 42620429389, Manufacturing): the App token's read of a
+# sibling's AGENTS.md answered 404 once, a different repo each time, while main passed minutes before
+# and after — and the re-run passed. A 404 is therefore retried RETRY_404 times with backoff before it
+# counts; what still cannot be read is reported under INFRA_PREFIX (a NO VERDICT, fail closed — the
+# gate never passes on evidence it does not have) and the drift comparison is NOT run on the partial
+# set, so no "drift" line is ever printed for a repo that was simply not read. The re-run lane
+# (retry-known-transients.py) recognises INFRA_PREFIX by name.
+INFRA_PREFIX = "shared-rules: NO VERDICT — sibling AGENTS.md unreadable (infra)"
+RETRY_404 = 3
+RETRY_BACKOFF_S = (2, 6, 18)
+
+
+class Unreadable(Problem):
+    """A sibling's AGENTS.md could not be read after the retries — infra, never a drift verdict."""
+
+
+class Refused(Problem):
+    """A PERMANENT refusal (401/403): deterministic, so never under the INFRA label the re-run lane retries."""
+
+
+def fetch_agents_md(repo: str, token: str | None, urlopen=None, sleep=None, clock=None, reader=None) -> str:
     """Read a repo's AGENTS.md from its default branch. Any failure is fatal, never a pass — and an
     OUTAGE (rate limit, 5xx, no connection past the shared budget) says NO VERDICT, never that the
-    token "lacks contents:read (or is rate-limited)" (MeshWeaver#7448)."""
-    reader = _github_reader()
+    token "lacks contents:read (or is rate-limited)" (MeshWeaver#7448). A 404 is retried RETRY_404
+    times with backoff (see INFRA_PREFIX); 401/403 are permanent and are not."""
+    reader = reader or _github_reader()
     kwargs = {k: v for k, v in (("urlopen", urlopen), ("sleep", sleep), ("clock", clock)) if v is not None}
-    try:
-        return reader.api_get(f"repos/{repo}/contents/{AGENTS_FILE}", token=token,
-                              accept="application/vnd.github.raw", raw=True,
-                              user_agent="meshweaver-shared-rules-gate", **kwargs)
-    except reader.ApiUnavailable as e:
-        raise Problem(f"could not read {repo}/{AGENTS_FILE}: {e.sentence()}") from e
-    except reader.ApiRefused as e:
-        code = str(e).split()[1] if len(str(e).split()) > 1 else "?"
-        hint = {
-            "401": "the token is invalid or expired",
-            "403": "the token is valid but lacks contents:read on this repo (a plain refusal, not a rate limit)",
-            "404": "the repo, the branch or AGENTS.md does not exist — OR the token cannot see a "
-                   "private repo, which GitHub reports as 404 rather than 403",
-        }.get(code, "unexpected status")
-        raise Problem(
-            f"could not read {repo}/{AGENTS_FILE}: HTTP {code} ({hint}). This gate compares "
-            f"what the repos actually contain, so an unreadable repo is a FAILURE — reporting "
-            f"'no drift' here would be reporting on evidence we do not have."
-        ) from e
+    pause = sleep or __import__("time").sleep
+    attempt = 0
+    while True:
+        try:
+            return reader.api_get(f"repos/{repo}/contents/{AGENTS_FILE}", token=token,
+                                  accept="application/vnd.github.raw", raw=True,
+                                  user_agent="meshweaver-shared-rules-gate", **kwargs)
+        except reader.ApiRefused as e:
+            code = str(e).split()[1] if len(str(e).split()) > 1 else "?"
+            if code == "404" and attempt < RETRY_404:
+                pause(RETRY_BACKOFF_S[min(attempt, len(RETRY_BACKOFF_S) - 1)])
+                attempt += 1
+                continue
+            refused = e
+            break
+        except reader.ApiUnavailable as e:
+            raise Unreadable(f"could not read {repo}/{AGENTS_FILE}: {e.sentence()}") from e
+    code = str(refused).split()[1] if len(str(refused).split()) > 1 else "?"
+    hint = {
+        "401": "the token is invalid or expired",
+        "403": "the token is valid but lacks contents:read on this repo (a plain refusal, not a rate limit)",
+        "404": "the repo, the branch or AGENTS.md does not exist — OR the token cannot see a "
+               "private repo, which GitHub reports as 404 rather than 403",
+    }.get(code, "unexpected status")
+    raise (Unreadable if code == "404" else Refused)(
+        f"could not read {repo}/{AGENTS_FILE}: HTTP {code} ({hint})"
+        f"{f' — after {RETRY_404} retries' if code == '404' else ''}. This gate compares "
+        f"what the repos actually contain, so an unreadable repo is a FAILURE — reporting "
+        f"'no drift' here would be reporting on evidence we do not have."
+    ) from refused
 
 
 def _github_reader():
@@ -436,6 +469,77 @@ def self_test() -> int:
         if not ok:
             bad += 1
 
+    # ── a 404 is retried, and what stays unreadable is INFRA, never drift ──
+    class _Refused(Exception):
+        pass
+
+    class _Unavailable(Exception):
+        def sentence(self):
+            return "the API was unavailable"
+
+    def fake_reader(answers):
+        calls = []
+
+        class R:
+            ApiRefused = _Refused
+            ApiUnavailable = _Unavailable
+
+            @staticmethod
+            def api_get(path, **_):
+                calls.append(path)
+                a = answers[min(len(calls) - 1, len(answers) - 1)]
+                if isinstance(a, Exception):
+                    raise a
+                return a
+        return R, calls
+
+    slept: list[float] = []
+    r, calls = fake_reader([_Refused("HTTP 404 x"), _Refused("HTTP 404 x"), "TEXT"])
+    got = fetch_agents_md("o/x", None, sleep=slept.append, reader=r)
+    for name, ok in [
+        ("a transient 404 is retried and the read then succeeds", got == "TEXT" and len(calls) == 3),
+        ("…with backoff between the attempts", slept == [RETRY_BACKOFF_S[0], RETRY_BACKOFF_S[1]]),
+    ]:
+        print(f"  [{'ok' if ok else 'WRONG':5}] {name}")
+        bad += 0 if ok else 1
+    r, calls = fake_reader([_Refused("HTTP 404 x")])
+    try:
+        fetch_agents_md("o/x", None, sleep=lambda s: None, reader=r)
+        raised = None
+    except Problem as e:
+        raised = e
+    ok = isinstance(raised, Unreadable) and len(calls) == RETRY_404 + 1 and "after 3 retries" in str(raised)
+    print(f"  [{'ok' if ok else 'WRONG':5}] a persistent 404 is UNREADABLE (infra) after {RETRY_404} retries, never drift")
+    bad += 0 if ok else 1
+    r, calls = fake_reader([_Refused("HTTP 403 x")])
+    try:
+        fetch_agents_md("o/x", None, sleep=lambda s: None, reader=r)
+        raised = None
+    except Problem as e:
+        raised = e
+    ok = isinstance(raised, Refused) and not isinstance(raised, Unreadable) and len(calls) == 1
+    print(f"  [{'ok' if ok else 'WRONG':5}] a 403 (a plain refusal) is not retried and is NOT under the infra label")
+    bad += 0 if ok else 1
+    import contextlib
+    import io
+    buf = io.StringIO()
+    import tempfile
+    saved_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["GITHUB_STEP_SUMMARY"] = str(Path(tmp) / "summary.md")   # never the live job summary
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = report_unreadable(["o/x: could not read o/x/AGENTS.md: HTTP 404 (…)"], 3)
+        finally:
+            if saved_summary is None:
+                os.environ.pop("GITHUB_STEP_SUMMARY", None)
+            else:
+                os.environ["GITHUB_STEP_SUMMARY"] = saved_summary
+    out = buf.getvalue()
+    ok = rc == 1 and f"::error::{INFRA_PREFIX}: o/x" in out and "drift" not in out.split("NO drift verdict")[-1].lower()
+    print(f"  [{'ok' if ok else 'WRONG':5}] an unreadable sibling is reported under the INFRA label, fails closed, and no drift line is printed")
+    bad += 0 if ok else 1
+
     # The hub itself must be checkable.
     failures, _ = run({"o/spoke": _HUB}, _MANIFEST)
     ok = bool(failures)
@@ -447,8 +551,23 @@ def self_test() -> int:
         print(f"\n::error::{bad} self-test case(s) behaved wrongly — this gate's verdict on the "
               f"real tree cannot be trusted until they pass.")
         return 1
-    print(f"\nSelf-test: {len(cases) + 4} cases, all correct.")
+    print(f"\nSelf-test: {len(cases) + 9} cases, all correct.")
     return 0
+
+
+def report_unreadable(unreadable: list[str], total: int) -> int:
+    """NO VERDICT: print each unreadable sibling under INFRA_PREFIX and run NO drift comparison."""
+    print(f"⚠ {len(unreadable)} of {total} repo(s) could not be read — NO drift verdict is given on a "
+          f"partial set (a missing repo would read as every block missing there).\n")
+    for u in unreadable:
+        print(f"::error::{INFRA_PREFIX}: {u.splitlines()[0]}")
+    summary = Path(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull))
+    with summary.open("a", encoding="utf-8") as fh:
+        fh.write("### ⚠ Shared rule blocks — NO VERDICT (infra)\n\n")
+        for u in unreadable:
+            fh.write(f"- {u.splitlines()[0]}\n")
+        fh.write("\nNot drift: these siblings could not be READ (after retries). Re-run the job.\n")
+    return 1
 
 
 def unregistered_local(local: dict[str, Path], repos: list[str]) -> list[str]:
@@ -506,6 +625,7 @@ def main() -> int:
 
     sources: dict[str, str] = {}
     read_failures: list[str] = []
+    unreadable: list[str] = []
     for repo in repos:
         try:
             if repo in local:
@@ -517,10 +637,16 @@ def main() -> int:
             else:
                 sources[repo] = fetch_agents_md(repo, token)
                 print(f"  {repo:38} <- github.com (default branch)")
+        except Unreadable as e:
+            unreadable.append(f"{repo}: {e}")
         except Problem as e:
             read_failures.append(f"{repo}: {e}")
 
     print()
+    if unreadable:
+        for f in read_failures:   # a non-infra failure of the same run is still named, not dropped
+            print(f"::error::{f.splitlines()[0]}")
+        return report_unreadable(unreadable, len(repos))
     failures: list[str] = []
     report: list[str] = []
     if read_failures:
