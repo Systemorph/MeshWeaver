@@ -126,16 +126,31 @@ new TemplateColumnControl(Controls.Button("View"))
 | `WithEmptyContent(control)` | Content shown when the dataset is empty | — |
 | `WithLoading(bool)` | Show loading skeleton | `false` |
 | `WithGenerateHeader(string)` | Header generation strategy (`"Sticky"`, etc.) | `"Sticky"` |
+| `WithAutoFit(bool)` | Measure the cells once in the browser and pin their pixel widths (legacy) | `false` |
+
+## Default layout — readable without tuning
+
+A grid that declares no widths is laid out by its CONTENT. Nothing per page is needed:
+
+- **The grid fills its container's width.** Columns never stop short of the page.
+- **Every column is as wide as its content.** A text or template column is an `auto` track: as wide as its widest cell (or header) when the room exists, and the room left over is shared among these columns. A number, date or duration column (`PropertyColumnControl<int>`, `<decimal>`, `<DateTime>`, `<TimeSpan>`, …) is exactly its widest cell (`max-content`) and right-aligned.
+- **A text cell that has to ellipsize shows its full value as a tooltip.**
+- **On a narrow screen the grid scrolls horizontally inside its own box**; the page never overflows.
+- **A grid ends with spacing below it**, so the next heading never sits on its last row.
+
+Override per column with `WithWidth("…")` / `WithAlign("…")`, or for the whole grid with `WithGridTemplateColumns("…")` (which then replaces every per-column default — Fluent refuses a template and column widths together).
+
+> 🚨 `WithAutoFit()` used to be the renderer's DEFAULT. It measured the cells once in JavaScript after a render and pinned the measured pixel widths; measured before the rows had arrived (they bind a turn after the first render), it pinned header-sized columns, and every later measurement read back the pinned tracks — the fleet monitor showed `Hosting/…` and `🟢 Drai…` in a grid that ended short of the page. It is now off unless a grid asks for it.
 
 ## Column options (all column types)
 
 | Method | Purpose | Default |
 |---|---|---|
 | `WithTitle(string)` | Column header text | — |
-| `WithWidth(string)` | Fixed CSS width | — |
+| `WithWidth(string)` | CSS width or grid track (`"96px"`, `"2fr"`, `"auto"`) — overrides the default below | content-sized |
 | `WithMinWidth(string)` | Minimum CSS width | — |
 | `WithMaxWidth(string)` | Maximum CSS width | — |
-| `WithAlign(string)` | Cell alignment (`start`, `center`, `end`) | — |
+| `WithAlign(string)` | Cell alignment (`start`, `center`, `end`) | `end` for numbers, dates and durations; else `start` |
 | `WithSortable(bool)` | Enable column sorting | `true` |
 | `WithResizable(bool)` | Enable column resizing | `true` |
 | `WithVisible(bool)` | Show or hide the column | `true` |
