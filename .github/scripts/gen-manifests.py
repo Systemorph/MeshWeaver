@@ -797,8 +797,11 @@ def _tag_annotated_content(root: Path, tag: str) -> str | None:
     tag-modules.py writes every tag it cuts as `<Module> <version> (content <hash>)`, labelled with
     the content it RELEASED — and reads its own claims annotation-first (`tagged_content_hash`).
     """
-    out = git(root, ["for-each-ref", f"refs/tags/{tag}", "--format=%(contents)"])
-    claimed = ANNOTATED_CONTENT.search(out or "")
+    out = git(root, ["for-each-ref", f"refs/tags/{tag}", "--format=%(objecttype)%00%(contents)"])
+    kind, _, contents = (out or "").partition("\0")
+    if kind.strip() != "tag":
+        return None       # a LIGHTWEIGHT tag: %(contents) is the commit's message, not a claim
+    claimed = ANNOTATED_CONTENT.search(contents)
     return claimed.group(1) if claimed else None
 
 
@@ -2630,7 +2633,9 @@ def _self_test_first_claim_tag(repo: Path) -> list[str]:
         if got != want:
             failures.append(f"first-claim tag — {name}: expected {want}, derived {got} ({basis})")
 
-    # The fallback still holds: an UN-annotated (lightweight) tag is read by its committed lock.
+    # The fallback still holds: an UN-annotated (lightweight) tag is read by its committed lock —
+    # even when the COMMIT it points at carries a `(content …)` line (%(contents) would return it).
+    g("commit", "-q", "--allow-empty", "-m", "settle: Mod 1.51.5 (content X)")
     g("tag", "Mod/v1.51.6", "HEAD")
     for name, content, want in [("lightweight tag, its lock's tree N", "N", "1.51.6"),
                                 ("lightweight tag, another tree M", "M", "1.51.7")]:
