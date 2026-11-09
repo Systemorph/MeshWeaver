@@ -2530,6 +2530,18 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-bundle-static-assets.py --self-test
 
+    # The module-pack lane's two size guards (Plugins main run 42641639266: Gmail and Mail packed at
+    # ~33.4 MB, refused by the registry with 413). The first stops a dependent bundle re-shipping
+    # the modules its package REQUIRES — what their own contexts serve; the second measures every
+    # bundle against the registry's declared bound where it is made. Both run in every satellite's
+    # pack lane, so they are proven here, where core owns them.
+    - name: "A bundle does not re-ship what a required module serves (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/module-required-closure.py --self-test
+    - name: "A bundle over the registry's upload bound is caught where it is packed (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-module-bundle-size.py --self-test
+
     # Two source files importing to ONE node path (`X.md` + `X.json`, `X.md` + `X/index.json`,
     # case-folded) are silently last-writer-wins at import. Every node repo's validate lane fetches
     # this guard from here, so it is proven here; and core's own trees are held to it. Both trees
