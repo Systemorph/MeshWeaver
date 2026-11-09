@@ -44,6 +44,24 @@ public sealed class PluginCatalogOptions
     public List<PluginRegistryReference> Registries { get; set; } = [];
 
     /// <summary>
+    /// How many modules the default install's module phase downloads and lands AT ONCE within one
+    /// dependency level (<c>PluginCatalog:ModuleLandingConcurrency</c>, default
+    /// <see cref="DefaultModuleLandingConcurrency"/>, clamped to 1…16 — the HTTP pool's cap).
+    ///
+    /// <para>Why not one at a time: a bundle download is dominated by the registry's fixed
+    /// per-request latency, not by its size — measured 2026-11-09 on a local Mac instance,
+    /// 1.2 KB took 6.7 s, 28 KB 13.2 s, 19 MB 19 s — so a fresh instance's ~48 modules cost
+    /// ~14 minutes back to back. A level is still a barrier (a module is link-probed against the
+    /// modules already landed, so a dependency lands first), and the landing writes themselves
+    /// still serialise on <see cref="ModuleLandingService"/>'s own lane. 1 restores the sequential
+    /// behaviour.</para>
+    /// </summary>
+    public int ModuleLandingConcurrency { get; set; } = DefaultModuleLandingConcurrency;
+
+    /// <summary>The default of <see cref="ModuleLandingConcurrency"/>.</summary>
+    public const int DefaultModuleLandingConcurrency = 4;
+
+    /// <summary>
     /// The deployment's DEFAULT auto-update policy, consulted ONLY at install time: a fresh install
     /// record is seeded with <c>AutoUpdate = AutoUpdateByDefault</c>. Defaults to <c>false</c> —
     /// the platform default is EXPLICIT OPT-IN, so an installation that configures nothing gets
