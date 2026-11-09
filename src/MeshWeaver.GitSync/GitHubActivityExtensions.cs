@@ -502,7 +502,7 @@ public static class GitHubActivityExtensions
         return HoldSpaceDuringImport(hub, spacePath,
             $"GitSync: an unattended import is writing '{spacePath}' at the built commit {shortSha}",
             TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "update", requiresCommitAuthority: false,
-            () => hub.RunActivity(spacePath, ActivityCategory.Import,
+            () => ForgetANoOpAttempt(hub, spacePath, concluded => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         $"Update {spacePath} to the built commit {shortSha}", LogLevel.Information)
                     .WithKey("activity.gitsync.updateToProvenCommit.title",
@@ -521,9 +521,10 @@ public static class GitHubActivityExtensions
                             if (r.PrunedPaths.Count > 0)
                                 ctx.Log(PrunedLine(r));
                             LogImportOutcome(ctx, r, commitish: shortSha);
+                            concluded(r);
                             return Unit.Default;
                         });
-                }, onActivityCreated)));
+                }, onActivityCreated))));
     }
 
     /// <summary>
@@ -565,7 +566,7 @@ public static class GitHubActivityExtensions
         return HoldSpaceDuringImport(hub, spacePath,
             $"GitSync: an unattended import ({trigger}) is writing '{spacePath}' at the pushed commit {shortSha}",
             TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "update", requiresCommitAuthority: false,
-            () => hub.RunActivity(spacePath, ActivityCategory.Import,
+            () => ForgetANoOpAttempt(hub, spacePath, concluded => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         $"Update {spacePath} to the pushed commit {shortSha} ({trigger})", LogLevel.Information)
                     .WithKey("activity.gitsync.updateToPushedCommit.title",
@@ -584,9 +585,10 @@ public static class GitHubActivityExtensions
                             if (r.PrunedPaths.Count > 0)
                                 ctx.Log(PrunedLine(r));
                             LogImportOutcome(ctx, r, commitish: shortSha);
+                            concluded(r);
                             return Unit.Default;
                         });
-                }, onActivityCreated)));
+                }, onActivityCreated))));
     }
 
     /// <summary>
@@ -632,7 +634,7 @@ public static class GitHubActivityExtensions
         return HoldSpaceDuringImport(hub, spacePath,
             $"GitSync: an unattended import is writing '{spacePath}' at the sealed commit {shortSha}",
             TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "update", requiresCommitAuthority: false,
-            () => hub.RunActivity(spacePath, ActivityCategory.Import,
+            () => ForgetANoOpAttempt(hub, spacePath, concluded => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         $"Update {spacePath} to the sealed commit {shortSha}", LogLevel.Information)
                     .WithKey("activity.gitsync.updateToSealedCommit.title",
@@ -651,9 +653,10 @@ public static class GitHubActivityExtensions
                             if (r.PrunedPaths.Count > 0)
                                 ctx.Log(PrunedLine(r));
                             LogImportOutcome(ctx, r, commitish: shortSha);
+                            concluded(r);
                             return Unit.Default;
                         });
-                }, onActivityCreated)));
+                }, onActivityCreated))));
     }
 
     /// <summary>
@@ -685,7 +688,7 @@ public static class GitHubActivityExtensions
         return HoldSpaceDuringImport(hub, spacePath,
             $"GitSync: a reconciling import is writing '{spacePath}' at the sealed commit {shortSha}",
             TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "update", requiresCommitAuthority: false,
-            () => hub.RunActivity(spacePath, ActivityCategory.Import,
+            () => ForgetANoOpAttempt(hub, spacePath, concluded => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         $"Reconcile {spacePath} with the sealed commit {shortSha}", LogLevel.Information)
                     .WithKey("activity.gitsync.reconcileAtProvenCommit.title",
@@ -702,10 +705,101 @@ public static class GitHubActivityExtensions
                             if (r.PrunedPaths.Count > 0)
                                 ctx.Log(PrunedLine(r));
                             LogImportOutcome(ctx, r, commitish: shortSha);
+                            concluded(r);
                             return Unit.Default;
                         });
-                }, onActivityCreated)));
+                }, onActivityCreated))));
     }
+
+    /// <summary>
+    /// 🚨 <b>An unattended sync attempt that changed nothing leaves no permanent Activity</b>
+    /// (MeshWeaver#8020; <c>Doc/Architecture/GitHubSync</c> → "What an unattended attempt leaves
+    /// behind").
+    ///
+    /// <para>Every unattended import ran as an Activity at <c>{space}/_Activity/{id}</c>, and none was
+    /// ever removed — including the ones that found nothing to do. A push to a repository fans out to
+    /// every Space that syncs it, and for all but the one or two Spaces whose module moved the answer
+    /// is "unchanged": measured on memex-cloud, <c>Hosting/_Activity</c> gained 76 records in 7.6 h
+    /// (est. 8–12k since 2026-08-19, none pruned), <c>Essentials/_Activity/833b2845</c> reading
+    /// "Re-imported Skipped". The partition grew without bound and blocked the declared retirement of
+    /// <c>Plugins/Hosting</c> at the uninstall's 20,000-node verification bound.</para>
+    ///
+    /// <para><b>The model.</b> The Activity still exists for the life of the run — it is the progress
+    /// surface and the cancel handle (<c>Doc/Architecture/ActivityControlPlane</c>). What an attempt
+    /// CONCLUDED is recorded on the sync source's own node by the one write path every conclusion
+    /// takes (<c>GitHubSyncService.RecordSyncResult</c>): <c>lastSyncAttemptAt</c>,
+    /// <c>lastSyncOutcome</c>, <c>lastAttemptedCommitSha</c>, the per-module outcomes. For an attempt
+    /// that wrote, pruned, failed, preserved, held or declined nothing (<see cref="IsNoOpAttempt"/>)
+    /// that record says everything the Activity could, so the Activity is removed once it has
+    /// finished. An attempt with ANY effect or finding keeps its Activity — that is the post-mortem a
+    /// person reads, and the one a decline is recorded on (once: the triggers no longer re-attempt a
+    /// decline whose condition still holds).</para>
+    ///
+    /// <para>Only the UNATTENDED surfaces use this. A person's Update, Re-import or Check keeps its
+    /// Activity whatever it found: somebody asked, and the answer is theirs to read.</para>
+    ///
+    /// <para>The removal is best-effort and runs as System (the Activity is a System-owned satellite
+    /// of a system-owned Space): a failed delete is logged at Warning and leaves the Activity in
+    /// place, exactly as before this change — never a fault of the import, which has concluded.</para>
+    /// </summary>
+    /// <param name="hub">The hub the activity ran on.</param>
+    /// <param name="spacePath">The Space, for the log line.</param>
+    /// <param name="run">Starts the activity; the import reports its result through the callback it
+    /// is handed, before the activity finishes.</param>
+    /// <returns>The activity path, emitted once the activity has finished (and, for a no-op, been removed).</returns>
+    private static IObservable<string> ForgetANoOpAttempt(
+        IMessageHub hub, string spacePath, Func<Action<StaticRepoImportResult>, IObservable<string>> run)
+        => Observable.Defer(() =>
+        {
+            // Per subscription: written by the import's own Select before the activity finishes,
+            // read after RunActivity has emitted — strictly sequential within this one chain.
+            StaticRepoImportResult? concluded = null;
+            return run(result => concluded = result).SelectMany(activityPath =>
+            {
+                if (concluded is not { } result || !IsNoOpAttempt(result))
+                    return Observable.Return(activityPath);
+                var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+                var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+                var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.GitSync.UnattendedImport");
+                return access.RunAsSystem(() => meshService.DeleteNode(activityPath))
+                    .Take(1)
+                    .DefaultIfEmpty(false)
+                    .Catch((Exception ex) =>
+                    {
+                        logger?.LogWarning(ex,
+                            "[GitSync] {Space}: the attempt changed nothing and is recorded on its sync source, "
+                            + "but its activity {Activity} could not be removed — it stays in the partition.",
+                            spacePath, activityPath);
+                        return Observable.Return(false);
+                    })
+                    .Select(_ => activityPath);
+            });
+        });
+
+    /// <summary>
+    /// Whether an import attempt changed NOTHING and found nothing a person must read: no node
+    /// written or pruned, no write request issued, no failure, no preserved or refused node, no held
+    /// NodeType, no declined module. The fingerprint short-circuit (<c>Skipped</c>) and a module tree
+    /// whose every module is unchanged are the usual shapes. Pure.
+    /// </summary>
+    /// <param name="result">The import's result.</param>
+    internal static bool IsNoOpAttempt(StaticRepoImportResult result)
+        => !string.Equals(result.Outcome, "Failed", StringComparison.OrdinalIgnoreCase)
+           && result.WrittenPaths.IsEmpty
+           && result.PrunedPaths.IsEmpty
+           && result.WriteRequests == 0
+           && result.Failed == 0
+           && result.FailedPaths.IsEmpty
+           && result.Preserved == 0
+           && result.BlockedCreatePaths.IsEmpty
+           && result.RefusedContent.IsEmpty
+           && !result.PruneRefused
+           && result.HeldNodeTypePaths.IsEmpty
+           && result.BundleHeldNodeTypePaths.IsEmpty
+           && result.DeclinedModules.IsEmpty
+           && result.UnmetRequirementModules.IsEmpty
+           && result.UnverifiedFloorModules.IsEmpty;
 
     /// <summary>The first 8 characters of a sha — what a human reads in a log line. Anything
     /// shorter than that (a branch name arriving where a sha was expected) is passed through whole,

@@ -141,6 +141,13 @@ public static class GitHubSyncConfiguration
         {
             SourceCredentials = sp.GetService<GitSourceCredentials>(),
         });
+        // MeshWeaver#8020 — a Space whose package a feature flag declares retired is not imported by
+        // any unattended trigger. Built explicitly: the instance-local source catalog is optional.
+        services.AddSingleton(sp => new RetiredPackageSyncGate(
+            sp.GetService<MeshWeaver.Mesh.Features.IFeatureFlags>(),
+            sp.GetService<IConfiguration>(),
+            sp.GetService<InstancePackageSourceCatalog>(),
+            sp.GetService<ILogger<RetiredPackageSyncGate>>()));
         services.AddSingleton<GitHubWebhookProcessor>();
         // Sources sync on PUSH (policy sources-sync-on-push); GitHub never redelivers a lost webhook
         // by itself, so a periodic pass resolves each configured branch's head and imports where a

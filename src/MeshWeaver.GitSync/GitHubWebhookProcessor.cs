@@ -486,8 +486,15 @@ public sealed class GitHubWebhookProcessor
     private IObservable<IReadOnlyList<BuildImport>> MatchingSyncTargets(
         RepoIdentity repo, string branch, string headSha, string trigger)
         => ConfigsTargeting(repo, $"{trigger} of {branch}")
-            .Select(match =>
+            // Each candidate's content is parsed ONCE per delivery and threaded through: the gate's
+            // inputs and the classification loop below read the same parse (review on #8053).
+            .Select(match => (Match: match, Parsed: match.Configs
+                .Select(node => (Node: node, Config: node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)))
+                .ToList()))
+            .SelectMany(read => GateInputs(read.Parsed.Select(p => p.Config)).Select(gate => (read.Match, read.Parsed, gate)))
+            .Select(read =>
             {
+                var (match, parsed, gate) = read;
                 // 🚨 Classify EVERY candidate and say what happened to it. A fan-out that reports
                 // only its winners cannot be audited: "updated 34" and "updated 34 of 43" look
                 // identical in the log, which is how #1326 stayed invisible for days. One line per
@@ -530,14 +537,21 @@ public sealed class GitHubWebhookProcessor
                 string? heldReason = null;
                 var picked = new List<BuildImport>();
                 var skipped = new List<string>();
-                foreach (var node in match.Configs)
+                foreach (var (node, cfg) in parsed)
                 {
-                    var cfg = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
                     // 🚨 Only the CONFIGURATION half here; the per-commit skips are asked about the
                     // commit that would LAND, after the gate has named it (review on #4576).
                     if (ConfigurationSkipReason(cfg, branch) is { } reason)
                     {
                         skipped.Add($"{node.Path} ({reason})");
+                        continue;
+                    }
+                    // 🚨 MeshWeaver#8020 — a Space whose package the instance declares RETIRED is not
+                    // fetched, imported, or given an Activity. Asked before the seal gate: no commit
+                    // changes the answer, only the flag does (read live, so turning it on resumes).
+                    if (gate.Retired(node.Path, cfg) is { } retired)
+                    {
+                        skipped.Add($"{node.Path} ({RetiredPackageSyncGate.SkipPhrase(retired)})");
                         continue;
                     }
                     gateEvaluated++;
@@ -569,7 +583,7 @@ public sealed class GitHubWebhookProcessor
                     // over). A source ALREADY at the sealed commit must still say why the build did
                     // not arrive (#4063); a final verdict is deliberately NOT recorded as a hold,
                     // because a hold clears the attempt pair that licences this very skip.
-                    if (CommitSkipReason(cfg, plan.Commit!) is { } landingReason)
+                    if (CommitSkipReason(cfg, plan.Commit!, gate.DeclineConditionNow) is { } landingReason)
                     {
                         if (plan.Redirected)
                         {
@@ -744,7 +758,32 @@ public sealed class GitHubWebhookProcessor
     /// (<c>GitHubSyncService.ReimportAtCommit</c>) never consults this predicate at all.</para>
     /// </summary>
     private static string? SkipReason(GitHubSyncConfig? cfg, string branch, string headSha)
-        => ConfigurationSkipReason(cfg, branch) ?? CommitSkipReason(cfg, headSha);
+        => ConfigurationSkipReason(cfg, branch) ?? CommitSkipReason(cfg, headSha, declineConditionNow: null);
+
+    /// <summary>
+    /// What one fan-out reads ONCE besides the configs: the retired-package classifier
+    /// (<see cref="RetiredPackageSyncGate"/>) and — only when a candidate carries a recorded decline —
+    /// the decline condition as this instance has it now (<see cref="GitHubSyncService.DeclineConditionNow"/>).
+    /// A mesh without either reader decides exactly as before.
+    /// </summary>
+    /// <param name="Retired">Config path + content → the retirement, or null.</param>
+    /// <param name="DeclineConditionNow">Recorded outcomes → the condition recomputed under the current
+    /// inputs; null when no candidate needed it.</param>
+    private sealed record FanOutGate(
+        Func<string, GitHubSyncConfig?, RetiredSyncSource?> Retired,
+        Func<IEnumerable<ModuleSyncOutcome>?, string?>? DeclineConditionNow);
+
+    private IObservable<FanOutGate> GateInputs(IEnumerable<GitHubSyncConfig?> configs)
+    {
+        var retired = hub.ServiceProvider.GetService<RetiredPackageSyncGate>() is { } gate
+            ? gate.Classifier()
+            : Observable.Return<Func<string, GitHubSyncConfig?, RetiredSyncSource?>>((_, _) => null);
+        var needsDecline = configs.Any(c => c?.LastAttemptDeclinedUnder is { Length: > 0 });
+        var decline = needsDecline && hub.ServiceProvider.GetService<GitHubSyncService>() is { } sync
+            ? sync.DeclineConditionNow().Select(f => (Func<IEnumerable<ModuleSyncOutcome>?, string?>?)f)
+            : Observable.Return<Func<IEnumerable<ModuleSyncOutcome>?, string?>?>(null);
+        return retired.Take(1).SelectMany(r => decline.Take(1).Select(d => new FanOutGate(r, d)));
+    }
 
     /// <summary>
     /// The half of <see cref="SkipReason"/> that is about the CONFIGURATION and no commit — asked
@@ -769,7 +808,9 @@ public sealed class GitHubWebhookProcessor
     /// instead, the two skips mean what they say: the source already holds the tree that would land,
     /// or it has a final verdict on it.</para>
     /// </summary>
-    private static string? CommitSkipReason(GitHubSyncConfig? cfg, string commit)
+    private static string? CommitSkipReason(
+        GitHubSyncConfig? cfg, string commit,
+        Func<IEnumerable<ModuleSyncOutcome>?, string?>? declineConditionNow)
         => cfg is null ? "config content could not be read"
             : IsAlreadyAt(cfg, commit)
                 ? "already at this commit"
@@ -783,6 +824,15 @@ public sealed class GitHubWebhookProcessor
                 ? $"already attempted at this commit with a final verdict ('{cfg.LastSyncOutcome}') — "
                   + "re-reading the same bytes under the same configuration re-derives it; a new "
                   + "commit or an edit of the source re-attempts"
+            // 🚨 MeshWeaver#8020 — a decline waits for what blocks it, never for the next pass. The
+            // reconcile used to re-fetch a declined commit (and mint an Activity) every 10 minutes
+            // on every replica; it is re-attempted only once the condition it was declined under
+            // (the running platform, the newer platform, a dependency's loaded version) changes.
+            : declineConditionNow is not null
+              && GitHubSyncService.HasDeclineVerdictAt(cfg, commit, declineConditionNow(cfg.ModuleOutcomes))
+                ? $"already declined at this commit under the condition that still holds "
+                  + $"('{cfg.LastAttemptDeclinedUnder}') — a roll, a dependency activation, a new commit "
+                  + "or an edit of the source re-attempts"
             : null;
 
     /// <summary>Whether a source already holds the content of <paramref name="commit"/> — the
