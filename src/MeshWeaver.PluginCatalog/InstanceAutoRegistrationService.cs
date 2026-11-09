@@ -504,8 +504,16 @@ public sealed class InstanceAutoRegistrationService(
         var bakeSettled = hub.ServiceProvider.GetService<PreWarmCompletion>()?.Settled
             ?? Observable.Return(PreWarmSettlement.NotApplicable);
 
+        var bootProgress = hub.ServiceProvider.GetService<BootProgress>();
+        bootProgress?.PhaseStarted(BootPhaseIds.Bake, "Verifying node types",
+            "the default install starts once the NodeType bake has settled");
         subscriptions.Add(bakeSettled
             .Take(1)
+            .Do(settlement => bootProgress?.PhaseEnded(BootPhaseIds.Bake,
+                settlement is PreWarmSettlement.Faulted ? BootStepStates.Failed
+                : settlement is PreWarmSettlement.NotApplicable ? BootStepStates.Skipped
+                : BootStepStates.Done,
+                $"settled as {settlement}"))
             // Hop off whatever thread settled the bake (the sweep's completion callback, or the
             // ApplicationStarted callback on a no-bake host) before the install chain runs.
             .ObserveOn(TaskPoolScheduler.Default)
@@ -924,7 +932,12 @@ public sealed class InstanceAutoRegistrationService(
     /// saturate it.</para>
     /// </summary>
     private IObservable<DefaultInstallSummary> InstallDefaults(PluginCatalogOptions options) =>
-        InstanceSourcesRead().SelectMany(read => InstallDefaultsWith(options, read.Sources)
+        Observable.Defer(() =>
+        {
+            hub.ServiceProvider.GetService<BootProgress>()?.PhaseStarted(BootPhaseIds.Resolve,
+                "Resolving the module set", "listing the selected packages from the configured sources");
+            return InstanceSourcesRead();
+        }).SelectMany(read => InstallDefaultsWith(options, read.Sources)
             // An unread instance store is a source that did not ANSWER: the pass still installs the
             // deployment's packages, but it is not complete, so the repair lane (LeftUndone /
             // RetryFailedDefaults) knows work remains once the store answers.
@@ -2451,19 +2464,43 @@ public sealed class InstanceAutoRegistrationService(
                 tierRefused.Count, string.Join("; ", tierRefused.Select(r => r.Describe())));
 
         var seed = DefaultInstallSummary.Empty with { Skipped = skipped, TierRefused = tierRefused };
+        var progress = hub.ServiceProvider.GetService<BootProgress>();
+        progress?.PhaseEnded(BootPhaseIds.Resolve, BootStepStates.Done,
+            $"{installable.Count} package(s) to install, {installable.Count(c => !string.IsNullOrWhiteSpace(c.Package.Module))} "
+            + $"carrying a module; {skipped.Count} skipped");
         if (installable.Count == 0)
+        {
+            progress?.PhaseEnded(BootPhaseIds.Modules, BootStepStates.Skipped, "nothing to install");
+            progress?.PhaseEnded(BootPhaseIds.Content, BootStepStates.Skipped, "nothing to install");
             return Observable.Return(seed);
+        }
         logger.LogInformation(
             "[DefaultInstall] {Count} package(s), in dependency order — {Packages}",
             installable.Count, string.Join(", ", installable.Select(c => c.Package.Id)));
         // 🚨 PHASE 1 — MODULES, THEN PHASE 2 — NODES (see LandModulesFirst). Strictly sequential:
         // the content phase is subscribed only once every module of the selection has been decided.
         return LandModulesFirst(installable)
+            .Do(_ => progress?.PhaseStarted(BootPhaseIds.Content, "Installing packages",
+                "each package's nodes, in dependency order", installable.Count, concurrency: 1))
             .SelectMany(phase1 => installable
-                .Select(Install)
+                .Select(candidate => Install(candidate)
+                    .Do(one => progress?.PhaseStep(BootPhaseIds.Content, failed: one.Failed > 0)))
                 .ToObservable()
                 .Concat()
                 .Aggregate(seed with { ModulesLanded = phase1.Landed }, (acc, one) => acc.Add(one))
+                .Do(summary =>
+                {
+                    progress?.PhaseEnded(BootPhaseIds.Content,
+                        summary.Failed > 0 ? BootStepStates.Failed : BootStepStates.Done,
+                        summary.Failed > 0
+                            ? $"{summary.Failed} package(s) failed: {string.Join(", ", summary.Failures)}"
+                            : null);
+                    if (phase1.Landed.Count > 0)
+                        progress?.PhaseStarted(BootPhaseIds.Activate, "Restarting to activate the landed modules",
+                            $"{phase1.Landed.Count} module(s) landed; they load at the next start of the portal");
+                    else
+                        progress?.PhaseEnded(BootPhaseIds.Activate, BootStepStates.Skipped, "no module landed");
+                })
                 // 🚨 ONE proposal per pass, at its END: checked against the install records AND the
                 // whole selection's declared floors, and blocked by any carrier phase 1 could not
                 // clear. Phase 2's per-package installs propose nothing (proposeModuleSet: false) —
@@ -2566,7 +2603,13 @@ public sealed class InstanceAutoRegistrationService(
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         IReadOnlySet<string> none = ImmutableHashSet<string>.Empty;
         if (carriers.Count == 0 || persistence is null)
+        {
+            hub.ServiceProvider.GetService<BootProgress>()?.PhaseEnded(BootPhaseIds.Modules, BootStepStates.Skipped,
+                carriers.Count == 0
+                    ? "no selected package carries a module"
+                    : "this host has no storage adapter to read install records with, so no module lands ahead of its content");
             return Observable.Return((ImmutableList<string>.Empty, none, none, false));
+        }
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var configuration = hub.ServiceProvider.GetService<IConfiguration>();
@@ -2661,12 +2704,89 @@ public sealed class InstanceAutoRegistrationService(
                 });
         }
 
-        return accessService.RunAsSystem(() => carriers
-                .Select(x => One(x.Candidate, x.Bundles!)
-                    .Select(o => (o.Fresh, o.Landed, o.Blocked, Module: x.Candidate.Package.Module!)))
-                .ToObservable()
-                .Concat()
+        // 🚨 LEVEL BY LEVEL, and within a level up to ModuleLandingConcurrency at once (#boot-progress).
+        // A level is a BARRIER: a module is link-probed against the modules already landed
+        // (ModuleLinkObservation → WithSiblingModules), so a provider that references
+        // MeshWeaver.AI must find AI landed — the levels come from the WHOLE selection's declared
+        // `requires`, so an edge through a content-only package still orders its modules. Inside a
+        // level nothing depends on anything else, and the one serial resource — the volume — keeps
+        // its own cap-1 lane in ModuleLandingService. One at a time cost a fresh instance ~14
+        // minutes of registry latency (≈7–20 s per bundle whatever its size, measured 2026-11-09).
+        var levels = PackageDependencyGraph.DependencyLevels(installable.Select(c => c.Package).ToList());
+        var degree = Math.Clamp(
+            hub.ServiceProvider.GetService<PluginCatalogOptions>()?.ModuleLandingConcurrency
+                ?? PluginCatalogOptions.DefaultModuleLandingConcurrency, 1, 16);
+        var progress = hub.ServiceProvider.GetService<BootProgress>();
+        // The carriers with their module and bundle client stated as non-null — the filter above
+        // guarantees both, and this says so once instead of forgiving it at every use.
+        var wave = carriers
+            .SelectMany(x => x.Candidate.Package.Module is { Length: > 0 } module && x.Bundles is { } bundles
+                ? new[] { (x.Candidate, Bundles: bundles, Module: module) }
+                : [])
+            .ToList();
+        progress?.ModulesPlanned(wave.Select(x => new BootModuleStep(x.Candidate.Package.Id, x.Module)
+        {
+            Level = levels.GetValueOrDefault(x.Candidate.Package.Id),
+        }));
+        progress?.PhaseStarted(BootPhaseIds.Modules, "Landing modules",
+            $"{wave.Count} module(s) in {wave.Select(x => levels.GetValueOrDefault(x.Candidate.Package.Id)).Distinct().Count()} "
+            + $"dependency level(s), up to {degree} at once", wave.Count, degree);
+
+        IObservable<(bool Fresh, string? Landed, string? Blocked, string Module)> Measured(
+            InstallCandidate candidate, PluginBundleClient bundles, string module) =>
+            Observable.Defer(() =>
+                {
+                    progress?.ModuleStarted(candidate.Package.Id);
+                    return One(candidate, bundles);
+                })
+                .Do(o =>
+                {
+                    var state = o.Landed is not null ? BootModuleStates.Landed
+                        : o.Blocked is not null ? BootModuleStates.Failed
+                        : o.Fresh ? BootModuleStates.Current
+                        : BootModuleStates.Skipped;
+                    progress?.ModuleEnded(candidate.Package.Id, state,
+                        error: state == BootModuleStates.Failed ? "did not land — the content phase decides the package" : null);
+                    progress?.PhaseStep(BootPhaseIds.Modules, failed: state == BootModuleStates.Failed);
+                })
+                .Select(o => (o.Fresh, o.Landed, o.Blocked, Module: module));
+
+        // 🚨 ONE sequential retry of every fresh carrier the wave could not land. The levels honour
+        // every DECLARED `requires`; a module whose link probe needs a sibling its package never
+        // declared used to land only because the one-at-a-time order happened to put that sibling
+        // first. In a wave it can race the sibling and be refused — so once every level has landed,
+        // the refused ones go again, one at a time, against everything that did land. A registry
+        // that answered 503 gets its second chance here too.
+        IObservable<IList<(bool Fresh, string? Landed, string? Blocked, string Module)>> RetryRefused(
+            IList<(bool Fresh, string? Landed, string? Blocked, string Module)> first)
+        {
+            var again = wave.Where(x => first.Any(o => o.Module == x.Module && o.Fresh && o.Blocked is not null)).ToList();
+            if (again.Count == 0)
+                return Observable.Return(first);
+            logger.LogInformation(
+                "[DefaultInstall] module phase: {Count} module(s) did not land in the wave — retrying them one at a "
+                + "time now that every level has landed: [{Modules}]", again.Count, string.Join(", ", again.Select(x => x.Module)));
+            var retried = again.Select(x => x.Module).ToImmutableHashSet(StringComparer.Ordinal);
+            return again.Select(x => Observable.Defer(() =>
+                    {
+                        progress?.PhaseRetrying(BootPhaseIds.Modules);
+                        return Measured(x.Candidate, x.Bundles, x.Module);
+                    }))
+                .Concat().ToList()
+                .Select(second => (IList<(bool Fresh, string? Landed, string? Blocked, string Module)>)
+                    first.Where(o => !retried.Contains(o.Module)).Concat(second).ToList());
+        }
+
+        return accessService.RunAsSystem(() => LevelledWave.Run(
+                    wave, x => levels.GetValueOrDefault(x.Candidate.Package.Id), degree,
+                    x => Measured(x.Candidate, x.Bundles, x.Module))
                 .ToList()
+                .SelectMany(RetryRefused)
+                .Do(outcomes => progress?.PhaseEnded(BootPhaseIds.Modules,
+                    outcomes.Any(o => o.Blocked is not null) ? BootStepStates.Failed : BootStepStates.Done,
+                    $"{outcomes.Count(o => o.Landed is not null)} landed, "
+                    + $"{outcomes.Count(o => o.Blocked is not null)} did not land, "
+                    + $"{outcomes.Count(o => o.Landed is null && o.Blocked is null)} already current"))
                 .Select(outcomes =>
                 {
                     var landed = outcomes.Where(o => o.Landed is not null).Select(o => o.Landed!).ToImmutableList();
@@ -2697,6 +2817,9 @@ public sealed class InstanceAutoRegistrationService(
                 }))
             .Catch((Exception ex) =>
             {
+                progress?.ModulesAbandoned($"the module phase faulted: {ex.Message}");
+                progress?.PhaseEnded(BootPhaseIds.Modules, BootStepStates.Failed, $"the module phase faulted: {ex.Message}");
+                progress?.Error($"module phase: {ex.Message}");
                 logger.LogError(ex,
                     "[DefaultInstall] module phase faulted: {Cause}. The content phase runs as before — "
                     + "each package's module still follows its content on the install funnel. No module of "
