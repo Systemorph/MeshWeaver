@@ -16,7 +16,7 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para><b>Why.</b> The ladder is data (<see cref="PlanTierLadder"/>): the tier node IS what makes a
 /// plan id known. Delete it and every instance record still carrying that id reads as an UNKNOWN
-/// plan, which decides at the baseline (<see cref="PlanTierRanks.CoversInstance"/>, fail closed) —
+/// plan, which decides at the baseline (<see cref="PlanTierRanks.CoversInstance(string?, string?, string?)"/>, fail closed) —
 /// the instance silently loses every package above <c>free</c>. Measured on the public registry: the
 /// node <c>Admin/Tiers/sme</c> was deleted while a dedicated client instance stood on <c>sme</c>, and
 /// that instance was refused 18 packages, Mail and Teams among them, each reported as "this instance

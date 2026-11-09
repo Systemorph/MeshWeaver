@@ -104,7 +104,9 @@ public sealed class PlanTierLadder(IMessageHub hub, ILogger<PlanTierLadder> logg
                 "Plan ladder: tier node {Path} carries the RETIRED plan id '{Retired}' — ignored; "
                 + "'{Retired}' resolves to '{Successor}', whose own tier node ranks it",
                 retired.Path, retired.Id, retired.Id, PlanTierRanks.SuccessorOf(retired.Id));
-        var ranks = PlanTierRanks.From(items.Select(Plan));
+        var plans = items.Select(Plan).ToList();
+        var ranks = PlanTierRanks.From(plans.Select(p => (p.Id, p.Rank, p.AllAccess)))
+            .WithMembers(plans.Where(p => p.Members.Count > 0).Select(p => (p.Id, (IEnumerable<string>)p.Members)));
         if (ranks.Ranks.Count == 0)
             logger.LogInformation(
                 "Plan ladder: no tier nodes under {Namespace} — plan-scoped grant entries license nothing here",
@@ -116,10 +118,11 @@ public sealed class PlanTierLadder(IMessageHub hub, ILogger<PlanTierLadder> logg
     /// <summary>One tier node → <c>(id, rank, allAccess)</c>. The id is the node's, the two fields
     /// are read off the content whatever CLR shape it arrived in (typed Store content on a mesh
     /// that runs the Store, a <see cref="JsonElement"/> anywhere else); a missing rank reads 0.</summary>
-    private (string Id, int Rank, bool AllAccess) Plan(MeshNode node)
+    private (string Id, int Rank, bool AllAccess, IReadOnlyList<string> Members) Plan(MeshNode node)
     {
         var rank = 0;
         var allAccess = false;
+        var members = new List<string>();
         try
         {
             var content = node.Content is JsonElement json
@@ -130,13 +133,31 @@ public sealed class PlanTierLadder(IMessageHub hub, ILogger<PlanTierLadder> logg
                 if (Property(content, "rank") is { ValueKind: JsonValueKind.Number } r && r.TryGetInt32(out var parsed))
                     rank = parsed;
                 allAccess = Property(content, "allAccess") is { ValueKind: JsonValueKind.True };
+                // The plan's declared members (content.members) — package ids it includes beside its rank.
+                switch (Property(content, "members"))
+                {
+                    case { ValueKind: JsonValueKind.Array } list:
+                        foreach (var m in list.EnumerateArray())
+                            if (m.ValueKind == JsonValueKind.String && m.GetString() is { } id && !string.IsNullOrWhiteSpace(id))
+                                members.Add(id);
+                            else
+                                logger.LogWarning(
+                                    "Plan ladder: tier node {Path} lists a member that is not a package id ({Kind}) — skipped; the plan includes nothing for it",
+                                    node.Path, m.ValueKind);
+                        break;
+                    case { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } other:
+                        logger.LogWarning(
+                            "Plan ladder: tier node {Path} carries 'members' as {Kind}, not a list of package ids — ignored; the plan includes no member",
+                            node.Path, other.ValueKind);
+                        break;
+                }
             }
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
             logger.LogWarning(ex, "Plan ladder: could not read tier node {Path}", node.Path);
         }
-        return (node.Id ?? "", rank, allAccess);
+        return (node.Id ?? "", rank, allAccess, members);
     }
 
     /// <summary>Case-insensitive property lookup — the content is camelCase on the wire, PascalCase

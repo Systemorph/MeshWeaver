@@ -38,7 +38,7 @@ public record RegistrationKey
     /// plan-scoped whole-source entry per configured source (<c>Plugins/*@pro</c>, …), on top of
     /// the operator's <c>PluginCatalog:DefaultGrants</c> — so "a key for Pro customers" is minted
     /// once and every install that presents it may pull exactly what the Pro plan covers
-    /// (<see cref="PlanTierRanks.Covers"/>), nothing an admin has to type per instance. Null keeps
+    /// (<see cref="PlanTierRanks.Covers(string?, string?, string?)"/>), nothing an admin has to type per instance. Null keeps
     /// today's behaviour: the DefaultGrants seed and nothing else.</para>
     /// </summary>
     public string? Tier { get; init; }
