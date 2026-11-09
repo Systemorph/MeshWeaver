@@ -186,6 +186,10 @@ class Unreadable(Problem):
     """A sibling's AGENTS.md could not be read after the retries — infra, never a drift verdict."""
 
 
+class Refused(Problem):
+    """A PERMANENT refusal (401/403): deterministic, so never under the INFRA label the re-run lane retries."""
+
+
 def fetch_agents_md(repo: str, token: str | None, urlopen=None, sleep=None, clock=None, reader=None) -> str:
     """Read a repo's AGENTS.md from its default branch. Any failure is fatal, never a pass — and an
     OUTAGE (rate limit, 5xx, no connection past the shared budget) says NO VERDICT, never that the
@@ -217,7 +221,7 @@ def fetch_agents_md(repo: str, token: str | None, urlopen=None, sleep=None, cloc
         "404": "the repo, the branch or AGENTS.md does not exist — OR the token cannot see a "
                "private repo, which GitHub reports as 404 rather than 403",
     }.get(code, "unexpected status")
-    raise Unreadable(
+    raise (Unreadable if code == "404" else Refused)(
         f"could not read {repo}/{AGENTS_FILE}: HTTP {code} ({hint})"
         f"{f' — after {RETRY_404} retries' if code == '404' else ''}. This gate compares "
         f"what the repos actually contain, so an unreadable repo is a FAILURE — reporting "
@@ -513,14 +517,24 @@ def self_test() -> int:
         raised = None
     except Problem as e:
         raised = e
-    ok = isinstance(raised, Unreadable) and len(calls) == 1
-    print(f"  [{'ok' if ok else 'WRONG':5}] a 403 (a plain refusal) is not retried")
+    ok = isinstance(raised, Refused) and not isinstance(raised, Unreadable) and len(calls) == 1
+    print(f"  [{'ok' if ok else 'WRONG':5}] a 403 (a plain refusal) is not retried and is NOT under the infra label")
     bad += 0 if ok else 1
     import contextlib
     import io
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = report_unreadable(["o/x: could not read o/x/AGENTS.md: HTTP 404 (…)"], 3)
+    import tempfile
+    saved_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["GITHUB_STEP_SUMMARY"] = str(Path(tmp) / "summary.md")   # never the live job summary
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = report_unreadable(["o/x: could not read o/x/AGENTS.md: HTTP 404 (…)"], 3)
+        finally:
+            if saved_summary is None:
+                os.environ.pop("GITHUB_STEP_SUMMARY", None)
+            else:
+                os.environ["GITHUB_STEP_SUMMARY"] = saved_summary
     out = buf.getvalue()
     ok = rc == 1 and f"::error::{INFRA_PREFIX}: o/x" in out and "drift" not in out.split("NO drift verdict")[-1].lower()
     print(f"  [{'ok' if ok else 'WRONG':5}] an unreadable sibling is reported under the INFRA label, fails closed, and no drift line is printed")
@@ -537,7 +551,7 @@ def self_test() -> int:
         print(f"\n::error::{bad} self-test case(s) behaved wrongly — this gate's verdict on the "
               f"real tree cannot be trusted until they pass.")
         return 1
-    print(f"\nSelf-test: {len(cases) + 8} cases, all correct.")
+    print(f"\nSelf-test: {len(cases) + 9} cases, all correct.")
     return 0
 
 
@@ -630,6 +644,8 @@ def main() -> int:
 
     print()
     if unreadable:
+        for f in read_failures:   # a non-infra failure of the same run is still named, not dropped
+            print(f"::error::{f.splitlines()[0]}")
         return report_unreadable(unreadable, len(repos))
     failures: list[str] = []
     report: list[str] = []

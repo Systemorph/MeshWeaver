@@ -80,20 +80,28 @@ def probe(repos, path_template, capability, what, token, reader, budget_seconds,
                                urlopen=urlopen, sleep=sleep, clock=clock)
                 out(f"  ok   {repo}" + (f" (after {attempt} retr{'y' if attempt == 1 else 'ies'} of a 404)" if attempt else ""))
             except reader.ApiUnavailable as e:
-                outages.append(repo)
-                out(f"::error title=NO VERDICT — GitHub API::{repo} -> {e.sentence()}")
+                if attempt:
+                    # The budget ran out WHILE retrying a 404: still the 404's infra verdict, never a
+                    # plain outage line the re-run lane does not name.
+                    refused.append(repo)
+                    out(f"::error::{INFRA_404_PREFIX}: {repo} -> 404, then the probe's budget ran out "
+                        f"after {attempt} retr{'y' if attempt == 1 else 'ies'}: {refusal_sentence(404, capability, what)}")
+                else:
+                    outages.append(repo)
+                    out(f"::error title=NO VERDICT — GitHub API::{repo} -> {e.sentence()}")
             except reader.ApiRefused as e:
                 try:
                     status = int(str(e).split()[1])
                 except (IndexError, ValueError):
                     status = 0
-                if status == 404 and attempt < RETRY_404:
-                    sleep(RETRY_BACKOFF_S[min(attempt, len(RETRY_BACKOFF_S) - 1)])
+                backoff = RETRY_BACKOFF_S[min(attempt, len(RETRY_BACKOFF_S) - 1)]
+                if status == 404 and attempt < RETRY_404 and clock() + backoff < deadline:
+                    sleep(backoff)
                     attempt += 1
                     continue
                 refused.append(repo)
                 if status == 404:
-                    out(f"::error::{INFRA_404_PREFIX}: {repo} -> 404 after {RETRY_404} retries: "
+                    out(f"::error::{INFRA_404_PREFIX}: {repo} -> 404 after {attempt} retr{'y' if attempt == 1 else 'ies'}: "
                         f"{refusal_sentence(status, capability, what)}")
                 else:
                     out(f"::error::{repo} -> {status}: {refusal_sentence(status, capability, what)}")
@@ -193,6 +201,9 @@ def self_test() -> int:
     code, said, slept = run({"o/a": [err(404, nf)] * (RETRY_404 + 1), "o/b": [_Ok()]})
     check("a persistent 404 is a red under the INFRA label after the retries -> 1",
           code == REFUSED and f"{INFRA_404_PREFIX}: o/a -> 404 after {RETRY_404} retries" in said, said)
+    code, said, slept = run({"o/a": [err(404, nf)] * (RETRY_404 + 1), "o/b": [_Ok()]}, budget=5)
+    check("a 404 whose backoff would outlast the probe's budget is still labelled INFRA -> 1",
+          code == REFUSED and f"{INFRA_404_PREFIX}: o/a -> 404 after" in said and "title=NO VERDICT — GitHub API" not in said, said)
     code, said, slept = run({"o/a": [err(403, '{"message":"Resource not accessible by integration"}')], "o/b": [_Ok()]})
     check("…while a permission 403 is not retried and carries no INFRA label",
           code == REFUSED and slept == [] and INFRA_404_PREFIX not in said, said)
