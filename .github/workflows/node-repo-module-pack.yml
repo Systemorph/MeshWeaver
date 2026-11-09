@@ -751,6 +751,18 @@ on:
         description: The registry that will serve these bundles onward.
         type: string
         default: https://memex.meshweaver.cloud
+      registry-max-bundle-bytes:
+        description: >-
+          The largest module upload `registry-url` accepts, in bytes — its server's request-body
+          bound, which the registry names in its 413 ("this registry accepts a module upload of at
+          most N bytes"). Every packed bundle is measured against it where it is MADE: over it is
+          RED with the per-file breakdown, at 80 % of it a warning (check-module-bundle-size.py).
+          Plugins main run 42641639266 learned it from the registry instead — two Mail bundles of
+          ~33.4 MB refused with 413 at the very end of the run, after an earlier run's unlabelled
+          500 for the same bytes. Declare a different value only together with the registry that
+          really has it; never to make a red go away (Doc/Architecture/ModuleClosureAccounting).
+        type: number
+        default: 30000000
       content-repository:
         description: >-
           The repository whose packages are packed. Empty = the caller (today's behaviour). The
@@ -837,6 +849,18 @@ on:
           (and tested) on top of the diff, so a package a partial publication withheld is rebuilt
           until a run publishes it. 🚨 A caller that passes a publication-base from a
           --carry-withheld walk MUST pass this too, or the withheld packages never ship. Empty: none.
+        required: false
+        type: string
+        default: ''
+      cache-signing-environment:
+        description: >
+          ACCEPTED AND UNUSED — kept so a caller that still passes it is not refused. The workspace compile
+          cache's claims are now SIGNED BY THE CALLER (outputs `ccache-claims` / `ccache-build-logic-ref`):
+          a job of this reusable workflow that declared the caller's environment did NOT receive its
+          secret (measured, MeshWeaver.Plugins main runs 42563861810 and 42580826046: the env var was
+          empty, "Secret source: Actions"), while a caller job in the same environment does
+          (Plugins compile-check legs: "189 of 189 claim(s) signed"). Readers trust the public key(s)
+          in the content repo's `.github/ci-cache-signing.pub` (Plugins Hosting/CiProfile.md §11).
         required: false
         type: string
         default: ''
@@ -966,6 +990,19 @@ on:
         description: Private key (PEM) of that App.
         required: false
     outputs:
+      ccache-claims:
+        description: >-
+          The workspace compile cache's CLAIMS of this run ([{entry, sha256}] JSON): what `build-workspace`
+          kept in the store on a trusted run, to be SIGNED BY THE CALLER in a job that runs in its
+          main-only signing environment (`workspace-compile-cache.py sign`). Empty or `[]` on every
+          other run. A claim names the digest the producing job computed — never sign bytes read back
+          from the share, which every job can write.
+        value: ${{ jobs.build-workspace.outputs.ccache-claims }}
+      ccache-build-logic-ref:
+        description: >-
+          The core commit whose `.github/scripts/workspace-compile-cache.py` wrote the claims — the
+          caller's signer checks out exactly this ref, so the claim format and the signer agree.
+        value: ${{ jobs.select.outputs.build-logic-ref }}
       bundles-built:
         description: >
           "true" when EVERY selected module bundle of THIS CALL exists as a COMPOSABLE artifact —
@@ -2209,6 +2246,10 @@ jobs:
     # `workspace-runner` (inputs): a Docker-capable label — the compiler is the platform image.
     runs-on: ${{ inputs.workspace-runner }}
     timeout-minutes: 30
+    outputs:
+      # The compile cache's CLAIMS ([{entry, sha256}]) — handed to `compile-cache-sign` through the run's
+      # own job outputs, never read back from the share a pull request can write.
+      ccache-claims: ${{ steps.ccache-keep.outputs.claims }}
     # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
     # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
     # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
@@ -2404,6 +2445,92 @@ jobs:
       - name: Keep the platform checkout out of the global compiler's source mount
         if: inputs.module-libraries-project != '' || inputs.build-extensions-project != ''
         run: rm -rf "${GITHUB_WORKSPACE:?}/.module-libs-platform"
+      # ⚡ THE COMPILE CACHE (MeshWeaver.Plugins Hosting/CiProfile.md → "Compile cache"). An entry whose
+      # compiler inputs are unchanged is served from our store instead of being compiled again:
+      # `workspace-compile-cache.py` keys each container entry by its project closure in THIS tree
+      # (msbuild-closure-key.py --no-targets, the platform roots external) salted with everything else
+      # the compiler reads (both image digests, the shelf and extension bytes, accept, superseded, the
+      # platform ref and the SDK). Measured before it: MeshWeaver.AI recompiled for 350 s of a 356.5 s
+      # workspace build on a pull request that touched nothing it compiles (run 42517167915).
+      # Fail-open: no key, a miss or any store error builds exactly as before; it can never red a run.
+      # Runs on our own store only (a `gha` store has no shared, content-addressed cache for this).
+      # The tools are copied OUT of the workspace and their checkout removed before the build mounts it.
+      - name: Check out the compile-cache tools at the build-logic ref
+        if: needs.select.outputs.artifact-store != 'gha'
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: .compile-cache-logic
+          sparse-checkout: .github/scripts
+      - name: Compile cache — reuse every unchanged container entry
+        id: ccache
+        if: needs.select.outputs.artifact-store != 'gha'
+        env:
+          MODULES: ${{ needs.select.outputs.build-modules }}
+          DIGEST: ${{ inputs.platform-image-digest }}
+          TESTER_DIGEST: ${{ inputs.tester-image-digest }}
+          SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
+          SHELF: ${{ steps.shelf.outputs.root }}
+          EXTENSION: ${{ steps.extension.outputs.root }}
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
+          EXTENSION_PROJECT: ${{ inputs.build-extensions-project }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+          KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
+          STORE: ${{ needs.select.outputs.artifact-store }}
+          STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
+        run: |
+          set -uo pipefail
+          tools="$RUNNER_TEMP/compile-cache-tools"
+          rm -rf "$tools"; mkdir -p "$tools"
+          cp -R .compile-cache-logic/.github/scripts/. "$tools/"
+          rm -rf "${GITHUB_WORKSPACE:?}/.compile-cache-logic"
+          cc="$tools/workspace-compile-cache.py"
+          # The trunk's public key(s), from the tested tree. A pull request that edits this file changes
+          # only its OWN run's trust — the trunk reads with the trunk's file.
+          trust="$RUNNER_TEMP/ccache-trust.pub"
+          cp .github/ci-cache-signing.pub "$trust" 2>/dev/null || : > "$trust"
+          python3 "$cc" --self-test >/dev/null || { echo "::warning title=Compile cache off::workspace-compile-cache.py failed its self-test at the build-logic ref — every entry is compiled"; exit 0; }
+          if [ -z "$DIGEST" ] || [ -z "$TESTER_DIGEST" ]; then
+            echo "compile cache: off — no image digests to key on (the build step names why it cannot compile)"; exit 0
+          fi
+          printf '%s' "$MODULES" > "$RUNNER_TEMP/ccache-selection.json"
+          accept=$(jq -r '[.[] | select(.build == "container") | (.accept // "")] | unique | join("|")' <<< "$MODULES")
+          # 🚨 THE SALT IS TOOLCHAIN IDENTITY ONLY (`salt`): image, tester, accept, superseded, platform ref,
+          # SDK, and the shelf / build-extension PROJECTS by their input closure keys. Never the published
+          # bytes: two publishes of unchanged inputs differ, which moved EVERY key on every run (Plugins main
+          # runs 42601509542 → 42612488062: 39 entries signed, 0 reused). A tool project the closure key
+          # cannot key turns the cache off for this run.
+          tools_args=()
+          # A published tool must be keyed by its project — never silently left out of the salt (two runs
+          # with different shelves would then share a salt). The shelf/extension steps only run when their
+          # project input is set, so a mismatch is a wiring defect: the cache is off, never a partial salt.
+          if { [ -n "$SHELF" ] && [ -z "$SHELF_PROJECT" ]; } || { [ -n "$EXTENSION" ] && [ -z "$EXTENSION_PROJECT" ]; }; then
+            echo "::warning title=Compile cache off::a shelf or build extension was published without its project input — it cannot be keyed, so every entry is compiled"; exit 0
+          fi
+          [ -n "$SHELF" ] && tools_args+=(--tool-project "$SHELF_PROJECT")
+          [ -n "$EXTENSION" ] && tools_args+=(--tool-project "$EXTENSION_PROJECT")
+          if ! salt=$(python3 "$cc" salt --repo . --image "$DIGEST" --tester "$TESTER_DIGEST" --accept "$accept" \
+                        --superseded "$SUPERSEDED" --platform "$PLATFORM_REF" --sdk "$KEYED_SDK" ${tools_args[@]+"${tools_args[@]}"}); then
+            echo "::warning title=Compile cache off::no toolchain salt for this run (above) — every entry is compiled"; exit 0
+          fi
+          echo "compile cache salt: $salt"
+          plan="$RUNNER_TEMP/ccache-plan.json"
+          if ! python3 "$cc" plan --repo . --modules "@$RUNNER_TEMP/ccache-selection.json" --salt "$salt" --out "$plan"; then
+            echo "::warning title=Compile cache off::the plan failed — every entry is compiled"; exit 0
+          fi
+          if ! python3 "$cc" restore --plan "$plan" --store "$STORE" --store-id "$STORE_ID" --trust "$trust" \
+                 --stage "$RUNNER_TEMP/ccache-stage" --misses "$RUNNER_TEMP/ccache-misses.txt"; then
+            echo "::warning title=Compile cache off::the restore failed — every entry is compiled"; exit 0
+          fi
+          hits=$(jq '[.[] | select(.hit)] | length' "$plan")
+          total=$(jq 'length' "$plan")
+          echo "### Compile cache: $hits of $total container entr(y|ies) reused" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.[] | "- `\(.module)` — \(.reason)"' "$plan" >> "$GITHUB_STEP_SUMMARY"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "hits=$hits" >> "$GITHUB_OUTPUT"
+          echo "plan=$plan" >> "$GITHUB_OUTPUT"
+          echo "misses=$RUNNER_TEMP/ccache-misses.txt" >> "$GITHUB_OUTPUT"
       # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
       # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
@@ -2420,9 +2547,25 @@ jobs:
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
           ACR_LOGIN: ${{ inputs.acr-login }}
+          CCACHE_MISSES: ${{ steps.ccache.outputs.misses }}
+          CCACHE_HITS: ${{ steps.ccache.outputs.hits }}
         run: |
           set -euo pipefail
           mapfile -t projects < <(jq -r '.[] | select(.build == "container") | .project' <<< "$MODULES")
+          # The compile cache served some entries: compile only the rest (the merge step lays the served
+          # ones into the output). Every entry served ⇒ no compile at all, and no image to load.
+          if [ -n "${CCACHE_MISSES:-}" ] && [ -f "$CCACHE_MISSES" ] && [ "${CCACHE_HITS:-0}" -gt 0 ]; then
+            mapfile -t projects < <(grep -v '^$' "$CCACHE_MISSES" || true)
+            if [ "${#projects[@]}" -eq 0 ]; then
+              out="$RUNNER_TEMP/module-build"
+              rm -rf "$out"; mkdir -p "$out"; chmod 777 "$out"
+              : > "$out/workspace-build.log"
+              echo "global build: every container entry ($CCACHE_HITS) is served by the compile cache — nothing to compile"
+              echo "built=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "global build: $CCACHE_HITS entr(y|ies) served by the compile cache; compiling the other ${#projects[@]}"
+          fi
           if [ "${#projects[@]}" -eq 0 ]; then
             echo "no container entries to compile — the global build has nothing to do (sdk-only selection, or every container entry is reused from the ledger)"
             echo "built=false" >> "$GITHUB_OUTPUT"
@@ -2571,6 +2714,14 @@ jobs:
           ref: ${{ needs.select.outputs.build-logic-ref }}
           path: build-logic
           sparse-checkout: .github/scripts
+      - name: Compile cache — lay the reused entries into the workspace
+        if: steps.ccache.outputs.enabled == 'true' && steps.ccache.outputs.hits != '0'
+        env:
+          PLAN: ${{ steps.ccache.outputs.plan }}
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/compile-cache-tools/workspace-compile-cache.py" merge \
+            --plan "$PLAN" --stage "$RUNNER_TEMP/ccache-stage" --out "$RUNNER_TEMP/module-build"
       # ───────────── THE BUILD ASSERTS ITS OWN POSTCONDITION (Plugins#1051) ─────────────
       # A green here used to mean "the compiler did not throw" and was read as "the selected set
       # was emitted". Those are different claims, and the gap between them surfaced N JOBS LATER:
@@ -2619,6 +2770,34 @@ jobs:
           else
             echo "::warning::uncarried-asset refusal NOT ENFORCED in this run — OBSERVE-ONLY: the pinned tester (tester-image-digest $TESTER_DIGEST) predates MeshWeaver#4445 and does not refuse a container bundle that lacks an asset for the target RID. It arms when the tester pin moves to a platform build carrying #4445."
           fi
+      # Only after the postcondition: an entry is kept only from a build that emitted the complete set.
+      # 🚨 ONLY A TRUSTED RUN WRITES (StandingBuildHosts §4's cache contract: a pull request never
+      # writes a shared cache). A pull request's workflow and build are its author's to change, and an
+      # entry it wrote under a key main later computes would put the author's bytes into main's
+      # bundles. So the default branch's push, schedule and dispatch runs fill the cache; every run
+      # reads it. A PR's unchanged entries hit what main compiled under the same key.
+      - name: Compile cache — keep what this run compiled
+        id: ccache-keep
+        if: >-
+          success() && steps.ccache.outputs.enabled == 'true' && steps.build.outputs.built == 'true'
+          && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+          && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'repository_dispatch')
+        env:
+          PLAN: ${{ steps.ccache.outputs.plan }}
+          STORE: ${{ needs.select.outputs.artifact-store }}
+          STORE_ID: ${{ needs.select.outputs.artifact-store-id }}
+        run: |
+          set -uo pipefail
+          tools="$RUNNER_TEMP/compile-cache-tools"
+          claims="$RUNNER_TEMP/ccache-claims.json"
+          echo '[]' > "$claims"
+          python3 "$tools/workspace-compile-cache.py" save --plan "$PLAN" --out "$RUNNER_TEMP/module-build" \
+            --store "$STORE" --store-id "$STORE_ID" --claims-out "$claims" \
+            || echo "::warning title=Compile cache not kept::the save failed — this run is unaffected"
+          echo "claims=$(jq -c . "$claims" 2>/dev/null || echo '[]')" >> "$GITHUB_OUTPUT"
+          # BOUNDED, like cache/module-pack-tool/: entries older than 7 days are evicted (a miss).
+          python3 "$tools/ci-artifact-store.py" prune --store "$STORE" --prefix cache/workspace-compile/ --older-than 7 \
+            || echo "::warning title=Compile cache not pruned::the prune of cache/workspace-compile/ failed — this run is unaffected"
       # ───────── THE LEDGER HEARS ABOUT THIS JOB — a heartbeat on success, the verdict on failure ─────────
       # A claim taken in `select` must stay fresh across this job (queue + up to 30 min of compile);
       # a heartbeat here keeps a follower from taking the key over mid-build. On failure the verdict
@@ -2730,6 +2909,11 @@ jobs:
       # reading a gate the lane itself introduced out of THAT tree is a file-not-found on every
       # satellite whose pin has not moved yet. A gate ships with the workflow that calls it.
       BUNDLE_STATIC_ASSETS: ${{ github.workspace }}/build-logic/.github/scripts/check-bundle-static-assets.py
+      # The required-module prune (container path) and the registry-bound size gate — build logic,
+      # from the same ref and for the same reason as the static-asset assertion above.
+      MODULE_REQUIRED_CLOSURE: ${{ github.workspace }}/build-logic/.github/scripts/module-required-closure.py
+      BUNDLE_SIZE: ${{ github.workspace }}/build-logic/.github/scripts/check-module-bundle-size.py
+      REGISTRY_MAX_BUNDLE_BYTES: ${{ inputs.registry-max-bundle-bytes }}
     # Inherit the caller's least-privilege map; declaring OIDC here rejects basic-auth callers at
     # graph creation time, before this job's `acr-login` mode can choose its conditional steps.
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
@@ -3536,6 +3720,22 @@ jobs:
                       echo "closure: $native RIDES — a native payload of the module's private closure (deps.json-derived, from the image or the shelf)"
                     done < "$packdir/module-natives.txt"
                   fi
+                  # 🚨 WHAT A REQUIRED MODULE SERVES IS NOT CARRIED (Plugins main run 42641639266:
+                  # Gmail and Mail at ~33.4 MB, refused by the registry with 413). The lists above
+                  # are the module's whole in-tree graph, so a module whose package REQUIRES another
+                  # in-repo module re-shipped that module's entry and its entire closure — 19 MB of
+                  # AI in Mail, 32.5 MB of Mail + AI in Gmail. The loader serves another installed
+                  # module's entry from that module's own context (ModuleLoadContext step 2), and a
+                  # required module is installed wherever its dependent is. The script keeps exactly
+                  # the AssemblyRef closure of this module's own code, stopping at those entries;
+                  # with no required in-repo module in reach it changes nothing and runs no dotnet.
+                  test -f "$MODULE_REQUIRED_CLOSURE" || { echo "::error::the resolved build-logic ref carries no .github/scripts/module-required-closure.py — move build-logic-ref to a commit that carries it."; exit 1; }
+                  python3 "$MODULE_REQUIRED_CLOSURE" \
+                    --repo-root "$GITHUB_WORKSPACE" \
+                    --package "$(bk get --module "$MODULE" package)" \
+                    --module "$MODULE" \
+                    --packdir "$packdir" \
+                    --pack-args "$packargs"
                   echo "closure: NO --deps-closure on the container path — there is no SDK deps.json to derive one from."
                   echo "closure: complete BY RECORD instead — the builder walked the module's own package references over the image's and the shelf's deps.json and copied everything the shared framework does not supply; it refuses BY NAME anything neither supplies, and this lane passes no --extra-refs."
                   # 🚨 THE BINDING IDENTITY, CHECKED (MeshWeaver#143): the expected value is the one
@@ -3929,6 +4129,10 @@ jobs:
                 --project "$GITHUB_WORKSPACE/$PROJECT" \
                 --manifest "$manifest" \
                 --build-output "$PACKDIR"
+              # 🚨 THE REGISTRY'S BOUND, MEASURED WHERE THE BUNDLE IS MADE — never learned from a 413
+              # at the end of a trunk run (Plugins main run 42641639266). Both lanes, no `if`.
+              test -f "$BUNDLE_SIZE" || { echo "::error::the resolved build-logic ref carries no .github/scripts/check-module-bundle-size.py — move build-logic-ref to a commit that carries it."; exit 1; }
+              python3 "$BUNDLE_SIZE" --bundle "$bundle" --limit "$REGISTRY_MAX_BUNDLE_BYTES"
               bk set --module "$MODULE" "bundle=$bundle"
               echo "bundle OK ($MODULE):"; jq . "$manifest"
             )
@@ -4540,6 +4744,9 @@ jobs:
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
           MSBUILD_EVALUATION: ${{ needs.select.outputs.msbuild-evaluation }}
           KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
+          GITHUB_TOKEN_FOR_RUNS: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
@@ -4560,6 +4767,21 @@ jobs:
           if [ "$tip" != "$mine" ]; then
             # Two trees, no history needed: both commits are present in this shallow clone.
             changed=$(git diff --no-renames --name-only "$mine" "$tip" | paste -sd, -)
+          fi
+          # 🚨 Stand down only for a tip run that is EXECUTING (module-publication.py `superseded`): a
+          # queued trunk run is displaced by the next push, so "that commit's own run publishes it" is
+          # not true of it. Unreadable PUBLISHES — the shelf keeps the highest version as head (#3996).
+          tip_run="unreadable"
+          if [ "$tip" != "$mine" ]; then
+            workflow_path="${CALLER_WORKFLOW_REF#"$REPO"/}"; workflow_path="${workflow_path%%@*}"
+            if GH_TOKEN="$GITHUB_TOKEN_FOR_RUNS" gh api "repos/$REPO/actions/runs?head_sha=$tip&per_page=100" > "$RUNNER_TEMP/tip-runs.json" 2>"$RUNNER_TEMP/tip-runs.err"; then
+              # A build-logic ref that predates `tip-run` cannot classify: that is `unreadable` (publishes), never a dead step.
+              tip_run=$(python3 build-logic/.github/scripts/module-publication.py tip-run --runs "@$RUNNER_TEMP/tip-runs.json" --workflow-path "$workflow_path") \
+                || { echo "the tip run's state could not be classified (build-logic without \`tip-run\`?) — reading it as unreadable, which publishes"; tip_run="unreadable"; }
+            else
+              echo "the tip run's state could not be read ($(head -c 300 "$RUNNER_TEMP/tip-runs.err" | tr '\n' ' ')) — reading it as unreadable, which publishes"
+            fi
+            echo "trunk tip $tip: its run of $workflow_path is $tip_run"
           fi
           # 🚨 THIS run's evaluation ∪ the newer TIP's, the same union the scope takes: a file the tip
           # deleted is listed by this tree, one it added (or an import it now declares) only by the
@@ -4585,6 +4807,8 @@ jobs:
                 echo "this run's commit $mine IS the trunk tip — nothing newer; publishing $MODULE"
               elif [ -z "$changed" ]; then
                 echo "the trunk moved to $tip, but its tree equals this run's — nothing newer reaches $MODULE; publishing"
+              elif [ "$tip_run" != "in_progress" ]; then
+                echo "the trunk moved to $tip, but its run is $tip_run, not running — nothing guarantees it reaches its hand-over; publishing $MODULE (the shelf never lets an older upload displace its head, #3996)"
               else
                 mkdir -p "$RUNNER_TEMP/mods/$MODULE"
                 bk entry --module "$MODULE" --phase publish | jq '[.]' > "$RUNNER_TEMP/mods/$MODULE/newer-entry.json"

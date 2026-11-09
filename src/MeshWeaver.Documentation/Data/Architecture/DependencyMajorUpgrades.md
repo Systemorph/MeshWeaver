@@ -512,3 +512,13 @@ infrastructure's — so ~2,000 `error xUnit1069` at core main, the break this wh
 classified as **unknown**, which suppresses the report and preserves the tracking issue rather than
 raising one. It now matches any diagnostic id except `MSB`/`NU`/`NETSDK`, which stay
 infrastructure.
+
+**A patch release can add a rule too: 4.0.2 → 4.0.3 brought `xUnit1073`** — *a
+`[CollectionDefinition]` that no `[Collection]` names is never used*. Measured 2026-11-09 with only
+the three `PackageVersion` lines of #8034 applied, `dotnet build -c Release -warnaserror` reported
+exactly one error each in `MeshWeaver.Graph.Test` (`SamplesGraphData`) and
+`MeshWeaver.Hosting.Orleans.Test` (`OrleansClusterCollection`). Both were truly dead — no
+`[Collection]` in either assembly named them, by literal, `nameof` or `typeof`; the Orleans classes
+take their cluster from `OrleansMeshTestBase`, and no Graph test class joined the serialized
+collection. Both definitions were **deleted, not suppressed**: a definition nothing joins changes no
+scheduling, so the deletion changes no test's behaviour.

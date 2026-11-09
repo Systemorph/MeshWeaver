@@ -336,6 +336,56 @@ Tests (`MeshWeaver.FaultInjection.Test`, real multi-silo Orleans test clusters):
   names the payload's `$type` and never `RawJson`. The asker's sentence is the catalog's in the asker's
   language, is not English for a German asker, and carries no router diagnostics.
 
+### The read recovers, end to end
+
+The cases above stop at the router: they show the asker is TOLD. What #7842 broke for a person was
+the READ. `CollaborativeMarkdownView` reads a document through the cache hub's `SubscribeRequest`, and
+the view failed with `TimeoutException … for request SubscribeRequest`. So one case runs the whole
+chain on production's directory: `ARemoteStreamOpenedDuringADirectoryLeaveLoadsTest`
+(`MeshWeaver.FaultInjection.Test`).
+
+- Three silos run `LocalGrainDirectory`.
+- The READER is a real hub (`silohub/…`) on silo 0. Its id is chosen so that its directory entry lives
+  on a second silo. The rig's `cache/…` is declared client-hosted, so it cannot take the pod-hub leg.
+  `silohub` is the rig's type that does, and it is the leg production's `cache/…` takes.
+- The node's per-node owner is activated on the third silo.
+- The second silo is held in `ShuttingDown`, and the reader's re-assertion is held.
+- Once both remaining directories have moved the entry off the leaving silo, the reader opens the
+  node's raw subscription (`GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>`). That is the
+  subscription the node-stream cache's own hub opens.
+
+- The node's path is chosen so that its OWN grain is not registered on the leaving silo, and the case
+  asserts the premise before it relies on it: the first thing the reader hears from the node is the
+  router's refused-reply report, from the owner placed on the third silo.
+
+🚨 **A leave on `LocalGrainDirectory` also moves the OWNERS.** Every silo deactivates each activation
+whose directory partition was on a silo that has entered a terminating status (Orleans'
+`LocalGrainDirectory.OnSiloStatusChange`). An owner registered on the leaving silo is therefore
+deactivated by the leave, and the next request re-activates it, prefer-local, on the ASKING silo, where
+its answer reaches the asker locally and never crosses the directory. The first version of the case did
+not choose the node's path. The case went red on main in about one run in three (`ac8a8fddb`): the read
+loaded inside the window. Locally the baseline failed 4 of 13 runs. With the path chosen, 20 of 20
+passed. Forcing the owner's registration ONTO the leaving silo failed 6 of 6, each time with the owner's
+answer (`RawJson`) arriving before any refusal. By the same mechanism (reasoned, not measured in production), some readers caught by the
+window are not affected at all, because their owner moved to their own pod. It changes nothing about the
+readers whose owner stayed.
+
+| Phase | What the read does |
+|---|---|
+| The window is open (2 s) | Nothing is delivered and nothing fails. The owner's answers are refused on the way back. `JsonSynchronizationStream` takes each named `ShuttingDown` failure as a routing-layer refusal (no owner banner) and re-asks, paced at 500 ms, within its 16-re-ask ride-out. |
+| The re-assertion lands | The read delivers the node within 10 s. |
+
+**Negative control** (measured locally, not committed): with the router's report to the asker removed
+(`AnswerPodHubNotHere` never calls `reportRefusedReplyToAsker`), the same case is red. The read
+delivers nothing within 10 s of the re-assertion landing, because nothing re-asks. The subscriber
+waits for its own 60 s budget, which is the production failure.
+
+So on current code, a reply lost in this window delays a read by the window plus at most one re-ask
+pace. The read no longer ends in a timeout. A window longer than the ride-out (16 × 500 ms) should end
+the stream with a named `SyncStreamOwnerRefusedException` instead of a 60 s timeout. That is reasoned
+from `JsonSynchronizationStream`'s route-refusal budget, not tested: no case holds the window past the
+ride-out.
+
 ### Part 1 (moving to `DistributedGrainDirectory`): DECIDED AGAINST, parked
 
 **Decision: stay on `LocalGrainDirectory`, ship part 2 only.** There is no directory switch, no
@@ -396,6 +446,10 @@ registrations are preserved and no duplicates occur in a mixed cluster.
   hosted there is not told, and the router logs the Warning. This was reasoned, not tested.
 - How late in a graceful stop the carrier stays reachable. The test holds the silo in `ShuttingDown`.
   After the message centre stops, the asker's process is going away and is not told.
+- That `CollaborativeMarkdownView` itself recovers. The end-to-end case drives the raw subscription
+  that the cache hub opens, from a `silohub` reader. It does not drive the view, the
+  `MeshNodeStreamCache` read gate, or a `cache/…` address, because the rig declares `cache/…`
+  client-hosted.
 - Whether a reply's DeliveryFailure always lands in a callback. If the asker's wait has already ended
   (its own budget elapsed), the failure arrives uncorrelated and is handled as an ordinary
   `DeliveryFailure` message.

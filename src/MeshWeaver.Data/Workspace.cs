@@ -41,6 +41,10 @@ using Microsoft.Extensions.Logging;
 // ends it when a delegated read is revoked or expires. That shape is exactly the raw single-node
 // subscribe, so it needs the sanctioned escape hatch.
 [assembly: InternalsVisibleTo("MeshWeaver.Graph.Test")]
+// The #7842 end-to-end case opens the raw single-node subscribe from a real pod-hub reader while
+// its grain-directory entry is lost — the subscription the node-stream cache's own hub opens, from
+// a hub the multi-silo rig can route as a pod hub (the rig's `cache/…` is client-hosted).
+[assembly: InternalsVisibleTo("MeshWeaver.FaultInjection.Test")]
 
 namespace MeshWeaver.Data;
 

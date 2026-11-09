@@ -86,6 +86,112 @@ public class ThreadPoolStallTest
         line.Should().Contain("at Held.Here()");
     }
 
+    /// <summary>The innermost 12 frames of the 2026-11-07 shape: a worker waiting on an Rx Zip gate.</summary>
+    private static string[] ZipWaiter() =>
+    [
+        "System.Threading.Monitor.Enter_Slowpath(System.Object)",
+        "System.Threading.Monitor.ReliableEnter(System.Object, Boolean ByRef)",
+        "System.Reactive.Linq.ObservableImpl.Zip+_.Observer.OnNext(System.Object)",
+        .. Enumerable.Range(1, ThreadPoolStall.FramesPerGroup - 3).Select(i => $"Rx.Inner{i}()"),
+    ];
+
+    private static string Stack(params string[] frames) =>
+        string.Join(Environment.NewLine, frames.Select(frame => "at " + frame));
+
+    /// <summary>
+    /// 🚨 Workers that share their innermost 12 frames but were called from DIFFERENT places must have
+    /// each caller named — the 2026-11-07 line keyed and printed 12 frames, so the caller was lost. The
+    /// control is the frame at index 12: present in the stack, printed by the new line.
+    /// </summary>
+    [Fact]
+    public void WorkersSharingTheirInnerFrames_EachDistinctOuterCallerIsPrintedOnce()
+    {
+        var stacks = new[]
+        {
+            Stack([.. ZipWaiter(), "EaGraphAuth+CredentialRead.Mailboxes()", "Caller.A()", "PortableThreadPool+WorkerThread.WorkerThreadStart()"]),
+            Stack([.. ZipWaiter(), "EaGraphAuth+CredentialRead.Mailboxes()", "Caller.A()", "PortableThreadPool+WorkerThread.WorkerThreadStart()"]),
+            Stack([.. ZipWaiter(), "EaGraphAuth+CredentialRead.Mailboxes()", "Caller.B()", "PortableThreadPool+WorkerThread.WorkerThreadStart()"]),
+        };
+
+        var line = ThreadPoolStall.Describe(Stalled(), stacks, null);
+
+        line.Should().Contain("3 worker stack(s) in 1 distinct shape(s)", "the group key is still the innermost 12 frames");
+        line.Should().Contain("-> ×2 called from:").And.Contain("-> ×1 called from:");
+        line.Should().Contain("at Caller.A()").And.Contain("at Caller.B()");
+        line.Should().Contain("at EaGraphAuth+CredentialRead.Mailboxes()",
+            "frame 13 — the one a 12-frame line could never show — is in the line");
+        line.IndexOf("Caller.A()", StringComparison.Ordinal).Should()
+            .BeLessThan(line.IndexOf("Caller.B()", StringComparison.Ordinal), "the most frequent caller first");
+    }
+
+    /// <summary>
+    /// A group waiting on a monitor names its lock site and every thread INSIDE that method without
+    /// waiting there — worker or not. A thread waiting at the same site is not a candidate (control),
+    /// and neither is one that never entered it (control).
+    /// </summary>
+    [Fact]
+    public void AGroupWaitingOnAMonitor_NamesTheLockSiteAndTheCandidateHolders()
+    {
+        var waiters = new[] { Stack([.. ZipWaiter(), "Worker.Loop()"]), Stack([.. ZipWaiter(), "Worker.Loop()"]) };
+        var others = new[]
+        {
+            Stack("System.Net.Http.HttpConnectionWaiter.Wait()", "Downstream.Blocking()",
+                "System.Reactive.Linq.ObservableImpl.Zip+_.Observer.OnNext(System.Object)", "Timer.Callback()"),
+            Stack("Unrelated.Idle()", "Timer.Other()"),
+        };
+
+        var line = ThreadPoolStall.Describe(Stalled(), waiters, null, others);
+
+        line.Should().Contain("LOCK waiting to enter a monitor at System.Reactive.Linq.ObservableImpl.Zip+_.Observer.OnNext(System.Object)");
+        line.Should().Contain("1 thread(s) are inside it without waiting there");
+        line.Should().Contain("at Downstream.Blocking()", "the holder's stack is printed in full");
+        line.Should().NotContain("Unrelated.Idle()", "a thread that never entered the lock site is not a candidate");
+        line.Should().Contain("2 other thread(s) searched for lock holders");
+    }
+
+    [Fact]
+    public void AMonitorGroupWithNoThreadInsideTheLockSite_SaysTheHolderIsOutsideTheCapture()
+        => ThreadPoolStall.Describe(Stalled(), [Stack([.. ZipWaiter(), "Worker.Loop()"])], null, [])
+            .Should().Contain("NO captured thread is inside that method without waiting there — every managed thread was read");
+
+    /// <summary>
+    /// When the other threads were NOT read (null), an empty holder list must not be blamed on native
+    /// code — the line says the non-pool threads were not searched. Control: the read-and-empty case above.
+    /// </summary>
+    [Fact]
+    public void AMonitorGroupWhoseOtherThreadsWereNotRead_SaysSo_InsteadOfBlamingNativeCode()
+    {
+        var line = ThreadPoolStall.Describe(Stalled(), [Stack([.. ZipWaiter(), "Worker.Loop()"])], null, otherThreads: null);
+
+        line.Should().Contain("the other threads were NOT read");
+        line.Should().Contain("a holder on a non-pool thread (a timer, a scheduler) cannot be named by this capture");
+        line.Should().NotContain("every managed thread was read");
+    }
+
+    /// <summary>A group that is not waiting on a monitor prints no lock section.</summary>
+    [Fact]
+    public void AGroupNotWaitingOnAMonitor_PrintsNoLockSection()
+        => ThreadPoolStall.Describe(Stalled(), [Stack("Held.Here()", "Worker.Loop()")], null, [])
+            .Should().NotContain("LOCK");
+
+    /// <summary>
+    /// Full stacks are bounded by the line as a whole: groups past <see cref="ThreadPoolStall.MaxLineChars"/>
+    /// are counted, never cut mid-stack, and the line says the budget was spent.
+    /// </summary>
+    [Fact]
+    public void TheLineStaysWithinItsBudget_AndCountsTheShapesItCouldNotPrint()
+    {
+        var deep = Enumerable.Range(0, 8)
+            .Select(g => Stack([.. Enumerable.Range(0, 400).Select(f => $"Shape{g}.Frame{f}(System.String, System.Collections.Generic.IReadOnlyList`1<System.Object>)")]))
+            .ToArray();
+
+        var line = ThreadPoolStall.Describe(Stalled(), deep, null);
+
+        line.Length.Should().BeLessThanOrEqualTo(ThreadPoolStall.MaxLineChars + 200);
+        line.Should().Contain("budget is spent");
+        line.Should().Contain("Shape0.Frame399", "the first shape fits and is printed whole");
+    }
+
     [Fact]
     public void WithoutStacks_TheLineStillNamesTheStall_AndSaysWhyItCannotNameTheFrame()
     {

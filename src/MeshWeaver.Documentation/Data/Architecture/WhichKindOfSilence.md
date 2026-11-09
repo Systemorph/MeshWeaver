@@ -248,7 +248,7 @@ item while work was queued at both the previous tick and this one, it captures e
 their innermost 12 frames, the largest group first:
 
 ```
-[POOLSTALL] tick=1099: the ThreadPool completed no work item in the last 10.12s with 20357 queued over 69 thread(s). 69 worker stack(s) in 3 distinct shape(s), largest first (innermost 12 frames each):
+[POOLSTALL] tick=1099: the ThreadPool completed no work item in the last 10.12s with 20357 queued over 69 thread(s). 69 worker stack(s) in 3 distinct shape(s), largest first (grouped by the innermost 12 frames, each distinct caller in full; N other thread(s) searched for lock holders):
   ×61:
      at <the frame the pool is held in>
      …
@@ -260,6 +260,29 @@ their innermost 12 frames, the largest group first:
   it back with ClrMD, then deletes the file. This is the same reader, with the same DAC pin, that the
   silo stop uses for leaves that outlive its join (#7277): `BlockedThreadStacks.CaptureThreadPoolWorkers`,
   registered as `IThreadPoolWorkerStacks` by `AddThreadPoolWorkerStacks()` in every Orleans silo.
+- **Outer callers and lock holders (#5388, after the 2026-11-07 capture).** That capture named the
+  frame — ≥13 workers in `Monitor.Enter_Slowpath` inside an Rx `Zip` gate under
+  `EaGraphAuth+CredentialRead` — but cut every stack at 12 frames, so it named neither the caller
+  that led the workers into the gate nor the thread holding it. The capture now reads every live
+  managed thread to 512 frames, and the line prints:
+  - each group's shared innermost 12 frames once, then every distinct **outer continuation** in
+    full (`-> ×N called from:`), most frequent first, up to `MaxCallersPerGroup` (4);
+  - for a group waiting to enter a monitor, its **lock site** (the first frame outward of the
+    `System.Threading.Monitor` frames) and every captured thread — pool worker or not — that is
+    inside that method WITHOUT waiting to enter it there (`LOCK ×N candidate holder:`, full stack).
+
+  🚨 **A candidate is not a proven owner.** A `Normal` minidump carries no sync-block table:
+  measured on macOS, ClrMD enumerates **0** sync blocks from a 28 MB `Normal` dump of a process
+  whose monitor had three waiters, while a `WithHeap` dump of the same process (410 MB, ~1 s) names
+  the owner thread. A heap dump of a multi-GB portal would suspend it in proportion to its heap, so
+  the capture stays `Normal` and the owner is inferred: a thread inside the same method may hold a
+  different instance's gate. `NO captured thread is inside that method` means the holder is in native
+  code or left the method still holding the lock.
+
+  **Size.** The line is bounded as a whole: `ThreadPoolStall.MaxLineChars` (96,000 characters, under
+  Loki's default 256 KB line limit). Groups are appended largest first until the next would not
+  fit, and the rest are counted with "budget is spent". The old line was at most 8 × 12 frames,
+  about 10–15 KB; the new one is at most ~94 KB once per 30 minutes per pod.
 - **Cost.** The dump suspends the process for about a second. It is taken at most once every
   30 minutes (`ThreadPoolStall.CaptureCooldown`), and only after a whole period in which the pool
   served nothing.
@@ -275,7 +298,10 @@ their innermost 12 frames, the largest group first:
   negative control takes the
   same capture with nothing parked and must not find the method. `ThreadPoolStallTest` pins the
   decision (stalled, idle, busy, first tick, cooldown) and the line's grouping and ordering over
-  controlled inputs.
+  controlled inputs. `WorkersWaitingOnAMonitor_TheLineNamesTheirOuterCallerAndTheCandidateHolder`
+  parks pool workers 20 frames below a known outer method, waiting on a monitor a dedicated
+  non-pool thread holds, and requires the line from a real dump to name the outer method (asserted
+  to sit deeper than frame 12, so a 12-frame line cannot pass) and the holder's frame.
 
 ### The stall that made this necessary
 

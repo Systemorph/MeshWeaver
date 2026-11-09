@@ -193,6 +193,56 @@ public sealed class DataVolumeUsageTest : IDisposable
     }
 
     [Fact]
+    public void A_store_root_not_created_yet_on_a_mounted_volume_is_an_empty_complete_reading()
+    {
+        // The control instance, 2026-11-09: /artifacts is mounted, /artifacts/linux-x64/prebuilt-bundles
+        // has never been written, and every pass FAULTED with DirectoryNotFoundException — Degraded for good.
+        var store = Path.Combine(root, "linux-x64", "prebuilt-bundles");
+        var mounts = ImmutableHashSet.Create(StringComparer.Ordinal, root);
+
+        var reading = DataVolumeUsage.Measure(store, mounts, () => Now);
+
+        reading.Fault.Should().BeNull();
+        reading.NotCreatedYetOn.Should().Be(DataVolumeUsage.Canonical(root));
+        reading.TotalBytes.Should().Be(0);
+        DataVolumeUsage.Describe(reading).Should().Contain("does not exist yet");
+        var census = new DataVolumeUsageCensus();
+        census.SetRoots([store]);
+        DataVolumeUsageHostedService.Apply(census, store, () => reading, logger: null);
+        census.IsDegraded.Should().BeFalse();
+        census.Describe().Should().NotContain("NOT MEASURED YET");
+    }
+
+    [Fact]
+    public void A_root_with_no_volume_mounted_above_it_stays_a_fault()
+    {
+        // The negative control: the same absent path with nothing mounted above it is a dropped mount.
+        var reading = DataVolumeUsage.Measure(Path.Combine(root, "absent"), ImmutableHashSet<string>.Empty, () => Now);
+
+        reading.Fault.Should().NotBeNull();
+        reading.NotCreatedYetOn.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_root_that_vanishes_on_a_mounted_volume_after_a_good_walk_still_degrades()
+    {
+        var store = Path.Combine(root, "store");
+        Directory.CreateDirectory(Path.Combine(store, "a"));
+        System.IO.File.WriteAllBytes(Path.Combine(store, "a", "x.bin"), new byte[10 * KiB]);
+        var mounts = ImmutableHashSet.Create(StringComparer.Ordinal, root);
+        var census = new DataVolumeUsageCensus();
+        census.SetRoots([store]);
+        DataVolumeUsageHostedService.Apply(census, store, () => DataVolumeUsage.Measure(store, mounts, () => Now), logger: null);
+        Directory.Delete(store, recursive: true);
+
+        DataVolumeUsageHostedService.Apply(census, store, () => DataVolumeUsage.Measure(store, mounts, () => Now), logger: null);
+
+        census.IsDegraded.Should().BeTrue();
+        census.Latest[DataVolumeUsage.Canonical(store)].TotalBytes.Should().Be(10 * KiB);
+        census.Describe().Should().Contain("no longer exists");
+    }
+
+    [Fact]
     public void The_interval_defaults_and_is_clamped_to_its_floor()
     {
         DataVolumeUsage.IntervalOf(null).Should().Be(DataVolumeUsage.DefaultInterval);
