@@ -332,6 +332,31 @@ permissions are first exercised by the first scheduled run (maintainer step 9).
   `modules/*.module.nupkg`. A client control's own landings fill its shared module tier. Our control's
   landed generations are not replicated as such.
 
+## An empty store reads Healthy, a missing mount does not
+
+A store root the record renders (`PreWarm:PrebuiltBundleRoot=<mount>/{rid}/prebuilt-bundles`) is
+created by its FIRST write. Until something writes a bundle there — on the control instance nothing
+had, because a closed-type-set image compiles and adopts no in-mesh type — the directory does not
+exist, and both data-volume checks used to call that a fault. Measured on the control instance after
+the 3.1.12855 roll (2026-11-09, every replica): `data_volume_free_space: Degraded —
+/artifacts/linux-x64/prebuilt-bundles: free space could not be measured (DriveNotFoundException …)`
+and `data_volume_usage: Degraded — … the LATEST pass over /artifacts/linux-x64/prebuilt-bundles
+FAULTED (DirectoryNotFoundException …)`, with `/artifacts` mounted (`control-artifacts`) and
+`/artifacts/linux-x64` present and empty. The deployment was right; the instrument was not.
+
+The rule now (`DataVolumeFreeSpace.ProbeWithin`, `DataVolumeUsage.Measure`):
+
+| the configured root | free space | usage census |
+|---|---|---|
+| exists | measured, as before | walked, as before |
+| absent, a volume is mounted above it (`DataVolumeFreeSpace.MountAbove`, never `/`) | that volume, marked *not created yet* — Healthy unless low | an empty, complete reading: *does not exist yet* — Healthy |
+| absent, only the root filesystem above it | FAULT: *no volume is mounted above it* — Degraded | FAULT — Degraded |
+| measured once, then gone | — | FAULT: *no longer exists after a measured walk*; the last walk stays published |
+
+The third row is what a dropped volume mount looks like, so it stays Degraded on purpose. Pinned by
+`DataVolumeFreeSpaceTest` and `DataVolumeUsageTest` (MeshWeaver.Hosting.Test), each with its negative
+control.
+
 ## Retention and the prune job
 
 The store has ONE owner, so it has ONE sweep and ONE inventory: control's standing `StoragePrune`

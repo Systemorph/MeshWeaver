@@ -60,6 +60,15 @@ public sealed record DataVolumeUsageReading(
 
     /// <summary>Directories anywhere under the root that could not be enumerated.</summary>
     public int UnreadableDirectories => Directories.Sum(d => d.UnreadableDirectories);
+
+    /// <summary>
+    /// The mount point of the volume <see cref="Root"/> will be created on, when the root does not
+    /// exist YET — a configured store root nothing has written to (the control instance's
+    /// <c>/artifacts/{rid}/prebuilt-bundles</c> before its first bundle). Such a reading is complete
+    /// and empty: nothing is stored there. Null for a root that exists. A root with no volume mounted
+    /// above it is never this — it is a <see cref="Fault"/>, because that is a dropped mount.
+    /// </summary>
+    public string? NotCreatedYetOn { get; init; }
 }
 
 /// <summary>
@@ -172,6 +181,14 @@ public static class DataVolumeUsage
         var rootPath = Canonical(root);
         cancellationToken.ThrowIfCancellationRequested();
         var foreignMounts = mountPoints.Remove(rootPath);
+        if (!Directory.Exists(rootPath)
+            && DataVolumeFreeSpace.MountAbove(rootPath, mountPoints) is { } mount
+            && Directory.Exists(mount))
+            return new DataVolumeUsageReading(rootPath, nowUtc(), nowUtc() - started,
+                ImmutableList<DataVolumeUsageEntry>.Empty, 0, 0, null)
+            {
+                NotCreatedYetOn = mount,
+            };
         DirectoryInfo[] directories;
         FileInfo[] looseFiles;
         try
@@ -317,6 +334,9 @@ public static class DataVolumeUsage
                 + "An absent reading is not an empty volume.";
         if (reading.Fault is not null)
             return $"{reading.Root} could not be enumerated at {Stamp(reading.TakenAtUtc)}: {reading.Fault} — nothing was measured.";
+        if (reading.NotCreatedYetOn is { } volume)
+            return $"{reading.Root} does not exist yet at {Stamp(reading.TakenAtUtc)} — nothing is stored there; "
+                + $"its volume is mounted at {volume} and the directory is created by its first write.";
 
         var total = reading.TotalBytes;
         var text = new StringBuilder();

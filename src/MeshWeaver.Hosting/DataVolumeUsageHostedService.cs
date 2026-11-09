@@ -120,6 +120,20 @@ public sealed class DataVolumeUsageHostedService(
                 + "the next pass walks again", root, reading.Fault);
             return;
         }
+        // A root that does not exist YET is a complete, empty reading — but only while it never
+        // existed on this replica. Once a walk has measured it, its disappearance is a fault: the last
+        // real measurement stays published and the check names it (the vanished-root rule above).
+        if (reading.NotCreatedYetOn is not null
+            && census.Latest.TryGetValue(DataVolumeUsage.Canonical(root), out var previous)
+            && previous.NotCreatedYetOn is null)
+        {
+            const string vanished = "the root no longer exists after a measured walk";
+            census.RecordFault(root, vanished);
+            logger?.LogWarning(
+                "DataVolumeUsage: {Root} {Fault} — the previous reading stays, the next pass walks again",
+                root, vanished);
+            return;
+        }
         census.Record(reading);
         logger?.LogInformation("DataVolumeUsage: {Reading}", DataVolumeUsage.Describe(reading));
     }
