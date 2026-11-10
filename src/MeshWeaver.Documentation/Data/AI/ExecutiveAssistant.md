@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "The Executive Assistant Agent"
-Abstract: "A personal agent that works your own mailbox, calendar and Teams — triage and write mail, read your inbox, do your booking, read your teams' channels and your chats — under per-user, just-in-time delegated consent: no app-wide Graph access, an encrypted per-user refresh token, and short-lived delegated tokens that call Graph as you."
+Abstract: "A personal agent that works your own mailbox, calendar, Teams and SharePoint — triage and write mail, read your inbox, do your booking, read your teams' channels and your chats, find and read SharePoint files and, where the deployment allows it, create new ones — under per-user, just-in-time delegated consent: no app-wide Graph access, an encrypted per-user refresh token, and short-lived delegated tokens that call Graph as you."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#6a1b9a'/><rect x='4' y='9' width='16' height='10' rx='2' fill='white'/><path d='M9 9V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/><rect x='10.5' y='12' width='3' height='2' rx='0.5' fill='#6a1b9a'/></svg>"
 Thumbnail: "images/agenticai.svg"
 Authors:
@@ -52,6 +52,7 @@ The EA agent declares the `Mesh` + `ExecutiveAssistant` plugins. The `ExecutiveA
 | Mailings | `PrepareMailing` — one subject and body template merged per recipient into personal mails, saved as a page the person reviews; **never sends** — see below |
 | Calendar | `ListEvents`, `GetEvent`, `CreateEvent` (book + invite attendees), `UpdateEvent`, `CancelEvent` |
 | Teams | `ListTeams`, `ListChannels`, `ReadChannelMessages`, `ListChats`, `ReadChat` — the user's own organisation's teams and chats; and `PostChannelMessage`, `ReplyToChannelMessage`, `SendChatMessage` **only where the deployment opted in** (`Teams:AgentSend=Send`), see below |
+| SharePoint &amp; OneDrive | `SearchSharePoint`, `ListSharePointFolder`, `ReadSharePointFile` — search there, read live, copy nothing into the mesh; and `CreateSharePointFile` **only where the deployment opted in** (`SharePoint:AgentWrite=Write`): it creates new files and never replaces one, see below |
 
 Example asks: *"Book 30 min with Alice next Tuesday afternoon and invite her"*, *"reply to the vendor that
 we accept"*, *"clear my Friday"*, *"email me when an approval needs me"* (the last manages your
@@ -202,6 +203,34 @@ agent states rather than hides:
   on later does not cost every user a second reconnect. In `Send` mode there is no per-message
   confirmation — the same boundary `Email:AgentSend=Send` has, and the same approval-gate work
   closes both.
+
+### SharePoint writes are create-only, and off unless the deployment says so
+
+Reading SharePoint and OneDrive uses the same grant once the deployment adds the read scopes. Writing is
+a separate decision, recorded on
+[MeshWeaver.Plugins#4982](https://github.com/Systemorph/MeshWeaver.Plugins/issues/4982) as *create-only,
+off by default*. One switch, **`SharePoint:AgentWrite`**, governs both halves, and only the word `Write`
+turns it on:
+
+- **The scope.** With the switch on, the connection also asks Microsoft for `Files.ReadWrite.All`.
+  With it off (unset, `true`, `1`, a typo), the connection asks for no write scope. Like any added scope,
+  turning it on asks every person on the instance to reconnect once; the Mail accounts view tells them
+  why, in their own language.
+- **The tool.** With the switch on, the model is handed `CreateSharePointFile(driveId, folderItemId,
+  name, text | sourcePath)`. With it off, the tool is not in the model's toolset at all, and the method
+  refuses by name if reached directly.
+- **Create, never replace.** The tool looks the name up in the target folder first and refuses an
+  existing one before anything is sent. The upload repeats the guarantee at Microsoft
+  (`conflictBehavior=fail`), so a name that appeared in between is refused too. A wrong file is
+  therefore always a new file the person can delete. Overwriting would be irreversible, so it waits for
+  a per-write approval the person signs, and is not offered.
+- **Content.** Text is written as UTF-8. A binary file (a PDF the round exported) is named by its mesh
+  path and read server-side for the caller, so its bytes never pass through the model. Up to 4 MB.
+- **The person's own permissions.** The grant is delegated: a folder the person cannot write is refused
+  by Microsoft, and the answer names the scope and the switch.
+
+The full manual (endpoints, refusals, what was not measured) is the plugin page *Microsoft Graph
+scopes* (`Mail/MicrosoftGraphScopes`) → *Writing to SharePoint*.
 
 ### Editing an event is READ then PATCH, never cancel-and-recreate
 
