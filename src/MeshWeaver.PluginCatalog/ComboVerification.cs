@@ -77,6 +77,15 @@ public sealed record ModuleVerification
     /// first. Empty for <see cref="ModuleVerificationOutcome.Passed"/>.
     /// </summary>
     public ImmutableList<string> Failures { get; init; } = [];
+
+    /// <summary>
+    /// The gate's failing checks for this module that its SOURCE REPOSITORY declares as known debt
+    /// (<see cref="ModuleAssembly.KnownDebt"/>, MeshWeaver#4413) — reported with their diagnostics,
+    /// never counted against the candidate. A module whose every failure is listed here is
+    /// <see cref="ModuleVerificationOutcome.Passed"/>; one failure that is not listed keeps it
+    /// <see cref="ModuleVerificationOutcome.Failed"/>.
+    /// </summary>
+    public ImmutableList<string> KnownDebt { get; init; } = [];
 }
 
 /// <summary>

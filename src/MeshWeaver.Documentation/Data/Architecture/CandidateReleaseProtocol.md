@@ -98,6 +98,30 @@ both empty:
 - `Failed` — attempted, with its own diagnostics.
 - `Blocked` — not attempted, naming the upstream that produced no assembly.
 
+### Known debt the source repository declares
+
+A node repository's own gate tolerates the failures listed in its `plugin-gate.allow`. An example
+is an executable spec whose live rows stay red until the platform gaps they name land. The combo
+gate holds each module to the same standard. It reads that file from the repository root, at the
+commit the module was materialised from. A failing check whose `<scope> <check>` the file names is
+recorded on the module as **known debt**. It appears in a caveat and in the run summary, and it does
+not count against the candidate. A module whose every failure is known debt passes.
+
+- The match is exact on scope and check, like the tester's ratchet. A failure the file does not
+  name is still a failure, and debt for one check excuses no other.
+- The tester runs without any allow file, so tolerated debt makes it exit 1. That exit counts as
+  explained only when known debt is the report's only failing signal. A package-level content error
+  beside it keeps the run `NotVerifiable`.
+- A malformed file honours nothing, and a caveat names the bad line.
+- The file is read only for a whole-repository fetch (an installed package folder). A module
+  fetched as a subdirectory has no repository root in its tree, so it carries no known debt.
+- Stale entries (a listed check that now passes) are the source repository's ratchet to fail. A
+  combo verdict is about the candidate, so it neither fails nor reports them.
+
+Before this, every instance carrying the plugins repository's `Testing` package read `Red` on every
+candidate. The three end-vision specs, all listed in that repository's allow file, failed by design.
+The verdict was about debt the source had already declared, not about the candidate (MeshWeaver#4413).
+
 ## Design decisions
 
 **Cycles.** `Store/Coupon`, `Store/Order` and `Store/Plugin` form a genuine source cycle today

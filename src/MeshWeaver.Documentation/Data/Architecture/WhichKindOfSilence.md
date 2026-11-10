@@ -283,9 +283,24 @@ their innermost 12 frames, the largest group first:
   Loki's default 256 KB line limit). Groups are appended largest first until the next would not
   fit, and the rest are counted with "budget is spent". The old line was at most 8 × 12 frames,
   about 10–15 KB; the new one is at most ~94 KB once per 30 minutes per pod.
+- **The second trigger: queue delay (#5388, after the 2026-11-09 stalls).** The no-progress rule
+  missed five of the six stalls logged in the three days after the capture shipped; only one
+  (2026-11-08 13:29Z, `…697fc49dc8-fvqn2`) printed a `[POOLSTALL]` line. On `…5cf7b87497-4l9xx`
+  (2026-11-09 22:55Z) Orleans logged 15.6 s and 10.1 s stalls while the heartbeat read
+  `poolPending=11196 poolCompleted(+9310)` and `poolPending=11813 poolCompleted(+1284)`: a burst of
+  ~11,000 items that 32 threads were still draining. Every period completed *something*, so the
+  rule never fired, yet every item behind the burst — Orleans' health-monitor timer included —
+  waited 15 s. `LocalSiloHealthMonitor` measures that wait, not the completion count. So the
+  heartbeat thread now also keeps ONE probe work item in the ThreadPool's global queue
+  (`ThreadPoolQueueProbe`), polls it every 250 ms slice, and captures when the probe has waited
+  `ThreadPoolStall.QueueDelayCaptureThreshold` (5 s, half the 10 s at which the Orleans reading is
+  filed) without starting. The line then begins `a probe work item queued N s ago had not started`,
+  and its groups name what the workers were busy with while the queue backed up. The two triggers
+  share one cooldown and one in-flight capture.
 - **Cost.** The dump suspends the process for about a second. It is taken at most once every
   30 minutes (`ThreadPoolStall.CaptureCooldown`), and only after a whole period in which the pool
-  served nothing.
+  served nothing, or once a queued item has waited 5 s. The probe itself is one queued no-op at a
+  time.
 - **When it cannot read stacks.** The line still prints and says why: no reader registered in this
   host, the capture failed (with the exception), or the dump held no pool worker.
 - **A missing `[POOLSTALL]` line does NOT rule out starvation.** Three cases print none for a real
@@ -298,7 +313,9 @@ their innermost 12 frames, the largest group first:
   negative control takes the
   same capture with nothing parked and must not find the method. `ThreadPoolStallTest` pins the
   decision (stalled, idle, busy, first tick, cooldown) and the line's grouping and ordering over
-  controlled inputs. `WorkersWaitingOnAMonitor_TheLineNamesTheirOuterCallerAndTheCandidateHolder`
+  controlled inputs; `ABacklogThePoolIsStillDraining_IsMissedByNoProgress_AndCaughtByQueueDelay`
+  replays the two 4l9xx ticks verbatim, and `ThreadPoolQueueProbeTest` pins the probe (one item in
+  flight, wait measured from its own queueing, and a real-pool positive control). `WorkersWaitingOnAMonitor_TheLineNamesTheirOuterCallerAndTheCandidateHolder`
   parks pool workers 20 frames below a known outer method, waiting on a monitor a dedicated
   non-pool thread holds, and requires the line from a real dump to name the outer method (asserted
   to sit deeper than frame 12, so a 12-frame line cannot pass) and the holder's frame.
