@@ -89,6 +89,38 @@ public static class InstanceRegistrationPayloads
         public string? TermsHash { get; init; }
     }
 
+    /// <summary>
+    /// <c>POST</c> <see cref="PlanRedeemRequest"/> — an ALREADY-REGISTERED instance redeems a
+    /// registration key for a higher plan (an upgrade only, never a downgrade). Authorised by
+    /// possession of BOTH keys: the instance's own durable key in <c>Authorization: Bearer mwi_…</c>
+    /// (a short-lived token is refused) and the registration key in the body.
+    /// <list type="table">
+    /// <item><term>200</term><description><see cref="PlanRedeemResponse"/>, <see cref="OutcomeUpgraded"/>
+    /// or <see cref="OutcomeUnchanged"/> — the key's use is stamped either way</description></item>
+    /// <item><term>401</term><description>the instance key is not accepted, or the registration key is
+    /// unknown, revoked, expired or used up</description></item>
+    /// <item><term>409</term><description>the key's plan is lower than the instance's, or it carries no
+    /// plan the registry knows — nothing changed, nothing used</description></item>
+    /// </list>
+    /// </summary>
+    public const string PlanRedeemRoute = "/api/instances/self/plan/redeem";
+
+    /// <summary>The <see cref="PlanRedeemResponse.Outcome"/> of a redemption that raised the plan.</summary>
+    public const string OutcomeUpgraded = "upgraded";
+
+    /// <summary>The <see cref="PlanRedeemResponse.Outcome"/> of a redemption that found the plan already there.</summary>
+    public const string OutcomeUnchanged = "unchanged";
+
+    /// <summary>The body of a plan redemption: the raw registration key (<c>mwr_…</c>).</summary>
+    /// <param name="RegistrationKey">The key.</param>
+    public sealed record PlanRedeemRequest(string RegistrationKey);
+
+    /// <summary>The answer of a successful plan redemption.</summary>
+    /// <param name="InstanceId">The instance the presented instance key belongs to.</param>
+    /// <param name="Outcome"><see cref="OutcomeUpgraded"/> or <see cref="OutcomeUnchanged"/>.</param>
+    /// <param name="Plan">The plan on the instance's record afterwards.</param>
+    public sealed record PlanRedeemResponse(string InstanceId, string Outcome, string? Plan);
+
     /// <summary>The success response: the registered id, and the instance key — the ONLY time it is
     /// available in the clear. The caller must persist it now or lose it.</summary>
     public record Response(string InstanceId, string InstanceKey)
@@ -167,6 +199,35 @@ public sealed class InstanceRegistrationClient(IMessageHub hub)
                 throw new InstanceRegistrationException(resp.StatusCode,
                     $"Instance registration at {url} returned no instance key.");
             return parsed;
+        });
+
+    /// <summary>
+    /// Redeems <paramref name="registrationKey"/> for the instance <paramref name="instanceKey"/>
+    /// authenticates (<see cref="InstanceRegistrationPayloads.PlanRedeemRoute"/>). Cold; the call
+    /// happens on Subscribe. A refusal carries its status (401 / 409 / 404 from a registry that
+    /// predates the route) as an <see cref="InstanceRegistrationException"/>.
+    /// </summary>
+    public IObservable<InstanceRegistrationPayloads.PlanRedeemResponse> RedeemPlanKey(
+        string registryUrl, string instanceKey, string registrationKey) =>
+        _httpPool.Invoke(async ct =>
+        {
+            var url = $"{(registryUrl ?? "").TrimEnd('/')}{InstanceRegistrationPayloads.PlanRedeemRoute}";
+            var json = JsonSerializer.Serialize(
+                new InstanceRegistrationPayloads.PlanRedeemRequest(registrationKey), InstanceRegistrationPayloads.Json);
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            };
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", instanceKey);
+            using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
+            var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+                throw new InstanceRegistrationException(resp.StatusCode,
+                    $"Plan redemption at {url} failed ({(int)resp.StatusCode}): {text}");
+            return JsonSerializer.Deserialize<InstanceRegistrationPayloads.PlanRedeemResponse>(
+                       text, InstanceRegistrationPayloads.Json)
+                   ?? throw new InstanceRegistrationException(resp.StatusCode,
+                       $"Plan redemption at {url} answered no body.");
         });
 }
 

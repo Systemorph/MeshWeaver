@@ -124,8 +124,25 @@ public record MeshWeaverInstance
     /// package it serves against this plan and the package's declared tier
     /// (<see cref="PlanTierRanks.CoversInstance(string?, string?, string?)"/>); a <see cref="PluginGrant"/> entry says WHICH
     /// sources and packages, and can at most cap the plan, never raise it.
+    /// <para>Besides a global admin, ONE other act raises it: the instance itself redeeming a valid,
+    /// unspent registration key for a HIGHER plan (<see cref="PlanSetVia"/> then names the key) —
+    /// never a downgrade.</para>
     /// </summary>
     public string? Plan { get; init; }
+
+    /// <summary>
+    /// When <see cref="Plan"/> was last changed after registration — by a global admin or by a
+    /// redeemed registration key. Null for a plan that is still the one registration wrote. The
+    /// audit half of the plan, beside the log line each change writes.
+    /// </summary>
+    public DateTimeOffset? PlanSetAt { get; init; }
+
+    /// <summary>
+    /// What last changed <see cref="Plan"/>: <c>global administrator &lt;id&gt;</c>, or
+    /// <c>registration key &lt;key node path&gt;</c> for a plan an instance raised by redeeming a key.
+    /// Null while the plan is the one registration wrote.
+    /// </summary>
+    public string? PlanSetVia { get; init; }
 }
 
 /// <summary>
