@@ -272,6 +272,26 @@ new NavLinkControl(codeNode.Name, icon, codeHref);
 
 The Code node handles all of its own display logic. The parent simply points at it.
 
+# Page Width — a node page fills the window
+
+A node page **fills the content pane**; there is no centred column by default. This is the one
+wide-window rule shared by every client (MeshWeaver.Plugins#5317, `clients/react/src/theme/layout.ts`,
+mirrored in the Blazor `standard-page-layout.css`):
+
+- **The shell owns the gutter**, which grows with the window: 16px below 760px (a phone), 24px from
+  760px, 32px from 1280px, 48px from 1920px. The page adds its own 24px inner padding.
+- **Reading text keeps its measure**: a rendered markdown's own paragraphs, lists, quotes and headings
+  stop at **100ch**, left-aligned beside the navigation.
+- **Structure takes the full width**: tables, data grids, code, images, card grids and authored HTML
+  blocks are not capped.
+
+`MeshNodeLayoutAreas.GetContainerStyle(host)` is the container every built-in node page (and every
+module page that wants the same geometry) applies. A width is **opt-in** — the caller's
+`maxWidthOverride`, then the node type's `PageMaxWidth`, then the hub's
+`configuration.Set(new PageLayoutOptions { MaxWidth = "960px" })` — and a declared width is a centred
+column of that width. Until 2026-11 an undeclared width was a centred 1200px column, which stranded
+the page in the middle of a wide window with empty bands on both sides.
+
 # Common Patterns
 
 ## Splitter with Nav Menu and Content Pane

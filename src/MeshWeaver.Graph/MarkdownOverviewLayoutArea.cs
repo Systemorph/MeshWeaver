@@ -303,7 +303,7 @@ public static class MarkdownOverviewLayoutArea
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var read = ReadMarkdownContent(node);
 
-        // Markdown pages render full width (max-width: 100%), not the centered 1200px reading column.
+        // Markdown pages render full width, like every node page (GetContainerStyle — the wide-window rule).
         // STRETCH, explicitly (#6036): the markdown body has no width of its own, so under the stack's
         // default start alignment a table wider than the column made the body the table's max-content
         // width and the pane clipped it with no scrollbar. Stretched, the table wraps/scrolls in place.
