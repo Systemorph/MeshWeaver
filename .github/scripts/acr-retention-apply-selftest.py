@@ -69,8 +69,10 @@ ALLOWED = {
                                "--git-access-token"},
     ("acr", "task", "timer", "update"): {"--timer-name", "--schedule", "--enabled"},
     ("acr", "task", "timer", "add"): {"--timer-name", "--schedule", "--enabled"},
+    ("acr", "task", "list-runs"): {"--top", "--run-status", "--image"},
+    ("acr", "task", "logs"): {"--run-id", "--no-format", "--image"},
 }
-FLAGS = {"--only-show-errors", "--debug", "--verbose", "--no-push", "--no-cache"}
+FLAGS = {"--only-show-errors", "--debug", "--verbose", "--no-push", "--no-cache", "--no-format"}
 argv = sys.argv[1:]
 cmd = tuple(a for a in argv[:4] if not a.startswith("-"))
 key = cmd if cmd in ALLOWED else cmd[:3]
@@ -95,8 +97,31 @@ with open(STATE) as f:
     st = json.load(f)
 with open(STATE + ".log", "a") as f:
     f.write(json.dumps(argv) + "\n")
+if key == ("acr", "task", "logs"):
+    run = next((r for t in st["tasks"].values() for r in t.get("runs", [])
+                if r["runId"] == opts.get("--run-id")), None)
+    if run is None:
+        print(f"ERROR: run '{opts.get('--run-id')}' not found", file=sys.stderr); sys.exit(1)
+    if "--no-format" not in opts:
+        print("ERROR: fake az: the reader must ask for --no-format (colour codes break the parse)",
+              file=sys.stderr); sys.exit(2)
+    sys.stdout.write(run["log"]); sys.exit(0)
 name = opts.get("--name") or opts.get("-n")
 task = st["tasks"][name]
+if key == ("acr", "task", "list-runs"):
+    # The reader's query asks for the newest TERMINAL run as `runId status createTime`; the fake
+    # answers that question from its state and refuses any other query, so a changed query is a red.
+    want_q = ("[?status=='Succeeded' || status=='Failed' || status=='Error' || status=='Canceled' "
+              "|| status=='Timeout'] | sort_by(@, &createTime) | [-1].[runId,status,createTime]")
+    if opts.get("--query") != want_q:
+        print(f"ERROR: fake az does not model --query {opts.get('--query')}", file=sys.stderr); sys.exit(2)
+    done = sorted((r for r in task.get("runs", [])
+                   if r["status"] in ("Succeeded", "Failed", "Error", "Canceled", "Timeout")),
+                  key=lambda r: r["createTime"])
+    if done:
+        r = done[-1]
+        print(f"{r['runId']}\t{r['status']}\t{r['createTime']}")
+    sys.exit(0)
 if key == ("acr", "task", "show"):
     q = opts.get("--query")
     timers = task["timers"]
@@ -147,7 +172,8 @@ print("protection is current (fake verdict)")
 
 
 def setup(root: Path, with_timer: dict[str, bool], live_schedule: dict[str, str] | None = None,
-          protection: str = "green", record_edit=None) -> dict:
+          protection: str = "green", record_edit=None, applied: bool = False,
+          runs: dict[str, list] | None = None) -> dict:
     # A private copy of the scripts and the record, so neither the committed record's statuses nor
     # live GitHub state decide what this test exercises.
     tree = root / "tree"
@@ -167,6 +193,16 @@ def setup(root: Path, with_timer: dict[str, bool], live_schedule: dict[str, str]
                            "timers": [{"name": "t1", "schedule": (live_schedule or {}).get(t, "0 1 * * *")}]
                                      if with_timer[t] else []}
                        for t in TASKS}}
+    if applied:
+        # The registry as a successful apply leaves it: every task carries the recorded definition,
+        # status and schedule — the state a stand-alone `verify` reads on the governed path.
+        rec = json.loads((tree / "acr-retention" / "tasks.json").read_text())
+        for t in rec["tasks"]:
+            state["tasks"][t["name"]].update(
+                encoded=base64.b64encode((tree / "acr-retention" / t["file"]).read_bytes()).decode(),
+                status=t["status"], timers=[{"name": "t1", "schedule": t["schedule"]}])
+    for task, rs in (runs or {}).items():
+        state["tasks"][task]["runs"] = rs
     (root / "state.json").write_text(json.dumps(state))
     env = dict(os.environ)
     env.update(PATH=f"{bindir}{os.pathsep}{env['PATH']}", FAKE_AZ_STATE=str(root / "state.json"),
@@ -283,15 +319,110 @@ def main() -> int:
                 failures.append(f"apply refused on a GREEN protection verdict:\n"
                                 f"{(r.stdout + r.stderr)[-1500:]}")
 
+    # 7. THE NIGHTLY DRY RUN IS READ BACK (MeshWeaver#3438). The committed record runs
+    #    purge-old-images as an ENABLED dry-run report, so a stand-alone `verify` — the governed
+    #    action's read-only mode — must fetch the newest completed run and print, per repository,
+    #    what it would delete. Before this, `verify` compared definitions only and no governed
+    #    instrument read a task RUN, so the read-back `dryRun.liftWhen` asks for had no path.
+    dry_tasks = [t for t in (record.get("dryRun") or {}).get("tasks") or []
+                 if (record.get("dryRun") or {}).get("inForce") is True
+                 and str(want[t]["status"]).lower() == "enabled"]
+    if not dry_tasks:
+        failures.append("scenario 7 needs the committed record to run a task as an enabled dry run "
+                        "— the record no longer does; retire or re-target this scenario")
+    login = "meshweaver.azurecr.io"
+
+    def step_log(repo: str, tags: list[str], manifests: list[str], dry: bool = True,
+                 deleted: bool = False) -> str:
+        out = []
+        if dry:
+            out.append("DRY RUN: The following output shows what WOULD be deleted if the purge "
+                       "command was executed. Nothing is deleted.")
+        out.append(f"Would delete tags for repository: {repo}")
+        out += [f"Would delete: {login}/{repo}:{t}" for t in tags]
+        out.append(f"Would delete manifests for repository: {repo}")
+        out += [f"Would delete: {login}/{repo}@{d} (reason: untagged)" for d in manifests]
+        if deleted:
+            out += ["", f"Number of deleted tags: {len(tags)}", f"Number of deleted manifests: {len(manifests)}"]
+        else:
+            out += ["", f"Number of tags to be deleted: {len(tags)}",
+                    f"Number of manifests to be deleted: {len(manifests)}"]
+        return "\n".join(out) + "\n"
+
+    good = (step_log("mw-plugin-test", ["staging-1f652b7-34040888432", "8358471"], ["sha256:" + "a" * 64])
+            + step_log("memex-portal", ["3.0.0-ci.7903"], []))
+
+    def verify_with(runs: list) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as t:
+            env = setup(Path(t), {k: True for k in TASKS}, applied=True,
+                        runs={task: runs for task in dry_tasks})
+            return run(env, "verify")
+
+    for task in dry_tasks:
+        r = verify_with([{"runId": "ca1", "status": "Succeeded", "createTime": "2026-11-08T03:00:01Z",
+                          "log": "stale run, must not be read\n"},
+                         {"runId": "ca2", "status": "Succeeded", "createTime": "2026-11-09T03:00:01Z",
+                          "log": good},
+                         {"runId": "ca3", "status": "Running", "createTime": "2026-11-10T03:00:01Z",
+                          "log": ""}])
+        out = r.stdout + r.stderr
+        if r.returncode != 0:
+            failures.append(f"verify over a good nightly dry run exited {r.returncode}:\n{out[-1500:]}")
+        for needle in ("newest completed run ca2", "mw-plugin-test: 2 tag(s), 1 manifest(s)",
+                       "memex-portal: 1 tag(s), 0 manifest(s)",
+                       "would delete 3 tag(s) and 1 manifest(s) across 2 repository(ies)"):
+            if needle not in out:
+                failures.append(f"verify did not report `{needle}` for {task}'s nightly dry run")
+
+    # 8. …and the read-back REFUSES every reading it cannot stand behind (each must red verify).
+    bad_runs = {
+        "no completed run": [{"runId": "cb1", "status": "Running", "createTime": "2026-11-09T03:00:01Z", "log": ""}],
+        "a failed run": [{"runId": "cb2", "status": "Failed", "createTime": "2026-11-09T03:00:01Z", "log": good}],
+        "a step not marked DRY RUN": [{"runId": "cb3", "status": "Succeeded", "createTime": "2026-11-09T03:00:01Z",
+                                       "log": step_log("mw-plugin-test", ["8358471"], [])
+                                       + step_log("memex-portal", ["3.0.0-ci.7903"], [], dry=False)}],
+        "a step that DELETED": [{"runId": "cb4", "status": "Succeeded", "createTime": "2026-11-09T03:00:01Z",
+                                 "log": step_log("mw-plugin-test", ["8358471"], [])
+                                 + step_log("memex-portal", ["3.0.0-ci.7903"], [], deleted=True)}],
+        "a step that never reported": [{"runId": "cb5", "status": "Succeeded", "createTime": "2026-11-09T03:00:01Z",
+                                        "log": step_log("mw-plugin-test", ["8358471"], [])}],
+        "a purge that failed part-way": [{"runId": "cb6", "status": "Succeeded", "createTime": "2026-11-09T03:00:01Z",
+                                          "log": good + "Failed to complete purge: 403 \n"}],
+        "summaries that disagree with the list": [{"runId": "cb7", "status": "Succeeded",
+                                                   "createTime": "2026-11-09T03:00:01Z",
+                                                   "log": good.replace("Number of tags to be deleted: 1",
+                                                                       "Number of tags to be deleted: 9")}],
+        "an empty log": [{"runId": "cb8", "status": "Succeeded", "createTime": "2026-11-09T03:00:01Z", "log": ""}],
+    }
+    for label, runs in bad_runs.items():
+        if not dry_tasks:
+            break
+        r = verify_with(runs)
+        if r.returncode == 0:
+            failures.append(f"verify went GREEN over {label} — the dry-run read-back cannot fail on it")
+        if "it deleted nothing" in r.stdout:
+            failures.append(f"verify printed a clean dry-run verdict over {label} while going red")
+
+    # 9. An apply's own re-verify does NOT read a run (the newest one predates what it just wrote),
+    #    so enabling the report never fails on the run that has not happened yet.
+    with tempfile.TemporaryDirectory() as t:
+        env = setup(Path(t), {k: True for k in TASKS}, live_schedule={k: want[k]["schedule"] for k in TASKS})
+        r = run(env, "apply")
+        if r.returncode != 0 or "not read in an apply's re-verify" not in r.stdout:
+            failures.append(f"apply's re-verify tried to read a dry-run that predates it (exit "
+                            f"{r.returncode}):\n{(r.stdout + r.stderr)[-1500:]}")
+
     if failures:
         print("acr-retention apply self-test FAILED:")
         for f in failures:
             print(f"  ✗ {f}")
         return 1
-    print("acr-retention apply self-test: 6 scenarios held (timer updated, timer added, apply green "
+    print("acr-retention apply self-test: 9 scenarios held (timer updated, timer added, apply green "
           "naming the stale declaration while verify still reds on it, a timer already at the "
           "recorded schedule left alone, the fake refuses --schedule and a same-schedule update, "
-          "and a red protection verdict refuses the apply before any registry write) — offline, "
+          "a red protection verdict refuses the apply before any registry write, verify reads the "
+          f"nightly dry run back per repository, {len(bad_runs)} unreadable run shapes each red it, "
+          "and an apply's re-verify leaves the run alone) — offline, "
           "against a private copy of the record and a stubbed protection verdict")
     return 0
 
