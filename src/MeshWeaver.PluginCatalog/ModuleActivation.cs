@@ -2516,12 +2516,21 @@ public static class ModuleActivationSidecar
                 // 🚨 The remedy follows the fault (MeshWeaver#8049). A refused open or read says
                 // nothing about the file's bytes: the file is not damaged, and the next read that
                 // opens it restores the module. Telling an operator to re-install over a refusal by
-                // the volume sends them to repair a file that is fine. Only content that is not an
-                // entry needs a re-install to rewrite it.
-                var remedy = ex is IOException or UnauthorizedAccessException
-                    ? " The volume refused the read, which says nothing about the file's content, so "
-                      + "nothing needs re-installing: the next read that opens the file restores the module."
-                    : " The file's content is not an activation entry, so re-install the module to rewrite it.";
+                // the volume sends them to repair a file that is fine. Only bytes that do not parse
+                // (a JsonException) show the content is wrong, and only then is a re-install the
+                // repair. Any other exception shows neither, and the line says so rather than guess.
+                var remedy = ex switch
+                {
+                    IOException or UnauthorizedAccessException =>
+                        " The volume refused the read, which says nothing about the file's content, so "
+                        + "nothing needs re-installing: the next read that opens the file restores the module.",
+                    JsonException =>
+                        " The file's content does not parse as an activation entry, so re-install the module "
+                        + "to rewrite it.",
+                    _ =>
+                        " This fault does not show whether the file's content is wrong; if the next read "
+                        + "reports the same fault, re-install the module to rewrite the file.",
+                };
                 onCorrupt?.Invoke(
                     $"Module activation entry '{file}' could not be read ({ex.GetType().Name}: "
                     + $"{ex.Message}) — " + EntrySkipped + remedy);

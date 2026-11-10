@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Collections.Immutable;
 using System.IO;
@@ -40,6 +38,7 @@ public class UnreadableActivationEntryIsOneLineTest : IDisposable
 
     private readonly string entryPath;
 
+    /// <summary>Lands one module with a landing record AND its own readable entry file.</summary>
     public UnreadableActivationEntryIsOneLineTest()
     {
         var generation = Path.Combine(root, "modules", Generation);
@@ -57,12 +56,15 @@ public class UnreadableActivationEntryIsOneLineTest : IDisposable
         Assert.True(File.Exists(entryPath), $"the entry must exist at '{entryPath}'");
     }
 
+    /// <summary>Removes the temporary module root.</summary>
     public void Dispose()
     {
         try { Directory.Delete(root, recursive: true); }
         catch (IOException) { /* temp cleanup is the OS's problem, never a test failure */ }
     }
 
+    /// <summary>The incident: the volume refuses the entry's open. The module is dropped, the
+    /// fault is ONE line, and the line advises no re-install.</summary>
     [Fact]
     public void AnEntryTheVolumeRefuses_DropsTheModule_InOneLine_WithoutReinstallAdvice()
     {
@@ -98,6 +100,21 @@ public class UnreadableActivationEntryIsOneLineTest : IDisposable
         var line = Assert.Single(faults);
         Assert.StartsWith($"Module activation entry '{entryPath}' does not hold the entry", line);
         Assert.Contains("re-install the module to rewrite it", line);
+    }
+
+    /// <summary>Bytes that do not parse are a content fault: one line, and it advises re-installing.</summary>
+    [Fact]
+    public void AnEntryThatDoesNotParse_DropsTheModule_InOneLine_AndAdvisesReinstall()
+    {
+        File.WriteAllText(entryPath, "{ this is not an activation entry");
+        var faults = ImmutableList.CreateBuilder<string>();
+
+        var list = ModuleActivationSidecar.Read(root, faults.Add);
+
+        Assert.DoesNotContain(list.Entries, e => e.Name == Module);
+        var line = Assert.Single(faults);
+        Assert.StartsWith($"Module activation entry '{entryPath}' could not be read (JsonException", line);
+        Assert.Contains("does not parse as an activation entry, so re-install the module", line);
     }
 
     /// <summary>The negative control: the same fixture, readable, loads the module and reports
