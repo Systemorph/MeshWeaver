@@ -329,6 +329,7 @@ Console.WriteLine(
 // A throwaway work root is kept when the verdict is not green — the materialised tree and the
 // gate report are exactly what an operator inspects next.
 if (!explicitWorkRoot)
-    ComboWorkRoots.Settle(run.ExitCode, workRoot, moduleSet?.Root, Console.Out);
+    ComboWorkRoots.Settle(
+        run.ExitCode, workRoot, moduleSet?.Root, Console.Out, DockerImageGate.BakeRootFor(workRoot));
 
 return run.ExitCode;

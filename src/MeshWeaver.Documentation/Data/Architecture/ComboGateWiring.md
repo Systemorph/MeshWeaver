@@ -993,6 +993,56 @@ All of this is pinned by `ComboComposesTheModuleHalfTest`. Each refusal has a ne
 the test fails when its guard is disabled, and the argv test fails when `RunArgs` drops the
 `--module` entries.
 
+## The combo bakes first, then gates the bake (#4413)
+
+The combo gate runs in two docker calls, the same split every node-repo lane runs
+(`bake-then-gate.sh`, `node-repo-gate.yml`):
+
+1. **The bake.** `mw-plugin-test compile /work --output /bake --app /app --shared-frameworks
+   /usr/share/dotnet/shared`, with the same composed host and the same `--module` set as the gate.
+   It compiles every NodeType of the combo without a mesh and writes one bundle per package, keyed
+   to the identity the candidate resolves. The bake directory sits beside the work root
+   (`<work root>.bake`) and is settled with it: deleted on a Green, kept otherwise.
+2. **The gate.** `mw-plugin-test /work … --seed /seed`, with the bake mounted read-only. The mesh
+   adopts the baked assemblies and judges install, render and `Tests` on them. A type that failed
+   to bake is absent from the seed, so the mesh compiles that one type and the report carries its
+   diagnostics.
+
+Both calls share one budget (`GATE_TIMEOUT`): the gate gets what the bake left.
+
+### Why: the fused run compiled every NodeType in the mesh
+
+Until this change the combo ran one fused call with no seed. The gate host then registered no
+prebuilt-assembly consumer, so the mesh compiled every NodeType itself. The run's log says so
+directly: `NO prebuilt assembly was adopted for 63 installed type(s) because this host registers no
+IPrebuiltAssemblyConsumer`. Measured on the slots that carry the `Hosting` package:
+
+| reading | run | what it shows |
+|---|---|---|
+| a green slot (memex) | 42855183344 | `Hosting` installed at 17:00:16; its 63 types settled one in-mesh compile wave at a time, the last at 17:15:41. That is 15 of the slot's 25 minutes |
+| a killed slot (memex-cloud) | 42855183344 | `Hosting/ActionList` and `Hosting/AiApp` each waited the gate's 300 s with no terminal compile status; the slot reached 25 minutes on `Hosting/DatabasesApp` and was killed |
+| the producing repository's lane | Plugins 42844061345 | the mesh-free bake compiled 190 types in 5 minutes; the seeded gate then checked all 63 `Hosting` types in 4½ minutes |
+
+The gate waits for each type in path order, 300 s at most. When the in-mesh drain reached a type
+more than 300 s after the gate began waiting on it, the type read as `compile-no-verdict`. When two
+of those waits stacked, the slot ran out its budget. Both symptoms on the ledger (14 killed slots,
+10 no-verdict slots over 2026-11-08 to 2026-11-10) are this one cause. Neither the per-type wait nor
+the 25-minute budget was raised: the mesh's job is to consume a bake, not to be the compiler.
+
+### What the split refuses
+
+- **A bake that sealed no identity** (`framework-mvid.txt` absent or empty) died. The run is
+  NotVerifiable, and it does not fall back to the fused call, because that would bring the in-mesh
+  compile of everything back without saying so.
+- **A bake killed on the budget**, or one that used the whole budget, starts no gate and is
+  NotVerifiable.
+- **A sealed bake with no bundle** compiled no NodeType. The gate runs without `--seed`, because
+  `--seed` refuses an empty bake and there is nothing to adopt.
+
+`ComboGateBakesThenSeedsTest` pins the order, the seed mount, the shared budget and each refusal
+against a fake docker. Each of its cases fails on the fused call, which runs one container, no
+`compile` and no `--seed`.
+
 ## Known boundary: the combo moves
 
 A verdict names the `ComboReadAt` of the snapshot it verified. An instance whose modules sync forward

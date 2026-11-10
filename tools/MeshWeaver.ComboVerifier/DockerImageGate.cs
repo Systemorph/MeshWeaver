@@ -24,6 +24,11 @@ namespace MeshWeaver.ComboVerifier;
 /// non-root user needs write access there, so the work root is made world-writable before the
 /// run.</para>
 ///
+/// <para>🚨 It runs in TWO calls, as every node-repo lane does since MeshWeaver#2064: the mesh-free
+/// bake (<c>compile</c>), then the mesh gate consuming that bake (<c>--seed</c>). The single fused
+/// call made the mesh compile every NodeType itself, which is what killed combo runs at their
+/// budget (MeshWeaver#4413, see <see cref="Execute"/>).</para>
+///
 /// <para>🚨 EVERY docker call is PINNED to <see cref="Platform"/>, and that is not tidiness. A
 /// candidate reference is a multi-arch manifest list whose amd64 and arm64 variants carry
 /// genuinely different bytes (they resolve different framework build identities — see the bake
@@ -122,7 +127,7 @@ public sealed class DockerImageGate(
     /// </summary>
     private CandidateGateRun? EnsurePulled(string imageRef, CancellationToken ct)
     {
-        var present = Docker(
+        var present = RunDocker(
             ["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", imageRef], ct,
             TimeSpan.FromMinutes(1));
         var localPlatform = present.ExitCode == 0 ? present.Output.Trim() : null;
@@ -132,7 +137,7 @@ public sealed class DockerImageGate(
         output.WriteLine(localPlatform is null
             ? $"pulling {imageRef} ({Platform}) …"
             : $"pulling {imageRef} ({Platform}) — the local copy is {localPlatform} …");
-        var pull = Docker(PullArgs(imageRef, Platform), ct, runBudget);
+        var pull = RunDocker(PullArgs(imageRef, Platform), ct, runBudget);
         if (pull.TimedOut)
             return new CandidateGateRun
             {
@@ -154,39 +159,126 @@ public sealed class DockerImageGate(
         return null;
     }
 
-    private CandidateGateRun Execute(string imageRef, string workRoot, CancellationToken ct)
+    /// <summary>
+    /// Where the run's mesh-free bake is written: beside the work root, never inside it (the tester
+    /// discovers packages under the root), with the same sibling convention as the module set
+    /// (<c>&lt;work root&gt;.modules</c>).
+    /// </summary>
+    /// <param name="workRoot">The materialised combo.</param>
+    public static string BakeRootFor(string workRoot) => Path.GetFullPath(workRoot) + ".bake";
+
+    /// <summary>
+    /// Runs the gate in the SPLIT shape every node-repo lane runs since MeshWeaver#2064: first
+    /// <c>mw-plugin-test compile</c>, the mesh-free bake of the whole tree, then the mesh gate
+    /// CONSUMING that bake (<c>--seed</c>).
+    ///
+    /// <para>🚨 <b>Why (MeshWeaver#4413).</b> The combo used to run the FUSED shape: one
+    /// <c>mw-plugin-test /work</c> with no seed. The gate host then registered no prebuilt-assembly
+    /// consumer, and the MESH compiled every NodeType of every package. The run's own log says so:
+    /// <c>NO prebuilt assembly was adopted for 63 installed type(s) because this host registers no
+    /// IPrebuiltAssemblyConsumer — … every one of them compiles in-mesh</c>. For <c>Hosting</c>
+    /// alone that is 63 per-node compiles of one shared source network, drained one network-sized
+    /// Roslyn pass at a time: 15 minutes of the 25-minute budget on a GREEN slot (run 42855183344,
+    /// memex: Hosting installed 17:00:16, its last type settled 17:15:41). The gate waits 300 s per
+    /// type in path order, so a type the drain reached more than 300 s after its turn began was
+    /// recorded as <c>compile-no-verdict</c> (<c>Hosting/ActionList</c>, <c>AiApp</c>,
+    /// <c>ApprovalInbox</c>, <c>Backup</c>), and two such waits stacked took the run past 25 minutes,
+    /// where it was killed. The producing repository's own gate bakes the same types mesh-free
+    /// (Plugins run 42844061345: 190 types in 5 minutes) and its mesh checks of Hosting then take
+    /// 4½ minutes. The mesh's job is to CONSUME a bake, never to be the compiler.</para>
+    ///
+    /// <para>🚨 <b>One budget for both calls.</b> The bake and the gate share <c>runBudget</c>: the
+    /// gate gets what the bake left, so splitting the run does not extend the time a slot may
+    /// take.</para>
+    ///
+    /// <para>A bake that seals no identity (<c>framework-mvid.txt</c>) died. That is reported as an
+    /// orchestration error (NotVerifiable), never answered by falling back to the fused shape,
+    /// which would silently bring back the in-mesh compile of everything. A bake that sealed its
+    /// identity but holds no bundle compiled no NodeType; the gate then runs without a seed
+    /// (<c>--seed</c> refuses an empty bake, and there is nothing to adopt). A NodeType that failed
+    /// to bake is absent from the seed, so the mesh compiles that one type itself and the report
+    /// carries its diagnostics, as in the producing repository's lane.</para>
+    /// </summary>
+    internal CandidateGateRun Execute(string imageRef, string workRoot, CancellationToken ct)
     {
         var fullRoot = Path.GetFullPath(workRoot);
         var reportFile = Path.Combine(fullRoot, GateRunReport.FileName);
-        // A stale report from an earlier run must never masquerade as this run's evidence.
+        // A stale report from an earlier run must never masquerade as this run's evidence,
         if (File.Exists(reportFile))
             File.Delete(reportFile);
+        // …nor a stale bake as this run's bytes.
+        var bakeRoot = BakeRootFor(fullRoot);
+        if (Directory.Exists(bakeRoot))
+            Directory.Delete(bakeRoot, recursive: true);
+        Directory.CreateDirectory(bakeRoot);
 
-        // The image's tester runs as a non-root user and writes its report to the mount.
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(fullRoot,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
-                | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
-                | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+        // The image's tester runs as a non-root user and writes its report and its bake to the
+        // mounts.
+        MakeWorldWritable(fullRoot);
+        MakeWorldWritable(bakeRoot);
 
         var pullFailure = EnsurePulled(imageRef, ct);
         if (pullFailure is not null)
             return pullFailure;
 
         var digest = ResolveDigest(imageRef, ct);
+        var fullHost = Path.GetFullPath(hostDir);
+        var started = Clock.GetTimestamp();
 
         output.WriteLine(
-            $"running mw-plugin-test as {imageRef} ({Platform}), gate host "
-            + $"'{Path.GetFullPath(hostDir)}', over '{fullRoot}' …");
-        var run = Docker(
-            RunArgs(imageRef, fullRoot, Path.GetFullPath(hostDir), Platform, modules), ct, runBudget);
+            $"baking the combo with mw-plugin-test compile as {imageRef} ({Platform}), gate host "
+            + $"'{fullHost}', over '{fullRoot}' into '{bakeRoot}' (no mesh) …");
+        var compile = RunDocker(
+            CompileArgs(imageRef, fullRoot, fullHost, bakeRoot, Platform, modules), ct, runBudget);
+        if (compile.TimedOut)
+            return new CandidateGateRun
+            {
+                ImageDigest = digest,
+                Platform = Platform,
+                Error = $"the mesh-free bake exceeded the run's {runBudget} budget and was killed — "
+                        + "something inside the candidate's compiler did not complete.",
+                LogTail = Tail(compile.Output),
+            };
+
+        var bake = ReadBake(bakeRoot);
+        if (bake == BakeReading.Unsealed)
+            return new CandidateGateRun
+            {
+                ImageDigest = digest,
+                Platform = Platform,
+                Error = $"the mesh-free bake (exit {compile.ExitCode}) sealed no framework identity "
+                        + $"in '{bakeRoot}' — the bake died, so there are no bytes to gate and "
+                        + "nothing about the candidate was verified.",
+                LogTail = Tail(compile.Output),
+            };
+
+        var remaining = runBudget - Clock.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero)
+            return new CandidateGateRun
+            {
+                ImageDigest = digest,
+                Platform = Platform,
+                Error = $"the mesh-free bake used the run's whole {runBudget} budget — the gate "
+                        + "never started.",
+                LogTail = Tail(compile.Output),
+            };
+
+        var seed = bake == BakeReading.Bundles ? bakeRoot : null;
+        output.WriteLine(
+            $"running mw-plugin-test as {imageRef} ({Platform}), gate host '{fullHost}', over "
+            + $"'{fullRoot}' "
+            + (seed is null
+                ? "— the bake compiled no NodeType, so there is no seed to consume …"
+                : $"consuming the bake in '{seed}' …"));
+        var run = RunDocker(
+            RunArgs(imageRef, fullRoot, fullHost, Platform, modules, seed), ct, remaining);
         if (run.TimedOut)
             return new CandidateGateRun
             {
                 ImageDigest = digest,
                 Platform = Platform,
-                Error = $"the gate run exceeded its {runBudget} budget and was killed — "
-                        + "something inside the candidate did not complete.",
+                Error = $"the gate run exceeded what the bake left of the run's {runBudget} budget "
+                        + "and was killed — something inside the candidate did not complete.",
                 LogTail = Tail(run.Output),
             };
 
@@ -198,6 +290,44 @@ public sealed class DockerImageGate(
             Report = ReadReport(reportFile),
             LogTail = Tail(run.Output),
         };
+    }
+
+    private static void MakeWorldWritable(string directory)
+    {
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(directory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+    }
+
+    /// <summary>What a finished <c>compile --output</c> directory holds.</summary>
+    internal enum BakeReading
+    {
+        /// <summary>No (or an empty) identity file: the bake died before it sealed.</summary>
+        Unsealed,
+
+        /// <summary>Sealed, no bundle: the tree holds no NodeType that compiled.</summary>
+        NoBundles,
+
+        /// <summary>Sealed, with at least one bundle: a seed the gate consumes.</summary>
+        Bundles,
+    }
+
+    /// <summary>The identity file every bake seals (the tester's <c>BakeOutput.FrameworkMvidFile</c>).</summary>
+    internal const string FrameworkMvidFile = "framework-mvid.txt";
+
+    /// <summary>Reads a bake directory the way <c>mw-plugin-test --seed</c> will: a sealed identity,
+    /// then <c>*.zip</c> bundles at its top level.</summary>
+    /// <param name="bakeRoot">The directory <c>compile --output</c> wrote.</param>
+    internal static BakeReading ReadBake(string bakeRoot)
+    {
+        var identity = Path.Combine(bakeRoot, FrameworkMvidFile);
+        if (!File.Exists(identity) || File.ReadAllText(identity).Trim().Length == 0)
+            return BakeReading.Unsealed;
+        return Directory.EnumerateFiles(bakeRoot, "*.zip", SearchOption.TopDirectoryOnly).Any()
+            ? BakeReading.Bundles
+            : BakeReading.NoBundles;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -227,10 +357,15 @@ public sealed class DockerImageGate(
     /// tester registers no module NodeType at all (its image ships none), and every package whose
     /// content declares a <c>Skill</c> or <c>Agent</c> fails at install for a reason that names
     /// the content.</para>
+    ///
+    /// <para>🚨 <paramref name="fullSeed"/> is the run's own mesh-free bake (<see cref="CompileArgs"/>),
+    /// mounted read-only at <see cref="SeedMount"/> and passed as <c>--seed</c>, so the mesh ADOPTS
+    /// the baked assemblies instead of compiling every NodeType itself (MeshWeaver#4413, see
+    /// <see cref="Execute"/>).</para>
     /// </summary>
     internal static string[] RunArgs(
         string imageRef, string fullRoot, string fullHost, string platform,
-        ComboModuleComposition? modules = null) =>
+        ComboModuleComposition? modules = null, string? fullSeed = null) =>
     [
         "run", "--rm",
         // --init reaps the tester's children and lets a crashed runtime's SIGABRT end the process
@@ -242,6 +377,7 @@ public sealed class DockerImageGate(
         .. modules is { Modules.Length: > 0 }
             ? new[] { "-v", $"{modules.Root}:{ModulesMount}:ro" }
             : [],
+        .. fullSeed is null ? [] : new[] { "-v", $"{fullSeed}:{SeedMount}:ro" },
         "--entrypoint", "dotnet",
         imageRef,
         $"{HostMount}/mw-plugin-test.dll",
@@ -249,7 +385,51 @@ public sealed class DockerImageGate(
         "--app", "/app",
         "--report", $"/work/{GateRunReport.FileName}",
         .. modules is null ? [] : modules.TesterArgs(ModulesMount),
+        .. fullSeed is null ? [] : new[] { "--seed", SeedMount },
     ];
+
+    /// <summary>
+    /// The <c>docker run</c> argv of the mesh-free BAKE, the first half of the split the node-repo
+    /// gate lane runs in container mode (<c>run_tester compile "$P_REPO" --app "$P_APP"
+    /// --shared-frameworks "$P_SHARED" … --output "$P_BAKE"</c> in <c>node-repo-gate.yml</c>). Same
+    /// image, same composed host, same modules as the gate, so the bundles are keyed to the identity
+    /// the gate resolves. <c>--app /app</c> and <c>--shared-frameworks</c> name the PORTAL image's
+    /// own application directory and implementation frameworks as the reference set. The work root
+    /// is mounted exactly as the gate mounts it, and the bundles are written to
+    /// <see cref="BakeMount"/>.
+    /// </summary>
+    internal static string[] CompileArgs(
+        string imageRef, string fullRoot, string fullHost, string fullBake, string platform,
+        ComboModuleComposition? modules = null) =>
+    [
+        "run", "--rm",
+        "--init",
+        "--platform", platform,
+        "-v", $"{fullHost}:{HostMount}:ro",
+        "-v", $"{fullRoot}:/work",
+        "-v", $"{fullBake}:{BakeMount}",
+        .. modules is { Modules.Length: > 0 }
+            ? new[] { "-v", $"{modules.Root}:{ModulesMount}:ro" }
+            : [],
+        "--entrypoint", "dotnet",
+        imageRef,
+        $"{HostMount}/mw-plugin-test.dll",
+        "compile", "/work",
+        "--output", BakeMount,
+        "--app", "/app",
+        "--shared-frameworks", PortalSharedFrameworks,
+        .. modules is null ? [] : modules.TesterArgs(ModulesMount),
+    ];
+
+    /// <summary>Where the run's bake is mounted, writable, for <see cref="CompileArgs"/>.</summary>
+    internal const string BakeMount = "/bake";
+
+    /// <summary>Where the run's bake is mounted, read-only, for the gate's <c>--seed</c>.</summary>
+    internal const string SeedMount = "/seed";
+
+    /// <summary>The portal image's implementation shared frameworks: the value
+    /// <c>node-repo-gate.yml</c> passes as <c>P_SHARED</c> in container mode.</summary>
+    internal const string PortalSharedFrameworks = "/usr/share/dotnet/shared";
 
     /// <summary>Where the combo's composed modules are mounted inside the candidate container.</summary>
     internal const string ModulesMount = "/ext";
@@ -261,12 +441,12 @@ public sealed class DockerImageGate(
     /// local image id (a locally built candidate has no repo digest), else null.</summary>
     private string? ResolveDigest(string imageRef, CancellationToken ct)
     {
-        var repoDigest = Docker(
+        var repoDigest = RunDocker(
             ["image", "inspect", "--format", "{{index .RepoDigests 0}}", imageRef],
             ct, TimeSpan.FromMinutes(1));
         if (repoDigest.ExitCode == 0 && !string.IsNullOrWhiteSpace(repoDigest.Output))
             return repoDigest.Output.Trim();
-        var id = Docker(["image", "inspect", "--format", "{{.Id}}", imageRef],
+        var id = RunDocker(["image", "inspect", "--format", "{{.Id}}", imageRef],
             ct, TimeSpan.FromMinutes(1));
         return id.ExitCode == 0 && !string.IsNullOrWhiteSpace(id.Output) ? id.Output.Trim() : null;
     }
@@ -288,6 +468,22 @@ public sealed class DockerImageGate(
             return null;
         }
     }
+
+    /// <summary>One docker invocation: argv, then exit code, combined output, and whether it was
+    /// killed on its budget.</summary>
+    internal delegate DockerResult DockerCall(
+        IReadOnlyList<string> args, CancellationToken ct, TimeSpan budget);
+
+    /// <summary>Test seam: replaces the docker CLI for every call <see cref="Execute"/> makes, so
+    /// the split's order, its seed and its shared budget are pinned without a daemon. Null in
+    /// production.</summary>
+    internal DockerCall? DockerOverride { get; init; }
+
+    /// <summary>The clock the shared budget is measured on; a test advances it.</summary>
+    internal TimeProvider Clock { get; init; } = TimeProvider.System;
+
+    private DockerResult RunDocker(IReadOnlyList<string> args, CancellationToken ct, TimeSpan budget) =>
+        DockerOverride is { } fake ? fake(args, ct, budget) : Docker(args, ct, budget);
 
     private DockerResult Docker(IReadOnlyList<string> args, CancellationToken ct, TimeSpan budget)
     {
@@ -358,5 +554,6 @@ public sealed class DockerImageGate(
     private static string Tail(string text) =>
         text.Length <= LogTailLength ? text : text[^LogTailLength..];
 
-    private sealed record DockerResult(int ExitCode, string Output, bool TimedOut);
+    /// <summary>What one docker invocation returned.</summary>
+    internal sealed record DockerResult(int ExitCode, string Output, bool TimedOut);
 }
