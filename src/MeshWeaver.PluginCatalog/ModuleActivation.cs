@@ -1343,7 +1343,20 @@ public static class ModuleActivationSidecar
             .ThenByDescending(VerdictAddress, StringComparer.Ordinal)
             .FirstOrDefault();
 
-    private static ModuleLog ReadModuleLog(
+    /// <summary>
+    /// Reads one module's whole record directory (<see cref="ModuleLog"/>). Every record fault is
+    /// passed to <paramref name="onCorrupt"/> AS IT IS MET, and <paramref name="cancellationToken"/>
+    /// (the pool's) is checked before each record, outside the per-record catch, so a drain that
+    /// arrives inside the log surfaces as <see cref="OperationCanceledException"/> before the next
+    /// record is read — never as a corrupt record.
+    ///
+    /// <para>Internal, not private, so that last property stays testable. The activation read
+    /// (<c>ApplyLandingRecords</c>) passes no <paramref name="onCorrupt"/>: it names the
+    /// faults in the module's drop line once the log is read (MeshWeaver#7690), so a cancel from its
+    /// callback lands only after the walk. <c>DrainInsideARecordLogTest</c> therefore calls this
+    /// method directly.</para>
+    /// </summary>
+    internal static ModuleLog ReadModuleLog(
         string baseDirectory, string moduleName, Action<string>? onCorrupt, CancellationToken cancellationToken)
     {
         var problems = ImmutableList.CreateBuilder<string>();

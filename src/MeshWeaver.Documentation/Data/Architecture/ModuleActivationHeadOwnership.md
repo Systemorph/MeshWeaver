@@ -226,6 +226,17 @@ watcher filed those as two incidents. #8067 had made the ENTRY fault one line an
 fault; the record fault was the remaining case, and it is now one line too
 (`UnreadableLandingRecordIsOneLineTest`).
 
+**Folding the record faults moved the seam a drain test used.** A drain that arrives inside one
+module's record log must stop before the next record: the pool's token is checked before every record
+file, outside the per-record catch, so a cancel is never reported as a corrupt record. MeshWeaver.Plugins
+pinned that by cancelling from the activation read's corrupt-record callback. Once the record faults
+were reported in the drop line, after the walk, that cancel arrived after the last record and the test
+threw nothing, although the per-record check was unchanged. The check is now pinned in core, at the
+method that holds it: `ReadModuleLog` still reports each fault as it is met, and
+`DrainInsideARecordLogTest` cancels on the first of two unreadable records and asserts the second is
+never read. Asserting only the exception is not enough: with the check removed, the check before the
+next record KIND still throws.
+
 ### 🚨 What an image that predates the records sees when the two disagree
 
 It reads `<Name>.json` alone, and that file is **last-writer-wins, as it always was** — no ordering
