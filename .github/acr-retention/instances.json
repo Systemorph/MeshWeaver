@@ -212,7 +212,7 @@
         "rule": "derived-protected-set",
         "cleanupAuthorized": false,
         "authorizationBlockedBy": [
-          "Blob garbage-collection is not built (MeshWeaver.Plugins#4370 slice 3): a manifest DELETE frees no storage until it is, so a real run cannot yet meet this issue's cost acceptance.",
+          "Blob garbage-collection is only half built: the chart Job and the read-only window are MeshWeaver.Deploy#237 (Plugins#4370 slice 3, design 1A); the Plugins side that drives the window from the lease-holding `FleetRegistryCleanup` run is not merged, so a manifest DELETE still frees no storage.",
           "A migration Job outside any instance action (a hand-run `helm upgrade`) is not seen by the derivation (MeshWeaver.Plugins#4370 slice 4).",
           "Tag writers outside instance actions do not respect the lease: core's release.yml promotion retag, the CD publish that moves `latest`/`main`, and a hand or rollback retag can attach a tag to a planned digest after the run's last re-read of it (manual `Hosting/FleetRegistryCleanup` → Still open).",
           "The control instance holds no publisher credential yet (`Hosting:FleetRegistry:Host`, `TokenRealm`, `PublisherPassword`): the one what-if, Ops/Actions/fleet-registry-cleanup-whatif-20261101-7530 on the control instance, read 0 manifests and refused (R1) naming `no trusted registry host is configured`. Setting it is the owner's.",
@@ -283,8 +283,21 @@
           },
           {
             "mechanism": "registry garbage-collect (blob GC)",
-            "present": false,
-            "verdict": "No Job, no CronJob — the 8 objects rendered under deploy/helm/templates/registry are 2 ConfigMaps, 2 Deployments, 2 Services, an Ingress and a SecretProviderClass — and no invocation anywhere in deploy/ or .github/ (hand sweep 2026-09-14 over all 409 files under deploy/ and .github/; the GATE sweeps the 246 of them that can run a command and names the 3 it skips — two denominators, not one. Both with the pattern proven on a synthetic control first). So blobs are never collected: this is the unbounded-growth half. 🚨 STILL TRUE AFTER MeshWeaver#7530: the named cleanup deletes MANIFESTS only, so until GC runs a deletion frees no storage. GC inside a read-only window, run by the same governed action under the lease, is MeshWeaver.Plugins#4370 slice 3; when it lands this row becomes `present: true` with `governedBy: FleetRegistryCleanup`, and a Job or CronJob in the chart still reds."
+            "present": true,
+            "governedBy": "FleetRegistryCleanup",
+            "job": "deploy/helm/templates/registry/job-registry-gc.yaml",
+            "sites": [
+              "deploy/helm/templates/registry/job-registry-gc.yaml",
+              "deploy/helm/templates/registry/_registry.tpl",
+              "deploy/helm/values.yaml",
+              "deploy/aks/scripts/test-registry-maintenance.sh"
+            ],
+            "protectedBy": {
+              "readOnlyWindow": true,
+              "lease": "FleetRegistryCleanup",
+              "deleteUntagged": false
+            },
+            "verdict": "PRESENT in the chart (MeshWeaver.Deploy#237, Plugins#4370 design 1A) as ONE Job, `memex-registry-gc-<run>`, running `registry garbage-collect /etc/registry/config.yml` and NEVER `--delete-untagged`. What protects what it can reach: (1) the chart renders it only while `registry.maintenance.garbageCollect` names a run AND `registry.maintenance.readOnly` is true — `_registry.tpl` fails the render otherwise — so no push can upload a blob the mark phase misses (R4, upstream's race); (2) only the run that HOLDS the registry-maintenance lease of `FleetRegistryCleanup` applies that window (`hosting-registry-maintenance window`), after verifying every live registry pod is read-only, so no image action is admitted mid-collect; (3) without `--delete-untagged` it frees only blobs no manifest references — the manifests themselves are deleted only by the cleanup, by digest, against its derived protected set, and the untagged platform manifests beneath every kept index stay. The gate accepts exactly this file as a `kind: Job` with no `schedule:` and no `--delete-untagged`, beside a chart `fail` guard; `sites` are the only files that may spell `garbage-collect`. Any other Job, any CronJob, any other site is RED. A collect frees storage the cleanup's manifest DELETEs released; until the Plugins side drives the window from the lease-holding run, nothing renders it."
           },
           {
             "mechanism": "an explicit registry DELETE (HTTP DELETE, or a crane / skopeo / regctl / oras / az-acr-repository deletion)",
