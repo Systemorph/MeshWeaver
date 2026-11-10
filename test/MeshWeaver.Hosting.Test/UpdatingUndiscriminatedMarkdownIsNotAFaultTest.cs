@@ -112,6 +112,42 @@ public class UpdatingUndiscriminatedMarkdownIsNotAFaultTest : MonolithMeshTestBa
     }
 
     /// <summary>
+    /// The third discriminator-less shape, and the one the issue asks to be RECOVERED, not merely
+    /// tolerated: <c>{"content": …}</c> with no <c>$type</c>. It binds, so the Update validators
+    /// must be handed a typed <see cref="MarkdownContent"/> carrying the stored body (the declared
+    /// NodeType's content type, recovered without a discriminator), and the pipeline files neither
+    /// an Error nor the untyped-snapshot Warning for it. The seam alone is pinned by
+    /// <c>NodeUpdateContentTypeChangeTest.UndiscriminatedMarkdownThatBinds_IsStillTyped</c>; this
+    /// pins it through the real mesh, where the store or the read could otherwise change the shape.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task UpdatingMarkdownStoredWithoutDiscriminatorThatBinds_HandsValidatorsTheTypedRecord()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = await CreateWithStoredContent("""{"content":"# Stored body that must never reach a log"}""");
+
+        var updated = await MeshService.UpdateNode(Edited(path)).Take(1)
+            .Timeout(60.Seconds()).Await(ct);
+        updated.Path.Should().Be(path);
+
+        var seen = await Validator.SeenContent(path).Timeout(60.Seconds()).Await(ct);
+        seen.Should().BeOfType<MarkdownContent>(
+                "discriminator-less content that binds must be recovered as the declared NodeType's "
+                + "content type, so a typed comparison in a validator does not silently skip (#5736)")
+            .Which.Content.Should().Be(StoredText, "the recovered record carries the stored body, never an empty one");
+
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n?.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content == "# Edited")
+            .FirstAsync().Timeout(60.Seconds()).Await(ct);
+
+        var forPath = lines.For(PipelineCategory, path);
+        foreach (var e in forPath)
+            Output.WriteLine($"{e.Level}: {e.Text}");
+        forPath.Should().NotContain(e => e.Level >= LogLevel.Warning,
+            "content that binds is recovered, so there is neither a failed recovery nor an untyped snapshot to report");
+    }
+
+    /// <summary>
     /// NEGATIVE CONTROL: stored content that NAMES <c>MarkdownContent</c> and does not bind is
     /// corruption, and the same mesh, update and recorder MUST surface it at Error. If this ever
     /// passes with no line, the recorder is blind and the positive case above proves nothing.
@@ -157,22 +193,25 @@ public class UpdatingUndiscriminatedMarkdownIsNotAFaultTest : MonolithMeshTestBa
         Content = new MarkdownContent { Content = "# Edited" },
     };
 
-    /// <summary>Records the CLR type of <c>ExistingNode.Content</c> per path; always Valid.</summary>
+    /// <summary>Records <c>ExistingNode.Content</c> per path; always Valid.</summary>
     private sealed class ExistingContentRecorder : INodeValidator
     {
-        private readonly ReplaySubject<(string Path, Type? Type)> seen = new();
+        private readonly ReplaySubject<(string Path, object? Content)> seen = new();
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Update];
 
         public IObservable<Type?> Seen(string path)
+            => SeenContent(path).Select(c => c?.GetType());
+
+        public IObservable<object?> SeenContent(string path)
             => seen.Where(s => string.Equals(s.Path, path, StringComparison.OrdinalIgnoreCase))
-                .Select(s => s.Type)
+                .Select(s => s.Content)
                 .FirstAsync();
 
         public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
         {
             if (context.ExistingNode is { } existing)
-                seen.OnNext((existing.Path, existing.Content?.GetType()));
+                seen.OnNext((existing.Path, existing.Content));
             return Observable.Return(NodeValidationResult.Valid());
         }
     }
