@@ -24,6 +24,11 @@ second store: **what may be deleted, and what proves something is still needed.*
 > what the registry actually holds.** `distribution` has no lock. On the ACR the protected set is
 > written into the registry as state, ahead of the deleter, and the registry enforces it. Here
 > there is no such object, so the derivation IS the entire safety margin — with nothing behind it.
+>
+> **Since [#7530](https://github.com/Systemorph/MeshWeaver/issues/7530) that cleanup exists and the
+> record names it** (§3 → *The record names the cleanup*). It deletes manifests only, it is not yet
+> authorized to run for real, and blob garbage-collection is still not built — so the registry still
+> grows today. §1 is the measurement that preceded it.
 
 ## 1. What deletes today — enumerated, with the denominator
 
@@ -108,13 +113,48 @@ consequences fix its shape before a line of it is written:
    deletes nothing), then the real run under a mesh approval that binds that what-if. Never a hand
    `DELETE` and never a blob lifecycle policy on the storage account: a lifecycle rule over a
    content-addressed store cannot see references at all (§1's last row).
-3. **R0 stays the recorded state until the cleanup exists.** The record keeps `rule:
-   nothing-deletes` and `cleanupAuthorized: false`. The first governed step was the READ that
+3. **R0 stayed the recorded state until the cleanup existed.** The record kept `rule:
+   nothing-deletes` and `cleanupAuthorized: false` until
+   [#7530](https://github.com/Systemorph/MeshWeaver/issues/7530) moved it (next section). The first governed step was the READ that
    answers the lifecycle row — the registry storage account's management policy — taken by the same
    action kind in its read-only mode, not a person's `az` call. It has been taken (§7 item 1: no
    policy exists), so the gate's refusal of `true` over an unverified row no longer applies here;
    what keeps the authorization `false` now is this rule itself, until the cleanup of items 1 and 2
    exists.
+
+### The record names the cleanup — `derived-protected-set` (#7530)
+
+The cleanup of items 1 and 2 is the `FleetRegistryCleanup` kind of `Hosting/InstanceAction` in
+MeshWeaver.Plugins (manual `Hosting/FleetRegistryCleanup`). Its what-if landed in
+[Plugins#3790](https://github.com/Systemorph/MeshWeaver.Plugins/pull/3790), the registry-maintenance
+lease in [Plugins#4852](https://github.com/Systemorph/MeshWeaver.Plugins/pull/4852), and the delete
+path under that lease in [Plugins#4878](https://github.com/Systemorph/MeshWeaver.Plugins/pull/4878).
+From that merge on, `nothing-deletes` was a false sentence. So the record for `cr.meshweaver.cloud` now
+says `rule: derived-protected-set`, and it carries:
+
+- **`cleanup`** — the job's `kind`, `repository`, `manual` and `runsAs`. `runsAs` must equal
+  `deleteGrantedTo`, because the ACL grants `delete` to the publisher only.
+- **`protectedSet.axes`** — the cleanup's own consumers: image closures (the sealed sets), deployment
+  pins, each live installation's running images, in-flight actions, release markers and moving
+  pointers, the index closure, and the bundle family wholesale (R6). Every axis is
+  `onIncomplete: "refuse"`.
+- **the same `deleters` enumeration as before, with the explicit-DELETE row now `present: true` and
+  `governedBy: FleetRegistryCleanup`.** The GC row stays `present: false`. The cleanup deletes
+  manifests only, so until GC is built a deletion frees no storage.
+- **`cleanupAuthorized: false`, with `authorizationBlockedBy`** naming what it waits for. That list is:
+  blob GC (Plugins#4370 slice 3); migration Jobs outside instance actions (slice 4); tag writers outside
+  instance actions, which do not respect the lease; the publisher credential on the control instance;
+  and the owner's approval of a first deleting run against a complete what-if. The one what-if so far,
+  `Ops/Actions/fleet-registry-cleanup-whatif-20261101-7530` on the control instance, read 0 manifests
+  and refused (R1). That proves the refusal, not the deletion.
+
+🚨 **Naming a cleanup does not switch off the search for a second one.** Before #7530 the gate
+checked a `derived-protected-set` rule's axes and then skipped the chart, the ACL and the deleter
+sweep. The step that adds a deleter would therefore have been the step that stopped looking. Now the
+rule falls through to every `nothing-deletes` arm, and it adds one acceptance: every `present: true`
+row is either the named cleanup or a declared `maintenance.<key>` timer, and at least one row is the
+cleanup. A `CronJob` beside the registry, a `DELETE` in this repository, or a row governed by another
+job is still red.
 
 The ACR's half of the same decision is policy `registry-retention` (#3438): a 30-day window by age,
 no build-count quota, and the purge changed only through the governed `RegistryRetention` action.
@@ -315,7 +355,10 @@ run on every pull request beside the existing record gate. It asserts:
   denominator clause); an `"unverified"` one names its `verifiedBy` and keeps `cleanupAuthorized`
   false;
 - a `derived-protected-set` rule names its axes, and every axis declares `onIncomplete: "refuse"`
-  (R1, held by the gate rather than by review);
+  (R1, held by the gate rather than by review). It names its `cleanup` (`kind`, `repository`,
+  `manual`, and a `runsAs` equal to `deleteGrantedTo`). It is held to the same enumeration and chart
+  arms as `nothing-deletes`, and every present deleter is that cleanup or a declared
+  `maintenance.<key>` timer. `cleanupAuthorized: false` lists its `authorizationBlockedBy` (#7530);
 - **the chart still agrees with the record** — the registry templates render no `Job` or `CronJob`,
   the `maintenance:` stanza carries exactly the declared keys and window, **every ACL rule granting
   the `delete` action still names the declared principal**, and no executable line anywhere runs a
