@@ -44,7 +44,9 @@ public sealed record ThreadPoolStacks(IReadOnlyList<string> Workers, IReadOnlyLi
 /// The <c>[POOLSTALL]</c> reading (MeshWeaver#5388): when a whole heartbeat period passes in which
 /// the ThreadPool finished NOTHING while work sat queued, the heartbeat captures every pool worker's
 /// stack once and prints them grouped by their top frames, so the frame that held the pool is named
-/// by the stall itself.
+/// by the stall itself. A second trigger, <see cref="ShouldCaptureQueueDelay"/>, captures when a probe
+/// work item has waited in the queue past <see cref="QueueDelayCaptureThreshold"/> — the stall of a
+/// pool that IS completing work, but too slowly to drain a burst queued ahead of everything else.
 ///
 /// <para>🚨 <b>Why this exists.</b> The 2026-11-02 08:58Z stall on memex-cloud (21.95&#160;s and
 /// 24.27&#160;s <c>LocalSiloHealthMonitor</c> readings) left a heartbeat that was ON TIME
@@ -119,8 +121,31 @@ public static class ThreadPoolStall
     /// <returns>Whether to capture now.</returns>
     public static bool ShouldCapture(
         ProcessLivenessSample? previous, ProcessLivenessReading reading, TimeSpan? lastCapture) =>
-        MadeNoProgress(previous, reading)
-        && (lastCapture is not { } last || reading.Current.Elapsed - last >= CaptureCooldown);
+        MadeNoProgress(previous, reading) && CooledDown(reading.Current.Elapsed, lastCapture);
+
+    /// <summary>
+    /// How long a probe work item may wait in the queue before the heartbeat captures. Half of the
+    /// 10&#160;s at which <c>LocalSiloHealthMonitor</c>'s stall reading is filed as an incident, so the
+    /// capture is taken WHILE such a stall is still building, not after it has drained.
+    /// </summary>
+    public static readonly TimeSpan QueueDelayCaptureThreshold = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Whether this moment captures on queue delay: a probe work item has waited at least
+    /// <see cref="QueueDelayCaptureThreshold"/> without starting, and the last capture (if any) is at
+    /// least <see cref="CaptureCooldown"/> behind. This catches the stall <see cref="MadeNoProgress"/>
+    /// cannot see — a queue the pool IS draining, but too slowly for the items behind the burst
+    /// (MeshWeaver#5388: <c>poolPending=11196 poolCompleted(+9310)</c> under a 15.6&#160;s Orleans stall).
+    /// </summary>
+    /// <param name="probeWait">How long the outstanding probe has been queued without starting.</param>
+    /// <param name="now">The heartbeat's monotonic clock.</param>
+    /// <param name="lastCapture">The heartbeat clock at the last capture, or null if none was taken.</param>
+    /// <returns>Whether to capture now.</returns>
+    public static bool ShouldCaptureQueueDelay(TimeSpan probeWait, TimeSpan now, TimeSpan? lastCapture) =>
+        probeWait >= QueueDelayCaptureThreshold && CooledDown(now, lastCapture);
+
+    private static bool CooledDown(TimeSpan now, TimeSpan? lastCapture) =>
+        lastCapture is not { } last || now - last >= CaptureCooldown;
 
     /// <summary>
     /// The <c>[POOLSTALL]</c> line: the tick's pool reading, then the workers' stacks grouped by their
@@ -153,7 +178,36 @@ public static class ThreadPoolStall
             .Append(CultureInfo.InvariantCulture, $"[POOLSTALL] tick={current.TickSeq}: the ThreadPool completed no work item in the last ")
             .Append(CultureInfo.InvariantCulture, $"{Seconds(reading.Gap ?? reading.Period)} with {current.ThreadPoolPending} queued over ")
             .Append(CultureInfo.InvariantCulture, $"{current.ThreadPoolThreads} thread(s)");
+        return Render(line, stacks, failure, otherThreads);
+    }
 
+    /// <summary>
+    /// The <c>[POOLSTALL]</c> line for a QUEUE-DELAY capture (<see cref="ShouldCaptureQueueDelay"/>): the
+    /// probe's wait and the pool's state at the moment of capture, then the same stack groups as
+    /// <see cref="Describe"/>. The workers' stacks here name what the pool was busy with while the queue
+    /// backed up — the items it was draining too slowly, or the frame some of its workers were parked in.
+    /// </summary>
+    /// <param name="current">A sample taken at the moment of capture.</param>
+    /// <param name="probeWait">How long the probe work item had waited without starting.</param>
+    /// <param name="stacks">The workers' stacks, or null when none could be captured.</param>
+    /// <param name="failure">Why no stacks were captured, when <paramref name="stacks"/> is null.</param>
+    /// <param name="otherThreads">The process's other managed threads' stacks, or null when not read.</param>
+    /// <returns>The line.</returns>
+    public static string DescribeQueueDelay(
+        ProcessLivenessSample current, TimeSpan probeWait, IReadOnlyList<string>? stacks, string? failure,
+        IReadOnlyList<string>? otherThreads = null)
+    {
+        var line = new StringBuilder(4096)
+            .Append(CultureInfo.InvariantCulture, $"[POOLSTALL] tick={current.TickSeq}: a probe work item queued {Seconds(probeWait)} ago ")
+            .Append("had not started (the queue delay Orleans' LocalSiloHealthMonitor reports as a stall), with ")
+            .Append(CultureInfo.InvariantCulture, $"{current.ThreadPoolPending} queued over {current.ThreadPoolThreads} thread(s) ")
+            .Append(CultureInfo.InvariantCulture, $"and {current.ThreadPoolCompleted} completed since start");
+        return Render(line, stacks, failure, otherThreads);
+    }
+
+    private static string Render(
+        StringBuilder line, IReadOnlyList<string>? stacks, string? failure, IReadOnlyList<string>? otherThreads)
+    {
         if (stacks is null)
             return line
                 .Append(" — the workers' stacks could NOT be read (")
