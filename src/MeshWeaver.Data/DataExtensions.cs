@@ -763,12 +763,73 @@ public static class DataExtensions
                         "error.userActionNotRun", request.AccessContext?.Locale, userAction.ActionArea)
                 },
                 o => o.ResponseFor(request));
+
+            TellAStrandedSubscriberItsStreamEnded(hub, cause, request, streamMessage.StreamId);
         }
         catch (ObjectDisposedException)
         {
             // Same reason the drop diagnostic swallows this one: refusals routinely fire while the
             // hub is tearing down, and reporting the loss must never itself become a fault.
         }
+    }
+
+    /// <summary>
+    /// 🚨 <b>The refusal of a user action for a stream this activation does not serve ALSO tells
+    /// the subscriber that its stream has ended</b> (#8052) — the same answer a heartbeat naming
+    /// such a stream already gets (<c>MeshExtensions.AnswerAHeartbeatForAStreamThisOwnerDoesNotServe</c>,
+    /// #6047), given on the message that revealed the fact instead of up to one heartbeat interval
+    /// later.
+    ///
+    /// <para><b>Why this is needed.</b> An owner on a LEAVING host cannot say goodbye: its
+    /// <c>StreamEndedEvent</c> rides the router the stopping host already refuses
+    /// (<c>Doc/Architecture/RidingOutAShuttingDownAddress</c>, "A leaving HOST must refuse"). Its
+    /// address re-activates on another silo, and a WARM subscriber's next click lands on that new
+    /// activation, which has no <c>sync/{id}</c> for it. Measured on memex-cloud, 2026-11-09 13:58Z,
+    /// during a roll: the old replica logged <c>Host is shutting down, cannot route to</c> the
+    /// subscriber's circuit, the owner re-activated on another replica, and the next click was
+    /// refused <i>"NO sync hub for this stream was EVER registered on the current activation"</i>.
+    /// The refusal itself is right — that click cannot run. But the new activation KNEW the
+    /// subscriber was bound to a dead activation and told it nothing, so every further action on
+    /// that page was refused too, until the subscriber's next heartbeat (45 s by default) happened
+    /// to name the stream.</para>
+    ///
+    /// <para><b>Only for the two causes that mean "not served here".</b>
+    /// <see cref="LostStreamCause.NeverRegistered"/> and <see cref="LostStreamCause.NoRecord"/>:
+    /// after the registration grace, no <c>sync/{id}</c> exists on this hub or an ancestor, and the
+    /// ledger cannot place an end the subscriber was told about. Not for
+    /// <see cref="LostStreamCause.ReleasedBySubscriber"/> (the subscriber asked; its mirror is going
+    /// away), not for <see cref="LostStreamCause.ReapedByOwner"/> (the owner-side end already
+    /// announced itself when the stream ended) and not for
+    /// <see cref="LostStreamCause.LedgerUnavailable"/> (a hub tearing down must not speak — routing a
+    /// message from a deactivating grain resurrects it).</para>
+    ///
+    /// <para>Addressed to the SUBSCRIBING hub — the host of the sender's <c>sync/{id}</c>, the
+    /// address the owner keys a client subscription on and the heartbeat answer targets — whose
+    /// <c>RouteStreamMessage</c> forwards it to the mirror. The subscriber then re-asks once through
+    /// its recycle re-arm, bounded by its own budget. Nothing polls, nothing is timed, nothing
+    /// retries: one end per refused action, and a re-ask can never cause a refusal.
+    /// <c>StreamEndedEvent</c> is <c>[CanBeIgnored]</c>, so a subscriber that has itself gone away
+    /// drops it silently.</para>
+    /// </summary>
+    private static void TellAStrandedSubscriberItsStreamEnded(
+        IMessageHub hub, LostStreamCause cause, IMessageDelivery request, string streamId)
+    {
+        if (cause is not (LostStreamCause.NeverRegistered or LostStreamCause.NoRecord))
+            return;
+        // A dying owner must not speak for an address it is leaving.
+        if (hub.RunLevel > MessageHubRunLevel.Started || hub is MessageHub { IsDisposing: true })
+            return;
+        // The router never publishes (ROUTER_TRAFFIC); a router-owned stream recovers on its
+        // heartbeat answer, which already hops off the router.
+        if (string.Equals(hub.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal))
+            return;
+        if (request.Sender is not { } sender)
+            return;
+        var subscriber = sender.Host ?? sender;
+        if (subscriber.Equals(hub.Address))
+            return;
+        hub.Post(new StreamEndedEvent(streamId) { Activation = ShutdownNack.ActivationToken(hub) },
+            o => o.WithTarget(subscriber));
     }
 
     /// <summary>
