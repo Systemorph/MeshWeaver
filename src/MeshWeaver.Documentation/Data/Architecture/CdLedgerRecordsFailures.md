@@ -292,6 +292,50 @@ classifier treats a compare at GitHub's 300-file cap as possibly truncated, and 
 name of a renamed file, so a file moved out of `src/` still counts as a `src/` change. `.github/`
 stays an input, because `main-cd` reads its scripts while it builds and bakes.
 
+#### Which set delivers a commit that was not built
+
+A commit the core classifier skips has no image set of its own, by design. Something still has to
+say which set delivers it, and every part of `main-cd` must give the same answer. The `gate` job's
+`delivered_by` step decides it once and exposes two outputs, `delivered` and `delivered_by`:
+
+| the commit | `delivered_by` | `delivered` |
+|---|---|---|
+| has its own complete set in the registry | the commit itself | `true` |
+| changed no image input since the newest published set, and that set is complete (`check-image-set.sh`) | the newest published set | `true` |
+| changed no image input, but the newest published set is torn | empty | `false` |
+| changed an image input, or the classifier could not decide (fail-open), and has no set of its own | empty | `false` |
+
+Three consumers read these outputs. They do not read `complete`, which only describes the
+commit's own set:
+
+- `decide` skips the build only when `delivered` is `true`. On both paths, a commit whose newest
+  set is torn is therefore built (a heal), not skipped onto a set nobody can pull. A requested
+  `rebuild` is never skipped this way.
+- `delivery-verdict` raises the stuck-delivery alarm when `delivered` is anything but `true` on a
+  green reconcile that published nothing. A green commit that changed an image input and has no
+  images still goes red, as before. An empty value also goes red.
+- `handoff` owes no publisher to a HEAD that is already delivered, so it no longer dispatches a
+  reconcile for a test-only HEAD.
+
+The registry probe for the commit's own set (`acr`) is not run when the classifier has positively
+found that nothing since the newest published set is an image input. That commit was never built,
+so the probe could only print one `could not be verified` error per repository, on a run that was
+right not to build.
+
+This is the fix for MeshWeaver#8066. Before it, only `decide` applied the rule. On `ed888fd`, a merge that
+changed one file under `test/`, the push run correctly built nothing (`Newest published set:
+ecf71b4; image-relevant changes since: false`). Its `handoff` then dispatched a reconcile. That
+reconcile, and every one after it, also declined correctly, and then `delivery-verdict` failed with
+*"GREEN and has an INCOMPLETE image set … nobody is publishing it"*. Four CD runs failed and alerted
+about images that were correctly never built.
+
+The defect had been there since the reconcile skip was added. It showed only when a test-only merge
+stayed main's tip through a reconcile tick. The one earlier test-only tip in the 40 merges before
+`ed888fd`, `4626bcd`, was superseded within minutes by a merge that changed an image input. The
+step's cases in `.github/scripts/test-cd-steps.py` cover every row of the table, plus the verdict
+and handoff readings. Run against the previous verdict and handoff steps, the cases for this
+incident fail.
+
 Measured over the Plugins lane's last 60 pushes (2026-10-08 17:28Z to 2026-10-09 18:53Z): 22
 dispatched a rebuild and 38 did not. Every one of the 22 named a host input. For example, run
 `37976049420` reported `REBUILD: 5 of 6 changed path(s) can reach the published image, first:

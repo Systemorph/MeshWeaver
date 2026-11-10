@@ -61,6 +61,9 @@ ATTEMPTED_STEP_ID = "attempted"
 # The step that discharges a deferral instead of promising one (MeshWeaver#4652): when a run lets
 # go of the delivery lane it asks whether main's HEAD still has a publisher, and creates one if not.
 HANDOFF_STEP_ID = "handoff"
+# The ONE answer to "which image set delivers this commit?" (MeshWeaver#8066), read by `decide`,
+# `verdict` and `handoff` alike.
+DELIVERED_BY_STEP_ID = "delivered_by"
 
 SHORT_SHA = "aaf95af"
 VERSION = "3.0.0-rc8.ci.6360"
@@ -642,6 +645,95 @@ def run_decide_cases(root, case) -> None:
     case("MUTATION CONTROL: with no live run the same staged layers DO open the issue",
          rc == 0 and any("issue create" in c for c in calls), f"calls={calls!r} log={log}")
 
+    # ── MeshWeaver#8066: ONE delivery answer, read by `decide` too ───────────────────────────
+    # A test-only commit (`ed888fd`): no set of its own (COMPLETE empty — the probe is not asked for
+    # a commit that changed no image input), delivered by the complete newest set `ecf71b4`. Both
+    # paths must decline to build, touch no ledger, and name the set that delivers it.
+    for reason, extra in (("reconcile", {}), ("push", {"FRESH_AGE_MIN": "999999"})):
+        calls = []
+        rc, log, outputs = run_step(
+            body, {**ledger, "REASON": reason, "COMPLETE": "", "DELIVERED": "true",
+                   "DELIVERED_BY": "ecf71b4", "ATTEMPTED": "", **extra},
+            None, runs=[], calls_out=calls)
+        case(f"a test-only commit DELIVERED by the newest set builds nothing on the {reason} path (#8066)",
+             rc == 0 and "publish=false" in outputs and "bake_only=true" not in outputs and "ecf71b4" in log
+             and not any("issue" in c for c in calls), f"rc={rc} out={outputs!r} calls={calls!r} log={log}")
+    # 🚨 The SAME commit when the newest set is torn — `relevant=false`, but `delivered=false`: it
+    # is NOT skipped onto a set nobody can pull. It publishes (a heal), on both paths. Before #8066
+    # the raw `relevant=false` skipped it.
+    for reason, extra in (("reconcile", {"ATTEMPTED": "false"}), ("push", {"FRESH_AGE_MIN": "999999"})):
+        rc, log, outputs = run_step(
+            body, {**ledger, "REASON": reason, "COMPLETE": "", "DELIVERED": "false", "DELIVERED_BY": "",
+                   "RELEVANT": "false", **extra},
+            None, runs=[])
+        case(f"...but with the newest set TORN the same commit publishes on the {reason} path",
+             rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    # A requested `rebuild` (MeshWeaver.Plugins' host-change dispatch) must not be swallowed by a
+    # test-only core tip: it falls through to the publish branches.
+    rc, log, outputs = run_step(
+        body, {**ledger, "COMPLETE": "", "DELIVERED": "true", "DELIVERED_BY": "ecf71b4",
+               "FORCE_REBUILD": "true", "ATTEMPTED": "false"},
+        None, runs=[])
+    case("...and rebuild=true on a delivered test-only tip still publishes",
+         rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+
+# ── the DELIVERED_BY step: the one answer to "which set delivers this commit?" ──────────────
+def run_delivered_by_cases(root, case) -> None:
+    """
+    🚨 <b>MeshWeaver#8066 — three readers, three answers.</b>
+
+    `decide` skipped a test-only commit under policy `image-rebuild-own-inputs`; `verdict` and
+    `handoff` judged the same commit by its OWN image set and went red on it. `delivered_by` is now
+    the one answer. These cases execute it with the REAL step body and a stand-in for
+    `check-image-set.sh` (the step calls it by path, so a prepared tree supplies one whose exit code
+    the case chooses), and assert both what it answers and which set it ASKED about.
+    """
+    body = extract_step(root, DELIVERED_BY_STEP_ID)
+    if ".github/scripts/check-image-set.sh" not in body:
+        die(f"step `{DELIVERED_BY_STEP_ID}` no longer probes the newest set with check-image-set.sh — "
+            "the torn-set arm below would test nothing. Update the harness with the step.")
+
+    def drive(env, probe_rc=0):
+        with tempfile.TemporaryDirectory() as td:
+            tree = Path(td) / "tree"
+            scripts = tree / ".github" / "scripts"
+            scripts.mkdir(parents=True)
+            asked = Path(td) / "asked"
+            probe = scripts / "check-image-set.sh"
+            probe.write_text(f'#!/usr/bin/env bash\necho "$*" >> "{asked}"\nexit {probe_rc}\n')
+            probe.chmod(0o755)
+            rc, log, outputs = run_step(body, env, None, cwd=str(tree))
+            return rc, log, outputs, (asked.read_text().split() if asked.exists() else [])
+
+    base = {"SHORT": "ed888fd", "COMPLETE": "", "RELEVANT": "false", "NEWEST_SHORT": "ecf71b4"}
+
+    rc, log, out, asked = drive(base)
+    case("a test-only commit whose newest published set is complete is delivered BY that set",
+         rc == 0 and "delivered=true" in out and "delivered_by=ecf71b4" in out and asked == ["ecf71b4"],
+         f"rc={rc} out={out!r} asked={asked} log={log}")
+
+    rc, log, out, asked = drive(base, probe_rc=1)
+    case("...but a TORN newest set delivers nothing (delivered=false)",
+         rc == 0 and "delivered=false" in out and "delivered_by=\n" in out, f"rc={rc} out={out!r} log={log}")
+
+    rc, log, out, asked = drive({**base, "RELEVANT": "true"})
+    case("a commit WITH an image change and no set of its own is NOT delivered, and no other set is asked",
+         rc == 0 and "delivered=false" in out and asked == [], f"rc={rc} out={out!r} asked={asked} log={log}")
+
+    rc, log, out, asked = drive({**base, "RELEVANT": ""})
+    case("...and an unanswered relevance (empty) is treated as relevant, never as a skip",
+         rc == 0 and "delivered=false" in out and asked == [], f"rc={rc} out={out!r} asked={asked} log={log}")
+
+    rc, log, out, asked = drive({**base, "COMPLETE": "true", "RELEVANT": "true"})
+    case("a commit with its OWN complete set is delivered by itself",
+         rc == 0 and "delivered=true" in out and "delivered_by=ed888fd" in out and asked == [],
+         f"rc={rc} out={out!r} asked={asked} log={log}")
+
+    rc, log, out, asked = drive({**base, "NEWEST_SHORT": ""})
+    case("no newest published set at all delivers nothing",
+         rc == 0 and "delivered=false" in out and asked == [], f"rc={rc} out={out!r} asked={asked} log={log}")
+
 
 # ── the ATTEMPTED step: the registry probe the ledger's evidence comes from ───────────────────
 def run_attempted_cases(root, case) -> None:
@@ -871,6 +963,34 @@ def run_verdict_cases(root, case) -> None:
     case("a cancelled TIP is still red",
          rc != 0 and "is the TIP" in log, f"rc={rc} log={log}")
 
+    # ── MeshWeaver#8066: A COMMIT DELIVERED BY THE NEWEST PUBLISHED SET IS NOT STUCK ─────────
+    # Run 42769962027's exact shape: a reconcile on the test-only `ed888fd`, green, no image set of
+    # its own (`complete=false`, as that run's probe answered), published nothing, nothing in
+    # flight. The gate's one answer: delivered by `ecf71b4`, whose set is complete. Keyed on
+    # `COMPLETE` this was RED four times — so this case fails on the old step.
+    delivered = {**shape, "SHA": "ed888fdc46a94ca265ef9dc2a56bb839f2d6e6dc", "SHORT": "ed888fd",
+                 "COMPLETE": "false", "DELIVERED": "true", "DELIVERED_BY": "ecf71b4"}
+    rc, log, outputs = run_step(body, delivered, None, runs=[me])
+    case("a reconcile on a test-only commit DELIVERED by the newest published set is green (#8066)",
+         rc == 0 and "Delivery is stuck" not in log and "ecf71b4" in log, f"rc={rc} log={log}")
+    # 🚨 THE COVERAGE THAT MUST NOT BE LOST: the same green, unpublished, nothing-in-flight commit
+    # with NOTHING delivering it — it changed an image input, or the newest set is torn — is still
+    # RED, whether the gate wrote `false` or (a step that did not run) nothing at all, and whether
+    # or not the commit's own set was asked about (`complete` is not asked for a no-image-input
+    # commit, so `complete=''` with an undelivered answer is the torn-newest-set shape — the old
+    # step, which required a literal `complete=false`, was silent on it).
+    for value in ("false", ""):
+        for complete in ("false", ""):
+            rc, log, outputs = run_step(body, {**delivered, "COMPLETE": complete, "DELIVERED": value,
+                                               "DELIVERED_BY": ""}, None, runs=[me])
+            case(f"...but the same commit with delivered='{value}' complete='{complete}' is still RED",
+                 rc != 0 and "Delivery is stuck" in log, f"rc={rc} log={log}")
+    # And `delivered=true` naming the commit's OWN set is the bake-only case — green as before, and
+    # it must not claim another set delivers it.
+    rc, log, outputs = run_step(body, {**delivered, "COMPLETE": "true", "DELIVERED_BY": "ed888fd"}, None, runs=[me])
+    case("...and a commit delivered by its OWN set stays green without naming another set",
+         rc == 0 and "needs none" not in log, f"rc={rc} log={log}")
+
 
 # ── the HEAL step: the one that told a human to close an issue and then never closed one ─────
 def run_handoff_cases(root, case) -> None:
@@ -1025,14 +1145,36 @@ def run_handoff_cases(root, case) -> None:
          not dispatched, f"dispatched={dispatched} log={log}")
 
     # 🚨 THE ANTI-LOOP ARM. A reconcile that found the set already complete takes the bake-only
-    # branch: publish=false, promote=skipped, complete=true, target == HEAD. Without the
-    # `COMPLETE` arm it would hand ITSELF on, and the dispatched run would do the same, forever.
+    # branch: publish=false, promote=skipped, complete=true, target == HEAD — and the gate's one
+    # delivery answer says `delivered=true` by HEAD's own set. Without the `DELIVERED` arm it would
+    # hand ITSELF on, and the dispatched run would do the same, forever.
     rc, log, dispatched, _ = drive(
-        handoff(SHA=HEAD, PUBLISH="false", COMPLETE="true", PROMOTE_RESULT="skipped",
+        handoff(SHA=HEAD, PUBLISH="false", COMPLETE="true", DELIVERED="true", DELIVERED_BY=HEAD[:7],
+                PROMOTE_RESULT="skipped",
                 DELIVERY_LEGS="skipped skipped skipped skipped skipped skipped skipped"),
         [me])
     case("a BAKE-ONLY run on HEAD hands nothing on (it would otherwise dispatch itself forever)",
          rc == 0 and not dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # 🚨 MeshWeaver#8066 — the PUSH run on a test-only HEAD. Policy `image-rebuild-own-inputs`
+    # skipped the build (publish=false, promote=skipped, complete EMPTY — the push path never asks
+    # the registry for the commit's own set) and the gate found the newest published set complete,
+    # so `delivered=true` by THAT set. Measured on `ed888fd`: keyed on `COMPLETE`, this step called
+    # HEAD "green, no publisher" and dispatched a reconcile that could only decline and then red.
+    test_only = dict(SHA=HEAD, PUBLISH="false", COMPLETE="", PROMOTE_RESULT="skipped",
+                     DELIVERY_LEGS="skipped skipped skipped skipped skipped skipped skipped")
+    rc, log, dispatched, _ = drive(handoff(**test_only, DELIVERED="true", DELIVERED_BY="ecf71b4"), [me])
+    case("a test-only HEAD delivered by the newest published set is handed to nobody (#8066)",
+         rc == 0 and not dispatched and "ecf71b4" in log, f"rc={rc} dispatched={dispatched} log={log}")
+    # The neighbour that must keep dispatching: the same skipped run, but NOTHING delivers HEAD
+    # (it changed an image input, or the newest set is torn). Without this, the case above would
+    # also pass if the arm accepted any skipped run.
+    rc, log, dispatched, _ = drive(handoff(**test_only, DELIVERED="false", DELIVERED_BY=""), [me])
+    case("...while the same skipped run on an UNDELIVERED HEAD still dispatches a publisher",
+         rc == 0 and dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+    rc, log, dispatched, _ = drive(handoff(**test_only, DELIVERED="", DELIVERED_BY=""), [me])
+    case("...and an EMPTY delivery answer reads as undelivered, never as delivered",
+         rc == 0 and dispatched, f"rc={rc} dispatched={dispatched} log={log}")
 
     # ── ARM 4: THE ONE-HOP BOUND ────────────────────────────────────────────────────────────
     # Exactly ARM 1's state, but this run arrived BY a handoff. A deterministic promote failure
@@ -2031,6 +2173,10 @@ def main() -> int:
     run_decide_cases(root, case)
 
     print()
+    print(f"── step `{DELIVERED_BY_STEP_ID}` ──")
+    run_delivered_by_cases(root, case)
+
+    print()
     print(f"── step `{ATTEMPTED_STEP_ID}` ──")
     run_attempted_cases(root, case)
 
@@ -2067,7 +2213,7 @@ def main() -> int:
         print(f"::error::{len(failures)} case(s) failed: {', '.join(failures)}")
         return 1
     print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{BAKE_VERSION_STEP_ID}` "
-          f"+ `{DECIDE_STEP_ID}` + `{ATTEMPTED_STEP_ID}` "
+          f"+ `{DECIDE_STEP_ID}` + `{DELIVERED_BY_STEP_ID}` + `{ATTEMPTED_STEP_ID}` "
           f"+ `{VERDICT_STEP_ID}` + `{HANDOFF_STEP_ID}` + `{HEAL_STEP_ID}` "
           f"(extracted, not copied)")
     return 0
