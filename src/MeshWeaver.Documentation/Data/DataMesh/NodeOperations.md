@@ -191,6 +191,8 @@ Anything else at the target is a genuine collision: the move is refused with `Ta
 
 The **source must also be unchanged since the copy landed.** The first attempt releases its hold on the source when it ends, so the old address can be written before the retry — and resuming would then keep the stale copy and delete the newer source. A move copies `LastModified` verbatim, so the retry resumes only when the source's `LastModified` is one the target has carried: its current one (nobody has written to the target), or one of its recorded versions (somebody has, and the target's later state is kept as the node's newer state). Otherwise the retry is refused with `TargetAlreadyExists` and touches nothing. On a store that keeps no version history, a target that has been written to since cannot prove this, and the retry is refused rather than guessed.
 
+**A taken target is the caller's answer, not a fault.** A copy or a move refused with `TargetAlreadyExists` logs a `Warning` (`[CopyNode] … refused`, `[MoveNode] … refused in its copy leg`), never an `Error`: the reply already names the reason, nothing was written and nothing was removed — the same as a plain create onto an occupied path, which logs nothing. Only a typed "node already exists" verdict counts; a failure whose message merely says "already exists" (a storage error, for instance) is still logged at `Error` with its stack. A caller that re-issues a refused move forever is the caller's defect, and it shows at the caller's own log site.
+
 ## Programmatic Move
 
 ```csharp

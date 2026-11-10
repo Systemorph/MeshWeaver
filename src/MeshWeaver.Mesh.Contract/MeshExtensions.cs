@@ -10276,8 +10276,15 @@ public static class MeshExtensions
                         // The copy leg's OWN classification and transcript, carried — see
                         // MoveReasonForCopy. Nothing was deleted: the delete leg runs only after a
                         // successful copy.
-                        logger.LogError("[MoveNode] {Source} -> {Target} failed in its copy leg ({Reason}): {Error}",
-                            sourcePath, targetPath, copyLeg.Reason, copyLeg.Message);
+                        // A taken target is a refusal the caller is answered with, not a fault (#8073):
+                        // the copy leg has already said so at its own site, at Error with its stack
+                        // whenever the verdict was not a typed NodeAlreadyExists.
+                        if (copyLeg.Reason == NodeMoveRejectionReason.TargetAlreadyExists)
+                            logger.LogWarning("[MoveNode] {Source} -> {Target} refused in its copy leg ({Reason}): {Error}",
+                                sourcePath, targetPath, copyLeg.Reason, copyLeg.Message);
+                        else
+                            logger.LogError("[MoveNode] {Source} -> {Target} failed in its copy leg ({Reason}): {Error}",
+                                sourcePath, targetPath, copyLeg.Reason, copyLeg.Message);
                         Reply(MoveNodeResponse.Fail(copyLeg.Message, copyLeg.Reason) with { Log = copyLeg.Log },
                             o => o.ResponseFor(request));
                         return;
@@ -11317,7 +11324,19 @@ public static class MeshExtensions
                     }
                     var msg = ex.Message ?? "Unknown error";
                     var reason = CopyReasonForFailure(ex, msg);
-                    logger.LogError(ex, "Copy {Source} -> {Target} failed", sourcePath, targetPath);
+                    // 🚨 A TAKEN TARGET IS THE CALLER'S ANSWER, NOT A FAULT (#8073). A create refused
+                    // with a TYPED NodeAlreadyExists is a deterministic refusal — the reply below names
+                    // it, nothing was written at the target, nothing was removed at the source — exactly
+                    // as a plain CreateNodeRequest onto an occupied path, which logs nothing at all. An
+                    // Error line with a stack for it was filed as an incident every time a user or an
+                    // agent moved a file onto a name that was already taken. Only the TYPED verdict
+                    // qualifies: a fault whose message merely contains "already exists" (a storage error,
+                    // say) still lands at Error with its stack below.
+                    if (IsNodeAlreadyExists(ex))
+                        logger.LogWarning("[CopyNode] {Source} -> {Target} refused: {Error}",
+                            sourcePath, targetPath, msg);
+                    else
+                        logger.LogError(ex, "Copy {Source} -> {Target} failed", sourcePath, targetPath);
                     hub.Post(CopyNodeResponse.Fail(msg, reason)
                             with
                             {
