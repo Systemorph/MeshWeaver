@@ -19,15 +19,21 @@ namespace MeshWeaver.Hosting;
 /// <para>Owned by the heartbeat's dedicated thread, which is the only caller of <see cref="Poll"/>.
 /// The started flag is the one value shared with a pool thread, written once per probe.</para>
 /// </summary>
-/// <param name="enqueue">Queues a callback on the ThreadPool. The production one is
-/// <see cref="ThreadPool.UnsafeQueueUserWorkItem(WaitCallback, object?)"/>, which puts the item on the
-/// GLOBAL queue — where a timer's callback, and so the Orleans health monitor's, also waits.</param>
-internal sealed class ThreadPoolQueueProbe(Action<Action> enqueue)
+/// <param name="enqueue">Queues a callback on the ThreadPool and answers whether it was queued. The
+/// production one is <see cref="ThreadPool.UnsafeQueueUserWorkItem(WaitCallback, object?)"/>, which puts
+/// the item on the GLOBAL queue — where a timer's callback, and so the Orleans health monitor's, also waits.</param>
+internal sealed class ThreadPoolQueueProbe(Func<Action, bool> enqueue)
 {
     /// <summary>A probe on the real ThreadPool.</summary>
     public ThreadPoolQueueProbe()
-        : this(static callback => ThreadPool.UnsafeQueueUserWorkItem(static state => ((Action)state!)(), callback))
+        : this(static callback => ThreadPool.UnsafeQueueUserWorkItem(RunCallback, callback))
     {
+    }
+
+    private static void RunCallback(object? state)
+    {
+        if (state is Action callback)
+            callback();
     }
 
     private TimeSpan? queuedAt;
@@ -49,9 +55,17 @@ internal sealed class ThreadPoolQueueProbe(Action<Action> enqueue)
         }
 
         var next = new Probe();
+        if (!enqueue(() => Volatile.Write(ref next.Started, 1)))
+        {
+            // Not queued, so it can never start: holding it would grow a wait no queue imposed and
+            // file a spurious capture. The next poll tries again.
+            outstanding = null;
+            queuedAt = null;
+            return TimeSpan.Zero;
+        }
+
         queuedAt = now;
         outstanding = next;
-        enqueue(() => Volatile.Write(ref next.Started, 1));
         return TimeSpan.Zero;
     }
 

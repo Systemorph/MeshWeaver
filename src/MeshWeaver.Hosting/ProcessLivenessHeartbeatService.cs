@@ -160,11 +160,14 @@ internal sealed class ProcessLivenessHeartbeatService(
         try
         {
             var wait = probe.Poll(now);
-            if (!ThreadPoolStall.ShouldCaptureQueueDelay(wait, now, lastStallCapture)
-                || Interlocked.CompareExchange(ref stallCaptureInFlight, 1, 0) != 0)
+            if (!ThreadPoolStall.ShouldCaptureQueueDelay(wait, now, lastStallCapture))
+                return;
+            // Sampled BEFORE the in-flight flag is taken: a throwing sample must not leave the flag
+            // set with no capture to clear it, which would silence both triggers for good.
+            var sample = ProcessLiveness.Probe(tick, now);
+            if (Interlocked.CompareExchange(ref stallCaptureInFlight, 1, 0) != 0)
                 return;
             lastStallCapture = now;
-            var sample = ProcessLiveness.Probe(tick, now);
             StartStallCapture(tick, stacks => DescribeQueueDelay(sample, wait, stacks), workerStacks);
         }
         catch (Exception exception)

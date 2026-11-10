@@ -16,7 +16,7 @@ public class ThreadPoolQueueProbeTest
     public void AnUnstartedProbe_ReportsItsWait_AndNoSecondIsQueued_UntilItStarts()
     {
         var queued = new List<Action>();
-        var probe = new ThreadPoolQueueProbe(queued.Add);
+        var probe = new ThreadPoolQueueProbe(callback => { queued.Add(callback); return true; });
 
         probe.Poll(TimeSpan.FromSeconds(100)).Should().Be(TimeSpan.Zero, "the first poll only queues");
         queued.Should().HaveCount(1);
@@ -31,6 +31,19 @@ public class ThreadPoolQueueProbeTest
         queued.Should().HaveCount(2, "a fresh probe is queued once the previous one started");
         probe.Poll(TimeSpan.FromSeconds(117)).Should().Be(TimeSpan.FromSeconds(1),
             "the wait is measured from the NEW probe's queueing, not the first one's");
+    }
+
+    /// <summary>An item the pool refused to queue can never start, so it must not be read as a growing wait.</summary>
+    [Fact]
+    public void AProbeThePoolDidNotQueue_IsNotReportedAsWaiting()
+    {
+        var attempts = 0;
+        var probe = new ThreadPoolQueueProbe(_ => { attempts++; return false; });
+
+        probe.Poll(TimeSpan.FromSeconds(100)).Should().Be(TimeSpan.Zero);
+        probe.Poll(TimeSpan.FromSeconds(200)).Should().Be(TimeSpan.Zero,
+            "nothing was queued, so nothing is waiting — a held probe would read 100 s here");
+        attempts.Should().Be(2, "each poll tries to queue again");
     }
 
     /// <summary>
