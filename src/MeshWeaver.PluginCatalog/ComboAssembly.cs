@@ -154,6 +154,19 @@ public sealed record ModuleAssembly
     /// <c>mw-plugin-test</c> will not discover the folder as a package.</summary>
     public bool DeclaresRoot { get; init; }
 
+    /// <summary>
+    /// The failures the module's SOURCE REPOSITORY declares as known debt in its
+    /// <c>plugin-gate.allow</c> at <see cref="ResolvedCommit"/>, as <c>&lt;scope&gt; &lt;check&gt;</c>
+    /// with the scope re-rooted at <see cref="ModuleId"/> — the same list that repository's own gate
+    /// tolerates (MeshWeaver#4413). Empty when the tree carries no such file, and for a module
+    /// fetched as a subdirectory, whose tree does not reach the repository root.
+    /// </summary>
+    public ImmutableList<string> KnownDebt { get; init; } = [];
+
+    /// <summary>Why the source repository's known-debt file could not be read (a malformed line);
+    /// when set, <see cref="KnownDebt"/> is empty and every failure counts.</summary>
+    public string? KnownDebtError { get; init; }
+
     /// <summary>The speaking reason when <see cref="Status"/> is not
     /// <see cref="ModuleAssemblyStatus.Materialized"/>.</summary>
     public string? Error { get; init; }

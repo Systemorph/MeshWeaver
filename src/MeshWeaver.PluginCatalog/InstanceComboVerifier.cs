@@ -226,16 +226,41 @@ public sealed class InstanceComboVerifier
                             + "package) — nothing about it was verified.",
                         ],
                     };
-                var failures = FailuresOf(package);
+                // 🚨 A failure the module's source repository DECLARES as known debt is held to that
+                // repository's own gate standard (MeshWeaver#4413): reported, not counted. Matched on
+                // exact (scope, check), like the tester's ratchet — a failure the list does not
+                // name is still a failure, and the debt of one NodeType excuses no other.
+                var debt = module.KnownDebt
+                    .Select(line => line.Split(' ', 2))
+                    .Where(parts => parts.Length == 2)
+                    .Select(parts => (Scope: parts[0], Check: parts[1]))
+                    .ToImmutableList();
+                var all = FailuresOf(package);
+                var tolerated = all.Where(f => debt.Any(d =>
+                        string.Equals(d.Scope, f.Scope, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(d.Check, f.Check, StringComparison.OrdinalIgnoreCase)))
+                    .ToImmutableList();
+                var failures = all.Where(f => !tolerated.Contains(f)).Select(f => f.Line).ToImmutableList();
+                if (tolerated.Count > 0)
+                    caveats.Add(
+                        $"'{module.ModuleId}' has {tolerated.Count} failing check(s) its source "
+                        + $"repository declares as known debt in {ComboKnownDebt.FileName} at "
+                        + $"{module.ResolvedCommit} ({string.Join(", ", tolerated.Select(f => $"{f.Scope} {f.Check}"))}) "
+                        + "— the same failures that repository's own gate tolerates. They are reported "
+                        + "on the module and not counted against the candidate.");
                 return entry with
                 {
                     Outcome = failures.Count == 0
                         ? ModuleVerificationOutcome.Passed
                         : ModuleVerificationOutcome.Failed,
                     Failures = failures,
+                    KnownDebt = [.. tolerated.Select(f => f.Line)],
                 };
             })
             .ToImmutableList();
+
+        foreach (var unreadable in assembly.Modules.Where(m => m.KnownDebtError is not null))
+            caveats.Add(unreadable.KnownDebtError!);
 
         // A package the report carries that the assembly never materialised would mean the gate
         // verified content this combo does not name — call it out rather than silently widening.
@@ -327,7 +352,14 @@ public sealed class InstanceComboVerifier
                 caveats.Add("the assembly names no modules — there is nothing this verdict is about.");
             return ComboVerdictKind.NotVerifiable;
         }
-        if (gate.ExitCode != 0)
+        // 🚨 The tester runs WITHOUT the source repositories' known-debt lists (each repository has
+        // its own, and the tester takes one), so tolerated debt makes it exit 1. That exit is
+        // explained ONLY when known debt is the report's sole failing signal: here no module has an
+        // untolerated failure left (that returned Red above), so the one signal debt cannot account
+        // for is a package-level content error, which FailuresOf does not list.
+        var explainedByDebt = modules.Any(m => m.KnownDebt.Count > 0)
+                              && gate.Report.Packages.All(p => p.ContentError is null);
+        if (gate.ExitCode != 0 && !explainedByDebt)
         {
             // The report shows all green but the process exited red — the two disagree, and a
             // disagreement is not evidence of a pass.
@@ -351,26 +383,31 @@ public sealed class InstanceComboVerifier
     /// members from the failure list, so a run that judged nothing would report a package with an
     /// empty failure list beside a non-zero exit code.</para>
     /// </summary>
-    private static ImmutableList<string> FailuresOf(GateRunPackage package)
+    private static ImmutableList<GateFailure> FailuresOf(GateRunPackage package)
     {
-        var failures = ImmutableList.CreateBuilder<string>();
+        var failures = ImmutableList.CreateBuilder<GateFailure>();
         if (package.InstallError is not null)
-            failures.Add($"install: {package.InstallError}");
+            failures.Add(new(package.Id, "install", $"install: {package.InstallError}"));
         if (package.IdempotenceError is not null)
-            failures.Add($"idempotence: {package.IdempotenceError}");
+            failures.Add(new(package.Id, "idempotence", $"idempotence: {package.IdempotenceError}"));
         foreach (var type in package.NodeTypes)
         {
             if (Fails(type.Compile))
-                failures.Add($"{type.Path}: compile {Verb(type.Compile)}"
+                failures.Add(new(type.Path, "compile", $"{type.Path}: compile {Verb(type.Compile)}"
                              + (type.CompilationStatus is null ? "" : $" ({type.CompilationStatus})")
-                             + Detail(type.CompileDetail));
+                             + Detail(type.CompileDetail)));
             if (Fails(type.Render))
-                failures.Add($"{type.Path}: render {Verb(type.Render)}{Detail(type.RenderDetail)}");
+                failures.Add(new(type.Path, "render",
+                    $"{type.Path}: render {Verb(type.Render)}{Detail(type.RenderDetail)}"));
             if (Fails(type.Tests))
-                failures.Add($"{type.Path}: tests {Verb(type.Tests)}{Detail(type.TestsDetail)}");
+                failures.Add(new(type.Path, "tests",
+                    $"{type.Path}: tests {Verb(type.Tests)}{Detail(type.TestsDetail)}"));
         }
         return failures.ToImmutable();
     }
+
+    /// <summary>One failing check: the (scope, check) a known-debt entry names, and its line.</summary>
+    private sealed record GateFailure(string Scope, string Check, string Line);
 
     /// <summary>Whether an outcome fails the run — every state that is neither a pass nor a
     /// deliberate skip.</summary>
@@ -443,6 +480,9 @@ public sealed record ComboVerificationRun
                              + "]");
             foreach (var failure in module.Failures)
                 output.WriteLine($"        {failure.ReplaceLineEndings("\n").Replace("\n", "\n        ")}");
+            foreach (var debt in module.KnownDebt)
+                output.WriteLine($"        known debt (not counted): "
+                                 + FirstLine(debt));
         }
         foreach (var retired in Verdict.RetiredModules)
             output.WriteLine($"  --  {retired.ModuleId} [{retired.Status}] {retired.Reason}");
@@ -456,4 +496,8 @@ public sealed record ComboVerificationRun
     }
 
     private static string Shorten(string value) => value.Length > 12 ? value[..12] : value;
+
+    // A known-debt line carries the spec's whole live table; its first line names the check.
+    private static string FirstLine(string value) =>
+        value.ReplaceLineEndings("\n").Split('\n', 2)[0];
 }
