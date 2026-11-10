@@ -312,7 +312,9 @@ The Store sells **plans** (`free` · `personal` · `pro` · `dedicated` — your
 in the MeshWeaver.Plugins repository), and every package names the plan it belongs to in its root's
 `content.tier`. **The instance carries its plan on its own record** (`MeshWeaverInstance.Plan`,
 #2804): a new registration starts on `free` (a registration key minted for a plan puts it on that
-plan), and a global admin raises it in one field (Instance grants ▸ Plan). Every registry decision
+plan), and a global admin raises it in one field (Instance grants ▸ Plan) — or the instance raises it
+itself by redeeming a registration key for a higher plan (below, *A key raises a registered
+instance's plan*). Every registry decision
 — `/api/plugins`, `/files`, the bundle index and download — is then:
 
 > granted for the source/package by some entry within its term **and** the package's tier is
@@ -502,6 +504,33 @@ It is deliberately not `Bootstrap:Secret`. That secret also creates a platform a
 **Known limit.** The usage count is stamped after the registration it counts. Two registrations
 presenting the same single-use coupon at the same moment could therefore both pass. The coupon is
 held only in the vault, and only one Provision presents it, so this is not hardened further.
+
+### A key raises a registered instance's plan — upgrade only (2026-11)
+
+A registration key used to do one thing: register a NEW instance on its plan. An installation that
+already held a credential never presented its configured key again ("the explicit token wins;
+skipping auto-registration" and, with a stored credential, nothing at all). That broke the fleet
+order of events: a machine registers **open** (free) the moment it is installed, and its enrolment
+hands it the plan-bearing key only afterwards — so every enrolled machine came up on `free`, the
+registry refused it the enterprise `Hosting` package, and a global admin raised each plan by hand.
+
+Now a configured `PluginCatalog:BootstrapKey` that an already-registered installation has not
+presented yet is **redeemed** on the next boot, before the install phase:
+
+| | |
+|---|---|
+| route | `POST /api/instances/self/plan/redeem`, body `{registrationKey}` (`InstanceRegistrationPayloads.PlanRedeemRoute`) |
+| authorised by | possession of BOTH keys — the instance's own durable key (`Authorization: Bearer mwi_…`; a short-lived token is refused) and the registration key. The route acts only on the instance the `mwi_` key authenticates. |
+| rule | `RegistrationKeyPlanUpgrade.Decide`: the key's plan must be on the ladder; an all-access plan raises any plan that is not; otherwise a higher rank raises, an equal rank is unchanged, a lower rank is **refused** — a key never lowers a plan |
+| on success | 200 `upgraded` (the record's `Plan` moves, `PlanSetAt`/`PlanSetVia = registration key <path>` record it, the plan's grant entries are seeded as at registration) or `unchanged`; the key's use is stamped **either way**, so a single-use key minted for this instance is spent rather than left live |
+| refusals | 401 (key unknown, revoked, expired or spent — or the instance key is not accepted), 409 (lower plan, no plan, unknown plan); nothing is written and the key is not used |
+| consumer | `InstanceAutoRegistrationService` (`OwesPlanRedemption`): presents the key once and records its hash on the stored credential (`PluginRegistryCredential.PresentedKeyHash`, also written when the key REGISTERED the instance), so a later boot never presents it again. A refusal is a Warning naming the fix and never blocks the install phase. |
+
+`InstancePlanService.RedeemRegistrationKey` is the one writer, beside the admin's `SetPlan` (which now
+stamps `PlanSetVia = global administrator <id>`). `RegistrationKeyPlanRedemptionTest` (core) pins the
+rule and every outcome against a real record. A single-use coupon minted for one machine at the
+moment of its enrolment approval is the intended key (MeshWeaver.Plugins `Hosting/MacStudioFleet`
+§2b); the registry's usage limit and expiry bound it exactly as they bound a registration.
 
 ## Short-lived tokens — `POST /api/instances/token`
 
