@@ -259,8 +259,8 @@ public sealed class InstanceComboVerifier
             })
             .ToImmutableList();
 
-        foreach (var unreadable in assembly.Modules.Where(m => m.KnownDebtError is not null))
-            caveats.Add(unreadable.KnownDebtError!);
+        foreach (var error in assembly.Modules.Select(m => m.KnownDebtError).OfType<string>())
+            caveats.Add(error);
 
         // A package the report carries that the assembly never materialised would mean the gate
         // verified content this combo does not name — call it out rather than silently widening.
@@ -357,7 +357,10 @@ public sealed class InstanceComboVerifier
         // explained ONLY when known debt is the report's sole failing signal: here no module has an
         // untolerated failure left (that returned Red above), so the one signal debt cannot account
         // for is a package-level content error, which FailuresOf does not list.
-        var explainedByDebt = modules.Any(m => m.KnownDebt.Count > 0)
+        // And only the tester's checks-failed code (GateReport.ExitCode: 0 or 1) is explained:
+        // a kill, a crash or a usage error that still left a report is no evidence of a pass.
+        var explainedByDebt = gate.ExitCode == ChecksFailedExitCode
+                              && modules.Any(m => m.KnownDebt.Count > 0)
                               && gate.Report.Packages.All(p => p.ContentError is null);
         if (gate.ExitCode != 0 && !explainedByDebt)
         {
@@ -405,6 +408,10 @@ public sealed class InstanceComboVerifier
         }
         return failures.ToImmutable();
     }
+
+    /// <summary>The exit code mw-plugin-test reports for a run whose checks failed
+    /// (<c>GateReport.ExitCode</c>) — the only non-zero exit known debt can explain.</summary>
+    private const int ChecksFailedExitCode = 1;
 
     /// <summary>One failing check: the (scope, check) a known-debt entry names, and its line.</summary>
     private sealed record GateFailure(string Scope, string Check, string Line);

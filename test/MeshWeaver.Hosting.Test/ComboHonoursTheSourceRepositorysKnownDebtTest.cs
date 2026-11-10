@@ -116,6 +116,19 @@ public sealed class ComboHonoursTheSourceRepositorysKnownDebtTest : IDisposable
         run.Verdict.Verdict.Should().Be(ComboVerdictKind.NotVerifiable);
     }
 
+    /// <summary>A tester killed or crashed (not the checks-failed exit 1) is never explained by
+    /// the debt its report happens to carry.</summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(137)]
+    [InlineData(139)]
+    public async Task ANonChecksFailedExitBesideTheDebt_IsNotGreen(int exitCode)
+    {
+        var run = await Verify("Widget/Spec tests\n", contentError: null, exitCode, Tests("Widget/Spec"));
+
+        run.Verdict.Verdict.Should().Be(ComboVerdictKind.NotVerifiable);
+    }
+
     private static GateRunNodeType Tests(string path) => new()
     {
         Path = path,
@@ -130,7 +143,11 @@ public sealed class ComboHonoursTheSourceRepositorysKnownDebtTest : IDisposable
         Verify(allowFile, contentError: null, types);
 
     private Task<ComboVerificationRun> Verify(
-        string? allowFile, string? contentError, params GateRunNodeType[] types)
+        string? allowFile, string? contentError, params GateRunNodeType[] types) =>
+        Verify(allowFile, contentError, exitCode: 1, types);
+
+    private Task<ComboVerificationRun> Verify(
+        string? allowFile, string? contentError, int exitCode, params GateRunNodeType[] types)
     {
         var files = new List<RepoFile>
         {
@@ -161,7 +178,7 @@ public sealed class ComboHonoursTheSourceRepositorysKnownDebtTest : IDisposable
         };
         // The tester runs without any allow file, so ANY failure exits 1 — exactly as in the lane.
         var verifier = new InstanceComboVerifier(assembler, (_, _) => Observable.Return(
-            new CandidateGateRun { ExitCode = 1, Platform = "linux/amd64", Report = report }));
+            new CandidateGateRun { ExitCode = exitCode, Platform = "linux/amd64", Report = report }));
         var combo = new InstanceCombo
         {
             ReadAt = DateTimeOffset.UtcNow,
