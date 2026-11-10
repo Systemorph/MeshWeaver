@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -220,6 +221,106 @@ public class BootProgressTest
         var both = InstanceAutoRegistrationService.SkipCause(31, 0, false);
         Assert.Contains("no bundle registry", both);
         Assert.Contains("no storage adapter", both);
+    }
+
+    // ── The register phase ──────────────────────────────────────────────────────────────────
+
+    private static BootPhase RegisterRow(BootProgress progress) =>
+        Assert.Single(progress.Current.Phases, p => p.Id == BootPhaseIds.Register);
+
+    [Fact]
+    public void AnOpenRegistrationNamesTheWaitAndStaysOpenUntilConsent()
+    {
+        using var progress = new BootProgress();
+        progress.PhaseStarted(BootPhaseIds.Register, "Registering with the plugin registry", "https://registry.example.com");
+
+        InstanceAutoRegistrationService.RecordPreflight(progress,
+            InstanceAutoRegistrationService.RegistrationPreflight.AwaitConsent, "waiting for consent in Settings");
+
+        // A repeated PhaseStarted REPLACES the row by id — one register row, now naming the wait.
+        var waiting = RegisterRow(progress);
+        Assert.Equal("Waiting for an administrator's consent to register", waiting.Title);
+        Assert.Equal("waiting for consent in Settings", waiting.Detail);
+        Assert.Equal(BootStepStates.Running, waiting.State);
+        Assert.Null(waiting.EndedAt);
+
+        var consent = new Subject<Unit>();
+        using var _ = InstanceAutoRegistrationService
+            .RecordRegistration(consent, progress, "https://registry.example.com").Subscribe(_ => { }, _ => { });
+        Assert.Equal(BootStepStates.Running, RegisterRow(progress).State);
+
+        consent.OnNext(Unit.Default);
+        var done = RegisterRow(progress);
+        Assert.Equal(BootStepStates.Done, done.State);
+        Assert.Equal("registered at https://registry.example.com", done.Detail);
+        Assert.NotNull(done.EndedAt);
+    }
+
+    [Fact]
+    public void AFailedRegistrationClosesThePhaseFailedAndStillPropagates()
+    {
+        using var progress = new BootProgress();
+        progress.PhaseStarted(BootPhaseIds.Register, "Registering with the plugin registry");
+        Exception? seen = null;
+
+        using var _ = InstanceAutoRegistrationService
+            .RecordRegistration(Observable.Throw<Unit>(new InvalidOperationException("401 from the registry")), progress, "https://r")
+            .Subscribe(_ => { }, ex => seen = ex);
+
+        Assert.Equal("401 from the registry", seen?.Message);
+        var row = RegisterRow(progress);
+        Assert.Equal(BootStepStates.Failed, row.State);
+        Assert.Equal("401 from the registry", row.Detail);
+    }
+
+    [Fact]
+    public void AnAbortedRegistrationFailsThePhaseAndRecordsTheError()
+    {
+        using var progress = new BootProgress();
+        progress.PhaseStarted(BootPhaseIds.Register, "Registering with the plugin registry");
+
+        InstanceAutoRegistrationService.RecordPreflight(progress,
+            InstanceAutoRegistrationService.RegistrationPreflight.Abort, "no master key to protect the instance key with");
+
+        var row = RegisterRow(progress);
+        Assert.Equal(BootStepStates.Failed, row.State);
+        Assert.Equal("no master key to protect the instance key with", row.Detail);
+        Assert.Contains("registration: no master key to protect the instance key with", progress.Current.Errors);
+    }
+
+    [Fact]
+    public void ASkippedRegistrationIsDoneWithItsReason()
+    {
+        using var progress = new BootProgress();
+        progress.PhaseStarted(BootPhaseIds.Register, "Registering with the plugin registry");
+
+        InstanceAutoRegistrationService.RecordPreflight(progress,
+            InstanceAutoRegistrationService.RegistrationPreflight.Skip, "an instance key is already stored");
+
+        var row = RegisterRow(progress);
+        Assert.Equal(BootStepStates.Done, row.State);
+        Assert.Equal("an instance key is already stored", row.Detail);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void AMissingReasonNeverLeavesABlankDetail(string? reason)
+    {
+        foreach (var action in new[]
+                 {
+                     InstanceAutoRegistrationService.RegistrationPreflight.Skip,
+                     InstanceAutoRegistrationService.RegistrationPreflight.Abort,
+                     InstanceAutoRegistrationService.RegistrationPreflight.AwaitConsent,
+                 })
+        {
+            using var progress = new BootProgress();
+            progress.PhaseStarted(BootPhaseIds.Register, "Registering with the plugin registry");
+            InstanceAutoRegistrationService.RecordPreflight(progress, action, reason);
+            Assert.False(string.IsNullOrWhiteSpace(RegisterRow(progress).Detail), $"{action}: blank detail");
+            Assert.DoesNotContain(progress.Current.Errors, e => e.TrimEnd().EndsWith(':'));
+        }
     }
 
     [Fact]

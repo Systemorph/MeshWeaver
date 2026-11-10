@@ -675,9 +675,7 @@ public sealed class InstanceAutoRegistrationService(
         // bake — a spinner in the one place the person could have been told what to do).
         var progress = hub.ServiceProvider.GetService<BootProgress>();
         progress?.PhaseStarted(BootPhaseIds.Register, "Registering with the plugin registry", registry.Url);
-        IObservable<Unit> Registered(IObservable<Unit> registration) => registration
-            .Do(_ => progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Done, $"registered at {registry.Url}"),
-                ex => progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Failed, ex.Message));
+        IObservable<Unit> Registered(IObservable<Unit> registration) => RecordRegistration(registration, progress, registry.Url);
 
         return consent.SelectMany(consentGiven =>
         {
@@ -688,16 +686,15 @@ public sealed class InstanceAutoRegistrationService(
                 case RegistrationPreflight.Skip:
                     if (reason is not null)
                         logger.LogInformation("{Reason}", reason);
-                    progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Done, reason ?? "already registered");
+                    RecordPreflight(progress, action, reason);
                     return Observable.Return(Unit.Default);
                 case RegistrationPreflight.Abort:
                     logger.LogError("{Reason}", reason);
-                    progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Failed, reason);
-                    progress?.Error($"registration: {reason}");
+                    RecordPreflight(progress, action, reason);
                     return Observable.Empty<Unit>();       // misconfigured → do not go on to install
                 case RegistrationPreflight.AwaitConsent:
                     logger.LogInformation("{Reason}", reason);
-                    progress?.PhaseStarted(BootPhaseIds.Register, "Waiting for an administrator's consent to register", reason);
+                    RecordPreflight(progress, action, reason);
                     // The instance has asked; now it waits for the answer — the consent record a
                     // platform admin writes from Settings — and registers the moment it lands.
                     // Ordering on the actual precondition: no timer, no restart, no poll.
@@ -2841,6 +2838,47 @@ public sealed class InstanceAutoRegistrationService(
                 return Observable.Return((ImmutableList<string>.Empty, allCarriers, none, true));
             });
     }
+
+    /// <summary>
+    /// The register phase's row for a preflight verdict — the sentence the boot page shows. Skip
+    /// closes it Done, Abort closes it Failed and records the error, AwaitConsent keeps it OPEN and
+    /// names the wait (a repeated <see cref="BootProgress.PhaseStarted"/> replaces the row by id, it
+    /// never adds a second one). Present records nothing here: <see cref="RecordRegistration"/> closes
+    /// it. A missing or blank <paramref name="reason"/> never leaves a blank detail.
+    /// </summary>
+    internal static void RecordPreflight(BootProgress? progress, RegistrationPreflight action, string? reason)
+    {
+        if (progress is null)
+            return;
+        switch (action)
+        {
+            case RegistrationPreflight.Skip:
+                progress.PhaseEnded(BootPhaseIds.Register, BootStepStates.Done, OrDefault(reason, "already registered"));
+                break;
+            case RegistrationPreflight.Abort:
+                var why = OrDefault(reason, "registration is misconfigured (no reason was given)");
+                progress.PhaseEnded(BootPhaseIds.Register, BootStepStates.Failed, why);
+                progress.Error($"registration: {why}");
+                break;
+            case RegistrationPreflight.AwaitConsent:
+                progress.PhaseStarted(BootPhaseIds.Register, "Waiting for an administrator's consent to register",
+                    OrDefault(reason, "a platform administrator grants consent in Settings"));
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Closes the register phase from the registration call itself: Done with the registry on its
+    /// value, Failed with the error message on its error — which still propagates (observed, never
+    /// swallowed).
+    /// </summary>
+    internal static IObservable<Unit> RecordRegistration(IObservable<Unit> registration, BootProgress? progress, string registryUrl) =>
+        registration.Do(
+            _ => progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Done, $"registered at {registryUrl}"),
+            ex => progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Failed, OrDefault(ex.Message, ex.GetType().Name)));
+
+    private static string OrDefault(string? text, string fallback) =>
+        string.IsNullOrWhiteSpace(text) ? fallback : text;
 
     /// <summary>
     /// Why the module phase landed nothing ahead of the content — the sentence the boot page shows.
