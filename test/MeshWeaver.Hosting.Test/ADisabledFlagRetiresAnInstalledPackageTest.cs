@@ -417,17 +417,70 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
 
     /// <summary>The restart coordinator once it satisfies <paramref name="until"/>. It may not exist
     /// yet, so its existence is re-read from storage first — never a point read of an absent node.</summary>
-    private async Task<PackageRestartCoordinatorState> Coordinator(Func<PackageRestartCoordinatorState, bool> until, CancellationToken ct)
+    private async Task<PackageRestartCoordinatorState> Coordinator(Func<PackageRestartCoordinatorState, bool> until, CancellationToken ct) =>
+        await (await CoordinatorStream(ct)).Where(until).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+    /// <summary>The restart coordinator's live content, once it exists — existence re-read from
+    /// storage first, never a point read of an absent node.</summary>
+    private async Task<IObservable<PackageRestartCoordinatorState>> CoordinatorStream(CancellationToken ct)
     {
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => Storage.Read(PackageRestartCoordinator.Path, Mesh.JsonSerializerOptions).Take(1).DefaultIfEmpty(null))
             .Where(n => n is not null)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-        return await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(PackageRestartCoordinator.Path))
+        return Access.RunAsSystem(() => Mesh.GetMeshNodeStream(PackageRestartCoordinator.Path))
             .Select(n => n.ContentAs<PackageRestartCoordinatorState>(Mesh.JsonSerializerOptions))
-            .OfType<PackageRestartCoordinatorState>()
-            .Where(until)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            .OfType<PackageRestartCoordinatorState>();
+    }
+
+    /// <summary>Whether no enrolment on <paramref name="s"/> is still pending — THE condition the
+    /// withdrawal tests assert, waited on directly.</summary>
+    private static bool NoPendingMember(PackageRestartCoordinatorState s) =>
+        s.Members is null || s.Members.Values.All(m => m.State != PackageRestartMemberState.Pending);
+
+    /// <summary>
+    /// Waits until the coordinator has folded every fact AND holds no pending enrolment, and fails
+    /// naming the pending members it last saw. 🚨 Never <c>Facts is null</c> alone: that proxy is
+    /// already true BEFORE the withdrawal — once the owner folded the Pending fact, the coordinator
+    /// reads Facts null with the member Pending. A writer's Withdraw completes on the owner's ack of
+    /// the FACT; the owner folds it afterwards, and a reader's replica can still be at the Pending
+    /// fold when the retire returns. See <see cref="FactsFolded_IsSatisfiedByAPendingEnrolment_BeforeItsWithdrawal"/>.
+    /// </summary>
+    private async Task NoPendingEnrolmentIsLeftBehind(CancellationToken ct) =>
+        await (await CoordinatorStream(ct))
+            .Select(s => new CoordinatorView(s))
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(v => v.State.Facts is null && NoPendingMember(v.State), "no pending enrolment is left behind", ct);
+
+    /// <summary>The coordinator as a failure message names it: its unfolded facts and its pending members.</summary>
+    private sealed record CoordinatorView(PackageRestartCoordinatorState State)
+    {
+        public override string ToString() =>
+            $"facts [{string.Join(", ", State.Facts?.Keys ?? [])}], pending ["
+            + string.Join(", ", (State.Members ?? ImmutableDictionary<string, PackageRestartMember>.Empty)
+                .Where(kv => kv.Value.State == PackageRestartMemberState.Pending).Select(kv => kv.Key)) + "]";
+    }
+
+    /// <summary>
+    /// 🚨 The deterministic pin of the flake in <see cref="AnEnrolmentWhoseRequestIsNeverWritten_IsWithdrawn"/>
+    /// (CI run 42785226094): the wait it used, <c>Facts is null</c>, is satisfied by a coordinator
+    /// whose enrolment is still PENDING — the state after the owner folded the Pending fact and before
+    /// any Withdraw reached the reader. Then the withdrawal itself: once stated, the owner folds the
+    /// member away, which only the real condition observes.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task FactsFolded_IsSatisfiedByAPendingEnrolment_BeforeItsWithdrawal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var request = PackageUninstall.PathAt("flag-retire-proxy-repro-a1");
+        await PackageRestartCoordinator.Pending(Mesh, request, "MeshWeaver.FlagRetireProbe", "the proxy repro", Log)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var folded = await Coordinator(s => s.Facts is null, ct);
+        Assert.Equal(PackageRestartMemberState.Pending, folded.Members?.GetValueOrDefault(request)?.State);
+
+        await PackageRestartCoordinator.Withdraw(Mesh, request, Log).Timeout(TestTimeouts.Convergence).Await(ct);
+        await NoPendingEnrolmentIsLeftBehind(ct);
     }
 
     private Task Landed(string module, string package, CancellationToken ct) =>
@@ -532,9 +585,7 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         Assert.Contains(outcome.Refused, line => line.StartsWith(Package + ":"));
         Assert.Contains(Dependent, Assert.Single(outcome.Requested), StringComparison.OrdinalIgnoreCase);
         Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "refused, so still installed");
-        var state = await Coordinator(s => s.Facts is null, ct);
-        Assert.True(state.Members is null || state.Members.Values.All(m => m.State != PackageRestartMemberState.Pending),
-            "no pending enrolment is left behind: " + string.Join(", ", state.Members?.Keys ?? []));
+        await NoPendingEnrolmentIsLeftBehind(ct);
         Assert.Equal(0, restart.Count);
     }
 
@@ -557,9 +608,7 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         Assert.Contains(outcome.Refused, line => line.StartsWith(Package + ":"));
         Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "the install record is kept");
         // The boot pass enrolled the request; its failed phase 1 withdrew it.
-        var state = await Coordinator(s => s.Facts is null, ct);
-        Assert.True(state.Members is null || state.Members.Values.All(m => m.State != PackageRestartMemberState.Pending),
-            "no pending enrolment is left behind: " + string.Join(", ", state.Members?.Keys ?? []));
+        await NoPendingEnrolmentIsLeftBehind(ct);
         Assert.Equal(0, restart.Count);
     }
 
