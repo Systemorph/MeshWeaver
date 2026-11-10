@@ -3,8 +3,9 @@ namespace MeshWeaver.ComboVerifier;
 /// <summary>
 /// What happens to an automatically allocated work root once a verification has run.
 ///
-/// <para>Two directories belong to one run: the materialised combo (the work root) and its composed
-/// module set beside it (<c>&lt;work root&gt;.modules</c>, MeshWeaver#4413). They are one unit: a
+/// <para>Three directories belong to one run: the materialised combo (the work root), its composed
+/// module set beside it (<c>&lt;work root&gt;.modules</c>, MeshWeaver#4413) and the run's mesh-free
+/// bake (<c>&lt;work root&gt;.bake</c>, <see cref="DockerImageGate.BakeRootFor"/>). They are one unit: a
 /// Green deletes BOTH — deleting only the first left a whole module set (DLLs, closure files,
 /// native payloads) behind on every successful run — and anything else keeps BOTH, because the
 /// tree and the modules it ran against are exactly what an operator inspects next.</para>
@@ -16,9 +17,11 @@ public static class ComboWorkRoots
     /// <param name="workRoot">The materialised combo.</param>
     /// <param name="modulesRoot">The composed module set, or null when the combo declared none.</param>
     /// <param name="output">Where a kept directory is named.</param>
-    public static void Settle(int exitCode, string workRoot, string? modulesRoot, TextWriter output)
+    /// <param name="bakeRoot">The run's mesh-free bake, or null when none was written.</param>
+    public static void Settle(
+        int exitCode, string workRoot, string? modulesRoot, TextWriter output, string? bakeRoot = null)
     {
-        foreach (var directory in new[] { workRoot, modulesRoot }.OfType<string>())
+        foreach (var directory in new[] { workRoot, modulesRoot, bakeRoot }.OfType<string>())
         {
             if (exitCode == 0)
             {
