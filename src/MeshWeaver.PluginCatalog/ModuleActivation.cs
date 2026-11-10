@@ -739,10 +739,15 @@ public static class ModuleActivationSidecar
         foreach (var moduleName in names)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt, cancellationToken);
+            // 🚨 ONE fault, ONE line (MeshWeaver#7690), as for the listing and entry faults above.
+            // The record faults are not reported as they are read: they are named IN the drop's
+            // line. Reported as read, one refused open of one record was two Error lines (the
+            // record line and "Module … is NOT loaded from this read"), filed as two incidents.
+            var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt: null, cancellationToken);
             if (!log.Whole)
             {
-                Drop(moduleName, $"{log.Faults} of its records could not be read");
+                Drop(moduleName, $"{log.Faults} of its records could not be read: "
+                    + string.Join(" ", log.Problems).TrimEnd('.'));
                 continue;
             }
             if (log.IsEmpty)
@@ -1303,6 +1308,10 @@ public static class ModuleActivationSidecar
         ImmutableList<ModuleEntrySnapshot> Snapshots,
         int Faults = 0)
     {
+        /// <summary>The sentence for each of the <see cref="Faults"/>, in the order they were met,
+        /// for a caller that reports them in the line naming their consequence (MeshWeaver#7690).</summary>
+        public ImmutableList<string> Problems { get; init; } = [];
+
         /// <summary>Every file of the directory was read: the only state anything may be derived
         /// from.</summary>
         public bool Whole => Faults == 0;
@@ -1337,18 +1346,25 @@ public static class ModuleActivationSidecar
     private static ModuleLog ReadModuleLog(
         string baseDirectory, string moduleName, Action<string>? onCorrupt, CancellationToken cancellationToken)
     {
-        var faults = 0;
+        var problems = ImmutableList.CreateBuilder<string>();
         void Fault(string message)
         {
-            faults++;
+            problems.Add(message);
             onCorrupt?.Invoke(message);
         }
+        var records = ReadLandingFiles(baseDirectory, moduleName, Fault, cancellationToken);
+        var uninstalls = ReadUninstallFiles(baseDirectory, moduleName, Fault, cancellationToken);
+        var verdicts = ReadVerdictFiles(baseDirectory, moduleName, Fault, cancellationToken);
+        var snapshots = ReadSnapshotFiles(baseDirectory, moduleName, Fault, cancellationToken);
         return new ModuleLog(
-            [.. ReadLandingFiles(baseDirectory, moduleName, Fault, cancellationToken).Select(f => f.Record)],
-            [.. ReadUninstallFiles(baseDirectory, moduleName, Fault, cancellationToken).Select(f => f.Record)],
-            [.. ReadVerdictFiles(baseDirectory, moduleName, Fault, cancellationToken).Select(f => f.Record)],
-            [.. ReadSnapshotFiles(baseDirectory, moduleName, Fault, cancellationToken).Select(f => f.Record)],
-            faults);
+            [.. records.Select(f => f.Record)],
+            [.. uninstalls.Select(f => f.Record)],
+            [.. verdicts.Select(f => f.Record)],
+            [.. snapshots.Select(f => f.Record)],
+            problems.Count)
+        {
+            Problems = problems.ToImmutable(),
+        };
     }
 
     /// <summary>

@@ -124,7 +124,11 @@ proposed that as the mesh's module set. Now:
 - a module whose record directory cannot be read WHOLE — any file unreadable, or not matching its
   own address, or the directory not listable — is **dropped from the read** and reported through
   `onCorrupt`, exactly as an unreadable activation entry always was before #4026 ("that ONE module
-  is skipped"); the next read that sees it whole restores it;
+  is skipped"); the next read that sees it whole restores it. The record faults are named IN the
+  drop's line ("Module … is NOT loaded from this read: N of its records could not be read: Module
+  record '…' could not be read (…)"), never reported as they are read — one fault is one line
+  (#7690): reported as read, one refused open of one `.verdict` was a record line and a drop line
+  two seconds apart, filed as two incidents;
 - so is a module that has records and whose `<Name>.json` exists but cannot be read — that file may
   be an older image's install or uninstall, and a stale legacy-aggregate row behind it must not
   decide in its place (the aggregate's own write time is its time now, never the unreadable file's).
@@ -210,6 +214,17 @@ Pinned by `LockFreeReadTest` and `FaultedActivationReadIsNeverReusedTest`
 (`AnActivationRecordHeldUnderAnExclusiveLock_StillReadsWhole`): another handle holds the record with
 `FileShare.None` (an exclusive `flock`), the BCL open is measured to be refused in the same window,
 and the activation still reads the module whole.
+
+**The recurrence on an image that takes no lock (#7690).** On 2026-11-10 at 11:20:55Z one memex pod,
+running `3.1.12923` with `LockFreeRead`, failed to open one record,
+`activation.d/MeshWeaver.Notifications.Channels/<generation>.<address>.verdict`, with errno 11 at OPEN
+and no advisory lock taken. That confirms the exclusion above: no other holder can refuse that open, so
+the fault is the file system's. The module was dropped from that one runtime read, as designed. Its
+cause is still not established, because the node's kernel and SMB-client logs are not collected. The
+fault was also reported twice, as the record line and, at 11:20:57Z, as the module's drop line. The log
+watcher filed those as two incidents. #8067 had made the ENTRY fault one line and #7914 the listing
+fault; the record fault was the remaining case, and it is now one line too
+(`UnreadableLandingRecordIsOneLineTest`).
 
 ### 🚨 What an image that predates the records sees when the two disagree
 
