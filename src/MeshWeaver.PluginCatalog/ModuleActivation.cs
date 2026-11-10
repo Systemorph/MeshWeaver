@@ -695,10 +695,15 @@ public static class ModuleActivationSidecar
         var byName = stored.List.Entries.ToImmutableDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
         var order = stored.List.Entries.Select(e => e.Name).ToImmutableList();
 
-        void Drop(string moduleName, string why)
+        void Remove(string moduleName)
         {
             byName = byName.Remove(moduleName);
             order = order.RemoveAll(n => string.Equals(n, moduleName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        void Drop(string moduleName, string why)
+        {
+            Remove(moduleName);
             onCorrupt?.Invoke(
                 $"Module '{moduleName}' is NOT loaded from this read: {why}. A partial read would "
                 + "change which generation it runs — or whether it runs at all — so it is dropped "
@@ -742,6 +747,15 @@ public static class ModuleActivationSidecar
             }
             if (log.IsEmpty)
                 continue;
+            if (stored.Unreadable.Contains(moduleName))
+            {
+                // 🚨 ONE fault, ONE line (MeshWeaver#8049), as for the listing fault above. The
+                // entry file's fault was already reported by ReadEntryFiles, and that line says
+                // this module is not loaded from this read. A second line about the same fault
+                // carried no new fact, and it was filed as a second incident.
+                Remove(moduleName);
+                continue;
+            }
             if (stored.Hides(moduleName) is { } hidden)
             {
                 Drop(moduleName, hidden);
@@ -2417,6 +2431,15 @@ public static class ModuleActivationSidecar
     }
 
     /// <summary>
+    /// What an unreadable per-module entry file costs, stated ONCE, in the line that reports its
+    /// fault (MeshWeaver#8049): the activation read drops a module with records for that same fault
+    /// and reports no second line, so this line has to say what the drop means.
+    /// </summary>
+    private const string EntrySkipped =
+        "that ONE module is NOT loaded from this read (a module with landing records is dropped whole, "
+        + "never derived from the rest of its records); every other activation entry is unaffected.";
+
+    /// <summary>
     /// Every per-module entry file, each with the time it was written — read from the same handle
     /// as its content, so a concurrent replace cannot pair one file's bytes with another's time —
     /// and the module names whose file exists but could not be read.
@@ -2476,8 +2499,8 @@ public static class ModuleActivationSidecar
                     unreadable.Add(fileModule);
                     onCorrupt?.Invoke(
                         $"Module activation entry '{file}' does not hold the entry its name addresses "
-                        + "(it is null, has no name, or names another module) — that ONE module is "
-                        + "skipped; every other activation entry is unaffected.");
+                        + "(it is null, has no name, or names another module) — " + EntrySkipped
+                        + " The file's content is wrong, so re-install the module to rewrite it.");
                     continue;
                 }
                 entries.Add((entry, read.WrittenAtUtc));
@@ -2490,10 +2513,18 @@ public static class ModuleActivationSidecar
             catch (Exception ex)
             {
                 unreadable.Add(Path.GetFileNameWithoutExtension(file));
+                // 🚨 The remedy follows the fault (MeshWeaver#8049). A refused open or read says
+                // nothing about the file's bytes: the file is not damaged, and the next read that
+                // opens it restores the module. Telling an operator to re-install over a refusal by
+                // the volume sends them to repair a file that is fine. Only content that is not an
+                // entry needs a re-install to rewrite it.
+                var remedy = ex is IOException or UnauthorizedAccessException
+                    ? " The volume refused the read, which says nothing about the file's content, so "
+                      + "nothing needs re-installing: the next read that opens the file restores the module."
+                    : " The file's content is not an activation entry, so re-install the module to rewrite it.";
                 onCorrupt?.Invoke(
                     $"Module activation entry '{file}' could not be read ({ex.GetType().Name}: "
-                    + $"{ex.Message}) — that ONE module is skipped; re-install it to repair the "
-                    + "entry. Every other activation entry is unaffected.");
+                    + $"{ex.Message}) — " + EntrySkipped + remedy);
             }
         }
         return (entries.ToImmutable(), unreadable.ToImmutable(), true);
