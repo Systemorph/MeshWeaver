@@ -743,6 +743,56 @@ for one in flight when the activation went. What it ends is the **stranding**: t
 within one round trip and the NEXT click lands on a live handler, instead of every click for the rest
 of that page's life being thrown away.
 
+## 🚨 The refusal itself tells a stranded subscriber (#8052)
+
+The goodbye above needs a carrier that can still route. On a host that is LEAVING it has none: the
+stopping replica's router refuses every outbound delivery, the goodbye included
+([Riding Out a ShuttingDown Address](../RidingOutAShuttingDownAddress), "A leaving HOST must
+refuse"), and that page already names the gap — *a subscriber that was already warm when the silo
+began stopping still gets no goodbye*.
+
+### The measurement
+
+memex-cloud, 2026-11-09, during a roll. One circuit, one layout stream, three replicas:
+
+| time (UTC) | replica | line |
+|---|---|---|
+| 13:58:11 | new replica A | the circuit opens and subscribes; its `sync/{id}` receives the layout by 13:58:19 |
+| 13:58:24 | leaving replica | `Host is shutting down, cannot route to portal/{circuit}` — the goodbye that could not leave |
+| 13:58:26 | new replica B | the owner hub's first render on its NEW activation |
+| 13:58:28 | A → B | the click; held for the registration grace |
+| 13:58:33 | B | `REFUSING ClickedEvent … NO sync hub for this stream was EVER registered on the current activation` |
+
+That click could not run — the owner that rendered its button was gone — and refusing it is right.
+What was wrong is what the new activation did NOT do: it had just established that this subscriber
+was bound to an activation that no longer exists, and it told it nothing. The mirror stayed bound
+to the dead activation, and every further action on the page would have been refused the same way
+until the subscriber's next heartbeat — 45 s by default — named the stream and got the
+`StreamEndedEvent` answer of #6047. (In this occurrence the click also navigated, so the client
+released the stream two seconds later and no second click followed; the gap is the window, not this
+one person's next click.)
+
+### The fix
+
+`DataExtensions.TellAStrandedSubscriberItsStreamEnded`: when a user action is refused as
+**never registered** or **no record** — after the grace, no `sync/{id}` exists for the stream on
+this hub or an ancestor — the owner also posts a `StreamEndedEvent` to the SUBSCRIBING hub (the host
+of the sender's `sync/{id}`), the same answer, to the same address, that a heartbeat for the stream
+already gets. The subscriber re-asks once through its recycle re-arm and its next action lands on a
+live handler.
+
+It does nothing for the other three causes: a subscriber that released the stream asked for the end;
+an owner-side reap already announced itself; and a hub that could not be asked is tearing down, and
+a dying owner must not speak. It never speaks from the router. Nothing polls, nothing is timed and
+nothing retries — one end per refused action, and a re-ask cannot cause a refusal.
+
+Pinned by `RefusalTellsAStrandedSubscriberTest.AfterARefusalForAStreamTheActivationNeverServed_TheNextClickRuns`
+(`MeshWeaver.Layout.Test`): the owner deactivates with its goodbye declined (its carrier starts going
+down the instant it is chosen, and the test reads the decline from the log), the subscriber's
+heartbeat is set beyond the test's reach, the first click is refused with the never-registered
+sentence, and the second click must RUN. Falsified by removing the call: the wait for the
+subscriber's re-subscribe is red.
+
 ## A click on an area with no control
 
 The stream can be perfectly alive and a click still have nothing to run: its area holds no control
