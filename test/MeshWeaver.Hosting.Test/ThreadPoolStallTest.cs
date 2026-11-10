@@ -202,4 +202,62 @@ public class ThreadPoolStallTest
         ThreadPoolStall.Describe(Stalled(), [], null)
             .Should().Contain("found NO ThreadPool worker thread");
     }
+
+    /// <summary>
+    /// The 2026-11-09 22:55Z memex-cloud stall (pod <c>…5cf7b87497-4l9xx</c>, Orleans: 15.56&#160;s): two
+    /// consecutive heartbeat ticks, verbatim. The pool went from idle to 11,196 queued and still completed
+    /// 9,310 items in the period, so the no-progress rule does not fire — the reason no frames were
+    /// captured for it. A probe item queued behind that burst waits as long as Orleans' timer did.
+    /// </summary>
+    [Fact]
+    public void ABacklogThePoolIsStillDraining_IsMissedByNoProgress_AndCaughtByQueueDelay()
+    {
+        var tick201 = new ProcessLivenessSample(201, TimeSpan.FromSeconds(2010.0), 1160, 506, 189,
+            TimeSpan.FromSeconds(28.12), 3_600_000_000L, true, 32, 0, 14_003_138);
+        var tick202 = new ProcessLivenessSample(202, TimeSpan.FromSeconds(2020.1), 1173, 512, 189,
+            TimeSpan.FromSeconds(28.97), 4_290_000_000L, true, 32, 11_196, 14_012_448);
+        var reading = ProcessLiveness.Read(tick201, tick202, Period);
+
+        ThreadPoolStall.ShouldCapture(tick201, reading, lastCapture: null)
+            .Should().BeFalse("the pool completed 9,310 items in the period — the shape the counters cannot call a stall");
+        ThreadPoolStall.ShouldCaptureQueueDelay(TimeSpan.FromSeconds(15.56), tick202.Elapsed, lastCapture: null)
+            .Should().BeTrue("a work item queued behind the burst waited as long as the Orleans timer did");
+    }
+
+    /// <summary>Controls: an ordinary hand-off, a wait under the threshold, and a capture inside the cooldown do not capture.</summary>
+    [Fact]
+    public void AShortQueueDelay_OrOneInsideTheCooldown_DoesNotCapture()
+    {
+        var now = TimeSpan.FromMinutes(40);
+        ThreadPoolStall.ShouldCaptureQueueDelay(TimeSpan.Zero, now, null).Should().BeFalse("the probe started");
+        ThreadPoolStall.ShouldCaptureQueueDelay(
+                ThreadPoolStall.QueueDelayCaptureThreshold - TimeSpan.FromMilliseconds(1), now, null)
+            .Should().BeFalse("under the threshold");
+        ThreadPoolStall.ShouldCaptureQueueDelay(ThreadPoolStall.QueueDelayCaptureThreshold, now, null)
+            .Should().BeTrue("at the threshold");
+        ThreadPoolStall.ShouldCaptureQueueDelay(TimeSpan.FromSeconds(20), now, now - TimeSpan.FromMinutes(1))
+            .Should().BeFalse("one capture per cooldown, whichever rule took it");
+        ThreadPoolStall.ShouldCaptureQueueDelay(TimeSpan.FromSeconds(20), now, now - ThreadPoolStall.CaptureCooldown)
+            .Should().BeTrue("the cooldown has passed");
+    }
+
+    [Fact]
+    public void TheQueueDelayLine_NamesTheWait_ThePoolState_AndTheGroups()
+    {
+        var sample = new ProcessLivenessSample(202, TimeSpan.FromSeconds(2020.1), 1173, 512, 189,
+            TimeSpan.FromSeconds(28.97), 4_290_000_000L, true, 32, 11_196, 14_012_448);
+        string Stack(string top) =>
+            string.Join(Environment.NewLine, $"at {top}", "at System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()");
+
+        var line = ThreadPoolStall.DescribeQueueDelay(sample, TimeSpan.FromSeconds(15.56),
+            [Stack("Slow.Item()"), Stack("Slow.Item()"), Stack("Other.Item()")], null, []);
+
+        line.Should().StartWith("[POOLSTALL] tick=202: a probe work item queued 15.56s ago had not started");
+        line.Should().Contain("11196 queued over 32 thread(s)");
+        line.Should().Contain("×2:").And.Contain("Slow.Item()");
+        line.IndexOf("Slow.Item()", StringComparison.Ordinal).Should()
+            .BeLessThan(line.IndexOf("Other.Item()", StringComparison.Ordinal), "largest group first");
+        ThreadPoolStall.DescribeQueueDelay(sample, TimeSpan.FromSeconds(6), null, null)
+            .Should().Contain("no stack reader is registered in this host");
+    }
 }

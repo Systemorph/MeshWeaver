@@ -99,10 +99,19 @@ internal sealed class ProcessLivenessHeartbeatService(
         var tick = 0L;
         var due = period;
 
+        // The queue-delay half of [POOLSTALL] (MeshWeaver#5388): polled every slice, not every tick,
+        // because the stall it mirrors builds and drains inside one period — a 15.6 s Orleans stall
+        // on 2026-11-09 fell between two ticks that each read the pool as making progress.
+        var queueProbe = new ThreadPoolQueueProbe();
+
         while (!stopped)
         {
             Thread.Sleep(slice);
-            if (stopped || clock.Elapsed < due)
+            if (stopped)
+                continue;
+
+            PollQueueDelay(queueProbe, clock.Elapsed, tick, ref lastStallCapture, workerStacks);
+            if (clock.Elapsed < due)
                 continue;
 
             // Re-base off NOW rather than adding a period to `due`: after a long stop the process
@@ -124,7 +133,7 @@ internal sealed class ProcessLivenessHeartbeatService(
                     && Interlocked.CompareExchange(ref stallCaptureInFlight, 1, 0) == 0)
                 {
                     lastStallCapture = sample.Elapsed;
-                    StartStallCapture(reading, workerStacks);
+                    StartStallCapture(reading.Current.TickSeq, stacks => DescribeStall(reading, stacks), workerStacks);
                 }
             }
             catch (Exception exception)
@@ -137,6 +146,32 @@ internal sealed class ProcessLivenessHeartbeatService(
         }
 
         sampler?.Dispose();
+    }
+
+    /// <summary>
+    /// Polls the queue-delay probe and, when a probe item has waited past
+    /// <see cref="ThreadPoolStall.QueueDelayCaptureThreshold"/>, starts the capture. Never throws: a
+    /// fault here is reported and the heartbeat runs on, for the reason the class remarks give.
+    /// </summary>
+    private void PollQueueDelay(
+        ThreadPoolQueueProbe probe, TimeSpan now, long tick, ref TimeSpan? lastStallCapture,
+        IThreadPoolWorkerStacks? workerStacks)
+    {
+        try
+        {
+            var wait = probe.Poll(now);
+            if (!ThreadPoolStall.ShouldCaptureQueueDelay(wait, now, lastStallCapture)
+                || Interlocked.CompareExchange(ref stallCaptureInFlight, 1, 0) != 0)
+                return;
+            lastStallCapture = now;
+            var sample = ProcessLiveness.Probe(tick, now);
+            StartStallCapture(tick, stacks => DescribeQueueDelay(sample, wait, stacks), workerStacks);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception,
+                "[POOLSTALL] the ThreadPool queue-delay probe could not be read; the heartbeat continues.");
+        }
     }
 
     /// <summary>1 while a <c>[POOLSTALL]</c> capture runs; at most one is ever in flight.</summary>
@@ -168,7 +203,8 @@ internal sealed class ProcessLivenessHeartbeatService(
     /// or ClrMD read can never silence the <c>[LIVENESS]</c> line or forge an overrun on it. The
     /// in-flight flag keeps it to one capture at a time; it is cleared only when the line is logged.
     /// </summary>
-    private void StartStallCapture(ProcessLivenessReading reading, IThreadPoolWorkerStacks? workerStacks)
+    private void StartStallCapture(
+        long tick, Func<IThreadPoolWorkerStacks?, string> describe, IThreadPoolWorkerStacks? workerStacks)
     {
         try
         {
@@ -176,12 +212,11 @@ internal sealed class ProcessLivenessHeartbeatService(
             {
                 try
                 {
-                    logger.LogWarning("{PoolStall}", DescribeStall(reading, workerStacks));
+                    logger.LogWarning("{PoolStall}", describe(workerStacks));
                 }
                 catch (Exception exception)
                 {
-                    logger.LogWarning(exception, "[POOLSTALL] tick {Tick}: the line could not be written.",
-                        reading.Current.TickSeq);
+                    logger.LogWarning(exception, "[POOLSTALL] tick {Tick}: the line could not be written.", tick);
                 }
                 finally
                 {
@@ -198,7 +233,7 @@ internal sealed class ProcessLivenessHeartbeatService(
             Volatile.Write(ref stallCaptureInFlight, 0);
             logger.LogWarning(exception,
                 "[POOLSTALL] tick {Tick}: the capture thread could not be started, so this stall is reported "
-                + "without its frames.", reading.Current.TickSeq);
+                + "without its frames.", tick);
         }
     }
 
@@ -219,6 +254,23 @@ internal sealed class ProcessLivenessHeartbeatService(
         catch (Exception exception)
         {
             return ThreadPoolStall.Describe(reading, null, $"{exception.GetType().Name}: {exception.Message}");
+        }
+    }
+
+    /// <summary>The queue-delay counterpart of <see cref="DescribeStall"/>; same thread, same never-throw rule.</summary>
+    private static string DescribeQueueDelay(
+        ProcessLivenessSample sample, TimeSpan wait, IThreadPoolWorkerStacks? workerStacks)
+    {
+        if (workerStacks is null)
+            return ThreadPoolStall.DescribeQueueDelay(sample, wait, null, null);
+        try
+        {
+            var stacks = workerStacks.CaptureStacks();
+            return ThreadPoolStall.DescribeQueueDelay(sample, wait, stacks.Workers, null, stacks.OtherThreads);
+        }
+        catch (Exception exception)
+        {
+            return ThreadPoolStall.DescribeQueueDelay(sample, wait, null, $"{exception.GetType().Name}: {exception.Message}");
         }
     }
 
