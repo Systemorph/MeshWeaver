@@ -1685,88 +1685,141 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             if (!entry.TryAddSubscriber())
                 continue;
             IDisposable sub;
-            // Set when this reader unsubscribes, so a terminal still on its way to the pool is
+            // Set when this reader unsubscribes, so a notification still on its way to the pool is
             // not delivered to an observer that has already left.
             var detached = 0;
+            // 🚨 EVERY notification after the reader's own subscribe call reaches it OFF the turn
+            // that produced it, in order, on the reader's own lane (#8057, the data half of #7548).
+            //
+            // A value arrives on the stream's own sync/{id} hub, inside SynchronizationStream
+            // .UpdateStream → SetCurrent → Store.OnNext, and BEFORE that hub has opened its gate
+            // (OpenGate runs after the fan-out). The entry's subject relays it to every reader in
+            // turn, on that thread. So one reader whose OnNext did not return held every later
+            // reader of the path untold, held the hub at Starting with its gate closed, and queued
+            // every later frame, every write and the hub's ShutdownRequest behind the turn.
+            // Production: memex, sync/Zz9… at Executing(DataChangedEvent, 5067432ms) with 31 turns
+            // queued, until the pod's shutdown drain gave up on it. The terminal had already been
+            // moved off that turn (#7548); the values had not.
+            //
+            // The lane is an ObserveOn over a per-reader subject: it keeps this reader's order (one
+            // drain at a time) and runs it on the pool, so the producing turn returns at once and a
+            // reader that blocks holds only itself. The values a reader is handed INSIDE its own
+            // Subscribe call — the Replay(1) hydration, on the subscribing thread — stay inline,
+            // exactly as before, so a reader still holds the current node when its subscribe
+            // returns.
+            //
+            // Order across that switch: the entry's ReplaySubject hands this reader's notifications
+            // to ONE scheduled observer, drained by one thread at a time, so inline and lane
+            // deliveries never overlap within a drain. But a live value can be drained to the lane
+            // by the producing thread and a LATER one drained by the subscribing thread before its
+            // Subscribe returns (review of #8061). So the switch is one-way: once anything has gone
+            // to the lane, everything after it goes to the lane too, behind it.
+            var lane = new Subject<System.Reactive.Notification<MeshNode>>();
+            var subscribingThread = Environment.CurrentManagedThreadId;
+            var subscribing = 1;
+            var laned = 0;
+
+            // A reader that throws from ANY of its callbacks is named, never allowed to escape. On
+            // the lane an escaping throw ends ObserveOn's drain inside a pool task, where it becomes
+            // an unobserved task exception: nothing logs it, and this reader's lane is gone with it
+            // (measured with the guard removed: the host survives, the throw leaves no trace). Every
+            // arm goes through this one guard, so none can be left out.
+            void Notify(string what, Action deliver)
+            {
+                try { deliver(); }
+                catch (Exception thrown)
+                {
+                    logger.LogWarning(thrown,
+                        "MeshNodeStreamCache: a reader of {Path} threw while receiving {What}; "
+                        + "the other readers of the path are still told", path, what);
+                }
+            }
+
+            void DeliverValue(MeshNode value) => Notify("a value", () => observer.OnNext(value));
+
+            void DeliverTerminal(Exception error)
+            {
+                if (Volatile.Read(ref detached) != 0)
+                    return;
+                Notify($"its terminal ({error.Message})", () => observer.OnError(error));
+            }
+
+            // Runs on the reader's lane, off the producing turn, one notification at a time.
+            //
+            // 🚨 The TERMINAL is delivered in isolation (#5011): the entry's subject fans an error
+            // out by calling each reader in turn, and a reader that throws from OnError (one
+            // subscribed with no error handler rethrows) would abort that loop, leaving every
+            // reader after it subscribed to a subject nothing writes again — the silent corpse
+            // EndReaders exists to prevent. The throwing reader is named, not swallowed. It is
+            // ordered behind every value the reader was handed before it, because it travels the
+            // same lane.
+            //
+            // 🚨 A FORCED end goes down the shared release lane (review of #7589). The cache's
+            // teardown ends every reader of every path in ONE sweep; delivered from each reader's
+            // own lane those terminals would run CONCURRENTLY, and a consumer composing two node
+            // reads would then take them on two threads at once — the Rx gate lock-order deadlock
+            // ReleaseLane exists to prevent. On the release lane they run one at a time. Upstream
+            // faults stay on the reader's own lane: one stream raises one, and a reader that blocks
+            // in its error path must hold only itself, never the mesh's lane.
+            void Dispatch(System.Reactive.Notification<MeshNode> notification)
+            {
+                if (Volatile.Read(ref detached) != 0)
+                    return;
+                switch (notification.Kind)
+                {
+                    case System.Reactive.NotificationKind.OnNext:
+                        DeliverValue(notification.Value);
+                        return;
+                    case System.Reactive.NotificationKind.OnCompleted:
+                        Notify("its completion", observer.OnCompleted);
+                        return;
+                    // A RETIRED entry is not an answer: move this reader to the current entry.
+                    // Already off the retiring turn (the change feed's publisher), which matters
+                    // because the attachment may open a fresh upstream, i.e. post a SubscribeRequest.
+                    case System.Reactive.NotificationKind.OnError when notification.Exception is ReadEntryRetiredException:
+                        Attach(path, observer, link);
+                        return;
+                    case System.Reactive.NotificationKind.OnError when notification.Exception is { } error:
+                        if (entry.EndedByForce)
+                            _releaseLane.Refuse<System.Reactive.Unit>(() => error).Subscribe(_ => { }, _ => DeliverTerminal(error));
+                        else
+                            DeliverTerminal(error);
+                        return;
+                }
+            }
+
+            var laneSub = lane.ObserveOn(TaskPoolScheduler.Default)
+                .Subscribe(notification => Dispatch(notification));
             try
             {
-                // 🚨 The TERMINAL is delivered in isolation (#5011), and OFF the turn that
-                // raised it (#7548).
-                //
-                // Isolation: the entry's subject fans an error out by calling each reader in
-                // turn, and a reader that throws from OnError (one subscribed with no error
-                // handler rethrows) would abort that loop. Every reader after it would then
-                // stay subscribed to a subject nothing writes again, which is the silent corpse
-                // EndReaders exists to prevent. The throwing reader is named, not swallowed.
-                //
-                // Off the turn: the fault arrives on the stream's own sync/{id} hub, inside
-                // SynchronizationStream.OnError and before that hub has settled
-                // (FailStartup, OpenGate). A reader's error arm is where it chains its next
-                // step (Catch, then the next read), so delivering inline ran that whole
-                // continuation on the sync hub's action block. One reader that did not return
-                // held every later reader of the path untold, held the hub at Starting with its
-                // gate closed, and held its ShutdownRequest behind the turn. Production: 34 min
-                // at Executing(DeliveryFailure, ...) on a serving replica. Each reader now gets
-                // its terminal as its own pooled work item. The raising turn returns, and a
-                // reader that blocks holds only itself. This is ordering-safe: an error is the
-                // last notification a reader ever receives, and every OnNext before it was
-                // delivered synchronously and has already returned.
-                //
-                // 🚨 But a FORCED end goes down the shared release lane, never one pool item per
-                // reader (review of #7589). The cache's teardown ends every reader of every path
-                // in ONE sweep; a pool item each delivers those terminals CONCURRENTLY, and a
-                // consumer composing two node reads then takes them on two threads at once — the
-                // Rx gate lock-order deadlock ReleaseLane exists to prevent. On the lane they run
-                // one at a time, still off the turn that raised them. Upstream faults stay on the
-                // pool: one stream raises one, and a reader that blocks in its error path must hold
-                // only itself, never the mesh's lane.
                 sub = entry.Replay.Subscribe(
-                    observer.OnNext,
-                    error =>
+                    value =>
                     {
-                        void Deliver()
+                        if (Volatile.Read(ref subscribing) == 1
+                            && Volatile.Read(ref laned) == 0
+                            && Environment.CurrentManagedThreadId == subscribingThread)
                         {
-                            if (Volatile.Read(ref detached) != 0)
-                                return;
-                            try { observer.OnError(error); }
-                            catch (Exception thrown)
-                            {
-                                logger.LogWarning(thrown,
-                                    "MeshNodeStreamCache: a reader of {Path} threw while receiving its "
-                                    + "terminal ({Terminal}); the other readers of the path are still told",
-                                    path, error.Message);
-                            }
-                        }
-
-                        // A RETIRED entry is not an answer: move this reader to the current
-                        // entry. Off the retiring turn (the change feed's publisher), because the
-                        // attachment may open a fresh upstream, i.e. post a SubscribeRequest.
-                        if (error is ReadEntryRetiredException)
-                        {
-                            TaskPoolScheduler.Default.Schedule(() =>
-                            {
-                                if (Volatile.Read(ref detached) == 0)
-                                    Attach(path, observer, link);
-                            });
+                            DeliverValue(value);
                             return;
                         }
-
-                        if (entry.EndedByForce)
-                            _releaseLane.Refuse<System.Reactive.Unit>(() => error).Subscribe(_ => { }, _ => Deliver());
-                        else
-                            TaskPoolScheduler.Default.Schedule(Deliver);
+                        Volatile.Write(ref laned, 1);
+                        lane.OnNext(System.Reactive.Notification.CreateOnNext(value));
                     },
-                    observer.OnCompleted);
+                    error => lane.OnNext(System.Reactive.Notification.CreateOnError<MeshNode>(error)),
+                    () => lane.OnNext(System.Reactive.Notification.CreateOnCompleted<MeshNode>()));
             }
             catch
             {
+                laneSub.Dispose();
                 entry.RemoveSubscriber();
                 throw;
             }
+            Volatile.Write(ref subscribing, 0);
             return System.Reactive.Disposables.Disposable.Create(() =>
             {
                 Volatile.Write(ref detached, 1);
                 sub.Dispose();
+                laneSub.Dispose();
                 // Refcount release ALSO restarts the idle window — "idle" is
                 // measured from the last unsubscribe, never mid-subscription.
                 entry.RemoveSubscriber();
