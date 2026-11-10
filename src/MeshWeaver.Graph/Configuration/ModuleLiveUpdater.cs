@@ -94,7 +94,9 @@ public sealed class ModuleLiveUpdater : IDisposable
     /// kept loaded and the outcome says so.</summary>
     public static readonly TimeSpan RecycleBudget = TimeSpan.FromSeconds(60);
 
-    /// <summary>How long a retired generation may take to go quiet before it is kept loaded.</summary>
+    /// <summary>How long a retired generation may take to go quiet before the swap reports it still in use.
+    /// Never a bound on the unload: the generation unloads whenever its last lease is released
+    /// (<see cref="ModuleContexts.Retire"/>, MeshWeaver#8082).</summary>
     public static readonly TimeSpan RetireBudget = TimeSpan.FromSeconds(30);
 
     private readonly IMessageHub meshHub;
@@ -616,7 +618,7 @@ public sealed class ModuleLiveUpdater : IDisposable
                 .Subscribe(
                     unloaded => logger?.Log(unloaded ? LogLevel.Information : LogLevel.Warning,
                         "[ModuleLiveUpdate] the deferred activations of the swap of {Modules} have shut down; the old generation(s) were {Outcome}",
-                        names, unloaded ? "retired" : "KEPT loaded (still in use) — they leak until the next restart"),
+                        names, unloaded ? "retired" : "still in use after the retire budget — each unloads when its last lease is released"),
                     ex => logger?.LogWarning(ex,
                         "[ModuleLiveUpdate] retiring the old generation(s) of {Modules} after their deferred activations faulted — they stay loaded",
                         names));
@@ -637,7 +639,7 @@ public sealed class ModuleLiveUpdater : IDisposable
             .SelectMany(_ => Retire()
                 .Select(unloaded => unloaded
                     ? live
-                    : live.Select(o => o with { Reason = o.Reason + "; a retired generation was KEPT loaded (still in use) — it leaks until the next restart" }).ToImmutableList()))
+                    : live.Select(o => o with { Reason = o.Reason + "; a retired generation was still in use after the retire budget — it unloads when its last lease is released" }).ToImmutableList()))
             .Catch((TimeoutException _) => Observable.Return(live.Select(o => o with
             {
                 Reason = o.Reason + $"; the recycled hubs did not all die within {RecycleBudget} — the old generation is KEPT loaded rather than unloaded under them",

@@ -54,7 +54,8 @@ public sealed record ModuleBinding(Assembly Assembly, ModuleLoadContext Context,
 /// it made current (<see cref="Commit"/>) — so a generation that fails to materialise never becomes
 /// the one other contexts resolve, and the one that was serving keeps serving. A generation that
 /// stops being current is RETIRED (<see cref="Retire"/>): unloaded on a POSITIVE quiescence signal
-/// from <see cref="Leases"/> and recorded on the mesh's <see cref="CollectibleContextUnloads"/> so
+/// from <see cref="Leases"/> — however late it comes; the retire budget only reports a generation
+/// still in use — and recorded on the mesh's <see cref="CollectibleContextUnloads"/> so
 /// "it has really been collected" is observable — never on a timer (the use-after-unload SIGSEGV,
 /// <see cref="AlcLeaseRegistry"/>).</para>
 ///
@@ -77,6 +78,9 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     // them at boot has been swapped out (see StaticMeshNodeListProvider).
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<MeshNode, string> nodeOwners = new();
     private long sequence;
+    // Retired generations whose lease has not been released yet (Retire). Instance state of the mesh's
+    // registry, emptied by each unload and by Dispose (NoStaticState).
+    private readonly ConcurrentDictionary<ModuleLoadContext, PendingUnload> pendingUnloads = new();
     private CollectibleContextUnloads? unloads;
     private ILogger? logger;
 
@@ -920,9 +924,20 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
 
     /// <summary>
     /// Retires <paramref name="generation"/>: removes it from <see cref="Generations"/> if it is
-    /// still current, then unloads it once nothing holds a lease on it — and NOT AT ALL if that does
-    /// not happen within <paramref name="budget"/> (a leak, deliberately chosen over a crash). Cold:
-    /// the caller subscribes. Emits whether the unload was started.
+    /// still current, then unloads it once nothing holds a lease on it — WHENEVER that is, and never
+    /// while a lease is held. Cold: the caller subscribes. Emits once, then completes: <c>true</c>
+    /// when the unload started within <paramref name="budget"/>; <c>false</c> when it did not (or the
+    /// unload threw).
+    ///
+    /// <para>🚨 <b>A late quiescence still unloads</b> (policy <c>retire-late-quiescence-unloads</c>,
+    /// MeshWeaver#8082). The budget decides when the retirement is REPORTED as still in use — a Warning
+    /// naming the holders — never whether the generation is reclaimed: the wait for the lease's
+    /// release is not bounded and is owned by this registry (disposed with the mesh), so a query leg
+    /// that is still reading when the budget runs out unloads its generation the moment it ends. A
+    /// lease that is never released keeps the generation loaded, its retirement stays pending on
+    /// <see cref="CollectibleContextUnloads"/>, and mesh teardown reports it at Error and faults the
+    /// retirement — "KEPT loaded", as before. The unload itself is driven only by the lease registry's
+    /// quiescence signal (<see cref="AlcLeaseRegistry.Quiesced"/>): no timer, no poll.</para>
     /// </summary>
     public IObservable<bool> Retire(ModuleGeneration generation, TimeSpan budget) =>
         Observable.Defer(() =>
@@ -933,16 +948,95 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
             // caller that leased the generation (TryLeaseModuleService) finishes on live services: the
             // disposal then runs when the last lease is released (MeshWeaver#6715).
             generation.Services?.Dispose();
-            var retirement = RetireCore(generation.Context);
-            return Leases.UnloadWhenQuiesced(generation.Context, budget, logger, generation.Context.Name)
-                .Do(unloaded =>
-                {
-                    if (!unloaded)
-                        retirement?.Faulted(new InvalidOperationException(
-                            $"Module generation '{generation.Context.Name}' ({generation.Location}) was KEPT loaded: "
-                            + $"it still had {Leases.InFlight(generation.Context)} in-flight lease(s) after {budget}, held by {string.Join(", ", Leases.Holders(generation.Context))}."));
-                });
+            // Retired twice: the first retirement already waits for this context's quiescence.
+            if (pendingUnloads.TryGetValue(generation.Context, out var first))
+                return Reported(first, budget);
+            var pending = new PendingUnload(generation.Context, RetireCore(generation.Context));
+            if (!pendingUnloads.TryAdd(generation.Context, pending))
+                return pendingUnloads.TryGetValue(generation.Context, out var raced)
+                    ? Reported(raced, budget)
+                    : Observable.Return(true);
+            // Registered BEFORE the wait subscribes, so the teardown always finds a wait it must end.
+            // Quiesced hops to the task pool, so the unload never runs on the thread that released the
+            // last lease (or under the registry's lock).
+            pending.Watch.Disposable = Leases.Quiesced(generation.Context)
+                .Subscribe(_ => UnloadQuiesced(pending), ex => FailUnload(pending, ex));
+            return Reported(pending, budget);
         });
+
+    // What a Retire caller is told: the outcome within the budget. Past it, the holders are reported once
+    // at Warning and the wait goes on, owned by the registry (UnloadQuiesced finishes it).
+    private IObservable<bool> Reported(PendingUnload pending, TimeSpan budget) =>
+        pending.Unloaded
+            .Take(1)
+            .Timeout(budget)
+            .Catch((TimeoutException _) =>
+            {
+                if (Interlocked.Exchange(ref pending.ReportedLate, 1) == 0)
+                    logger?.LogWarning(
+                        "Module generation {Context} is still in use after {Budget}: {InFlight} in-flight lease(s), held by "
+                        + "{Holders}. It stays loaded until the last one is released, then unloads — never under a lease.",
+                        pending.Context.Name, budget, Leases.InFlight(pending.Context),
+                        string.Join(", ", Leases.Holders(pending.Context)));
+                return Observable.Return(false);
+            })
+            // An unload that threw was reported (and its retirement faulted) where it threw.
+            .Catch((Exception _) => Observable.Return(false));
+
+    // The lease registry said nobody is inside the context any more. Whoever removes the pending entry
+    // acts — this, or the teardown — so a context is unloaded exactly once.
+    private void UnloadQuiesced(PendingUnload pending)
+    {
+        if (!pendingUnloads.TryRemove(new KeyValuePair<ModuleLoadContext, PendingUnload>(pending.Context, pending)))
+            return;
+        try
+        {
+            // Unload FIRST, drop the lease tracking only once it succeeded (see AlcLeaseRegistry.UnloadWhenQuiesced).
+            pending.Context.Unload();
+            Leases.Forget(pending.Context);
+        }
+        catch (Exception exception)
+        {
+            ReportUnloadFault(pending, exception);
+            pending.Unloaded.OnError(exception);
+            return;
+        }
+        if (Volatile.Read(ref pending.ReportedLate) != 0)
+            logger?.LogInformation(
+                "Module generation {Context} unloaded LATE: its last lease was released after the retire budget had run out.",
+                pending.Context.Name);
+        else
+            logger?.LogDebug("Unloaded collectible context {What}", pending.Context.Name);
+        pending.Unloaded.OnNext(true);
+        pending.Unloaded.OnCompleted();
+    }
+
+    private void FailUnload(PendingUnload pending, Exception exception)
+    {
+        if (!pendingUnloads.TryRemove(new KeyValuePair<ModuleLoadContext, PendingUnload>(pending.Context, pending)))
+            return;
+        ReportUnloadFault(pending, exception);
+        pending.Unloaded.OnError(exception);
+    }
+
+    private void ReportUnloadFault(PendingUnload pending, Exception exception)
+    {
+        logger?.LogError(exception,
+            "NOT unloading module generation {Context}: its unload failed. Leaving it loaded.", pending.Context.Name);
+        pending.Retirement?.Faulted(new InvalidOperationException(
+            $"Module generation '{pending.Context.Name}' was KEPT loaded: its unload failed ({exception.Message}).", exception));
+    }
+
+    // One retired generation waiting for its lease's release. Holds the CONTEXT (what the unload needs),
+    // never the generation record, and leaves the registry the moment it is unloaded or torn down.
+    private sealed class PendingUnload(ModuleLoadContext context, CollectibleContextUnloads.Retirement? retirement)
+    {
+        public ModuleLoadContext Context { get; } = context;
+        public CollectibleContextUnloads.Retirement? Retirement { get; } = retirement;
+        public System.Reactive.Disposables.SingleAssignmentDisposable Watch { get; } = new();
+        public System.Reactive.Subjects.AsyncSubject<bool> Unloaded { get; } = new();
+        public int ReportedLate;
+    }
 
     /// <summary>
     /// The current entry assembly of the module named <paramref name="simpleName"/>, or null — the
@@ -1150,6 +1244,26 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         ~RetirementSentinel() => retirement.Collected();
     }
 
+    // The teardown's verdict on one context: unloaded when nobody holds a lease on it, otherwise KEPT
+    // loaded and reported with its holders (the use-after-unload SIGSEGV is never risked).
+    private bool UnloadAtTeardown(ModuleLoadContext context, CollectibleContextUnloads.Retirement? retirement)
+    {
+        var inFlight = Leases.InFlight(context);
+        if (inFlight > 0)
+        {
+            var holders = string.Join(", ", Leases.Holders(context));
+            logger?.LogError(
+                "NOT unloading module generation {Context} at mesh teardown: {InFlight} lease(s) still held, by {Holders}.",
+                context.Name, inFlight, holders);
+            retirement?.Faulted(new InvalidOperationException(
+                $"Module generation '{context.Name}' was kept loaded at teardown: {inFlight} lease(s) held, by {holders}."));
+            return false;
+        }
+        context.Unload();
+        Leases.Forget(context);
+        return true;
+    }
+
     /// <summary>
     /// Retires every generation still held — the mesh is going down, so no hub can enter a module
     /// any more. A generation somebody still leases is left loaded rather than unloaded under them,
@@ -1163,19 +1277,18 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         {
             current.TryRemove(generation.Name, out _);
             generation.Services?.Dispose();
-            var retirement = RetireCore(generation.Context);
-            var inFlight = Leases.InFlight(generation.Context);
-            if (inFlight > 0)
-            {
-                var holders = string.Join(", ", Leases.Holders(generation.Context));
-                logger?.LogError(
-                    "NOT unloading module generation {Context} at mesh teardown: {InFlight} lease(s) still held, by {Holders}.",
-                    generation.Context.Name, inFlight, holders);
-                retirement?.Faulted(new InvalidOperationException(
-                    $"Module generation '{generation.Context.Name}' was kept loaded at teardown: {inFlight} lease(s) held, by {holders}."));
+            UnloadAtTeardown(generation.Context, RetireCore(generation.Context));
+        }
+        // A generation retired mid-life whose lease was never released (Retire): its wait ends with the
+        // mesh, and it is unloaded now if it has quiesced, or reported KEPT loaded with its holders.
+        foreach (var pending in pendingUnloads.Values.ToArray())
+        {
+            if (!pendingUnloads.TryRemove(new KeyValuePair<ModuleLoadContext, PendingUnload>(pending.Context, pending)))
                 continue;
-            }
-            generation.Context.Unload();
+            pending.Watch.Dispose();
+            var unloaded = UnloadAtTeardown(pending.Context, pending.Retirement);
+            pending.Unloaded.OnNext(unloaded);
+            pending.Unloaded.OnCompleted();
         }
         // The registry's half of MeshWeaver#7373: a subject holds every observer until it unsubscribes,
         // so completing it at teardown releases a subscriber that never ended its own subscription —

@@ -55,7 +55,7 @@ against the new member failed with `CS0117 'ThreadPreparation' does not contain 
 | Piece | What it does |
 |---|---|
 | `ModuleLoadContext` (`MeshWeaver.Mesh.Contract`) | Collectible context for ONE generation of ONE module, named `module:<Name>#<n>`. Resolves **platform first** (anything the default context can bind — one `MeshNodeProviderAttribute`, one `IMessageHub` in the process; a bundled platform copy is never used), then **another module** (the current generation of a module whose entry assembly is asked for, or an assembly a module it depends on already holds — each edge recorded as `DependsOn`), then the generation's **own directory**. Natives resolve through the same candidates as `ModuleNativeAssets`. Marked `IPlatformLoadContext`, so the impersonation guard classifies module code with the platform. Purges System.Text.Json's process-static cache on `Unloading`, as a NodeType context does (the DI container keeps none). |
-| `ModuleContexts` | The mesh's registry (a mesh singleton, disposed with the mesh): `Load` a generation into a fresh context, `Commit` it as current (returning the one it replaces), `Retire` the old one — unloaded on a POSITIVE quiescence signal from its `AlcLeaseRegistry`, never on a timer, and recorded on `CollectibleContextUnloads` so "really collected" is observable. `Resolve(name)` is the explicit lookup a NodeType build uses (a module's entry assembly); `ResolveDependency(assemblyName, among)` is the one a kernel script session uses — the entry assembly, or one of a module's private dependencies bound through that module's context and returned with a lease on it (see *Kernel scripts and a module private closure* below); `DependentsOf(name)` is the set a swap has to take with it. |
+| `ModuleContexts` | The mesh's registry (a mesh singleton, disposed with the mesh): `Load` a generation into a fresh context, `Commit` it as current (returning the one it replaces), `Retire` the old one — unloaded on a POSITIVE quiescence signal from its `AlcLeaseRegistry`, never on a timer and never under a lease; a late quiescence still unloads (see *A late quiescence still unloads* below), and recorded on `CollectibleContextUnloads` so "really collected" is observable. `Resolve(name)` is the explicit lookup a NodeType build uses (a module's entry assembly); `ResolveDependency(assemblyName, among)` is the one a kernel script session uses — the entry assembly, or one of a module's private dependencies bound through that module's context and returned with a lease on it (see *Kernel scripts and a module private closure* below); `DependentsOf(name)` is the set a swap has to take with it. |
 | `MeshBuilder.InstallModules` | Loads every module the image does not bind into its own context and commits it only after its contributions materialised. A generation whose contributions throw is unloaded and the serving one stays current. Because a failed generation never takes its name in the default context, the previous generation and the image copy stay reachable for the fallback (#3649, #3735). |
 | `NodeAssemblyLoadContext` | Binds a module's entry assembly through `ModuleContexts.Resolve` — its CURRENT generation. |
 | The kernel `ScriptSession` (`ModuleScriptBindings`) | Pins the module generations current when the session builds its reference set, compiles against them, binds a module's entry assembly or private dependency from them through `ModuleContexts.ResolveDependency`, and keeps every module context it binds into leased until the session ends. |
@@ -114,8 +114,8 @@ begun unloading. `ModuleScriptBindings` keeps one lease per bound context until 
 ends (the executor hub is disposed), because what a submission leaves behind — a subscription, a
 rendered control, a stored delegate — can call into the module after the submission returned. A swap
 of a bound module therefore retires the old generation only once the session has ended; a session
-that outlives the swap's retire budget leaves the old generation loaded rather than unloaded under it
-(the leak-over-crash rule of `AlcLeaseRegistry`).
+that outlives the swap's retire budget keeps the old generation loaded until it ends, and the generation
+is unloaded then (*A late quiescence still unloads*, below) — never under the session's lease.
 
 **Tests:** `KernelScriptRunsAgainstAModulesPrivateDependencyTest` (`MeshWeaver.Compiler.Pipeline.Test`)
 installs a module whose generation directory ships a private dependency at version 6.2.0.0, runs a
@@ -816,13 +816,38 @@ from inside the rule, through a controlled switch, at each of the three points: 
 the evaluation, and inside `Find`'s metadata read. On the base, the first two fault on the disposed
 generation and the third throws out of `Find`.
 
+### A late quiescence still unloads
+
+Policy `retire-late-quiescence-unloads` ([Policy Not Prose](../PolicyNotProse)). `ModuleContexts.Retire`
+removes the generation from the current set, disposes its services, and subscribes to
+`AlcLeaseRegistry.Quiesced` for its context. That wait has NO bound and is owned by the registry (disposed
+with the mesh). The retire's budget (`ModuleLiveUpdater.RetireBudget`, 30 s) decides only what the swap is
+told: `Retire` emits `true` when the unload started within the budget, and otherwise `false` plus ONE
+Warning naming the holders (`Module generation … is still in use after 00:00:30: 1 in-flight lease(s),
+held by IMeshQueryProvider (registration 3) ×1. It stays loaded until the last one is released, then
+unloads — never under a lease.`). When the last lease is released the generation is unloaded at once
+(`Module generation … unloaded LATE`, Information), and its retirement is collected like any other.
+
+Why: the retire used to give up at the budget. A query leg that was still reading when the swap landed
+(MeshWeaver#8082: a Gmail inbox read, bounded by its own 20 s credential read plus 15 s per Gmail call)
+released its lease seconds later, and nothing unloaded the generation: it stayed loaded until the pod
+restarted. The budget expiring is not evidence that the lease is never released.
+
+What still alarms: a lease that is NEVER released keeps the generation loaded. Its retirement stays
+pending on `CollectibleContextUnloads` (`PendingContextNames` names it), and mesh teardown reports it at
+Error (`NOT unloading module generation … at mesh teardown: … still held, by …`) and faults the
+retirement: the same "KEPT loaded" record as a current generation held at teardown. An unload that
+throws is reported at Error and faults the retirement immediately. `ALateQuiescenceStillUnloadsTest`
+(`MeshWeaver.Compiler.Pipeline.Test`) pins both: a lease released after the budget still unloads the
+generation and it is collected; a lease never released keeps it loaded, warned, and faulted at teardown.
+
 **Who holds a lease, and what a lease left at teardown means.** Every lease on a module context is
 recorded under the KIND of holder that took it (`AlcLeaseRegistry.Enter(context, holder)`,
 `AlcLeaseRegistry.Holders`): a service lease under the platform interface the consumer leased and its
 registration (`IMeshQueryProvider (registration 0)` is the query fan-out, `INodeTypeAccessRule` the
 access-rule set, `IConfigureOptions<T>` the options pipeline, `the forwarder health scan` the readiness
-probe), and a script session's binding under the assembly it bound. A generation that `Retire` keeps
-loaded, and one `ModuleContexts.Dispose` keeps loaded at mesh teardown, are reported with those holders
+probe), and a script session's binding under the assembly it bound. A generation that `Retire` reports still
+in use at its budget, and one `ModuleContexts.Dispose` keeps loaded at mesh teardown, are reported with those holders
 (`NOT unloading module generation … still held, by IMeshQueryProvider (registration 0) ×1`), so the line
 names whose lease it was rather than only how many. At teardown, the line follows a lease whose holder
 was still alive when the container was disposed. The mesh's drain releases every POOLED query
