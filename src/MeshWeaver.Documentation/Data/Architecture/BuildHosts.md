@@ -542,6 +542,26 @@ amd64-only runner would leave that version unusable on an arm64 host (a leased-b
 the rest of the set. Every pull request there builds the image against core's `main` and runs every
 self-test (job `test`).
 
+**The image's package sources are mirror lists, never one host.** The base image names one host per
+Ubuntu source (`archive.ubuntu.com` and `security.ubuntu.com` on amd64, `ports.ubuntu.com` on
+arm64), so a stall on that one host stalls every `apt-get` in the build. That is how five amd64 legs
+in a row ran into the job's 30-minute cap while the arm64 leg passed (MeshWeaver.Deploy#235). Before
+its first `apt-get`, the Dockerfile runs Deploy's `deploy/build-host/apt-mirrors.sh apply`. The script
+rewrites each source to apt's own mirror method (`mirror+file:`), a list of several mirrors tried in
+priority order. On amd64 the first mirror is the cloud's regional Ubuntu mirror, the one GitHub's
+own Ubuntu runners use, followed by Canonical's host and an independent mirror. On arm64,
+`ports.ubuntu.com` comes first, followed by two independent ports mirrors. `Signed-By` is unchanged,
+so every index is still verified against the Ubuntu keyring, whichever mirror served it.
+
+The script also turns off apt's delay between retries (`Acquire::Retries::Delay "false"`); the
+retries themselves stay. With the delay on, apt 2.8 never re-queues a file that the mirror method
+has moved to its next mirror, so every `apt-get update` with a failing first mirror hung for good.
+`apply` ends in `check`, which refuses an Ubuntu source left on one host and mirror lists without
+that setting. The build then runs `prove-fallback`, which updates a copy of the sources whose first
+mirror refuses every connection, and fails unless the next mirror serves it within the step's own
+300-second deadline. A base image that regresses, or a fallback that stops working, therefore fails
+the BUILD rather than a run.
+
 **`build-latest` follows the armed set.** On every tick, Deploy's job `handover` (after
 `image`) hands `build-latest` the newest armed set (policy `build-hosts-follow-latest`, [Policy Not Prose](../PolicyNotProse)):
 it resolves the set's `mw-plugin-test`, `memex-portal-ai` and `mw-build-host` digests from the
