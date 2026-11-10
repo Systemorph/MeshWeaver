@@ -39,7 +39,8 @@ public record PageLayoutOptions
     /// <summary>
     /// Maximum width for the page content area (e.g., "960px", "1200px").
     /// Applied as CSS max-width with centered margins.
-    /// Default: null (no constraint, full width).
+    /// Default: null (no constraint — the page fills the pane; see
+    /// <see cref="MeshNodeLayoutAreas.GetContainerStyle"/>).
     /// </summary>
     public string? MaxWidth { get; init; }
 }
@@ -414,20 +415,36 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
-    /// The standard node-page container style: centered, padded, constrained to the page max
-    /// width (node-type override → <see cref="PageLayoutOptions"/> → 1200px default).
-    /// Public module-facing contract: out-of-tree modules (e.g. Approvals) apply this to their
-    /// own layout-area roots so module pages share the built-in node-page geometry instead of
-    /// duplicating the style string. Changing the returned style reflows every module page.
+    /// The standard node-page container style. The page FILLS the content pane — the wide-window
+    /// layout rule (MeshWeaver.Plugins#5317, <c>clients/react/src/theme/layout.ts</c>): the shell owns
+    /// the responsive gutter (16 / 24 / 32 / 48px at 760 / 1280 / 1920px), reading text keeps its own
+    /// 100ch measure, left-aligned (the clients cap a rendered markdown's direct paragraphs, lists,
+    /// quotes and headings), and tables, grids, code and images take the full width. The former
+    /// centred 1200px column left empty bands on both sides of a wide window.
+    /// <para>A width is opt-in: <paramref name="maxWidthOverride"/> → node-type
+    /// <c>PageMaxWidth</c> → <see cref="PageLayoutOptions"/>; a declared width keeps the centred
+    /// column it always had. Public module-facing contract: out-of-tree modules (e.g. Approvals)
+    /// apply this to their own layout-area roots so module pages share the built-in node-page
+    /// geometry. Changing the returned style reflows every module page.</para>
     /// </summary>
     public static string GetContainerStyle(LayoutAreaHost host, NodeTypeDefinition? typeDef = null, string? maxWidthOverride = null)
-    {
-        var pageMaxWidth = maxWidthOverride
+        => ContainerStyle(maxWidthOverride
             ?? typeDef?.PageMaxWidth
-            ?? host.Hub.Configuration.Get<PageLayoutOptions>()?.MaxWidth
-            ?? "1200px";
-        return $"position: relative; max-width: {pageMaxWidth}; margin: 0 auto; padding: 0 24px;";
+            ?? host.Hub.Configuration.Get<PageLayoutOptions>()?.MaxWidth);
+
+    /// <summary>
+    /// The container style for a declared page max width — null or blank fills the pane
+    /// (<c>max-width: 100%</c>, the geometry markdown pages already had); anything else is a centred
+    /// column of that width. Internal for unit testing.
+    /// </summary>
+    internal static string ContainerStyle(string? pageMaxWidth)
+    {
+        var width = string.IsNullOrWhiteSpace(pageMaxWidth) ? FillWidth : pageMaxWidth.Trim();
+        return $"position: relative; max-width: {width}; margin: 0 auto; padding: 0 24px;";
     }
+
+    /// <summary>The default page max width: none — the page fills the pane.</summary>
+    internal const string FillWidth = "100%";
 
     /// <summary>
     /// The node page — header, property overview, markdown body, comments — as a TEMPLATE: every
