@@ -21,6 +21,10 @@ public static class BootPhaseIds
     /// <summary>The NodeType bake the default install waits for before it starts.</summary>
     public const string Bake = "bake";
 
+    /// <summary>Registering this installation with its plugin registry — which, for an OPEN
+    /// registration, waits for the owner's consent in the GUI.</summary>
+    public const string Register = "register";
+
     /// <summary>Listing the selected packages from the configured sources (the module set).</summary>
     public const string Resolve = "resolve";
 
