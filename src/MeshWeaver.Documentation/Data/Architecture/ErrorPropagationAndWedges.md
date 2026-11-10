@@ -284,9 +284,8 @@ things followed:
 The cache's shared view (`MeshNodeStreamCache.SharedView`) now hands each reader its terminal as
 its own pooled work item. The raising turn returns at once and the hub settles. A reader that
 blocks in its error path holds only itself, and the other readers still hear the error. This is
-ordering-safe: an error is the last notification a reader receives, and every value before it was
-delivered synchronously and has already returned. Data emissions are unchanged and still run on
-the stream's turn.
+ordering-safe: an error is the last notification a reader receives, and it travels behind every
+value the reader was handed before it (see the next section: values now take the same route).
 
 A FORCED end is the exception to "its own pooled work item". The cache's own teardown and a
 committed delete end readers through `Entry.EndReaders`, and the teardown does it for every path
@@ -309,6 +308,45 @@ credential read. They do not name it. Finding it needs a stack from a wedged pro
 the pod while a hub reports `Executing(DeliveryFailure, …)` for minutes). With this change that
 call holds one pooled thread, not a hub, so it is still a defect to find. It just no longer pins
 a stream.
+
+### A stream's value never runs its readers on the turn that received it (#8057)
+
+Moving the terminal off the turn left the values on it. On memex a pod's shutdown drain
+(`MeshTeardownExtensions.DrainAsync`, 30 s) gave up, and the only work left in the hub tree was a
+cache stream, `sync/Zz9…`, at `RunLevel=Starting … openGates=1 … Executing(DataChangedEvent,
+5067432ms)` with 31 turns queued behind it; the same address had logged `[DISPOSE-WEDGE]` and then
+`DISPOSAL DEADLOCK DETECTED` for the hour before. With the gate still closed, the turn was the
+frame that would have opened it. `UpdateStream` →
+`SetCurrent` → `Store.OnNext` relays a value through the cache's shared subject to every reader of
+the path, one after another, on the sync hub's thread, and `OpenGate` runs only after that fan-out
+returns. One reader whose `OnNext` did not return therefore held every later reader of the path,
+the hub's gate, every later frame and write, and the hub's `ShutdownRequest`. The mesh's drain then
+waited on that hub until its bound reported.
+
+The cache's shared view now gives each reader its own LANE: an `ObserveOn` over a per-reader
+subject, on the pool. Every notification after the reader's own subscribe call (values, the
+terminal, completion) goes down that lane in order, so the producing turn returns at once and a
+reader that blocks holds only itself. The values a reader is handed INSIDE its subscribe call (the
+`Replay(1)` hydration, on the subscribing thread) are still delivered inline, so a reader still
+holds the current node when its subscribe returns. The subject drains a reader's notifications on
+one thread at a time, but a live value can be drained to the lane by the producing thread and a
+later one by the subscribing thread before its subscribe returns. So the switch is one-way: once
+anything has gone to the lane, everything after it goes there too, behind it. A forced end still
+leaves the reader's lane for the shared `ReleaseLane`, one terminal at a time (above). A reader
+that throws from any callback is named in a Warning and does not end the lane; unguarded, the throw
+would end the lane inside a pool task as an unobserved exception that nothing logs.
+
+This is pinned by `AReaderNeverRunsOnTheSyncHubTurnThatDeliversItsValueTest`. Two readers read one
+existing node; on the node's next value the first parks in its `OnNext`. The second must hear that
+value, and then the next one, which only a hub that is still turning can deliver. Before the change
+it hears neither. A reader that parked on the test's own thread held no hub turn, and the test
+reports that as inconclusive. Its negative control runs the same writes with a reader that returns.
+
+**What this does NOT establish** is which reader did not return on memex, or what it waited on. No
+line names it: between the pod's boot and its first stall report, nothing the pod shipped named the
+hub, and the production verdicts carry no stack. After this change that reader holds one pooled thread, not a
+hub, a path or a teardown. It is still a defect, and the instrument that names it is a stack of a
+pool thread parked under `MeshNodeStreamCache` while nothing reports a stall.
 
 ### Long-running operations (activity → activity log)
 
