@@ -939,6 +939,22 @@ with 5 subscription(s) still attached`. Also `IoPoolOwnUntilDrainTest` (MeshWeav
 before the cancel on both drains, the `.Finally` on the drain caller's thread, the unowned shape as its
 negative control, an early dispose ending the leg once, and a late own disposed at once.
 
+**A circuit-lifetime reader is the same ordering bug one level out.** After the mesh-lifetime readers were
+fixed, the stops still named two MeshWeaver.Plugins readers with ages that track a person's session
+(170 to 4,700 s) rather than the pod's: the bell's feed (`NotificationFeed.Merge`) and the search
+surface's default-scope read (`SearchScopeState.DefaultOf` over `MailSearchScope.IncludedOf` and
+`MailPreferencesStore`). Both HAD an owner — the Blazor component disposes them with itself — but a
+component lives as long as its circuit, and every open circuit lives on past `IoPoolSiloTeardown` until
+the host stops. So for every person with the page open at a stop, the owner's dispose came after the
+cancel. The rule is therefore about the OWNER's lifetime, not the reader's: **any pooled subscription
+whose owner can outlive the silo's stop — a singleton, the mesh hub, a circuit, a component — is also
+handed to `hub.OwnUntilIoDrain`**, and the owner keeps the returned handle and disposes it as before.
+The handle's early dispose ends the leg and FORGETS it, so a long-lived portal does not accumulate one
+registration per page ever opened, and a repeat dispose after the drain's release is a no-op. Pinned in
+MeshWeaver.Plugins by `SearchScopeReleasedBeforeThePoolCancelTest` (MeshWeaver.Mail.MicrosoftGraph.Test)
+and `NotificationFeedReleasedBeforeThePoolCancelTest` (MeshWeaver.Blazor.Portal.Test), each with an
+unowned control read the report must still name and a measured negative control.
+
 **A one-shot read is not a mesh-lifetime reader — and the line now says which way it is stuck.**
 `EaGraphAuth.AddedAccountIds` (MeshWeaver.Plugins) kept appearing after the readers above were owned:
 `Query(...).Where(Initial).Take(1).Select(...).Finally(scope.Dispose)`, still attached 180–6,675 s after
