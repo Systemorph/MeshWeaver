@@ -20,7 +20,7 @@ bundles one at a time, and the boot page showed a spinner with one fixed sentenc
 | Piece | Where | What it does |
 |---|---|---|
 | `BootProgress` | core, `MeshWeaver.Mesh.Contract` | The ONE recorder. The code that does the work records phases, module steps and errors into an immutable snapshot (lock-free, `ImmutableInterlocked`). |
-| Recording sites | core, `MeshWeaver.PluginCatalog` | `InstanceAutoRegistrationService` records the phases (`bake`, `resolve`, `modules`, `content`, `activate`); `PluginBundleClient` records each bundle's size and download time. |
+| Recording sites | core, `MeshWeaver.PluginCatalog` | `InstanceAutoRegistrationService` records the phases (`bake`, `register`, `resolve`, `modules`, `content`, `activate`). `register` names an open registration's wait for an administrator's consent, which used to show as nothing at all; `PluginBundleClient` records each bundle's size and download time. |
 | `BootProgressReport.From` | core | The ONE renderer: derived values (seconds, ETA, headline) are computed here, so no reader re-derives a fact. |
 | `/_boot/progress` | MeshWeaver.Plugins, `Memex.Portal.ServiceDefaults` | Anonymous JSON, `no-store`. Adds the readiness checks that still say no, read with the SAME predicate as `/ready` and shared for 3 s. |
 | Boot page | MeshWeaver.Deploy chart, `memex-boot-page` | What the ingress serves while the portal has no ready endpoint. It proxies `/_boot/progress` to the portal pods through a Service that publishes not-ready addresses, and renders it. |

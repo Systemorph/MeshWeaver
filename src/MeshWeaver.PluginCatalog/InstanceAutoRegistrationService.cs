@@ -670,6 +670,12 @@ public sealed class InstanceAutoRegistrationService(
         // unconfigured deployment never touches the consent record.
         var open = bootstrapKey.Length == 0 && !string.IsNullOrWhiteSpace(options.InstanceId);
         var consent = open ? ConsentGiven(wait: false) : Observable.Return(true);
+        // 🚨 The boot page names this wait (measured 2026-11-09: a fresh instance with an OPEN
+        // registration sat 30 min awaiting consent while its boot progress showed nothing after the
+        // bake — a spinner in the one place the person could have been told what to do).
+        var progress = hub.ServiceProvider.GetService<BootProgress>();
+        progress?.PhaseStarted(BootPhaseIds.Register, "Registering with the plugin registry", registry.Url);
+        IObservable<Unit> Registered(IObservable<Unit> registration) => RecordRegistration(registration, progress, registry.Url);
 
         return consent.SelectMany(consentGiven =>
         {
@@ -680,12 +686,15 @@ public sealed class InstanceAutoRegistrationService(
                 case RegistrationPreflight.Skip:
                     if (reason is not null)
                         logger.LogInformation("{Reason}", reason);
+                    RecordPreflight(progress, action, reason);
                     return Observable.Return(Unit.Default);
                 case RegistrationPreflight.Abort:
                     logger.LogError("{Reason}", reason);
+                    RecordPreflight(progress, action, reason);
                     return Observable.Empty<Unit>();       // misconfigured → do not go on to install
                 case RegistrationPreflight.AwaitConsent:
                     logger.LogInformation("{Reason}", reason);
+                    RecordPreflight(progress, action, reason);
                     // The instance has asked; now it waits for the answer — the consent record a
                     // platform admin writes from Settings — and registers the moment it lands.
                     // Ordering on the actual precondition: no timer, no restart, no poll.
@@ -695,9 +704,9 @@ public sealed class InstanceAutoRegistrationService(
                         .Do(_ => logger.LogInformation(
                             "Consent recorded — registering this installation as '{InstanceId}' at {Url}.",
                             options.InstanceId!.Trim(), registry.Url))
-                        .SelectMany(_ => Register(options, registry, bootstrapKey));
+                        .SelectMany(_ => Registered(Register(options, registry, bootstrapKey)));
             }
-            return Register(options, registry, bootstrapKey);
+            return Registered(Register(options, registry, bootstrapKey));
         });
     }
 
@@ -2605,9 +2614,7 @@ public sealed class InstanceAutoRegistrationService(
         if (carriers.Count == 0 || persistence is null)
         {
             hub.ServiceProvider.GetService<BootProgress>()?.PhaseEnded(BootPhaseIds.Modules, BootStepStates.Skipped,
-                carriers.Count == 0
-                    ? "no selected package carries a module"
-                    : "this host has no storage adapter to read install records with, so no module lands ahead of its content");
+                SkipCause(installable.Count(c => !string.IsNullOrWhiteSpace(c.Package.Module)), carriers.Count, persistence is not null));
             return Observable.Return((ImmutableList<string>.Empty, none, none, false));
         }
 
@@ -2830,6 +2837,71 @@ public sealed class InstanceAutoRegistrationService(
                     .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
                 return Observable.Return((ImmutableList<string>.Empty, allCarriers, none, true));
             });
+    }
+
+    /// <summary>
+    /// The register phase's row for a preflight verdict — the sentence the boot page shows. Skip
+    /// closes it Done, Abort closes it Failed and records the error, AwaitConsent keeps it OPEN and
+    /// names the wait (a repeated <see cref="BootProgress.PhaseStarted"/> replaces the row by id, it
+    /// never adds a second one). Present records nothing here: <see cref="RecordRegistration"/> closes
+    /// it. A missing or blank <paramref name="reason"/> never leaves a blank detail.
+    /// </summary>
+    internal static void RecordPreflight(BootProgress? progress, RegistrationPreflight action, string? reason)
+    {
+        if (progress is null)
+            return;
+        switch (action)
+        {
+            case RegistrationPreflight.Skip:
+                progress.PhaseEnded(BootPhaseIds.Register, BootStepStates.Done, OrDefault(reason, "already registered"));
+                break;
+            case RegistrationPreflight.Abort:
+                var why = OrDefault(reason, "registration is misconfigured (no reason was given)");
+                progress.PhaseEnded(BootPhaseIds.Register, BootStepStates.Failed, why);
+                progress.Error($"registration: {why}");
+                break;
+            case RegistrationPreflight.AwaitConsent:
+                progress.PhaseStarted(BootPhaseIds.Register, "Waiting for an administrator's consent to register",
+                    OrDefault(reason, "a platform administrator grants consent in Settings"));
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Closes the register phase from the registration call itself: Done with the registry on its
+    /// value, Failed with the error message on its error — which still propagates (observed, never
+    /// swallowed).
+    /// </summary>
+    internal static IObservable<Unit> RecordRegistration(IObservable<Unit> registration, BootProgress? progress, string registryUrl) =>
+        registration.Do(
+            _ => progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Done, $"registered at {registryUrl}"),
+            ex => progress?.PhaseEnded(BootPhaseIds.Register, BootStepStates.Failed, OrDefault(ex.Message, ex.GetType().Name)));
+
+    private static string OrDefault(string? text, string fallback) =>
+        string.IsNullOrWhiteSpace(text) ? fallback : text;
+
+    /// <summary>
+    /// Why the module phase landed nothing ahead of the content — the sentence the boot page shows.
+    /// Called only when the phase is skipped (no carrier, or no store). Each cause that holds is
+    /// named as itself (measured on the registry instance 2026-11-09: 31 packages
+    /// carried a module and the page said "no selected package carries a module", because the
+    /// registry serves its own sources and holds no bundle client for them). Pure.
+    /// </summary>
+    /// <param name="withModule">Selected packages that declare a module.</param>
+    /// <param name="carriers">Those whose source has a bundle client to fetch it with.</param>
+    /// <param name="hasStorage">Whether this host can read install records.</param>
+    internal static string SkipCause(int withModule, int carriers, bool hasStorage)
+    {
+        if (withModule == 0)
+            return "no selected package carries a module";
+        // Every cause that holds is named — a host can lack both a bundle registry and a store.
+        var causes = ImmutableList<string>.Empty
+            .AddRange(carriers == 0
+                ? [$"the {withModule} package(s) carrying a module come from sources with no bundle registry "
+                   + "(an instance that serves its own sources)"]
+                : [])
+            .AddRange(hasStorage ? [] : ["this host has no storage adapter to read install records with"]);
+        return string.Join("; and ", causes) + " — each module follows its content on the install funnel";
     }
 
     /// <summary>
