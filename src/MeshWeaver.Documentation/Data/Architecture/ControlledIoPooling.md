@@ -939,6 +939,29 @@ with 5 subscription(s) still attached`. Also `IoPoolOwnUntilDrainTest` (MeshWeav
 before the cancel on both drains, the `.Finally` on the drain caller's thread, the unowned shape as its
 negative control, an early dispose ending the leg once, and a late own disposed at once.
 
+**A one-shot read is not a mesh-lifetime reader — and the line now says which way it is stuck.**
+`EaGraphAuth.AddedAccountIds` (MeshWeaver.Plugins) kept appearing after the readers above were owned:
+`Query(...).Where(Initial).Take(1).Select(...).Finally(scope.Dispose)`, still attached 180–6,675 s after
+it opened, one per affected stop. That is not a reader to hand to `OwnUntilIoDrain` — owning it would
+only hide a read that never ended. A `Take(1)` over a query either gets its Initial and disposes its
+upstream, or gets the fan-in's stall terminal within `QueryInitialBudget`; staying attached means one of
+two things, and the line could not say which:
+
+- **The answer never reached the `Take`** — the read was lost between the merge and its consumer.
+- **The answer was handed on and the call into the consumer never returned** — `Take` forwards the value
+  BEFORE it completes and disposes its upstream, so a consumer that parks (or throws past every guard)
+  leaves the read attached with its answer already delivered.
+
+Two defects in the chain walk hid it. The walk took the first observer-typed field of each step as the
+next one, and `Finally` declares `_sourceDisposable` — the sink ABOVE it, an observer too — before the
+inherited `_observer`; finding that sink already visited, the walk ended, so every chain stopped at its
+first `.Finally` and the consumer below was never named. Now an observer already on the chain is never
+the next step, and each step prints the integer and boolean fields its own type declares:
+`Count._ [_remaining=1]` reads "the answer never arrived", `_remaining=0` reads "delivered, and the
+consumer never returned". The next stop that names this read names its consumer and which case it is.
+Pinned by `IoPoolTest.Leak_line_walks_past_Finally_to_the_consumer_and_reads_the_take_counter`
+(negative control, measured: without the already-visited check the line ends at the `Finally`).
+
 **What this does NOT cover, stated so nobody reads it as covered.** `Invoke` and `InvokeStream` link
 each leaf's token to the pool's. A leaf awaiting I/O whose cancellation completes inline (a
 `Task.Delay(ct)`, some drivers) resumes its async body on the canceller, and the body's fault then
