@@ -311,8 +311,10 @@ cmd_dry_run_report() {
     fi
     echo "  $task: newest completed run $run_id ($run_status, created $run_created)."
     if [ "$run_status" != "Succeeded" ]; then
-      echo "::error::'$task' run $run_id ended '$run_status', so it reported nothing usable."
-      rc=1
+      # Its log is NOT parsed: a well-formed report printed under this error would read as a clean
+      # verdict to anyone skimming the log, and a run that did not succeed carries none.
+      echo "::error::'$task' run $run_id ended '$run_status', so it reported nothing usable — NO VERDICT."
+      rc=1; continue
     fi
     log="${TMPDIR:-/tmp}/acr-retention-run.$$.log"
     if ! az acr task logs --registry "$REGISTRY" --run-id "$run_id" --no-format > "$log"; then

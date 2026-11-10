@@ -400,6 +400,8 @@ def main() -> int:
         r = verify_with(runs)
         if r.returncode == 0:
             failures.append(f"verify went GREEN over {label} — the dry-run read-back cannot fail on it")
+        if "it deleted nothing" in r.stdout:
+            failures.append(f"verify printed a clean dry-run verdict over {label} while going red")
 
     # 9. An apply's own re-verify does NOT read a run (the newest one predates what it just wrote),
     #    so enabling the report never fails on the run that has not happened yet.

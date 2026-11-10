@@ -9,7 +9,8 @@ the read-back had no path but a hand `az acr task logs`, which is break-glass.
 
 `acr-retention-tasks.sh verify` fetches the newest completed run of every enabled dry-run task and
 hands its log here. This prints, per repository, how many tags and untagged manifests the run says
-it would delete, then every listed reference, then a one-line summary — and it REFUSES (exit 1)
+it would delete, then every listed reference, then a one-line summary LAST (so a log tail carries
+it) — and it REFUSES (exit 1)
 rather than report a number it cannot stand behind:
 
   * a step that is not marked `DRY RUN:` — the run may have deleted, and a count of "would delete"
@@ -113,14 +114,16 @@ def main(argv: list[str]) -> int:
     with open(a.log, encoding="utf-8", errors="replace") as f:
         text = f.read()
     repos, errors = parse(text, a.steps)
-    for repo, kinds in repos.items():
-        for ref in kinds["tags"] + kinds["manifests"]:
-            print(f"    would delete {ref}")
     print(f"  {a.task}: dry-run report, per repository (tags / untagged manifests it would delete):")
     if not repos:
         print("    (no repository lists anything to delete)")
     for repo, kinds in repos.items():
         print(f"    {repo}: {len(kinds['tags'])} tag(s), {len(kinds['manifests'])} manifest(s)")
+    if repos:
+        print(f"  {a.task}: every reference the run lists:")
+    for repo, kinds in repos.items():
+        for ref in kinds["tags"] + kinds["manifests"]:
+            print(f"    would delete {ref}")
     if errors:
         for e in errors:
             print(f"::error::{a.task}: {e}.")
