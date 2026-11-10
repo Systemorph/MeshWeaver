@@ -5120,6 +5120,9 @@ def check_deleters_name_the_cleanup(where: str, retention: dict, deleters: list,
                     "job is a claim that the job runs it; say `true`, or drop `governedBy`.")
             else:
                 governed += 1
+                if deleter.get("job") is not None:
+                    check_governed_job_row(f"{where}.retention.deleters[{position}]", deleter,
+                                           cleanup_kind, problems)
             continue
         if deleter.get("present") is True:
             key = mechanism.split(" ", 1)[0].removeprefix("maintenance.")
@@ -5135,6 +5138,90 @@ def check_deleters_name_the_cleanup(where: str, retention: dict, deleters: list,
             f"{where}.retention names the cleanup {cleanup_kind!r} and no `deleters` row is "
             f"`governedBy: {cleanup_kind!r}`. A record that names a job and enumerates nothing it "
             "runs has not said what deletes — the enumeration must carry the job's own row.")
+
+
+# ── A chart Job the named cleanup runs: the blob garbage-collect (Plugins#4370 slice 3) ────────
+#
+# A blob GC is the deletion that never returns (R4), and the chart arm refuses any Job or CronJob
+# beside the registry for exactly that reason. Design 1A puts the collect in the chart as ONE Job,
+# rendered only inside a read-only window by the run holding the registry-maintenance lease. So a
+# `governedBy` row may name that ONE template (`job`) and the files allowed to spell
+# `garbage-collect` (`sites`), and must state what protects what it can reach (`protectedBy`). The
+# gate then accepts exactly that file, and only as a `Job` with no `schedule:` and no
+# `--delete-untagged`, beside a chart that refuses a collect outside a read-only window. Any other
+# Job, any CronJob, and any other file spelling `garbage-collect` is still RED.
+GC_SWEEP_DESCRIPTION = "a blob garbage collection"
+GC_PROTECTED_BY = ("readOnlyWindow", "lease", "deleteUntagged")
+# A Helm `fail` ACTION: `{{ fail "…" }}` / `{{- fail "…" -}}` — not `{{/* fail … */}}`, not `failure`.
+GC_GUARD_ACTION = re.compile(r'\{\{-?\s*fail\s+"')
+
+
+def check_governed_job_row(where: str, deleter: dict, cleanup_kind: str,
+                           problems: list[str]) -> None:
+    job = deleter.get("job")
+    if not isinstance(job, str) or not job.strip():
+        problems.append(f"{where}.job is {job!r}; expected the chart template's path in its "
+                        "repository (a non-empty string).")
+    sites = deleter.get("sites")
+    if not isinstance(sites, list) or not sites \
+            or not all(isinstance(site, str) and site.strip() for site in sites):
+        problems.append(f"{where} names a chart Job and no `sites` (a non-empty list of paths). "
+                        "Every file allowed to spell `garbage-collect` has to be named, or the "
+                        "acceptance is a blanket one over the whole chart repository.")
+    elif isinstance(job, str) and job not in sites:
+        problems.append(f"{where}.sites does not list its own `job` ({job!r}).")
+    protected = deleter.get("protectedBy")
+    expected = {"readOnlyWindow": True, "lease": cleanup_kind, "deleteUntagged": False}
+    if not isinstance(protected, dict) or {key: protected.get(key) for key in GC_PROTECTED_BY} != expected:
+        problems.append(
+            f"{where}.protectedBy is {protected!r}; expected {expected!r}. A collect beside a push "
+            "removes a blob the push is about to reference, `--delete-untagged` removes the untagged "
+            "platform manifests beneath every kept index, and outside the lease a roll can be "
+            "admitted mid-collect — the record has to say all three hold, and the gate re-reads "
+            "the first two off the chart.")
+
+
+def governed_job_shape(where: str, relative: str, body: str, chart_dir: Path) -> list[str]:
+    """The named cleanup's Job, re-read off the chart: one Job, on no schedule, never
+    `--delete-untagged`, beside a chart that refuses to render a collect outside read-only."""
+    problems: list[str] = []
+    executable = [line for line in body.splitlines() if not line.strip().startswith("#")]
+    if any("--delete-untagged" in line for line in executable):
+        problems.append(f"{relative} passes `--delete-untagged`. It removes the untagged "
+                        "per-platform manifests beneath every kept index; the cleanup deletes "
+                        "manifests by digest and the collect may free only unreferenced blobs.")
+    if any(re.match(r"^\s*schedule:", line) for line in executable):
+        problems.append(f"{relative} carries a `schedule:`. The collect runs inside ONE window held "
+                        "by the lease, never on a timer nobody holds it for.")
+    # The refusal has to be an executed `fail` action — never a YAML comment, a Helm `{{/* */}}`
+    # comment, or a word that merely contains "fail" (#8080 review): a guard that exists only as
+    # prose lets the Job render beside a registry still taking pushes, the R4 race.
+    guarded = False
+    for template in sorted(chart_dir.rglob("*.tpl")) + sorted(chart_dir.rglob("*.yaml")):
+        for line in template.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("#"):
+                continue
+            action = GC_GUARD_ACTION.search(line)
+            if action and "garbageCollect" in line[action.start():] \
+                    and "readOnly" in line[action.start():]:
+                guarded = True
+    if not guarded:
+        problems.append(
+            f"{where}: {relative} is accepted as the collect of a read-only window, and no template "
+            "under the chart `fail`s a `garbageCollect` without `readOnly`. Without that refusal the "
+            "Job renders beside a registry still taking pushes.")
+    return problems
+
+
+def governed_jobs(retention: dict, cleanup_kind: str | None) -> dict[str, dict]:
+    """The chart Jobs a `derived-protected-set` record attributes to its named cleanup."""
+    if retention.get("rule") != "derived-protected-set" or not cleanup_kind:
+        return {}
+    rows = retention.get("deleters") if isinstance(retention.get("deleters"), list) else []
+    return {row["job"]: row for row in rows
+            if isinstance(row, dict) and row.get("governedBy") == cleanup_kind
+            and row.get("present") is True and isinstance(row.get("job"), str)
+            and isinstance(row.get("sites"), list)}
 
 
 def check_registry_retention(root: str, chart_root: str | None = None) -> int:
@@ -5196,6 +5283,11 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
     external_chart_swept = ""
     out_of_estate: list[tuple[str, str]] = []
     unverified_by_host: dict[str, list[str]] = {}
+    # `garbage-collect` sites a named cleanup's chart Job may spell, keyed as the sweep prints them.
+    accepted_gc_sites: dict[str, str] = {}
+    pending_jobs: list[str] = []
+    gc_sites_hit: set[str] = set()
+    cleanup_kind: str | None = None
     for host, entry in sorted(registries.items()):
         where = f"{ROSTER_PATH}: `registries.{host}`"
         if not isinstance(entry, dict):
@@ -5421,18 +5513,39 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
         if chart_repo:
             external_chart_swept = chart_repo
 
-        # (a) no Job or CronJob — a blob GC would be one, and it is the deletion that never returns.
+        # (a) no Job or CronJob — a blob GC would be one, and it is the deletion that never returns —
+        # except the ONE Job a `derived-protected-set` record attributes to its named cleanup.
+        jobs = governed_jobs(retention, cleanup_kind if rule == "derived-protected-set" else None)
+        jobs_seen: set[str] = set()
         for rendered in sorted(chart_dir.rglob("*.yaml")) + sorted(chart_dir.rglob("*.yml")):
-            for number, line in enumerate(rendered.read_text(encoding="utf-8").splitlines(), 1):
+            relative = str(rendered.relative_to(chart_base))
+            body = rendered.read_text(encoding="utf-8")
+            for number, line in enumerate(body.splitlines(), 1):
                 if line.strip().startswith("#"):
                     continue
-                if re.match(r'^\s*kind:\s*"?(Job|CronJob)"?\s*$', line):
+                kind_match = re.match(r'^\s*kind:\s*"?(Job|CronJob)"?\s*$', line)
+                if kind_match and relative in jobs and kind_match.group(1) == "Job":
+                    jobs_seen.add(relative)
+                    problems.extend(governed_job_shape(where, relative, body, chart_dir))
+                    continue
+                if kind_match:
                     problems.append(
                         f"{rendered.relative_to(chart_base)}:{number} renders a "
                         f"{line.split(':', 1)[1].strip()} under {host}'s chart, and the record "
                         "says nothing deletes there. A scheduled job beside a registry is how a "
                         "`registry garbage-collect` arrives. Re-derive "
                         f"`{ROSTER_PATH}` → `registries.{host}.retention.deleters` in THIS diff.")
+        # 🚨 ORDER: the record lands FIRST (core), the chart Job second (its own repository), so a
+        # declared Job this chart does not render yet is PRINTED, never red — red would hold every
+        # pull request of the chart's repository until the one that adds it merged. It accepts
+        # nothing meanwhile: its sites are registered only once the Job is rendered, and from then
+        # on a site the sweep no longer finds IS red (below).
+        for missing in sorted(set(jobs) - jobs_seen):
+            pending_jobs.append(f"{host}: chart Job `{missing}` is declared and NOT rendered by "
+                                "this chart — accepted nowhere until it is.")
+        for job in sorted(jobs_seen):
+            for site in jobs[job]["sites"]:
+                accepted_gc_sites[(chart_repo + ":" if chart_repo else "") + site] = host
 
         # (b) the maintenance stanza still says what the record says it says.
         found, stanza_problems = maintenance_stanza(chart_dir)
@@ -5510,7 +5623,12 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
             swept_skipped += root_skipped
             sweep_coverage.append(f"{prefix.rstrip(':') or 'this repository'} "
                                   f"({root_files} swept, {root_skipped} skipped)")
+        # `hits` is already aggregated over every swept checkout, so this loop runs ONCE;
+        # `gc_sites_hit` is initialized with the other per-run state above (#8080 review).
         for hit_path, number, description, line in hits:
+            if description == GC_SWEEP_DESCRIPTION and hit_path in accepted_gc_sites:
+                gc_sites_hit.add(hit_path)
+                continue
             problems.append(
                 f"{hit_path}:{number} executes {description} — `{line}` — while "
                 f"{', '.join(declaring_nothing_deletes)} record(s) every deleter (nothing, or only "
@@ -5518,6 +5636,17 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
                 "registry that command addresses, the enumeration has to name it and say what "
                 "protects what it can reach, in THIS diff. "
                 "Doc/Architecture/FleetRegistryRetention.")
+
+    for site in sorted(set(accepted_gc_sites) - gc_sites_hit):
+        problems.append(
+            f"{site} is listed as a `garbage-collect` site of {accepted_gc_sites[site]}'s named "
+            "cleanup and the sweep found no such line there. A stale site is an acceptance waiting "
+            "for the next, unnamed collect — drop it from `sites`.")
+    for line in pending_jobs:
+        print(f"  {line}")
+    if accepted_gc_sites:
+        print(f"  blob garbage-collect accepted at {len(gc_sites_hit)} named site(s), as the named "
+              "cleanup's own Job inside a read-only window under its lease.")
 
     # 🚨 THE DENOMINATOR, printed whatever the verdict. "No deleter found" and "nothing was swept"
     # are the same output without it, and that is the confusion this whole family is made of.
@@ -7357,6 +7486,106 @@ ingress:
     code, output = _verdict(_fleet(retention=_empty))
     check(code == 1 and "names no `protectedSet.axes`" in output,
           f"ARM 33: a cleanup deleting the complement of a set nobody wrote down passed: {output}")
+
+    # ── ARM 33d: the named cleanup's blob GC Job — accepted in EXACTLY one shape (#7530) ────────
+    # MeshWeaver.Deploy#237 (Plugins#4370 design 1A) renders `registry garbage-collect` as ONE chart
+    # Job inside a read-only window applied by the lease holder. The record names it; the gate must
+    # accept that file and nothing near it.
+    _gc_job = f"{_CHART}/job-registry-gc.yaml"
+    _gc_body = ('{{- if not .Values.readOnly }}{{- fail "garbageCollect needs readOnly" }}{{- end }}\n'
+                'apiVersion: batch/v1\nkind: Job\nspec:\n  template:\n    spec:\n      containers:\n'
+                '        - args: ["garbage-collect", "/etc/registry/config.yml"]\n')
+    _gc_row = {"mechanism": "registry garbage-collect (blob GC)", "present": True,
+               "governedBy": "ExampleCleanup", "job": _gc_job, "sites": [_gc_job],
+               "protectedBy": {"readOnlyWindow": True, "lease": "ExampleCleanup",
+                               "deleteUntagged": False},
+               "verdict": "the named cleanup's collect"}
+
+    def _gc_record(**row_changes) -> dict:
+        body = json.loads(json.dumps(_derived))
+        row = json.loads(json.dumps(_gc_row))
+        row.update(row_changes)
+        body["deleters"] = [d for d in body["deleters"] if d["mechanism"] != "blob GC"] + [row]
+        return body
+
+    def _gc_verdict(retention: dict, job_body: str | None = _gc_body,
+                    more: dict[str, str] | None = None) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as scratch:
+            root = _registry_root(scratch, _fleet(retention=retention))
+            if job_body is not None:
+                (Path(root) / _gc_job).write_text(job_body, encoding="utf-8")
+            for relative, text in (more or {}).items():
+                target = Path(root) / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text, encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = check_registry_retention(root)
+            return code, stdout.getvalue()
+
+    code, output = _gc_verdict(_gc_record())
+    check(code == 0 and "accepted at 1 named site(s)" in output,
+          f"ARM 33d: the named cleanup's own GC Job, in the accepted shape, was rejected — or "
+          f"accepted without saying where: {output}")
+    code, output = _verdict(_fleet(retention=json.loads(json.dumps(_derived))),
+                            extra_chart=("job-registry-gc.yaml", _gc_body))
+    check(code == 1 and "renders a Job" in output,
+          f"ARM 33d: a GC Job that NO deleter row names passed under `derived-protected-set`: {output}")
+    code, output = _gc_verdict(_gc_record(), job_body=_gc_body.replace("kind: Job", "kind: CronJob"))
+    check(code == 1 and "renders a CronJob" in output,
+          f"ARM 33d: the named Job turned into a CronJob — a collect on a timer nobody holds the "
+          f"lease for — passed: {output}")
+    code, output = _gc_verdict(_gc_record(), job_body=_gc_body.replace(
+        '"/etc/registry/config.yml"]', '"/etc/registry/config.yml", "--delete-untagged"]'))
+    check(code == 1 and "passes `--delete-untagged`" in output,
+          f"ARM 33d: the named Job with `--delete-untagged` passed — it removes the untagged "
+          f"platform manifests beneath every kept index: {output}")
+    code, output = _gc_verdict(_gc_record(), job_body=_gc_body + "  schedule: \"@daily\"\n")
+    check(code == 1 and "carries a `schedule:`" in output,
+          f"ARM 33d: the named Job with a schedule passed: {output}")
+    code, output = _gc_verdict(_gc_record(), job_body=_gc_body.split("\n", 1)[1])
+    check(code == 1 and "`fail`s a `garbageCollect` without `readOnly`" in output,
+          f"ARM 33d: a GC Job beside a chart that does not refuse a collect outside a read-only "
+          f"window passed: {output}")
+    for _shape, _guard in (("a YAML comment", '# {{- fail "garbageCollect needs readOnly" }}\n'),
+                           ("a Helm comment", '{{/* fail "garbageCollect needs readOnly" */}}\n'),
+                           ("a word containing fail", 'failure: garbageCollect without readOnly\n')):
+        code, output = _gc_verdict(_gc_record(), job_body=_guard + _gc_body.split("\n", 1)[1])
+        check(code == 1 and "`fail`s a `garbageCollect` without `readOnly`" in output,
+              f"ARM 33d: a read-only guard that exists only as {_shape} was accepted as the "
+              f"chart's refusal (#8080 review): {output}")
+    code, output = _gc_verdict(_gc_record(), more={f"{_CHART}/job-other.yaml": "kind: Job\n"})
+    check(code == 1 and "job-other.yaml:1 renders a Job" in output,
+          f"ARM 33d: a SECOND, unnamed Job beside the named one passed: {output}")
+    code, output = _gc_verdict(_gc_record(), more={
+        "deploy/scripts/collect.sh": "registry garbage-collect /etc/registry/config.yml\n"})
+    check(code == 1 and "collect.sh:1 executes a blob garbage collection" in output,
+          f"ARM 33d: `garbage-collect` in a file the row does not list passed: {output}")
+    code, output = _gc_verdict(_gc_record(protectedBy={"readOnlyWindow": True,
+                                                       "lease": "ExampleCleanup",
+                                                       "deleteUntagged": True}))
+    check(code == 1 and ".protectedBy is" in output,
+          f"ARM 33d: a GC row that does not state read-only + lease + no --delete-untagged "
+          f"passed: {output}")
+    code, output = _gc_verdict(_gc_record(lease=None, protectedBy=None))
+    check(code == 1 and ".protectedBy is None" in output,
+          f"ARM 33d: a GC row with no `protectedBy` passed: {output}")
+    code, output = _gc_verdict(_gc_record(sites=[]))
+    check(code == 1 and "no `sites`" in output,
+          f"ARM 33d: a GC row with no sites passed — a blanket acceptance: {output}")
+    code, output = _gc_verdict(_gc_record(sites=[_gc_job, "deploy/helm/values.yaml"]))
+    check(code == 1 and "deploy/helm/values.yaml is listed as a `garbage-collect` site" in output,
+          f"ARM 33d: a STALE site — listed, and spelling no collect — passed: {output}")
+    # ORDER: the record lands first, the chart Job second. A declared Job the chart does not render
+    # yet is PRINTED, never red — and accepts nothing: a collect elsewhere is still RED.
+    code, output = _gc_verdict(_gc_record(), job_body=None)
+    check(code == 0 and "is declared and NOT rendered" in output,
+          f"ARM 33d: a record naming a Job its chart does not render yet either reddened the "
+          f"chart's repository (blocking the PR that adds it) or stayed silent: {output}")
+    code, output = _gc_verdict(_gc_record(), job_body=None, more={
+        "deploy/scripts/collect.sh": "registry garbage-collect /etc/registry/config.yml\n"})
+    check(code == 1 and "collect.sh:1 executes a blob garbage collection" in output,
+          f"ARM 33d: a declared-but-unrendered Job made a collect elsewhere acceptable: {output}")
 
     # ── ARM 33b: the three arms the #4315 review found MISSING ──────────────────────────────────
     # 🚨 (1) UNVERIFIED is not ABSENT. `present: false` used to carry both "measured, and it is not

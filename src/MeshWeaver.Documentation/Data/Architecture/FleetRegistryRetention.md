@@ -139,10 +139,26 @@ says `rule: derived-protected-set`, and it carries:
   pointers, the index closure, and the bundle family wholesale (R6). Every axis is
   `onIncomplete: "refuse"`.
 - **the same `deleters` enumeration as before, with the explicit-DELETE row now `present: true` and
-  `governedBy: FleetRegistryCleanup`.** The GC row stays `present: false`. The cleanup deletes
-  manifests only, so until GC is built a deletion frees no storage.
+  `governedBy: FleetRegistryCleanup`.**
+- **the blob GC row, also `present: true` and governed by the same cleanup** (Plugins#4370 design 1A,
+  [Deploy#237](https://github.com/Systemorph/MeshWeaver.Deploy/pull/237)). It names ONE chart Job
+  (`job`), the only files allowed to spell `garbage-collect` (`sites`), and what protects what it can
+  reach (`protectedBy`):
+  - `readOnlyWindow: true` — the chart refuses to render the collect unless the registry is read-only,
+    so no push races the mark phase (R4);
+  - `lease: FleetRegistryCleanup` — only the run holding the registry-maintenance lease applies the
+    window, so no image action is admitted mid-collect;
+  - `deleteUntagged: false` — the collect frees only blobs no manifest references. It never removes
+    the untagged platform manifests beneath a kept index.
+
+  The gate re-reads the chart. It accepts that file only as a `kind: Job` with no `schedule:` and no
+  `--delete-untagged`, and only beside a template that `fail`s a `garbageCollect` without `readOnly`.
+  Any other Job, any CronJob, and `garbage-collect` in any unlisted file is red, and so is a listed
+  site that no longer spells it. **Order:** the record lands first. A declared Job that the chart
+  does not render yet is printed, not red, and it accepts nothing until it is rendered. Otherwise
+  the record would block the chart repository's pull request that adds the Job.
 - **`cleanupAuthorized: false`, with `authorizationBlockedBy`** naming what it waits for. That list is:
-  blob GC (Plugins#4370 slice 3); migration Jobs outside instance actions (slice 4); tag writers outside
+  the Plugins half of blob GC, which drives the window from the lease-holding run (Plugins#4370 slice 3); migration Jobs outside instance actions (slice 4); tag writers outside
   instance actions, which do not respect the lease; the publisher credential on the control instance;
   and the owner's approval of a first deleting run against a complete what-if. The one what-if so far,
   `Ops/Actions/fleet-registry-cleanup-whatif-20261101-7530` on the control instance, read 0 manifests
