@@ -433,6 +433,12 @@ jobs:
       # The three facts the delivery verdict below judges. Exposed as outputs so the check is a
       # JOB anyone can read in the run summary, not a conclusion buried in this job's log.
       complete: ${{ steps.acr.outputs.complete }}
+      # 🚨 THE delivery answer (MeshWeaver#8066) — which set delivers this commit, decided ONCE by
+      # the `delivered_by` step and read by `decide`, `delivery-verdict` and `handoff`. `complete`
+      # above is only the commit's OWN set; a commit that changed no image input is delivered by the
+      # newest published set, and judging it by `complete` reds a run that was right not to build.
+      delivered: ${{ steps.delivered_by.outputs.delivered }}
+      delivered_by: ${{ steps.delivered_by.outputs.delivered_by }}
       # 🚨 Resolved ONCE (steps.plugins) and consumed by promote + verify-images. Never
       # re-resolved downstream — see the step's own comment for why re-resolving turns a correct
       # publish red (#2622).
@@ -735,9 +741,76 @@ jobs:
           echo "plugins HEAD ($PLUGINS_REF) = $full  short=$short"
           echo "plugins_short=$short" >> "$GITHUB_OUTPUT"
           echo "plugins_sha=$full" >> "$GITHUB_OUTPUT"
+      - name: "Are there image-relevant changes since the newest published set?"
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -uo pipefail
+          # Policy `image-rebuild-own-inputs`: an image is rebuilt only when one of ITS inputs
+          # changed. The classifier is `.github/scripts/core-image-relevance.py` — the not-image
+          # list, each entry with its reason, and a self-test run on every PR. MeshWeaver.Plugins
+          # answers the same question for the host side and dispatches `rebuild: true` (#4688).
+          # 🚨 FAIL-OPEN: any doubt — no published set, unresolvable base, unreadable compare, a
+          # compare at GitHub's 300-file cap (the list may be truncated) — publishes. The only way
+          # to skip is a POSITIVE finding that every changed file since the newest PUBLISHED set
+          # is outside every image's inputs. Diffing against the newest published set (not HEAD^)
+          # is what keeps the reconciler stable: a skipped tip differs from the last set only by
+          # irrelevant files, so the reconcile branch skips it too instead of "healing" it back
+          # into a build every tick.
+          relevant=true
+          superseded=false
+          # `--detail` is load-bearing: WITHOUT it show-tags returns an array of plain STRINGS,
+          # so `[].name` matches nothing and newest_short is ALWAYS empty. Every gate log has read
+          # `Newest published set: <none>` for as long as this step has existed. It fails open
+          # (relevant stays true), so it never turned CD red — it only meant the image-irrelevant
+          # skip below could never fire. The batching probe above already passes --detail.
+          newest_short=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
+            --orderby time_desc --detail --top 60 --query "[].name" -o tsv \
+            | grep -E '^[0-9a-f]{7}$' | head -1 || true)
+          if [ -n "$newest_short" ] && [ "$newest_short" != "$(printf '%s' "$SHA" | cut -c1-7)" ]; then
+            base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$newest_short" --jq .sha || true)
+            if [ -n "$base" ]; then
+              cmp="${RUNNER_TEMP:-/tmp}/relevance-compare.json"
+              if gh api "repos/$GITHUB_REPOSITORY/compare/$base...$SHA" > "$cmp"; then
+                changed="${RUNNER_TEMP:-/tmp}/relevance-changed.txt"
+                # The PREVIOUS name of a renamed file is listed too: a file renamed out of src/
+                # changed src/.
+                jq -r '.files[] | .filename, (.previous_filename // empty)' "$cmp" > "$changed" || : > "$changed"
+                total=$(jq -r '.files | length' "$cmp" || true)
+                verdict=$(python3 .github/scripts/core-image-relevance.py --changed "$changed" ${total:+--total "$total"} || echo "relevant=true")
+                printf '%s\n' "$verdict"
+                if [ "$(printf '%s\n' "$verdict" | tail -1)" = "relevant=false" ]; then
+                  relevant=false
+                fi
+              fi
+              # 🚨 NEVER PUBLISH A COMMIT OLDER THAN THE NEWEST PUBLISHED SET. The same compare
+              # says whether this target is strictly BEHIND that set; the Decide step declines
+              # it, because the version is this RUN's number and every consumer takes the
+              # highest one. Measured 2026-10-14: CD #10796 published 6b9944c (the parent) as
+              # 3.1.10796 right after #10795 had published 04d56c7, and every
+              # MeshWeaver.Plugins main run resolved the older code. `cd-superseded.py` holds
+              # the rule and its self-test; an unreadable compare is `superseded=false`.
+              sverdict=$(python3 .github/scripts/cd-superseded.py --target "$SHA" --newest "$base" --compare "$cmp" || echo "superseded=false")
+              printf '%s\n' "$sverdict"
+              if [ "$(printf '%s\n' "$sverdict" | tail -1)" = "superseded=true" ]; then
+                superseded=true
+              fi
+            fi
+          fi
+          echo "Newest published set: ${newest_short:-<none>}; image-relevant changes since: $relevant; target superseded by it: $superseded"
+          { echo "relevant=$relevant"; echo "superseded=$superseded"; echo "newest_short=${newest_short:-}"; } >> "$GITHUB_OUTPUT"
+      # 🚨 NOT asked when `relevance` has POSITIVELY found that nothing since the newest published set
+      # is an image input (MeshWeaver#8066). Such a commit is never built, so it has no set of its
+      # own by construction, and asking printed one `::error::<repo>:<sha> could not be verified`
+      # per repository on a run that was right not to build — five red annotations on a green job,
+      # read by everyone as the failure. The set that DOES deliver it is probed by `delivered_by`
+      # below. This is not an input check that can skip a gate: `relevant` is `true` unless that
+      # positive finding exists, so any doubt still asks.
       - name: "Does main's HEAD already have a complete image set?"
         id: acr
-        if: steps.target.outputs.reason == 'reconcile'
+        if: steps.target.outputs.reason == 'reconcile' && steps.relevance.outputs.relevant != 'false'
         env:
           SHORT: ${{ steps.target.outputs.short_sha }}
         run: |
@@ -767,6 +840,62 @@ jobs:
             0) echo "complete=true"  >> "$GITHUB_OUTPUT" ;;
             *) echo "complete=false" >> "$GITHUB_OUTPUT" ;;
           esac
+      # ── WHICH SET DELIVERS THIS COMMIT? — the ONE answer every consumer reads (MeshWeaver#8066) ──
+      #
+      # 🚨 Three places used to answer "is this commit delivered?" and they answered it differently.
+      # `decide` applied policy `image-rebuild-own-inputs` (a commit whose every change since the
+      # newest published set is outside every image's inputs builds nothing). `delivery-verdict` and
+      # `handoff` did not: they read `complete` — the commit's OWN set — and nothing else. So a
+      # test-only merge was correctly never built, and then could never count as delivered. Measured
+      # on `ed888fd` (the merge of #8065, one file under `test/`): the push run skipped it correctly,
+      # its `handoff` saw "HEAD green, no complete set of its own, nobody publishing" and dispatched
+      # a reconcile; every reconcile then logged `Newest published set: ecf71b4; image-relevant
+      # changes since: false`, declined correctly, and `verdict` went RED with "GREEN and has an
+      # INCOMPLETE image set … nobody is publishing it" — about images that were correctly never
+      # built. Four CD runs red on one test-only commit, each alerting. Latent since the reconcile
+      # skip landed; it surfaces only when a test-only merge stays main's tip through a reconcile
+      # tick — the earlier one (`4626bcd`) was superseded by a relevant merge within minutes.
+      #
+      # So the answer is decided ONCE, here, as two outputs every consumer reads instead of `complete`:
+      #   * `delivered_by` — the short sha of the set that delivers this commit: its OWN set when the
+      #     registry holds it complete, otherwise — ONLY on the `relevance` step's positive finding
+      #     that nothing since the newest published set is an image input — that newest set,
+      #     PROVIDED the registry holds IT complete too. A torn newest set delivers nothing.
+      #   * `delivered` — `true` or `false`, always written. Consumers compare it to the literal
+      #     `true`, so a step that did not run reads as NOT delivered, never as delivered.
+      #
+      # 🚨 NOT A WEAKENING of the stuck-delivery alarm: a green commit WITH an image input since the
+      # newest set and no images of its own is `delivered=false` exactly as before, and `verdict`
+      # reds on it exactly as before. The only new `true` is a commit whose images ARE in the
+      # registry — under another commit's sha, which carries every one of its image inputs.
+      - name: "Which image set delivers this commit?"
+        id: delivered_by
+        env:
+          SHORT: ${{ steps.target.outputs.short_sha }}
+          COMPLETE: ${{ steps.acr.outputs.complete }}
+          RELEVANT: ${{ steps.relevance.outputs.relevant }}
+          NEWEST_SHORT: ${{ steps.relevance.outputs.newest_short }}
+        run: |
+          set -uo pipefail
+          say() { echo "$1"; echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+          by=""
+          if [ "${COMPLETE:-}" = "true" ]; then
+            by="$SHORT"
+            say "📦 \`$SHORT\` is delivered by its OWN image set (complete in the registry)."
+          elif [ "${RELEVANT:-true}" = "false" ] && [ -n "${NEWEST_SHORT:-}" ]; then
+            # `|| rc=$?`, never a bare call: the default `bash -e` would end the step on exit 1.
+            rc=0
+            .github/scripts/check-image-set.sh "$NEWEST_SHORT" || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              by="$NEWEST_SHORT"
+              say "📦 \`$SHORT\` is delivered by the newest published set \`$NEWEST_SHORT\`: nothing that changed since it is an input of any image (policy \`image-rebuild-own-inputs\`), and that set is complete in the registry."
+            else
+              say "⚠️ \`$SHORT\` changed no image input since the newest published set \`$NEWEST_SHORT\`, but that set is NOT complete in the registry (check-image-set.sh exit $rc, errors above) — so nothing delivers \`$SHORT\` yet."
+            fi
+          else
+            say "📭 \`$SHORT\` has no complete image set of its own, and nothing established that it changed no image input since the newest published set (\`${NEWEST_SHORT:-<none>}\`, relevant=${RELEVANT:-<unset>}) — it is delivered only once a set is built for it."
+          fi
+          { echo "delivered_by=$by"; echo "delivered=$([ -n "$by" ] && echo true || echo false)"; } >> "$GITHUB_OUTPUT"
       # ── Has a publisher ALREADY TRIED this commit and not finished? (reconcile only) ────────
       #
       # 🚨 THE LEDGER RECORDS A DELIVERY THAT FAILED, NOT ONE THAT HAS NOT HAPPENED YET
@@ -881,71 +1010,16 @@ jobs:
           fi
           { echo "digest=$digest"; echo "version=$version"; echo "run_number=$run_number"; } >> "$GITHUB_OUTPUT"
           echo "baseline (the set the fleet is on): mw-plugin-test:main = $digest = $version, built by run #$run_number"
-      - name: "Are there image-relevant changes since the newest published set?"
-        id: relevance
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ steps.target.outputs.sha }}
-        run: |
-          set -uo pipefail
-          # Policy `image-rebuild-own-inputs`: an image is rebuilt only when one of ITS inputs
-          # changed. The classifier is `.github/scripts/core-image-relevance.py` — the not-image
-          # list, each entry with its reason, and a self-test run on every PR. MeshWeaver.Plugins
-          # answers the same question for the host side and dispatches `rebuild: true` (#4688).
-          # 🚨 FAIL-OPEN: any doubt — no published set, unresolvable base, unreadable compare, a
-          # compare at GitHub's 300-file cap (the list may be truncated) — publishes. The only way
-          # to skip is a POSITIVE finding that every changed file since the newest PUBLISHED set
-          # is outside every image's inputs. Diffing against the newest published set (not HEAD^)
-          # is what keeps the reconciler stable: a skipped tip differs from the last set only by
-          # irrelevant files, so the reconcile branch skips it too instead of "healing" it back
-          # into a build every tick.
-          relevant=true
-          superseded=false
-          # `--detail` is load-bearing: WITHOUT it show-tags returns an array of plain STRINGS,
-          # so `[].name` matches nothing and newest_short is ALWAYS empty. Every gate log has read
-          # `Newest published set: <none>` for as long as this step has existed. It fails open
-          # (relevant stays true), so it never turned CD red — it only meant the image-irrelevant
-          # skip below could never fire. The batching probe above already passes --detail.
-          newest_short=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
-            --orderby time_desc --detail --top 60 --query "[].name" -o tsv \
-            | grep -E '^[0-9a-f]{7}$' | head -1 || true)
-          if [ -n "$newest_short" ] && [ "$newest_short" != "$(printf '%s' "$SHA" | cut -c1-7)" ]; then
-            base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$newest_short" --jq .sha || true)
-            if [ -n "$base" ]; then
-              cmp="${RUNNER_TEMP:-/tmp}/relevance-compare.json"
-              if gh api "repos/$GITHUB_REPOSITORY/compare/$base...$SHA" > "$cmp"; then
-                changed="${RUNNER_TEMP:-/tmp}/relevance-changed.txt"
-                # The PREVIOUS name of a renamed file is listed too: a file renamed out of src/
-                # changed src/.
-                jq -r '.files[] | .filename, (.previous_filename // empty)' "$cmp" > "$changed" || : > "$changed"
-                total=$(jq -r '.files | length' "$cmp" || true)
-                verdict=$(python3 .github/scripts/core-image-relevance.py --changed "$changed" ${total:+--total "$total"} || echo "relevant=true")
-                printf '%s\n' "$verdict"
-                if [ "$(printf '%s\n' "$verdict" | tail -1)" = "relevant=false" ]; then
-                  relevant=false
-                fi
-              fi
-              # 🚨 NEVER PUBLISH A COMMIT OLDER THAN THE NEWEST PUBLISHED SET. The same compare
-              # says whether this target is strictly BEHIND that set; the Decide step declines
-              # it, because the version is this RUN's number and every consumer takes the
-              # highest one. Measured 2026-10-14: CD #10796 published 6b9944c (the parent) as
-              # 3.1.10796 right after #10795 had published 04d56c7, and every
-              # MeshWeaver.Plugins main run resolved the older code. `cd-superseded.py` holds
-              # the rule and its self-test; an unreadable compare is `superseded=false`.
-              sverdict=$(python3 .github/scripts/cd-superseded.py --target "$SHA" --newest "$base" --compare "$cmp" || echo "superseded=false")
-              printf '%s\n' "$sverdict"
-              if [ "$(printf '%s\n' "$sverdict" | tail -1)" = "superseded=true" ]; then
-                superseded=true
-              fi
-            fi
-          fi
-          echo "Newest published set: ${newest_short:-<none>}; image-relevant changes since: $relevant; target superseded by it: $superseded"
-          { echo "relevant=$relevant"; echo "superseded=$superseded"; echo "newest_short=${newest_short:-}"; } >> "$GITHUB_OUTPUT"
       - name: "Decide"
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEVANT: ${{ steps.relevance.outputs.relevant }}
+          # 🚨 NOT `relevance`'s raw `relevant` (MeshWeaver#8066): the ONE delivery answer, decided by
+          # `delivered_by` and read the same way by `delivery-verdict` and `handoff`. A no-image-input
+          # commit whose newest published set is TORN is `delivered=false`, so it builds (a heal)
+          # rather than being skipped onto a set that cannot be pulled.
+          DELIVERED: ${{ steps.delivered_by.outputs.delivered }}
+          DELIVERED_BY: ${{ steps.delivered_by.outputs.delivered_by }}
           SUPERSEDED: ${{ steps.relevance.outputs.superseded }}
           NEWEST_SHORT: ${{ steps.relevance.outputs.newest_short }}
           SHORT: ${{ steps.target.outputs.short_sha }}
@@ -1042,8 +1116,8 @@ jobs:
           if [ "$REASON" = "push" ]; then
             if [ "$GREEN" != "true" ]; then
               decision false "⛔ \`Consolidate test results\` on $SHORT is \`$CONCL\` — nothing will be built"
-            elif [ "$RELEVANT" = "false" ]; then
-              decision false "⏭️ Only paths outside every image's inputs (tests, agent config, root prose, standalone clients — policy \`image-rebuild-own-inputs\`) changed since the newest published set — no image build for \`$SHORT\`"
+            elif [ "${DELIVERED:-false}" = "true" ]; then
+              decision false "⏭️ Only paths outside every image's inputs (tests, agent config, root prose, standalone clients — policy \`image-rebuild-own-inputs\`) changed since the newest published set \`${DELIVERED_BY}\`, which is complete and delivers \`$SHORT\` — no image build for \`$SHORT\`"
             # Batching window (see the freshness probe above): a green merge inside the window
             # defers to the reconciler's next tick. Deliberately SILENT beyond the summary — this
             # is intentional cadence, not a fault, and the reconciler self-heals it by design.
@@ -1117,8 +1191,11 @@ jobs:
           # A tip that differs from the newest PUBLISHED set only by image-irrelevant paths is
           # NOT unhealed state — it is the deliberate skip above, seen from the next tick. Without
           # this the reconciler would "heal" every skipped clients-only merge back into a build.
-          if [ "$RELEVANT" = "false" ]; then
-            decision false "⏭️ main \`$SHORT\` differs from the newest published set only in image-irrelevant paths — nothing to reconcile"
+          # 🚨 A requested `rebuild` is NOT skipped here: MeshWeaver.Plugins dispatches it for a HOST
+          # change core's diff cannot see, so a test-only core tip must not swallow it — it falls
+          # through to the publish branches below like any other commit with no set of its own.
+          if [ "${DELIVERED:-false}" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
+            decision false "⏭️ main \`$SHORT\` differs from the newest published set \`${DELIVERED_BY}\` only in image-irrelevant paths, and that set is complete — it delivers \`$SHORT\`; nothing to reconcile"
             exit 0
           fi
 
@@ -4941,6 +5018,11 @@ jobs:
           REASON: ${{ needs.gate.outputs.reason }}
           PUBLISH: ${{ needs.gate.outputs.publish }}
           COMPLETE: ${{ needs.gate.outputs.complete }}
+          # The ONE delivery answer (MeshWeaver#8066), judged instead of `COMPLETE` — which is only
+          # the commit's OWN set and is not even asked for a commit that changed no image input.
+          # See the gate's `delivered_by` step.
+          DELIVERED: ${{ needs.gate.outputs.delivered }}
+          DELIVERED_BY: ${{ needs.gate.outputs.delivered_by }}
           GREEN: ${{ needs.gate.outputs.green }}
           CONCLUSION: ${{ needs.gate.outputs.conclusion }}
           SHA: ${{ needs.gate.outputs.sha }}
@@ -4963,7 +5045,7 @@ jobs:
           WORKFLOW_NAME: ${{ github.workflow }}
         run: |
           set -euo pipefail
-          echo "gate=$GATE_RESULT reason=$REASON publish=$PUBLISH complete=$COMPLETE green=$GREEN sha=$SHORT"
+          echo "gate=$GATE_RESULT reason=$REASON publish=$PUBLISH complete=$COMPLETE delivered=${DELIVERED:-} delivered_by=${DELIVERED_BY:-} green=$GREEN sha=$SHORT"
 
           # 🚨 THIS JOB MUST NOT PASS ON AN EMPTY VERDICT.
           #
@@ -4994,8 +5076,22 @@ jobs:
             exit 1
           fi
 
+          # 🚨 A COMMIT DELIVERED BY ANOTHER SET IS NOT STUCK (MeshWeaver#8066). Policy
+          # `image-rebuild-own-inputs` never builds a commit whose every change since the newest
+          # published set is outside every image's inputs, so it has no set of its own BY DESIGN.
+          # This branch keyed on `COMPLETE` (its own set) and so went red on four CD runs of the
+          # test-only `ed888fd`, each saying "nobody is publishing it" about images correctly never
+          # built. It now keys on the gate's ONE answer, `DELIVERED`, which is `true` only when the
+          # registry holds the delivering set complete — so a green commit WITH an image change and
+          # no images still reaches the red below exactly as before. Compared to the literal
+          # `true`: an empty value (the gate's step did not run) is NOT delivered, and alarms.
+          if [ "$REASON" = "reconcile" ] && [ "$PUBLISH" != "true" ] && [ "${DELIVERED:-}" = "true" ] \
+             && [ -n "${DELIVERED_BY:-}" ] && [ "$DELIVERED_BY" != "$SHORT" ]; then
+            echo "✅ main \`$SHORT\` has no image set of its own and needs none: nothing that changed since the newest published set \`$DELIVERED_BY\` is an input of any image (policy \`image-rebuild-own-inputs\`), and that set is complete in the registry — it delivers \`$SHORT\`."
+          fi
+
           if [ "$REASON" = "reconcile" ] && [ "$PUBLISH" != "true" ] \
-             && [ "$COMPLETE" = "false" ] && [ "$GREEN" = "true" ]; then
+             && [ "${DELIVERED:-}" != "true" ] && [ "$GREEN" = "true" ]; then
             # 🚨 "INCOMPLETE" IS A SNAPSHOT. "STUCK" IS A CLAIM ABOUT THE FUTURE. (MeshWeaver#3513)
             #
             # The four gate outputs above describe main at ONE INSTANT: green, no complete image
@@ -5208,6 +5304,7 @@ jobs:
           SHORT: ${{ needs.gate.outputs.short_sha }}
           GATE_RESULT: ${{ needs.gate.result }}
           PROMOTE_RESULT: ${{ needs.promote.result }}
+          DELIVERED_BY: ${{ needs.gate.outputs.delivered_by }}
           # The third verdict (MeshWeaver#3513). Empty unless the step above found a live
           # publication on this commit — so this is a POSITIVE finding, never a default.
           DEFERRED_TO: ${{ steps.verdict.outputs.deferred_to }}
@@ -5230,6 +5327,8 @@ jobs:
             echo "### ✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
           elif [ "$PUBLISH" = "true" ]; then
             echo "### ❌ DELIVERY FAILED for \`${SHORT}\` — the gate decided to publish but promote=${PROMOTE_RESULT}; see the leg check above" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "$DELIVERED_BY" ] && [ "$DELIVERED_BY" != "$SHORT" ]; then
+            echo "### ⏭️ NO BUILD for \`${SHORT}\` — it changed no image input, so the complete set \`${DELIVERED_BY}\` delivers it (policy \`image-rebuild-own-inputs\`, #8066)" >> "$GITHUB_STEP_SUMMARY"
           elif [ -n "$REASON" ]; then
             echo "### 🕐 NO PUBLISH for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
           else
@@ -5292,6 +5391,9 @@ jobs:
           SHA: ${{ needs.gate.outputs.sha }}
           PUBLISH: ${{ needs.gate.outputs.publish }}
           COMPLETE: ${{ needs.gate.outputs.complete }}
+          # The gate's ONE delivery answer (MeshWeaver#8066), read by the "nothing owed" arm below.
+          DELIVERED: ${{ needs.gate.outputs.delivered }}
+          DELIVERED_BY: ${{ needs.gate.outputs.delivered_by }}
           PROMOTE_RESULT: ${{ needs.promote.result }}
           # 🚨 EVERY PLATFORM SHIPPING LEG, not `promote` alone — promote is only phase A, the image
           # TAGS. A run can tag the set and still fail afterwards in the platform bake or the
@@ -5352,13 +5454,16 @@ jobs:
           esac
 
           # Nothing is owed when this run IS HEAD's publication — either it shipped the set, or the
-          # gate found one already complete and took the bake-only branch. Two arms are
-          # load-bearing. Without the `COMPLETE` one a bake-only reconcile on HEAD would hand itself
-          # on forever; without `DELIVERY_INCOMPLETE` a run that tagged the set and then failed a
-          # later leg would count as HEAD's publication and hand nothing on.
+          # gate found HEAD already DELIVERED: by its own complete set (the bake-only branch), or by
+          # the newest published set because HEAD changed no image input (MeshWeaver#8066). Two arms
+          # are load-bearing. Without the `DELIVERED` one a bake-only reconcile on HEAD would hand
+          # itself on forever, and a test-only HEAD would be handed to a reconcile that can only
+          # decline (measured on `ed888fd`: the push run dispatched one, and it went red); without
+          # `DELIVERY_INCOMPLETE` a run that tagged the set and then failed a later leg would count
+          # as HEAD's publication and hand nothing on.
           if [ "$HEAD" = "$SHA" ] && [ "$DELIVERY_INCOMPLETE" != "true" ] \
-             && { { [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; } || [ "$COMPLETE" = "true" ]; }; then
-            echo "nothing owed — this run is main's HEAD ($SHORT_HEAD) publication (publish=$PUBLISH promote=$PROMOTE_RESULT complete=$COMPLETE, every shipping leg clean)."
+             && { { [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; } || [ "${DELIVERED:-}" = "true" ]; }; then
+            echo "nothing owed — this run is main's HEAD ($SHORT_HEAD) publication (publish=$PUBLISH promote=$PROMOTE_RESULT complete=${COMPLETE:-} delivered=${DELIVERED:-} by ${DELIVERED_BY:-<none>}, every shipping leg clean)."
             exit 0
           fi
 
