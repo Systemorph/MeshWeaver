@@ -32,11 +32,15 @@ namespace MeshWeaver.Mesh.Threading;
 /// not a null dereference. The allocator backing that dynamic method was gone while a thread was
 /// still arriving at it.</para>
 ///
-/// <para><b>The rule this type enforces: an unload happens on a POSITIVE quiescence signal or it
-/// does not happen at all.</b> Never on a timer expiry. A retained context costs memory until the
-/// process exits; an unload with a live user costs the process. <see cref="UnloadWhenQuiesced"/>
-/// therefore reports <c>false</c> and leaves the context loaded rather than unloading on timeout —
-/// which is the inversion of what the grain used to do (wait 5 s, log "moving on", unload anyway).
+/// <para><b>The rule this type enforces: an unload happens on a POSITIVE quiescence signal — never
+/// on a timer expiry, and never while a lease is held.</b> An unload with a live user costs the
+/// process. <see cref="UnloadWhenQuiesced"/> therefore reports <c>false</c> and leaves the context
+/// loaded rather than unloading on timeout — which is the inversion of what the grain used to do
+/// (wait 5 s, log "moving on", unload anyway). 🚨 <b>A late quiescence still unloads</b> on the
+/// module retire path (policy <c>retire-late-quiescence-unloads</c>, MeshWeaver#8082):
+/// <c>ModuleContexts.Retire</c> treats its budget as the point at which a generation still in use is
+/// REPORTED, keeps waiting on <see cref="Quiesced"/>, and unloads the moment the last lease is
+/// released. Only a lease that is never released keeps a context loaded until the process exits.
 /// </para>
 ///
 /// <para>Instance state only — held by whoever owns the contexts, dying with them (NoStaticState).
@@ -154,6 +158,10 @@ public sealed class AlcLeaseRegistry
         // common case (retiring a duplicate compilation), and without the hop there it would run
         // Unload — module and finalizer code — inline on whichever thread happened to subscribe.
         .ObserveOn(TaskPoolScheduler.Default);
+
+    /// <summary>Drops the tracking of a context that has been unloaded — the registry's map would
+    /// otherwise root it. Called only after <c>Unload()</c> succeeded.</summary>
+    internal void Forget(AssemblyLoadContext context) => entries.TryRemove(context, out _);
 
     /// <summary>
     /// Unloads <paramref name="context"/> once it is quiesced, and NOT AT ALL if it fails to
