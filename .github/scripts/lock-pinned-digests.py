@@ -5038,6 +5038,105 @@ def acl_delete_grants(chart_dir: Path) -> tuple[list[tuple[str, int, str]], int]
     return grants, rules
 
 
+# ── `derived-protected-set`: the cleanup is NAMED, and it is the one deleter accepted ──────────
+#
+# MeshWeaver#7530 asks that the fleet registry's record move off `nothing-deletes` to "a policy that
+# names this job", and that `--check-registry-retention` then accept THAT job as the one deleter.
+# Before it, a `derived-protected-set` rule was three fields and a `continue`: it named axes and
+# skipped the chart, the ACL and the deleter sweep — so the step that adds a deleter would have
+# been the step that stopped looking for a second one. Now the rule names its cleanup and falls
+# through to the same enumeration: every `present: true` row is either that cleanup
+# (`governedBy: <cleanup.kind>`) or a `maintenance.<key>` timer the chart re-derives, and at least
+# one row is the cleanup — a record that names a job and enumerates nothing it runs has not said
+# what deletes.
+CLEANUP_REQUIRED_FIELDS = ("kind", "repository", "manual", "runsAs")
+
+
+def check_named_cleanup(where: str, retention: dict, problems: list[str]) -> str | None:
+    """Validate a `derived-protected-set` rule's `cleanup` block; return its kind, or None when
+    the block is unusable (the enumeration below cannot be held to a job nobody named)."""
+    cleanup = retention.get("cleanup")
+    if not isinstance(cleanup, dict):
+        problems.append(
+            f"{where}.retention is `derived-protected-set` and names no `cleanup`. The rule says a "
+            "cleanup deletes the complement of a derived set; which cleanup, run from where, as "
+            "whom, is the whole of what makes that sentence checkable (MeshWeaver#7530).")
+        return None
+    usable = True
+    for field in CLEANUP_REQUIRED_FIELDS:
+        value = cleanup.get(field)
+        if not isinstance(value, str) or not value.strip():
+            problems.append(f"{where}.retention.cleanup has no `{field}` (a non-empty string).")
+            usable = False
+    repository = str(cleanup.get("repository", "")).strip()
+    if repository and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        problems.append(f"{where}.retention.cleanup.repository is {repository!r}, which is not an "
+                        "`owner/name`. The job's source has to be a repository someone can read.")
+    principal = str(retention.get("deleteGrantedTo", "")).strip()
+    runs_as = str(cleanup.get("runsAs", "")).strip()
+    if runs_as and principal and runs_as != principal:
+        problems.append(
+            f"{where}.retention.cleanup runs as {runs_as!r} while the registry's ACL grants "
+            f"`delete` to {principal!r} only (`deleteGrantedTo`). Either the job cannot delete, "
+            "or the ACL has been widened to an account this record does not name.")
+    authorized = retention.get("cleanupAuthorized")
+    blocked_by = retention.get("authorizationBlockedBy")
+    if authorized is False:
+        if not isinstance(blocked_by, list) or not blocked_by \
+                or not all(isinstance(item, str) and item.strip() for item in blocked_by):
+            problems.append(
+                f"{where}.retention names a cleanup and declares `cleanupAuthorized: false` with no "
+                "`authorizationBlockedBy` (a non-empty list of strings). A job that exists and is "
+                "not authorized has to say what it waits for, or 'not yet' and 'never' read alike.")
+    elif authorized is True and blocked_by:
+        problems.append(
+            f"{where}.retention declares `cleanupAuthorized: true` and still lists "
+            f"`authorizationBlockedBy` ({len(blocked_by)} item(s)). One of the two is false.")
+    return str(cleanup.get("kind")).strip() if usable else None
+
+
+def check_deleters_name_the_cleanup(where: str, retention: dict, deleters: list,
+                                    cleanup_kind: str, problems: list[str]) -> None:
+    """Under `derived-protected-set`, the enumeration accepts exactly ONE deleting job: the named
+    cleanup. Any other present mechanism must be a chart `maintenance.<key>` timer, which the
+    stanza arm re-derives; a row governed by any other job is a second deleter nobody named."""
+    maintenance = retention.get("maintenance") if isinstance(retention.get("maintenance"), dict) else {}
+    governed = 0
+    for position, deleter in enumerate(deleters):
+        if not isinstance(deleter, dict):
+            continue
+        mechanism = str(deleter.get("mechanism", "")).strip()
+        governed_by = deleter.get("governedBy")
+        if governed_by is not None:
+            if governed_by != cleanup_kind:
+                problems.append(
+                    f"{where}.retention.deleters[{position}] (`{mechanism}`) is governed by "
+                    f"{governed_by!r}, and the named cleanup is {cleanup_kind!r}. This rule accepts "
+                    "ONE deleting job; a second one is exactly what the derivation cannot see.")
+            elif deleter.get("present") is not True:
+                problems.append(
+                    f"{where}.retention.deleters[{position}] names the cleanup {cleanup_kind!r} and "
+                    f"is `present: {deleter.get('present')!r}`. A row attributing a mechanism to the "
+                    "job is a claim that the job runs it; say `true`, or drop `governedBy`.")
+            else:
+                governed += 1
+            continue
+        if deleter.get("present") is True:
+            key = mechanism.split(" ", 1)[0].removeprefix("maintenance.")
+            if not mechanism.startswith("maintenance.") or key not in maintenance:
+                problems.append(
+                    f"{where}.retention.deleters[{position}] (`{mechanism}`) is `present: true` and "
+                    f"names neither the cleanup (`governedBy: {cleanup_kind!r}`) nor a declared "
+                    "`maintenance.<key>` timer. Under `derived-protected-set` the named cleanup is "
+                    "the one deleter accepted; anything else present is a deleter nobody derived a "
+                    "protected set for.")
+    if governed == 0:
+        problems.append(
+            f"{where}.retention names the cleanup {cleanup_kind!r} and no `deleters` row is "
+            f"`governedBy: {cleanup_kind!r}`. A record that names a job and enumerates nothing it "
+            "runs has not said what deletes — the enumeration must carry the job's own row.")
+
+
 def check_registry_retention(root: str, chart_root: str | None = None) -> int:
     """Does every registry the fleet's overlays name still say what — if anything — DELETES from it,
     and does the committed chart still agree with what the record says?
@@ -5211,16 +5310,27 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
                         f"`onIncomplete: {axis.get('onIncomplete')!r}`. On a registry with no lock "
                         "the ONLY safe answer is `refuse`: an incomplete derivation there does not "
                         "protect less, it DELETES what it could not see, in the same act.")
-            continue
+            # 🚨 AND THE CLEANUP IS NAMED, then held to the SAME enumeration `nothing-deletes` is
+            # (MeshWeaver#7530). Moving off `nothing-deletes` must not move off the chart, ACL and
+            # sweep arms: the day a cleanup exists is the day a SECOND, unnamed deleter matters
+            # most, so this rule falls through to them rather than `continue`-ing past them. What
+            # it adds is the one deleter it accepts — `cleanup.kind` — and every `present: true`
+            # row must be either that job or a `maintenance.<key>` timer the chart re-derives.
+            cleanup_kind = check_named_cleanup(where, retention, problems)
+            if cleanup_kind is None:
+                continue
 
-        # rule == "nothing-deletes" — the enumeration, and then the chart it was derived from.
+        # The enumeration, and then the chart it was derived from — for `nothing-deletes`, and for
+        # a `derived-protected-set` whose cleanup is named (above).
         deleters = retention.get("deleters")
         if not isinstance(deleters, list) or not deleters:
             problems.append(
-                f"{where}.retention is `nothing-deletes` and enumerates no `deleters`. The claim "
-                "IS the enumeration: without one, 'nothing deletes' and 'nobody looked' are the "
-                "same sentence.")
+                f"{where}.retention is `{rule}` and enumerates no `deleters`. The claim "
+                "IS the enumeration: without one, 'nothing deletes' (or 'only the named cleanup "
+                "deletes') and 'nobody looked' are the same sentence.")
             continue
+        if rule == "derived-protected-set":
+            check_deleters_name_the_cleanup(where, retention, deleters, cleanup_kind, problems)
         present = 0
         unverified: list[str] = []
         for position, deleter in enumerate(deleters):
@@ -5269,7 +5379,7 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
         authorized = retention.get("cleanupAuthorized")
         if not isinstance(authorized, bool):
             problems.append(
-                f"{where}.retention is `nothing-deletes` and declares "
+                f"{where}.retention is `{rule}` and declares "
                 f"`cleanupAuthorized: {authorized!r}`, which is not a boolean. It must state, "
                 "explicitly, whether this enumeration is complete enough to authorize deleting "
                 "anything — an absent field would default to whatever the next reader assumes.")
@@ -5286,7 +5396,7 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
         chart = str(retention.get("chart", "")).strip()
         if not chart:
             problems.append(
-                f"{where}.retention is `nothing-deletes` and names no `chart`. Without the "
+                f"{where}.retention is `{rule}` and names no `chart`. Without the "
                 "committed source the claim was derived from, this gate can only re-read the "
                 "claim — and a claim that checks itself passes on the day it stops being true.")
             continue
@@ -5403,7 +5513,8 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
         for hit_path, number, description, line in hits:
             problems.append(
                 f"{hit_path}:{number} executes {description} — `{line}` — while "
-                f"{', '.join(declaring_nothing_deletes)} record(s) that nothing deletes. Whichever "
+                f"{', '.join(declaring_nothing_deletes)} record(s) every deleter (nothing, or only "
+                "a named cleanup outside this repository). Whichever "
                 "registry that command addresses, the enumeration has to name it and say what "
                 "protects what it can reach, in THIS diff. "
                 "Doc/Architecture/FleetRegistryRetention.")
@@ -5445,9 +5556,11 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
     if problems:
         return 1
     print("  every declared registry says what deletes from it, the pairing with its disposition "
-          "holds, and a `nothing-deletes` enumeration names at least one mechanism that IS "
-          "present — so it inspected something — while an UNVERIFIED one is counted apart from a "
-          "measured absence and keeps `cleanupAuthorized` false.")
+          "holds, and an enumeration (`nothing-deletes`, or a `derived-protected-set` naming its "
+          "cleanup) names at least one mechanism that IS present — so it inspected something — "
+          "while an UNVERIFIED one is counted apart from a measured absence and keeps "
+          "`cleanupAuthorized` false; under `derived-protected-set` every present deleter is the "
+          "named cleanup or a declared `maintenance.<key>` timer.")
     print(f"  {charts_checked} committed chart(s) still agree: no Job or CronJob beside the registry, the "
           "`maintenance:` stanza carries exactly the declared keys and windows, every ACL rule "
           "granting `delete` still names the declared principal, and no executable line anywhere "
@@ -7162,9 +7275,77 @@ ingress:
     _derived = {"rule": "derived-protected-set", "reason": "a cleanup exists",
                 "protectedSet": {"axes": [
                     {"axis": "overlay pins", "derivedFrom": "Systemorph/Memex overlays",
-                     "onIncomplete": "refuse"}]}}
+                     "onIncomplete": "refuse"}]},
+                "cleanup": {"kind": "ExampleCleanup", "repository": "Systemorph/Example.Plugins",
+                            "manual": "Hosting/ExampleCleanup", "runsAs": "publisherUsername"},
+                "authorizationBlockedBy": ["blob GC is not built"],
+                "deleters": [
+                    {"mechanism": "maintenance.uploadpurging", "present": True,
+                     "verdict": "incomplete uploads only"},
+                    {"mechanism": "manifest DELETE by digest", "present": True,
+                     "governedBy": "ExampleCleanup", "verdict": "the named cleanup"},
+                    {"mechanism": "blob GC", "present": False, "verdict": "no job anywhere"}]}
     code, output = _verdict(_fleet(retention=dict(_derived)))
     check(code == 0, f"ARM 33: a well-formed derived protected set was rejected: {output}")
+    check("1 chart(s) re-derived" in output,
+          f"ARM 33c: a `derived-protected-set` record SKIPPED the chart arm. Naming a cleanup must "
+          f"not stop the search for a second deleter (MeshWeaver#7530): {output}")
+
+    # ── ARM 33c: the cleanup is NAMED and is the ONE deleter accepted (MeshWeaver#7530) ─────────
+    def _derived_with(**changes) -> dict:
+        body = json.loads(json.dumps(_derived))
+        for key, value in changes.items():
+            if value is None:
+                body.pop(key, None)
+            else:
+                body[key] = value
+        return body
+    code, output = _verdict(_fleet(retention=_derived_with(cleanup=None)))
+    check(code == 1 and "names no `cleanup`" in output,
+          f"ARM 33c: a `derived-protected-set` record that names no cleanup passed — 'a cleanup "
+          f"deletes the complement' with no cleanup named checks nothing: {output}")
+    _no_kind = _derived_with()
+    del _no_kind["cleanup"]["kind"]
+    code, output = _verdict(_fleet(retention=_no_kind))
+    check(code == 1 and "has no `kind`" in output,
+          f"ARM 33c: a cleanup with no kind passed: {output}")
+    _other_principal = _derived_with()
+    _other_principal["cleanup"]["runsAs"] = "ciUsername"
+    code, output = _verdict(_fleet(retention=_other_principal))
+    check(code == 1 and "grants `delete` to" in output,
+          f"ARM 33c: a cleanup running as an account the ACL does not grant `delete` passed: {output}")
+    _unnamed_deleter = _derived_with()
+    _unnamed_deleter["deleters"][1].pop("governedBy")
+    code, output = _verdict(_fleet(retention=_unnamed_deleter))
+    check(code == 1 and "names neither the cleanup" in output
+          and "no `deleters` row is" in output,
+          f"ARM 33c: a present deleter attributed to NOTHING passed beside a named cleanup — a "
+          f"second deleter nobody derived a protected set for: {output}")
+    _second_job = _derived_with()
+    _second_job["deleters"][1]["governedBy"] = "SomeOtherJob"
+    code, output = _verdict(_fleet(retention=_second_job))
+    check(code == 1 and "accepts ONE deleting job" in output,
+          f"ARM 33c: a row governed by a SECOND job passed: {output}")
+    _absent_job = _derived_with()
+    _absent_job["deleters"][1]["present"] = False
+    code, output = _verdict(_fleet(retention=_absent_job))
+    check(code == 1 and "is a claim that the job runs it" in output,
+          f"ARM 33c: a row attributed to the cleanup and marked absent passed: {output}")
+    code, output = _verdict(_fleet(retention=_derived_with(authorizationBlockedBy=None)))
+    check(code == 1 and "no `authorizationBlockedBy`" in output,
+          f"ARM 33c: an unauthorized cleanup that does not say what it waits for passed: {output}")
+    code, output = _verdict(_fleet(retention=_derived_with(cleanupAuthorized=True)))
+    check(code == 1 and "One of the two is false" in output,
+          f"ARM 33c: `cleanupAuthorized: true` beside a non-empty blocker list passed: {output}")
+    code, output = _verdict(_fleet(retention=_derived_with(cleanupAuthorized=True,
+                                                           authorizationBlockedBy=[])))
+    check(code == 0, f"ARM 33c: an authorized cleanup with nothing blocking it was rejected: {output}")
+    # …and the chart arm still bites: a CronJob beside the registry is RED under this rule too.
+    code, output = _verdict(_fleet(retention=dict(_derived)),
+                            extra_chart=("gc.yaml", "kind: CronJob\n"))
+    check(code == 1 and "renders a CronJob" in output,
+          f"ARM 33c: a CronJob beside the registry passed under `derived-protected-set` — the "
+          f"named cleanup became a licence for an unnamed one: {output}")
     _loose = json.loads(json.dumps(_derived))
     _loose["protectedSet"]["axes"][0]["onIncomplete"] = "warn"
     code, output = _verdict(_fleet(retention=_loose))
@@ -7482,10 +7663,10 @@ ingress:
     # 🚨 A `fleet-unlockable` host needs NO `publishes` — its host-level declaration already says
     # our images live there, and its `retention` block already has to say what keeps them. Without
     # this the accounting would demand a second declaration of the same fact on cr.meshweaver.cloud.
-    code, output = _accounting({"ghcr.example": {
-        "disposition": "fleet-unlockable", "reason": "ours",
-        "retention": {"rule": "derived-protected-set", "reason": "r", "protectedSet": {"axes": [
-            {"axis": "committed pins", "derivedFrom": "overlays", "onIncomplete": "refuse"}]}}}})
+    # (A well-formed `derived-protected-set` — named cleanup, enumeration, chart — so the only
+    # question left for this arm is the publication accounting.)
+    code, output = _accounting({"ghcr.example": _fleet(
+        retention=json.loads(json.dumps(_derived)))["cr.example"]})
     check(code == 0,
           f"ARM 34: a `fleet-unlockable` host was made to declare `publishes` as well, so the "
           f"accounting demands the same fact twice: {output}")
