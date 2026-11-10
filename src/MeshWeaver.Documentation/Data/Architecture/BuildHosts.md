@@ -558,9 +558,9 @@ retries themselves stay. With the delay on, apt 2.8 never re-queues a file that 
 has moved to its next mirror, so every `apt-get update` with a failing first mirror hung for good.
 `apply` ends in `check`, which refuses an Ubuntu source left on one host and mirror lists without
 that setting. The build then runs `prove-fallback`, which updates a copy of the sources whose first
-mirror refuses every connection. Measured on the base image, the next mirror served that update in
-about 10–20 s, and in about 50 s when the first mirror blackholes connections instead. A base image
-that regresses, or a fallback that stops working, therefore fails the BUILD rather than a run.
+mirror refuses every connection, and fails unless the next mirror serves it within the step's own
+300-second deadline. A base image that regresses, or a fallback that stops working, therefore fails
+the BUILD rather than a run.
 
 **`build-latest` follows the armed set.** On every tick, Deploy's job `handover` (after
 `image`) hands `build-latest` the newest armed set (policy `build-hosts-follow-latest`, [Policy Not Prose](../PolicyNotProse)):
