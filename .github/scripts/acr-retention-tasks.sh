@@ -20,6 +20,8 @@
 #   apply    push the record onto the registry                        (MUTATES — only through the
 #            governed `RegistryRetention` InstanceAction on the control instance, never a laptop)
 #   preflight  the apply interlocks alone: pause + current protection  (read-only, no Azure call)
+#   dry-run-report  read the newest completed RUN of every enabled dry-run task back as a
+#            per-repository report of what it would delete              (read-only; `verify` runs it)
 #
 # 🚨 THE GOVERNED PATH (MeshWeaver#3438, policy `registry-retention`). Nobody runs `apply` by hand:
 # the control instance's `RegistryRetention` action (`registryMode: verify|apply`) dispatches the
@@ -41,7 +43,7 @@ RECORD="$HERE/../acr-retention"
 TASKS="purge-old-images purge-old-ci-releases"
 
 usage() {
-  echo "usage: acr-retention-tasks.sh {show|record|verify|apply|preflight}" >&2
+  echo "usage: acr-retention-tasks.sh {show|record|verify|apply|preflight|dry-run-report}" >&2
   exit 2
 }
 
@@ -255,7 +257,78 @@ cmd_verify() {
     n=$(printf '%s\n' "$steps" | grep -c .)
     echo "  $n purge step(s) inspected; none passes --include-locked, so locked manifests are skipped."
   fi
+  # 🚨 THE RUN, NOT ONLY THE DEFINITION (MeshWeaver#3438). A dry-run task that is enabled exists to
+  # be READ: `dryRun.liftWhen` asks for a nightly run read back before `--dry-run` is dropped, and
+  # `verify` is the governed action's read-only mode, so it is where that read lives. An apply's own
+  # re-verify skips it — the run it would read predates the definition the apply just wrote.
+  if [ "${MW_ACR_JUST_APPLIED:-}" = "1" ]; then
+    echo "  dry-run report: not read in an apply's re-verify (the newest run predates this apply)."
+  else
+    cmd_dry_run_report || drift=1
+  fi
   return $drift
+}
+
+# The tasks the record runs as a dry-run REPORT: listed under `dryRun.tasks` while `dryRun.inForce`,
+# and recorded `Enabled`. Fails closed on a non-boolean switch, as declared_ahead does.
+dry_run_tasks() {
+  python3 -c "
+import json, sys
+d = json.load(open('$RECORD/tasks.json'))
+r = d.get('dryRun')
+if r is None:
+    print(''); sys.exit(0)
+if not isinstance(r, dict) or not isinstance(r.get('inForce'), bool):
+    sys.exit('dryRun.inForce is ' + repr(r.get('inForce') if isinstance(r, dict) else r) + ', not a JSON boolean')
+enabled = {t['name'] for t in d['tasks'] if str(t.get('status', '')).lower() == 'enabled'}
+print(' '.join(t for t in (r.get('tasks') or []) if t in enabled) if r['inForce'] else '')"
+}
+
+# 🚨 Every unreadable answer is a RED, never "nothing to report": no completed run, a run that did
+# not succeed, a log that cannot be fetched, or a log the reader cannot stand behind (see
+# acr-retention-dryrun-report.py). A report that reads "0 would be deleted" because the log was
+# empty is exactly the reading the dry run exists to replace.
+cmd_dry_run_report() {
+  local tasks task rc=0
+  tasks=$(dry_run_tasks) || { echo "::error::cannot read dryRun from $RECORD/tasks.json." >&2; return 1; }
+  if [ -z "$tasks" ]; then
+    echo "  dry-run report: no enabled task is recorded as a dry run, so there is no run to read."
+    return 0
+  fi
+  for task in $tasks; do
+    local runs run_id run_status run_created steps log
+    if ! runs=$(az acr task list-runs --registry "$REGISTRY" --name "$task" --top 20 \
+                  --query "[?status=='Succeeded' || status=='Failed' || status=='Error' || status=='Canceled' || status=='Timeout'] | sort_by(@, &createTime) | [-1].[runId,status,createTime]" \
+                  -o tsv); then
+      echo "::error::cannot list the runs of '$task' on '$REGISTRY' — nothing was read." >&2
+      echo "  This needs Microsoft.ContainerRegistry/registries/runs/read." >&2
+      rc=1; continue
+    fi
+    read -r run_id run_status run_created <<< "$runs"
+    if [ -z "${run_id:-}" ]; then
+      echo "::error::'$task' is recorded as an enabled dry run and has NO completed run to read."
+      rc=1; continue
+    fi
+    echo "  $task: newest completed run $run_id ($run_status, created $run_created)."
+    if [ "$run_status" != "Succeeded" ]; then
+      echo "::error::'$task' run $run_id ended '$run_status', so it reported nothing usable."
+      rc=1
+    fi
+    log="${TMPDIR:-/tmp}/acr-retention-run.$$.log"
+    if ! az acr task logs --registry "$REGISTRY" --run-id "$run_id" --no-format > "$log"; then
+      echo "::error::cannot read the log of '$task' run $run_id — nothing was read." >&2
+      echo "  This needs Microsoft.ContainerRegistry/registries/runs/listLogSasUrl/action." >&2
+      rm -f "$log"; rc=1; continue
+    fi
+    steps=$(grep -c -E "^[[:space:]]*-[[:space:]]+cmd:[[:space:]]+acr purge" "$RECORD/$task.yaml")
+    if [ "${steps:-0}" -eq 0 ]; then
+      echo "::error::no \`acr purge\` step was found in $RECORD/$task.yaml, so the run cannot be read against it."
+      rm -f "$log"; rc=1; continue
+    fi
+    python3 "$HERE/acr-retention-dryrun-report.py" --log "$log" --task "$task" --steps "$steps" || rc=1
+    rm -f "$log"
+  done
+  return $rc
 }
 
 # 🚨 THE RE-ENABLE INTERLOCK (MeshWeaver#3859, acceptance criterion 1).
@@ -425,5 +498,6 @@ case "${1:-}" in
     assert_pause_permits_enabling || exit 1
     assert_protection_current || exit 1
     echo "  preflight: nothing in the record's interlocks refuses an apply." ;;
+  dry-run-report) cmd_dry_run_report ;;
   *)      usage ;;
 esac
