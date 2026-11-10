@@ -6,9 +6,13 @@ namespace MeshWeaver.ComboVerifier;
 /// <para>Three directories belong to one run: the materialised combo (the work root), its composed
 /// module set beside it (<c>&lt;work root&gt;.modules</c>, MeshWeaver#4413) and the run's mesh-free
 /// bake (<c>&lt;work root&gt;.bake</c>, <see cref="DockerImageGate.BakeRootFor"/>). They are one unit: a
-/// Green deletes BOTH — deleting only the first left a whole module set (DLLs, closure files,
-/// native payloads) behind on every successful run — and anything else keeps BOTH, because the
-/// tree and the modules it ran against are exactly what an operator inspects next.</para>
+/// Green deletes all three — deleting only the first left a whole module set (DLLs, closure files,
+/// native payloads) behind on every successful run — and anything else keeps all three, because the
+/// tree, the modules and the bake it ran against are exactly what an operator inspects next.</para>
+///
+/// <para>A directory the run never created (a run that failed before its gate wrote a bake, a combo
+/// that declared no module) is neither deleted nor named: "kept for inspection" pointing at a
+/// directory that does not exist would send the operator to look for nothing.</para>
 /// </summary>
 public static class ComboWorkRoots
 {
@@ -23,11 +27,10 @@ public static class ComboWorkRoots
     {
         foreach (var directory in new[] { workRoot, modulesRoot, bakeRoot }.OfType<string>())
         {
+            if (!Directory.Exists(directory))
+                continue;
             if (exitCode == 0)
-            {
-                if (Directory.Exists(directory))
-                    Directory.Delete(directory, recursive: true);
-            }
+                Directory.Delete(directory, recursive: true);
             else
                 output.WriteLine($"kept for inspection: '{Path.GetFullPath(directory)}'");
         }

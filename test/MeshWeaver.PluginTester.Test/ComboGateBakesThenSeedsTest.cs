@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -41,12 +39,14 @@ public sealed class ComboGateBakesThenSeedsTest : IDisposable
     private string WorkRoot => Path.Combine(scratch, "slot-0");
     private string HostDir => Path.Combine(scratch, "host");
 
+    /// <summary>Creates an empty work root and gate host for one case.</summary>
     public ComboGateBakesThenSeedsTest()
     {
         Directory.CreateDirectory(WorkRoot);
         Directory.CreateDirectory(HostDir);
     }
 
+    /// <summary>Releases the pools and deletes the case's scratch tree.</summary>
     public void Dispose()
     {
         pools.Dispose();
@@ -172,6 +172,8 @@ public sealed class ComboGateBakesThenSeedsTest : IDisposable
         Assert.Single(docker.Containers);
     }
 
+    /// <summary>The three bake readings: no identity (died), identity without a bundle (nothing
+    /// compiled), identity with a bundle (a seed).</summary>
     [Fact]
     public void ReadBake_DistinguishesDiedEmptyAndSeeded()
     {
@@ -184,6 +186,23 @@ public sealed class ComboGateBakesThenSeedsTest : IDisposable
         Assert.Equal(DockerImageGate.BakeReading.NoBundles, DockerImageGate.ReadBake(dir));
         SealBake(dir, withBundle: true);
         Assert.Equal(DockerImageGate.BakeReading.Bundles, DockerImageGate.ReadBake(dir));
+    }
+
+    /// <summary>A bake root the run never created is neither deleted (no throw) nor named as kept,
+    /// on both settle paths.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void Settle_IgnoresABakeRootTheRunNeverCreated(int exitCode)
+    {
+        var bakeRoot = DockerImageGate.BakeRootFor(WorkRoot);
+        Assert.False(Directory.Exists(bakeRoot));
+        var output = new StringWriter();
+
+        ComboWorkRoots.Settle(exitCode, WorkRoot, null, output, bakeRoot);
+
+        Assert.DoesNotContain(bakeRoot, output.ToString());
+        Assert.Equal(exitCode != 0, Directory.Exists(WorkRoot));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────
