@@ -744,6 +744,21 @@ public sealed class IoPool : IIoPool, IDisposable
     /// action, the final <c>Subscribe</c>'s handlers. Compiler-generated lambda names carry their
     /// ENCLOSING method, so this names the consumer. Read by reflection over fields that hold the
     /// next observer; bounded, and best-effort by design (it is a diagnostic over library internals).
+    ///
+    /// <para>🚨 <b>An observer already on the chain is never the next step</b> (MeshWeaver#7992). An Rx
+    /// sink that keeps its UPSTREAM subscription in a field of its own — <c>Finally</c>'s
+    /// <c>_sourceDisposable</c>, declared before the inherited <c>_observer</c> — holds the sink above it,
+    /// which is an observer too. Taking it as "next" found a step already seen and ended the walk, so
+    /// every chain stopped at its first <c>.Finally</c> and the consumer below it was never named
+    /// (<c>EaGraphAuth.AddedAccountIds</c>: <c>… → Finally._ (MeshServiceProvider.Dispose)</c>, and no
+    /// more). The walk now passes over observers it has already visited and follows the downstream
+    /// one.</para>
+    ///
+    /// <para>🚨 <b>Each step carries its own counters</b> — the integer and boolean fields its type
+    /// declares, e.g. <c>Count._ [_remaining=1]</c> for a <c>Take(1)</c>. That is what tells the two
+    /// ways a one-shot read stays attached apart: <c>_remaining=1</c> means its answer never reached
+    /// it; <c>_remaining=0</c> means the answer was handed downstream and the call into the consumer
+    /// never returned, so <c>Take</c> never got to complete and dispose its upstream.</para>
     /// </summary>
     private static string DescribeObserverChain(object observer)
     {
@@ -761,6 +776,7 @@ public sealed class IoPool : IIoPool, IDisposable
             var name = Bare(type.Name);
             var outer = type.DeclaringType is { } d ? Bare(d.Name) + "." : "";
             var delegates = System.Collections.Immutable.ImmutableList<string>.Empty;
+            var counters = System.Collections.Immutable.ImmutableList<string>.Empty;
             object? next = null;
             for (var t = type; t is not null && t != typeof(object); t = t.BaseType)
             {
@@ -775,13 +791,21 @@ public sealed class IoPool : IIoPool, IDisposable
                     if (value is Delegate del && del.Method.DeclaringType is { } owner
                         && !(owner.FullName ?? owner.Name).StartsWith("System.", StringComparison.Ordinal))
                         delegates = delegates.Add($"{owner.FullName ?? owner.Name}.{del.Method.Name}");
+                    else if (t == type && value is int or long or bool)
+                        // The step's OWN state only (never a base type's bookkeeping): a Take's
+                        // `_remaining`, a sink's done/has-value flags.
+                        counters = counters.Add(string.Create(CultureInfo.InvariantCulture, $"{f.Name}={value}"));
                     else if (next is null && value is not null && value != current
+                             // An observer already on the chain is the sink ABOVE this one, held as its
+                             // upstream subscription (Finally's `_sourceDisposable`) — never the next step.
+                             && !seen.Contains(value)
                              && value.GetType().GetInterfaces().Any(i =>
                                  i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IObserver<>)))
                         next = value;
                 }
             }
-            steps = steps.Add(delegates.Count == 0 ? outer + name : $"{outer}{name} ({string.Join(", ", delegates)})");
+            var step = delegates.Count == 0 ? outer + name : $"{outer}{name} ({string.Join(", ", delegates)})";
+            steps = steps.Add(counters.Count == 0 ? step : $"{step} [{string.Join(", ", counters)}]");
             current = next;
         }
         return steps.Count == 0 ? "(unavailable)" : string.Join(" → ", steps);
