@@ -1706,37 +1706,42 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // reader that blocks holds only itself. The values a reader is handed INSIDE its own
             // Subscribe call — the Replay(1) hydration, on the subscribing thread — stay inline,
             // exactly as before, so a reader still holds the current node when its subscribe
-            // returns. The subject's own drain is single-threaded, so nothing reaches the lane
-            // while an inline delivery is still running, and order holds across the switch.
+            // returns.
+            //
+            // Order across that switch: the entry's ReplaySubject hands this reader's notifications
+            // to ONE scheduled observer, drained by one thread at a time, so inline and lane
+            // deliveries never overlap within a drain. But a live value can be drained to the lane
+            // by the producing thread and a LATER one drained by the subscribing thread before its
+            // Subscribe returns (review of #8061). So the switch is one-way: once anything has gone
+            // to the lane, everything after it goes to the lane too, behind it.
             var lane = new Subject<System.Reactive.Notification<MeshNode>>();
             var subscribingThread = Environment.CurrentManagedThreadId;
             var subscribing = 1;
+            var laned = 0;
 
-            // A reader that throws from OnNext is named, never allowed to end the lane's pool
-            // thread or the turn that produced the value (where SetCurrent used to log it).
-            void DeliverValue(MeshNode value)
+            // A reader that throws from ANY of its callbacks is named, never allowed to escape. On
+            // the lane an escaping throw ends ObserveOn's drain inside a pool task, where it becomes
+            // an unobserved task exception: nothing logs it, and this reader's lane is gone with it
+            // (measured with the guard removed: the host survives, the throw leaves no trace). Every
+            // arm goes through this one guard, so none can be left out.
+            void Notify(string what, Action deliver)
             {
-                try { observer.OnNext(value); }
+                try { deliver(); }
                 catch (Exception thrown)
                 {
                     logger.LogWarning(thrown,
-                        "MeshNodeStreamCache: a reader of {Path} threw while receiving a value; "
-                        + "the other readers of the path are still told", path);
+                        "MeshNodeStreamCache: a reader of {Path} threw while receiving {What}; "
+                        + "the other readers of the path are still told", path, what);
                 }
             }
+
+            void DeliverValue(MeshNode value) => Notify("a value", () => observer.OnNext(value));
 
             void DeliverTerminal(Exception error)
             {
                 if (Volatile.Read(ref detached) != 0)
                     return;
-                try { observer.OnError(error); }
-                catch (Exception thrown)
-                {
-                    logger.LogWarning(thrown,
-                        "MeshNodeStreamCache: a reader of {Path} threw while receiving its "
-                        + "terminal ({Terminal}); the other readers of the path are still told",
-                        path, error.Message);
-                }
+                Notify($"its terminal ({error.Message})", () => observer.OnError(error));
             }
 
             // Runs on the reader's lane, off the producing turn, one notification at a time.
@@ -1766,19 +1771,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         DeliverValue(notification.Value);
                         return;
                     case System.Reactive.NotificationKind.OnCompleted:
-                        observer.OnCompleted();
+                        Notify("its completion", observer.OnCompleted);
+                        return;
+                    // A RETIRED entry is not an answer: move this reader to the current entry.
+                    // Already off the retiring turn (the change feed's publisher), which matters
+                    // because the attachment may open a fresh upstream, i.e. post a SubscribeRequest.
+                    case System.Reactive.NotificationKind.OnError when notification.Exception is ReadEntryRetiredException:
+                        Attach(path, observer, link);
+                        return;
+                    case System.Reactive.NotificationKind.OnError when notification.Exception is { } error:
+                        if (entry.EndedByForce)
+                            _releaseLane.Refuse<System.Reactive.Unit>(() => error).Subscribe(_ => { }, _ => DeliverTerminal(error));
+                        else
+                            DeliverTerminal(error);
                         return;
                 }
-                var error = notification.Exception!;
-                // A RETIRED entry is not an answer: move this reader to the current entry. Already
-                // off the retiring turn (the change feed's publisher), which matters because the
-                // attachment may open a fresh upstream, i.e. post a SubscribeRequest.
-                if (error is ReadEntryRetiredException)
-                    Attach(path, observer, link);
-                else if (entry.EndedByForce)
-                    _releaseLane.Refuse<System.Reactive.Unit>(() => error).Subscribe(_ => { }, _ => DeliverTerminal(error));
-                else
-                    DeliverTerminal(error);
             }
 
             var laneSub = lane.ObserveOn(TaskPoolScheduler.Default)
@@ -1788,10 +1795,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 sub = entry.Replay.Subscribe(
                     value =>
                     {
-                        if (Volatile.Read(ref subscribing) == 1 && Environment.CurrentManagedThreadId == subscribingThread)
+                        if (Volatile.Read(ref subscribing) == 1
+                            && Volatile.Read(ref laned) == 0
+                            && Environment.CurrentManagedThreadId == subscribingThread)
+                        {
                             DeliverValue(value);
-                        else
-                            lane.OnNext(System.Reactive.Notification.CreateOnNext(value));
+                            return;
+                        }
+                        Volatile.Write(ref laned, 1);
+                        lane.OnNext(System.Reactive.Notification.CreateOnNext(value));
                     },
                     error => lane.OnNext(System.Reactive.Notification.CreateOnError<MeshNode>(error)),
                     () => lane.OnNext(System.Reactive.Notification.CreateOnCompleted<MeshNode>()));

@@ -328,10 +328,13 @@ subject, on the pool. Every notification after the reader's own subscribe call (
 terminal, completion) goes down that lane in order, so the producing turn returns at once and a
 reader that blocks holds only itself. The values a reader is handed INSIDE its subscribe call (the
 `Replay(1)` hydration, on the subscribing thread) are still delivered inline, so a reader still
-holds the current node when its subscribe returns. The subject's own drain is single-threaded, so
-nothing reaches the lane while an inline delivery is running, and order holds across the switch. A
-forced end still leaves the reader's lane for the shared `ReleaseLane`, one terminal at a time
-(above). A reader that throws from `OnNext` is named in a Warning and does not end the lane.
+holds the current node when its subscribe returns. The subject drains a reader's notifications on
+one thread at a time, but a live value can be drained to the lane by the producing thread and a
+later one by the subscribing thread before its subscribe returns. So the switch is one-way: once
+anything has gone to the lane, everything after it goes there too, behind it. A forced end still
+leaves the reader's lane for the shared `ReleaseLane`, one terminal at a time (above). A reader
+that throws from any callback is named in a Warning and does not end the lane; unguarded, the throw
+would end the lane inside a pool task as an unobserved exception that nothing logs.
 
 This is pinned by `AReaderNeverRunsOnTheSyncHubTurnThatDeliversItsValueTest`. Two readers read one
 existing node; on the node's next value the first parks in its `OnNext`. The second must hear that
