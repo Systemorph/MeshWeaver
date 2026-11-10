@@ -948,14 +948,18 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
             // caller that leased the generation (TryLeaseModuleService) finishes on live services: the
             // disposal then runs when the last lease is released (MeshWeaver#6715).
             generation.Services?.Dispose();
-            // Retired twice: the first retirement already waits for this context's quiescence.
-            if (pendingUnloads.TryGetValue(generation.Context, out var first))
-                return Reported(first, budget);
-            var pending = new PendingUnload(generation.Context, RetireCore(generation.Context));
+            // The slot is reserved BEFORE the retirement is recorded: a context records ONE retirement
+            // (its sentinel is set once), so a second Retire of the same generation must not record
+            // another that could never be collected. Retired twice: the first retirement already waits
+            // for this context's quiescence, and its outcome is the answer.
+            var pending = new PendingUnload(generation.Context);
             if (!pendingUnloads.TryAdd(generation.Context, pending))
-                return pendingUnloads.TryGetValue(generation.Context, out var raced)
-                    ? Reported(raced, budget)
-                    : Observable.Return(true);
+                return pendingUnloads.TryGetValue(generation.Context, out var first)
+                    ? Reported(first, budget)
+                    // The first retirement has just ended — unloaded, failed or torn down, and which
+                    // is not known here. Never answer "unloaded" on no evidence.
+                    : Observable.Return(false);
+            pending.Retirement = RetireCore(generation.Context);
             // Registered BEFORE the wait subscribes, so the teardown always finds a wait it must end.
             // Quiesced hops to the task pool, so the unload never runs on the thread that released the
             // last lease (or under the registry's lock).
@@ -1029,10 +1033,11 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
 
     // One retired generation waiting for its lease's release. Holds the CONTEXT (what the unload needs),
     // never the generation record, and leaves the registry the moment it is unloaded or torn down.
-    private sealed class PendingUnload(ModuleLoadContext context, CollectibleContextUnloads.Retirement? retirement)
+    private sealed class PendingUnload(ModuleLoadContext context)
     {
         public ModuleLoadContext Context { get; } = context;
-        public CollectibleContextUnloads.Retirement? Retirement { get; } = retirement;
+        // Set once, by the Retire that reserved the slot, before its wait subscribes.
+        public CollectibleContextUnloads.Retirement? Retirement { get; set; }
         public System.Reactive.Disposables.SingleAssignmentDisposable Watch { get; } = new();
         public System.Reactive.Subjects.AsyncSubject<bool> Unloaded { get; } = new();
         public int ReportedLate;
