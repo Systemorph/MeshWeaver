@@ -428,9 +428,10 @@ public sealed class InstanceComboAssembler
                 if (verdict.Failed is not null)
                     return Observable.Return(new ModuleOutcome(plan, verdict.Failed, Absent: false));
 
+                var withDebt = WithKnownDebt(verdict.Entry, spec, snapshot, plan.Module.ModuleId);
                 return filePool.InvokeBlocking(ct =>
                         WriteModule(workRoot, plan.Module.ModuleId, files, ct))
-                    .Select(written => new ModuleOutcome(plan, verdict.Entry with
+                    .Select(written => new ModuleOutcome(plan, withDebt with
                     {
                         Status = ModuleAssemblyStatus.Materialized,
                         FileCount = files.Count,
@@ -451,6 +452,37 @@ public sealed class InstanceComboAssembler
                     Error = $"{exception.GetType().Name}: {exception.Message}",
                 }, Absent: false));
             });
+    }
+
+    /// <summary>
+    /// The entry with the known debt its source repository declares for it (MeshWeaver#4413) —
+    /// read only from a WHOLE-REPOSITORY fetch (a package folder), the one shape whose tree carries
+    /// the repository root the file lives at. A malformed file is recorded as such and honours
+    /// nothing: a guessed subset could excuse a failure the repository never listed.
+    /// </summary>
+    private ModuleAssembly WithKnownDebt(
+        ModuleAssembly entry, FetchSpec spec, RepoSnapshot snapshot, string moduleId)
+    {
+        if (spec.FolderFilter is null || spec.Subdirectory is not null)
+            return entry;
+        try
+        {
+            var debt = ComboKnownDebt.ForModule(snapshot, spec.FolderFilter, moduleId);
+            if (debt.Count > 0)
+                options.Output.WriteLine(
+                    $"  debt {moduleId}: {debt.Count} known-debt entr(ies) declared in "
+                    + $"{ComboKnownDebt.FileName} @ {snapshot.CommitSha}");
+            return entry with { KnownDebt = [.. debt.Select(d => d.ToString())] };
+        }
+        catch (FormatException exception)
+        {
+            return entry with
+            {
+                KnownDebtError = $"{ComboKnownDebt.FileName} in '{spec.RepositoryUrl}' at "
+                                 + $"{snapshot.CommitSha} is malformed, so no known debt is "
+                                 + $"honoured for '{moduleId}': {exception.Message}",
+            };
+        }
     }
 
     private static string AbsentError(FetchSpec spec, string gitRef) =>

@@ -293,6 +293,25 @@ in-region registry, then it is cached. The Deployment uses `strategy: Recreate`,
 needs a second 28 GiB node for a surge. The cost is a short gap, which callers absorb as a failed
 call.
 
+That gap also opens whenever the pod's NODE goes away, and with one replica it lasts the whole
+preload. On memex the pod was replaced three times in five days with no error and no restart, each
+time on a newer `silos` instance: the cluster autoscaler was consolidating the pool under it
+(MeshWeaver#7678). So an instance that runs the service sets the autoscaler's own veto through the
+chart's `podAnnotations`:
+
+```yaml
+podAnnotations:
+  cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+```
+
+The value must be the string `"false"`. An unquoted `false` is a YAML boolean, and the API server
+refuses it as an annotation value. The veto stops only scale-down: a node-image upgrade drain, a
+node failure or real node pressure still move the pod. Its cost is that the one node hosting the
+pod is never consolidated away. A PodDisruptionBudget with `minAvailable: 1` was deliberately not
+used, because it would also block every upgrade drain until someone deleted the pod by hand. In the
+estate repository, `scripts/check-scale-down-protection.py` holds the setting on each chart release
+record that declares it.
+
 ## Latency
 
 **Not yet measured on the fleet's nodes.** The helm test (below) prints the time of every call,
