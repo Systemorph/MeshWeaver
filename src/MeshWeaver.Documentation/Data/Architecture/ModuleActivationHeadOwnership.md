@@ -127,7 +127,13 @@ proposed that as the mesh's module set. Now:
   is skipped"); the next read that sees it whole restores it;
 - so is a module that has records and whose `<Name>.json` exists but cannot be read — that file may
   be an older image's install or uninstall, and a stale legacy-aggregate row behind it must not
-  decide in its place (the aggregate's own write time is its time now, never the unreadable file's);
+  decide in its place (the aggregate's own write time is its time now, never the unreadable file's).
+  That drop is reported in the entry fault's OWN line, which already says the module is not loaded
+  from this read — one fault is one line (#8049): a second "is NOT loaded" line for the same file
+  was filed as a second incident. The line's remedy follows the fault: a refused open or read (an
+  `IOException` or `UnauthorizedAccessException`, e.g. `EAGAIN` from the SMB transport) says nothing
+  about the file's bytes, so nothing needs re-installing and the next read that opens it restores the
+  module; only content that is not the file's own entry is repaired by a re-install;
 - a `<Name>.json` that does not hold ITS OWN entry — JSON `null`, an entry with no name, or an entry
   naming a different module — is corrupt exactly as a record that does not hash to its own name is:
   reported, keyed by the FILE's name, and never accepted under the other module's name (sorted
