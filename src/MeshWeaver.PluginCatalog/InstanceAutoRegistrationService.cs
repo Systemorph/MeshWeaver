@@ -51,6 +51,17 @@ public record PluginRegistryCredential
     /// response — what this installation is entitled to pull, shown in Settings. Null when the
     /// registry predates plans; the registry is the authority either way.</summary>
     public string? Plan { get; init; }
+
+    /// <summary>
+    /// SHA-256 hex of the registration key (<c>mwr_…</c>) this installation last presented with
+    /// SUCCESS — the key it registered with, or the one it redeemed for its plan afterwards
+    /// (<see cref="InstanceRegistrationPayloads.PlanRedeemRoute"/>). A configured
+    /// <c>PluginCatalog:BootstrapKey</c> whose hash differs is a key this installation has not used
+    /// yet, so an already-registered installation redeems it once; the same key on every later boot
+    /// is recognised here and never presented again. Null for a credential written before redemption
+    /// existed, or from an OPEN registration.
+    /// </summary>
+    public string? PresentedKeyHash { get; init; }
 }
 
 /// <summary>Where auto-registration credentials live and how a registry URL maps to a node id.</summary>
@@ -635,6 +646,27 @@ public sealed class InstanceAutoRegistrationService(
         return (RegistrationPreflight.Register, null);
     }
 
+    /// <summary>
+    /// Whether an ALREADY-REGISTERED installation owes the registry a plan redemption of its
+    /// configured bootstrap key — PURE. A fleet machine registers OPEN (free) the moment it is
+    /// installed, and only its enrolment afterwards hands it the plan-bearing key; until 2026-11 the
+    /// stored credential short-circuited everything and the key was never presented, so a global
+    /// administrator raised each such plan by hand. Owed exactly when a key of the registration
+    /// shape is configured, a credential is stored, and that credential does not record THIS key as
+    /// already presented (<see cref="PluginRegistryCredential.PresentedKeyHash"/>) — so it is
+    /// presented once, never on every boot.
+    /// </summary>
+    /// <param name="bootstrapKey">The configured bootstrap key, if any.</param>
+    /// <param name="credential">The stored credential, if any.</param>
+    internal static bool OwesPlanRedemption(string? bootstrapKey, PluginRegistryCredential? credential)
+    {
+        var key = bootstrapKey?.Trim() ?? "";
+        if (credential is null || !RegistrationKeys.HasKeyShape(key))
+            return false;
+        return string.IsNullOrWhiteSpace(credential.PresentedKeyHash)
+            || !InstanceKeys.HashEquals(InstanceKeys.Hash(key), credential.PresentedKeyHash);
+    }
+
     /// <summary>What the registration pre-flight decided.</summary>
     internal enum RegistrationPreflight
     {
@@ -708,6 +740,80 @@ public sealed class InstanceAutoRegistrationService(
             }
             return Registered(Register(options, registry, bootstrapKey));
         });
+    }
+
+    /// <summary>
+    /// Presents the configured bootstrap key to the registry as a PLAN REDEMPTION for this
+    /// already-registered installation (<see cref="InstanceRegistrationPayloads.PlanRedeemRoute"/>):
+    /// the registry raises the instance to the key's plan when it ranks higher, never lower. On an
+    /// answer that applied it (upgraded, or already on that plan) the stored credential records the
+    /// plan and the key's hash, so the key is never presented again. Every refusal — the key spent,
+    /// expired or revoked (401), a lower plan (409), a registry that predates the route (404), no
+    /// answer — is logged at Warning naming what would fix it and does NOT block the install phase:
+    /// the instance keeps the plan it has, which is what it had before the key arrived.
+    /// </summary>
+    private IObservable<Unit> RedeemPlan(
+        PluginRegistryReference registry, MeshNode existing, PluginRegistryCredential stored, string bootstrapKey)
+    {
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var client = hub.ServiceProvider.GetRequiredService<InstanceRegistrationClient>();
+        var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
+        var instanceKey = protector is null ? stored.ProtectedKey : protector.Unprotect(stored.ProtectedKey);
+        if (string.IsNullOrWhiteSpace(instanceKey))
+        {
+            logger.LogWarning(
+                "A registration key is configured for plan redemption at {Url}, but the stored instance key at {Path} "
+                + "could not be decrypted — was the master key changed? The plan stays as it is.",
+                registry.Url, existing.Path);
+            return Observable.Return(Unit.Default);
+        }
+        logger.LogInformation(
+            "This installation is registered at {Url} as '{InstanceId}' (plan {Plan}) and a registration key it has "
+            + "not presented yet is configured — redeeming it for the key's plan (an upgrade only).",
+            registry.Url, stored.InstanceId, stored.Plan ?? "unknown");
+        return client.RedeemPlanKey(registry.Url, instanceKey!, bootstrapKey)
+            .SelectMany(answer => accessService.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(existing.Path)
+                    .Update(current => current with
+                    {
+                        Content = current.ContentAs<PluginRegistryCredential>(hub.JsonSerializerOptions) is { } held
+                            ? held with
+                            {
+                                Plan = answer.Plan ?? held.Plan,
+                                PresentedKeyHash = InstanceKeys.Hash(bootstrapKey),
+                            }
+                            : current.Content,
+                    }))
+                .Select(_ =>
+                {
+                    logger.LogInformation(
+                        "Plan redemption at {Url}: instance '{InstanceId}' {Outcome} — plan {Plan}.",
+                        registry.Url, answer.InstanceId, answer.Outcome, answer.Plan ?? "unknown");
+                    return Unit.Default;
+                }))
+            .Catch((InstanceRegistrationException ex) =>
+            {
+                logger.LogWarning(
+                    "Plan redemption at {Url} was refused ({Status}): {Reason} The plan stays as it is. "
+                    + "{Fix}",
+                    registry.Url, (int)ex.StatusCode, ex.Message, ex.StatusCode switch
+                    {
+                        HttpStatusCode.Unauthorized =>
+                            "The registration key is spent, expired or revoked (or this instance's key is not accepted) — "
+                            + "ask the registry's platform admin for a fresh key, or remove PluginCatalog:BootstrapKey.",
+                        HttpStatusCode.Conflict =>
+                            "The key's plan does not raise this instance's — a key never lowers a plan.",
+                        HttpStatusCode.NotFound =>
+                            "That registry predates plan redemption — a platform admin there raises the plan by hand.",
+                        _ => "Retried on the next boot.",
+                    });
+                return Observable.Return(Unit.Default);
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "Plan redemption at {Url} failed — the plan stays as it is; retried on the next boot.", registry.Url);
+                return Observable.Return(Unit.Default);
+            });
     }
 
     /// <summary>
@@ -801,6 +907,9 @@ public sealed class InstanceAutoRegistrationService(
             {
                 if (existing is not null)
                 {
+                    var stored = existing.ContentAs<PluginRegistryCredential>(hub.JsonSerializerOptions);
+                    if (OwesPlanRedemption(bootstrapKey, stored))
+                        return RedeemPlan(registry, existing, stored!, bootstrapKey);
                     logger.LogDebug("Registry credential already stored at {Path} — no registration needed.",
                         credentialPath);
                     return Observable.Return(Unit.Default);
@@ -832,6 +941,9 @@ public sealed class InstanceAutoRegistrationService(
                                 ProtectedKey = protector.Protect(result.InstanceKey)!,
                                 RegisteredAt = DateTimeOffset.UtcNow,
                                 Plan = result.Plan,
+                                // The key this registration presented is spent for THIS installation:
+                                // recorded so a later boot never offers it for redemption.
+                                PresentedKeyHash = bootstrapKey.Length > 0 ? InstanceKeys.Hash(bootstrapKey) : null,
                             },
                         };
                         return Observable.Defer(() =>
