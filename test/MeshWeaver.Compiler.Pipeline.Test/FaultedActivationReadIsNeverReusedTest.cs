@@ -137,7 +137,9 @@ public class FaultedActivationReadIsNeverReusedTest : IDisposable
         using (UnreadableRecord.Hold(recordPath))
             ModuleActivationSidecar.Read(root, reasons.Add);
 
-        var reason = Assert.Single(reasons, r => r.StartsWith("Module record '", StringComparison.Ordinal));
+        // ONE line (MeshWeaver#7690): the record's own sentence is carried in the module's drop line.
+        var reason = Assert.Single(reasons);
+        Assert.Contains($"Module record '{recordPath}' could not be read (", reason);
         Assert.Contains("step: OPEN", reason);
         Assert.Contains(recordPath, reason);
         Assert.Contains("error number (HResult):", reason);
