@@ -5152,6 +5152,8 @@ def check_deleters_name_the_cleanup(where: str, retention: dict, deleters: list,
 # Job, any CronJob, and any other file spelling `garbage-collect` is still RED.
 GC_SWEEP_DESCRIPTION = "a blob garbage collection"
 GC_PROTECTED_BY = ("readOnlyWindow", "lease", "deleteUntagged")
+# A Helm `fail` ACTION: `{{ fail "…" }}` / `{{- fail "…" -}}` — not `{{/* fail … */}}`, not `failure`.
+GC_GUARD_ACTION = re.compile(r'\{\{-?\s*fail\s+"')
 
 
 def check_governed_job_row(where: str, deleter: dict, cleanup_kind: str,
@@ -5191,10 +5193,17 @@ def governed_job_shape(where: str, relative: str, body: str, chart_dir: Path) ->
     if any(re.match(r"^\s*schedule:", line) for line in executable):
         problems.append(f"{relative} carries a `schedule:`. The collect runs inside ONE window held "
                         "by the lease, never on a timer nobody holds it for.")
+    # The refusal has to be an executed `fail` action — never a YAML comment, a Helm `{{/* */}}`
+    # comment, or a word that merely contains "fail" (#8080 review): a guard that exists only as
+    # prose lets the Job render beside a registry still taking pushes, the R4 race.
     guarded = False
     for template in sorted(chart_dir.rglob("*.tpl")) + sorted(chart_dir.rglob("*.yaml")):
         for line in template.read_text(encoding="utf-8").splitlines():
-            if "fail" in line and "garbageCollect" in line and "readOnly" in line:
+            if line.strip().startswith("#"):
+                continue
+            action = GC_GUARD_ACTION.search(line)
+            if action and "garbageCollect" in line[action.start():] \
+                    and "readOnly" in line[action.start():]:
                 guarded = True
     if not guarded:
         problems.append(
@@ -5614,7 +5623,8 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
             swept_skipped += root_skipped
             sweep_coverage.append(f"{prefix.rstrip(':') or 'this repository'} "
                                   f"({root_files} swept, {root_skipped} skipped)")
-        gc_sites_hit: set[str] = set()
+        # `hits` is already aggregated over every swept checkout, so this loop runs ONCE;
+        # `gc_sites_hit` is initialized with the other per-run state above (#8080 review).
         for hit_path, number, description, line in hits:
             if description == GC_SWEEP_DESCRIPTION and hit_path in accepted_gc_sites:
                 gc_sites_hit.add(hit_path)
@@ -7537,6 +7547,13 @@ ingress:
     check(code == 1 and "`fail`s a `garbageCollect` without `readOnly`" in output,
           f"ARM 33d: a GC Job beside a chart that does not refuse a collect outside a read-only "
           f"window passed: {output}")
+    for _shape, _guard in (("a YAML comment", '# {{- fail "garbageCollect needs readOnly" }}\n'),
+                           ("a Helm comment", '{{/* fail "garbageCollect needs readOnly" */}}\n'),
+                           ("a word containing fail", 'failure: garbageCollect without readOnly\n')):
+        code, output = _gc_verdict(_gc_record(), job_body=_guard + _gc_body.split("\n", 1)[1])
+        check(code == 1 and "`fail`s a `garbageCollect` without `readOnly`" in output,
+              f"ARM 33d: a read-only guard that exists only as {_shape} was accepted as the "
+              f"chart's refusal (#8080 review): {output}")
     code, output = _gc_verdict(_gc_record(), more={f"{_CHART}/job-other.yaml": "kind: Job\n"})
     check(code == 1 and "job-other.yaml:1 renders a Job" in output,
           f"ARM 33d: a SECOND, unnamed Job beside the named one passed: {output}")
