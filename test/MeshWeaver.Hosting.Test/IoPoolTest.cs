@@ -912,6 +912,67 @@ public class IoPoolTest
                 "the leak line says what happened, and names the subscriber chain");
     }
 
+    /// <summary>
+    /// 🚨 The leak line names the consumer BELOW a <c>.Finally</c>, and says whether a one-shot read's
+    /// answer ever reached it (MeshWeaver#7992). In production the line for
+    /// <c>EaGraphAuth.AddedAccountIds</c> — <c>Query(...).Where(Initial).Take(1).Select(...).Finally(scope.Dispose)</c>
+    /// — ended at <c>Finally._ (MeshServiceProvider.Dispose)</c>: <c>Finally</c> keeps its upstream
+    /// subscription (the sink above it, itself an observer) in a field declared before the inherited
+    /// <c>_observer</c>, the walk took that as the next step, found it already visited and stopped. So the
+    /// one thing the line exists for — who consumes the leaked read — was missing, and nothing said
+    /// whether <c>Take(1)</c> had received its answer (the read never answered) or had handed it on into a
+    /// consumer that never returned.
+    ///
+    /// <para>This builds exactly that shape over a long-lived source that never answers, leaves it
+    /// unowned, and drains. The line must walk PAST the <c>Finally</c> to the selector of the operator
+    /// below it, and must read <c>_remaining=1</c> on the <c>Take</c> — the answer never arrived.
+    /// <b>Negative control, measured:</b> with the walk's already-visited check removed, the line ends at
+    /// <c>Finally._ (…FinallyOfTheOneShotRead)</c> and the first assertion fails.</para>
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task Leak_line_walks_past_Finally_to_the_consumer_and_reads_the_take_counter()
+    {
+        using var pool = new IoPool(2);
+        var subscribed = new AsyncSubject<Unit>();
+        // A long-lived source that never answers — the read the consumer below waits on.
+        var source = Observable.Create<int>(_ =>
+        {
+            subscribed.OnNext(Unit.Default);
+            subscribed.OnCompleted();
+            return System.Reactive.Disposables.Disposable.Empty;
+        });
+
+        // UNOWNED, and the production one-shot shape: Where → Take(1) → Select → Finally, then the
+        // consumer's own operator below the Finally.
+        using var sub = pool.SubscribeThroughPool(source)
+            .Where(x => x > 0)
+            .Take(1)
+            .Select(x => x + 1)
+            .Finally(FinallyOfTheOneShotRead)
+            .SelectMany(ConsumerBelowTheFinally)
+            .Subscribe(_ => { }, _ => { });
+
+        await subscribed.Should().Within(Timeout5).Emit("the source must be open before the drain",
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 0, Timeout5),
+            "the setup leaf must have released its permit, so the leg is attached past its subscribe");
+
+        pool.Drain();
+
+        var line = pool.UnownedLeakSites.Should().ContainSingle(
+            "the one-shot read was still attached when the pool was cancelled").Which;
+        line.Should().Contain(nameof(ConsumerBelowTheFinally),
+            "the walk must pass over the sink Finally holds as its upstream subscription and name the "
+            + "consumer below it — the line exists to name who consumes the leaked read");
+        line.Should().Contain("Count._ [_remaining=1]",
+            "the Take's own counter says the answer never reached it — which is what separates a read "
+            + "that never answered from a delivery that never returned (_remaining=0)");
+    }
+
+    private static void FinallyOfTheOneShotRead() { }
+
+    private static IObservable<int> ConsumerBelowTheFinally(int value) => Observable.Return(value);
+
     [Fact]
     public async Task Unbounded_fallback_runs_the_leaf_on_the_threadpool()
     {
