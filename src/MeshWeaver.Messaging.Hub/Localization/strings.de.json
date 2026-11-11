@@ -767,6 +767,7 @@
   "grid.clearSelection": "Auswahl aufheben",
   "grid.selectRow": "Zeile auswählen",
   "grid.selectedCount": "{0} ausgewählt",
+  "grid.allSelectedCount": "Alle {0} in dieser Ansicht ausgewählt",
   "comments.label": "Kommentare",
   "comments.add": "Kommentar hinzufügen",
   "comments.placeholder": "Kommentar schreiben…",

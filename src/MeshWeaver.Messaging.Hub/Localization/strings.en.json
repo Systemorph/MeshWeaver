@@ -767,6 +767,7 @@
   "grid.clearSelection": "Clear selection",
   "grid.selectRow": "Select row",
   "grid.selectedCount": "{0} selected",
+  "grid.allSelectedCount": "All {0} in this view selected",
   "comments.label": "Comments",
   "comments.add": "Add comment",
   "comments.placeholder": "Write your comment...",
