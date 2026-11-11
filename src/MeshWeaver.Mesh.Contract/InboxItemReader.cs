@@ -7,7 +7,8 @@ namespace MeshWeaver.Mesh;
 /// One inbox item as its source READ it for the reading view — what the item says, never stored.
 /// A mail is a subject, a sender and a <see cref="Body"/>; a chat is a list of
 /// <see cref="Messages"/>. Every text is PLAIN TEXT: the inbox renders it escaped, so a source
-/// never hands the portal markup it would run.
+/// never hands the portal markup it would run. The one exception is <see cref="BodyHtml"/>, which the
+/// inbox sanitises on the server and frames sandboxed — never renders as it arrived.
 /// </summary>
 public sealed record InboxItemContent
 {
@@ -25,6 +26,20 @@ public sealed record InboxItemContent
 
     /// <summary>The item's text, plain; empty for an item that is only <see cref="Messages"/>.</summary>
     public string Body { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The item's HTML body AS THE PROVIDER RETURNED IT (Graph's <c>body</c> with content type html, a Gmail
+    /// message's <c>text/html</c> part); empty when the item has none — the reading pane then shows
+    /// <see cref="Body"/>. Never stored and never shown as it is: the inbox sanitises it on the server and
+    /// frames it sandboxed (<c>MeshWeaver.Graph.MailHtml</c>). A reader still fills <see cref="Body"/>.
+    /// </summary>
+    public string BodyHtml { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The message's own INLINE parts a <c>cid:</c> reference in <see cref="BodyHtml"/> names, by content id
+    /// (without angle brackets), each a <c>data:image/…;base64,…</c> URL. Read with the message, never stored.
+    /// </summary>
+    public ImmutableDictionary<string, string> InlineImages { get; init; } = ImmutableDictionary<string, string>.Empty;
 
     /// <summary>A conversation's messages, oldest first; empty for a single mail.</summary>
     public ImmutableList<InboxItemMessage> Messages { get; init; } = [];

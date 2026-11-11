@@ -101,6 +101,8 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         var grid = (DataGridControl)(await stream.GetControlStream(GridArea).Should().Within(TestTimeouts.Convergence)
             .Match(c => c is DataGridControl, "the inbox renders as one grid", ct))!;
         grid.SelectionMode.Should().Be(DataGridRowSelection.Multiple, "the inbox is select-many");
+        grid.MultiLine.Should().Be(true,
+            "a row is three lines (sender and time, subject, preview); a one-line row height shows only the subject");
         grid.SelectionKey.Should().Be(InboxRows.KeyProperty);
         var rows = stream.GetDataStream<JsonElement>(
             new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)));
@@ -911,6 +913,39 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         InboxReadingView.Content(new InboxItemContent { Refusal = "Outlook is not connected" }, null,
                 System.Globalization.CultureInfo.InvariantCulture, texts)
             .Should().BeOfType<LabelControl>().Which.Data.Should().Be("Outlook is not connected");
+    }
+
+    /// <summary>
+    /// A mail with an HTML body is shown in its own layout — sanitised on the server and framed sandboxed —
+    /// with remote images held back and a line that offers them; asking shows them and the line goes. A mail
+    /// without HTML falls back to its plain text. Synthetic content only.
+    /// </summary>
+    [Fact]
+    public void AnHtmlMail_IsFramedSanitised_WithRemoteImagesBlockedUntilAsked()
+    {
+        var texts = new InboxReadingView.Texts("…", "failed", "From", "Account", "Received", "Open", p => "Open in " + p);
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        var content = new InboxItemContent
+        {
+            Subject = "Newsletter", From = "news@example.com", Body = "plain fallback",
+            BodyHtml = "<p onclick=\"alert(1)\">Hello</p><script>alert(2)</script><img src=\"https://tracker.example.com/p.gif\">",
+        };
+
+        var blocked = InboxReadingView.Parts(content, null, culture, texts);
+        blocked.Select(p => p.Id).Should().Equal("Subject", "Meta", "Images", "Body");
+        var frame = blocked.Single(p => p.Id == "Body").View.Should().BeOfType<SandboxedHtmlControl>().Subject;
+        var document = (string)frame.Document;
+        document.Should().Contain("<p>Hello</p>").And.NotContain("alert").And.NotContain("tracker.example.com");
+        frame.Title.Should().Be(texts.BodyTitle);
+
+        var shown = InboxReadingView.Parts(content, null, culture, texts, imagesShown: true);
+        shown.Select(p => p.Id).Should().Equal("Subject", "Meta", "Body");
+        ((string)shown.Single(p => p.Id == "Body").View.Should().BeOfType<SandboxedHtmlControl>().Subject.Document)
+            .Should().Contain("https://tracker.example.com/p.gif");
+
+        var plain = InboxReadingView.Parts(content with { BodyHtml = "  " }, null, culture, texts);
+        plain.Single(p => p.Id == "Body").View.Should().BeOfType<LabelControl>().Which.Data.Should().Be("plain fallback");
+        MeshWeaver.Messaging.LocalizationCatalog.Get("inbox.read.imagesBlocked", "de", 2).Should().Contain("2");
     }
 
     /// <summary>
