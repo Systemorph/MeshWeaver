@@ -577,12 +577,10 @@ internal static class PackageUpdateReconciler
     /// <see cref="PackageManifest.PreInstalled"/> declaration, which is taken from the candidate.
     ///
     /// <para>🚨 <b>The declaration is the candidate's, never the record's</b> (MeshWeaver.Plugins#4962).
-    /// <c>preInstalled</c> is a fact the PACKAGE states on its root at the version being adopted. A
-    /// record stamped while a package was pre-installed kept <c>preInstalled: true</c> through every
-    /// later adoption: measured on 2026-11-11, the CLI harness packages had dropped the flag six days
-    /// earlier, and their install records on two instances still claimed it after an adoption the
-    /// day before. A record that contradicts the package's own declaration tells every reader of the
-    /// inventory that the package belongs to the platform baseline when it is sold through a tier.</para></summary>
+    /// <c>preInstalled</c> is a fact the PACKAGE states on its root at the version being adopted. Kept
+    /// from the record, a package that stopped being pre-installed would stay recorded as part of the
+    /// platform baseline through every later adoption. The incident is told in
+    /// <c>Doc/Architecture/OnePartitionOneBookkeeping</c>.</para></summary>
     /// <param name="current">The record as it stands.</param>
     /// <param name="pkg">The candidate.</param>
     /// <param name="now">Now.</param>
