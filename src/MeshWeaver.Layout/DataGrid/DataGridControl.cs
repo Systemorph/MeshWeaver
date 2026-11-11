@@ -86,6 +86,14 @@ public record DataGridControl(object Data)
     /// </summary>
     public object? ItemSize { get; init; } = 50;
     /// <summary>
+    /// When true, every row is as tall as its tallest cell and a cell's content may span several lines
+    /// (a message list's sender, subject and preview). Off by default: a renderer may then give every
+    /// row ONE fixed line height (Fluent's DataGrid pins each cell to its row size and centres the
+    /// content, so a multi-line template cell shows only its middle line). Mutually exclusive with
+    /// <see cref="Virtualize"/>, which needs a fixed <see cref="ItemSize"/>. Accepts a boolean or a binding.
+    /// </summary>
+    public object? MultiLine { get; init; }
+    /// <summary>
     /// When true, columns can be resized by dragging their dividers. Defaults to <c>true</c>.
     /// </summary>
     public object? ResizableColumns { get; init; } = true;
@@ -215,6 +223,9 @@ public record DataGridControl(object Data)
     /// <summary>Returns a copy of the control with <paramref name="itemSize"/> as the row height used by the virtualizer.</summary>
     /// <param name="itemSize">Row height in pixels.</param>
     public DataGridControl WithItemSize(object itemSize) => This with { ItemSize = itemSize };
+    /// <summary>Returns a copy of the control whose rows grow to their content (<see cref="MultiLine"/>).</summary>
+    /// <param name="multiLine">The multi-line setting; defaults to <c>true</c> when omitted.</param>
+    public DataGridControl WithMultiLine(object? multiLine = null) => This with { MultiLine = multiLine ?? true };
     /// <summary>Returns a copy of the control with column resizing enabled or set to <paramref name="resizable"/>. Defaults to <c>true</c>.</summary>
     /// <param name="resizable">The resizable value; defaults to <c>true</c> when omitted.</param>
     public DataGridControl Resizable(object? resizable = null) => This with { ResizableColumns = resizable ?? true };

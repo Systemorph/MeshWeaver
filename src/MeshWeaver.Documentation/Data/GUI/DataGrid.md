@@ -116,6 +116,7 @@ new TemplateColumnControl(Controls.Button("View"))
 |---|---|---|
 | `WithVirtualize(bool)` | Enable virtual (windowed) scrolling | `false` |
 | `WithItemSize(int)` | Row height in pixels (used by virtualizer) | `50` |
+| `WithMultiLine(bool)` | Rows grow to their content; a cell may span several lines — see "Multi-line rows" below | `false` |
 | `Resizable(bool)` | Allow column resizing globally | `true` |
 | `WithPagination(bool)` | Enable built-in pagination | `false` |
 | `WithItemsPerPage(int)` | Rows per page | — |
@@ -232,6 +233,20 @@ new DataGridControl(largeDataset)
     .WithItemSize(40)
     .WithColumn(new PropertyColumnControl<int>    { Property = "id"    }.WithTitle("ID"))
     .WithColumn(new PropertyColumnControl<string> { Property = "value" }.WithTitle("Value"))
+```
+
+## Multi-line rows
+
+A row is ONE line high by default: the Blazor renderer (Fluent's DataGrid) pins every cell to its row
+size and centres what is inside, so a template cell that stacks several lines shows only its middle
+line and cuts the rest. A grid whose rows are several lines — a message list's sender and time,
+subject and preview — declares `WithMultiLine()`: every row is then as tall as its tallest cell.
+It cannot be combined with `WithVirtualize`, which needs the fixed `WithItemSize`.
+
+```csharp
+rows.BindGrid("messages", "No messages", reason => reason)
+    .WithMultiLine()
+    .WithColumn(new TemplateColumnControl(threeLineCell).WithTitle("Message"))
 ```
 
 ## Read-only report grid

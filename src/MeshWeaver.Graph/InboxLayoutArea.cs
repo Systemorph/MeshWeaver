@@ -1258,6 +1258,10 @@ public static class InboxLayoutArea
         var grid = rows.Select(set => (IEnumerable<InboxRow>)set)
             .BindGrid(InboxRows.GridId, host.Localize("inbox.band.empty"), reason => host.Localize("inbox.listFailed", reason))
             .WithRowSelection(InboxRows.SelectionId, InboxRows.KeyProperty, InboxRows.BlockedReasonProperty)
+            // A row is three lines (ItemCell): it must be as tall as its content. Without this the
+            // renderer pins every row to one line's height and shows only the subject (Plugins: the
+            // Blazor grid centred the three-line cell in 32px, so sender, time and preview were cut).
+            .WithMultiLine()
             // Unread rows carry their class (bold), as a mail client shows new mail.
             .WithRowClassProperty(InboxRows.RowClassProperty)
             // The medium the item came through, first, so a glance tells mail from a message from an
