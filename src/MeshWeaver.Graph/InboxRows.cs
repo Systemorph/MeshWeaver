@@ -411,8 +411,12 @@ public static class InboxRows
     /// <summary>The row property that carries the tags (<see cref="InboxRow.TagText"/>).</summary>
     public const string TagTextProperty = "tagText";
 
-    /// <summary>The style of one line of a row — one line, cut with an ellipsis where the column ends, never a horizontal scroll.</summary>
-    public const string LineStyle = "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto;";
+    /// <summary>
+    /// The style of one line of a row — one line, cut with an ellipsis where the column ends, never a horizontal scroll.
+    /// <c>max-width: 100%</c> is what makes the ellipsis happen: the row's stack does not stretch its lines, so without
+    /// it a line is as wide as its text and is clipped by the cell, not ended with "…" (measured on a live portal).
+    /// </summary>
+    public const string LineStyle = "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 100%; flex: 1 1 auto;";
 
     /// <summary>The style of an unread item's sender and subject — <see cref="LineStyle"/>, semibold, as a mail client shows new mail.</summary>
     public const string EmphasisStyle = LineStyle + " font-weight: 600;";

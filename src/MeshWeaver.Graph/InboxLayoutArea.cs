@@ -1277,7 +1277,7 @@ public static class InboxLayoutArea
             // The icon IS the header: a titled 72px column cut its own title to "S…". The icon carries the source's
             // name as its tooltip.
             .WithColumn(new TemplateColumnControl(Controls.Icon(new ContextProperty(InboxRows.SourceIconProperty)).WithWidth("20px"))
-                .WithTitle(string.Empty).WithWidth("48px").WithSortable(false));
+                .WithTitle(string.Empty).WithWidth("56px").WithSortable(false));
         // Outlook's message list: ONE column that reads like a mail client's row — who and when, what, and the
         // beginning of the body — so nothing is cut to a dozen characters and nothing scrolls sideways. A part a
         // row lacks takes no room: the state badge is hidden without a state (and for unread, which the bold
