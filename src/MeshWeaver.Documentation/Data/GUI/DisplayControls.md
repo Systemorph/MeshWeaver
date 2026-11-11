@@ -305,6 +305,39 @@ For a video use `Controls.Video`, which frames embed players itself.
 
 ---
 
+# Sandboxed HTML
+
+`Controls.SandboxedHtml(document, title)` shows a complete HTML document that came from OUTSIDE —
+a mail's own layout in the inbox's reading pane — in a frame with a fixed sandbox
+(`SandboxedHtmlFrame`): no scripts, no origin (no cookies, no storage, no access to the portal), no
+forms, no top navigation; a link opens a normal new tab, and no referrer is sent. Every renderer
+writes the document as the frame's `srcdoc` and those attributes — nothing else from the control.
+
+🚨 The control does NOT sanitise. `document` must already be safe, produced on the SERVER by a
+sanitiser. The inbox's is `MailHtml.Render(html, inlineImages, allowRemoteImages)`:
+
+- an allow-list parser keeps layout tags, attributes and CSS (including `<style>` blocks); script,
+  event handlers, forms and their controls, frames, `object`, `embed`, `meta`, `base`, `link` and
+  `svg` never survive;
+- a link keeps `http`, `https` or `mailto` and gets `target="_blank" rel="noopener noreferrer"`;
+- a resource (an image, a CSS `url(...)`) keeps a `cid:` reference only as the message's own inline
+  part, a `data:` URL only as a raster image, and a REMOTE address only once the viewer asked to show
+  images — until then it is dropped and counted (`BlockedRemoteImages`), because a remote image is a
+  tracking pixel;
+- the document carries its own Content-Security-Policy (`default-src 'none'`, no script, images only
+  from `data:` unless allowed) and a LIGHT page, as a mail client shows mail in dark mode too.
+
+```csharp
+var mail = MailHtml.Render(content.BodyHtml, content.InlineImages, allowRemoteImages: shown);
+Controls.Stack
+    .WithView(Controls.Label(blockedText), "Images")       // only when mail.BlockedRemoteImages > 0, with a "Show images" button
+    .WithView(Controls.SandboxedHtml(mail.Document, messageTitle), "Body")
+```
+
+The sandbox is the second line behind the sanitiser, never the only one.
+
+---
+
 # Audio
 
 `Controls.Audio(src)` is an in-place audio player: the control for a hand-built `<audio controls>`
