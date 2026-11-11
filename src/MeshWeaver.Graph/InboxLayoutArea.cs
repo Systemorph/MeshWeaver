@@ -1268,18 +1268,25 @@ public static class InboxLayoutArea
             // renderer pins every row to one line's height and shows only the subject (Plugins: the
             // Blazor grid centred the three-line cell in 32px, so sender, time and preview were cut).
             .WithMultiLine()
+            // The selection box shows on the row under the pointer (and once anything is ticked), as a mail client shows it.
+            .WithSelectionOnHover()
             // Unread rows carry their class (bold), as a mail client shows new mail.
             .WithRowClassProperty(InboxRows.RowClassProperty)
             // The medium the item came through, first, so a glance tells mail from a message from an
             // approval: a header and the source's name as the tooltip.
+            // The icon IS the header: a titled 72px column cut its own title to "S…". The icon carries the source's
+            // name as its tooltip.
             .WithColumn(new TemplateColumnControl(Controls.Icon(new ContextProperty(InboxRows.SourceIconProperty)).WithWidth("20px"))
-                .WithTitle(host.Localize("inbox.column.channel")).WithWidth("72px").WithSortable(false));
+                .WithTitle(string.Empty).WithWidth("48px").WithSortable(false));
         // Outlook's message list: ONE column that reads like a mail client's row — who and when, what, and the
         // beginning of the body — so nothing is cut to a dozen characters and nothing scrolls sideways. A part a
         // row lacks takes no room: the state badge is hidden without a state (and for unread, which the bold
         // says), the account is named only when several accounts feed the inbox. Ordered by date always: a
         // header sort would be a second, unbound ordering.
-        return grid.WithColumn(new TemplateColumnControl(ItemCell()).WithTitle(host.Localize("inbox.column.item")).WithSortable(false))
+        // The item track may shrink below its content (minmax(0, 1fr)): each line then ends in an ellipsis instead
+        // of widening the column past the page.
+        return grid.WithColumn(new TemplateColumnControl(ItemCell()).WithTitle(host.Localize("inbox.column.item"))
+                .WithWidth("minmax(0, 1fr)").WithSortable(false))
             // A click on a row OPENS it, as in a mail client — always INSIDE the portal, in the
             // inbox's reading view (InboxReadingView), never the provider's own client. (Ticking a box
             // and shift/cmd-clicks are selection gestures the grid keeps to itself.) Paged, newest first.

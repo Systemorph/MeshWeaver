@@ -189,6 +189,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         grid.SelectionMode.Should().Be(DataGridRowSelection.Multiple, "the inbox is select-many");
         grid.MultiLine.Should().Be(true,
             "a row is three lines (sender and time, subject, preview); a one-line row height shows only the subject");
+        grid.SelectionOnHover.Should().Be(true, "the box shows on the row under the pointer, as a mail client shows it");
         grid.SelectionKey.Should().Be(InboxRows.KeyProperty);
         var rows = stream.GetDataStream<JsonElement>(
             new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)));
