@@ -70,10 +70,12 @@ hosting-jobrunner-token`, `mounts live-only (1): /var/run/secrets/hosting-operat
 once the Secret behind that volume was deleted, the serving pods kept their already-mounted copy and every
 new pod stuck in `FailedMount`, roll after roll. A live-only volume is cleared the same deliberate way as
 a live-only env entry: the record states it (`liveOnlyVolumes[]`, declarative — it renders nothing),
-`retiredBy` ends it, and Reconcile's `RetireLiveOnlyVolume` remedy removes it (`hosting-volume-retire`,
-after proving the chart does not render it and no container reads its path). And a governed
-`DeleteClusterManifest` now refuses an object a live workload still uses, naming the workload, so the
-deletion cannot happen before the reference is gone.
+`retiredBy` ends it, and Reconcile's `RetireLiveOnlyVolume` remedy removes it. That remedy is the Hosting
+plugin's (Systemorph/MeshWeaver.Plugins#5358); its operator command is MeshWeaver.Deploy's
+`hosting-volume-retire` (Systemorph/MeshWeaver.Deploy#262), which first proves the chart does not render the
+volume and no container reads its path. The same MeshWeaver.Deploy change makes a governed
+`DeleteClusterManifest` refuse an object a live workload still uses, naming the workload, so the deletion
+cannot happen before the reference is gone. Until those land and run, this record field only STATES the volume.
 
 One exception, and it follows from the same mechanism rather than qualifying it: a key the LAST
 deploy rendered and the CURRENT chart does not is in the release's own manifest, so helm owned it

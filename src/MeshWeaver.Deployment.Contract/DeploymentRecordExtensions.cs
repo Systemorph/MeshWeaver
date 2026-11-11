@@ -651,7 +651,9 @@ public static class DeploymentRecordExtensions
     /// <summary>
     /// Records a pod volume (and its mounts) that exists only on the live Deployment (declarative — renders
     /// nothing). With <paramref name="retiredBy"/> set, Reconcile removes it once nothing renders it or reads
-    /// <paramref name="mountPath"/>.
+    /// <paramref name="mountPath"/>. Appends, like <see cref="WithInlineEnv"/>: one entry per pod volume
+    /// name is the caller's contract, and the retirement remedy refuses a volume retired twice by name
+    /// rather than choosing between two entries.
     /// </summary>
     public static DeploymentContent WithLiveOnlyVolume(this DeploymentContent d, string name, string mountPath, string? source = null, string? reason = null, string? retiredBy = null) =>
         d with { LiveOnlyVolumes = d.LiveOnlyVolumes.Add(new LiveOnlyVolume { Name = name, MountPath = mountPath, Source = source, Reason = reason, RetiredBy = retiredBy }) };
