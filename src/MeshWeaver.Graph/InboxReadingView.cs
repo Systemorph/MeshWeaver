@@ -29,11 +29,17 @@ namespace MeshWeaver.Graph;
 /// is stored. A stored item no reader handles is shown by its own page, embedded.</para>
 ///
 /// <para>🚨 Only the owner's OWN items are opened: the path must lie in the owner's partition,
-/// whatever the address says. Everything shown is PLAIN TEXT rendered escaped — a mail's markup
-/// never reaches the portal.</para>
+/// whatever the address says. Text is rendered escaped. A mail's HTML body
+/// (<see cref="InboxItemContent.BodyHtml"/>) is SANITISED on the server (<see cref="MailHtml"/>) and framed
+/// sandboxed (<see cref="SandboxedHtmlControl"/>) — no script runs, the frame has no origin, remote images
+/// stay blocked until the viewer asks for them (<see cref="ImagesShownId"/>), and the page is light as a
+/// mail client shows mail. A mail without HTML shows its plain text.</para>
 /// </summary>
 public static class InboxReadingView
 {
+    /// <summary>The data id of the reading view's "show remote images" choice — false until the viewer asks, per opened item.</summary>
+    public const string ImagesShownId = "inboxReadImagesShown";
+
     /// <summary>The one URL segment that names <paramref name="path"/> — base64url of its UTF-8 bytes. Pure.</summary>
     public static string ItemId(string path) => Base64Url.EncodeToString(Encoding.UTF8.GetBytes(path.Trim('/')));
 
@@ -103,7 +109,12 @@ public static class InboxReadingView
             OpenIn: host.Localize("inbox.read.openIn"),
             // The read answers on another thread, where the viewer's language is no longer ambient:
             // the locale is captured HERE and the provider's name filled in with it.
-            OpenInProvider: provider => LocalizationCatalog.Get("inbox.read.openInProvider", locale, provider));
+            OpenInProvider: provider => LocalizationCatalog.Get("inbox.read.openInProvider", locale, provider))
+        {
+            BodyTitle = host.Localize("inbox.read.bodyTitle"),
+            ShowImages = host.Localize("inbox.read.showImages"),
+            ImagesBlocked = count => LocalizationCatalog.Get("inbox.read.imagesBlocked", locale, count),
+        };
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxReadingView));
         IObservable<InboxItemContent> read;
         try
@@ -114,11 +125,15 @@ public static class InboxReadingView
         {
             read = Observable.Throw<InboxItemContent>(ex);
         }
+        // Remote images stay blocked until the viewer asks (a remote image is a tracking pixel); the
+        // choice lives in this area's data, so asking re-renders the same read, never re-reads the mail.
+        host.UpdateData(ImagesShownId, false);
+        var imagesShown = host.Stream.GetDataStream<bool>(ImagesShownId).StartWith(false).DistinctUntilChanged();
         // The template at once, the content when the read answers (Doc/GUI/DataBinding → "Templates
         // first, data later").
         return Observable.Return<UiControl?>(Page(Controls.Markdown(texts.Loading)))
             .Concat(read.Take(1)
-                .Select(content => (UiControl?)Page(Content(content, zone, culture, texts)))
+                .SelectMany(content => imagesShown.Select(shown => (UiControl?)Page(Content(content, zone, culture, texts, shown))))
                 .DefaultIfEmpty(Page(Controls.Markdown(texts.Failed)))
                 .Catch((Exception ex) =>
                 {
@@ -149,20 +164,31 @@ public static class InboxReadingView
 
     /// <summary>The texts a reading view shows, resolved on the render turn.</summary>
     internal sealed record Texts(string Loading, string Failed, string From, string Account, string Received,
-        string OpenIn, Func<string, string> OpenInProvider);
+        string OpenIn, Func<string, string> OpenInProvider)
+    {
+        /// <summary>The accessible name of the framed mail.</summary>
+        public string BodyTitle { get; init; } = "Message";
+
+        /// <summary>The label of the "show remote images" button.</summary>
+        public string ShowImages { get; init; } = "Show images";
+
+        /// <summary>The line that says how many remote images are held back.</summary>
+        public Func<int, string> ImagesBlocked { get; init; } = count => $"{count} remote image(s) blocked";
+    }
 
     /// <summary>
     /// One read item as controls: subject, who and when, the body (plain text, escaped, line breaks
     /// kept), a conversation's messages, and the provider's own link last. Pure.
     /// </summary>
-    internal static UiControl Content(InboxItemContent content, string? zone, CultureInfo culture, Texts texts)
+    internal static UiControl Content(InboxItemContent content, string? zone, CultureInfo culture, Texts texts, bool imagesShown = false)
         => content.Refusal is { Length: > 0 } refusal
             ? Controls.Label(refusal)
-            : Parts(content, zone, culture, texts)
+            : Parts(content, zone, culture, texts, imagesShown)
                 .Aggregate(Controls.Stack.WithVerticalGap(8), (view, part) => view.WithView(part.View, part.Id));
 
     /// <summary>The named parts of <see cref="Content"/>, in page order. Pure.</summary>
-    internal static ImmutableList<(string Id, UiControl View)> Parts(InboxItemContent content, string? zone, CultureInfo culture, Texts texts)
+    internal static ImmutableList<(string Id, UiControl View)> Parts(InboxItemContent content, string? zone, CultureInfo culture, Texts texts,
+        bool imagesShown = false)
     {
         string When(DateTimeOffset at) => DisplayTimeExtensions.ToDisplayTime(at, zone).ToString("g", culture);
         var parts = ImmutableList.Create<(string Id, UiControl View)>(
@@ -176,7 +202,22 @@ public static class InboxReadingView
             meta = meta.Add($"{texts.Received}: {When(received)}");
         if (!meta.IsEmpty)
             parts = parts.Add(("Meta", Controls.Label(string.Join(" · ", meta)).WithStyle("opacity: 0.75;")));
-        if (content.Body.Length > 0)
+        if (content.BodyHtml.Trim().Length > 0)
+        {
+            // The mail's own layout: sanitised here, on the server, and framed sandboxed (MailHtml).
+            var mail = MailHtml.Render(content.BodyHtml, content.InlineImages, imagesShown);
+            if (mail.BlockedRemoteImages > 0)
+                parts = parts.Add(("Images", Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8)
+                    .WithView(Controls.Label(texts.ImagesBlocked(mail.BlockedRemoteImages)).WithStyle("opacity: 0.75;"), "Text")
+                    .WithView(Controls.Button(texts.ShowImages).WithAppearance(Appearance.Lightweight)
+                        .WithReactiveClickAction(ctx =>
+                        {
+                            ctx.Host.UpdateData(ImagesShownId, true);
+                            return Observable.Return(System.Reactive.Unit.Default);
+                        }), "Show")));
+            parts = parts.Add(("Body", Controls.SandboxedHtml(mail.Document, texts.BodyTitle)));
+        }
+        else if (content.Body.Length > 0)
             parts = parts.Add(("Body", Text(content.Body)));
         for (var i = 0; i < content.Messages.Count; i++)
         {

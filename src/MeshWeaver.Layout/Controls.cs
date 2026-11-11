@@ -427,6 +427,15 @@ public static class Controls
     public static EmbedControl Embed(object src, object title) => new(src, title);
 
     /// <summary>
+    /// Creates a sandboxed HTML document (<see cref="SandboxedHtmlControl"/>) — a mail's own layout, framed with
+    /// no scripts and no origin. <paramref name="document"/> must already be sanitised on the server.
+    /// </summary>
+    /// <param name="document">The complete, sanitised document.</param>
+    /// <param name="title">The localized accessible name of the frame.</param>
+    /// <returns>A new <see cref="SandboxedHtmlControl"/>.</returns>
+    public static SandboxedHtmlControl SandboxedHtml(object document, object title) => new(document, title);
+
+    /// <summary>
     /// Creates a new instance of <see cref="MenuItemControl"/> with the specified title and icon.
     /// </summary>
     /// <param name="title">The title of the menu item.</param>
