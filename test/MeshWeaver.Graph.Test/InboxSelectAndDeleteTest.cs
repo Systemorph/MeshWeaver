@@ -150,7 +150,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         await Click(stream, MarkReadArea, "2 marked read.", ct);
         readState.Calls.Should().Contain(($"{ns}/rs1", owner, true)).And.Contain(($"{ns}/rs2", owner, true));
         readState.Calls.Should().NotContain(c => c.Path == $"{ns}/rs3", "an unticked row is never written");
-        (await stream.GetDataStream<DataGridSelectionState>(new JsonPointerReference(pointer)).FirstAsync().Timeout(TestTimeouts.Convergence))
+        (await stream.GetDataStream<DataGridSelectionState>(new JsonPointerReference(pointer)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
             .Keys.Count.Should().Be(2, "the selection stays, as in a mail client");
 
         await Click(stream, MarkUnreadArea, "2 marked unread.", ct);
