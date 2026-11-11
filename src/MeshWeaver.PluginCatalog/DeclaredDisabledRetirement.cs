@@ -354,6 +354,24 @@ public static class DeclaredDisabledRetirement
         return (PackageUninstall.PathAt(RequestIdFor(key, number)), null, number, attempts);
     }
 
+    /// <summary>The failed attempt with the highest attempt number (<see cref="RequestIdFor"/>'s
+    /// <c>-a{n}</c> suffix) — the one a new attempt supersedes; null when there is none. Pure.</summary>
+    /// <param name="failed">The install's failed attempts.</param>
+    internal static (string Path, PackageUninstallRequest Request)? LatestFailed(
+        IReadOnlyList<(string Path, PackageUninstallRequest Request)> failed) =>
+        failed.Count == 0
+            ? null
+            : failed.OrderByDescending(x => AttemptNumberOf(x.Path)).ThenByDescending(x => x.Path, StringComparer.Ordinal).First();
+
+    /// <summary>The attempt number a request path ends in (<c>…-a{n}</c>), or 0 when it ends in none. Pure.</summary>
+    /// <param name="path">A request path.</param>
+    internal static int AttemptNumberOf(string path)
+    {
+        var at = path.LastIndexOf("-a", StringComparison.Ordinal);
+        return at >= 0 && int.TryParse(path.AsSpan(at + 2), System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0;
+    }
+
     /// <summary>Whether this boot runs phase 1 for <paramref name="covered"/>'s attempt and that phase 1
     /// may need a restart: the package declares a module, the host has a restart path, and the attempt
     /// is new or still in its phase 1 — an attempt already past phase 1 states nothing again, and a
@@ -495,11 +513,15 @@ public static class DeclaredDisabledRetirement
         var (path, live, attempt, failedAttempts) = Attempt(covered, existing);
         if (live is not null)
             return Settle(hub, covered, path, logger, settleBudget).Select(s => s with { Written = false });
-        foreach (var failed in failedAttempts)
+        // 🚨 Only the attempt this one SUPERSEDES is reported (#8020): every earlier one was reported
+        // by the boot that superseded IT. Logging the whole history made one boot's line count grow with
+        // the attempt number — 100 boots against a standing refusal logged ~5,000 Errors on memex-cloud.
+        if (LatestFailed(failedAttempts) is { } superseded)
             logger.LogError(
                 "[FlagRetire] {Package}, declared off by the feature flag '{Flag}': the earlier retire {Path} was refused — {Failure}. "
-                + "Re-evaluating under the current declaration with a new attempt.",
-                covered.Record.Id, covered.Flag, failed.Path, failed.Request.Failure ?? "(no reason recorded)");
+                + "Re-evaluating under the current declaration with attempt {Attempt} ({Earlier} earlier attempt(s) refused before it).",
+                covered.Record.Id, covered.Flag, superseded.Path, superseded.Request.Failure ?? "(no reason recorded)",
+                attempt, failedAttempts.Count - 1);
         var id = RequestIdFor(key, attempt);
         var request = new PackageUninstallRequest
         {
