@@ -54,6 +54,13 @@ public sealed record InboxItemContent
     public string Provider { get; init; } = string.Empty;
 
     /// <summary>
+    /// The item's read state AT THE SOURCE when the reader knows it (Graph's <c>isRead</c>, Gmail's missing
+    /// <c>UNREAD</c> label); null when it does not. Opening an item whose state is <c>false</c> marks it read at
+    /// the source (<see cref="IInboxReadState"/>), as a mail client does.
+    /// </summary>
+    public bool? IsRead { get; init; }
+
+    /// <summary>
     /// Why the item cannot be shown, when it cannot — shown VERBATIM, so a refusal the reader chose
     /// to state ("Outlook is not connected — …"), never an exception's message. Null when it can.
     /// </summary>
@@ -101,4 +108,30 @@ public interface IInboxItemReader
     /// <param name="path">The item's node path.</param>
     /// <param name="viewer">The person reading — the inbox's owner.</param>
     IObservable<InboxItemContent> Read(IMessageHub hub, string path, string viewer);
+}
+
+/// <summary>
+/// How the inbox changes one item's READ STATE at its source — a mail's <c>isRead</c> in Graph, the
+/// <c>UNREAD</c> label in Gmail. Optional: a package registers it as a singleton beside its
+/// <see cref="IInboxItemReader"/> for the paths it owns; an item no service handles keeps the state its source
+/// gives it. Used when an item is OPENED (marked read, as a mail client does) and by the list's bulk
+/// Mark read / Mark unread. The source stays the one record of the state: nothing is stored in the mesh, and the
+/// list shows the change when its source answers it.
+/// </summary>
+public interface IInboxReadState
+{
+    /// <summary>Whether <paramref name="path"/> is one of this service's items — a pure test of the path's shape, never a read.</summary>
+    /// <param name="path">The item's node path.</param>
+    bool Handles(string path);
+
+    /// <summary>
+    /// Sets the item at <paramref name="path"/> read (or unread) at its source, as <paramref name="viewer"/>.
+    /// Emits one outcome and completes; a refusal (not the owner, a read-only grant, the item gone) is an
+    /// outcome with <see cref="InboxItemOutcome.Done"/> false and a reason, never an error.
+    /// </summary>
+    /// <param name="hub">The hub the inbox renders on.</param>
+    /// <param name="path">The item's node path.</param>
+    /// <param name="viewer">The person acting — the inbox's owner.</param>
+    /// <param name="read">True to mark read, false to mark unread.</param>
+    IObservable<InboxItemOutcome> SetRead(IMessageHub hub, string path, string viewer, bool read);
 }

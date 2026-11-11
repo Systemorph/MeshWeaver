@@ -76,6 +76,20 @@ public static class InboxReadingView
             && !p.Split('/').Any(segment => segment is "" or "." or "..");
     }
 
+    /// <summary>The read-state service that handles <paramref name="path"/>, or null when none does.</summary>
+    public static IInboxReadState? ReadStateFor(IEnumerable<IInboxReadState> services, string path)
+        => services.FirstOrDefault(s => s.Handles(path));
+
+    /// <summary>
+    /// The service to mark an opened item read with: <paramref name="service"/> when the item was read, is not
+    /// refused and its source says it is UNREAD; null otherwise — an item already read, or whose state the
+    /// reader does not know, is never written. Pure.
+    /// </summary>
+    /// <param name="content">What the reader returned.</param>
+    /// <param name="service">The read-state service for the item's path, or null.</param>
+    internal static IInboxReadState? MarkReadOnOpen(InboxItemContent content, IInboxReadState? service)
+        => service is not null && content.Refusal is null && content.IsRead == false ? service : null;
+
     /// <summary>The reader that handles <paramref name="path"/>, or null when none does.</summary>
     public static IInboxItemReader? ReaderFor(IEnumerable<IInboxItemReader> readers, string path)
         => readers.FirstOrDefault(r => r.Handles(path));
@@ -131,8 +145,22 @@ public static class InboxReadingView
         var imagesShown = host.Stream.GetDataStream<bool>(ImagesShownId).StartWith(false).DistinctUntilChanged();
         // The template at once, the content when the read answers (Doc/GUI/DataBinding → "Templates
         // first, data later").
+        // Opening an unread item marks it read AT ITS SOURCE, as a mail client does (MarkReadOnOpen) — once
+        // per read, never on a re-render; a refusal or failure leaves the item as it was and is logged.
+        var readState = ReadStateFor(hub.ServiceProvider.GetServices<IInboxReadState>(), path);
         return Observable.Return<UiControl?>(Page(Controls.Markdown(texts.Loading)))
             .Concat(read.Take(1)
+                .Do(content =>
+                {
+                    if (MarkReadOnOpen(content, readState) is { } service)
+                        host.RegisterForDisposal(service.SetRead(hub, path, owner, true).Take(1).Subscribe(
+                            outcome =>
+                            {
+                                if (!outcome.Done)
+                                    logger?.LogInformation("Inbox: {Path} could not be marked read on open: {Reason}", path, outcome.Reason);
+                            },
+                            ex => logger?.LogWarning(ex, "Inbox: marking {Path} read on open failed", path)));
+                })
                 .SelectMany(content => imagesShown.Select(shown => (UiControl?)Page(Content(content, zone, culture, texts, shown))))
                 .DefaultIfEmpty(Page(Controls.Markdown(texts.Failed)))
                 .Catch((Exception ex) =>

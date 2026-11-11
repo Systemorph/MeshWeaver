@@ -476,7 +476,12 @@ one segment (`InboxReadingView.ItemId`). There:
   Content-Security-Policy, a light page in dark mode too). Remote images are BLOCKED until the viewer
   presses **Show images** for that message (a remote image is a tracking pixel); `cid:` images come
   from the message itself. A mail with no HTML part shows its plain `Body`. See Doc/GUI/DisplayControls
-  → "Sandboxed HTML". A package registers its reader as a singleton service beside its
+  → "Sandboxed HTML". Opening an item the reader reports UNREAD (`InboxItemContent.IsRead == false`) marks
+  it read AT ITS SOURCE, once per open, through the **`IInboxReadState`** service that handles its path
+  (a package registers it beside its reader — Graph's `isRead`, Gmail's `UNREAD` label); an item whose
+  state the reader does not know is never written, and a refusal (a read-only grant, a foreign
+  mailbox) leaves it as it was. The source stays the one record of the state; the list shows the change
+  when its source answers it. A package registers its reader as a singleton service beside its
   `InboxQueryLeg` and `IInboxItemHandler`;
 - any other (stored) item is shown by its own page, embedded (`Overview`);
 - the provider's own client (`webLink`, https only) is a secondary **Open in …** link under the
