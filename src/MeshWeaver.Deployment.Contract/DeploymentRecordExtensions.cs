@@ -648,6 +648,16 @@ public static class DeploymentRecordExtensions
     public static DeploymentContent WithInlineEnv(this DeploymentContent d, string key, string? value = null, bool isSecret = false, string? shadows = null, bool? agreesWithShadowed = null, string? reason = null) =>
         d with { InlineEnv = d.InlineEnv.Add(new InlineEnvOverride { Key = key, Value = value, IsSecret = isSecret, Shadows = shadows, AgreesWithShadowed = agreesWithShadowed, Reason = reason }) };
 
+    /// <summary>
+    /// Records a pod volume (and its mounts) that exists only on the live Deployment (declarative — renders
+    /// nothing). With <paramref name="retiredBy"/> set, Reconcile removes it once nothing renders it or reads
+    /// <paramref name="mountPath"/>. Appends, like <see cref="WithInlineEnv"/>: one entry per pod volume
+    /// name is the caller's contract, and the retirement remedy refuses a volume retired twice by name
+    /// rather than choosing between two entries.
+    /// </summary>
+    public static DeploymentContent WithLiveOnlyVolume(this DeploymentContent d, string name, string mountPath, string? source = null, string? reason = null, string? retiredBy = null) =>
+        d with { LiveOnlyVolumes = d.LiveOnlyVolumes.Add(new LiveOnlyVolume { Name = name, MountPath = mountPath, Source = source, Reason = reason, RetiredBy = retiredBy }) };
+
     // ── sign-in, email, integrations ────────────────────────────────────────────────────────────
 
     /// <summary>Sign-in providers by CLIENT ID (secrets are Key Vault names, mapped separately).</summary>
