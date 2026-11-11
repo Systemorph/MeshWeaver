@@ -258,6 +258,14 @@ record now says so (`heldUpdate`: what the sync landed, what it waits for; `held
 fleet view lists it. The broadcast lane names no candidate and keeps the hold; the next full pass
 converges. Pinned by `HeldUpdatesConvergeTest`.
 
+The adoption keeps the record's install-time fields (policy, the authorizing principal), but **not
+the package's own declarations**: `preInstalled` is what the package states at the version being
+adopted, so the record takes the candidate's (`PackageUpdateReconciler.AdoptedFromSync`). Before
+this, a record stamped while a package was pre-installed kept `preInstalled: true` through every
+adoption after the package dropped the flag. Measured on two instances for the CLI harness packages
+(MeshWeaver.Plugins#4962): the record claimed the platform baseline while the package said it is
+sold through its tier. Pinned by `ASyncAdoptionTakesThePackagesOwnPreInstalledTest`.
+
 ### Gate 2 — a delta is never diffed against a baseline the installer does not own
 
 `CatalogLayoutAreas.InstallOrUpdateCore` consults the same verdict before choosing the incremental

@@ -573,7 +573,16 @@ internal static class PackageUpdateReconciler
     }
 
     /// <summary>The record after adopting a candidate the sync has landed (pure). Policy, the
-    /// authorizing principal and every other install-time field are kept.</summary>
+    /// authorizing principal and every other install-time field are kept, except the package's own
+    /// <see cref="PackageManifest.PreInstalled"/> declaration, which is taken from the candidate.
+    ///
+    /// <para>🚨 <b>The declaration is the candidate's, never the record's</b> (MeshWeaver.Plugins#4962).
+    /// <c>preInstalled</c> is a fact the PACKAGE states on its root at the version being adopted. A
+    /// record stamped while a package was pre-installed kept <c>preInstalled: true</c> through every
+    /// later adoption: measured on 2026-11-11, the CLI harness packages had dropped the flag six days
+    /// earlier, and their install records on two instances still claimed it after an adoption the
+    /// day before. A record that contradicts the package's own declaration tells every reader of the
+    /// inventory that the package belongs to the platform baseline when it is sold through a tier.</para></summary>
     /// <param name="current">The record as it stands.</param>
     /// <param name="pkg">The candidate.</param>
     /// <param name="now">Now.</param>
@@ -584,6 +593,7 @@ internal static class PackageUpdateReconciler
             ReleasedVersion = pkg.ReleasedVersion ?? current.ReleasedVersion,
             ModuleVersion = pkg.ModuleVersion,
             MinMeshVersion = pkg.MinMeshVersion,
+            PreInstalled = pkg.PreInstalled,
             InstalledFiles = pkg.ManifestFiles ?? current.InstalledFiles,
             InstalledAtUtc = now,
             NotifiedModuleVersion = pkg.ModuleVersion,
