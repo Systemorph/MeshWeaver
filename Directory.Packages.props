@@ -4,7 +4,11 @@
     <NoWarn>$(NoWarn);NU1608</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="Azure.Core" Version="1.60.0" />
+    <!-- Azure.Core 1.62.0: the floor Aspire 13.6.5's client integrations require (Aspire.Azure.Npgsql,
+         .Storage.Blobs, .Data.Tables). MeshWeaver.Plugins moves the Aspire family to 13.6.5 for
+         GHSA-f7vh-h5g3-7jrh, and Memex.Portal.Distributed references Azure.Core directly to hold the
+         /app floor (its csproj, "bump the central pin here FIRST") — at 1.60.0 that is NU1605. -->
+    <PackageVersion Include="Azure.Core" Version="1.62.0" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.84.2" />
     <PackageVersion Include="System.ClientModel" Version="1.15.0" />
