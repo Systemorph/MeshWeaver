@@ -154,6 +154,23 @@ public class DeclaredDisabledFlagCompositionTest
         Assert.NotEqual(DeclaredDisabledRetirement.RetireKeyFor(a with { Version = null }),
             DeclaredDisabledRetirement.RetireKeyFor(b with { Version = null }));
     }
+
+    [Fact]
+    public void TheLatestFailedAttempt_IsTheHighestAttemptNumber_NotTheLastListed()
+    {
+        var r = new PackageUninstallRequest { Package = "X" };
+        var failed = new List<(string, PackageUninstallRequest)>
+        {
+            ("Admin/_PackageUninstall/flag-retire-X-k-a10", r),
+            ("Admin/_PackageUninstall/flag-retire-X-k-a9", r),
+            ("Admin/_PackageUninstall/flag-retire-X-k-a100", r),
+            ("Admin/_PackageUninstall/flag-retire-X-k-a11", r),
+        };
+        Assert.True(DeclaredDisabledRetirement.LatestFailed(failed) is { Path: "Admin/_PackageUninstall/flag-retire-X-k-a100" },
+            "the highest attempt number is the superseded one, whatever the listing order");
+        Assert.Null(DeclaredDisabledRetirement.LatestFailed([]));
+        Assert.Equal(0, DeclaredDisabledRetirement.AttemptNumberOf("Admin/_PackageUninstall/no-attempt"));
+    }
 }
 
 /// <summary>The retire against a real mesh: the request, its executor, the install records and the content.</summary>
@@ -415,6 +432,42 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         Assert.False(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "retired on re-evaluation");
     }
 
+    /// <summary>
+    /// #8020: a refusal that stands (here a shared partition; on memex-cloud the user-data census) is
+    /// re-evaluated by every boot, and each boot reports ONLY the attempt it supersedes — never the
+    /// whole history. Before the fix the third boot logged one "earlier retire … was refused" Error per
+    /// earlier attempt (two here; ~100 per boot on memex-cloud, ~5,000 Errors in two days). Negative
+    /// control: the second boot, which has exactly one earlier attempt, logs exactly one line too.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AStandingRefusal_ReportsOnlyTheAttemptItSupersedes_EachBoot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Installed(Package, ct);
+        await Installed("FlagRetireSharer", ct, partition: Package, module: null);
+        var composition = Declared("off", enabled: false, $"Plugins/{Package}");
+
+        var paths = new List<string>();
+        var superseding = new List<IReadOnlyList<string>>();
+        for (var boot = 1; boot <= 3; boot++)
+        {
+            var log = new CapturingLogger();
+            var outcome = await DeclaredDisabledRetirement.Retire(Mesh, composition, log).Timeout(TestTimeouts.Convergence).Await(ct);
+            var path = Assert.Single(outcome.Requested);
+            Assert.Equal(PackageUninstallStatus.Failed, (await Settled(path, ct)).Status);
+            paths.Add(path);
+            superseding.Add(log.Errors.Where(l => l.Contains("the earlier retire")).ToList());
+        }
+
+        Assert.EndsWith("-a3", paths[2]);
+        Assert.Empty(superseding[0]);
+        Assert.Contains(paths[0], Assert.Single(superseding[1]));
+        var third = Assert.Single(superseding[2]);
+        Assert.Contains(paths[1], third);
+        Assert.DoesNotContain(paths[0], third);
+        Assert.Contains("1 earlier attempt(s)", third);
+    }
+
     /// <summary>The restart coordinator once it satisfies <paramref name="until"/>. It may not exist
     /// yet, so its existence is re-read from storage first — never a point read of an absent node.</summary>
     private async Task<PackageRestartCoordinatorState> Coordinator(Func<PackageRestartCoordinatorState, bool> until, CancellationToken ct) =>
@@ -476,8 +529,16 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         await PackageRestartCoordinator.Pending(Mesh, request, "MeshWeaver.FlagRetireProbe", "the proxy repro", Log)
             .Timeout(TestTimeouts.Convergence).Await(ct);
 
-        var folded = await Coordinator(s => s.Facts is null, ct);
-        Assert.Equal(PackageRestartMemberState.Pending, folded.Members?.GetValueOrDefault(request)?.State);
+        // Waited on the real condition — the enrolment folded in as Pending — never on "Facts is null"
+        // alone: that is ALSO true before the Pending fact reaches the reader (the coordinator is
+        // created empty, and a replica may replay that state first — CI run 43071278745). The
+        // state matched here is exactly what the old proxy accepted with the enrolment still pending.
+        await (await CoordinatorStream(ct))
+            .Select(s => new CoordinatorView(s))
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(v => v.State.Facts is null
+                        && v.State.Members?.GetValueOrDefault(request)?.State == PackageRestartMemberState.Pending,
+                "the owner folds the Pending fact into a Pending member, with no fact left unfolded", ct);
 
         await PackageRestartCoordinator.Withdraw(Mesh, request, Log).Timeout(TestTimeouts.Convergence).Await(ct);
         await NoPendingEnrolmentIsLeftBehind(ct);
@@ -736,14 +797,16 @@ public class AnUnattendedWriterKeepsOffARetiringInstallTest(ITestOutputHelper ou
         public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
             Observable.Return((IReadOnlyList<PackageFile>)[]);
     }
+}
 
-    private sealed class CapturingLogger : ILogger
-    {
-        private ImmutableList<string> lines = ImmutableList<string>.Empty;
-        public IReadOnlyList<string> Lines => lines;
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            ImmutableInterlocked.Update(ref lines, l => l.Add(formatter(state, exception)));
-    }
+/// <summary>Records every formatted line and its level.</summary>
+internal sealed class CapturingLogger : ILogger
+{
+    private ImmutableList<(LogLevel Level, string Line)> entries = ImmutableList<(LogLevel, string)>.Empty;
+    public IReadOnlyList<string> Lines => entries.Select(e => e.Line).ToImmutableList();
+    public IReadOnlyList<string> Errors => entries.Where(e => e.Level == LogLevel.Error).Select(e => e.Line).ToImmutableList();
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(LogLevel logLevel) => true;
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+        ImmutableInterlocked.Update(ref entries, l => l.Add((logLevel, formatter(state, exception))));
 }

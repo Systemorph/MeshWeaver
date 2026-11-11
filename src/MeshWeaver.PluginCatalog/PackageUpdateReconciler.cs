@@ -573,7 +573,14 @@ internal static class PackageUpdateReconciler
     }
 
     /// <summary>The record after adopting a candidate the sync has landed (pure). Policy, the
-    /// authorizing principal and every other install-time field are kept.</summary>
+    /// authorizing principal and every other install-time field are kept, except the package's own
+    /// <see cref="PackageManifest.PreInstalled"/> declaration, which is taken from the candidate.
+    ///
+    /// <para>🚨 <b>The declaration is the candidate's, never the record's</b> (MeshWeaver.Plugins#4962).
+    /// <c>preInstalled</c> is a fact the PACKAGE states on its root at the version being adopted. Kept
+    /// from the record, a package that stopped being pre-installed would stay recorded as part of the
+    /// platform baseline through every later adoption. The incident is told in
+    /// <c>Doc/Architecture/OnePartitionOneBookkeeping</c>.</para></summary>
     /// <param name="current">The record as it stands.</param>
     /// <param name="pkg">The candidate.</param>
     /// <param name="now">Now.</param>
@@ -584,6 +591,7 @@ internal static class PackageUpdateReconciler
             ReleasedVersion = pkg.ReleasedVersion ?? current.ReleasedVersion,
             ModuleVersion = pkg.ModuleVersion,
             MinMeshVersion = pkg.MinMeshVersion,
+            PreInstalled = pkg.PreInstalled,
             InstalledFiles = pkg.ManifestFiles ?? current.InstalledFiles,
             InstalledAtUtc = now,
             NotifiedModuleVersion = pkg.ModuleVersion,
