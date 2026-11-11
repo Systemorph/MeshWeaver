@@ -973,6 +973,74 @@ public class IoPoolTest
 
     private static IObservable<int> ConsumerBelowTheFinally(int value) => Observable.Return(value);
 
+    /// <summary>
+    /// 🚨 The leak line names the consumer BELOW a multi-input operator (MeshWeaver#7992). The
+    /// <c>EaGraphAuth.GetMailboxes</c> line ended at <c>Zip.SecondObserver</c>: Rx's <c>Zip</c> sink keeps
+    /// its inner observers in fields declared before the inherited <c>_observer</c>, so the walk stepped
+    /// sideways into the sibling observer instead of downstream, found nothing new there and stopped —
+    /// and the consumer the line exists to name was missing. The generated arities of <c>Zip</c> and
+    /// <c>CombineLatest</c> (<c>_observer1.._observerN</c>) do the same, and <c>Timeout(…, other)</c>
+    /// holds its fallback source in a field, which a <c>Subject</c> fallback turns into a false step.
+    ///
+    /// <para>Each case leaves the pooled read unowned under the operator, drains, and requires the line
+    /// to reach the selector of the operator below. <b>Negative control, measured:</b> with the walk's
+    /// <c>_observer</c>/<c>_parent</c> preference removed, every case fails on the first assertion (the
+    /// line ends at the sibling inner observer, or at the <c>Subject</c>). Operators measured to walk
+    /// through already, and so not repeated here: two-source <c>CombineLatest</c>, the list forms of
+    /// <c>Zip</c>/<c>CombineLatest</c>, <c>Merge</c>, <c>Concat</c>, <c>Switch</c>, <c>SelectMany</c>,
+    /// <c>WithLatestFrom</c>, <c>TakeUntil</c>, <c>SkipUntil</c>, <c>Sample</c>, <c>Join</c>, <c>Amb</c>,
+    /// <c>Catch</c>.</para>
+    /// </summary>
+    [Theory(Timeout = 30_000)]
+    [InlineData("Zip, pooled read on the first side")]
+    [InlineData("Zip, pooled read on the second side")]
+    [InlineData("Zip of three sources")]
+    [InlineData("CombineLatest of three sources")]
+    [InlineData("Timeout with a Subject fallback")]
+    public async Task Leak_line_walks_past_a_multi_input_operator_to_the_consumer(string shape)
+    {
+        using var pool = new IoPool(2);
+        var subscribed = new AsyncSubject<Unit>();
+        var other = new Subject<int>();
+        // A long-lived source that never answers — the read the consumer below waits on.
+        var source = Observable.Create<int>(_ =>
+        {
+            subscribed.OnNext(Unit.Default);
+            subscribed.OnCompleted();
+            return System.Reactive.Disposables.Disposable.Empty;
+        });
+        var read = pool.SubscribeThroughPool(source);
+        var combined = shape switch
+        {
+            "Zip, pooled read on the first side" => read.Zip(other, (a, b) => a + b),
+            "Zip, pooled read on the second side" => other.Zip(read, (a, b) => a + b),
+            "Zip of three sources" => Observable.Zip(read, other, other, (a, b, c) => a + b + c),
+            "CombineLatest of three sources" => Observable.CombineLatest(read, other, other, (a, b, c) => a + b + c),
+            "Timeout with a Subject fallback" => read.Timeout(TimeSpan.FromHours(1), other),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, "unknown shape"),
+        };
+
+        // UNOWNED, with the consumer's own operator below the multi-input one.
+        using var sub = combined
+            .SelectMany(ConsumerBelowTheMultiInputOperator)
+            .Subscribe(_ => { }, _ => { });
+
+        await subscribed.Should().Within(Timeout5).Emit("the source must be open before the drain",
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 0, Timeout5),
+            "the setup leaf must have released its permit, so the leg is attached past its subscribe");
+
+        pool.Drain();
+
+        var line = pool.UnownedLeakSites.Should().ContainSingle(
+            "the read was still attached when the pool was cancelled").Which;
+        line.Should().Contain(nameof(ConsumerBelowTheMultiInputOperator),
+            $"the walk must follow the {shape.Split(',')[0].Split(' ')[0]} sink's own downstream observer, not a "
+            + "sibling inner observer or a source held in a field, and name the consumer below it");
+    }
+
+    private static IObservable<int> ConsumerBelowTheMultiInputOperator(int value) => Observable.Return(value);
+
     [Fact]
     public async Task Unbounded_fallback_runs_the_leaf_on_the_threadpool()
     {
