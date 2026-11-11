@@ -166,7 +166,8 @@ public class DeclaredDisabledFlagCompositionTest
             ("Admin/_PackageUninstall/flag-retire-X-k-a100", r),
             ("Admin/_PackageUninstall/flag-retire-X-k-a11", r),
         };
-        Assert.Equal("Admin/_PackageUninstall/flag-retire-X-k-a100", DeclaredDisabledRetirement.LatestFailed(failed)!.Value.Path);
+        Assert.True(DeclaredDisabledRetirement.LatestFailed(failed) is { Path: "Admin/_PackageUninstall/flag-retire-X-k-a100" },
+            "the highest attempt number is the superseded one, whatever the listing order");
         Assert.Null(DeclaredDisabledRetirement.LatestFailed([]));
         Assert.Equal(0, DeclaredDisabledRetirement.AttemptNumberOf("Admin/_PackageUninstall/no-attempt"));
     }
