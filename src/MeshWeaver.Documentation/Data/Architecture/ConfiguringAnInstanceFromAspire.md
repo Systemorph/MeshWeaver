@@ -243,6 +243,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithVaultValuesKeys(keys)` | `VaultValuesKeys` | `extraEnvFrom` | — |
 | `WithSecretMount(volumeName, secretProviderClass, syncedSecret, mountPath)` | `SecretMounts[].VolumeName`, `SecretMounts[].SecretProviderClass`, `SecretMounts[].SyncedSecret`, `SecretMounts[].MountPath` | `extraVolumes`, `extraVolumeMounts` | — |
 | `WithInlineEnv(key, value, isSecret, shadows, agreesWithShadowed, reason)` | `InlineEnv[].Key`, `InlineEnv[].Value`, `InlineEnv[].IsSecret`, `InlineEnv[].Shadows`, `InlineEnv[].AgreesWithShadowed`, `InlineEnv[].Reason`, `InlineEnv[].RetiredBy` | the env-precedence ledger the `Audit` reads | — |
+| `WithLiveOnlyVolume(name, mountPath, source, reason, retiredBy)` | `LiveOnlyVolumes[].Name`, `LiveOnlyVolumes[].MountPath`, `LiveOnlyVolumes[].Source`, `LiveOnlyVolumes[].Reason`, `LiveOnlyVolumes[].RetiredBy` | — (declarative: Reconcile's `RetireLiveOnlyVolume` removes a retired one) | — |
 | `WithSignIn(provider, microsoftClientId, microsoftTenantId, googleClientId, linkedInClientId, appleClientId, enableDevLogin)` | `SignIn.Provider`, `SignIn.MicrosoftClientId`, `SignIn.MicrosoftTenantId`, `SignIn.GoogleClientId`, `SignIn.LinkedInClientId`, `SignIn.AppleClientId`, `SignIn.EnableDevLogin` | `config.memex_portal.Authentication__*` | `Authentication__Provider`, `Authentication__EnableDevLogin`, `Authentication__Microsoft__ClientId`, `Authentication__Microsoft__TenantId`, `Authentication__Google__ClientId`, `Authentication__LinkedIn__ClientId`, `Authentication__Apple__ClientId` |
 | `WithEmail(enabled, mailboxAddress, clientId, tenantId, useManagedIdentity, inboundEnabled, webhookBaseUrl, inboundForwardAddress)` | `Email.Enabled`, `Email.MailboxAddress`, `Email.ClientId`, `Email.TenantId`, `Email.UseManagedIdentity`, `Email.InboundEnabled`, `Email.WebhookBaseUrl`, `Email.InboundForwardAddress` | `config.memex_portal.Email__*` | `Email__Enabled`, `Email__MailboxAddress`, `Email__ClientId`, `Email__TenantId`, `Email__UseManagedIdentity`, `Email__InboundEnabled`, `Email__WebhookBaseUrl`, `Email__Inbound__ForwardAddress` |
 | `WithGitHubApp(clientId, installationId, installationOwner)` | `GitHubApp.ClientId`, `GitHubApp.InstallationId`, `GitHubApp.InstallationOwner` | `config.memex_portal.GitHub__App__*` | `GitHub__App__ClientId`, `GitHub__App__InstallationId`, `GitHub__App__InstallationOwner` |
@@ -344,6 +345,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `KeyVaultSecretClasses` | Additional Key Vault secret classes (a second SecretProviderClass, and further) | Weitere Key-Vault-Secret-Klassen (eine zweite SecretProviderClass und weitere) |
 | `DeploymentContent` | `VaultValuesKeys` | Keys the chart's own Secret supplies, from the Key Vault values half (names only) | Schlüssel aus dem eigenen Secret des Charts, aus der Key-Vault-Wertehälfte (nur Namen) |
 | `DeploymentContent` | `InlineEnv` | Inline env entries on the live Deployment (declarative — renders nothing) | Inline-Env-Einträge auf dem laufenden Deployment (deklarativ — rendert nichts) |
+| `DeploymentContent` | `LiveOnlyVolumes` | Live-only pod volumes on the Deployment (declarative — renders nothing) | Nur live vorhandene Pod-Volumes auf dem Deployment (deklarativ — rendert nichts) |
 | `DeploymentContent` | `Gates` | Language gate sidecars | Sprach-Gate-Sidecars |
 | `DeploymentContent` | `SecretMounts` | Key Vault secret mounts (legacy — hand-made SecretProviderClass by name) | Key-Vault-Secret-Einhängungen (veraltet — handgemachte SecretProviderClass nach Namen) |
 | `DeploymentContent` | `Ai` | AI providers | KI-Anbieter |
@@ -526,6 +528,11 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `InlineEnvOverride` | `AgreesWithShadowed` | Does the shadowed source agree? Unset means not compared (a Secret) | Stimmt die überdeckte Quelle überein? Nicht gesetzt heißt nicht verglichen (ein Secret) |
 | `InlineEnvOverride` | `Reason` | Why it is still set inline | Warum es weiterhin inline gesetzt ist |
 | `InlineEnvOverride` | `RetiredBy` | What retires it (issue reference) | Was es ablöst (Issue-Referenz) |
+| `LiveOnlyVolume` | `Name` | Pod volume name, as on the live Deployment | Name des Pod-Volumes, wie auf dem laufenden Deployment |
+| `LiveOnlyVolume` | `MountPath` | Mount path in the containers | Einhängepfad in den Containern |
+| `LiveOnlyVolume` | `Source` | Its source, e.g. secret/<name> (names only) | Seine Quelle, z. B. secret/<name> (nur Namen) |
+| `LiveOnlyVolume` | `Reason` | Why it is on the pod | Warum es auf dem Pod ist |
+| `LiveOnlyVolume` | `RetiredBy` | What retires it (issue reference) | Was es ablöst (Issue-Referenz) |
 | `GateSpec` | `Language` | Language (python, node, pandas) | Sprache (python, node, pandas) |
 | `GateSpec` | `Enabled` | Enabled | Aktiviert |
 | `GateSpec` | `Image` | Sidecar image — blank means the gate does not run | Sidecar-Image — leer heißt, das Gate läuft nicht |

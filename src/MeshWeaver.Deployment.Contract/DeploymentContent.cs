@@ -568,6 +568,18 @@ public record DeploymentContent
         = ImmutableList<InlineEnvOverride>.Empty;
 
     /// <summary>
+    /// Pod VOLUMES (and their mounts) on the live Deployment that no file renders — the volume twin of
+    /// <see cref="InlineEnv"/>.
+    ///
+    /// <para>Declarative: this renders NOTHING. A live-only volume survives every roll, so the record
+    /// can only state it and — with <see cref="LiveOnlyVolume.RetiredBy"/> — end it through Reconcile.
+    /// See <see cref="LiveOnlyVolume"/>.</para>
+    /// </summary>
+    [Description("Live-only pod volumes on the Deployment (declarative — renders nothing)")]
+    public ImmutableList<LiveOnlyVolume> LiveOnlyVolumes { get; init; }
+        = ImmutableList<LiveOnlyVolume>.Empty;
+
+    /// <summary>
     /// Foreign-language GATE sidecars in the portal pod (python, node, pandas). Empty → the pod runs
     /// the portal container alone. Rendered into the chart's <c>grpc.gates</c>.
     /// </summary>
