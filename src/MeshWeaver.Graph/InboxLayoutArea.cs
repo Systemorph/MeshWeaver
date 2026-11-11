@@ -428,6 +428,12 @@ public static class InboxLayoutArea
                 .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, actionRows)), "Delete")
             .WithView(IconButton(host.Localize("inbox.undo"), FluentIcons.ArrowUndo(), Appearance.Stealth)
                 .WithReactiveClickAction(ctx => Undo(ctx, acts)), "Undo")
+            // Mark the ticked items read or unread AT THEIR SOURCE (IInboxReadState) — a select-all
+            // marks every item of the current view; the selection stays, as in a mail client.
+            .WithView(IconButton(host.Localize("inbox.markRead"), FluentIcons.MailRead(), Appearance.Stealth)
+                .WithReactiveClickAction(ctx => SetRead(ctx, acts, owner, actionRows, read: true)), "MarkRead")
+            .WithView(IconButton(host.Localize("inbox.markUnread"), FluentIcons.MailUnread(), Appearance.Stealth)
+                .WithReactiveClickAction(ctx => SetRead(ctx, acts, owner, actionRows, read: false)), "MarkUnread")
             // Decide every ticked approval request — the approval's own type decides and authorizes,
             // as the clicker (InboxApprovals). Other ticked rows are left alone.
             .WithView((IconButton(host.Localize("inbox.approve"), FluentIcons.Checkmark(), Appearance.Stealth) with { Style = decideStyle })
@@ -1262,18 +1268,25 @@ public static class InboxLayoutArea
             // renderer pins every row to one line's height and shows only the subject (Plugins: the
             // Blazor grid centred the three-line cell in 32px, so sender, time and preview were cut).
             .WithMultiLine()
+            // The selection box shows on the row under the pointer (and once anything is ticked), as a mail client shows it.
+            .WithSelectionOnHover()
             // Unread rows carry their class (bold), as a mail client shows new mail.
             .WithRowClassProperty(InboxRows.RowClassProperty)
             // The medium the item came through, first, so a glance tells mail from a message from an
             // approval: a header and the source's name as the tooltip.
+            // The icon IS the header: a titled 72px column cut its own title to "S…". The icon carries the source's
+            // name as its tooltip.
             .WithColumn(new TemplateColumnControl(Controls.Icon(new ContextProperty(InboxRows.SourceIconProperty)).WithWidth("20px"))
-                .WithTitle(host.Localize("inbox.column.channel")).WithWidth("72px").WithSortable(false));
+                .WithTitle(string.Empty).WithWidth("56px").WithSortable(false));
         // Outlook's message list: ONE column that reads like a mail client's row — who and when, what, and the
         // beginning of the body — so nothing is cut to a dozen characters and nothing scrolls sideways. A part a
         // row lacks takes no room: the state badge is hidden without a state (and for unread, which the bold
         // says), the account is named only when several accounts feed the inbox. Ordered by date always: a
         // header sort would be a second, unbound ordering.
-        return grid.WithColumn(new TemplateColumnControl(ItemCell()).WithTitle(host.Localize("inbox.column.item")).WithSortable(false))
+        // The item track may shrink below its content (minmax(0, 1fr)): each line then ends in an ellipsis instead
+        // of widening the column past the page.
+        return grid.WithColumn(new TemplateColumnControl(ItemCell()).WithTitle(host.Localize("inbox.column.item"))
+                .WithWidth("minmax(0, 1fr)").WithSortable(false))
             // A click on a row OPENS it, as in a mail client — always INSIDE the portal, in the
             // inbox's reading view (InboxReadingView), never the provider's own client. (Ticking a box
             // and shift/cmd-clicks are selection gestures the grid keeps to itself.) Paged, newest first.
@@ -1398,6 +1411,66 @@ public static class InboxLayoutArea
                         // The rows are gone from the grid; so are their ticks.
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
                         ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes, targets));
+                        acts.Reread();
+                    })
+                    .Select(_ => Unit.Default)));
+    }
+
+    /// <summary>
+    /// Mark read / Mark unread: every ticked row that the OWNER's own feed lists right now (re-checked exactly as
+    /// Delete is), set read or unread at its source by the <see cref="IInboxReadState"/> that handles its path, as
+    /// the CLICKER, one item at a time. An item no service handles answers for itself; the outcome line names
+    /// every item that was not changed. The selection stays; the list shows the change when its sources answer it.
+    /// </summary>
+    private static IObservable<Unit> SetRead(UiActionContext ctx, InboxActs acts, string owner,
+        IObservable<ImmutableList<InboxRow>> rows, bool read)
+    {
+        var host = ctx.Host;
+        var hub = host.Hub;
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        // Captured HERE, on the click turn: the writes are issued after a read, where the ambient context is gone.
+        var caller = access?.Context;
+        var services = hub.ServiceProvider.GetServices<IInboxReadState>().ToImmutableArray();
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
+        return acts.Exclusive(host.Localize("inbox.busy"), ctx.SelectedRowKeys(InboxRows.SelectionId)
+            .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner))
+            .SelectMany(targets => caller?.ObjectId is not { Length: > 0 } viewer
+                ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.noClicker")))
+                : targets.Count == 0
+                ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingSelected")))
+                : targets
+                    .Select((row, i) => Observable.Defer(() =>
+                    {
+                        ctx.ReportProgress(host.Localize(read ? "inbox.progress.markingRead" : "inbox.progress.markingUnread", i + 1, targets.Count),
+                            (double)i / targets.Count);
+                        if (InboxReadingView.ReadStateFor(services, row.Path) is not { } service)
+                            return Observable.Return(new InboxItemOutcome(row.Path, false, host.Localize("inbox.readState.notSupported")));
+                        // The person acting goes in EXPLICITLY (viewer): IInboxReadState decides and writes from it,
+                        // never from the ambient context. The switch only covers what the call itself builds.
+                        using (access?.SwitchAccessContext(caller))
+                        {
+                            try
+                            {
+                                return service.SetRead(hub, row.Path, viewer, read).Take(1)
+                                    .DefaultIfEmpty(new InboxItemOutcome(row.Path, false))
+                                    .Catch((Exception ex) =>
+                                    {
+                                        logger?.LogWarning(ex, "Inbox: setting {Path} read={Read} faulted", row.Path, read);
+                                        return Observable.Return(new InboxItemOutcome(row.Path, false));
+                                    });
+                            }
+                            catch (Exception ex)
+                            {
+                                logger?.LogWarning(ex, "Inbox: setting {Path} read={Read} faulted", row.Path, read);
+                                return Observable.Return(new InboxItemOutcome(row.Path, false));
+                            }
+                        }
+                    }))
+                    .Concat()
+                    .Aggregate(ImmutableList<InboxItemOutcome>.Empty, (done, outcome) => done.Add(outcome))
+                    .Do(outcomes =>
+                    {
+                        ctx.ReportSummary(Summary(host, read ? "inbox.summary.markedRead" : "inbox.summary.markedUnread", outcomes, targets));
                         acts.Reread();
                     })
                     .Select(_ => Unit.Default)));

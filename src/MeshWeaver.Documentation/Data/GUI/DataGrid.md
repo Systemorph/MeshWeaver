@@ -117,6 +117,7 @@ new TemplateColumnControl(Controls.Button("View"))
 | `WithVirtualize(bool)` | Enable virtual (windowed) scrolling | `false` |
 | `WithItemSize(int)` | Row height in pixels (used by virtualizer) | `50` |
 | `WithMultiLine(bool)` | Rows grow to their content; a cell may span several lines — see "Multi-line rows" below | `false` |
+| `WithSelectionOnHover(bool)` | Row-selection boxes show only on hover, focus, when ticked, or while anything is selected (pointer devices; touch keeps every box) | `false` |
 | `Resizable(bool)` | Allow column resizing globally | `true` |
 | `WithPagination(bool)` | Enable built-in pagination | `false` |
 | `WithItemsPerPage(int)` | Rows per page | — |

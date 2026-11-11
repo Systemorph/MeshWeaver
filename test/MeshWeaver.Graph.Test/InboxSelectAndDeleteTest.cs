@@ -30,15 +30,59 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     private const string DeleteArea = InboxLayoutArea.AreaName + "/Main/Toolbar/Delete";
     private const string UndoArea = InboxLayoutArea.AreaName + "/Main/Toolbar/Undo";
     private const string GridArea = InboxLayoutArea.AreaName + "/Main/Grid";
+    private const string MarkReadArea = InboxLayoutArea.AreaName + "/Main/Toolbar/MarkRead";
+    private const string MarkUnreadArea = InboxLayoutArea.AreaName + "/Main/Toolbar/MarkUnread";
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
 
-    /// <summary>A reader for the reserved namespace <c>{user}/_Fake</c> — a source no store holds.</summary>
+    /// <summary>What this test's read-state service was asked to do — one per test, never shared.</summary>
+    private readonly RecordingReadState readState = new();
+
+    /// <summary>A reader (and a read-state service) for the reserved namespace <c>{user}/_Fake</c> — a source no store holds.</summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .ConfigureServices(services => services.AddSingleton<IInboxItemReader>(new FakeSourceReader()));
+            .ConfigureServices(services => services
+                .AddSingleton<IInboxItemReader>(new FakeSourceReader())
+                .AddSingleton<IInboxReadState>(readState));
+
+    /// <summary>
+    /// Opening an UNREAD item marks it read at its source, once, as its owner; an item whose read state the
+    /// reader does not know is never written. Pure decision pinned too: a refused or already-read item is never marked.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task OpeningAnUnreadItem_MarksItReadAtItsSource_Once()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-markread";
+        await CreateUserAsync(owner, ct);
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
+
+        var unread = $"{owner}/_Fake/unread-1";
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName) { Id = InboxReadingView.ItemId(unread) });
+        await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Item/Subject").Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is LabelControl { Data: string subject } && subject == unread, "the item is shown", ct);
+        await System.Reactive.Linq.Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => readState.Calls)
+            .Should().Within(TestTimeouts.Convergence).Match(calls => calls.Contains((unread, owner, true)), "the open marks it read, as its owner", ct);
+
+        var unknown = $"{owner}/_Fake/m2";
+        var other = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName) { Id = InboxReadingView.ItemId(unknown) });
+        await other.GetControlStream($"{InboxLayoutArea.AreaName}/Item/Subject").Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is LabelControl { Data: string subject } && subject == unknown, "the item is shown", ct);
+        readState.Calls.Count(c => c.Path == unread).Should().Be(1, "once per open, never per re-render");
+        readState.Calls.Should().NotContain(c => c.Path == unknown, "a state the reader does not know is never written");
+
+        var service = readState;
+        InboxReadingView.MarkReadOnOpen(new InboxItemContent { IsRead = false }, service).Should().BeSameAs(service);
+        InboxReadingView.MarkReadOnOpen(new InboxItemContent { IsRead = true }, service).Should().BeNull();
+        InboxReadingView.MarkReadOnOpen(new InboxItemContent { IsRead = null }, service).Should().BeNull();
+        InboxReadingView.MarkReadOnOpen(new InboxItemContent { IsRead = false, Refusal = "no" }, service).Should().BeNull();
+        InboxReadingView.MarkReadOnOpen(new InboxItemContent { IsRead = false }, null).Should().BeNull();
+    }
 
     /// <summary>
     /// The reading view end to end, as its owner: the address names a row no store holds, the
@@ -69,6 +113,48 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             .Match(c => c is MarkdownControl { Markdown: string text } && text.Contains("not in your inbox"),
                 "an item outside the owner's partition is not opened — though a reader would handle its path", ct))
             .Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// Mark read / Mark unread end to end: every ticked row the owner's feed lists is set at its source by the
+    /// read-state service that handles its path, as the CLICKER; the selection stays, as in a mail client.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task MarkReadAndUnread_SetTheTickedRowsAtTheirSource_AsTheClicker()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-readstate";
+        await CreateUserAsync(owner, ct);
+        var ns = $"{owner}/{NotificationService.SatelliteSegment}";
+        foreach (var id in new[] { "rs1", "rs2", "rs3" })
+            await CreateAsync(new MeshNode(id, ns)
+            {
+                NodeType = NotificationNodeType.NodeType, Name = id, MainNode = owner, State = MeshNodeState.Active,
+                Content = new Notification { NotificationType = NotificationType.General, Id = id, Title = id, Recipient = owner },
+            }, ct);
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with { ShowIgnorable = true }, ct);
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
+
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName));
+        var grid = (DataGridControl)(await stream.GetControlStream(GridArea).Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is DataGridControl, "the inbox renders as one grid", ct))!;
+        await stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)))
+            .Should().Within(TestTimeouts.Convergence).Match(r => r.ValueKind == JsonValueKind.Array && r.GetArrayLength() == 3, "the three are listed", ct);
+
+        var pointer = grid.SelectedItems.Should().BeOfType<JsonPointerReference>().Subject.Pointer;
+        stream.UpdatePointer(new JsonArray(JsonValue.Create($"{ns}/rs1"), JsonValue.Create($"{ns}/rs2")), pointer, new JsonPointerReference("keys"));
+        await stream.GetDataStream<DataGridSelectionState>(new JsonPointerReference(pointer))
+            .Should().Within(TestTimeouts.Convergence).Match(s => s is { Keys.Count: 2 }, "the ticks reached the owner", ct);
+
+        await Click(stream, MarkReadArea, "2 marked read.", ct);
+        readState.Calls.Should().Contain(($"{ns}/rs1", owner, true)).And.Contain(($"{ns}/rs2", owner, true));
+        readState.Calls.Should().NotContain(c => c.Path == $"{ns}/rs3", "an unticked row is never written");
+        (await stream.GetDataStream<DataGridSelectionState>(new JsonPointerReference(pointer)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Keys.Count.Should().Be(2, "the selection stays, as in a mail client");
+
+        await Click(stream, MarkUnreadArea, "2 marked unread.", ct);
+        readState.Calls.Should().Contain(($"{ns}/rs1", owner, false)).And.Contain(($"{ns}/rs2", owner, false));
     }
 
     /// <summary>
@@ -103,6 +189,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         grid.SelectionMode.Should().Be(DataGridRowSelection.Multiple, "the inbox is select-many");
         grid.MultiLine.Should().Be(true,
             "a row is three lines (sender and time, subject, preview); a one-line row height shows only the subject");
+        grid.SelectionOnHover.Should().Be(true, "the box shows on the row under the pointer, as a mail client shows it");
         grid.SelectionKey.Should().Be(InboxRows.KeyProperty);
         var rows = stream.GetDataStream<JsonElement>(
             new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)));
@@ -964,7 +1051,26 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     {
         public bool Handles(string path) => path.Contains("/_Fake/", StringComparison.Ordinal);
         public IObservable<InboxItemContent> Read(IMessageHub hub, string path, string viewer)
-            => System.Reactive.Linq.Observable.Return(new InboxItemContent { Subject = path, Body = "text" });
+            => System.Reactive.Linq.Observable.Return(new InboxItemContent
+            {
+                Subject = path, Body = "text",
+                IsRead = path.Contains("/_Fake/unread", StringComparison.Ordinal) ? false : null,
+            });
+    }
+
+    /// <summary>Records every read-state write for <c>…/_Fake/…</c> paths and answers it done.</summary>
+    private sealed class RecordingReadState : IInboxReadState
+    {
+        private ImmutableList<(string Path, string Viewer, bool Read)> calls = [];
+        public ImmutableList<(string Path, string Viewer, bool Read)> Calls => calls;
+        public bool Handles(string path) => path.Contains("/_Fake/", StringComparison.Ordinal) || path.EndsWith("/rs1", StringComparison.Ordinal)
+                                            || path.EndsWith("/rs2", StringComparison.Ordinal);
+        public IObservable<InboxItemOutcome> SetRead(IMessageHub hub, string path, string viewer, bool read)
+            => System.Reactive.Linq.Observable.Defer(() =>
+            {
+                ImmutableInterlocked.Update(ref calls, list => list.Add((path, viewer, read)));
+                return System.Reactive.Linq.Observable.Return(new InboxItemOutcome(path, true));
+            });
     }
 
     private sealed class PrefixReader(string prefix) : IInboxItemReader
