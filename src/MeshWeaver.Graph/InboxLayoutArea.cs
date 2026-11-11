@@ -428,6 +428,12 @@ public static class InboxLayoutArea
                 .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, actionRows)), "Delete")
             .WithView(IconButton(host.Localize("inbox.undo"), FluentIcons.ArrowUndo(), Appearance.Stealth)
                 .WithReactiveClickAction(ctx => Undo(ctx, acts)), "Undo")
+            // Mark the ticked items read or unread AT THEIR SOURCE (IInboxReadState) — a select-all
+            // marks every item of the current view; the selection stays, as in a mail client.
+            .WithView(IconButton(host.Localize("inbox.markRead"), FluentIcons.MailRead(), Appearance.Stealth)
+                .WithReactiveClickAction(ctx => SetRead(ctx, acts, owner, actionRows, read: true)), "MarkRead")
+            .WithView(IconButton(host.Localize("inbox.markUnread"), FluentIcons.MailUnread(), Appearance.Stealth)
+                .WithReactiveClickAction(ctx => SetRead(ctx, acts, owner, actionRows, read: false)), "MarkUnread")
             // Decide every ticked approval request — the approval's own type decides and authorizes,
             // as the clicker (InboxApprovals). Other ticked rows are left alone.
             .WithView((IconButton(host.Localize("inbox.approve"), FluentIcons.Checkmark(), Appearance.Stealth) with { Style = decideStyle })
@@ -1398,6 +1404,62 @@ public static class InboxLayoutArea
                         // The rows are gone from the grid; so are their ticks.
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
                         ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes, targets));
+                        acts.Reread();
+                    })
+                    .Select(_ => Unit.Default)));
+    }
+
+    /// <summary>
+    /// Mark read / Mark unread: every ticked row that the OWNER's own feed lists right now (re-checked exactly as
+    /// Delete is), set read or unread at its source by the <see cref="IInboxReadState"/> that handles its path, as
+    /// the CLICKER, one item at a time. An item no service handles answers for itself; the outcome line names
+    /// every item that was not changed. The selection stays; the list shows the change when its sources answer it.
+    /// </summary>
+    private static IObservable<Unit> SetRead(UiActionContext ctx, InboxActs acts, string owner,
+        IObservable<ImmutableList<InboxRow>> rows, bool read)
+    {
+        var host = ctx.Host;
+        var hub = host.Hub;
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        // Captured HERE, on the click turn: the writes are issued after a read, where the ambient context is gone.
+        var caller = access?.Context;
+        var services = hub.ServiceProvider.GetServices<IInboxReadState>().ToImmutableArray();
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
+        return acts.Exclusive(host.Localize("inbox.busy"), ctx.SelectedRowKeys(InboxRows.SelectionId)
+            .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner))
+            .SelectMany(targets => targets.Count == 0 || caller?.ObjectId is not { Length: > 0 } viewer
+                ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingSelected")))
+                : targets
+                    .Select((row, i) => Observable.Defer(() =>
+                    {
+                        ctx.ReportProgress(host.Localize(read ? "inbox.progress.markingRead" : "inbox.progress.markingUnread", i + 1, targets.Count),
+                            (double)i / targets.Count);
+                        if (InboxReadingView.ReadStateFor(services, row.Path) is not { } service)
+                            return Observable.Return(new InboxItemOutcome(row.Path, false, host.Localize("inbox.readState.notSupported")));
+                        using (access?.SwitchAccessContext(caller))
+                        {
+                            try
+                            {
+                                return service.SetRead(hub, row.Path, viewer, read).Take(1)
+                                    .DefaultIfEmpty(new InboxItemOutcome(row.Path, false))
+                                    .Catch((Exception ex) =>
+                                    {
+                                        logger?.LogWarning(ex, "Inbox: setting {Path} read={Read} faulted", row.Path, read);
+                                        return Observable.Return(new InboxItemOutcome(row.Path, false));
+                                    });
+                            }
+                            catch (Exception ex)
+                            {
+                                logger?.LogWarning(ex, "Inbox: setting {Path} read={Read} faulted", row.Path, read);
+                                return Observable.Return(new InboxItemOutcome(row.Path, false));
+                            }
+                        }
+                    }))
+                    .Concat()
+                    .Aggregate(ImmutableList<InboxItemOutcome>.Empty, (done, outcome) => done.Add(outcome))
+                    .Do(outcomes =>
+                    {
+                        ctx.ReportSummary(Summary(host, read ? "inbox.summary.markedRead" : "inbox.summary.markedUnread", outcomes, targets));
                         acts.Reread();
                     })
                     .Select(_ => Unit.Default)));
