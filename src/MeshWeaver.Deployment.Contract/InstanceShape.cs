@@ -1493,6 +1493,55 @@ public sealed record InlineEnvOverride
 }
 
 /// <summary>
+/// A pod VOLUME on the live portal Deployment that no file renders — and every mount of it. The volume
+/// twin of <see cref="InlineEnvOverride"/>: recorded so the record can STATE what the Audit reports as
+/// <c>volumes live-only</c> / <c>mounts live-only</c>, and, through <see cref="RetiredBy"/>, END it.
+///
+/// <para>🚨 A live-only pod-spec field SURVIVES EVERY ROLL. <c>helm upgrade</c>'s three-way merge
+/// removes only what helm previously owned, and a strategic merge keeps a list entry it does not name,
+/// so each roll copies the volume into the new ReplicaSet (Doc/Architecture/ChartDriftSemantics).
+/// Measured on <c>memex</c>: a Secret volume <c>hosting-jobrunner-token</c> at
+/// <c>/var/run/secrets/hosting-operator</c>, from the retired Job-runner path, rode along on every
+/// roll; once its Secret was deleted, every new pod stuck in <c>FailedMount</c>.</para>
+///
+/// <para>Declarative: recording an entry does not create the volume, and dropping it does not remove
+/// it. Only an entry with <see cref="RetiredBy"/> is acted on — the Reconcile's
+/// <c>RetireLiveOnlyVolume</c> remedy removes it (<c>hosting-volume-retire</c>) after re-measuring in
+/// the cluster that the chart does not render it and that no container still reads
+/// <see cref="MountPath"/>.</para>
+/// </summary>
+public sealed record LiveOnlyVolume
+{
+    /// <summary>The pod volume's name, exactly as on the Deployment's pod template.</summary>
+    [Description("Pod volume name, as on the live Deployment")]
+    public string Name { get; init; } = "";
+
+    /// <summary>
+    /// Where the containers mount it. Every live mount of the volume must be at this path, and the
+    /// retirement refuses while any container still reads it (command, args, env, or a ConfigMap or
+    /// Secret the container reads).
+    /// </summary>
+    [Description("Mount path in the containers")]
+    public string MountPath { get; init; } = "";
+
+    /// <summary>
+    /// What the volume is made of, for the reader — <c>secret/&lt;name&gt;</c>,
+    /// <c>configMap/&lt;name&gt;</c>, <c>pvc/&lt;name&gt;</c>. Names only, never a value; informational,
+    /// the retirement measures the live template rather than trusting this.
+    /// </summary>
+    [Description("Its source, e.g. secret/<name> (names only)")]
+    public string? Source { get; init; }
+
+    /// <summary>Why it is (or was) there, in one line. An entry with no reason is a to-do, not a decision.</summary>
+    [Description("Why it is on the pod")]
+    public string? Reason { get; init; }
+
+    /// <summary>What retires it — an issue reference, so the entry has an end rather than a history.</summary>
+    [Description("What retires it (issue reference)")]
+    public string? RetiredBy { get; init; }
+}
+
+/// <summary>
 /// A foreign-language GATE sidecar in the portal pod — a participant that reaches the portal's
 /// loopback-bound trusted gRPC endpoint, so that reachability across the shared pod network
 /// namespace IS the authentication. It executes Code nodes of its language exactly as the
