@@ -2328,6 +2328,7 @@
   "inbox.summary.markedRead": "{0} marked read.",
   "inbox.summary.markedUnread": "{0} marked unread.",
   "inbox.readState.notSupported": "This kind of item has no read state to change.",
+  "inbox.noClicker": "You are not signed in on this page any more. Reload it and try again.",
   "inbox.summary.failed": "{0} not done: {1}",
   "adminApp.title": "Admin",
   "adminApp.overview": "Overview",

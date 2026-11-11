@@ -146,7 +146,9 @@ public static class InboxReadingView
         // The template at once, the content when the read answers (Doc/GUI/DataBinding → "Templates
         // first, data later").
         // Opening an unread item marks it read AT ITS SOURCE, as a mail client does (MarkReadOnOpen) — once
-        // per read, never on a re-render; a refusal or failure leaves the item as it was and is logged.
+        // per read, never on a re-render; a refusal or failure leaves the item as it was and is logged. The person
+        // acting is passed EXPLICITLY (the owner, resolved on the render turn): IInboxReadState acts on that, never
+        // on the ambient context, which is gone by the time the read answers.
         var readState = ReadStateFor(hub.ServiceProvider.GetServices<IInboxReadState>(), path);
         return Observable.Return<UiControl?>(Page(Controls.Markdown(texts.Loading)))
             .Concat(read.Take(1)

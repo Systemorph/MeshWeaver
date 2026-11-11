@@ -1434,7 +1434,9 @@ public static class InboxLayoutArea
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
         return acts.Exclusive(host.Localize("inbox.busy"), ctx.SelectedRowKeys(InboxRows.SelectionId)
             .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner))
-            .SelectMany(targets => targets.Count == 0 || caller?.ObjectId is not { Length: > 0 } viewer
+            .SelectMany(targets => caller?.ObjectId is not { Length: > 0 } viewer
+                ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.noClicker")))
+                : targets.Count == 0
                 ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingSelected")))
                 : targets
                     .Select((row, i) => Observable.Defer(() =>
@@ -1443,6 +1445,8 @@ public static class InboxLayoutArea
                             (double)i / targets.Count);
                         if (InboxReadingView.ReadStateFor(services, row.Path) is not { } service)
                             return Observable.Return(new InboxItemOutcome(row.Path, false, host.Localize("inbox.readState.notSupported")));
+                        // The person acting goes in EXPLICITLY (viewer): IInboxReadState decides and writes from it,
+                        // never from the ambient context. The switch only covers what the call itself builds.
                         using (access?.SwitchAccessContext(caller))
                         {
                             try

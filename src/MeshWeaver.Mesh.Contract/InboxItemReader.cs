@@ -128,6 +128,9 @@ public interface IInboxReadState
     /// Sets the item at <paramref name="path"/> read (or unread) at its source, as <paramref name="viewer"/>.
     /// Emits one outcome and completes; a refusal (not the owner, a read-only grant, the item gone) is an
     /// outcome with <see cref="InboxItemOutcome.Done"/> false and a reason, never an error.
+    /// <para>🚨 The person acting is <paramref name="viewer"/>, EXPLICIT — an implementation decides and writes from
+    /// it (and the item owner's own credential), never from the ambient access context: the inbox calls this off
+    /// the click turn and right after a read answers, where no ambient context can be relied on.</para>
     /// </summary>
     /// <param name="hub">The hub the inbox renders on.</param>
     /// <param name="path">The item's node path.</param>
