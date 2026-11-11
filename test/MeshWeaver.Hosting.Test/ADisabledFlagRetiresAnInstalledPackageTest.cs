@@ -529,8 +529,16 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         await PackageRestartCoordinator.Pending(Mesh, request, "MeshWeaver.FlagRetireProbe", "the proxy repro", Log)
             .Timeout(TestTimeouts.Convergence).Await(ct);
 
-        var folded = await Coordinator(s => s.Facts is null, ct);
-        Assert.Equal(PackageRestartMemberState.Pending, folded.Members?.GetValueOrDefault(request)?.State);
+        // Waited on the real condition — the enrolment folded in as Pending — never on "Facts is null"
+        // alone: that is ALSO true before the Pending fact reaches the reader (the coordinator is
+        // created empty, and a replica may replay that state first — CI run 43071278745). The
+        // state matched here is exactly what the old proxy accepted with the enrolment still pending.
+        await (await CoordinatorStream(ct))
+            .Select(s => new CoordinatorView(s))
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(v => v.State.Facts is null
+                        && v.State.Members?.GetValueOrDefault(request)?.State == PackageRestartMemberState.Pending,
+                "the owner folds the Pending fact into a Pending member, with no fact left unfolded", ct);
 
         await PackageRestartCoordinator.Withdraw(Mesh, request, Log).Timeout(TestTimeouts.Convergence).Await(ct);
         await NoPendingEnrolmentIsLeftBehind(ct);
