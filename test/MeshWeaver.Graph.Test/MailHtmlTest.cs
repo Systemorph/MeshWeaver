@@ -123,6 +123,20 @@ public class MailHtmlTest
         shown.Document.Should().Contain("https://tracker.example.com/pixel.gif").And.Contain("img-src data: https: http:");
     }
 
+    /// <summary>A remote CSS url() — in a style attribute and in a style block — is held back like an image, and restored once the viewer asks.</summary>
+    [Fact]
+    public void RemoteCssUrls_AreRestoredOnRequest()
+    {
+        const string html = "<style>.d { background: url(https://img.example.com/bg.png) }</style>"
+                            + "<div class=\"d\" style=\"background-image: url(https://img.example.com/cell.png)\">x</div>";
+        var blocked = MailHtml.Render(html, null, allowRemoteImages: false);
+        blocked.Document.Should().NotContain("img.example.com");
+        blocked.BlockedRemoteImages.Should().Be(2, "both remote CSS resources are counted");
+
+        var shown = MailHtml.Render(html, null, allowRemoteImages: true).Document;
+        shown.Should().Contain("https://img.example.com/bg.png").And.Contain("https://img.example.com/cell.png");
+    }
+
     /// <summary>A cid: reference shows the message's own inline part; an unknown one shows nothing.</summary>
     [Fact]
     public void CidReferences_ShowTheMessagesInlinePart()
@@ -130,6 +144,8 @@ public class MailHtmlTest
         var inline = ImmutableDictionary<string, string>.Empty.Add("logo@example", Png);
         Body("<img src=\"cid:logo@example\">", inline).Should().Contain(Png);
         Body("<img src=\"cid:%3Clogo@example%3E\">", inline).Should().Contain(Png, "an encoded <id> names the same part");
+        var plus = ImmutableDictionary<string, string>.Empty.Add("a+b@example", Png);
+        Body("<img src=\"cid:a+b@example\">", plus).Should().Contain(Png, "a '+' in a content id is part of the id, never a space");
         Body("<img src=\"cid:missing@example\">", inline).Should().NotContain("cid:").And.NotContain("data:");
         MailHtml.Render("<img src=\"cid:logo@example\">", inline, false).BlockedRemoteImages.Should().Be(0, "an inline part is not remote");
     }

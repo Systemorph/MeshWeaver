@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Net;
 using System.Text.RegularExpressions;
 using AngleSharp.Dom;
 using Ganss.Xss;
@@ -119,7 +118,16 @@ public static class MailHtml
     /// <summary>The inline part a <c>cid:</c> reference names, as a raster <c>data:</c> URL, or null. Pure.</summary>
     private static string? InlinePart(string contentId, IReadOnlyDictionary<string, string> inline)
     {
-        var id = WebUtility.UrlDecode(contentId).Trim().Trim('<', '>');
+        // Percent-decoding only (cid: is a URL scheme, RFC 2392): form decoding would turn a '+' of a generated id into a space.
+        string id;
+        try
+        {
+            id = Uri.UnescapeDataString(contentId).Trim().Trim('<', '>');
+        }
+        catch (UriFormatException)
+        {
+            return null;
+        }
         return inline.TryGetValue(id, out var part) && RasterDataUrl.IsMatch(part) ? part : null;
     }
 
