@@ -74,6 +74,8 @@
   "common.menu": "Menü",
   "common.signIn": "Anmelden",
   "common.signOut": "Abmelden",
+  "common.reload": "Neu laden",
+  "common.reloadApp": "App neu starten",
   "account.menu": "Kontomenü",
   "account.signedInAs": "Angemeldet als {0}",
   "account.switch": "Konto wechseln",
