@@ -74,6 +74,8 @@
   "common.menu": "Menu",
   "common.signIn": "Sign in",
   "common.signOut": "Sign out",
+  "common.reload": "Reload",
+  "common.reloadApp": "Reload app",
   "account.menu": "Account menu",
   "account.signedInAs": "Signed in as {0}",
   "account.switch": "Switch account",
