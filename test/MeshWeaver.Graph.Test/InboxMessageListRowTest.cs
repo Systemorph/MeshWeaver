@@ -146,4 +146,27 @@ public class InboxMessageListRowTest
         var row = InboxRows.ForList([Row(new { receivedAt = "2026-11-07T09:05:00Z", isRead = true })], 1, now, "UTC", English).Single();
         N(row.Received).Should().Be("9:05 AM", "the list's time comes from the row's stamp");
     }
+
+    /// <summary>The compact time follows the viewer's offset across both daylight-saving switches, and the day rolls over where the viewer is.</summary>
+    [Fact]
+    public void TheTime_FollowsBothDaylightSavingSwitches()
+    {
+        // Spring forward in Zurich: 01:00 UTC on 29 March 2026 (02:00 CET becomes 03:00 CEST).
+        var spring = new DateTimeOffset(2026, 3, 29, 12, 0, 0, TimeSpan.Zero);
+        N(InboxRows.ShortWhen(new DateTimeOffset(2026, 3, 29, 0, 30, 0, TimeSpan.Zero), spring, "Europe/Zurich", English))
+            .Should().Be("1:30 AM", "before the switch the offset is +1");
+        N(InboxRows.ShortWhen(new DateTimeOffset(2026, 3, 29, 1, 30, 0, TimeSpan.Zero), spring, "Europe/Zurich", English))
+            .Should().Be("3:30 AM", "after the switch the offset is +2");
+        // Fall back: 01:00 UTC on 25 October 2026 (03:00 CEST becomes 02:00 CET) — two instants, one wall time.
+        var autumn = new DateTimeOffset(2026, 10, 25, 12, 0, 0, TimeSpan.Zero);
+        N(InboxRows.ShortWhen(new DateTimeOffset(2026, 10, 25, 0, 30, 0, TimeSpan.Zero), autumn, "Europe/Zurich", English))
+            .Should().Be("2:30 AM", "the first 02:30, still summer time");
+        N(InboxRows.ShortWhen(new DateTimeOffset(2026, 10, 25, 1, 30, 0, TimeSpan.Zero), autumn, "Europe/Zurich", English))
+            .Should().Be("2:30 AM", "the second 02:30, winter time");
+        // 22:30 UTC on the 24th is 00:30 on the 25th in Zurich: today for the viewer, a weekday in UTC.
+        N(InboxRows.ShortWhen(new DateTimeOffset(2026, 10, 24, 22, 30, 0, TimeSpan.Zero), autumn, "Europe/Zurich", English))
+            .Should().Be("12:30 AM");
+        N(InboxRows.ShortWhen(new DateTimeOffset(2026, 10, 24, 22, 30, 0, TimeSpan.Zero), autumn, "UTC", English))
+            .Should().Be("Sat 10:30 PM", "negative control: in UTC it was yesterday");
+    }
 }

@@ -101,6 +101,8 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         var grid = (DataGridControl)(await stream.GetControlStream(GridArea).Should().Within(TestTimeouts.Convergence)
             .Match(c => c is DataGridControl, "the inbox renders as one grid", ct))!;
         grid.SelectionMode.Should().Be(DataGridRowSelection.Multiple, "the inbox is select-many");
+        grid.MultiLine.Should().Be(true,
+            "a row is three lines (sender and time, subject, preview); a one-line row height shows only the subject");
         grid.SelectionKey.Should().Be(InboxRows.KeyProperty);
         var rows = stream.GetDataStream<JsonElement>(
             new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)));
