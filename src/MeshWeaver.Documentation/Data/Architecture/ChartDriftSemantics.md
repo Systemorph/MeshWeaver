@@ -63,6 +63,20 @@ them"* — that inventory was right and the detector's legend was wrong.
 > urgency the old legend created was false, *and* the reassurance "it will sort itself out on the
 > next deploy" is equally false. Drift is only ever cleared deliberately.
 
+The same holds for a **pod volume and its mount** that only the live Deployment carries, and there it
+does damage on every roll: the strategic merge keeps a `volumes[]` / `volumeMounts[]` entry it does not
+name, so each roll copies it into the new ReplicaSet. Measured on memex (Audit `volumes live-only (1):
+hosting-jobrunner-token`, `mounts live-only (1): /var/run/secrets/hosting-operator`, helm revision 598):
+once the Secret behind that volume was deleted, the serving pods kept their already-mounted copy and every
+new pod stuck in `FailedMount`, roll after roll. A live-only volume is cleared the same deliberate way as
+a live-only env entry: the record states it (`liveOnlyVolumes[]`, declarative — it renders nothing),
+`retiredBy` ends it, and Reconcile's `RetireLiveOnlyVolume` remedy removes it. That remedy is the Hosting
+plugin's (Systemorph/MeshWeaver.Plugins#5358); its operator command is MeshWeaver.Deploy's
+`hosting-volume-retire` (Systemorph/MeshWeaver.Deploy#262), which first proves the chart does not render the
+volume and no container reads its path. The same MeshWeaver.Deploy change makes a governed
+`DeleteClusterManifest` refuse an object a live workload still uses, naming the workload, so the deletion
+cannot happen before the reference is gone. Until those land and run, this record field only STATES the volume.
+
 One exception, and it follows from the same mechanism rather than qualifying it: a key the LAST
 deploy rendered and the CURRENT chart does not is in the release's own manifest, so helm owned it
 and the merge deletes it. That is not a cluster-only setting surviving; it is a chart retirement
