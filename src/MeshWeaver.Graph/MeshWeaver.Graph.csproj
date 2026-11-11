@@ -88,6 +88,7 @@
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
     <!-- IHttpClientFactory for the OgCard Open Graph fetcher (OpenGraphPreviewService). -->
     <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="HtmlSanitizer" />
   </ItemGroup>
 
   <ItemGroup>

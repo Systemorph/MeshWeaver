@@ -468,9 +468,16 @@ one segment (`InboxReadingView.ItemId`). There:
 
 - an item whose path an **`IInboxItemReader`** handles (`Handles(path)` — a live mailbox or chat
   row, which no store holds) is READ LIVE by that reader as the owner — subject, sender, account,
-  received time in the viewer's zone, the body and a conversation's messages. Everything a reader
-  returns is PLAIN TEXT and rendered escaped; nothing is stored. A package registers its reader as
-  a singleton service beside its `InboxQueryLeg` and `IInboxItemHandler`;
+  received time in the viewer's zone, the body and a conversation's messages. Text is rendered
+  escaped; nothing is stored. A mail's HTML body (`InboxItemContent.BodyHtml`, with its inline parts
+  in `InlineImages`) is shown in the mail's own layout, as a mail client's reading pane does: it is
+  SANITISED on the server (`MailHtml` — an allow-list parser, safe URL schemes only, links to a new tab)
+  and framed SANDBOXED (`Controls.SandboxedHtml` — no script, no origin, its own
+  Content-Security-Policy, a light page in dark mode too). Remote images are BLOCKED until the viewer
+  presses **Show images** for that message (a remote image is a tracking pixel); `cid:` images come
+  from the message itself. A mail with no HTML part shows its plain `Body`. See Doc/GUI/DisplayControls
+  → "Sandboxed HTML". A package registers its reader as a singleton service beside its
+  `InboxQueryLeg` and `IInboxItemHandler`;
 - any other (stored) item is shown by its own page, embedded (`Overview`);
 - the provider's own client (`webLink`, https only) is a secondary **Open in …** link under the
   content — never where the click goes. The one transitional exception: a row with an https
