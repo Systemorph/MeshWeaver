@@ -94,6 +94,11 @@ public record DataGridControl(object Data)
     /// </summary>
     public object? MultiLine { get; init; }
     /// <summary>
+    /// When true, the row-selection boxes (<see cref="WithRowSelection"/>) show only on hover, focus, when ticked or
+    /// while anything is selected — a message list's quiet rows. A device that cannot hover keeps every box. Accepts a boolean or a binding.
+    /// </summary>
+    public object? SelectionOnHover { get; init; }
+    /// <summary>
     /// When true, columns can be resized by dragging their dividers. Defaults to <c>true</c>.
     /// </summary>
     public object? ResizableColumns { get; init; } = true;
@@ -226,6 +231,13 @@ public record DataGridControl(object Data)
     /// <summary>Returns a copy of the control whose rows grow to their content (<see cref="MultiLine"/>).</summary>
     /// <param name="multiLine">The multi-line setting; defaults to <c>true</c> when omitted.</param>
     public DataGridControl WithMultiLine(object? multiLine = null) => This with { MultiLine = multiLine ?? true };
+    /// <summary>
+    /// Returns a copy whose row-selection boxes show only where a mail client shows them: on the row under the
+    /// pointer, on keyboard focus, when ticked, and on every row once anything is selected. Only on a device that
+    /// can hover — a touch screen keeps every box. Off by default (<see cref="SelectionOnHover"/>).
+    /// </summary>
+    /// <param name="onHover">The setting; defaults to <c>true</c> when omitted.</param>
+    public DataGridControl WithSelectionOnHover(object? onHover = null) => This with { SelectionOnHover = onHover ?? true };
     /// <summary>Returns a copy of the control with column resizing enabled or set to <paramref name="resizable"/>. Defaults to <c>true</c>.</summary>
     /// <param name="resizable">The resizable value; defaults to <c>true</c> when omitted.</param>
     public DataGridControl Resizable(object? resizable = null) => This with { ResizableColumns = resizable ?? true };
