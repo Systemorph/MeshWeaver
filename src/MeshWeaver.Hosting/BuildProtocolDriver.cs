@@ -664,38 +664,63 @@ public static class BuildProtocolDriver
 
         // Door 2 — the build fell free and the arbiter granted it to us. Re-subscribing here also
         // closes the race where the grant landed microseconds after the GrantWindow expired.
+        //
+        // 🚨 The GRANTING STATE travels with the grant. A builder that finished frees the claim in
+        // the same fold that records its GO (BuildNodeType.FoldReportedOutcomes), and the history
+        // is never trimmed, so every state that names US as holder after a completed build already
+        // carries that GO. Whenever the GO and the grant reach this follower as one state (without a
+        // durable store they are even ONE write — GrantOnMirror), this door and door 1 fire on the
+        // SAME emission and whichever subscription is told first decides. Dropping that state here and asking
+        // only the durable witness turned a lost subscription race into a redundant bake —
+        // "released it without a GO, so this process bakes", for a build whose GO was on the very
+        // state that granted it (Plugins BuildCoordinationTest.Follower_StandsDown).
         var granted = mesh.ObserveBuildClaim(holder)
             .Take(1)
-            .Select(_ => (Go: (BuildGo?)null, Granted: true));
+            .Select(state => (Go: GoOn(state, fingerprint), Granted: true));
 
         return go.Merge(granted)
             .Take(1)
             .SelectMany(end => end.Granted
-                ? OnGranted(mesh, holder, fingerprint, definitions, store, bake, logger)
+                ? OnGranted(mesh, holder, fingerprint, end.Go, definitions, store, bake, logger)
                 : ProbeAfterGo(mesh, holder, fingerprint, end.Go!, definitions, store, logger));
     }
 
+    /// <summary>The GO <paramref name="state"/> records for <paramref name="fingerprint"/>, or <c>null</c>.</summary>
+    private static BuildGo? GoOn(BuildState state, string fingerprint)
+        => state.Ready is { } ready && ready.TryGetValue(fingerprint, out var go) ? go : null;
+
     /// <summary>
     /// The follower was handed the claim. That means the build fell free — but NOT which way: the
-    /// builder may have finished (published its GO and released) or gone away mid-bake. Only the
-    /// durable witness distinguishes them, and asking it here is what makes a peer cluster's GO
-    /// actually spare this process the bake instead of merely arriving too late to matter.
+    /// builder may have finished (published its GO and released) or gone away mid-bake. Two
+    /// witnesses tell them apart, read in this order:
+    ///
+    /// <list type="number">
+    /// <item><b>The state that granted the claim</b> (<paramref name="goOnTheGrant"/>). A completed
+    /// build records its GO in the same fold that frees the claim, so a grant that follows it carries
+    /// the GO — whichever of this follower's two subscriptions was told first.</item>
+    /// <item><b>The durable witness</b>, which is what makes a peer cluster's GO actually spare this
+    /// process the bake instead of merely arriving too late to matter.</item>
+    /// </list>
+    /// Only when NEITHER carries the GO did the builder go away without one, and this process bakes.
     /// </summary>
     private static IObservable<PreWarmOutcome> OnGranted(
         IMessageHub mesh,
         string holder,
         string fingerprint,
+        BuildGo? goOnTheGrant,
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
         IAssemblyStore store,
         Func<IObservable<PreWarmOutcome>> bake,
         ILogger? logger)
-        => mesh.ReadBuildGo(fingerprint, logger)
+        => (goOnTheGrant is not null
+                ? Observable.Return<BuildGo?>(goOnTheGrant)
+                : mesh.ReadBuildGo(fingerprint, logger))
             .SelectMany(go =>
             {
                 if (go is not null)
                 {
                     logger?.LogInformation(
-                        "BuildProtocol: {Holder} was granted the claim, but the durable witness "
+                        "BuildProtocol: {Holder} was granted the claim, but the build root "
                         + "already carries the GO for framework {Fingerprint} (ready at {ReadyAt:O}) "
                         + "— standing down instead of re-baking",
                         holder, fingerprint, go.ReadyAt);
