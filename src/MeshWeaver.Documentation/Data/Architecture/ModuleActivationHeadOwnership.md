@@ -148,7 +148,11 @@ proposed that as the mesh's module set. Now:
   be read, every module that has records and **no readable `<Name>.json` of its own** is dropped —
   its only entry may be in the aggregate. A module WITH its own readable file is not: that file
   outranks the aggregate's row by name, so the aggregate cannot hide it — and the aggregate is never
-  rewritten, so an unreadable one could otherwise drop every store module for good;
+  rewritten, so an unreadable one could otherwise drop every store module for good. The aggregate's
+  own fault line names the remedy its fault shows, as an entry file's does (#8124): a refused open or
+  read says nothing about its bytes, so nothing needs repairing or re-installing and the next read
+  that opens it restores the entries it holds; only content that does not parse calls for a repair
+  or a re-install;
 - if the record directories cannot even be listed, every current-image projection is dropped — it is
   a decision some record may have overtaken. The drops are reported in the SAME line as the listing
   fault, which names every dropped module (#7909, #7910): one fault is one line. One line per module

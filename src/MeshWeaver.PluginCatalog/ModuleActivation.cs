@@ -2450,11 +2450,29 @@ public static class ModuleActivationSidecar
         }
         catch (Exception ex)
         {
+            // 🚨 The remedy follows the fault (MeshWeaver#8124), exactly as for a per-module entry
+            // (#8049). A refused open or read says nothing about the aggregate's bytes: the file is
+            // not damaged, and the next read that opens it restores what it holds. "Repair the file
+            // or re-install" over a refusal by the volume sends an operator to fix a file that is
+            // fine. Only bytes that do not parse show the content is wrong; any other exception
+            // shows neither, and the line says so rather than guess.
+            var remedy = ex switch
+            {
+                IOException or UnauthorizedAccessException =>
+                    " The volume refused the read, which says nothing about the file's content, so "
+                    + "nothing needs repairing or re-installing: the next read that opens the file "
+                    + "restores the entries it holds.",
+                JsonException =>
+                    " The file's content does not parse as an activation list, so store-installed "
+                    + "modules recorded only there will NOT load until the file is repaired or the "
+                    + "modules are re-installed.",
+                _ =>
+                    " This fault does not show whether the file's content is wrong; if the next read "
+                    + "reports the same fault, repair the file or re-install the modules recorded there.",
+            };
             onCorrupt?.Invoke(
                 $"Module activation sidecar '{path}' could not be read ({ex.GetType().Name}: "
-                + $"{ex.Message}) — the entries it holds are skipped. Store-installed modules "
-                + "recorded there will NOT load until the file is repaired or the modules are "
-                + "re-installed.");
+                + $"{ex.Message}) — the entries it holds are skipped from this read." + remedy);
             return (new ModuleActivationList(), null, true);
         }
     }
