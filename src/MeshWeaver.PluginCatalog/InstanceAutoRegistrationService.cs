@@ -1739,6 +1739,127 @@ public sealed class InstanceAutoRegistrationService(
                 n => string.Equals(n, w.Source, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
+    /// <summary>The plan a pass reports when nothing in the registry's answer named one.</summary>
+    internal const string PlanUnknown = "unknown (the registry's answer named no plan)";
+
+    /// <summary>
+    /// The stable template of the Error a package NAMED EXACTLY in
+    /// <see cref="PluginCatalogOptions.InstallByDefault"/> raises when the registry's listing for
+    /// this instance does not carry it at all. Stable on purpose: an Error's TEMPLATE is what the
+    /// instance's error digest carries to the control instance's triage
+    /// (<see cref="ErrorSignatureCollector"/> → <see cref="InstanceErrorReporter"/>,
+    /// <c>Doc/Architecture/InstanceTelemetry</c>) — the values stay in the instance's own log — so
+    /// the template itself names the causes, in the order to check them.
+    /// </summary>
+    internal const string NamedEntryNotListedTemplate =
+        "[DefaultInstall] PluginCatalog:InstallByDefault names {Entry} exactly, and the default install "
+        + "selects NOTHING for it: the registry's listing for this instance does not carry that package "
+        + "(this instance is on plan {Plan}; listing complete: {ListingComplete}). A package the "
+        + "deployment configuration names is a declared requirement, and it is NOT installed. Likely "
+        + "causes, in order: (1) the registry does not list it to this instance — a package above the "
+        + "instance's plan tier is not offered at all: raise the plan on the registry (Settings > "
+        + "Instance grants) or redeem a registration key for that plan (PluginCatalog:BootstrapKey); "
+        + "(2) no package of that id exists under source {Source}; (3) the listing failed.";
+
+    /// <summary>
+    /// The stable template of the Error a package NAMED EXACTLY in
+    /// <see cref="PluginCatalogOptions.InstallByDefault"/> raises when the registry lists it as
+    /// refused by the instance's plan tier (#4097). Error, not the Warning the default set's
+    /// refusals get: a named package is a declared requirement (policy <c>declared-not-derived</c>).
+    /// </summary>
+    internal const string NamedEntryRefusedByPlanTemplate =
+        "[DefaultInstall] PluginCatalog:InstallByDefault names {Entry} exactly, and the registry "
+        + "REFUSES it by plan tier: {Package} needs plan tier {RequiredTier}, this instance is on "
+        + "{Plan}. A package the deployment configuration names is a declared requirement, and it is "
+        + "NOT installed. Raise the instance's plan on the registry (Settings > Instance grants) or "
+        + "redeem a registration key for that plan (PluginCatalog:BootstrapKey); nothing on this "
+        + "instance can.";
+
+    /// <summary>
+    /// 🚨 Judges the operator's <see cref="PluginCatalogOptions.InstallByDefault"/> entries against
+    /// the pass's listing, EACH ON ITS OWN, and says what did not select. Pure apart from the
+    /// logger, so it is directly unit-testable.
+    ///
+    /// <list type="bullet">
+    /// <item>An entry in <paramref name="named"/> naming a package EXACTLY (<c>Source/Package</c>)
+    /// whose source is configured but whose package the listing does not carry → one
+    /// <see cref="LogLevel.Error"/> per entry (<see cref="NamedEntryNotListedTemplate"/>). The
+    /// incident this closes: a fleet machine on <c>free</c> named <c>Plugins/Hosting</c> (tier
+    /// <c>enterprise</c>), the registry left Hosting out of its listing, and the only line was a
+    /// Warning that fired only when NO pattern matched — so the fleet heartbeat never installed for
+    /// 13 days and nobody was told.</item>
+    /// <item>The same entry whose package the listing carries as REFUSED by plan tier →
+    /// <see cref="LogLevel.Error"/> (<see cref="NamedEntryRefusedByPlanTemplate"/>).</item>
+    /// <item>Every other entry of <paramref name="wanted"/> — the whole-source <c>Source/*</c>
+    /// patterns, and exact choices that are the instance's own rather than the record's — keeps
+    /// today's Warning when none of them matched anything.</item>
+    /// </list>
+    ///
+    /// <para>An entry naming a source this installation does not have is left to
+    /// <see cref="UnmatchablePatterns"/>, which already reports it at Error before any listing.
+    /// Selection is not changed here: this only SAYS what the fail-closed selection did.</para>
+    /// </summary>
+    /// <param name="logger">Receives the Errors and the Warning.</param>
+    /// <param name="named">The entries carrying the deployment configuration's authority.</param>
+    /// <param name="wanted">Every operator pattern the selection reads.</param>
+    /// <param name="catalog">Every package the sources listed, refused rows included.</param>
+    /// <param name="sourceNames">The names of the sources actually configured.</param>
+    /// <param name="selectedCount">How many packages the pass selected (for the Warning's copy).</param>
+    /// <param name="listingComplete">False when some source's listing contributed nothing.</param>
+    /// <returns>The named entries reported at Error, in configuration order.</returns>
+    internal static IReadOnlyList<PluginGrantEntry> ReportUnselectedOperatorEntries(
+        ILogger logger,
+        IReadOnlyList<PluginGrantEntry> named,
+        IReadOnlyList<PluginGrantEntry> wanted,
+        IReadOnlyList<PackageManifest> catalog,
+        IReadOnlyCollection<string> sourceNames,
+        int selectedCount,
+        bool listingComplete)
+    {
+        static bool IsExact(PluginGrantEntry e) => e.PackageId != PluginGrantEntry.AllPackages;
+        bool SourceConfigured(PluginGrantEntry e) =>
+            sourceNames.Any(n => string.Equals(n, e.Source, StringComparison.OrdinalIgnoreCase));
+        // The plan the registry decided at, as its own refusals state it — the same words the
+        // plan-tier refusal line uses ("this instance is on free").
+        var plan = catalog.Select(p => p.Refusal?.InstancePlan)
+            .FirstOrDefault(p => !string.IsNullOrWhiteSpace(p)) ?? PlanUnknown;
+
+        var reported = new List<PluginGrantEntry>();
+        foreach (var entry in named.Where(IsExact).Where(SourceConfigured).Distinct())
+        {
+            var listed = catalog.Where(p => entry.Matches(p.Source ?? "", p.Id)).ToList();
+            if (listed.Count == 0)
+            {
+                logger.LogError(NamedEntryNotListedTemplate,
+                    entry.ToString(), plan, listingComplete, entry.Source);
+                reported.Add(entry);
+            }
+            else if (listed.All(p => p.IsRefused) && listed[0].Refusal is { } refusal)
+            {
+                logger.LogError(NamedEntryRefusedByPlanTemplate,
+                    entry.ToString(), refusal.PackageId, refusal.RequiredTier, refusal.InstancePlan);
+                reported.Add(entry);
+            }
+        }
+
+        // 🚨 The remaining patterns are judged on their OWN, not on whether the pass matched
+        // anything overall. `selected.Count == 0` alone is masked by the pre-installed baseline:
+        // with 8 baseline packages selected, "matched something" is true while every pattern
+        // matched nothing — which is exactly how a local registry came up with no plugins and no
+        // warning.
+        var rest = wanted
+            .Where(w => !(IsExact(w) && named.Any(n => n == w)))
+            .ToList();
+        if (rest.Count > 0 && !catalog.Any(p => rest.Any(w => w.Matches(p.Source ?? "", p.Id))))
+            logger.LogWarning(
+                "The default install matched no packages for the operator's patterns "
+                + "(wanted [{Wanted}]; {Baseline} pre-installed package(s) were still "
+                + "selected). If the registry predates source-stamped catalog entries, a "
+                + "Source/* pattern cannot match — it fails closed rather than guessing.",
+                string.Join(", ", rest), selectedCount);
+        return reported;
+    }
+
     /// <summary>
     /// One package pattern a feature flag contributes, and the flag that declared it — so an error
     /// message can name the flag an operator has to fix, not just the pattern.
@@ -1888,18 +2009,12 @@ public sealed class InstanceAutoRegistrationService(
                         + "([{Included}]). If the registry predates source-stamped catalog entries, "
                         + "a Source/* pattern cannot match — it fails closed rather than guessing.",
                         string.Join(", ", included.Select(i => $"{i.Flag}:{i.Entry}")));
-                // 🚨 Judge the OPERATOR'S patterns on their own, not on whether the pass matched
-                // anything overall. `selected.Count == 0` alone is masked by the pre-installed
-                // baseline: with 8 baseline packages selected, "matched something" is true while
-                // every InstallByDefault pattern matched nothing — which is exactly how a local
-                // registry came up with no plugins and no warning.
-                if (wanted.Count > 0 && !selected.Any(IsWanted))
-                    logger.LogWarning(
-                        "The default install matched no packages for the operator's patterns "
-                        + "(wanted [{Wanted}]; {Baseline} pre-installed package(s) were still "
-                        + "selected). If the registry predates source-stamped catalog entries, a "
-                        + "Source/* pattern cannot match — it fails closed rather than guessing.",
-                        string.Join(", ", wanted), selected.Count);
+                // 🚨 Judge the OPERATOR'S patterns on their own — and every EXACTLY named entry on
+                // its own, at Error: a named package the pass does not select is a declared
+                // requirement going unmet (see ReportUnselectedOperatorEntries).
+                ReportUnselectedOperatorEntries(
+                    logger, named, wanted, catalog.Select(c => c.Package).ToList(),
+                    sources.Select(s => s.Name).ToList(), selected.Count, listingComplete: !listingIncomplete);
 
                 // 🚨 THE DEPLOYMENT CONFIGURATION AUTHORIZES WHAT IT NAMES — policy
                 // `deployment-config-authorizes-named-commercial`. A package named EXACTLY in
@@ -2008,6 +2123,11 @@ public sealed class InstanceAutoRegistrationService(
                         // required by a package that is. Null when it does not (a wildcard, the
                         // baseline, a flag): such a commercial package is still skipped.
                         ConfigAuthority = ConfigAuthority(c),
+                        // Named EXACTLY by the deployment configuration — read by the plan-tier
+                        // refusal report, which says a named refusal at Error (it was already
+                        // reported, by ReportUnselectedOperatorEntries) and keeps only the default
+                        // set's own refusals at Warning.
+                        NamedExactly = IsNamed(c),
                     })
                     .ToList(), listingIncomplete, sourceUnreachable);
             }));
@@ -2577,12 +2697,19 @@ public sealed class InstanceAutoRegistrationService(
             .Select(r => r!)
             .DistinctBy(r => r.PackageId, StringComparer.Ordinal)
             .ToImmutableList();
-        if (tierRefused.Count > 0)
+        // A refusal of a package the deployment configuration NAMES was already said at Error by
+        // ReportUnselectedOperatorEntries (a declared requirement — policy declared-not-derived);
+        // only the default set's own refusals, which nobody declared, stay at this Warning. The
+        // ledger still records every refusal (seed below).
+        var namedIds = candidates.Where(c => c.NamedExactly).Select(c => c.Package.Id)
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        var undeclaredRefused = tierRefused.Where(r => !namedIds.Contains(r.PackageId)).ToList();
+        if (undeclaredRefused.Count > 0)
             logger.LogWarning(
                 "[DefaultInstall] {Count} package(s) the registry declares in this instance's default "
                 + "set are REFUSED by its plan tier and are not installed: {Refused}. Raise the "
                 + "instance's plan on the registry to receive them; nothing on this instance can.",
-                tierRefused.Count, string.Join("; ", tierRefused.Select(r => r.Describe())));
+                undeclaredRefused.Count, string.Join("; ", undeclaredRefused.Select(r => r.Describe())));
 
         var seed = DefaultInstallSummary.Empty with { Skipped = skipped, TierRefused = tierRefused };
         var progress = hub.ServiceProvider.GetService<BootProgress>();
@@ -3461,6 +3588,14 @@ public sealed class InstanceAutoRegistrationService(
         /// one without is skipped (<see cref="TerminalSkipReason(PackageManifest, bool)"/>).
         /// </summary>
         public string? ConfigAuthority { get; init; }
+
+        /// <summary>
+        /// Whether an entry of <see cref="PluginCatalogOptions.InstallByDefault"/> carrying the
+        /// deployment configuration's authority names this candidate EXACTLY (<c>Source/Package</c>,
+        /// never a whole-source <c>Source/*</c>) — a declared requirement, so a plan-tier refusal of
+        /// it is reported at Error rather than with the default set's Warning.
+        /// </summary>
+        public bool NamedExactly { get; init; }
 
         /// <summary>
         /// Whether the ref this candidate would be installed at was PROVEN for this instance: the
