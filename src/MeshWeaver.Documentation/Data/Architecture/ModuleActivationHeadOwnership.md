@@ -135,9 +135,14 @@ proposed that as the mesh's module set. Now:
   That drop is reported in the entry fault's OWN line, which already says the module is not loaded
   from this read — one fault is one line (#8049): a second "is NOT loaded" line for the same file
   was filed as a second incident. The line's remedy follows the fault: a refused open or read (an
-  `IOException` or `UnauthorizedAccessException`, e.g. `EAGAIN` from the SMB transport) says nothing
+  `IOException` that is not an access denial, e.g. `EAGAIN` from the SMB transport) says nothing
   about the file's bytes, so nothing needs re-installing and the next read that opens it restores the
-  module; only content that is not the file's own entry is repaired by a re-install;
+  module. A DENIED one (an `UnauthorizedAccessException` anywhere in the fault's inner chain —
+  `EACCES`/`EPERM`, an ACL, a read-only or mis-mapped mount) says nothing about the bytes either, but
+  it usually persists, so the line promises no self-repair: if the next read is denied too, fix the
+  file's permissions or the volume's mount (#8124). The lock-free reader WRAPS every fault in an
+  `IOException`, so the classification walks the inner chain rather than the outer type. Only
+  content that is not the file's own entry is repaired by a re-install;
 - a `<Name>.json` that does not hold ITS OWN entry — JSON `null`, an entry with no name, or an entry
   naming a different module — is corrupt exactly as a record that does not hash to its own name is:
   reported, keyed by the FILE's name, and never accepted under the other module's name (sorted
@@ -149,10 +154,11 @@ proposed that as the mesh's module set. Now:
   its only entry may be in the aggregate. A module WITH its own readable file is not: that file
   outranks the aggregate's row by name, so the aggregate cannot hide it — and the aggregate is never
   rewritten, so an unreadable one could otherwise drop every store module for good. The aggregate's
-  own fault line names the remedy its fault shows, as an entry file's does (#8124): a refused open or
-  read says nothing about its bytes, so nothing needs repairing or re-installing and the next read
-  that opens it restores the entries it holds; only content that does not parse calls for a repair
-  or a re-install;
+  own fault line names the remedy its fault shows, through the same classification as an entry
+  file's (#8124): a refused open or read says nothing about its bytes, so nothing needs repairing or
+  re-installing and the next read that opens it restores the entries it holds; a denied one needs no
+  repair or re-install either, but the line names the permission or the mount as what to fix if the
+  next read is denied too; only content that does not parse calls for a repair or a re-install;
 - if the record directories cannot even be listed, every current-image projection is dropped — it is
   a decision some record may have overtaken. The drops are reported in the SAME line as the listing
   fault, which names every dropped module (#7909, #7910): one fault is one line. One line per module

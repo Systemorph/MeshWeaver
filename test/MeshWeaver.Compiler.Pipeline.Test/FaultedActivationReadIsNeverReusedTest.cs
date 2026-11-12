@@ -201,6 +201,8 @@ public class FaultedActivationReadIsNeverReusedTest : IDisposable
 /// Makes a file genuinely unreadable for the life of the returned handle and restores it untouched —
 /// same name, length and write time. Unix: every permission removed (a <c>chmod</c> moves only the
 /// change time). Windows: held with <see cref="FileShare.None"/>, a kernel-enforced share mode.
+/// On Unix the fault is therefore an access DENIAL; on Windows it is a sharing violation, a refusal
+/// that is not a denial (<see cref="RefusedRecord"/> gives that class on both).
 /// </summary>
 internal static class UnreadableRecord
 {
@@ -214,6 +216,37 @@ internal static class UnreadableRecord
         {
             if (!OperatingSystem.IsWindows())
                 File.SetUnixFileMode(path, mode);
+        });
+    }
+
+    private sealed class Restore(Action restore) : IDisposable
+    {
+        public void Dispose() => restore();
+    }
+}
+
+/// <summary>
+/// Makes a file's open genuinely REFUSED, but not DENIED, for the life of the returned handle, and
+/// restores it untouched (MeshWeaver#8124). This is the incident's class: <c>EAGAIN</c> from the SMB
+/// transport is an <see cref="IOException"/> that is not an access denial, and no local fixture can
+/// provoke <c>EAGAIN</c> itself. So on Unix the file is moved aside and its name becomes a symbolic
+/// link to itself: <c>open(2)</c> answers <c>ELOOP</c>, another plain <see cref="IOException"/>. On
+/// Windows it is held with <see cref="FileShare.None"/>, a kernel sharing violation, which is
+/// likewise an <see cref="IOException"/> and not a denial.
+/// </summary>
+internal static class RefusedRecord
+{
+    public static IDisposable Hold(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+        var aside = path + ".held";
+        File.Move(path, aside);
+        File.CreateSymbolicLink(path, Path.GetFileName(path));
+        return new Restore(() =>
+        {
+            File.Delete(path);
+            File.Move(aside, path);
         });
     }
 
