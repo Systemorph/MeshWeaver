@@ -124,6 +124,57 @@ public class QueryFanInStallIsTerminalTest
         stall.Budget.Should().Be(StallBudget,
             "the budget reported is the FAN-IN's own rung of the ladder, never a consumer's bound");
         stall.Message.Should().Contain("never bump the consumer's timeout");
+        stall.ThreadPoolPending.Should().NotBeNull(
+            "the fan-in reads the process's queue when its bound elapses — on a backlogged replica the "
+            + "provider is only where the stall was seen, and the fault must say which it was (#8100)");
+        stall.ThreadPoolThreads.Should().NotBeNull();
+        stall.ThreadPoolThreads!.Value.Should().BeGreaterThan(0);
+        stall.Message.Should().Contain("queued work item(s) over");
+    }
+
+    /// <summary>
+    /// The reading decides the message's direction (#8100). Four standing catalogs on one replica filed
+    /// four "provider stalled" tickets for ONE process-wide backlog (48,807 queued over 42 threads,
+    /// siblings at 0), because the message could only say "fix the stalled provider". A backlogged
+    /// reading sends the reader to the replica; a quiet one keeps the provider in the dock; no reading
+    /// keeps the original sentence. The control is the quiet case: without it a message that always
+    /// blamed the replica would pass the first assertion.
+    /// </summary>
+    [Fact]
+    public void TheMessage_ReadsTheReplicaFirst_OnlyWhenThePoolWasBacklogged()
+    {
+        var backlogged = new QueryProviderStalledException("pg", TimeSpan.FromSeconds(15), "q", "u", 48_807, 42);
+        backlogged.Message.Should().Contain("48807 queued work item(s) over 42 thread(s)")
+            .And.Contain("the REPLICA was backlogged")
+            .And.Contain("never bump the consumer's timeout");
+
+        var quiet = new QueryProviderStalledException("pg", TimeSpan.FromSeconds(15), "q", "u", 12, 21);
+        quiet.Message.Should().Contain("12 queued work item(s) over 21 thread(s)")
+            .And.Contain("the process was not backlogged")
+            .And.NotContain("the REPLICA was backlogged");
+
+        var unread = new QueryProviderStalledException("pg", TimeSpan.FromSeconds(15), "q", "u");
+        unread.ThreadPoolPending.Should().BeNull();
+        unread.Message.Should().Contain("Fix the stalled provider; never bump the consumer's timeout.")
+            .And.NotContain("queued work item(s)");
+    }
+
+    /// <summary>
+    /// The two counts are one reading of one pool, so they travel as a pair. Half a reading would
+    /// render as no reading and silently drop the half it carried, so the constructor refuses it
+    /// rather than accept it and show less than it was given.
+    /// </summary>
+    [Fact]
+    public void TheReading_IsAPair_HalfAReadingIsRefused()
+    {
+        Action threadsOnly = () => _ = new QueryProviderStalledException("pg", TimeSpan.FromSeconds(15), "q", "u", null, 42);
+        threadsOnly.Should().Throw<ArgumentException>().Which.ParamName.Should().Be("threadPoolPending");
+
+        Action pendingOnly = () => _ = new QueryProviderStalledException("pg", TimeSpan.FromSeconds(15), "q", "u", 48_807, null);
+        pendingOnly.Should().Throw<ArgumentException>().Which.ParamName.Should().Be("threadPoolThreads");
+
+        Action neither = () => _ = new QueryProviderStalledException("pg", TimeSpan.FromSeconds(15), "q", "u", null, null);
+        neither.Should().NotThrow("no reading at all is the shape a caller that fabricates a stall uses");
     }
 
     /// <summary>
