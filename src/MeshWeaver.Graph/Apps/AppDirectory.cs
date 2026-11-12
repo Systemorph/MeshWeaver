@@ -269,8 +269,12 @@ public sealed class AppDirectory
     /// connections: your settings".</summary>
     public const string PersonSettingsDescriptionKey = "launcher.personSettingsDescription";
 
-    /// <summary>The icon the Settings and Administration built-ins carry.</summary>
+    /// <summary>The icon the Administration built-in carries — the technical gear.</summary>
     public const string SettingsIcon = "/static/NodeTypeIcons/settings.svg";
+
+    /// <summary>The icon of a person's OWN settings tile when they have no picture: a person, not the gear,
+    /// so "my settings" never looks like Administration (owner, 2026-11-12: "something less technical").</summary>
+    public const string PersonSettingsIcon = "/static/NodeTypeIcons/person.svg";
 
     private readonly IMessageHub hub;
     private readonly ILogger<AppDirectory>? logger;
@@ -765,10 +769,10 @@ public sealed class AppDirectory
     {
         var settingsPath = $"{viewer}/{MeshNodeLayoutAreas.SettingsArea}";
         var settings = person is { Name.Length: > 0 }
-            ? new AppDirectoryEntry(SettingsId, person.Name, person.Icon ?? SettingsIcon,
+            ? new AppDirectoryEntry(SettingsId, person.Name, person.Icon ?? PersonSettingsIcon,
                 LocalizationCatalog.Get(PersonSettingsDescriptionKey, person.Locale), SettingsGroup,
                 settingsPath, LabelKey: null, BuiltIn: true)
-            : new AppDirectoryEntry(SettingsId, "Settings", SettingsIcon, null, SettingsGroup,
+            : new AppDirectoryEntry(SettingsId, "Settings", PersonSettingsIcon, null, SettingsGroup,
                 settingsPath, LabelKey: "common.settings", BuiltIn: true);
         // The settings tiles sit in ONE group, last (Architecture/AppsHome); the Inbox stays top-level.
         settings = settings with { GroupDeclared = true, GroupOrder = LastGroupOrder, GroupLabelKey = SettingsGroupLabelKey };

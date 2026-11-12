@@ -124,7 +124,11 @@ public class AppDirectoryPureTest
             .And.Contain("Einstellungen");
 
         var noPicture = AppDirectory.BuiltIns("rbuergi", isGlobalAdmin: false, person with { Icon = null, Locale = null })[0];
-        noPicture.Icon.Should().Be(AppDirectory.SettingsIcon);
+        noPicture.Icon.Should().Be(AppDirectory.PersonSettingsIcon, "a person's own settings show a person, never the admin gear");
+        var admin = AppDirectory.BuiltIns("rbuergi", isGlobalAdmin: true, person with { Icon = null })
+            .Single(e => e.Id == AppDirectory.AdminId);
+        admin.Icon.Should().Be(AppDirectory.SettingsIcon);
+        noPicture.Icon.Should().NotBe(admin.Icon, "the two settings tiles must be told apart at a glance");
         noPicture.Description.Should().Contain("settings");
     }
 
