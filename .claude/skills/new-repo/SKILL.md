@@ -63,7 +63,7 @@ this one is the current fleet and that one is history.
   the image's (Linux, arm64) framework and dies at run with exit 134. Build it with `--keep`, then
   execute the kept `bin/Debug/net11.0` INSIDE the tester image: `docker cp` it into a container of
   the image, strip the `Microsoft.AspNetCore.App` entry from `NodeTests.runtimeconfig.json`, copy the
-  extracted refs' `Microsoft.AspNetCore.App/10.0.12/*.dll` beside it, delete `NodeTests.deps.json`,
+  extracted refs' `Microsoft.AspNetCore.App/<the image runtime version>/*.dll` (read it off the refs folder, never a remembered number) beside it, delete `NodeTests.deps.json`,
   `docker start -a`. The compile gate needs the three registry-served module assemblies
   (`MeshWeaver.AI`, `MeshWeaver.Markdown.Collaboration`, `MeshWeaver.Maps`) beside the image's
   `/app` — it REFUSES an `/app`-only set by design.

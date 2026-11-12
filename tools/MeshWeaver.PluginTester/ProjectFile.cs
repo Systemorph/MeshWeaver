@@ -1996,7 +1996,7 @@ public static class ProjectFile
 
     /// <summary>
     /// The preprocessor symbols the SDK defines beyond <c>DefineConstants</c>: the configuration
-    /// symbol and the target-framework ladder (<c>NET</c>, <c>NET10_0</c>, <c>NET10_0_OR_GREATER</c>
+    /// symbol and the target-framework ladder (<c>NET</c>, <c>NET11_0</c>, <c>NET11_0_OR_GREATER</c>
     /// and every earlier rung). A project guarding code with <c>#if NET8_0_OR_GREATER</c> compiles
     /// to something different without them, which is the silent-difference failure again.
     /// </summary>

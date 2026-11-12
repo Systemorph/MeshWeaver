@@ -426,9 +426,11 @@ public class ProjectFileTest : IDisposable
         var symbols = ProjectFile.FrameworkSymbols("net11.0");
 
         symbols.Should().Contain("NET");
-        symbols.Should().Contain("NET10_0");
+        symbols.Should().Contain("NET11_0");
         symbols.Should().Contain("NET8_0_OR_GREATER");
         symbols.Should().Contain("NET10_0_OR_GREATER");
+        symbols.Should().Contain("NET11_0_OR_GREATER");
+        symbols.Should().NotContain("NET10_0");
         symbols.Should().Contain("NETCOREAPP");
     }
 }

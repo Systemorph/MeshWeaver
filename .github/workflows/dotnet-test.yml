@@ -254,7 +254,7 @@ env:
   # The Playwright the shards' headless browser comes from, and the one whose `install-deps
   # --dry-run` the font set is checked against. Keep it in step with
   # deploy/base-images/portal-ai/Dockerfile.
-  PLAYWRIGHT_VERSION: 1.62.1
+  PLAYWRIGHT_VERSION: 1.65.0
 
 jobs:
   # 🚨 No `jlumbroso/free-disk-space` in any job — do not re-add it. Removed 2026-08-09 after

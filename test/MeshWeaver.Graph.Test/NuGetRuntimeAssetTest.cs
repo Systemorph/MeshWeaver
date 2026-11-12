@@ -44,7 +44,7 @@ public class NuGetRuntimeAssetTest : IDisposable
         return relativeFiles;
     }
 
-    private static readonly NuGetFramework Net10 = NuGetFramework.Parse("net11.0");
+    private static readonly NuGetFramework Net11 = NuGetFramework.Parse("net11.0");
 
     [Fact]
     public void RidFallbackChain_LinuxX64_FallsBackThroughLinuxAndUnix()
@@ -76,7 +76,7 @@ public class NuGetRuntimeAssetTest : IDisposable
             "runtimes/unix/lib/net8.0/Microsoft.Data.SqlClient.dll",
             "runtimes/unix/lib/net9.0/Microsoft.Data.SqlClient.dll");
 
-        var assets = RuntimeAssetSelector.Select(_root, files, Net10, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
+        var assets = RuntimeAssetSelector.Select(_root, files, Net11, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
 
         assets.RuntimeRid.Should().Be("unix");
         assets.Runtime.Should().ContainSingle()
@@ -85,7 +85,7 @@ public class NuGetRuntimeAssetTest : IDisposable
             .Which.Should().Be(Path.Combine(_root, "lib", "net9.0", "Microsoft.Data.SqlClient.dll"));
         assets.Native.Should().BeEmpty();
 
-        var onWindows = RuntimeAssetSelector.Select(_root, files, Net10, RuntimeAssetSelector.RidFallbackChain("win-x64"));
+        var onWindows = RuntimeAssetSelector.Select(_root, files, Net11, RuntimeAssetSelector.RidFallbackChain("win-x64"));
         onWindows.RuntimeRid.Should().Be("win");
         onWindows.Runtime.Should().ContainSingle().Which.Should().Contain(Path.Combine("runtimes", "win", "lib"));
     }
@@ -101,7 +101,7 @@ public class NuGetRuntimeAssetTest : IDisposable
             "runtimes/linux-x64/native/libpkg.so",
             "runtimes/win-x64/native/pkg.dll");
 
-        var assets = RuntimeAssetSelector.Select(_root, files, Net10, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
+        var assets = RuntimeAssetSelector.Select(_root, files, Net11, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
 
         assets.RuntimeRid.Should().Be("linux-x64");
         assets.Runtime.Should().ContainSingle().Which.Should().Contain(Path.Combine("runtimes", "linux-x64", "lib"));
@@ -121,7 +121,7 @@ public class NuGetRuntimeAssetTest : IDisposable
     {
         var files = Layout("lib/netstandard2.0/Plain.dll", "lib/net462/Plain.dll");
 
-        var assets = RuntimeAssetSelector.Select(_root, files, Net10, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
+        var assets = RuntimeAssetSelector.Select(_root, files, Net11, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
 
         assets.RuntimeRid.Should().BeNull();
         assets.Compile.Should().Equal(assets.Runtime);
@@ -133,7 +133,7 @@ public class NuGetRuntimeAssetTest : IDisposable
     {
         var files = Layout("runtimes/unix/lib/net8.0/OnlyRid.dll", "runtimes/win/lib/net8.0/OnlyRid.dll");
 
-        var assets = RuntimeAssetSelector.Select(_root, files, Net10, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
+        var assets = RuntimeAssetSelector.Select(_root, files, Net11, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
 
         assets.Compile.Should().Equal(assets.Runtime);
         assets.Runtime.Should().ContainSingle().Which.Should().Contain(Path.Combine("runtimes", "unix"));
@@ -152,7 +152,7 @@ public class NuGetRuntimeAssetTest : IDisposable
             "runtimes/linux-x64/native/_._",
             "runtimes/unix/native/libshim.so");
 
-        var assets = RuntimeAssetSelector.Select(_root, files, Net10, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
+        var assets = RuntimeAssetSelector.Select(_root, files, Net11, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
 
         assets.Compile.Should().BeEmpty();
         assets.Runtime.Should().BeEmpty();
