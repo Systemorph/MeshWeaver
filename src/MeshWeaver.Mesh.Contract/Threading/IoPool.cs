@@ -754,6 +754,14 @@ public sealed class IoPool : IIoPool, IDisposable
     /// more). The walk now passes over observers it has already visited and follows the downstream
     /// one.</para>
     ///
+    /// <para>🚨 <b>A sink's own <c>_observer</c> wins over every other observer field</b>, then an inner
+    /// observer's <c>_parent</c>. A multi-input sink holds its sibling inner observers in fields declared
+    /// before the inherited <c>_observer</c> — Zip's <c>_secondObserver</c>, the generated
+    /// <c>Zip</c>/<c>CombineLatest</c> arities' <c>_observer2</c>… — so the walk stepped SIDEWAYS into a
+    /// sibling, found nothing unseen there and stopped: the <c>EaGraphAuth.GetMailboxes</c> line ended
+    /// at <c>Zip.SecondObserver</c> and never named the consumer below the <c>Zip</c>. Timeout(other)
+    /// held its fallback source the same way, and a Subject is an observer too.</para>
+    ///
     /// <para>🚨 <b>Each step carries its own counters</b> — the integer and boolean fields its type
     /// declares, e.g. <c>Count._ [_remaining=1]</c> for a <c>Take(1)</c>. That is what tells the two
     /// ways a one-shot read stays attached apart: <c>_remaining=1</c> means its answer never reached
@@ -777,7 +785,10 @@ public sealed class IoPool : IIoPool, IDisposable
             var outer = type.DeclaringType is { } d ? Bare(d.Name) + "." : "";
             var delegates = System.Collections.Immutable.ImmutableList<string>.Empty;
             var counters = System.Collections.Immutable.ImmutableList<string>.Empty;
-            object? next = null;
+            // Candidates for the next step, by how sure the walk is that the field points DOWNSTREAM:
+            // a sink's own `_observer` (Rx's Sink and AutoDetachObserver), then an inner observer's
+            // `_parent` (the sink it feeds), and only then any other observer-typed field.
+            object? downstream = null, parent = null, next = null;
             for (var t = type; t is not null && t != typeof(object); t = t.BaseType)
             {
                 foreach (var f in t.GetFields(System.Reflection.BindingFlags.Instance
@@ -795,15 +806,24 @@ public sealed class IoPool : IIoPool, IDisposable
                         // The step's OWN state only (never a base type's bookkeeping): a Take's
                         // `_remaining`, a sink's done/has-value flags.
                         counters = counters.Add(string.Create(CultureInfo.InvariantCulture, $"{f.Name}={value}"));
-                    else if (next is null && value is not null && value != current
+                    else if (value is not null && value != current
                              // An observer already on the chain is the sink ABOVE this one, held as its
                              // upstream subscription (Finally's `_sourceDisposable`) — never the next step.
                              && !seen.Contains(value)
                              && value.GetType().GetInterfaces().Any(i =>
                                  i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IObserver<>)))
-                        next = value;
+                    {
+                        if (f.Name == "_observer") downstream ??= value;
+                        else if (f.Name == "_parent") parent ??= value;
+                        else next ??= value;
+                    }
                 }
             }
+            // A multi-input sink holds its SIBLING inner observers in fields declared before the
+            // inherited `_observer` (Zip's `_firstObserver`/`_secondObserver`, the generated
+            // `Zip`/`CombineLatest` arities' `_observer1.._observerN`), and Timeout(other) holds its
+            // fallback source — a Subject is an observer too — the same way (MeshWeaver#7992).
+            next = downstream ?? parent ?? next;
             var step = delegates.Count == 0 ? outer + name : $"{outer}{name} ({string.Join(", ", delegates)})";
             steps = steps.Add(counters.Count == 0 ? step : $"{step} [{string.Join(", ", counters)}]");
             current = next;

@@ -978,6 +978,29 @@ consumer never returned". The next stop that names this read names its consumer 
 Pinned by `IoPoolTest.Leak_line_walks_past_Finally_to_the_consumer_and_reads_the_take_counter`
 (negative control, measured: without the already-visited check the line ends at the `Finally`).
 
+**The walk follows a sink's own downstream, not a sibling — so it passes multi-input operators too.**
+The next line (`EaGraphAuth.GetMailboxes`, a `Take(1)` read feeding a `SelectMany` that feeds a `Zip`)
+ended at `Zip.SecondObserver`. The `Zip` sink declares its two inner observers (`_firstObserver`,
+`_secondObserver`) before the inherited `_observer`, so from the first side the walk stepped SIDEWAYS
+into the second side's observer, found nothing unseen there and stopped. The consumer below the `Zip` —
+the thing that tells "parked inside the `SelectMany`'s inner subscribe" from "parked in the consumer
+below the `Zip`" — was never named. The walk now ranks the candidate fields: a sink's own `_observer`
+first (Rx's `Sink` and `AutoDetachObserver`), then an inner observer's `_parent` (the sink it feeds),
+and any other observer-typed field only when neither exists.
+
+Measured against Rx 7.0.0 by walking each operator's sinks with the pooled read on one input:
+
+| Walk before this change | Operators |
+|---|---|
+| stopped at a sibling inner observer | two-source `Zip` (either side); the generated `Zip` and `CombineLatest` arities of three or more sources (`_observer1` … `_observerN`) |
+| stepped into the wrong object | `Timeout(…, other)` when the fallback is a `Subject` — it is held in a field, and a `Subject` is an observer too |
+| already reached the consumer | two-source `CombineLatest`, the list forms of `Zip`/`CombineLatest`, `Merge`, `Concat`, `Switch`, `SelectMany`, `WithLatestFrom`, `TakeUntil`, `SkipUntil`, `Sample`, `Join`, `Amb`, `Catch`, `Finally` |
+
+Pinned by `IoPoolTest.Leak_line_walks_past_a_multi_input_operator_to_the_consumer`, one case per row of
+the first two lines (negative control, measured: without the ranking every case fails). **Still not
+covered:** a multicast (`Publish`/`Replay` + `RefCount`, any `Subject` a chain feeds) keeps its
+observers in an array, so the line still ends at the `Subject` — which is at least named.
+
 **What this does NOT cover, stated so nobody reads it as covered.** `Invoke` and `InvokeStream` link
 each leaf's token to the pool's. A leaf awaiting I/O whose cancellation completes inline (a
 `Task.Delay(ct)`, some drivers) resumes its async body on the canceller, and the body's fault then
