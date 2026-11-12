@@ -1001,6 +1001,17 @@ the first two lines (negative control, measured: without the ranking every case 
 covered:** a multicast (`Publish`/`Replay` + `RefCount`, any `Subject` a chain feeds) keeps its
 observers in an array, so the line still ends at the `Subject` — which is at least named.
 
+**A hosted service's schedule is an owner that outlives the silo's stop too.** Once the walk reached the
+consumer, the stops on both production portals named one more core family, several legs per stop:
+`GitHubWebhookProcessor.QueryConfigNodesAsSystem` reads reached from `ReconcileBranches` (through
+`TriggerSyncAtCommit` and `MatchingSyncTargets`), 8 to 74 s old — a branch-reconcile pass in flight at
+the stop. Their owner is `GitSyncBranchReconcileService`'s timer schedule, and that is disposed by the
+service's `StopAsync`, which the host runs after `IoPoolSiloTeardown` has cancelled the pools. The
+schedule is now handed to `hub.OwnUntilIoDrain`, so the drain disposes the pass before the cancel and
+the later `StopAsync` finds it released. Pinned by `BranchReconcileReleasedBeforeThePoolCancelTest`
+(MeshWeaver.Hosting.Test; negative control, measured: without the call the ownership count does not
+move and the test fails).
+
 **What this does NOT cover, stated so nobody reads it as covered.** `Invoke` and `InvokeStream` link
 each leaf's token to the pool's. A leaf awaiting I/O whose cancellation completes inline (a
 `Task.Delay(ct)`, some drivers) resumes its async body on the canceller, and the body's fault then
