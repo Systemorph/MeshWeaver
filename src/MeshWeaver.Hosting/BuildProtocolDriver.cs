@@ -719,11 +719,17 @@ public static class BuildProtocolDriver
             {
                 if (go is not null)
                 {
+                    // Name the witness that decided: the granting state is this cluster's
+                    // mirror and need not be durable yet (GrantOnMirror writes it in one step).
                     logger?.LogInformation(
-                        "BuildProtocol: {Holder} was granted the claim, but the build root "
-                        + "already carries the GO for framework {Fingerprint} (ready at {ReadyAt:O}) "
+                        "BuildProtocol: {Holder} was granted the claim, but {Witness} already "
+                        + "carries the GO for framework {Fingerprint} (ready at {ReadyAt:O}) "
                         + "— standing down instead of re-baking",
-                        holder, fingerprint, go.ReadyAt);
+                        holder,
+                        goOnTheGrant is not null
+                            ? "the state that granted it (this cluster's mirror)"
+                            : "the durable build root",
+                        fingerprint, go.ReadyAt);
                     return ProbeAfterGo(mesh, holder, fingerprint, go, definitions, store, logger);
                 }
 
