@@ -1698,7 +1698,7 @@ jobs:
         if: steps.platform-source.outputs.mode == 'volume'
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "11.0.x"
       # 🚨 THE FIDELITY ASSERTION. `--shared-frameworks` is the reference set's framework half, and
       # in volume mode it is the RUNNER's install rather than the portal image's. A runner missing
       # Microsoft.AspNetCore.App, or carrying another major.minor, would compile every NodeType

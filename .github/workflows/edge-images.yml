@@ -57,7 +57,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
       # The edge version is spelled HERE, from the platform LINE, and never derived from $(Version):
       # $(Version) is a main CD build (<major>.<minor>.<run>) only when main-cd passes its run
       # number, and `<major>.<minor>.0-dev` everywhere else (policy `platform-semver-versioning`,

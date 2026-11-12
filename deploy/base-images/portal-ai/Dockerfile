@@ -26,7 +26,7 @@
 # of the others resolves its matching per-platform optional-dep binary (@github/copilot-linux-x64 /
 # -arm64, @openai/codex-linux-*, opencode-linux-*, @xai-official/grok-*) inside each platform's
 # build — so each arch bakes in its own CLI.
-ARG DOTNET_VERSION=10.0
+ARG DOTNET_VERSION=11.0
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}
 
 # git is required by BOTH the co-hosted CLIs (Claude Code / Copilot operate on a working tree)
@@ -35,7 +35,7 @@ FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}
 # byte-identical.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates gnupg git \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_26.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g @anthropic-ai/claude-code @github/copilot @openai/codex opencode-ai @xai-official/grok \
     && npm cache clean --force \
@@ -51,11 +51,12 @@ RUN apt-get update \
 # the browser has to be IN the image: a portal whose PDF export depends on an operator having
 # installed Chrome by hand has no PDF export. Three candidate sources, only one is multi-arch:
 #
-#   • `apt-get install chromium` / `chromium-browser` — a TRAP on this base. mcr aspnet:10.0 is
-#     Ubuntu 24.04 (noble), where `chromium-browser` is version `2:1snap1-0ubuntu2`: a snap SHIM
-#     that `PreDepends: snapd`. It installs no browser at all in a container, and there is no
-#     plain `chromium` deb in noble. Debian has one, but .NET 10 GA publishes no Debian tag
-#     (`10.0-trixie-slim` is preview-only), so switching the base is not on the table.
+#   • `apt-get install chromium` / `chromium-browser` — a TRAP on this base. mcr aspnet:11.0 is
+#     Ubuntu 26.04 (resolute; aspnet:10.0 was 24.04 noble), where `chromium-browser` is still
+#     version `2:1snap1-0ubuntu4`: a snap SHIM that `PreDepends: snapd`. It installs no browser
+#     at all in a container, and `chromium` has no candidate (both measured in aspnet:11.0,
+#     linux/arm64, 2026-11-12). Debian has a real deb, but switching the base for one package is
+#     not on the table.
 #   • Google Chrome / Microsoft Edge — no Linux **arm64** build exists for either. Using one
 #     would build a green amd64 leg and an arm64 leg with no browser: exactly the silent
 #     single-arch failure this file's multi-arch note warns about.
@@ -79,7 +80,7 @@ RUN apt-get update \
 # path never encodes a revision number, and MeshWeaver's first well-known probe location finds
 # it with no configuration at all. CHROME_BIN is set too: it is the convention every other tool
 # in the image reads, and it makes the resolution explicit rather than incidental.
-ARG PLAYWRIGHT_VERSION=1.62.1
+ARG PLAYWRIGHT_VERSION=1.65.0
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN npx --yes playwright-core@${PLAYWRIGHT_VERSION} install --with-deps --only-shell chromium \
     # 🚨 The binary has a DIFFERENT NAME on each architecture, and this is precisely the
