@@ -273,6 +273,22 @@ page is at least the recent end of the set — but it is still a page, and a rea
 whole set raises the limit until `truncated` reads `false`, exactly as the sweep above raises it
 until N stops being a floor.
 
+## A degraded answer — every row, a weaker method
+
+`coverage.degraded` (from `QueryResultChange.Degradations`) names what an answer lost in QUALITY
+while keeping every row it owes — one sentence each, e.g. `semantic ranking unavailable: the query
+embedding did not arrive within 3 s`. The envelope then carries `degradedHint`. It is not
+`coverage.partial` and not a silent provider: the count is a real count, the frame may be cached, and
+only the ranking (or matching method) is weaker. A retry later gets the ranked answer.
+
+Why it exists (2026-11-12): on the company instance the embedding server queued behind chat
+completions, the PostgreSQL provider waited for the query embedding past the fan-in's 15 s Initial
+bound, and every free-text search was terminated as `QueryProviderStalledException`. The provider
+now bounds that wait and answers from its lexical path (MeshWeaver.Plugins#5383); this field is how
+it says so. Ranking is never an access decision, so degrading here leaves
+[the fan-in's fail-closed rule](../QueryFanInStallTerminal) for access reads untouched. The aggregator
+unions the providers' sentences onto the merged Initial (`MeshQueryMergeContractTest`).
+
 ## What is still open
 
 - **The provider's report is the Plugins half.** `QueryResultChange.Partitions` is the core seam;
