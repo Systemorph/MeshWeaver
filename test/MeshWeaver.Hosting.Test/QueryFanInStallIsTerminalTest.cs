@@ -160,6 +160,24 @@ public class QueryFanInStallIsTerminalTest
     }
 
     /// <summary>
+    /// The two counts are one reading of one pool, so they travel as a pair. Half a reading would
+    /// render as no reading and silently drop the half it carried, so the constructor refuses it
+    /// rather than accept it and show less than it was given.
+    /// </summary>
+    [Fact]
+    public void TheReading_IsAPair_HalfAReadingIsRefused()
+    {
+        Action threadsOnly = () => _ = new QueryProviderStalledException("pg", TimeSpan.FromSeconds(15), "q", "u", null, 42);
+        threadsOnly.Should().Throw<ArgumentException>().Which.ParamName.Should().Be("threadPoolPending");
+
+        Action pendingOnly = () => _ = new QueryProviderStalledException("pg", TimeSpan.FromSeconds(15), "q", "u", 48_807, null);
+        pendingOnly.Should().Throw<ArgumentException>().Which.ParamName.Should().Be("threadPoolThreads");
+
+        Action neither = () => _ = new QueryProviderStalledException("pg", TimeSpan.FromSeconds(15), "q", "u", null, null);
+        neither.Should().NotThrow("no reading at all is the shape a caller that fabricates a stall uses");
+    }
+
+    /// <summary>
     /// THE CONTROL, and it is the one that proves the test above is not vacuous: the SAME merge, the
     /// SAME budget, two providers that both answer — no fault, and the merged Initial carries both
     /// slices. Without this case a terminal that fired unconditionally would pass the test above.

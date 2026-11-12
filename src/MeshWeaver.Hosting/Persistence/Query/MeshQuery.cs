@@ -1416,20 +1416,24 @@ public partial class MeshQuery : IMeshQueryCore
                 var missing = MissingOrNull();
                 if (missing is null)
                     return;
-                // The process's queue, read at the instant the bound elapsed: on a backlogged replica
-                // the provider is only where the stall was SEEN (MeshWeaver#8100), and the fault says so.
+                // The process's queue, read when this callback RUNS. Observable.Timer's default
+                // scheduler queues the callback to the ThreadPool, so on a backlogged replica it runs
+                // later than the bound, by about the queue delay; the reading is of that later moment.
+                // On such a replica the provider is only where the stall was SEEN (MeshWeaver#8100),
+                // and the fault says so.
                 var stalled = new QueryProviderStalledException(missing, delay, query, userId,
                     ThreadPool.PendingWorkItemCount, ThreadPool.ThreadCount);
                 onStalled(stalled, () => logger?.LogWarning(stalled,
                     "Query provider(s) [{Providers}] did not emit an Initial within {Delay}s for query "
                     + "'{Query}' (user '{UserId}') — the query is stalled on its all-providers Initial "
                     + "gate and has NO snapshot to answer with, so it is TERMINATED as unavailable "
-                    + "(retryable) rather than left hanging with no error. ThreadPool at the bound: "
-                    + "{ThreadPoolPending} queued over {ThreadPoolThreads} thread(s) — thousands queued "
-                    + "means the replica was backlogged, not the provider slow. Fix the cause; never bump "
-                    + "the consumer's timeout.",
+                    + "(retryable) rather than left hanging with no error. ThreadPool when this terminal "
+                    + "ran: {ThreadPoolPending} queued over {ThreadPoolThreads} thread(s) — {Threshold} "
+                    + "or more queued means the replica was backlogged, not the provider slow. Fix the "
+                    + "cause; never bump the consumer's timeout.",
                     missing, delay.TotalSeconds, query, userId,
-                    stalled.ThreadPoolPending, stalled.ThreadPoolThreads));
+                    stalled.ThreadPoolPending, stalled.ThreadPoolThreads,
+                    QueryProviderStalledException.BackloggedPendingThreshold));
             });
             // Publish the arm so MarkSeen can release it — and re-check, because a provider may have
             // answered synchronously between the subscribe above and this line, in which case the

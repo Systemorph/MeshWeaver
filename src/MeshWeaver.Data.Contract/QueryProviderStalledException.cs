@@ -56,9 +56,14 @@ namespace MeshWeaver.Mesh;
 /// global queue, and each standing catalog on that replica files its own "provider stalled" ticket
 /// for one process-wide backlog. Measured on one replica on 2026-11-11 at 14:40Z: 48,807 queued work
 /// items over 42 threads, while its three siblings read 0, and four catalogs filed four tickets.
-/// <see cref="ThreadPoolPending"/> and <see cref="ThreadPoolThreads"/> are read at the instant the
-/// bound elapsed, and the message says which reading it is, so triage reads the process before the
-/// provider. See <c>Doc/Architecture/QueryFanInStallTerminal</c> → "A stall on a backlogged
+/// <see cref="ThreadPoolPending"/> and <see cref="ThreadPoolThreads"/> are read when the stall
+/// terminal RUNS, and the message says which reading it is, so triage reads the process before the
+/// provider. 🚨 That is not the instant the bound elapsed: the terminal is an <c>Observable.Timer</c>
+/// callback on Rx's default scheduler, i.e. a ThreadPool work item, so on a backlogged replica it
+/// runs only once a worker reaches it — later than the bound by about the queue delay. The reading is
+/// of the queue at that later moment. A late terminal is itself a symptom of the backlog, so the
+/// reading still points the right way, but it is neither exact at the bound nor a bound on the
+/// queue's peak. See <c>Doc/Architecture/QueryFanInStallTerminal</c> → "A stall on a backlogged
 /// replica".</para>
 /// </summary>
 public sealed class QueryProviderStalledException
@@ -80,19 +85,23 @@ public sealed class QueryProviderStalledException
     {
     }
 
-    /// <summary>Raises the terminal with the process's ThreadPool reading taken when the bound elapsed.</summary>
+    /// <summary>Raises the terminal with the process's ThreadPool reading, taken when the terminal ran.</summary>
     /// <param name="providers">Comma-joined names of the providers that had not emitted an Initial.</param>
     /// <param name="budget">The fan-in's own bound, i.e. the budget that elapsed.</param>
     /// <param name="query">The query text the fan-in was serving, for attribution.</param>
     /// <param name="userId">The identity the query ran under, for attribution.</param>
-    /// <param name="threadPoolPending">The ThreadPool's queued work items when the bound elapsed, or
+    /// <param name="threadPoolPending">The ThreadPool's queued work items when the terminal ran, or
     /// <c>null</c> when it was not read.</param>
-    /// <param name="threadPoolThreads">The ThreadPool's thread count when the bound elapsed, or
+    /// <param name="threadPoolThreads">The ThreadPool's thread count when the terminal ran, or
     /// <c>null</c> when it was not read.</param>
+    /// <exception cref="ArgumentException">Exactly one of the two readings is given. They are one
+    /// reading of one pool and travel as a PAIR: both, or neither. A half reading would render as no
+    /// reading and silently drop the half it did carry.</exception>
     public QueryProviderStalledException(
         string providers, TimeSpan budget, string? query, string? userId,
         long? threadPoolPending, int? threadPoolThreads)
-        : base(Compose(providers, budget, query, userId, threadPoolPending, threadPoolThreads))
+        : base(Compose(providers, budget, query, userId,
+            RequirePair(threadPoolPending, threadPoolThreads), threadPoolThreads))
     {
         Providers = providers;
         Budget = budget;
@@ -101,6 +110,14 @@ public sealed class QueryProviderStalledException
         ThreadPoolPending = threadPoolPending;
         ThreadPoolThreads = threadPoolThreads;
     }
+
+    private static long? RequirePair(long? threadPoolPending, int? threadPoolThreads)
+        => threadPoolPending.HasValue == threadPoolThreads.HasValue
+            ? threadPoolPending
+            : throw new ArgumentException(
+                "The ThreadPool reading is one reading of one pool: pass both threadPoolPending and "
+                + "threadPoolThreads, or neither.",
+                threadPoolPending.HasValue ? nameof(threadPoolThreads) : nameof(threadPoolPending));
 
     private static string Compose(
         string providers, TimeSpan budget, string? query, string? userId,
@@ -115,8 +132,9 @@ public sealed class QueryProviderStalledException
             + "CLOSED and say it could not establish the answer.";
         if (threadPoolPending is not { } pending)
             return head + " Fix the stalled provider; never bump the consumer's timeout.";
-        var threads = threadPoolThreads is { } count ? count.ToString(CultureInfo.InvariantCulture) : "?";
-        var reading = " At the bound this process's ThreadPool held "
+        var threads = threadPoolThreads!.Value.ToString(CultureInfo.InvariantCulture);
+        var reading = " When this terminal ran (a ThreadPool callback, so on a backlogged replica later "
+            + "than the bound) this process's ThreadPool held "
             + pending.ToString(CultureInfo.InvariantCulture) + " queued work item(s) over "
             + threads + " thread(s)";
         return pending >= BackloggedPendingThreshold
@@ -149,12 +167,13 @@ public sealed class QueryProviderStalledException
     /// <summary>The identity the query ran under.</summary>
     public string? UserId { get; }
 
-    /// <summary>The ThreadPool's queued work items at the instant the bound elapsed, or <c>null</c>
-    /// when the raiser did not read it. At or above <see cref="BackloggedPendingThreshold"/> the
-    /// replica, not the provider, is the first place to look.</summary>
+    /// <summary>The ThreadPool's queued work items when the stall terminal ran (a ThreadPool callback,
+    /// so on a backlogged replica later than the bound), or <c>null</c> when the raiser did not read
+    /// it. At or above <see cref="BackloggedPendingThreshold"/> the replica, not the provider, is the
+    /// first place to look. Always non-null together with <see cref="ThreadPoolThreads"/>.</summary>
     public long? ThreadPoolPending { get; }
 
-    /// <summary>The ThreadPool's thread count at the instant the bound elapsed, or <c>null</c> when
-    /// the raiser did not read it.</summary>
+    /// <summary>The ThreadPool's thread count when the stall terminal ran, or <c>null</c> when the
+    /// raiser did not read it. Always non-null together with <see cref="ThreadPoolPending"/>.</summary>
     public int? ThreadPoolThreads { get; }
 }

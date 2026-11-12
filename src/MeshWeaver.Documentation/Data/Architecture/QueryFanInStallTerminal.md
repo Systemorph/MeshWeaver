@@ -773,10 +773,17 @@ generics do not name the handler. Finding which producer floods the pool is the 
 #5388.
 
 **What changed.** The fault now carries the reading. `QueryProviderStalledException` records
-`ThreadPoolPending` and `ThreadPoolThreads` at the instant the fan-in's bound elapses. At
-`BackloggedPendingThreshold` (1,000 queued items) or more, the message says the replica was
-backlogged and sends the reader to that replica's `[LIVENESS]` and `[POOLSTALL]` lines first. Below
-it, the message still says to fix the provider. The budget is unchanged (policy
+`ThreadPoolPending` and `ThreadPoolThreads` when the stall terminal runs. The two travel as a pair:
+the constructor refuses one without the other. At `BackloggedPendingThreshold` (1,000 queued items)
+or more, the message says the replica was backlogged and sends the reader to that replica's
+`[LIVENESS]` and `[POOLSTALL]` lines first. Below it, the message still says to fix the provider. The
+warning log line states the same threshold.
+
+The reading is not exact at the bound. The terminal is an `Observable.Timer` callback on Rx's
+default scheduler, which is a ThreadPool work item, so on a backlogged replica it runs only when a
+worker reaches it, late by about the queue delay. The count is of the queue at that later moment. A
+late terminal is itself a symptom of the backlog, so the reading still points the right way. It is
+not a measure of the queue's peak. The budget is unchanged (policy
 `query-fanin-stall-terminal`). A reading is no reason to retry or to raise any bound. It only says
 where the cause is.
 
