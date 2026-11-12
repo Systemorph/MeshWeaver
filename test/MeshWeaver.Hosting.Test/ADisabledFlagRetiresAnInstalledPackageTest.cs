@@ -468,6 +468,87 @@ public class ADisabledFlagRetiresAnInstalledPackageTest(ITestOutputHelper output
         Assert.Contains("1 earlier attempt(s)", third);
     }
 
+    /// <summary>Writes nodes straight to storage under <paramref name="partition"/> until it holds more
+    /// than <see cref="PackageUninstallExecutor.MaxInspectedNodes"/> — the memex-cloud <c>Hosting</c>
+    /// shape (#8020), without a hub per node.</summary>
+    private async Task OverTheCap(string partition, CancellationToken ct)
+    {
+        var nodes = Enumerable.Range(0, PackageUninstallExecutor.MaxInspectedNodes + 1)
+            .Select(i => MeshNode.FromPath($"{partition}/Bulk/n{i}") with { NodeType = "Markdown", Name = $"a{i}", State = MeshNodeState.Active })
+            .ToList();
+        await Storage.WriteMany(nodes, Mesh.JsonSerializerOptions).Timeout(TestTimeouts.Convergence).Await(ct);
+        var paths = await Storage.ListDescendantPaths(partition).Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+        Assert.True(paths.Count > PackageUninstallExecutor.MaxInspectedNodes,
+            $"the premise: '{partition}' holds more than the census cap ({paths.Count} paths)");
+    }
+
+    /// <summary>
+    /// #8020, policy <c>package-uninstall-request</c>: the census (the node cap and the <c>createdBy</c>
+    /// check) guards phase 2's drop, and a flag retire never drops — so a flag-issued phase 1 of a
+    /// partition above the cap is NOT measured and retires, keeping the data. Before the fix it was
+    /// refused on every boot (memex-cloud: <c>Hosting</c>, ~26 800 nodes, attempt -a170). Negative
+    /// control: <see cref="APersonsUninstall_OfThePartitionOverTheCap_IsStillRefused"/>.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AFlagRetire_OfAPartitionOverTheCap_IsNotMeasured_AndRetires()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Installed(Package, ct);
+        await OverTheCap(Package, ct);
+
+        var outcome = await Retire(Declared("off", enabled: false, $"Plugins/{Package}"), ct);
+        var request = await Settled(Assert.Single(outcome.Requested), ct);
+
+        Assert.True(request.Status == PackageUninstallStatus.AwaitingConfirmation, request.Failure ?? request.Status);
+        var preview = Assert.Single(request.Partitions);
+        Assert.Equal(Package, preview.Partition);
+        Assert.Equal([PackageUninstallExecutor.FlagRetireNotMeasured], preview.Unmeasured);
+        Assert.Empty(preview.RowsByTable);
+        Assert.Null(request.ConfirmationRequired);
+        Assert.Empty(outcome.Refused);
+        Assert.False(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "phase 1 removed the install record");
+        Assert.True(await Exists($"{Package}/Guide", ct), "no data is dropped");
+    }
+
+    /// <summary>Negative control for <see cref="AFlagRetire_OfAPartitionOverTheCap_IsNotMeasured_AndRetires"/>:
+    /// the SAME partition, uninstalled by a person, is still measured and refused over the cap.</summary>
+    [Fact(Timeout = 240_000)]
+    public async Task APersonsUninstall_OfThePartitionOverTheCap_IsStillRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Installed(Package, ct);
+        await OverTheCap(Package, ct);
+
+        var ticket = await PackageUninstall.Request(Mesh, new PackageUninstallRequest { Package = Package, Reason = "test", RequestedBy = "someone" })
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        var request = await Settled(Assert.IsType<string>(ticket.Path), ct);
+
+        Assert.Equal(PackageUninstallStatus.Failed, request.Status);
+        Assert.Contains($"more than the {PackageUninstallExecutor.MaxInspectedNodes} this uninstall verifies for user data", request.Failure ?? "");
+        Assert.True(await Exists($"{PackageInstaller.InstalledPartition}/{Package}", ct), "refused, so still installed");
+    }
+
+    /// <summary>A flag retire's partition was never measured, so the executor refuses any confirmation
+    /// of it BY NAME, before the requester check (which alone also refused it, for a different reason —
+    /// the negative control the message assertion separates).</summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AFlagRetire_RefusesEveryConfirmation_ByName()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Installed(Package, ct);
+        var outcome = await Retire(Declared("off", enabled: false, $"Plugins/{Package}"), ct);
+        var path = Assert.Single(outcome.Requested);
+        Assert.Equal(PackageUninstallStatus.AwaitingConfirmation, (await Settled(path, ct)).Status);
+
+        var ticket = await PackageUninstall.Confirm(Mesh, path, Package, "someone").Timeout(TestTimeouts.Convergence).Await(ct);
+        Assert.True(ticket.Accepted, ticket.Refusal);
+        var refused = await Read(path, r => r.ConfirmationRefusal is not null, ct);
+
+        Assert.Contains("issued by the flag 'off'", refused.ConfirmationRefusal);
+        Assert.Equal(PackageUninstallStatus.AwaitingConfirmation, refused.Status);
+        Assert.True(await Exists($"{Package}/Guide", ct), "nothing is dropped");
+    }
+
     /// <summary>The restart coordinator once it satisfies <paramref name="until"/>. It may not exist
     /// yet, so its existence is re-read from storage first — never a point read of an absent node.</summary>
     private async Task<PackageRestartCoordinatorState> Coordinator(Func<PackageRestartCoordinatorState, bool> until, CancellationToken ct) =>

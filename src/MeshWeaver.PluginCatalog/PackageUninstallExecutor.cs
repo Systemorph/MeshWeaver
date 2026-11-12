@@ -20,7 +20,9 @@ namespace MeshWeaver.PluginCatalog;
 /// <para><b>Phase 1 — no confirmation.</b> Refuses, before anything is touched and by name: a
 /// package with no install record here; a target partition another installed package also uses; a
 /// partition the platform never tears down (<see cref="PartitionTeardown.Refusal"/>); a partition
-/// holding nodes created by anyone but the installer (user data). Then: retires the module (live
+/// holding nodes created by anyone but the installer (user data) — that census guards phase 2's drop,
+/// so a FLAG-issued request skips it and records <see cref="FlagRetireNotMeasured"/> instead, and its
+/// confirmation is refused by name (policy <c>package-uninstall-request</c>). Then: retires the module (live
 /// through <see cref="IModuleLiveActivation.Retire"/>, else by the ONE restart the instance's
 /// <see cref="PackageRestartCoordinator"/> dispatches), closes the partition's hubs, removes the install record
 /// — which, with this request on record, keeps every unattended pass from installing it again
@@ -39,6 +41,16 @@ public static class PackageUninstallExecutor
     /// <summary>The most nodes phase 1 inspects for user data; a larger partition is refused by name
     /// (it cannot be verified here) rather than dropped unverified.</summary>
     public const int MaxInspectedNodes = 20_000;
+
+    /// <summary>
+    /// What a FLAG-issued request records as its partition's preview instead of a measurement
+    /// (policy <c>package-uninstall-request</c>, MeshWeaver#8020). The census — the
+    /// <see cref="MaxInspectedNodes"/> cap and the <c>CreatedBy</c> check — exists to guard phase 2's
+    /// drop, and a flag retire never reaches phase 2: it names no requester, and its confirmation is
+    /// refused by name. Running the census anyway refused the retire of a partition above the cap on
+    /// every boot, forever, while touching nothing.
+    /// </summary>
+    public const string FlagRetireNotMeasured = "not measured: a flag retire never drops";
 
     /// <summary>What phase 2 drops that phase 1 cannot count — said, never implied.</summary>
     public static readonly ImmutableList<string> Unmeasured =
@@ -186,7 +198,13 @@ public static class PackageUninstallExecutor
                             $"refused: partition '{partition}' is shared with the installed package(s) {string.Join(", ", sharers)} — uninstalling '{record.Id}' would destroy their content; nothing was touched");
                     if (PartitionTeardown.Refusal(hub, partition, requireSystem: false) is { } never)
                         return Finish(PackageUninstallStatus.Failed, $"refused: {never}; nothing was touched");
-                    return Measure(partition).SelectMany(measured => measured is not { Preview: { } preview }
+                    // 🚨 A flag retire never drops (policy package-uninstall-request, #8020): the
+                    // census guards phase 2 only, so a flag-issued phase 1 records "not measured"
+                    // instead of being refused by it. A person's uninstall is measured unchanged.
+                    var measure = request.RetiredByFlag is not null
+                        ? Observable.Return(new Measured(NotMeasured(partition), null))
+                        : Measure(partition);
+                    return measure.SelectMany(measured => measured is not { Preview: { } preview }
                         ? Finish(PackageUninstallStatus.Failed, $"refused: {measured.Refusal ?? "the partition could not be measured"}; nothing was touched")
                         // 🚨 The install record's OWN hub grants the retirement first
                         // (MeshWeaver.Plugins#5055, InstallRecordGate): from here it refuses every
@@ -232,7 +250,7 @@ public static class PackageUninstallExecutor
                                 .SelectMany(x => x.displaced is { } displaced
                                     ? Finish(PackageUninstallStatus.Failed,
                                         $"stopped: {displaced}; the install record is kept (module: {x.moduleOutcome})")
-                                    : RemoveAndPreview(record, partition, preview, x.moduleOutcome, x.Disabled, x.closed)))
+                                    : RemoveAndPreview(request.RetiredByFlag, record, partition, preview, x.moduleOutcome, x.Disabled, x.closed)))
                 .Catch((Exception ex) => WithdrawPending()
                     .SelectMany(_ => InstallRecordGate.EndRetirement(hub, record.Id, RequestPath, logger))
                     .Select(_ => "released")
@@ -247,7 +265,7 @@ public static class PackageUninstallExecutor
                 .Catch((Exception endFault) => Observable.Return($"NOT released ({endFault.Message})"))
                 .SelectMany(released => Finish(PackageUninstallStatus.Failed, $"{message}; the retirement was {released}"));
 
-        private IObservable<Unit> RemoveAndPreview(PackageManifest record, string partition, PackageUninstallPartition preview, string moduleOutcome, bool moduleDisabled, int closed) =>
+        private IObservable<Unit> RemoveAndPreview(string? retiredByFlag, PackageManifest record, string partition, PackageUninstallPartition preview, string moduleOutcome, bool moduleDisabled, int closed) =>
             PackageInstaller.RemoveInstalledRecord(hub, record.Id, logger).Take(1)
                                 .Select(removed => (moduleOutcome, Disabled: moduleDisabled, closed, removed))
                             .SelectMany(x => Write(r => r with
@@ -256,7 +274,9 @@ public static class PackageUninstallExecutor
                                     ModuleOutcome = x.moduleOutcome,
                                     ModuleDisabled = moduleDisabled,
                                     Partitions = [preview],
-                                    ConfirmationRequired = partition,
+                                    // A flag retire offers no confirmation: nothing may drop an
+                                    // unmeasured partition.
+                                    ConfirmationRequired = retiredByFlag is null ? partition : null,
                                     Status = PackageUninstallStatus.AwaitingConfirmation,
                                     // 🚨 The preview is what a confirmation answers (#6124 review): a
                                     // confirmation recorded BEFORE it existed is discarded here, and the
@@ -270,8 +290,19 @@ public static class PackageUninstallExecutor
                                 Line($"closed {x.closed} hub(s) under '{partition}'"),
                                 Line(x.removed ? $"install record {PackageInstaller.InstalledPartition}/{record.Id} removed — unattended passes will not re-install it"
                                                : $"install record {PackageInstaller.InstalledPartition}/{record.Id} was already gone"),
-                                Line($"UNINSTALLED, data RETAINED. Phase 2 drops partition '{partition}' ({Describe(preview)}) — "
-                                     + $"send the confirmation '{partition}' to run it")));
+                                Line(retiredByFlag is { } flag
+                                    ? $"UNINSTALLED, data RETAINED. Partition '{partition}' {FlagRetireNotMeasured} (retired by the flag '{flag}'); "
+                                      + "no confirmation can drop it"
+                                    : $"UNINSTALLED, data RETAINED. Phase 2 drops partition '{partition}' ({Describe(preview)}) — "
+                                      + $"send the confirmation '{partition}' to run it")));
+
+        /// <summary>A flag retire's preview: the partition named, nothing counted, and why.</summary>
+        private static PackageUninstallPartition NotMeasured(string partition) => new()
+        {
+            Partition = partition,
+            StoreExists = null,
+            Unmeasured = [FlagRetireNotMeasured],
+        };
 
         private sealed record Measured(PackageUninstallPartition? Preview, string? Refusal);
 
@@ -603,6 +634,15 @@ public static class PackageUninstallExecutor
 
         private IObservable<Unit> Confirmed(PackageUninstallRequest request)
         {
+            // 🚨 First, before any other check: phase 1 of a flag retire did not measure the
+            // partition, so no confirmation may ever drop it (policy package-uninstall-request).
+            if (request.RetiredByFlag is { } flag)
+                return Write(r => r with
+                {
+                    Confirmation = null,
+                    ConfirmationRefusal = $"refused: this request was issued by the flag '{flag}' and its partition was {FlagRetireNotMeasured} — "
+                                          + "nothing was dropped; the data is retained",
+                }, Line($"confirmation refused: a flag retire (flag '{flag}') never drops"));
             if (!string.Equals(request.Confirmation?.Trim(), request.ConfirmationRequired, StringComparison.Ordinal))
                 return Write(r => r with
                 {
@@ -635,7 +675,10 @@ public static class PackageUninstallExecutor
         }
 
         private IObservable<Unit> Phase2(PackageUninstallRequest request) =>
-            request.Partitions.ToObservable()
+            request.RetiredByFlag is { } flag
+                ? Finish(PackageUninstallStatus.Failed,
+                    $"refused: a flag retire (flag '{flag}') never drops — its partition was {FlagRetireNotMeasured}; nothing was dropped")
+                : request.Partitions.ToObservable()
                 .Select(p => CloseHubs(p.Partition)
                     .SelectMany(_ => Access.RunAsSystem(() => hub.TearDownPartition(p.Partition,
                         $"package uninstall {ModuleReloadExecutor.PathOf(hub)} of '{request.Package}', confirmed by {request.ConfirmedBy}")))
