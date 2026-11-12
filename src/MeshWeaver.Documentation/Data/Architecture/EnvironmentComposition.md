@@ -178,7 +178,10 @@ How it runs (`DeclaredDisabledRetirement`, called by the boot pass before the in
   boot logged one line per earlier attempt, so a standing refusal grew quadratically. On memex-cloud
   `Hosting` reached attempt `-a100` against the partition-size refusal, which came to about 5,000
   Errors in two days (#8020). The test is
-  `AStandingRefusal_ReportsOnlyTheAttemptItSupersedes_EachBoot`.
+  `AStandingRefusal_ReportsOnlyTheAttemptItSupersedes_EachBoot`. The refusal itself is gone too: a
+  flag-issued phase 1 no longer runs the user-data census, which guards only phase 2's drop, and a
+  flag retire never drops ([Package Uninstall](../PackageUninstall) → "Phase 1", policy
+  `package-uninstall-request`).
 - **Every replica drops the module — with ONE restart, never a loop.** The request carries
   `RetireOnEveryReplica`. Phase 1 then disables the module's landed generation **durably** on the
   volume all replicas share, or **fails** the request with the install record kept — an unreadable

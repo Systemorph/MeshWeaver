@@ -11,7 +11,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > uninstalls a package through ONE durable request, in two phases. Phase 1 needs no confirmation and
 > destroys no data. Phase 2 — the irreversible drop of the package's partition — runs only after the
 > requester repeats the partition name; without that the package stays uninstalled with its data
-> retained, and the request says so.
+> retained, and the request says so. A request a feature flag issued never reaches phase 2, so its
+> phase 1 does not run the user-data census that guards the drop: it records the partition as
+> `not measured: a flag retire never drops`, and any confirmation of it is refused by name.
 
 It sits beside [Module Reload](../ModuleReload) and has the same shape: a node at
 `Admin/_PackageUninstall/{id}` (`PackageUninstallRequest`), written only by `PackageUninstall.Request`
@@ -30,6 +32,17 @@ Refused by name, before anything is touched:
   identity (the first five are named) — or more nodes than the uninstall verifies (20 000);
 - any node under it **cannot be read** while it is measured: a fault is not an absence, so the
   partition is not verified free of user data (the first five faults are named).
+
+The last two refusals are the **census**, and the census exists only to guard phase 2's drop. A
+request a **feature flag** issued (`RetiredByFlag`) skips it: it can never reach phase 2 (see below),
+so its preview names the partition and records
+`not measured: a flag retire never drops` (`PackageUninstallExecutor.FlagRetireNotMeasured`) instead
+of counting it, and the request offers no `ConfirmationRequired`. Before this, the census refused a
+flag retire of a partition above the cap on every boot, forever, while touching nothing: on
+memex-cloud `Hosting` (about 26 800 nodes) reached attempt `-a170` (#8020). A person's uninstall is
+measured exactly as before. The tests are
+`ADisabledFlagRetiresAnInstalledPackageTest.AFlagRetire_OfAPartitionOverTheCap_IsNotMeasured_AndRetires`
+and its negative control `APersonsUninstall_OfThePartitionOverTheCap_IsStillRefused`.
 
 The module's activation is read **whole or not at all** (`ModuleLandingService.GetCheckedActivation`).
 An unreadable activation record would make a landed module look like it was never landed, and phase 1
@@ -305,6 +318,7 @@ dispatches alone and the second dispatches again, so the instance restarts twice
 recorded with who and when). A confirmation is accepted only while the request AWAITS one — it answers
 the preview, so one sent before the preview exists is refused and records nothing, and phase 1 clears
 any confirmation it finds and stamps `awaitingConfirmationAt`. The executor is the authority: a
+confirmation of a request a feature flag issued (checked first — its partition was never measured), a
 different string, a confirmation from anyone but the requester, a request that names no requester, or
 a confirmation older than the preview is refused by name (`confirmationRefusal`) and nothing is
 dropped. A matching one runs the platform's
@@ -322,7 +336,7 @@ teardown sentence and ends `Done`. Never raw SQL.
 | MCP `uninstall_package` (MeshWeaver.Plugins) | `MeshOperations.UninstallPackage(package, reason)` answers the preview and the exact confirmation string; `UninstallPackage(requestPath: …, confirmation: …)` confirms. Platform admins only. |
 | the package page (MeshWeaver.Plugins `Store/Plugin` `InstanceUninstall`) | **Uninstall from this instance**, shown to a platform admin only (everyone else gets an empty, hidden control). The click authorises the caller by id, fail-closed, then files phase 1 as System; the status line links the request node, which carries the phase-2 preview and its typed confirmation. |
 | the platform's own code | `PackageUninstall.Request` / `PackageUninstall.Confirm`; `PackageUninstall.RequestAt` writes at a caller-chosen id so several writers deciding the same thing collide on one node |
-| a feature flag declared off | the boot pass runs phase 1 for every installed package the flag names ([Environment Composition](../EnvironmentComposition) → "A disabled flag retires what is installed"). The request carries `RetiredByFlag` (so it blocks no re-install) and `RetireOnEveryReplica` — the module's landed generation must be disabled durably or the request FAILS with the install record kept, and phase 1 never restarts by itself: it records `ModuleDisabled` and states `Ready` on the restart coordinator, which dispatches ONE restart for the boot pass's whole batch ("One restart for every retirement" above). It names no requester, so phase 2 can never run. |
+| a feature flag declared off | the boot pass runs phase 1 for every installed package the flag names ([Environment Composition](../EnvironmentComposition) → "A disabled flag retires what is installed"). The request carries `RetiredByFlag` (so it blocks no re-install) and `RetireOnEveryReplica` — the module's landed generation must be disabled durably or the request FAILS with the install record kept, and phase 1 never restarts by itself: it records `ModuleDisabled` and states `Ready` on the restart coordinator, which dispatches ONE restart for the boot pass's whole batch ("One restart for every retirement" above). Its phase 1 skips the user-data census and records the partition as `not measured: a flag retire never drops`; it names no requester and offers no confirmation, and the executor refuses any confirmation of it and any phase 2 by name, so phase 2 can never run. |
 
 ## What is NOT established
 
