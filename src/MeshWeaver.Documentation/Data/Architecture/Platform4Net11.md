@@ -27,6 +27,20 @@ bundles, and each NodeType compiles its live source until its repository re-bake
 
 Orleans stays on 10.4.2, its newest release, which targets `net8.0+` and runs on the 11 runtime.
 
+## What the new runtime changed underneath unchanged code
+
+A green `-warnaserror` build was not the verdict. CI's first full run turned up three behaviours
+that changed behind signatures that did not. Each one traced back to code of ours, not to the runtime.
+
+| Symptom | What changed | Fix |
+|---|---|---|
+| Every healthy module was withdrawn at boot on a plain MS DI host: *"A circular dependency was detected for the service of type `ModuleContexts`"* | The registry's singleton factory runs the boot publication (`ModuleContexts.PublishOnce`), and the build asked the ROOT for that same registry (`ModuleServices.BuildBeforePublish`, `ModuleServices.Scope`). DI 10 answered a re-entrant resolve of a singleton under construction; **DI 11 refuses it.** | The registry passes ITSELF into the build (`BuildBeforePublish(root, this)`, `Scope(root, registry)`), so the build never resolves the registry it is part of. |
+| `ContentShapes.Describe` over 100k constructed doubles allocated 98,560 B against a 64,000 B budget | On System.Text.Json 11, a MISSED `JsonValue.TryGetValue<T>` on a constructed number or bool boxes the stored value: 24 B per miss, where 10 allocated nothing. Misses on a stored string or decimal stay free. `GetValueKind()` would be free, but it runs a customised value's converter (measured: one call, about 20 KB). | The probe order is the budget: element, double, int, long, decimal, bool, string. A double array costs nothing per entry, and nothing is worse than before on 10. |
+| `ParallelBakeTest`: the parallel bake wrote a different `platform-surface.json` from the serial one | A latent defect of ours, first seen on the 11 CI run: the published surface listed a shared-framework assembly only once something had LOADED it, so it depended on timing. Not established: whether a 10 run could hit it too. | `ModulePlatformSurface.OfRunningPlatform` also lists every trusted platform assembly as a file. `PlatformSurfaceDeterminismTest` loads an unloaded framework assembly between two measurements. It fails without the fix and passes with it. |
+
+The method that found each one: read the failing assertion, reproduce it in isolation on 11, run the
+same code on 10 as the negative control, and only then change code.
+
 ## The order the fleet follows
 
 The break lands dependency-first. Each step waits for the previous one's sealed output, and none
