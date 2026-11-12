@@ -493,11 +493,11 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
         File.WriteAllText(Path.Combine(directory, "Host.deps.json"),
             """
             {
-              "runtimeTarget": { "name": "net10.0" },
+              "runtimeTarget": { "name": "net11.0" },
               "targets": {
-                "net10.0": {
+                "net11.0": {
                   "Host/1.0.0": {},
-                  "Some.Package/1.0.0": { "runtime": { "lib/net10.0/Some.Package.dll": { "assemblyVersion": "1.0.0.0" } } },
+                  "Some.Package/1.0.0": { "runtime": { "lib/net11.0/Some.Package.dll": { "assemblyVersion": "1.0.0.0" } } },
                   "MeshWeaver.Compiler/3.0.0": { "runtime": { "MeshWeaver.Compiler.dll": { "assemblyVersion": "3.0.0.0" } } }
                 }
               },

@@ -26,7 +26,7 @@
 # of the others resolves its matching per-platform optional-dep binary (@github/copilot-linux-x64 /
 # -arm64, @openai/codex-linux-*, opencode-linux-*, @xai-official/grok-*) inside each platform's
 # build — so each arch bakes in its own CLI.
-ARG DOTNET_VERSION=10.0
+ARG DOTNET_VERSION=11.0
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}
 
 # git is required by BOTH the co-hosted CLIs (Claude Code / Copilot operate on a working tree)
@@ -51,7 +51,7 @@ RUN apt-get update \
 # the browser has to be IN the image: a portal whose PDF export depends on an operator having
 # installed Chrome by hand has no PDF export. Three candidate sources, only one is multi-arch:
 #
-#   • `apt-get install chromium` / `chromium-browser` — a TRAP on this base. mcr aspnet:10.0 is
+#   • `apt-get install chromium` / `chromium-browser` — a TRAP on this base. mcr aspnet:11.0 is
 #     Ubuntu 24.04 (noble), where `chromium-browser` is version `2:1snap1-0ubuntu2`: a snap SHIM
 #     that `PreDepends: snapd`. It installs no browser at all in a container, and there is no
 #     plain `chromium` deb in noble. Debian has one, but .NET 10 GA publishes no Debian tag

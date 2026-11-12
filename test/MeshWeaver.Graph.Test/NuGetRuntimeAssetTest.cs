@@ -44,7 +44,7 @@ public class NuGetRuntimeAssetTest : IDisposable
         return relativeFiles;
     }
 
-    private static readonly NuGetFramework Net10 = NuGetFramework.Parse("net10.0");
+    private static readonly NuGetFramework Net10 = NuGetFramework.Parse("net11.0");
 
     [Fact]
     public void RidFallbackChain_LinuxX64_FallsBackThroughLinuxAndUnix()

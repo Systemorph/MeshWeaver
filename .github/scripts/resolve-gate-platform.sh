@@ -107,7 +107,7 @@ if [ "${1:-}" = "--self-test" ]; then
     printf 'CLI'  > "$dir/app/mw-plugin-test.dll"
     printf '{}'   > "$dir/app/mw-plugin-test.runtimeconfig.json"
     printf 'X=1\n' > "$dir/platform-refs/meshweaver-surface.manifest"
-    printf '{"tfm":"net10.0"}' > "$dir/platform-refs/Memex.Portal.Distributed.runtimeconfig.json"
+    printf '{"tfm":"net11.0"}' > "$dir/platform-refs/Memex.Portal.Distributed.runtimeconfig.json"
     printf '{"set":"%s","sha":"deadbeef","image-digest":"%s","portal-image-digest":"%s"}\n' "$name" "$d" "$p" \
       > "$dir/platform.json"
     printf '%s\n' "$d" > "$dir/.complete"

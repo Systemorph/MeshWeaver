@@ -752,11 +752,11 @@ def _fake_builder(root: Path, log: list, nondeterministic: set[str] | None = Non
         blob = b"InternalsVisibleToAttribute" + b"".join(b"\x01\x00" + bytes([len(f)]) + f.encode() + b"\x00\x00" for f in friends)
         counter["n"] += 1
         salt = str(counter["n"]).encode() if nondeterministic and d in nondeterministic else b""
-        out = root / d / "obj/Release/net10.0/ref"
+        out = root / d / "obj/Release/net11.0/ref"
         out.mkdir(parents=True, exist_ok=True)
         name = Path(d).name
         (out / f"{name}.dll").write_bytes("\n".join(public).encode() + blob + salt)
-        binp = root / d / "bin/Release/net10.0"
+        binp = root / d / "bin/Release/net11.0"
         binp.mkdir(parents=True, exist_ok=True)
         (binp / f"{name}.dll").write_bytes(text.encode() + blob)
         return True
