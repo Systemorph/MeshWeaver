@@ -320,6 +320,7 @@ teardown sentence and ends `Done`. Never raw SQL.
 | surface | how |
 |---|---|
 | MCP `uninstall_package` (MeshWeaver.Plugins) | `MeshOperations.UninstallPackage(package, reason)` answers the preview and the exact confirmation string; `UninstallPackage(requestPath: …, confirmation: …)` confirms. Platform admins only. |
+| the package page (MeshWeaver.Plugins `Store/Plugin` `InstanceUninstall`) | **Uninstall from this instance**, shown to a platform admin only (everyone else gets an empty, hidden control). The click authorises the caller by id, fail-closed, then files phase 1 as System; the status line links the request node, which carries the phase-2 preview and its typed confirmation. |
 | the platform's own code | `PackageUninstall.Request` / `PackageUninstall.Confirm`; `PackageUninstall.RequestAt` writes at a caller-chosen id so several writers deciding the same thing collide on one node |
 | a feature flag declared off | the boot pass runs phase 1 for every installed package the flag names ([Environment Composition](../EnvironmentComposition) → "A disabled flag retires what is installed"). The request carries `RetiredByFlag` (so it blocks no re-install) and `RetireOnEveryReplica` — the module's landed generation must be disabled durably or the request FAILS with the install record kept, and phase 1 never restarts by itself: it records `ModuleDisabled` and states `Ready` on the restart coordinator, which dispatches ONE restart for the boot pass's whole batch ("One restart for every retirement" above). It names no requester, so phase 2 can never run. |
 
@@ -329,7 +330,7 @@ teardown sentence and ends `Done`. Never raw SQL.
   (`Localizer.Uninstall`, MeshWeaver.Plugins) removes a *viewer's localized copies* of a course from
   that viewer's own space — a different operation from removing a platform package, its module and
   its partition. Extracting it into this engine would change what the dialog does to every course
-  learner, so it was left alone; a package-page entry for this request is owed.
+  learner, so it was left alone. The package page carries its own entry for this request (Surfaces above).
 - **A Postgres run.** The tests run on the monolith's in-memory store, where the teardown sweeps the
   partition's rows; the Postgres `DROP SCHEMA` path is the platform's existing one and was not
   exercised here.
