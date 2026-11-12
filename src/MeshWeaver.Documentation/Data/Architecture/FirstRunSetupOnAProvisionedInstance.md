@@ -115,7 +115,7 @@ is someone in that organisation's directory. On an instance whose sign-in admits
 arrives first. Such an instance must not be provisioned without an administrator: a setup link or a
 record-declared first admin. The deployment record is where that condition is decided.
 
-### Who may claim the first administrator is DIFFERENT for every instance
+### Who may claim the first administrator differs per instance
 
 Maintainer, 2026-11-12: *"it should be different for every instance"*. Who owns an instance decides
 who may become its first administrator, so the claim is **declared per instance**. It is never a
@@ -136,8 +136,10 @@ What follows from that:
 - **No installer seeds an administrator.** `memex-local` writing `Auth__GlobalAdmins__0` from the
   owner is the static-seed shape measured above. The grant exists before anyone has signed in, so
   the first-person rule is off. The owner is declared as `Instance__Owner__Email` only, and that
-  person becomes administrator by **registering**. Someone who signs in and does not complete
-  onboarding leaves no `User` node behind.
+  person becomes administrator by **registering**. The rule: someone who signs in and does not
+  complete onboarding must leave no `User` node behind. Onboarding writes the `User` on completion
+  (`OnboardingAdmissions.Complete`); that no other sign-in path writes one first is not yet pinned
+  by a test, and is part of the work below.
 - **The declared owner is the only identity whose first registration claims administrator**, so an
   instance with a public name is not handed to whoever reaches its sign-in first. Anyone else is told
   the instance is not set up yet, and no user is created for them. (To be built: the
