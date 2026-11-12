@@ -50,9 +50,10 @@ public class BranchReconcileReleasedBeforeThePoolCancelTest(ITestOutputHelper ou
 
         // The silo's stop: the registry releases what it owns before it cancels the pools.
         registry.Dispose();
+        // No leak-report assertion here: the first pass fires only after a full interval (minutes), so no
+        // pass is in flight at this dispose and "no GitHubWebhookProcessor leg" would hold without the fix.
+        // The ownership count is the mechanism, and it is what the negative control fails on.
         registry.OwnedUntilDrainCount.Should().Be(0, "the drain released the schedule before the cancel");
-        registry.UnownedLeaks().SelectMany(r => r.Sites)
-            .Should().NotContain(s => s.Contains(nameof(GitHubWebhookProcessor), StringComparison.Ordinal));
 
         // The host's hosted-service stop comes later: it must find a released schedule and do nothing harmful.
         service.StopAsync(ct).IsCompletedSuccessfully.Should().BeTrue(
