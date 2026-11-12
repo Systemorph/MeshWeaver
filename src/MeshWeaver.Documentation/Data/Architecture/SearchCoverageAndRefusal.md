@@ -286,7 +286,7 @@ completions, the PostgreSQL provider waited for the query embedding past the fan
 bound, and every free-text search was terminated as `QueryProviderStalledException`. The provider
 now bounds that wait and answers from its lexical path (MeshWeaver.Plugins#5383); this field is how
 it says so. Ranking is never an access decision, so degrading here leaves
-[the fan-in's fail-closed rule](QueryFanInStallTerminal) for access reads untouched. The aggregator
+[the fan-in's fail-closed rule](../QueryFanInStallTerminal) for access reads untouched. The aggregator
 unions the providers' sentences onto the merged Initial (`MeshQueryMergeContractTest`).
 
 ## What is still open
