@@ -363,9 +363,18 @@ two **real** events:
    first. The read is what lets a peer cluster's GO mean anything at all here.
 2. **The arbiter hands us the claim.** Registering as a candidate outlives the grant wait, and the
    arbiter grants the moment the build falls free — whether the builder finished or died. On a grant
-   the follower **re-reads the durable witness**: a GO already there means the winner finished and
-   this process stands down without re-baking; no GO means the builder went away mid-build and this
-   process bakes. The grant is the level-trigger; the witness is the verdict.
+   the follower first reads the GO off **the state that granted it** — a completed build records its
+   GO in the same fold that frees the claim, and the history is never trimmed, so a grant after a
+   completion always carries it — and only when that state has none **re-reads the durable
+   witness** (a peer cluster's GO). A GO in either means the winner finished and this process stands
+   down without re-baking; no GO in both means the builder went away mid-build and this process
+   bakes. The grant is the level-trigger; the GO it carries, or the witness, is the verdict.
+
+   🚨 Why the granting state first: the GO and the grant can reach the follower as ONE emission, and
+   then which of the two door subscriptions is told first is scheduling. Asking only the witness made
+   a lost race into a redundant bake — "released it without a GO, so this process bakes" for a build
+   whose GO was on the very state that granted it (an intermittent red of
+   `BuildCoordinationTest.Follower_StandsDown_SoTheNextBuildCanStillBeClaimed`).
 
 **Standing down is not bookkeeping.** `RequestBuildClaim`'s registration survives until a grant
 consumes it, so a follower that reached its answer some other way is later handed a build it will
