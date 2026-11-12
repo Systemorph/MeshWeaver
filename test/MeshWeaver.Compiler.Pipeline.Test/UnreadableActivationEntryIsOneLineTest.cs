@@ -21,9 +21,9 @@ namespace MeshWeaver.Graph.Test;
 /// nothing about the file's content, and the second line said the next whole read restores the
 /// module.</para>
 ///
-/// <para><b>What makes this able to fail.</b> The fault is real: the entry file is made unreadable
-/// (<see cref="UnreadableRecord"/>: permissions removed on Unix, held with
-/// <see cref="FileShare.None"/> on Windows), so the reader's own open is refused. The test first
+/// <para><b>What makes this able to fail.</b> The fault is real: the entry file's open is refused
+/// (<see cref="RefusedRecord"/>: a refusal that is not a denial, the incident's class) or denied
+/// (<see cref="UnreadableRecord"/>: permissions removed, Unix), so the reader's own open fails. The test first
 /// asserts that the module is genuinely dropped. It then asserts exactly one line naming the file,
 /// and no re-install advice. The negative control below shows that the same fixture, readable,
 /// loads the module and reports nothing.</para>
@@ -60,17 +60,21 @@ public class UnreadableActivationEntryIsOneLineTest : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(root, recursive: true); }
-        catch (IOException) { /* temp cleanup is the OS's problem, never a test failure */ }
+        // Both faults a delete can raise: a file in use (IOException) and one this process may not
+        // remove (UnauthorizedAccessException, e.g. read-only on Windows).
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        { /* temp cleanup is the OS's problem, never a test failure */ }
     }
 
-    /// <summary>The incident: the volume refuses the entry's open. The module is dropped, the
-    /// fault is ONE line, and the line advises no re-install.</summary>
+    /// <summary>The incident: the volume refuses the entry's open (<see cref="RefusedRecord"/>, a
+    /// refusal that is not a denial). The module is dropped, the fault is ONE line, and the line
+    /// advises no re-install.</summary>
     [Fact]
     public void AnEntryTheVolumeRefuses_DropsTheModule_InOneLine_WithoutReinstallAdvice()
     {
         var faults = ImmutableList.CreateBuilder<string>();
         ModuleActivationList list;
-        using (UnreadableRecord.Hold(entryPath))
+        using (RefusedRecord.Hold(entryPath))
             list = ModuleActivationSidecar.Read(root, faults.Add);
 
         // The precondition: the read genuinely lost this module to the refused open, so one line
@@ -83,6 +87,31 @@ public class UnreadableActivationEntryIsOneLineTest : IDisposable
         Assert.Contains("the next read that opens the file restores the module", line);
         Assert.Contains("nothing needs re-installing", line);
         Assert.DoesNotContain("re-install it", line, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("re-install the module", line, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("was denied", line, StringComparison.Ordinal);
+    }
+
+    /// <summary>A DENIED read (MeshWeaver#8124) says nothing about the content either, so no
+    /// re-install; but a denied permission does not lift by itself, so the line names the
+    /// permission or the mount as what to fix and promises no self-repair. Unix only: there
+    /// <see cref="UnreadableRecord"/> removes every permission; on Windows it is a sharing violation.</summary>
+    [Fact]
+    public void AnEntryWhoseReadIsDenied_DropsTheModule_InOneLine_AndNamesThePermission()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a permission denial is provoked by chmod on Unix only");
+        var faults = ImmutableList.CreateBuilder<string>();
+        ModuleActivationList list;
+        using (UnreadableRecord.Hold(entryPath))
+            list = ModuleActivationSidecar.Read(root, faults.Add);
+
+        Assert.DoesNotContain(list.Entries, e => e.Name == Module);
+        var line = Assert.Single(faults);
+        Assert.StartsWith($"Module activation entry '{entryPath}' could not be read", line);
+        Assert.Contains("that ONE module is NOT loaded from this read", line);
+        Assert.Contains("Access to the file was denied", line);
+        Assert.Contains("nothing needs re-installing", line);
+        Assert.Contains("fix the file's permissions or the volume's mount", line);
+        Assert.DoesNotContain("the next read that opens the file restores", line, StringComparison.Ordinal);
         Assert.DoesNotContain("re-install the module", line, StringComparison.OrdinalIgnoreCase);
     }
 

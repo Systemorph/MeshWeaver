@@ -2450,13 +2450,77 @@ public static class ModuleActivationSidecar
         }
         catch (Exception ex)
         {
+            // 🚨 The remedy follows the fault (MeshWeaver#8124), exactly as for a per-module entry
+            // (#8049), through the SAME classification (ClassifyReadFault). A refused open or read
+            // says nothing about the aggregate's bytes: the file is not damaged, and the next read
+            // that opens it restores what it holds. "Repair the file or re-install" over a refusal
+            // by the volume sends an operator to fix a file that is fine. A DENIED access says
+            // nothing about the bytes either, but it does not lift by itself, so the line names the
+            // permission or the mount as what to fix, never a self-repair that may not come. Only
+            // bytes that do not parse show the content is wrong; any other exception shows neither,
+            // and the line says so rather than guess.
+            var remedy = ClassifyReadFault(ex) switch
+            {
+                ReadFault.Refused =>
+                    " The volume refused the read, which says nothing about the file's content, so "
+                    + "nothing needs repairing or re-installing: the next read that opens the file "
+                    + "restores the entries it holds.",
+                ReadFault.Denied =>
+                    " Access to the file was denied, which says nothing about the file's content, so "
+                    + "nothing needs repairing or re-installing. A denied permission usually persists: "
+                    + "if the next read is denied too, fix the file's permissions or the volume's mount "
+                    + "so this process can read it.",
+                ReadFault.Content =>
+                    " The file's content does not parse as an activation list, so store-installed "
+                    + "modules recorded only there will NOT load until the file is repaired or the "
+                    + "modules are re-installed.",
+                _ =>
+                    " This fault does not show whether the file's content is wrong; if the next read "
+                    + "reports the same fault, repair the file or re-install the modules recorded there.",
+            };
             onCorrupt?.Invoke(
                 $"Module activation sidecar '{path}' could not be read ({ex.GetType().Name}: "
-                + $"{ex.Message}) — the entries it holds are skipped. Store-installed modules "
-                + "recorded there will NOT load until the file is repaired or the modules are "
-                + "re-installed.");
+                + $"{ex.Message}) — the entries it holds are skipped from this read." + remedy);
             return (new ModuleActivationList(), null, true);
         }
+    }
+
+    /// <summary>What a read fault of an activation file shows about the file: the ONE
+    /// classification both the per-module entry files and the legacy aggregate name their remedy
+    /// from (MeshWeaver#8049, #8124).</summary>
+    private enum ReadFault
+    {
+        /// <summary>The volume refused the open or the read (e.g. <c>EAGAIN</c> from the SMB
+        /// transport): nothing about the bytes, and a later read can succeed.</summary>
+        Refused,
+
+        /// <summary>Access was denied (<c>EACCES</c>/<c>EPERM</c>, an ACL, a read-only or
+        /// mis-mapped mount): nothing about the bytes, but it usually persists.</summary>
+        Denied,
+
+        /// <summary>The bytes were read and do not parse: the content is wrong.</summary>
+        Content,
+
+        /// <summary>Anything else: shows neither.</summary>
+        Unknown,
+    }
+
+    /// <summary>
+    /// Classifies a read fault by its ROOT cause, not its outermost type. 🚨 Every lock-free read
+    /// fault arrives WRAPPED: <see cref="RecordReadFault(MeshWeaver.Utils.LockFreeReadException)"/>
+    /// is an <see cref="IOException"/> around a <see cref="MeshWeaver.Utils.LockFreeReadException"/>
+    /// (also an <see cref="IOException"/>) around the platform's own exception. So a denial is found
+    /// by walking the inner chain; matching the outer type alone files every denial as a refusal
+    /// that heals by itself.
+    /// </summary>
+    private static ReadFault ClassifyReadFault(Exception ex)
+    {
+        if (ex is JsonException)
+            return ReadFault.Content;
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+            if (e is UnauthorizedAccessException)
+                return ReadFault.Denied;
+        return ex is IOException ? ReadFault.Refused : ReadFault.Unknown;
     }
 
     /// <summary>
@@ -2545,15 +2609,22 @@ public static class ModuleActivationSidecar
                 // 🚨 The remedy follows the fault (MeshWeaver#8049). A refused open or read says
                 // nothing about the file's bytes: the file is not damaged, and the next read that
                 // opens it restores the module. Telling an operator to re-install over a refusal by
-                // the volume sends them to repair a file that is fine. Only bytes that do not parse
+                // the volume sends them to repair a file that is fine. A DENIED access says nothing
+                // about the bytes either, but it does not lift by itself (MeshWeaver#8124), so the
+                // line names the permission or the mount as what to fix. Only bytes that do not parse
                 // (a JsonException) show the content is wrong, and only then is a re-install the
                 // repair. Any other exception shows neither, and the line says so rather than guess.
-                var remedy = ex switch
+                var remedy = ClassifyReadFault(ex) switch
                 {
-                    IOException or UnauthorizedAccessException =>
+                    ReadFault.Refused =>
                         " The volume refused the read, which says nothing about the file's content, so "
                         + "nothing needs re-installing: the next read that opens the file restores the module.",
-                    JsonException =>
+                    ReadFault.Denied =>
+                        " Access to the file was denied, which says nothing about the file's content, so "
+                        + "nothing needs re-installing. A denied permission usually persists: if the next "
+                        + "read is denied too, fix the file's permissions or the volume's mount so this "
+                        + "process can read it.",
+                    ReadFault.Content =>
                         " The file's content does not parse as an activation entry, so re-install the module "
                         + "to rewrite it.",
                     _ =>
