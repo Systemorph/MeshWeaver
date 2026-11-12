@@ -738,6 +738,59 @@ anything blocking. Nobody has read a stack of the production leaf. A consumer th
 handling of the Initial itself still runs on the setup leaf. That is by design, and the per-leaf stack
 capture in [Controlled IO Pooling](../ControlledIoPooling) names such a consumer if it happens.
 
+## A stall on a backlogged replica (2026-11-11, #8097, #8100, #8101, #8102)
+
+Four standing queries filed four tickets within ten minutes, all on one replica of the company
+instance: `InstanceSecretCatalog`, `InstanceGitHubAppCatalog`, `InstancePackageSourceCatalog` and
+the triage assignment pass. Each one read like a defect in its own provider, and none of them was.
+
+**What the queries were.** Each was a plain structured listing such as
+`namespace:Admin nodeType:InstanceSecret`, run as system, with no free text. So the embedding path
+(MeshWeaver.Plugins#5383) does not apply to them.
+
+**What the replica was doing.** Its `[LIVENESS]` heartbeat stayed on time, at about 10.2 s per
+10 s tick. Its ThreadPool queue did not:
+
+| time (UTC) | queued work items | threads | GC share of the tick | heap |
+|---|---|---|---|---|
+| 14:28:03 | 3,991 | 39 | ~12 % | 3.8 GiB |
+| 14:40:23 | 48,807 | 42 | ~30 % | 6.2 GiB |
+| 14:40:57 (`[POOLSTALL]`) | 69,012 | 42 | — | — |
+| 14:47:59 | 31,173 | 42 | ~34 % | 4.6 GiB |
+
+Its three sibling replicas, on the same image and in the same minutes, read 0 to 377 queued items
+and 0.3–17 % GC. On the same replica, store writes failed with Npgsql timing out while it **opened**
+a connector, and the token-validation canary's store read timed out (#8098). Those are the same
+backlog. A connect continuation waits in the same queue, so a backlogged process cannot open a
+connection in time even when the database is healthy. The siblings wrote to the same database
+without error.
+
+**What was busy.** The queue-delay probe from #8071 captured its first production stall at
+14:40:57Z: 44 workers in 21 shapes. The largest shape, 20 of the 44 workers, was a hub's message
+drain (`MessageService.DrainLoop`) subscribing into a chain about ten levels deep of
+`SelectMany`/`Return`, with the innermost frame growing a `CompositeDisposable`'s list. The erased
+generics do not name the handler. Finding which producer floods the pool is the open question of
+#5388.
+
+**What changed.** The fault now carries the reading. `QueryProviderStalledException` records
+`ThreadPoolPending` and `ThreadPoolThreads` when the stall terminal runs. The two travel as a pair:
+the constructor refuses one without the other. At `BackloggedPendingThreshold` (1,000 queued items)
+or more, the message says the replica was backlogged and sends the reader to that replica's
+`[LIVENESS]` and `[POOLSTALL]` lines first. Below it, the message still says to fix the provider. The
+warning log line states the same threshold.
+
+The reading is not exact at the bound. The terminal is an `Observable.Timer` callback on Rx's
+default scheduler, which is a ThreadPool work item, so on a backlogged replica it runs only when a
+worker reaches it, late by about the queue delay. The count is of the queue at that later moment. A
+late terminal is itself a symptom of the backlog, so the reading still points the right way. It is
+not a measure of the queue's peak. The budget is unchanged (policy
+`query-fanin-stall-terminal`). A reading is no reason to retry or to raise any bound. It only says
+where the cause is.
+
+**Not established.** What flooded the pool. When the backlog began: the replica already held 3,991
+queued items at the first tick read, 14:28Z. Whether the 1,000-item threshold is the right line: it
+separates every reading above, but it is not calibrated against a larger sample.
+
 ## See also
 
 - [Access Control](../AccessControl) → "The fold can produce NO answer, and that is a third outcome",
