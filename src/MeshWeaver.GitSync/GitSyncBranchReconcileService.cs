@@ -1,4 +1,6 @@
 using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -25,8 +27,16 @@ namespace MeshWeaver.GitSync;
 ///
 /// <para>Serialised (<c>Concat</c>): a pass that outlives the interval delays the next one rather
 /// than overlapping it. A faulted pass is logged and does not tear the schedule down.</para>
+///
+/// <para><b>Owned until the IoPool drain (#7992).</b> A pass runs pooled mesh queries
+/// (<c>QueryConfigNodesAsSystem</c>) and this service's own <see cref="StopAsync"/> runs only when the
+/// host stops, after <c>IoPoolSiloTeardown</c> has already cancelled the pools at the silo's stop. So a
+/// pass in flight at a stop was reported as unowned query legs on every such stop. The schedule is
+/// therefore handed to <see cref="IoPoolOwnershipExtensions.OwnUntilIoDrain"/>, which disposes it
+/// before any pool is cancelled; the later <see cref="StopAsync"/> finds it released and does nothing.</para>
 /// </summary>
 internal sealed class GitSyncBranchReconcileService(
+    IMessageHub hub,
     GitHubWebhookProcessor processor,
     IConfiguration? configuration = null,
     ILogger<GitSyncBranchReconcileService>? logger = null) : IHostedService, IDisposable
@@ -51,7 +61,7 @@ internal sealed class GitSyncBranchReconcileService(
     public Task StartAsync(CancellationToken cancellationToken)
     {
         var interval = Interval;
-        schedule = Observable.Timer(interval, interval)
+        schedule = hub.OwnUntilIoDrain(Observable.Timer(interval, interval)
             .Select(_ => processor.ReconcileBranches()
                 .Catch((Exception ex) =>
                 {
@@ -71,7 +81,8 @@ internal sealed class GitSyncBranchReconcileService(
                 },
                 ex => logger?.LogWarning(ex,
                     "[GitSync] the branch reconcile schedule faulted — lost push deliveries are no longer "
-                    + "repaired until the next restart."));
+                    + "repaired until the next restart.")),
+            nameof(GitSyncBranchReconcileService));
         logger?.LogInformation("[GitSync] branch reconcile armed: every {Interval}.", interval);
         return Task.CompletedTask;
     }
