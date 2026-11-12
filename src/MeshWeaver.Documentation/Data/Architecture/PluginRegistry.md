@@ -382,6 +382,44 @@ name the consequence without a new parameter on a host compiled against the prev
 The vocabulary is #4091's binding-conflict sentence ("⛔ Not installed on this platform: it needs
 YamlDotNet 18.1.0.0, this platform provides 16.3.0.0") with the nouns of a plan.
 
+#### A package the deployment configuration NAMES and the pass does not select is an Error (2026-11)
+
+The #4097 verdict covers only the registry's own default set. A package the operator names in
+`PluginCatalog:InstallByDefault` that is **not** `preInstalled` on the registry is, above the
+instance's plan, simply absent from the listing — the enumeration defence again — and the pass used
+to say so only with a Warning that fired when **no** operator pattern matched at all. Measured on a
+fleet machine on 2026-11-12: `InstallByDefault:0 = Plugins/Hosting`, the instance on `free`, Hosting
+on `enterprise`; the listing never carried Hosting, the other patterns matched, nothing was logged,
+and the package carrying the fleet heartbeat stayed uninstalled for 13 days with nobody told.
+
+A name in the deployment record is a **declared requirement** (policy `declared-not-derived`), so
+`InstanceAutoRegistrationService.ReportUnselectedOperatorEntries` now judges **each** entry that
+names a package exactly (`Source/Package`, whose source is configured) on its own, once per pass:
+
+| the listing for this instance | logged |
+|---|---|
+| does not carry the named package | **Error**, one per entry: `[DefaultInstall] PluginCatalog:InstallByDefault names {Entry} exactly, and the default install selects NOTHING for it: the registry's listing for this instance does not carry that package (this instance is on plan {Plan}; listing complete: {ListingComplete}). …` followed by the causes in the order to check them — (1) the registry does not list it to this instance: a package above the plan tier is not offered at all, so raise the plan on the registry (Settings ▸ Instance grants) or redeem a registration key for that plan (`PluginCatalog:BootstrapKey`); (2) no package of that id exists under `{Source}`; (3) the listing failed |
+| carries it as **refused by plan tier** (#4097) | **Error**: `[DefaultInstall] PluginCatalog:InstallByDefault names {Entry} exactly, and the registry REFUSES it by plan tier: {Package} needs plan tier {RequiredTier}, this instance is on {Plan}. …` — and it leaves the default set's Warning below |
+| carries it | nothing |
+
+`{Plan}` is the plan the registry decided at, as its refusals in the same answer state it (the
+`instancePlan` of #4097); an answer with no refusal in it names no plan, and the line says
+`unknown (the registry's answer named no plan)`. Everything else keeps its level: a whole-source
+`Source/*` pattern names nothing and keeps the "matched no packages" **Warning** when none of the
+remaining patterns matched; the registry's own default-set refusals nobody named stay at the
+**Warning** above; an entry naming a source this installation does not have is the existing
+pre-listing Error (`UnmatchablePatterns`), not reported twice. Nothing about **selection** changed:
+the pass still fails closed and installs nothing the instance is not entitled to — it now SAYS so.
+
+**Why Error is what reaches a person.** Every `Error`/`Critical` record an instance logs is folded by
+`ErrorSignatureLoggerProvider` into the `ErrorSignatureCollector`, and `InstanceErrorReporter` delivers
+the new or escalated signatures to the registry as an error digest, which files one
+`Feedback/Feedback` submission per (instance, signature) and relays it to the control instance's
+triage ([Instance Telemetry](../InstanceTelemetry)). A Warning never leaves the instance's own log.
+The digest carries the **template**, never the values — so the templates above are stable and name
+the causes themselves; which entry and which plan is read from the instance's own log. Pinned by
+`ANamedDefaultPackageThatDoesNotInstallIsAnErrorTest`.
+
 **The ladder is the Store's data, not a table in the platform.** The registry reads its own
 `Admin/Tiers/{id}` nodes (`content.rank`, `content.allAccess`) once a minute (`PlanTierLadder`) and
 hands the snapshot to the authenticated caller, so every surface decides the same way and there is
