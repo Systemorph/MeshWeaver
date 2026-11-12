@@ -1602,12 +1602,19 @@ public partial class MeshOperations
                         ["scope"] = coverage.Value.Scope,
                         ["partitions"] = ToJsonArray(partitions),
                         ["partial"] = ToJsonArray(partial),
+                        // What the answer lost in QUALITY, not rows (QueryResultChange.Degradations):
+                        // e.g. a free-text search answered lexically because the embedding was late.
+                        ["degraded"] = ToJsonArray(change.Degradations is { Count: > 0 } d ? d : null),
                     },
                     ["results"] = JsonSerializer.SerializeToNode(list, hub.JsonSerializerOptions) ?? new JsonArray(),
                 };
                 if (truncated)
                     payload["hint"] =
                         "Result set hit the limit — there may be more matches. Narrow the query (namespace:/nodeType:/name:) or raise 'limit' (max 200).";
+                if (change.Degradations is { Count: > 0 })
+                    payload["degradedHint"] =
+                        "Every match is counted, but found by a weaker method (coverage.degraded) — e.g. word "
+                        + "matching instead of semantic ranking. Retry later for the ranked answer.";
                 if (partial is { Count: > 0 })
                     payload["partialHint"] =
                         $"{partial.Count} of the partitions read are readable to you only in part (coverage.partial): "

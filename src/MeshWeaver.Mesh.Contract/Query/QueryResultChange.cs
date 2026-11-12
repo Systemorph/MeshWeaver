@@ -163,6 +163,27 @@ public record QueryResultChange<T>
     public bool SnapshotIncomplete { get; init; }
 
     /// <summary>
+    /// What this answer lost in QUALITY while keeping every row it owes — one plain sentence per
+    /// degradation, e.g. <c>semantic ranking unavailable: the query embedding did not arrive within 3 s</c>.
+    ///
+    /// <para>Not <see cref="SnapshotIncomplete"/> and not <see cref="SilentProviders"/>: those say rows
+    /// may be MISSING, so a consumer must not read absence off the frame. A degradation says the rows
+    /// are all there but were found or ordered by a weaker method — a free-text search answered from
+    /// its lexical match because the query embedding was late or refused (MeshWeaver.Plugins#5383,
+    /// 2026-11-12: a queued embedding server terminated every free-text search as stalled at the
+    /// fan-in's 15 s bound). The frame may be cached and replayed like any answer.</para>
+    ///
+    /// <para>🚨 Never an access verdict: ranking decides nothing about who may see what, which is why
+    /// a provider may DEGRADE here instead of failing closed (core
+    /// <c>Doc/Architecture/QueryFanInStallTerminal</c> fails closed for access reads only).</para>
+    ///
+    /// <para><see langword="null"/> or empty means nothing was degraded (or the provider predates the
+    /// field). The aggregator unions the providers' sentences onto the merged Initial. Meaningful on
+    /// the Initial; live deltas leave it null.</para>
+    /// </summary>
+    public IReadOnlyList<string>? Degradations { get; init; }
+
+    /// <summary>
     /// The original query that produced this change.
     /// </summary>
     public ParsedQuery Query { get; init; } = null!;

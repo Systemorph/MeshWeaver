@@ -1100,6 +1100,9 @@ public partial class MeshQuery : IMeshQueryCore
             // another, and null throughout stays "not assessed" — as does ANY provider that read
             // partitions without assessing them (MergePartialReads).
             IReadOnlyList<string>?[] providerPartial = new IReadOnlyList<string>?[observables.Count];
+            // …and what each said its answer lost in quality (QueryResultChange.Degradations):
+            // unioned, first-seen order, so a degraded slice is never hidden by a healthy one.
+            var degradations = new List<string>();
 
             var subscriptions = new List<IDisposable>();
 
@@ -1129,6 +1132,7 @@ public partial class MeshQuery : IMeshQueryCore
                     // worth. Empty stays null so the common case allocates nothing and reads as
                     // "every provider answered".
                     SilentProviders = silentProviders.Count == 0 ? null : silentProviders.ToArray(),
+                    Degradations = degradations.Count == 0 ? null : degradations.ToArray(),
                 });
             }
 
@@ -1171,6 +1175,10 @@ public partial class MeshQuery : IMeshQueryCore
                                 lastQuery ??= change.Query;
                                 providerPartitions[idx] ??= change.Partitions;
                                 providerPartial[idx] ??= change.PartiallyReadPartitions;
+                                if (change.Degradations is { Count: > 0 } degraded)
+                                    foreach (var d in degraded)
+                                        if (!string.IsNullOrWhiteSpace(d) && !degradations.Contains(d))
+                                            degradations.Add(d);
                                 // 🚨 A provider that ANSWERED over reads it could not complete is
                                 // named here, exactly like one that answered not at all
                                 // (MeshWeaver#1186). SnapshotIncomplete is the provider's own verdict
@@ -1493,6 +1501,7 @@ public partial class MeshQuery : IMeshQueryCore
                 PartiallyReadPartitions = change.PartiallyReadPartitions,
                 SilentProviders = change.SilentProviders,
                 SnapshotIncomplete = change.SnapshotIncomplete,
+                Degradations = change.Degradations,
                 Query = change.Query!,
                 Version = change.Version,
                 Timestamp = change.Timestamp,

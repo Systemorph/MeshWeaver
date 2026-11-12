@@ -253,6 +253,56 @@ public class MeshQueryMergeContractTest
     }
 
     /// <summary>
+    /// A provider that answered every row but by a weaker method (a free-text search answered
+    /// lexically because the query embedding was late — MeshWeaver.Plugins#5383) says so in
+    /// <see cref="QueryResultChange{T}.Degradations"/>, and the merged Initial carries the union: a
+    /// degraded slice is never hidden by a healthy provider beside it. Not a floor: rows are all there.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Degradations_AreUnionedOntoTheMergedInitial_AndAreNotAFloor()
+    {
+        const string late = "semantic ranking unavailable: the query embedding did not arrive within 3 s";
+        var degraded = new FakeProvider("degraded", () => Observable.Return(Initial(Node("acme/one")) with
+        {
+            Degradations = [late],
+        }));
+        var alsoDegraded = new FakeProvider("alsoDegraded", () => Observable.Return(Initial(Node("docs/two")) with
+        {
+            Degradations = [late, "  "],
+        }));
+        var healthy = new FakeProvider("healthy", () => Observable.Return(Initial(Node("q/three"))));
+
+        var query = new MeshQuery([degraded, alsoDegraded, healthy], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "alpha partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.Degradations.Should().Equal(new[] { late }, "deduplicated, blanks dropped");
+        change.Items.Should().HaveCount(3, "a degradation drops no row");
+        change.SilentProviders.Should().BeNull("a degraded answer is an answer, not a floor");
+    }
+
+    /// <summary>The negative control: nothing degraded leaves the field null.</summary>
+    [Fact(Timeout = 60_000)]
+    public async Task NoDegradation_LeavesDegradationsNull()
+    {
+        var a = new FakeProvider("a", () => Observable.Return(Initial(Node("p/one"))));
+
+        var query = new MeshQuery([a], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "alpha partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.Degradations.Should().BeNull();
+    }
+
+    /// <summary>
     /// The negative control for <see cref="PartiallyReadPartitions_AreUnionedOntoTheMergedInitial"/>:
     /// a provider that assessed and found every partition covered reports an EMPTY list, and the
     /// merged Initial keeps it empty ("assessed, none partial"). It must not collapse to null
