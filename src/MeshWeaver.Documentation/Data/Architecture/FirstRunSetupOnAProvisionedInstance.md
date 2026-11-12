@@ -115,6 +115,38 @@ is someone in that organisation's directory. On an instance whose sign-in admits
 arrives first. Such an instance must not be provisioned without an administrator: a setup link or a
 record-declared first admin. The deployment record is where that condition is decided.
 
+### Who may claim the first administrator is DIFFERENT for every instance
+
+Maintainer, 2026-11-12: *"it should be different for every instance"*. Who owns an instance decides
+who may become its first administrator, so the claim is **declared per instance**. It is never a
+fleet-wide default, and never an identity baked into an image or an installer.
+
+**One Mac hosts several instances with different owners.** A typical fleet Mac Studio runs an
+instance for **control** (Systemorph's), **a customer instance** (the client's) and **build servers**
+(Systemorph's). The Mac itself is enrolled in **Systemorph's Intune** tenant, but that says nothing
+about who owns each instance on it. So ownership is read per instance, never per machine:
+
+| Instance (several may share one Mac) | Whose property | Who may claim the first administrator |
+|---|---|---|
+| **Systemorph's own instances**: the Mac's control or local instance, its build servers | Systemorph's. The `com.memex.local` profile Intune delivers carries the owner's answers | the declared owner, `Instance__Owner__Email`, which here is **typically a Systemorph employee** |
+| **A customer instance**, wherever it runs (a fleet Mac included) | **the client's property** | the client's own person, declared on that instance's record. **Systemorph employees generally do not have access**: no account, no grant, and never the first administrator. The Mac's owner from the Intune profile is **not** this instance's owner |
+
+What follows from that:
+
+- **No installer seeds an administrator.** `memex-local` writing `Auth__GlobalAdmins__0` from the
+  owner is the static-seed shape measured above. The grant exists before anyone has signed in, so
+  the first-person rule is off. The owner is declared as `Instance__Owner__Email` only, and that
+  person becomes administrator by **registering**. Someone who signs in and does not complete
+  onboarding leaves no `User` node behind.
+- **The declared owner is the only identity whose first registration claims administrator**, so an
+  instance with a public name is not handed to whoever reaches its sign-in first. Anyone else is told
+  the instance is not set up yet, and no user is created for them. (To be built: the
+  owner-email check in `OnboardingAdmissions` and the `memex-local` change. Until both land, a
+  fleet Mac still carries the static seed.)
+- **On a customer instance, Systemorph operates the deployment, not the content.** Rolls, recycles
+  and configuration go through CD and the control lane. A Systemorph employee does not sign in to
+  administer it, and the instance's record must never name one as its owner or first administrator.
+
 ## The rule (2026-09-16 — superseded for provisioned instances, see above)
 
 > An instance that has **no human administrator** serves a SETUP surface at its entry point, not a
