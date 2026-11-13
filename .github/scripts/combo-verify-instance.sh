@@ -185,6 +185,11 @@ module_sources=$(jq -r '[.modules[].package | select(. != null and ((.compiledMo
 if [ -n "$module_sources" ]; then
   : "${BAKE_PUBLISH_TARGETS:?vars.BAKE_PUBLISH_TARGETS is empty — the sealed module publications cannot be read, so the gate would run without the modules this instance lands}"
 fi
+# EVERY source a package of the combo comes from — whose sealed NodeType bundles the gate reuses
+# instead of re-baking that source's tree (MeshWeaver#4413, owner decision option C, step 1). A
+# superset of $module_sources.
+bundle_sources=$(jq -r '[.modules[].package | select(. != null) | (.sourceName // "") | ascii_downcase
+  | select(length > 0)] | unique | .[]' <"$combo")
 
 # ── 3. Verify ─────────────────────────────────────────────────────────────────────────────────
 verdict=$out_dir/combo-verdict-$tag.json
@@ -250,37 +255,81 @@ note "gate host: $PORTAL_IMAGE /app + the $TESTER_IMAGE CLI, framework identity 
 # ones no seal carries. A source with no seal for this identity is RED here — never a gate run
 # without the modules the instance lands.
 module_args=()
+sealed_args=()
+# 🚨 THE SEALED NODETYPE BUNDLES (MeshWeaver#4413, option C step 1). Every source's publication
+# also seals the NodeType bundles its own lane baked for this identity; the verifier reuses each one
+# whose package is byte-for-byte this instance's tree (SealedBundleReuse) and bakes only the rest. A
+# module source's bundles are fetched by the SAME compose call as its modules, from the SAME
+# publication directory, so the two halves cannot come from two publications. For a source that
+# lands no module, a failed fetch is NOT a red: it costs only the reuse, its packages are then baked
+# from source exactly as before, and the line below says so by name.
+sealed_root="$host_root/sealed-bundles"
+rm -rf "$sealed_root"
+storage_target="${BAKE_PUBLISH_TARGETS:-}"
+storage_target="${storage_target%% *}"
 if [ -n "$module_sources" ]; then
-  storage_target="${BAKE_PUBLISH_TARGETS%% *}"
   bundles_root="$host_root/module-bundles"
   rm -rf "$bundles_root"
   mkdir -p "$bundles_root"
-  while IFS= read -r src; do
-    [ -n "$src" ] || fail "a package in the combo read from $where declares a compiled module but names no source, so there is no sealed publication to take its module from — nothing was verified and nothing is landed."
-    mkdir -p "$bundles_root/$src"
-    set +e
-    if [ "$PRIVATE" = false ]; then
-      bash .github/scripts/compose-sealed-modules.sh --identity "$tester_identity" --packages '*' \
-        --upstreams "$src" --out "$bundles_root/$src" --storage-target "$storage_target"
-    else
-      mkdir -p "$WORK_ROOT"
-      bash .github/scripts/compose-sealed-modules.sh --identity "$tester_identity" --packages '*' \
-        --upstreams "$src" --out "$bundles_root/$src" --storage-target "$storage_target" \
-        >>"$WORK_ROOT/modules-$tag.log" 2>&1
-    fi
-    compose_exit=$?
-    set -e
-    if [ "$compose_exit" -ne 0 ]; then
+fi
+sealed_sources=0
+while IFS= read -r src; do
+  [ -n "$src" ] || continue
+  is_module_source=false
+  if printf '%s\n' "$module_sources" | grep -qx -- "$src"; then is_module_source=true; fi
+  if [ -z "$storage_target" ]; then
+    # Only reachable for a source that lands no module: a module source asserted the share above.
+    note "sealed-bundle reuse is OFF for a source: vars.BAKE_PUBLISH_TARGETS is empty, so its publication cannot be read — its packages are baked from source."
+    continue
+  fi
+  mkdir -p "$sealed_root/$src"
+  if [ "$is_module_source" = true ]; then
+    modules_out="$bundles_root/$src"
+  else
+    modules_out="$host_root/unused-modules/$src"
+  fi
+  mkdir -p "$modules_out"
+  set +e
+  if [ "$PRIVATE" = false ]; then
+    bash .github/scripts/compose-sealed-modules.sh --identity "$tester_identity" --packages '*' \
+      --upstreams "$src" --out "$modules_out" --storage-target "$storage_target" \
+      --bundles-out "$sealed_root/$src"
+  else
+    mkdir -p "$WORK_ROOT"
+    bash .github/scripts/compose-sealed-modules.sh --identity "$tester_identity" --packages '*' \
+      --upstreams "$src" --out "$modules_out" --storage-target "$storage_target" \
+      --bundles-out "$sealed_root/$src" >>"$WORK_ROOT/modules-$tag.log" 2>&1
+  fi
+  compose_exit=$?
+  set -e
+  if [ "$compose_exit" -ne 0 ]; then
+    if [ "$is_module_source" = true ]; then
       if [ "$PRIVATE" = false ]; then
         fail "the sealed module set of source '$src' for framework identity $tester_identity could not be composed (exit $compose_exit, above) — the gate would run without modules this instance lands, so nothing was verified and nothing is landed."
       else
         fail "a source's sealed module set for framework identity $tester_identity could not be composed (exit $compose_exit; source and output withheld: private roster row) — nothing was verified and nothing is landed."
       fi
     fi
-  done <<<"$module_sources"
+    rm -rf "${sealed_root:?}/$src"
+    if [ "$PRIVATE" = false ]; then
+      note "source '$src' lands no module and its sealed publication for identity $tester_identity could not be read (exit $compose_exit, above) — none of its bundles is reused; its packages are baked from source."
+    else
+      note "a source that lands no module could not be read for identity $tester_identity (exit $compose_exit; withheld: private roster row) — its packages are baked from source."
+    fi
+    continue
+  fi
+  sealed_sources=$((sealed_sources + 1))
+  sealed_args+=(--sealed-bundles "$sealed_root/$src")
+done <<<"$bundle_sources"
+rm -rf "$host_root/unused-modules"
+if [ -n "$module_sources" ]; then
   module_args=(--module-bundles "$bundles_root")
   note "module half: the sealed module set of $(printf '%s\n' "$module_sources" | grep -c .) source(s) composed for identity $tester_identity"
 fi
+if [ "${#sealed_args[@]}" -gt 0 ]; then
+  sealed_args+=(--framework-identity "$tester_identity")
+fi
+note "sealed NodeType bundles: fetched from $sealed_sources of $(printf '%s\n' "$bundle_sources" | grep -c . || true) source(s) for identity $tester_identity"
 
 # 🚨 A private row's verifier output names every module it materialises, so it goes to a file that
 # is never uploaded and only its line count is printed. The verdict below carries the counts.
@@ -294,7 +343,8 @@ verifier_cmd=(dotnet run --project tools/MeshWeaver.ComboVerifier/MeshWeaver.Com
   --platform "$PLATFORM"
   --gate-timeout "$GATE_TIMEOUT"
   "${src_args[@]}"
-  ${module_args[@]+"${module_args[@]}"})
+  ${module_args[@]+"${module_args[@]}"}
+  ${sealed_args[@]+"${sealed_args[@]}"})
 set +e
 if [ "$PRIVATE" = false ]; then
   "${verifier_cmd[@]}"
