@@ -118,6 +118,7 @@ import argparse
 import base64
 import contextlib
 import functools
+import hashlib
 import importlib.util
 import io
 import json
@@ -129,9 +130,10 @@ import tempfile
 import textwrap
 import threading
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, unquote, urlencode, urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1165,13 +1167,65 @@ def pmap(function, items, label: str = "", workers: int | None = None) -> list:
 TAG_ABSENT_MARKERS = consistency.ABSENT_MARKERS + ("the specified tag does not exist",)
 
 
+MANIFEST_ACCEPT = frozenset({
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+})
+REGISTRY_TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
+REGISTRY_HTTP_TIMEOUT = 30
+
+
+def _urllib_http(method: str, url: str, headers: dict[str, str],
+                 body: bytes | None) -> tuple[int, bytes | None]:
+    """The real transport: (status, body). An HTTP error status is an ANSWER, returned; only a
+    transport fault (DNS, reset, timeout) raises, as `OSError`."""
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=REGISTRY_HTTP_TIMEOUT) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, None
+
+
+def parse_index_children(body: bytes, digest: str) -> tuple[list[str] | None, str]:
+    """An image index's child digests, from its RAW bytes — believed only when those bytes hash to
+    the digest that was asked for. `None` is INDETERMINATE."""
+    algorithm, _, expected = digest.partition(":")
+    if algorithm != "sha256" or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        return None, f"{digest!r} is not a sha256 digest"
+    if hashlib.sha256(body).hexdigest() != expected:
+        return None, (f"the registry's bytes for {digest[:19]}… do not hash to that digest, so "
+                      "nothing in them is evidence about this index")
+    try:
+        document = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return None, f"the manifest is not JSON: {exc}"
+    if not isinstance(document, dict):
+        return None, "the manifest is not a JSON object"
+    children = [child.get("digest", "") if isinstance(child, dict) else ""
+                for child in document.get("manifests") or []]
+    if any(not re.fullmatch(r"sha256:[0-9a-f]{64}", child) for child in children):
+        return None, "the index lists a child with no usable digest"
+    return children, ""
+
+
 class Registry:
     """Every registry interaction this job makes. Read methods first, then the one write."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, http=None) -> None:
         self.name = name
         self._tag_cache: dict[tuple[str, str], tuple[str | None, str]] = {}
         self._tag_detail_cache: dict[str, tuple[list["Tag"] | None, str]] = {}
+        # The registry's OWN HTTP API, for the one read that runs thousands of times (#7991).
+        # `http` is the seam the self-test drives: `(method, url, headers, body) -> (status,
+        # bytes)`, raising `OSError` for a transport fault. The ACR refresh token is taken ONCE per
+        # run and each repository's pull token once; both live on this instance only.
+        self._http = http or _urllib_http
+        self._token_lock = threading.Lock()
+        self._refresh_token: tuple[str | None, str] | None = None
+        self._pull_tokens: dict[str, str] = {}
 
     # -- reads ----------------------------------------------------------------------------------
 
@@ -1238,21 +1292,114 @@ class Registry:
         return result
 
     def index_children(self, acr_repo: str, digest: str) -> tuple[list[str] | None, str]:
-        """The platform manifests one image index references. `None` is INDETERMINATE."""
-        rc, out, err = consistency.az(
-            ["acr", "manifest", "show", "--registry", self.name,
-             "--name", f"{acr_repo}@{digest}", "-o", "json"]
-        )
-        if rc != 0:
-            return None, public_diagnostic(err, 300)
+        """The platform manifests one image index references. `None` is INDETERMINATE.
+
+        🚨 READ OVER THE REGISTRY'S OWN HTTP API, NOT ONE `az` PROCESS PER INDEX (#7991). This
+        read runs once per wanted image index — 2,371 of them on 2026-11-08, 2,824 on 2026-11-13,
+        and the set grows by roughly 90 a day while the purge is paused. As one `az acr manifest
+        show` each (~3.8 s: an interpreter start plus an AAD → ACR token exchange, on an 8-wide
+        pool) it was ~1,350 s of a 1,800 s job, and on 2026-11-13 it pushed the job past its
+        30-minute cap mid read-back: run 43341717311 was CUT with no verdict at all. An index is
+        content-addressed, so the bytes the registry returns for `<repo>@<digest>` are checked
+        against that digest before a single child is believed — a STRONGER read than `az`'s, which
+        trusted whatever JSON came back. Every failure is still INDETERMINATE, never an empty
+        closure."""
+        token, error = self._pull_token(acr_repo)
+        if token is None:
+            return None, error
+        url = f"https://{self.login_server}/v2/{acr_repo}/manifests/{digest}"
+        status, body, detail = self._get_manifest(url, token)
+        if status == 401:
+            # A pull token outlived its life mid-run: exchange once more, then believe the answer.
+            token, error = self._pull_token(acr_repo, renew=True)
+            if token is None:
+                return None, error
+            status, body, detail = self._get_manifest(url, token)
+        if status != 200 or body is None:
+            return None, detail or f"GET {acr_repo}@{digest[:19]}… answered HTTP {status}"
+        return parse_index_children(body, digest)
+
+    @property
+    def login_server(self) -> str:
+        return f"{self.name}.azurecr.io"
+
+    def _refresh(self) -> tuple[str | None, str]:
+        """The run's ACR refresh token (`az acr login --expose-token`), taken once. Never printed."""
+        with self._token_lock:
+            if self._refresh_token is None:
+                rc, out, err = consistency.az(
+                    ["acr", "login", "--name", self.name, "--expose-token", "-o", "json"])
+                token = ""
+                if rc == 0:
+                    try:
+                        token = (json.loads(out) or {}).get("accessToken") or ""
+                    except (json.JSONDecodeError, AttributeError):
+                        token = ""
+                if token:
+                    self._refresh_token = (token, "")
+                elif rc != 0:
+                    self._refresh_token = (None, "could not take an ACR token (`az acr login "
+                                           "--expose-token`): " + public_diagnostic(err, 300))
+                else:
+                    self._refresh_token = (None, "`az acr login --expose-token` answered 0 with no "
+                                           "accessToken")
+            return self._refresh_token
+
+    def _pull_token(self, acr_repo: str, renew: bool = False) -> tuple[str | None, str]:
+        """A PULL-scoped access token for one repository, exchanged from the refresh token."""
+        with self._token_lock:
+            if not renew and acr_repo in self._pull_tokens:
+                return self._pull_tokens[acr_repo], ""
+        refresh, error = self._refresh()
+        if refresh is None:
+            return None, error
+        form = urlencode({"grant_type": "refresh_token", "service": self.login_server,
+                          "scope": f"repository:{acr_repo}:pull",
+                          "refresh_token": refresh}).encode()
+        status, body, detail = self._call(
+            "POST", f"https://{self.login_server}/oauth2/token",
+            {"Content-Type": "application/x-www-form-urlencoded"}, form)
+        if status != 200 or body is None:
+            return None, ((detail or f"the token endpoint answered HTTP {status}")
+                          + f" for a pull token on {acr_repo}")
         try:
-            document = json.loads(out)
-        except json.JSONDecodeError as exc:
-            return None, f"manifest show did not return JSON: {exc}"
-        children = [child.get("digest", "") for child in document.get("manifests") or []]
-        if any(not re.fullmatch(r"sha256:[0-9a-f]{64}", child) for child in children):
-            return None, "the index lists a child with no usable digest"
-        return children, ""
+            token = (json.loads(body) or {}).get("access_token") or ""
+        except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+            token = ""
+        if not token:
+            return None, f"the token endpoint answered no access_token for {acr_repo}"
+        with self._token_lock:
+            self._pull_tokens[acr_repo] = token
+        return token, ""
+
+    def _get_manifest(self, url: str, token: str) -> tuple[int, bytes | None, str]:
+        return self._call("GET", url, {"Authorization": f"Bearer {token}",
+                                       "Accept": ", ".join(sorted(MANIFEST_ACCEPT))}, None)
+
+    def _call(self, method: str, url: str, headers: dict[str, str],
+              body: bytes | None) -> tuple[int, bytes | None, str]:
+        """One registry HTTP call; a TRANSIENT answer (429, 5xx, a transport fault) is retried
+        twice, a verdict never. Returns (status, body or None, diagnostic). The diagnostic names
+        the method, the path and the status only — never a header or a form, so never a token."""
+        path = urlsplit(url).path
+        status, detail = 0, ""
+        for attempt in range(3):
+            try:
+                status, payload = self._http(method, url, headers, body)
+            except OSError as exc:
+                status = 0
+                detail = f"{method} {path}: transport fault: {public_diagnostic(str(exc), 200)}"
+            else:
+                if status == 200:
+                    return status, payload, ""
+                detail = f"{method} {path} answered HTTP {status}"
+                if status not in REGISTRY_TRANSIENT_STATUSES:
+                    return status, None, detail
+            if attempt < 2:
+                time.sleep(self.retry_pause * (attempt + 1))
+        return status, None, detail + " (3 attempts)"
+
+    retry_pause = 2.0
 
     def read_delete_enabled(self, acr_repo: str, digest: str) -> tuple[bool | None, str]:
         """The manifest's CURRENT `deleteEnabled`, read back. `None` is INDETERMINATE — the
@@ -2611,6 +2758,8 @@ def expand_platform_closure(plan: Plan, registry: Registry,
     seen: set[tuple[str, str]] = set()
     # 🚨 LEVEL BY LEVEL, so the indexes of one level are expanded on the pool together: ~108 of
     # them on 2026-10-10, one `az acr manifest show` each, which serially was most of the scan.
+    # 2,824 on 2026-11-13, which cut the job at its cap even pooled — so each is now one registry
+    # GET (`Registry.index_children`, #7991), not one `az` process.
     while pending:
         level: list[Wanted] = []
         for entry in pending:
@@ -6372,6 +6521,117 @@ def self_test() -> int:
               "ARM 8c (negative control): an authentication failure was read as 'absent'")
     finally:
         consistency.az = _saved_az_8c
+
+    # ── ARM 8d: an image index is read over HTTP, and believed only by its own digest (#7991) ───
+    # Drives the REAL `Registry.index_children` with az and the transport both faked. The lane was
+    # CUT at its 30-minute cap on 2026-11-13 because this read was one `az` process per index.
+    _saved_az_8d = consistency.az
+    try:
+        _child_a, _child_b = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        _index_8d = json.dumps({"schemaVersion": 2,
+                                "mediaType": "application/vnd.oci.image.index.v1+json",
+                                "manifests": [{"digest": _child_a}, {"digest": _child_b}]}).encode()
+        _digest_8d = "sha256:" + hashlib.sha256(_index_8d).hexdigest()
+        _refresh_secret = "REFRESH-SECRET-8d"
+        _logins: list[int] = []
+
+        def _az_8d(args):
+            _logins.append(1)
+            return 0, json.dumps({"accessToken": _refresh_secret,
+                                  "loginServer": "meshweaver.azurecr.io"}), ""
+
+        def _http_8d(script):
+            calls: list[tuple[str, str, dict, bytes | None]] = []
+
+            def http(method, url, headers, body):
+                calls.append((method, url, headers, body))
+                answer = script(method, url, headers, body, calls)
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+            return http, calls
+
+        def _healthy(method, url, headers, body, calls):
+            if method == "POST":
+                return 200, json.dumps({"access_token": "pull-token"}).encode()
+            return 200, _index_8d
+
+        consistency.az = _az_8d
+        http, calls = _http_8d(_healthy)
+        registry_8d = Registry(REGISTRY_DEFAULT, http=http)
+        registry_8d.retry_pause = 0
+        check(registry_8d.index_children("memex-portal-ai", _digest_8d) == ([_child_a, _child_b], ""),
+              "ARM 8d: a healthy index read over HTTP did not yield its two children")
+        check(registry_8d.index_children("memex-portal-ai", _digest_8d)[0] == [_child_a, _child_b]
+              and sum(1 for c in calls if c[0] == "POST") == 1 and len(_logins) == 1,
+              "ARM 8d: the refresh token or the repository's pull token was taken more than once "
+              "— the per-call token exchange is the cost this read exists to remove")
+        get = next(c for c in calls if c[0] == "GET")
+        check(get[1] == f"https://meshweaver.azurecr.io/v2/memex-portal-ai/manifests/{_digest_8d}"
+              and get[2].get("Authorization") == "Bearer pull-token"
+              and "application/vnd.oci.image.index.v1+json" in get[2].get("Accept", ""),
+              "ARM 8d: the manifest GET did not name the digest, the bearer or the index media type")
+        post = next(c for c in calls if c[0] == "POST")
+        check(b"scope=repository%3Amemex-portal-ai%3Apull" in (post[3] or b""),
+              "ARM 8d: the pull token was not scoped to the one repository, pull only")
+
+        # Bytes that do not hash to the digest asked for are NOT evidence about that index.
+        consistency.az = _az_8d
+        http, _ = _http_8d(lambda m, u, h, b, c: (200, json.dumps({"access_token": "t"}).encode())
+                           if m == "POST" else (200, _index_8d + b" "))
+        children, detail = Registry(REGISTRY_DEFAULT, http=http).index_children("x", _digest_8d)
+        check(children is None and "do not hash" in detail,
+              "ARM 8d: bytes that do not hash to the requested digest were believed")
+
+        # A 404 is INDETERMINATE (a blocker downstream), never an empty closure.
+        http, _ = _http_8d(lambda m, u, h, b, c: (200, json.dumps({"access_token": "t"}).encode())
+                           if m == "POST" else (404, None))
+        children, detail = Registry(REGISTRY_DEFAULT, http=http).index_children("x", _digest_8d)
+        check(children is None and "HTTP 404" in detail,
+              "ARM 8d: a missing index was read as an index with no children")
+
+        # A pull token that expired mid-run (401) is exchanged ONCE more, then the read succeeds.
+        def _expired_once(method, url, headers, body, calls):
+            if method == "POST":
+                return 200, json.dumps({"access_token": f"t{len(calls)}"}).encode()
+            gets = sum(1 for c in calls if c[0] == "GET")
+            return (401, None) if gets == 1 else (200, _index_8d)
+        http, calls = _http_8d(_expired_once)
+        children, _ = Registry(REGISTRY_DEFAULT, http=http).index_children("x", _digest_8d)
+        check(children == [_child_a, _child_b] and sum(1 for c in calls if c[0] == "POST") == 2,
+              "ARM 8d: an expired pull token was not renewed exactly once")
+
+        # A transient answer (503, a reset) is retried; a third failure is INDETERMINATE.
+        def _flaky(method, url, headers, body, calls):
+            if method == "POST":
+                return 200, json.dumps({"access_token": "t"}).encode()
+            gets = sum(1 for c in calls if c[0] == "GET")
+            return {1: (503, None), 2: ConnectionResetError("reset")}.get(gets, (200, _index_8d))
+        http, _ = _http_8d(_flaky)
+        registry_8d = Registry(REGISTRY_DEFAULT, http=http)
+        registry_8d.retry_pause = 0
+        check(registry_8d.index_children("x", _digest_8d)[0] == [_child_a, _child_b],
+              "ARM 8d: a 503 then a reset were not retried to the answer")
+        http, _ = _http_8d(lambda m, u, h, b, c: (200, json.dumps({"access_token": "t"}).encode())
+                           if m == "POST" else (503, None))
+        registry_8d = Registry(REGISTRY_DEFAULT, http=http)
+        registry_8d.retry_pause = 0
+        children, detail = registry_8d.index_children("x", _digest_8d)
+        check(children is None and "3 attempts" in detail,
+              "ARM 8d: a registry that kept answering 503 was smoothed into a verdict")
+
+        # No token ⇒ INDETERMINATE naming why; and NO diagnostic ever carries a token.
+        consistency.az = lambda _args: (1, "", "ERROR: AADSTS700016 the identity cannot log in")
+        children, detail = Registry(REGISTRY_DEFAULT, http=http).index_children("x", _digest_8d)
+        check(children is None and "could not take an ACR token" in detail,
+              "ARM 8d: a refused ACR login did not make the index read INDETERMINATE")
+        consistency.az = _az_8d
+        http, _ = _http_8d(lambda m, u, h, b, c: (403, None))
+        children, detail = Registry(REGISTRY_DEFAULT, http=http).index_children("x", _digest_8d)
+        check(children is None and _refresh_secret not in detail and "HTTP 403" in detail,
+              "ARM 8d: a refused token exchange leaked the refresh token or hid the status")
+    finally:
+        consistency.az = _saved_az_8d
 
     # ── ARM 9: a registry that cannot be enumerated ⇒ RED, not 'everything is unpinned' ─────────
     plan, _, registry = _drive(axis1, axis2,

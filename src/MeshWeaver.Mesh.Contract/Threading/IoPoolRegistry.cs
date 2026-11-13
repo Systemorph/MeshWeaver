@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Linq;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh.Threading;
@@ -246,7 +247,7 @@ public sealed class IoPoolRegistry : IDisposable
     /// </summary>
     public IObservable<Unit> WhenDrained(TimeSpan timeout) =>
         Observable.Interval(TimeSpan.FromMilliseconds(20))
-            .StartWith(-1L)
+            .StartWithInline(-1L)
             .Select(_ => TotalInFlight)
             .Where(inFlight => inFlight == 0)
             .Take(1)
