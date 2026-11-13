@@ -50,7 +50,7 @@
 #     pull-requests: write
 #   jobs:
 #     request:
-#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-request-review.yml@main
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-request-review.yml@main3
 #       permissions:
 #         contents: read
 #         pull-requests: write
@@ -81,10 +81,10 @@ on:
       scripts-ref:
         description: >-
           The Systemorph/MeshWeaver ref check-review-answered.py is fetched at (the same contract as
-          node-repo-review-answered.yml). `main` by default.
+          node-repo-review-answered.yml). `main3` (the v3 line) by default.
         required: false
         type: string
-        default: main
+        default: main3
 
 jobs:
   request:
@@ -103,7 +103,7 @@ jobs:
       group: request-review-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: false
     steps:
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"

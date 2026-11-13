@@ -64,7 +64,7 @@ STAGES_FILE = ".github/build-stages.json"
 # The owner's routing decision is a TRUNK policy, read from core's DEFAULT branch — never from the pull
 # request under test, so no pull request can route itself on or off the host (and the change that adds a
 # repository to it is not itself routed before it merges). Core is public: no credential is needed.
-ROUTING_URL = "https://raw.githubusercontent.com/Systemorph/MeshWeaver/main/.github/build-routing.json"
+ROUTING_URL = "https://raw.githubusercontent.com/Systemorph/MeshWeaver/main3/.github/build-routing.json"
 ROUTING_POLICY = "build-server-routes-all-ci"
 TRUNK_EVENTS = ("push", "schedule", "workflow_dispatch", "repository_dispatch")
 # 🧩 PER-STAGE EQUIVALENCE (policy `per-stage-ci-equivalence`; Doc/Architecture/BuildHosts → "Per-stage equivalence").

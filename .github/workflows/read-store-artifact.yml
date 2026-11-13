@@ -28,7 +28,7 @@ name: Read store artifacts into the job log
 #           pattern: { required: false, type: string, default: '*' }
 #     jobs:
 #       read:
-#         uses: Systemorph/MeshWeaver/.github/workflows/read-store-artifact.yml@main
+#         uses: Systemorph/MeshWeaver/.github/workflows/read-store-artifact.yml@main3
 #         with:
 #           repository: ${{ github.repository }}
 #           run-id: ${{ inputs.run-id }}
@@ -102,14 +102,14 @@ jobs:
     steps:
       - name: Resolve the store this runner mounts
         id: store
-        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main3
         with:
           store: ${{ inputs.store || vars.MW_ARTIFACT_STORE }}
           expected-store-id: ${{ inputs.expected-store-id }}
 
       - name: Download the selected artifacts
         id: download
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ steps.store.outputs.store || 'unresolved' }}
           expected-store-id: ${{ steps.store.outputs.store-id }}

@@ -44,7 +44,7 @@ name: Node repo review answered — outage retry (reusable)
 #     pull-requests: read
 #   jobs:
 #     retry:
-#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-review-answered-retry.yml@main
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-review-answered-retry.yml@main3
 #       permissions:
 #         actions: write     # read the completed attempt's jobs; POST …/runs/{id}/rerun
 #         contents: read
@@ -59,10 +59,10 @@ on:
     inputs:
       scripts-ref:
         description: >-
-          The Systemorph/MeshWeaver ref check-review-answered.py is fetched at. `main` by default.
+          The Systemorph/MeshWeaver ref check-review-answered.py is fetched at. `main3` (the v3 line) by default.
         required: false
         type: string
-        default: main
+        default: main3
 
 jobs:
   retry:
@@ -81,7 +81,7 @@ jobs:
       # caller grants it too (the contract above; check-review-answered.py --self-test asserts it).
       pull-requests: read
     steps:
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"

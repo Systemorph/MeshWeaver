@@ -561,12 +561,12 @@ on:
         description: >-
           The Systemorph/MeshWeaver ref that names the PLATFORM this gate runs against; also the ref
           this lane's own .github/scripts are fetched at when `scripts-ref` (below) is empty.
-          Default main; pin it to the same sha as the `uses:` line for a reproducible run.
+          Default main3 (the v3 line); pin it to the same sha as the `uses:` line for a reproducible run.
           (`github.job_workflow_sha` is EMPTY inside a reusable called from another repo — measured
           2026-08-30 — so the script's ref is an input, never inferred.)
         required: false
         type: string
-        default: main
+        default: main3
       scripts-ref:
         description: >-
           The Systemorph/MeshWeaver ref this lane's OWN helper scripts are fetched at (the guards,
@@ -575,7 +575,7 @@ on:
           images, core source). Empty (the default) means "the same as platform-ref" — right for a
           caller that pins the lane and the platform to one commit. A caller that pins NOTHING
           (MeshWeaver#3842: the platform resolved at run time to the newest SEALED set, the lane
-          called at `@main`) passes `main` here, because a sealed set is hours behind the lane's own
+          called at `@main3`) passes `main3` here, because a sealed set is hours behind the lane's own
           tip: on 2026-09-09 this lane at @main fetched check-abbreviated-shas.py — added at 17:06Z
           (022ab4a9d) — at a platform-ref cut at 3cda3efde a few hours earlier, and the fetch 404'd
           (Plugins#1566). `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a
@@ -757,10 +757,10 @@ jobs:
       candidate-tree: ${{ steps.candidate.outputs.tree }}
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - name: Resolve and bind the artifact store
         id: store
-        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main3
         with:
           store: ${{ inputs.artifact-store || 'gha' }}
           expected-store-id: ${{ inputs.artifact-store-id }}
@@ -813,7 +813,7 @@ jobs:
       # only resolves, and each shard asserts its merged TREE equals `candidate-tree` below.
       - name: Merge the head onto the base tip every shard merges onto
         id: fresh
-        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main3
         with:
           main-sha: ${{ inputs.merge-main-sha }}
       - name: Name the candidate tree every shard must test
@@ -1244,12 +1244,12 @@ jobs:
       id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
     steps: &gate-steps
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - uses: actions/checkout@v7
       # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
       - name: Merge the head onto the run's current base tip
         id: fresh
-        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main3
         with:
           main-sha: ${{ needs.plan.outputs.merge-main-sha }}
       # 🚨 ONE CANDIDATE: the plan selected the packages on a merged tree; this shard must test that
@@ -1283,7 +1283,7 @@ jobs:
           sparse-checkout: .github/scripts/gen-manifests.py
           sparse-checkout-cone-mode: false
       - name: Materialize main-owned manifest locks
-        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main3
         with:
           generator: .materialize-generator/.github/scripts/gen-manifests.py
       # Cross-repo `requires` must resolve for the package roots to bind — the tester installs
@@ -1540,15 +1540,15 @@ jobs:
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/publication-platform.py" > "$SCRIPT" \
             || { echo "::error::could not fetch publication-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
           head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched publication-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
-          # 🚨 THE DECLARATION IS READ AT core `main`, NOT at scripts-ref (#7424 review). A caller on an
+          # 🚨 THE DECLARATION IS READ AT core `main3` (this line's branch), NOT at scripts-ref (#7424 review). A caller on an
           # older scripts-ref can resolve a set built AFTER an epoch bump; its stale declaration would
           # file that set under the OLD epoch, address the old epoch's publication, and compose the host
           # on that publication's set — an old-epoch host the identity assertion below then agrees with.
           # The declaration is APPEND-ONLY (a break bumps `epoch` and appends an entry carrying the
           # previous epoch's ceiling; nothing is ever rewritten), so the newest one files EVERY sealed
           # set — old and new — under the epoch it was built in. The script stays pinned to scripts-ref.
-          "$RUNNER_TEMP/mw-core-file" main "src/MeshWeaver.Compiler/platform-compatibility.json" > "$DECL" \
-            || { echo "::error::could not fetch the platform-compatibility declaration at core main — the framework identity that addresses the publication cannot be computed"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" main3 "src/MeshWeaver.Compiler/platform-compatibility.json" > "$DECL" \
+            || { echo "::error::could not fetch the platform-compatibility declaration at core main3 — the framework identity that addresses the publication cannot be computed"; exit 1; }
           python3 "$SCRIPT" --self-test > "${RUNNER_TEMP:-/tmp}/publication-platform-self-test.log" 2>&1 \
             || { cat "${RUNNER_TEMP:-/tmp}/publication-platform-self-test.log"; echo "::error::publication-platform.py at ${SCRIPTS_REF} fails its own self-test — refusing to decide a platform with it"; exit 1; }
           # PINNED = the caller's digests taken verbatim (`plan` resolved nothing and they are set);
@@ -2294,7 +2294,7 @@ jobs:
           sparse-checkout: ${{ inputs.stage-modules }}
       - name: Download this run's module-bundle artifacts
         if: inputs.module-artifacts != ''
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
@@ -2563,7 +2563,7 @@ jobs:
       # or refuses it (damaged), and there is no fourth, silent outcome.
       - name: Fetch the run's prepared bake
         if: env.GATE_ROLE == 'shard' && env.BAKE_RESULT == 'success'
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
@@ -2900,7 +2900,7 @@ jobs:
       # reason as the gate log below (a shard may sit queued ≤ 24 h behind its bake).
       - name: Hand the prepared bake to the shards
         if: env.GATE_ROLE == 'bake'
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
@@ -2951,7 +2951,7 @@ jobs:
       # the file through the API. An absent consumer and a stale checkout look identical.
       - name: Upload this shard's gate log (the tester's stdout)
         if: always() && env.GATE_LOG != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
@@ -2980,7 +2980,7 @@ jobs:
       # stale checkout look identical, which is the mistake #4578 made and #4585 had to undo.
       - name: Upload this shard's bake
         if: always() && inputs.upload-bake && env.OWN_BAKE != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
@@ -3002,7 +3002,7 @@ jobs:
 
       - name: Upload core dumps (if the gate crashed)
         if: always() && inputs.capture-coredumps
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
@@ -3137,7 +3137,7 @@ jobs:
       - name: Report an upstream red once
         id: cascade
         if: inputs.executor != 'host'
-        uses: Systemorph/MeshWeaver/.github/actions/cascade-verdict@main
+        uses: Systemorph/MeshWeaver/.github/actions/cascade-verdict@main3
         with:
           needs: |
             {"plan": ${{ toJSON(needs.plan) }}, "bake": ${{ toJSON(needs.bake) }}}
@@ -3186,7 +3186,7 @@ jobs:
       # download error. The gate's INPUTS are asserted by the caller's preflight and by the plan.)
       - name: Collect every shard's gate log
         if: ${{ inputs.executor != 'host' && (steps.expect.outputs.fold == 'true') }}
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
@@ -3225,7 +3225,7 @@ jobs:
       # whatever the shard count.
       - name: Upload the folded gate log for the caller's own ratchets
         if: ${{ inputs.executor != 'host' && (always() && steps.fold.outputs.artifact != '') }}
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
@@ -3239,7 +3239,7 @@ jobs:
       # `bake-<sha>` is what MeshWeaver.Education's `e2e-install` and `e2e-mesh` download.
       - name: Collect every shard's bake
         if: ${{ inputs.executor != 'host' && (inputs.upload-bake && steps.expect.outputs.fold == 'true' && needs.gate.result == 'success') }}
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
@@ -3248,7 +3248,7 @@ jobs:
           path: ${{ runner.temp }}/bake
       - name: Upload the merged bake
         if: ${{ inputs.executor != 'host' && (inputs.upload-bake && steps.expect.outputs.fold == 'true' && needs.gate.result == 'success') }}
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}

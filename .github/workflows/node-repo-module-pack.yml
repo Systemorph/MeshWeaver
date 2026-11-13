@@ -1306,7 +1306,7 @@ jobs:
       # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
       - name: Merge the head onto the current base tip (the keys below hash the tested tree)
         id: fresh
-        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main3
         with:
           path: repo
           main-sha: ${{ inputs.merge-main-sha }}
@@ -1397,7 +1397,7 @@ jobs:
       # settled or branch-owned tree), written by the generator at the build-logic ref, so every
       # job of this lane that reads a lock runs the same generator and writes the same bytes.
       - name: Materialize main-owned manifest locks
-        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main3
         with:
           root: repo
           generator: build-logic/.github/scripts/gen-manifests.py
@@ -1457,7 +1457,7 @@ jobs:
       # GitHub artifacts" is never something you have to infer from an absence.
       - name: Resolve and bind the artifact store
         id: store
-        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main3
         with:
           store: ${{ inputs.artifact-store || 'gha' }}
           expected-store-id: ${{ inputs.artifact-store-id }}
@@ -1984,7 +1984,7 @@ jobs:
       # with the other call's builder.
       - name: Hand the tool to the matrix
         if: needs.select.outputs.build-modules != '[]'
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -2137,7 +2137,7 @@ jobs:
           echo "platform hand-over: $n assemblies from $DIGEST, $(du -h "$out/platform-refs.tar.gz" | cut -f1) gzipped"
       - name: Upload the platform's /app for the matrix
         if: inputs.platform-image-digest != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -2294,7 +2294,7 @@ jobs:
           token: ${{ steps.content-token.outputs.token || github.token }}
       # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
       - name: Merge the head onto the base tip `select` tested
-        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main3
         with:
           main-sha: ${{ needs.select.outputs.merge-main-sha }}
           content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
@@ -2310,7 +2310,7 @@ jobs:
           sparse-checkout: .github/scripts/gen-manifests.py
           sparse-checkout-cone-mode: false
       - name: Materialize main-owned manifest locks
-        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main3
         with:
           generator: .materialize-generator/.github/scripts/gen-manifests.py
       # The registry helper is lane orchestration too, but the global compiler mounts the whole
@@ -2843,7 +2843,7 @@ jobs:
           done < <(jq -r '.[] | select(.build == "container") | select(.ledger.key != null) | [.module, .project, .ledger.key] | @tsv' <<< "$MODULES")
       - name: Hand the workspace to the matrix
         if: steps.build.outputs.built == 'true'
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -2976,7 +2976,7 @@ jobs:
           token: ${{ steps.content-token.outputs.token || github.token }}
       # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
       - name: Merge the head onto the base tip `select` tested
-        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main3
         with:
           main-sha: ${{ needs.select.outputs.merge-main-sha }}
           content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
@@ -2996,7 +2996,7 @@ jobs:
       # The pack names each bundle from `{package}/manifest.lock`'s version: this tree's lock, by
       # the generator at the build-logic ref (the one `select` used).
       - name: Materialize main-owned manifest locks
-        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main3
         with:
           generator: build-logic/.github/scripts/gen-manifests.py
       # ───────────── THIS LEG'S MODULES — enumerated once, from the matrix batch ─────────────
@@ -3373,7 +3373,7 @@ jobs:
       - name: Fetch the platform's /app (handed over by prepare)
         if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true'
         id: platform-artifact
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -3515,7 +3515,7 @@ jobs:
       # manifests and the one build log. Container packs consume THIS; sdk entries ignore it.
       - name: Fetch the global workspace build
         if: steps.plan.outputs.fetch_workspace == 'true'
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -3851,7 +3851,7 @@ jobs:
       # rebuilding a maybe-different tool.
       - name: Fetch the module-pack tool (built once by prepare)
         if: steps.plan.outputs.any_build == 'true'
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4165,7 +4165,7 @@ jobs:
       # `verify` still accounts that module by its missing receipt.
       - name: Upload the bundle artifact (slot 1)
         if: steps.bundles.outputs.s1 != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4175,7 +4175,7 @@ jobs:
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 2)
         if: steps.bundles.outputs.s2 != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4185,7 +4185,7 @@ jobs:
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 3)
         if: steps.bundles.outputs.s3 != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4195,7 +4195,7 @@ jobs:
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 4)
         if: steps.bundles.outputs.s4 != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4205,7 +4205,7 @@ jobs:
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 5)
         if: steps.bundles.outputs.s5 != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4215,7 +4215,7 @@ jobs:
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 6)
         if: steps.bundles.outputs.s6 != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4225,7 +4225,7 @@ jobs:
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 7)
         if: steps.bundles.outputs.s7 != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4235,7 +4235,7 @@ jobs:
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 8)
         if: steps.bundles.outputs.s8 != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4245,7 +4245,7 @@ jobs:
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 9)
         if: steps.bundles.outputs.s9 != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4255,7 +4255,7 @@ jobs:
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 10)
         if: steps.bundles.outputs.s10 != ''
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4404,7 +4404,7 @@ jobs:
           echo "any=$any" >> "$GITHUB_OUTPUT"
       - name: Upload the built markers
         if: steps.marker.outputs.any == 'true'
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -4705,7 +4705,7 @@ jobs:
       # in five leaves something to read instead of a re-run button.
       - name: Upload the failing suites' evidence
         if: ${{ inputs.publish && steps.tests.outputs.evidence == 'true' }}
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -5025,7 +5025,7 @@ jobs:
           echo "any=$any" >> "$GITHUB_OUTPUT"
       - name: Upload the staged publications
         if: ${{ inputs.publish && inputs.publish-mode == 'staged' && steps.stage.outputs.any == 'true' }}
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -5163,7 +5163,7 @@ jobs:
           echo "any=$any" >> "$GITHUB_OUTPUT"
       - name: Upload the receipts
         if: steps.receipt.outputs.any == 'true'
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -5328,7 +5328,7 @@ jobs:
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
       - name: Merge the head onto the base tip `select` tested
-        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main3
         with:
           main-sha: ${{ needs.select.outputs.merge-main-sha }}
           content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
@@ -5346,7 +5346,7 @@ jobs:
           path: build-logic
           sparse-checkout: .github/scripts
       - name: Materialize main-owned manifest locks
-        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main3
         with:
           generator: build-logic/.github/scripts/gen-manifests.py
       - uses: actions/setup-dotnet@v6
@@ -5409,7 +5409,7 @@ jobs:
           fi
           echo "BUILD_RC=$rc" >> "$GITHUB_ENV"
       - name: Hand the suites' build output to the legs
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -5556,7 +5556,7 @@ jobs:
           token: ${{ steps.content-token.outputs.token || github.token }}
       # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
       - name: Merge the head onto the base tip `select` tested
-        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main3
         with:
           main-sha: ${{ needs.select.outputs.merge-main-sha }}
           content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
@@ -5575,7 +5575,7 @@ jobs:
           sparse-checkout: .github/scripts
       # The test host installs the content tree and stamps each install with its lock's version.
       - name: Materialize main-owned manifest locks
-        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main3
         with:
           generator: build-logic/.github/scripts/gen-manifests.py
       - name: This leg's modules
@@ -5634,7 +5634,7 @@ jobs:
         with:
           dotnet-version: "10.0.x"
       - name: Fetch the suites `tests-build` compiled
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -5923,7 +5923,7 @@ jobs:
           done
       - name: Upload the failing suites' evidence
         if: ${{ steps.tests.outputs.evidence == 'true' }}
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -5965,7 +5965,7 @@ jobs:
           echo "any=$any" >> "$GITHUB_OUTPUT"
       - name: Upload the test receipts
         if: steps.receipt.outputs.any == 'true'
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -6060,7 +6060,7 @@ jobs:
       - name: Report an upstream red once
         id: cascade
         if: inputs.executor != 'host'
-        uses: Systemorph/MeshWeaver/.github/actions/cascade-verdict@main
+        uses: Systemorph/MeshWeaver/.github/actions/cascade-verdict@main3
         with:
           needs: |
             {"select": ${{ toJSON(needs.select) }}, "prepare": ${{ toJSON(needs.prepare) }}, "build-workspace": ${{ toJSON(needs.build-workspace) }}}
@@ -6137,7 +6137,7 @@ jobs:
       # `bundles-built=false` for any non-empty selection — never a silent true.
       - name: Collect the receipts
         if: inputs.executor != 'host'
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -6146,7 +6146,7 @@ jobs:
           path: ${{ runner.temp }}/receipts
       - name: Collect the built markers
         if: inputs.executor != 'host'
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -6158,7 +6158,7 @@ jobs:
       # delegated suite with no receipt is precisely the finding.
       - name: Collect the test receipts
         if: inputs.executor != 'host'
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
@@ -6279,7 +6279,7 @@ jobs:
       # modules stage (Doc/Architecture/BuildHosts §5).
       - name: Collect every receipt in this run (the publication spans calls)
         if: ${{ always() && inputs.executor != 'host' && steps.cascade.outputs.cascade != 'true' }}
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
           expected-store-id: ${{ needs.select.outputs.artifact-store-id }}

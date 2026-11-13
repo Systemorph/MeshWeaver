@@ -11,7 +11,7 @@ description: >-
 # run's own GitHub OIDC token) and python3 on PATH. Every failure is RED and named; there is no
 # input whose absence turns this into a pass.
 #
-#   - uses: Systemorph/MeshWeaver/.github/actions/host-gate-log@main
+#   - uses: Systemorph/MeshWeaver/.github/actions/host-gate-log@main3
 #     with:
 #       api-url: ${{ needs.build-executor.outputs.api-url }}
 #       store: ${{ vars.MW_ARTIFACT_STORE }}
@@ -46,7 +46,7 @@ runs:
         [ -n "${STORE:-}" ] || { echo "::error title=Build host::host-gate-log: store is empty — name the store the host hands its artifacts to (vars.MW_ARTIFACT_STORE)"; exit 1; }
     - name: Bind the host's artifact store
       id: store
-      uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+      uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main3
       with:
         store: ${{ inputs.store }}
     - name: Fetch the gate log by its receipt and verify it
