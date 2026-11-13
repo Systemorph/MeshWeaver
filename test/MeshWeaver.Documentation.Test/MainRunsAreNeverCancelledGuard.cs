@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
 using MeshWeaver.Fixture;
@@ -80,6 +81,19 @@ public class MainRunsAreNeverCancelledGuard
             + "publishes (CD gates on 'Consolidate test results' reaching success for that SHA, "
             + "which a cancelled run never produces). See #2412.");
 
+        // 🚨 EVERY DELIVERY LINE is a `main` here (policy `major-lines-run-separately`): `main3`
+        // delivers from its own branch, gated on the same required check for the same SHA.
+        var onMain3 = Evaluate(expression, new Dictionary<string, string>
+        {
+            ["github.event_name"] = "push",
+            ["github.ref"] = "refs/heads/main3",
+        });
+
+        Assert.False(onMain3,
+            $"{Workflow} cancels in-progress runs on the main3 delivery line: '{expression}' evaluates "
+            + "TRUE for a push to refs/heads/main3. main3's CD ships only a commit whose 'Consolidate "
+            + "test results' succeeded, so a cancelled main3 run is an undeliverable commit (#2412).");
+
         var onPullRequest = Evaluate(expression, new Dictionary<string, string>
         {
             ["github.event_name"] = "pull_request",
@@ -140,6 +154,15 @@ public class MainRunsAreNeverCancelledGuard
             + "'Consolidate test results' success it gates delivery on. cancel-in-progress: false "
             + "does not prevent this; only a per-commit group does.");
 
+        var main3First = GroupFor("push", "refs/heads/main3", "aaaaaaaaaaaa");
+        var main3Second = GroupFor("push", "refs/heads/main3", "bbbbbbbbbbbb");
+
+        Assert.True(main3First != main3Second && main3First != second,
+            $"{Workflow} does not give every main3 commit its own group ('{expression}' yields "
+            + $"'{main3First}' / '{main3Second}', main: '{second}'). main3 is a delivery line "
+            + "(policy `major-lines-run-separately`): its landed commits must never evict each other "
+            + "or a main run from the single pending slot.");
+
         var pr1 = GroupFor("pull_request", "refs/pull/2447/merge", "aaaaaaaaaaaa");
         var pr2 = GroupFor("pull_request", "refs/pull/2447/merge", "bbbbbbbbbbbb");
 
@@ -194,21 +217,27 @@ public class MainRunsAreNeverCancelledGuard
     /// </summary>
     [Theory]
     // The shipped pair: silent.
-    [InlineData("false", "main-cd-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && 'reconcile' || github.ref }}", "")]
+    [InlineData("false", "main-cd-${{ (github.event_name == 'schedule' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && format('reconcile-{0}', github.ref_name) || github.ref }}", "")]
     // The flag flipped, as a literal and as an expression that spares only the reconcile.
-    [InlineData("true", "main-cd-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && 'reconcile' || github.ref }}", "run in flight")]
-    [InlineData("${{ github.event_name != 'schedule' }}", "main-cd-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && 'reconcile' || github.ref }}", "run in flight")]
+    [InlineData("true", "main-cd-${{ (github.event_name == 'schedule' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && format('reconcile-{0}', github.ref_name) || github.ref }}", "run in flight")]
+    [InlineData("${{ github.event_name != 'schedule' }}", "main-cd-${{ (github.event_name == 'schedule' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && format('reconcile-{0}', github.ref_name) || github.ref }}", "run in flight")]
     // The reconcile folded back into the push lane's group (#2490's shape).
     [InlineData("false", "main-cd-${{ github.ref }}", "reconcile")]
+    // 🚨 ONE reconcile lane for every line (the pre-`major-lines-run-separately` shape): main3's
+    // hourly dispatch and main's tick evict each other from the single pending slot.
+    [InlineData("false", "main-cd-${{ (github.event_name == 'schedule' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && 'reconcile' || github.ref }}", "share a reconcile lane")]
+    // A main3 push outside main3's reconcile lane: it is a reconcile (Build-and-Test has not
+    // vouched for the pushed commit yet), and in the push lane it would contend with a rebuild.
+    [InlineData("false", "main-cd-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && format('reconcile-{0}', github.ref_name) || github.ref }}", "push to a non-default line")]
     // A per-run or per-commit group: serializes nothing, every delivery publishes concurrently.
     [InlineData("false", "main-cd-${{ github.run_id }}", "its own group")]
     [InlineData("false", "main-cd-${{ github.sha }}", "its own group")]
     // 🚨 The pre-#4652 shape: a DEFAULT dispatch falls to the ref arm, i.e. into the push lane,
     // where a merge discards the handoff's publisher before it runs a step.
-    [InlineData("false", "main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}", "DEFAULT workflow_dispatch outside the reconcile lane")]
+    [InlineData("false", "main-cd-${{ (github.event_name == 'schedule' || github.event_name == 'push') && format('reconcile-{0}', github.ref_name) || github.ref }}", "DEFAULT workflow_dispatch outside the reconcile lane")]
     // 🚨 …and its over-correction, which #4656's review caught: EVERY dispatch in the reconcile
     // lane drops the operator's explicit rebuild into a slot the next tick overwrites.
-    [InlineData("false", "main-cd-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'reconcile' || github.ref }}", "operator's `rebuild` dispatch")]
+    [InlineData("false", "main-cd-${{ (github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') && format('reconcile-{0}', github.ref_name) || github.ref }}", "operator's `rebuild` dispatch")]
     public void DeliveryGuard_FiresOnEachMutation_AndStaysSilentOnTheShippedShape(string cancel, string group, string expectedProblem)
     {
         var problems = DeliveryConcurrencyProblems(cancel, group);
@@ -217,6 +246,40 @@ public class MainRunsAreNeverCancelledGuard
             Assert.Empty(problems);
         else
             Assert.Contains(problems, p => p.Contains(expectedProblem, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 🚨 The rows above are only controls if each MUTATION row is a different expression from the
+    /// shipped one (review on #8141 asked exactly this). Read off the theory's own attributes: the one
+    /// silent row must equal what the workflow ships, and every row expecting a problem must differ
+    /// from it in its cancel or its group — a copy of the shipped row expecting a problem would be a
+    /// control that cannot be told apart from a broken judge.
+    /// </summary>
+    [Fact]
+    public void DeliveryGuard_MutationRows_AreRealMutationsOfTheShippedShape()
+    {
+        var rows = typeof(MainRunsAreNeverCancelledGuard)
+            .GetMethod(nameof(DeliveryGuard_FiresOnEachMutation_AndStaysSilentOnTheShippedShape))!
+            .GetCustomAttributes(typeof(InlineDataAttribute), false)
+            .Cast<InlineDataAttribute>()
+            .Select(a => (Cancel: (string)a.Data[0]!, Group: (string)a.Data[1]!, Expected: (string)a.Data[2]!))
+            .ToList();
+
+        var silent = Assert.Single(rows, r => r.Expected.Length == 0);
+        var body = File.ReadAllText(Path.Combine(RepoPaths.Root, DeliveryWorkflow));
+        Assert.Equal(ExtractConcurrencyValue(body, "cancel-in-progress"), silent.Cancel);
+        Assert.Equal(ExtractConcurrencyValue(body, "group"), silent.Group);
+
+        var copies = rows.Where(r => r.Expected.Length > 0 && r.Cancel == silent.Cancel && r.Group == silent.Group)
+            .Select(r => r.Expected).ToList();
+        Assert.True(copies.Count == 0,
+            "mutation rows identical to the shipped shape (they can never fire): " + string.Join(", ", copies));
+
+        // And each mutation really is judged differently from the shipped shape.
+        foreach (var row in rows.Where(r => r.Expected.Length > 0))
+            Assert.Contains(DeliveryConcurrencyProblems(row.Cancel, row.Group),
+                p => p.Contains(row.Expected, StringComparison.Ordinal));
+        Assert.Empty(DeliveryConcurrencyProblems(silent.Cancel, silent.Group));
     }
 
     private static string ExtractConcurrencyValue(string body, string key)
@@ -238,12 +301,14 @@ public class MainRunsAreNeverCancelledGuard
     {
         var problems = new List<string>();
 
-        foreach (var eventName in new[] { "workflow_run", "schedule", "workflow_dispatch" })
+        foreach (var (eventName, line) in new[] { ("workflow_run", "main"), ("schedule", "main"),
+                     ("workflow_dispatch", "main"), ("push", "main3"), ("workflow_dispatch", "main3") })
         {
             var cancels = Evaluate(cancelExpression, new Dictionary<string, string>
             {
                 ["github.event_name"] = eventName,
-                ["github.ref"] = "refs/heads/main",
+                ["github.ref"] = "refs/heads/" + line,
+                ["github.ref_name"] = line,
                 ["inputs.rebuild"] = "",
             });
 
@@ -258,12 +323,16 @@ public class MainRunsAreNeverCancelledGuard
         // GitHub does with a `type: boolean` input — the unticked box would come out true and every
         // assertion below would be about the wrong lane. Absent (`workflow_run`, `schedule`: the
         // `inputs` context is empty) and unticked are both "".
-        string GroupFor(string eventName, string sha, string runId, string rebuild = "") =>
+        // 🚨 `line` is the branch whose copy of the file runs (policy `major-lines-run-separately`):
+        // a workflow_run and a schedule always run the default branch's (`main`), a push or a
+        // dispatch the copy at its ref — which is how `main3` delivers.
+        string GroupFor(string eventName, string sha, string runId, string rebuild = "", string line = "main") =>
             EvaluateValue(groupExpression,
                 new Dictionary<string, string>
                 {
                     ["github.event_name"] = eventName,
-                    ["github.ref"] = "refs/heads/main",
+                    ["github.ref"] = "refs/heads/" + line,
+                    ["github.ref_name"] = line,
                     ["github.sha"] = sha,
                     ["github.run_id"] = runId,
                     ["inputs.rebuild"] = rebuild,
@@ -303,6 +372,31 @@ public class MainRunsAreNeverCancelledGuard
                 + "pending slot, the survivor carries rebuild=false and no-ops on a complete set, so "
                 + "the explicit rebuild is dropped SILENTLY while the button reports success (#2622)");
 
+        // ── the second line: `main3` delivers beside `main`, from its own branch ──
+        var main3Push = GroupFor("push", "cccccccccccc", "1006", line: "main3");
+        var main3Dispatch = GroupFor("workflow_dispatch", "cccccccccccc", "1007", line: "main3");
+        var main3Rebuild = GroupFor("workflow_dispatch", "cccccccccccc", "1008", rebuild: "true", line: "main3");
+        var mainGroups = new[] { firstDelivery, reconcile, rebuildDispatch };
+
+        if (mainGroups.Contains(main3Dispatch) || mainGroups.Contains(main3Rebuild) || mainGroups.Contains(main3Push))
+            problems.Add(
+                $"group '{groupExpression}' makes the main3 and main lines share a reconcile lane or a "
+                + $"push lane (main3: '{main3Push}' / '{main3Dispatch}' / '{main3Rebuild}'; main: "
+                + $"'{string.Join("' / '", mainGroups)}') — each evicts the other's pending run, so one "
+                + "line's hourly dispatch starves the other's delivery (#2490, per line)");
+
+        if (main3Push != main3Dispatch)
+            problems.Add(
+                $"group '{groupExpression}' leaves a push to a non-default line outside that line's "
+                + $"reconcile lane ('{main3Push}' vs '{main3Dispatch}') — the push run IS a reconcile "
+                + "(Build-and-Test has not vouched for the pushed commit), so two of them are "
+                + "interchangeable, while sharing the push lane with a `rebuild` can drop the rebuild");
+
+        if (main3Rebuild == main3Dispatch)
+            problems.Add(
+                $"group '{groupExpression}' puts main3's `rebuild` dispatch in main3's reconcile lane "
+                + $"('{main3Rebuild}') — the next tick's dispatch would replace it silently (#2622)");
+
         if (firstDelivery != secondDelivery)
             problems.Add(
                 $"group '{groupExpression}' gives every delivery its own group ('{firstDelivery}' vs "
@@ -338,6 +432,27 @@ public class MainRunsAreNeverCancelledGuard
             ["github.event_name"] = eventName,
             ["github.ref"] = @ref,
         }));
+
+    /// <summary>
+    /// <c>format()</c> is evaluated, not pattern-matched: both lines' lanes must come out as the
+    /// strings GitHub would key on, and an unbalanced call must throw rather than pass.
+    /// </summary>
+    [Theory]
+    [InlineData("x-${{ format('reconcile-{0}', github.ref_name) }}", "main", "x-reconcile-main")]
+    [InlineData("x-${{ format('reconcile-{0}', github.ref_name) }}", "main3", "x-reconcile-main3")]
+    [InlineData("x-${{ format('{1}-{0}', github.ref_name, 'lane') }}", "main3", "x-lane-main3")]
+    [InlineData("x-${{ github.ref_name == 'main' && format('r-{0}', github.ref_name) || 'other' }}", "main3", "x-other")]
+    public void TheEvaluator_FormatsLikeActions(string expression, string refName, string expected)
+        => Assert.Equal(expected, EvaluateValue(expression, new Dictionary<string, string>
+        {
+            ["github.ref_name"] = refName,
+        }));
+
+    [Fact]
+    public void TheEvaluator_RefusesAnUnclosedFormat()
+        => Assert.Throws<InvalidOperationException>(() => EvaluateValue(
+            "x-${{ format('r-{0}', github.ref_name }}",
+            new Dictionary<string, string> { ["github.ref_name"] = "main" }));
 
     /// <summary>
     /// A recursive-descent evaluator for the slice of the GitHub expression language a
@@ -420,7 +535,7 @@ public class MainRunsAreNeverCancelledGuard
                 continue;
             }
 
-            if (c is '(' or ')' or '!')
+            if (c is '(' or ')' or '!' or ',')
             {
                 tokens.Add(c.ToString());
                 i++;
@@ -503,6 +618,27 @@ public class MainRunsAreNeverCancelledGuard
                 throw new InvalidOperationException("missing closing parenthesis");
             position++;
             return inner;
+        }
+
+        // `format('…{0}…', a, …)` — the one function a `group:` value uses (per-line lanes, policy
+        // `major-lines-run-separately`). Every argument is a full expression; `{n}` is replaced by
+        // the n-th one's string value, as Actions does.
+        if (token == "format" && position < tokens.Count && tokens[position] == "(")
+        {
+            position++;
+            var args = new List<object> { ParseOr(tokens, ref position, context) };
+            while (position < tokens.Count && tokens[position] == ",")
+            {
+                position++;
+                args.Add(ParseOr(tokens, ref position, context));
+            }
+            if (position >= tokens.Count || tokens[position] != ")")
+                throw new InvalidOperationException("missing closing parenthesis after format(");
+            position++;
+            var formatted = Stringify(args[0]);
+            for (var i = 1; i < args.Count; i++)
+                formatted = formatted.Replace("{" + (i - 1) + "}", Stringify(args[i]), StringComparison.Ordinal);
+            return formatted;
         }
 
         if (token.StartsWith('\'')) return token.Trim('\'');
