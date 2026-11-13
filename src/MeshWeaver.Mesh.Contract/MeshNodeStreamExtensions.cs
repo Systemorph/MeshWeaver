@@ -1147,7 +1147,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 // nothing registered in the window — costs one failed lookup. It is placed AFTER
                 // the filter deliberately: the filter answers "could THIS registration matter",
                 // and the gap re-check has no registration to judge.
-                .StartWith(System.Reactive.Unit.Default)
+                .StartWithInline(System.Reactive.Unit.Default)
                 .Select(_ => Retype(raw))
                 .Where(n => n is not null)
                 .Take(1)
