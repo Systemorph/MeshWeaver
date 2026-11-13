@@ -160,6 +160,21 @@ def run_number_of(version: str) -> int | None:
     return int(m.group(3)) if m else None
 
 
+def major_of(version: str) -> int | None:
+    """The platform MAJOR of a set name (`3.0.0-ci.9538` → 3, `4.0.11000` → 4), or None for a name
+    that is not a set. Pure. Policy `major-lines-run-separately`: every selection of "the newest
+    armed/promoted set" is made WITHIN one major, because the lines share one run counter — without
+    it, the first 4.x set would be "newest" for the v3 line forever."""
+    if run_number_of(version) is None:
+        return None
+    return int(str(version).split(".", 1)[0])
+
+
+def _in_major(version: str, major: int | None) -> bool:
+    """`major` None is the unfiltered, single-line reading (a caller that names no line)."""
+    return major is None or major_of(version) == major
+
+
 def check_record(rec: object) -> str | None:
     """Why a record cannot be used, or None. Pure."""
     if not isinstance(rec, dict):
@@ -184,12 +199,12 @@ def check_record(rec: object) -> str | None:
 ARM_COMPLETE_PREFIX = "arm-complete-"
 
 
-def armed_state(manifests: object) -> tuple[int, str, bool] | None:
+def armed_state(manifests: object, major: int | None = None) -> tuple[int, str, bool] | None:
     """(run number, version, complete) of the newest ARMED set, or None when nothing was ever armed.
     `complete` = its manifest also carries `arm-complete-<version>`, which `notify-platform-update`
     writes only after the release event was delivered. The marker is not version-shaped, so no
     self-updater can ever select it. Pure."""
-    got = armed_commit(manifests, require_sha=False)
+    got = armed_commit(manifests, require_sha=False, major=major)
     if got is None:
         return None
     version = got[0]
@@ -202,7 +217,7 @@ def armed_state(manifests: object) -> tuple[int, str, bool] | None:
     return run_number_of(version) or 0, version, f"{ARM_COMPLETE_PREFIX}{version}" in tags
 
 
-def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str] | None:
+def armed_commit(manifests: object, require_sha: bool = True, major: int | None = None) -> tuple[str, str] | None:
     """(the newest ARMED version, its seven-character core sha) from memex-portal-ai's manifest
     metadata (`az acr manifest list-metadata -o json`), or None when no manifest carries a version
     tag at all (nothing was ever armed). Pure.
@@ -212,7 +227,8 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
     core commit (a host-relevant MeshWeaver.Plugins change, or an operator's `rebuild`) moves that tag
     to the later manifest. The staging tag stays on the armed manifest and still names its core. Sets
     armed before the pair tag was retired are read through their legacy `<core7>-p<plugins7>` tag.
-    Conflicting or missing identities are errors, never guesses (a wrong base narrows the bundle)."""
+    Conflicting or missing identities are errors, never guesses (a wrong base narrows the bundle).
+    With `major`, only version tags of THAT major count (policy `major-lines-run-separately`)."""
     if not isinstance(manifests, list):
         raise ValueError("the manifest metadata is not a JSON list")
     best: tuple[int, str, list[str]] | None = None
@@ -222,7 +238,7 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
             continue
         for t in tags:
             n = run_number_of(str(t))
-            if n is not None and (best is None or n > best[0]):
+            if n is not None and _in_major(str(t), major) and (best is None or n > best[0]):
                 best = (n, str(t), [str(x) for x in tags])
     if best is None:
         return None
@@ -361,8 +377,10 @@ def http_get(url: str, token: str, raw: bool = False) -> tuple[int, object]:
 
 def read_records(get: Callable[..., tuple[int, object]], core_token: str,
                  above: int = 0, log: Callable[[str], None] = print, max_pages: int = 1,
-                 coverage: dict | None = None) -> list[dict]:
-    """Promotion records of main-cd runs on main numbered ABOVE `above`, newest first.
+                 coverage: dict | None = None, branch: str = "main", major: int | None = None) -> list[dict]:
+    """Promotion records of main-cd runs on `branch` (the delivery LINE) numbered ABOVE `above`,
+    newest first — and, with `major`, only records whose set is of that major (policy
+    `major-lines-run-separately`: a line never arms another major's set).
 
     A page is RUNS_EXAMINED RUNS, not promotions: hourly reconcile ticks promote nothing and still
     fill it. With `max_pages` > 1 the listing pages on until it reaches a run at or below `above`
@@ -372,7 +390,7 @@ def read_records(get: Callable[..., tuple[int, object]], core_token: str,
     runs: list[dict] = []
     reached = False
     for page_no in range(1, max(1, max_pages) + 1):
-        url = f"repos/{CORE}/actions/workflows/{WORKFLOW}/runs?branch=main&per_page={RUNS_EXAMINED}"
+        url = f"repos/{CORE}/actions/workflows/{WORKFLOW}/runs?branch={branch}&per_page={RUNS_EXAMINED}"
         code, page = get(url + (f"&page={page_no}" if page_no > 1 else ""), core_token)
         if code != 200 or not isinstance(page, dict):
             raise RuntimeError(f"cannot list {WORKFLOW} runs (HTTP {code}, page {page_no}) — refusing to decide on nothing")
@@ -409,6 +427,9 @@ def read_records(get: Callable[..., tuple[int, object]], core_token: str,
         why = check_record(rec)
         if why:
             log(f"  run #{number}: record refused — {why}")
+            continue
+        if not _in_major(str(rec["v_portal"]), major):
+            log(f"  run #{number}: {rec['v_portal']} is not of major {major} — another line's set, skipped")
             continue
         rec["run_url"] = run.get("html_url", "")
         rec["run_id"] = run.get("id")
@@ -1294,6 +1315,70 @@ def self_test() -> int:
           ua[-1]["run_number"] == 9460 and ua[-1]["state"] == "not examined", str(ua))
     check("unarmed_sets: nothing newer than the cursor is an empty reading (negative control)",
           unarmed_sets(records, {}, ctl(), 9461) == [])
+    # ── per line, per MAJOR (policy `major-lines-run-separately`) ───────────────────────────────
+    # The lines share ONE run counter, so once 4.x sets exist they are always "newest". Each line's
+    # selection must stay inside its own major — and the negative controls prove the filter is what
+    # makes the difference: without it, the v3 line reads the 4.x set.
+    mixed = [
+        {"tags": ["4.0.11005", "staging-4444444-1", "4-latest", "4.0-latest", "latest"]},
+        {"tags": ["3.1.11003", "staging-3333333-2", "3-latest", "3.1-latest", "arm-complete-3.1.11003"]},
+        {"tags": ["4.0.11001", "staging-4141414-3"]},
+        {"tags": ["3.1.10999", "staging-3131313-4"]},
+    ]
+    check("major: a set's major is read from its name, both notations; a non-set has none",
+          major_of("3.0.0-ci.9538") == 3 and major_of("4.0.11000") == 4 and major_of("3-latest") is None
+          and major_of("main3") is None)
+    check("armed-state, major 3: the newest armed 3.x set, although a 4.x set is newer",
+          armed_state(mixed, major=3) == (11003, "3.1.11003", True), str(armed_state(mixed, major=3)))
+    check("armed-state, major 4: the newest armed 4.x set",
+          armed_state(mixed, major=4) == (11005, "4.0.11005", False), str(armed_state(mixed, major=4)))
+    check("NEGATIVE CONTROL — without the major filter the v3 line reads the 4.x set as its cursor",
+          armed_state(mixed)[1] == "4.0.11005")
+    check("armed-base, major 3: the 3.x set's own core, never the 4.x one",
+          armed_commit(mixed, major=3) == ("3.1.11003", "3333333"), str(armed_commit(mixed, major=3)))
+    check("NEGATIVE CONTROL — armed-base without the filter names the 4.x core",
+          armed_commit(mixed) == ("4.0.11005", "4444444"))
+    check("armed-state: a major with no armed set is None (main-cd reds it, never 'arm anything')",
+          armed_state(mixed, major=5) is None)
+    # MUTATION CONTROL: disable the filter itself — the per-major cases above must then FAIL.
+    real_filter = globals()["_in_major"]
+    globals()["_in_major"] = lambda _version, _major: True
+    try:
+        mutated = (armed_state(mixed, major=3), armed_commit(mixed, major=3))
+    finally:
+        globals()["_in_major"] = real_filter
+    check("MUTATION CONTROL — with the major filter disabled, major 3 is handed the 4.x set (the cases above can fail)",
+          mutated[0] is not None and mutated[0][1] == "4.0.11005" and mutated[1][0] == "4.0.11005", str(mutated))
+
+    def mrec(n: int, core: str, version: str) -> dict:
+        r = rec(n, core, "9")
+        return {**r, "v_portal": version, "v_migration": version, "v_plugin": version}
+
+    def lfake(branch_seen: list[str], recs: list[dict]):
+        def get(url: str, _token: str, raw: bool = False):
+            if "/actions/workflows/" in url:
+                branch_seen.append(url.split("branch=", 1)[1].split("&", 1)[0])
+                return 200, {"workflow_runs": [{"id": r["run_number"], "run_number": r["run_number"],
+                                                "html_url": "", "created_at": ""} for r in recs]}
+            if "/artifacts?" in url:
+                rid = int(url.split("/runs/", 1)[1].split("/", 1)[0])
+                return 200, {"artifacts": [{"name": RECORD_ARTIFACT, "expired": False,
+                                            "archive_download_url": f"blob/{rid}", "created_at": ""}]}
+            rid = int(url.rsplit("/", 1)[1])
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as z:
+                z.writestr("promotion-record.json", json.dumps(next(r for r in recs if r["run_number"] == rid)))
+            return 200, buf.getvalue()
+        return get
+    both = [mrec(11006, "e", "4.0.11006"), mrec(11004, "f", "3.1.11004"), mrec(11002, "a", "3.1.11002")]
+    seen: list[str] = []
+    got = read_records(lfake(seen, both), "t", above=0, log=lambda _l: None, branch="main3", major=3)
+    check("read_records: the line's OWN runs (branch=main3), and only its major's sets",
+          seen == ["main3"] and [r["v_portal"] for r in got] == ["3.1.11004", "3.1.11002"], f"{seen} {got}")
+    seen = []
+    unfiltered = read_records(lfake(seen, both), "t", above=0, log=lambda _l: None)
+    check("NEGATIVE CONTROL — without the line, read_records lists `main` and hands back the 4.x set first",
+          seen == ["main"] and unfiltered[0]["v_portal"] == "4.0.11006", f"{seen} {unfiltered}")
     print(f"arm-promoted-set self-test: {failures} failure(s)")
     return 1 if failures else 0
 
@@ -1325,6 +1410,14 @@ def main() -> int:
     ap.add_argument("--instance", default="", help="control-announcement: the announcer, for the audit trail (the run URL)")
     ap.add_argument("--control-instance", type=Path, default=Path(".github/control-instance.json"),
                     help="select/control-lag: the declaration of which instance is control")
+    # 🚨 Policy `major-lines-run-separately`: the delivery LINE (`main`, `main3`) and its MAJOR (read
+    # by main-cd from PlatformVersion at the line's commit — never a number written here). main-cd
+    # passes both to every selection; omitting them is the single-line reading of a caller that
+    # predates the lines (all majors, records of `main`).
+    ap.add_argument("--major", type=int, default=None,
+                    help="armed-state/armed-base/select/control-lag: only sets of this platform major count")
+    ap.add_argument("--branch", default="main",
+                    help="select/control-lag: the delivery line whose main-cd runs hold the promotion records")
     ap.add_argument("--armed-max", type=int, default=0,
                     help="run number of the newest ARMED set (memex-portal-ai's newest version tag)")
     ap.add_argument("--override", default="", help="arm exactly this set name, platform verdict or not")
@@ -1343,12 +1436,13 @@ def main() -> int:
         if a.manifests is None:
             ap.error("armed-state needs --manifests")
         try:
-            st = armed_state(json.loads(a.manifests.read_text()))
+            st = armed_state(json.loads(a.manifests.read_text()), major=a.major)
         except (OSError, ValueError) as e:
             print(f"::error::the arming cursor cannot be read: {e}")
             return 1
         if st is None:
-            print("::error::memex-portal-ai carries no version tag at all — refusing to treat that as 'nothing armed' (it would arm anything)")
+            print("::error::memex-portal-ai carries no version tag" + (f" of major {a.major}" if a.major is not None else " at all")
+                  + " — refusing to treat that as 'nothing armed' (it would arm anything)")
             return 1
         rows = {"max": str(st[0]), "version": st[1], "complete": "true" if st[2] else "false"}
         _write_rows(rows)
@@ -1385,7 +1479,7 @@ def main() -> int:
         if a.manifests is None:
             ap.error("armed-base needs --manifests")
         try:
-            got = armed_commit(json.loads(a.manifests.read_text()))
+            got = armed_commit(json.loads(a.manifests.read_text()), major=a.major)
         except (OSError, ValueError) as e:
             print(f"::error::the newest armed set cannot be named: {e}")
             return 1
@@ -1404,7 +1498,7 @@ def main() -> int:
         return 1
     if a.command == "control-lag":
         try:
-            records = read_records(http_get, core_token, above=0)
+            records = read_records(http_get, core_token, above=0, branch=a.branch, major=a.major)
         except RuntimeError as e:
             print(f"::error::{e}")
             return 1
@@ -1443,7 +1537,8 @@ def main() -> int:
         # promotion-free reconcile ticks; an override names one set and needs no window.
         coverage: dict = {}
         records = read_records(http_get, core_token, above=above, coverage=coverage,
-                               max_pages=UNARMED_MAX_PAGES if a.unarmed_out is not None and not a.override else 1)
+                               max_pages=UNARMED_MAX_PAGES if a.unarmed_out is not None and not a.override else 1,
+                               branch=a.branch, major=a.major)
     except RuntimeError as e:
         print(f"::error::{e}")
         return 1

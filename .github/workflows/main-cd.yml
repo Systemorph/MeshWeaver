@@ -74,6 +74,23 @@ name: Continuous Delivery (main)
 # secrets. The reconcile paths never read the event payload at all: they resolve the target
 # commit server-side as the tip of THIS repo's main and re-check the required test check on it,
 # which a fork's code can never be.
+#
+# ═══════════════════════════ ONE FILE, EVERY DELIVERY LINE ═══════════════════════════
+# 🚨 A platform major is a LINE (policy `major-lines-run-separately`,
+# Doc/Architecture/MajorLinesRunSeparately): the default branch `main` carries one major, `main3`
+# the previous one, and each delivers on its own. The lines are DECLARED in
+# `.github/delivery-lines.json`; `gate` derives the run's line ONCE (`cd-line.py derive`) from the
+# event and every job reads it — the tip it resolves, the Plugins branch it builds the host from,
+# the floating label it moves, the ref its hand-over dispatches. Read "main" in the prose of this
+# file as "the line": a `main` literal that means the line is RED (`cd-line.py check-workflow`).
+#
+# WHO RUNS WHICH COPY OF THIS FILE — the reason the triggers are shaped as they are:
+#   * workflow_run and schedule ALWAYS run the DEFAULT branch's copy. They deliver the default line
+#     only; a workflow_run for another branch is refused (and filtered out by `branches:` below).
+#   * push and workflow_dispatch run the copy AT THE REF. So a non-default line delivers with ITS
+#     OWN copy: a push to its branch, and the default branch's hourly tick dispatching this file at
+#     that branch (`reconcile-lines`). Once the lines' trees diverge, the default branch's copy
+#     never decides anything about another line's commit.
 on:
   # 🚨 `branches:` IS LOAD-BEARING — without it, EVERY pull request's build starts a CD run.
   #
@@ -102,7 +119,22 @@ on:
   workflow_run:
     workflows: ["MeshWeaver Build and Test"]
     types: [completed]
+    # 🚨 The DEFAULT line only, and it must stay so: a workflow_run executes the default branch's
+    # copy of this file whatever branch its triggering run was on, so listing another line here
+    # would deliver that line's commit with this line's file (`cd-line.py derive` refuses it too).
     branches: [main]
+  # 🚨 EVERY NON-DEFAULT LINE delivers on a push to its branch — with THAT branch's copy of this
+  # file, which is the point. The default line is deliberately absent: it delivers after
+  # Build-and-Test through workflow_run, and a push run would race the tests.
+  #
+  # A push lands seconds before Build-and-Test has a verdict, so this run is a RECONCILE for the line
+  # (`gate` resolves the line's tip through the API and ships the newest commit CI vouched for, or
+  # nothing) — never "publish the pushed sha". The line's tested tip is then shipped by the default
+  # branch's hourly tick, which dispatches this file at the line's branch (`reconcile-lines`).
+  # `cd-line.py check-workflow` holds this list equal to the non-default lines of
+  # .github/delivery-lines.json.
+  push:
+    branches: [main3]
   # Reconcile cadence. Off the hour on purpose (the top of the hour is GitHub's most contended
   # scheduling slot).
   #
@@ -218,7 +250,17 @@ concurrency:
   # review.) One consequence stays true and is NOT fixed here: a `rebuild` dispatch can still
   # overlap a scheduled reconcile, which is the case the seal step's claim-then-rank workaround
   # exists for — so that workaround is narrowed, never removed. Do not delete it.
-  group: main-cd-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && 'reconcile' || github.ref }}
+  #
+  # 🚨 PER LINE (policy `major-lines-run-separately`): two lines never share a group, so neither can
+  # evict the other's pending run or starve its reconcile. The push lane already was per line —
+  # `github.ref` is `refs/heads/<line>` for a push or dispatch, and the default branch's ref for a
+  # workflow_run, which only ever delivers the default line. The reconcile lane is keyed on the ref
+  # NAME: `reconcile-main` (schedule, a default dispatch on main) and `reconcile-main3` (a push to
+  # main3 — itself a reconcile, see `on.push` — or a default dispatch at main3, which is what the
+  # default branch's hourly tick sends). Not on `github.event.repository.default_branch`: a schedule
+  # payload need not carry the repository, and a group that silently fell to another string would
+  # be the starvation this block exists to prevent.
+  group: main-cd-${{ (github.event_name == 'schedule' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && format('reconcile-{0}', github.ref_name) || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -335,10 +377,13 @@ jobs:
     # it can never be given — the one legitimate exemption AGENTS.md carves out, expressed once, on
     # the event. It costs nothing in coverage: a run this skips is a run where `gate` publishes
     # nothing either, so there is no path on which CD acts without having been preflighted.
+    # `== github.ref_name`: on a workflow_run the running file's ref IS the default branch, so this
+    # reads "a push to the branch whose file is running" — the default line, never a literal `main`
+    # (policy `major-lines-run-separately`; `cd-line.py derive` refuses anything else by name).
     if: >-
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main')
+       github.event.workflow_run.head_branch == github.ref_name)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -397,17 +442,155 @@ jobs:
             .github/control-instance.json "$CONTROL_WEBHOOK_URL"
           echo "All external inputs are present."
 
+  # ─────────────── RECONCILE EVERY OTHER LINE, WITH ITS OWN FILE ───────────────
+  # 🚨 The hourly tick runs the DEFAULT branch's copy of this file, so it may only ever reconcile the
+  # default line itself. Every other declared line (.github/delivery-lines.json, e.g. `main3`) is
+  # reconciled by DISPATCHING this workflow AT that line's branch — a workflow_dispatch runs the copy
+  # of the file at its ref, so main3's own main-cd.yml decides main3's delivery, whatever the default
+  # branch's copy has become (policy `major-lines-run-separately`). The dispatch lands in that line's
+  # reconcile lane (`main-cd-reconcile-<line>`), where the next tick's dispatch supersedes it
+  # harmlessly; nothing here waits for it.
+  #
+  # 🚨 RED, by name, when a declared line cannot be reconciled — never a quiet skip:
+  #   * its branch does not exist — the declaration names a line nobody cut;
+  #   * its branch does not carry `.github/delivery-lines.json` — it still holds the SINGLE-LINE CD,
+  #     whose reconcile resolves `commits/main` and would publish MAIN's tip from that branch. The
+  #     cure is to land this line-aware change on that branch, not to dispatch it.
+  # The condition is on the EVENT (only the hourly tick fans out), never on an input.
+  reconcile-lines:
+    name: "Reconcile every other delivery line (dispatch it at its own branch)"
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Job-level permissions REPLACE the workflow-level map:
+    #   contents — checkout of the declaration, and `branches/` / `contents/` reads of each line;
+    #   actions  — WRITE, for exactly one mutating command per line: `gh workflow run` on THIS
+    #              workflow at that line's branch. There is no narrower "dispatch only" scope.
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/delivery-lines.json
+            .github/scripts/cd-line.py
+          sparse-checkout-cone-mode: false
+      - name: Dispatch main-cd.yml at every non-default line
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          lines=$(python3 .github/scripts/cd-line.py reconcile-targets)
+          if [ -z "$lines" ]; then
+            echo "only the default line is declared — nothing else to reconcile."
+            exit 0
+          fi
+          bad=0
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            if ! gh api "repos/$REPO/branches/$line" --jq .name > /dev/null; then
+              echo "::error title=Delivery line has no branch::line '$line' is declared in .github/delivery-lines.json but branch '$line' could not be read — cut it, or drop the line from the declaration."
+              bad=1; continue
+            fi
+            if ! gh api "repos/$REPO/contents/.github/delivery-lines.json?ref=$line" --jq .name > /dev/null; then
+              echo "::error title=Delivery line still runs the single-line CD::branch '$line' does not carry .github/delivery-lines.json, so its main-cd.yml is the single-line file — a dispatch at it would resolve main's tip and publish it from '$line'. NOT dispatching. Land the line-aware CD on '$line' (the same commit applies unchanged)."
+              bad=1; continue
+            fi
+            if ! gh workflow run main-cd.yml --repo "$REPO" --ref "$line"; then
+              echo "::error::dispatching main-cd.yml at '$line' FAILED — line '$line' gets no reconcile this hour. Check that this job still holds \`actions: write\`."
+              bad=1; continue
+            fi
+            echo "- dispatched \`main-cd.yml\` at \`$line\` (its own copy reconciles it)" >> "$GITHUB_STEP_SUMMARY"
+            echo "dispatched main-cd.yml at $line"
+          done <<< "$lines"
+          exit "$bad"
+
+  # ─────────────────────────── THE DELIVERY LINE, DERIVED ONCE ───────────────────────────
+  # 🚨 Policy `major-lines-run-separately`: which line this run delivers (`main`, `main3`, …), its
+  # Plugins / satellite branches, its floating label, whether it moves `latest`, and its platform
+  # MAJOR. Its own job, not a step of `gate`, so `arm` — which runs whenever promote did not fail,
+  # including on a tick where `gate` itself failed — still knows its line and never selects across
+  # majors. The event condition is byte-identical to `gate`'s: a fork's pull-request workflow_run
+  # derives nothing, and nothing runs for it.
+  line:
+    name: "Derive the delivery line"
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == github.ref_name)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      line: ${{ steps.line.outputs.line }}
+      label: ${{ steps.line.outputs.label }}
+      plugins_ref: ${{ steps.line.outputs.plugins_ref }}
+      satellite_ref: ${{ steps.line.outputs.satellite_ref }}
+      moves_latest: ${{ steps.line.outputs.moves_latest }}
+      default_line: ${{ steps.line.outputs.default_line }}
+      major: ${{ steps.major.outputs.major }}
+    steps:
+      # The commit of the RUNNING file — on every entry the line's own tip (a workflow_run's file is
+      # the default branch's, the only line it delivers; a push or dispatch runs the copy at its ref).
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            Directory.Build.props
+            .github/delivery-lines.json
+            .github/scripts/cd-line.py
+          sparse-checkout-cone-mode: false
+      # 🚨 REFUSED RED, by name, for any branch .github/delivery-lines.json does not declare, for a
+      # workflow_run of another branch (it would run THIS line's file for that line's commit) and for
+      # a push to the default branch (it delivers after the tests). There is no default line: an
+      # unknown branch never delivers as `main`.
+      - name: "Derive the delivery line"
+        id: line
+        env:
+          CD_EVENT: ${{ github.event_name }}
+          CD_REF_NAME: ${{ github.ref_name }}
+          # Cross-checked against the DECLARED default branch; a payload without one (a schedule's
+          # need not carry the repository) falls back to the declaration, never to a guess.
+          CD_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CD_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          CD_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # The incident lever, unchanged: a repository variable that steers the Plugins branch of
+          # EVERY line's run. It overrides the line's declared `pluginsRef`; empty means "the line's".
+          CD_PLUGINS_OVERRIDE: ${{ vars.MW_PLUGINS_REF }}
+        run: |
+          set -euo pipefail
+          out=$(python3 .github/scripts/cd-line.py derive)
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" >> "$GITHUB_OUTPUT"
+      # 🚨 The line's MAJOR, from the line's OWN commit — `PlatformVersion` in its Directory.Build.props
+      # — never a number in this file. Every "newest armed/promoted set" selection (`arm`, the
+      # promotion record's base, notify's re-check) keys on it, because the lines share ONE run
+      # counter: without it, the first 4.x set would be "newest" for the v3 line on every tick.
+      - name: "Read the line's platform major"
+        id: major
+        run: |
+          set -euo pipefail
+          major=$(python3 .github/scripts/cd-line.py platform-major Directory.Build.props)
+          echo "major=$major" >> "$GITHUB_OUTPUT"
+          echo "platform major of line ${{ steps.line.outputs.line }}: $major"
+
   # Every downstream job takes its commit from here, so a push run and a heal run are literally
   # the same pipeline with a different target and a different reason.
   gate:
     name: "Resolve the target commit and decide whether to publish"
+    needs: [line]
     # The push gate, unchanged, for the ONLY path that trusts the event payload. Schedule and
     # workflow_dispatch carry no workflow_run object at all, so they fall through to the
     # reconcile branch below — which trusts nothing but the API and the registry.
+    # `== github.ref_name`: on a workflow_run the running file's ref IS the default branch, so this
+    # reads "a push to the branch whose file is running" — the default line, never a literal `main`
+    # (policy `major-lines-run-separately`; `cd-line.py derive` refuses anything else by name).
     if: >-
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main')
+       github.event.workflow_run.head_branch == github.ref_name)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Job-level permissions REPLACE the workflow-level map, so EVERY one this job needs is here —
@@ -425,6 +608,22 @@ jobs:
       checks: read
       actions: read
     outputs:
+      # 🚨 THE LINE this run delivers (policy `major-lines-run-separately`) — derived ONCE, by the
+      # `line` job, passed through here, and read by every job that used to spell `main`: the branch whose tip is
+      # resolved, the Plugins branch (`plugins_ref`, already folded with vars.MW_PLUGINS_REF), the
+      # satellites' branch, the floating `label` promote moves, whether this line moves `latest`.
+      # Consumers that still announce or arm the ONE fleet state (control-first, arm,
+      # notify-platform-update; the build host's hand-over lives in MeshWeaver.Deploy) receive it as
+      # DELIVERY_LINE and do not key on it yet — the per-major channels are their own change.
+      line: ${{ needs.line.outputs.line }}
+      label: ${{ needs.line.outputs.label }}
+      plugins_ref: ${{ needs.line.outputs.plugins_ref }}
+      satellite_ref: ${{ needs.line.outputs.satellite_ref }}
+      moves_latest: ${{ needs.line.outputs.moves_latest }}
+      default_line: ${{ needs.line.outputs.default_line }}
+      # The platform MAJOR of the line, read from PlatformVersion at the line's commit (`line`). Every "newest armed/promoted set" selection keys on it, because the lines share one run
+      # counter: without it the first 4.x set would be "newest" for the v3 line on every tick.
+      major: ${{ needs.line.outputs.major }}
       publish: ${{ steps.decide.outputs.publish }}
       sha: ${{ steps.target.outputs.sha }}
       short_sha: ${{ steps.target.outputs.short_sha }}
@@ -515,6 +714,7 @@ jobs:
         id: target
         env:
           GH_TOKEN: ${{ github.token }}
+          LINE: ${{ needs.line.outputs.line }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
@@ -522,8 +722,10 @@ jobs:
             reason="push"
           else
             # 🚨 Server-side truth, not the event payload. A fork can push anything to a branch
-            # called "main" in its own repo; it can never be the tip of THIS repo's main.
-            tip=$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha')
+            # called "main" in its own repo; it can never be the tip of THIS repo's main. The tip of
+            # THIS RUN'S LINE (`main`, `main3`): a push to a non-default line enters here too, because
+            # Build-and-Test has not vouched for the pushed commit yet (see `on.push`).
+            tip=$(gh api "repos/${{ github.repository }}/commits/$LINE" --jq '.sha')
             reason="reconcile"
 
             # 🚨 SHIP THE NEWEST COMMIT CI HAS VOUCHED FOR — NOT NECESSARILY THE TIP (#3077).
@@ -582,9 +784,9 @@ jobs:
                 sha="$candidate"
                 break
               fi
-            done < <(gh api "repos/${{ github.repository }}/commits?sha=main&per_page=10" --jq '.[].sha')
+            done < <(gh api "repos/${{ github.repository }}/commits?sha=$LINE&per_page=10" --jq '.[].sha')
             if [ "$sha" != "$tip" ]; then
-              echo "::notice::main's tip ${tip:0:7} has no completed required check yet; targeting ${sha:0:7}, the newest commit CI has vouched for. The tip ships on a later tick."
+              echo "::notice::$LINE's tip ${tip:0:7} has no completed required check yet; targeting ${sha:0:7}, the newest commit CI has vouched for. The tip ships on a later tick."
             fi
           fi
           # 🚨 The ONE definition of the short SHA — every job, and the image-set check, use this
@@ -596,7 +798,7 @@ jobs:
           echo "short_sha=$short"                             >> "$GITHUB_OUTPUT"
           echo "reason=$reason"                               >> "$GITHUB_OUTPUT"
           echo "staging_tag=staging-$short-$GITHUB_RUN_ID"    >> "$GITHUB_OUTPUT"
-          echo "Target: $sha ($short), entered via $reason (event ${{ github.event_name }})."
+          echo "Target: $sha ($short), entered via $reason on line $LINE (event ${{ github.event_name }})."
       - name: "Read the required check for this commit"
         id: required
         env:
@@ -716,7 +918,9 @@ jobs:
       - name: "Resolve the plugins HEAD this image set is bound to"
         id: plugins
         env:
-          PLUGINS_REF: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          # The LINE's Plugins branch (main → Plugins main, main3 → Plugins main3), with
+          # vars.MW_PLUGINS_REF already folded in as the override by the `line` step.
+          PLUGINS_REF: ${{ needs.line.outputs.plugins_ref }}
           SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
         run: |
           set -euo pipefail
@@ -734,7 +938,7 @@ jobs:
                    "refs/heads/$PLUGINS_REF" | awk '{print $1}' | head -1)
           rm -f ~/.ssh/plugins_key
           if [ -z "$full" ]; then
-            echo "::error::'refs/heads/$PLUGINS_REF' does not resolve in Systemorph/MeshWeaver.Plugins — check MW_PLUGINS_REF."
+            echo "::error::'refs/heads/$PLUGINS_REF' does not resolve in Systemorph/MeshWeaver.Plugins — check MW_PLUGINS_REF, and the line's \`pluginsRef\` in .github/delivery-lines.json."
             exit 1
           fi
           short="${full:0:7}"
@@ -978,21 +1182,25 @@ jobs:
       # fetches those). A read that fails, or a `main` that carries no version tag, is recorded as
       # "no baseline" with the reason — never fatal here, because the judge downstream treats an
       # unestablished baseline as a REFUSAL to judge, which is the only honest reading of it.
+      # 🚨 PER LINE: the set THIS LINE's floating label names (`main`, `main3`) — the line's own
+      # previous set, never another major's.
       - name: "Record the set the fleet is on (satellite-compat's baseline)"
         id: baseline
+        env:
+          LABEL: ${{ needs.line.outputs.label }}
         run: |
           set -euo pipefail
           row=""
           if rows=$(az acr manifest list-metadata --registry meshweaver --name mw-plugin-test --top 100 --orderby time_desc -o json --only-show-errors); then
-            row=$(printf '%s' "$rows" | jq -c '[.[] | select(.tags != null) | select(.tags | index("main"))] | .[0] // empty')
+            row=$(printf '%s' "$rows" | jq -c --arg label "$LABEL" '[.[] | select(.tags != null) | select(.tags | index($label))] | .[0] // empty')
           else
             echo "reason=ACR manifest metadata for mw-plugin-test could not be read" >> "$GITHUB_OUTPUT"
             echo "::warning::satellite-compat baseline NOT established: ACR manifest metadata for mw-plugin-test could not be read — every compat leg will refuse to judge this run"
             exit 0
           fi
           if [ -z "$row" ]; then
-            echo "reason=no mw-plugin-test manifest carries the main tag (first publish?)" >> "$GITHUB_OUTPUT"
-            echo "::warning::satellite-compat baseline NOT established: no mw-plugin-test manifest carries the main tag"
+            echo "reason=no mw-plugin-test manifest carries the $LABEL tag (first publish of the line?)" >> "$GITHUB_OUTPUT"
+            echo "::warning::satellite-compat baseline NOT established: no mw-plugin-test manifest carries the $LABEL tag"
             exit 0
           fi
           digest=$(printf '%s' "$row" | jq -r '.digest')
@@ -1001,15 +1209,15 @@ jobs:
           # hands the WHOLE version back for the SemVer notation.
           version=$(printf '%s' "$row" | jq -r '[.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+(-ci\\.[0-9]+)?$"))] | map(select(test("^[0-9]+\\.[0-9]+\\.0$") | not)) | .[0] // empty')
           run_number=$(python3 .github/scripts/platform-version.py ordinal "$version" || true)
-          case "$digest" in sha256:*) ;; *) echo "reason=the main manifest's digest is not a sha256 (got '$digest')" >> "$GITHUB_OUTPUT"; echo "::warning::satellite-compat baseline NOT established: main's digest is '$digest'"; exit 0 ;; esac
+          case "$digest" in sha256:*) ;; *) echo "reason=the $LABEL manifest's digest is not a sha256 (got '$digest')" >> "$GITHUB_OUTPUT"; echo "::warning::satellite-compat baseline NOT established: $LABEL's digest is '$digest'"; exit 0 ;; esac
           if [ -z "$version" ] || ! [ "$run_number" -eq "$run_number" ] 2>/dev/null; then
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
-            echo "reason=mw-plugin-test:main ($digest) carries no set version tag (3.0.0-ci.<run> or 3.<minor>.<run>), so the bundles that shipped with it cannot be located" >> "$GITHUB_OUTPUT"
-            echo "::warning::satellite-compat baseline NOT established: main ($digest) carries no ci version tag (tags: $(printf '%s' "$row" | jq -c .tags))"
+            echo "reason=mw-plugin-test:$LABEL ($digest) carries no set version tag (3.0.0-ci.<run> or 3.<minor>.<run>), so the bundles that shipped with it cannot be located" >> "$GITHUB_OUTPUT"
+            echo "::warning::satellite-compat baseline NOT established: $LABEL ($digest) carries no ci version tag (tags: $(printf '%s' "$row" | jq -c .tags))"
             exit 0
           fi
           { echo "digest=$digest"; echo "version=$version"; echo "run_number=$run_number"; } >> "$GITHUB_OUTPUT"
-          echo "baseline (the set the fleet is on): mw-plugin-test:main = $digest = $version, built by run #$run_number"
+          echo "baseline (the set the fleet is on): mw-plugin-test:$LABEL = $digest = $version, built by run #$run_number"
       - name: "Decide"
         id: decide
         env:
@@ -1042,6 +1250,7 @@ jobs:
           BATCH_WINDOW: ${{ vars.CD_BATCH_WINDOW_MINUTES }}
           FRESH_AGE_MIN: ${{ steps.freshness.outputs.age_min }}
           FORCE_REBUILD: ${{ inputs.rebuild }}
+          LINE: ${{ needs.line.outputs.line }}
         run: |
           set -euo pipefail
           decision() { echo "publish=$1" >> "$GITHUB_OUTPUT"; echo "### $2" >> "$GITHUB_STEP_SUMMARY"; echo "$2"; }
@@ -1307,7 +1516,7 @@ jobs:
               gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$(printf '%s\n\n%s\n\n%s' \
                 "<!-- cd-blocked:$SHORT -->" \
                 "🚧 **main \`$SHORT\` cannot be published**: it has no complete image set AND its required check \`Consolidate test results\` is \`$CONCL\`." \
-                "The reconciler will not attempt it — CD must never publish an untested tree. This clears itself the moment Build-and-Test goes green on HEAD (\`gh workflow run \"MeshWeaver Build and Test\" --ref main\` is enough; the reconciler reads the check on the commit, not the event that produced it), or when the next merge moves HEAD.")"
+                "The reconciler will not attempt it — CD must never publish an untested tree. This clears itself the moment Build-and-Test goes green on HEAD (\`gh workflow run \"MeshWeaver Build and Test\" --ref $LINE\` is enough; the reconciler reads the check on the commit, not the event that produced it), or when the next merge moves HEAD.")"
             fi
             decision false "🚧 \`Consolidate test results\` on $SHORT is \`$CONCL\` and the image set is incomplete — cannot publish"
             exit 0
@@ -2297,6 +2506,9 @@ jobs:
       STAGING: ${{ needs.gate.outputs.staging_tag }}
       SHA: ${{ needs.gate.outputs.short_sha }}
       V_CONTROL: ${{ needs.control-image.outputs.version }}
+      # The line's floating label (`main`, `main3`) — never a literal `main` (policy
+      # `major-lines-run-separately`).
+      LABEL: ${{ needs.gate.outputs.label }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -2315,7 +2527,7 @@ jobs:
         env:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
-      - name: Tag memex-control:<sha>, :main (ACR, then the fleet registry) — identity only, never the version
+      - name: Tag memex-control:<sha>, :<line label> (ACR, then the fleet registry) — identity only, never the version
         run: |
           set -euo pipefail
           # 🚨 IDENTITY TAGS ONLY here. The VERSION tag (what a Continuous record with `updatePattern:
@@ -2323,13 +2535,14 @@ jobs:
           # this run — for EVERY accepted build, never waiting for the fleet's arming (policy
           # `platform-deploy-control-first`). No `<core7>-p<plugins7>` pair tag: it is retired (policy
           # `platform-module-deploy-separate`); the host commit stays in the promotion record.
+          [ -n "$LABEL" ] || { echo "::error::gate produced no line label — refusing to guess which line's pointer to move"; exit 1; }
           args=(); margs=()
-          for t in "$SHA" main; do
+          for t in "$SHA" "$LABEL"; do
             args+=(--tag "${{ env.ACR }}/memex-control:$t"); margs+=("${{ env.REGISTRY }}/memex-control:$t")
           done
           docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$STAGING"
           .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" "${margs[@]}"
-          echo "- memex-control \`$SHA\`, \`main\` — accepted (empty DB · broken NodeType · N−1) and promoted; its version \`$V_CONTROL\` is written next by \`control-first\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- memex-control \`$SHA\`, \`$LABEL\` — accepted (empty DB · broken NodeType · N−1) and promoted; its version \`$V_CONTROL\` is written next by \`control-first\`" >> "$GITHUB_STEP_SUMMARY"
 
   # ────────── CONTROL FIRST (policy `platform-deploy-control-first`) ──────────
   # "after platform we always deploy control": EVERY platform build the control image's own
@@ -2851,6 +3064,14 @@ jobs:
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Job-level permissions REPLACE the workflow-level map, so the three it inherited are restated, and
+    # `actions: read` is added for ONE read: phase B's never-backwards check lists the OTHER lines'
+    # CD runs, so another line's newer set never holds this line's label back.
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+      actions: read
     env:
       STAGING: ${{ needs.gate.outputs.staging_tag }}
       SHA: ${{ needs.gate.outputs.short_sha }}
@@ -2929,9 +3150,20 @@ jobs:
           # The portal's SHA tag, but NOT its version tag — that is the ARMING write, `arm`'s
           # phase C, made only for a set whose platform verdict is green (policy `one-promotion-gate`).
           promote memex-portal-ai   "$SHA"
-      - name: "Phase B — moving pointers (main, latest, GHCR mirror)"
+      - name: "Phase B — moving pointers (the line's label, latest, GHCR mirror)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # 🚨 PER LINE (policy `major-lines-run-separately`): the line's OWN floating label (`main`,
+          # `main3`), and `latest` only from the ONE line delivery-lines.json says moves it — two
+          # lines share one run counter, so a forward-only check alone would hand `latest` back and
+          # forth between majors.
+          LINE: ${{ needs.gate.outputs.line }}
+          LABEL: ${{ needs.gate.outputs.label }}
+          MOVES_LATEST: ${{ needs.gate.outputs.moves_latest }}
         run: |
           set -euo pipefail
+          [ -n "$LINE" ] && [ -n "$LABEL" ] || { echo "::error::gate produced no line/label — refusing to guess which line's pointers to move"; exit 1; }
+          case "$MOVES_LATEST" in true|false) ;; *) echo "::error::gate's moves_latest is '$MOVES_LATEST', not true/false — refusing to guess whether this line moves latest"; exit 1 ;; esac
           # 🚨 NEVER BACKWARDS (MeshWeaver.Manufacturing#84) — the same rule phase D re-checks at its
           # write. Two runs can promote the SAME core + Plugins pair: the reconcile lane and a
           # `rebuild` dispatch overlap by design (see `concurrency:`). On 2026-10-05 run 9984 promoted
@@ -2943,33 +3175,51 @@ jobs:
           # ordinal, is RED — never "no newer set", which would move the pointers on no evidence.
           # Both notations share ONE lineage (policy `platform-semver-versioning`): the run number is
           # read by `platform-version.py`, never a `ci.` regex that cannot see `3.<minor>.<run>`.
+          #
+          # 🚨 "Newer" means newer ON THIS LINE. Every line's sets are numbered by this one workflow's
+          # run counter, so another line's newer set would otherwise hold this line's label back for
+          # good. The run numbers of the OTHER lines' CD runs are read from the API and left out —
+          # fail-closed too. With no other line's run among them (today, for `main`) the rule is the
+          # one above, unchanged.
           n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_PLUGIN") \
-            || { echo "::error::V_PLUGIN '$V_PLUGIN' carries no run ordinal (neither <line>-ci.<n> nor <major>.<minor>.<n>) — cannot decide whether a newer set already holds main/latest"; exit 1; }
+            || { echo "::error::V_PLUGIN '$V_PLUGIN' carries no run ordinal (neither <line>-ci.<n> nor <major>.<minor>.<n>) — cannot decide whether a newer set already holds $LABEL/latest"; exit 1; }
           tags=$(az acr repository show-tags -n meshweaver --repository mw-plugin-test --orderby time_desc --top 200 -o tsv) \
-            || { echo "::error::could not list mw-plugin-test tags — cannot decide whether a newer set already holds main/latest; refusing to move them blind"; exit 1; }
+            || { echo "::error::could not list mw-plugin-test tags — cannot decide whether a newer set already holds $LABEL/latest; refusing to move them blind"; exit 1; }
+          foreign="${RUNNER_TEMP:-/tmp}/foreign-line-runs.txt"
+          : > "$foreign"
+          while IFS= read -r other; do
+            [ -n "$other" ] || continue
+            [ "$other" != "$LINE" ] || continue
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/main-cd.yml/runs?branch=$other&per_page=100" \
+              --jq '.workflow_runs[].run_number' >> "$foreign" \
+              || { echo "::error::could not list the CD runs of line '$other' — cannot tell its sets from this line's; refusing to move $LABEL/latest blind"; exit 1; }
+          done < <(python3 .github/scripts/cd-line.py lines)
           # Phase A just wrote this run's own version tag, so an EMPTY reading is itself a broken read.
-          n_max=$(printf '%s\n' "$tags" | python3 .github/scripts/platform-version.py max-ordinal)
-          [ -n "$n_max" ] || { echo "::error::mw-plugin-test lists no set tag, not even this run's $V_PLUGIN written by phase A — the listing is not trustworthy"; exit 1; }
+          n_max=$(printf '%s\n' "$tags" | python3 .github/scripts/cd-line.py line-max-ordinal "$foreign")
+          [ -n "$n_max" ] || { echo "::error::mw-plugin-test lists no set tag of line $LINE, not even this run's $V_PLUGIN written by phase A — the listing is not trustworthy"; exit 1; }
           if [ "$n_max" -gt "$n_self" ]; then
-            echo "::notice title=Moving pointers left in place::a newer set (ci.$n_max) was promoted while this run (ci.$n_self) built — main/latest stay on it; this set keeps its own version and identity tags"
-            echo "- moving pointers NOT moved: ci.$n_max is newer than this run's ci.$n_self (never backwards)" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Moving pointers left in place::a newer set of line $LINE (ci.$n_max) was promoted while this run (ci.$n_self) built — $LABEL/latest stay on it; this set keeps its own version and identity tags"
+            echo "- moving pointers NOT moved: ci.$n_max is newer than this run's ci.$n_self on line $LINE (never backwards)" >> "$GITHUB_STEP_SUMMARY"
             # This set's OWN GHCR version tag is not a pointer: the satellite-compat legs pull it.
             NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
             docker buildx imagetools create --tag "ghcr.io/$NS/mw-plugin-test:$V_PLUGIN" "${{ env.ACR }}/mw-plugin-test:$STAGING"
             exit 0
           fi
           for repo in memex-migration memex-portal-ai mw-core-tests; do
-            echo "→ $repo: main"
-            docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" "${{ env.ACR }}/$repo:$STAGING"
-            .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$STAGING" "${{ env.REGISTRY }}/$repo:main"
+            echo "→ $repo: $LABEL"
+            docker buildx imagetools create --tag "${{ env.ACR }}/$repo:$LABEL" "${{ env.ACR }}/$repo:$STAGING"
+            .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$STAGING" "${{ env.REGISTRY }}/$repo:$LABEL"
           done
-          # `latest` is what MeshWeaver.Plugins pins as MW_TEST_IMAGE.
-          docker buildx imagetools create \
-            --tag "${{ env.ACR }}/mw-plugin-test:main" \
-            --tag "${{ env.ACR }}/mw-plugin-test:latest" \
-            "${{ env.ACR }}/mw-plugin-test:$STAGING"
-          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/mw-plugin-test:$STAGING" \
-            "${{ env.REGISTRY }}/mw-plugin-test:main" "${{ env.REGISTRY }}/mw-plugin-test:latest"
+          # `latest` is what MeshWeaver.Plugins pins as MW_TEST_IMAGE — moved by the ONE line that
+          # moves it (delivery-lines.json `movesLatest`), beside that line's label.
+          acr=(--tag "${{ env.ACR }}/mw-plugin-test:$LABEL"); cr=("${{ env.REGISTRY }}/mw-plugin-test:$LABEL")
+          if [ "$MOVES_LATEST" = "true" ]; then
+            acr+=(--tag "${{ env.ACR }}/mw-plugin-test:latest"); cr+=("${{ env.REGISTRY }}/mw-plugin-test:latest")
+          else
+            echo "- \`latest\` NOT moved: line $LINE does not move it (.github/delivery-lines.json)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          docker buildx imagetools create "${acr[@]}" "${{ env.ACR }}/mw-plugin-test:$STAGING"
+          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/mw-plugin-test:$STAGING" "${cr[@]}"
           # MIRROR the ACR index to GHCR — never a second `dotnet publish`. Two independent builds
           # of one commit are two independent compilations, so the bits the plugins repo gates on
           # from GHCR would not provably be the bits validated in ACR (and it measured 411 s on top
@@ -2981,12 +3231,9 @@ jobs:
           # reconciled and nothing would ever notice. Here it fails CD, alerts, and the hourly
           # reconciler re-drives HEAD until it lands or the budget escalates.
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
-          docker buildx imagetools create \
-            --tag "ghcr.io/$NS/mw-plugin-test:$V_PLUGIN" \
-            --tag "ghcr.io/$NS/mw-plugin-test:$SHA" \
-            --tag "ghcr.io/$NS/mw-plugin-test:main" \
-            --tag "ghcr.io/$NS/mw-plugin-test:latest" \
-            "${{ env.ACR }}/mw-plugin-test:$STAGING"
+          ghcr=(--tag "ghcr.io/$NS/mw-plugin-test:$V_PLUGIN" --tag "ghcr.io/$NS/mw-plugin-test:$SHA" --tag "ghcr.io/$NS/mw-plugin-test:$LABEL")
+          [ "$MOVES_LATEST" != "true" ] || ghcr+=(--tag "ghcr.io/$NS/mw-plugin-test:latest")
+          docker buildx imagetools create "${ghcr[@]}" "${{ env.ACR }}/mw-plugin-test:$STAGING"
       # 🚨 THE FLEET IS NOT ARMED HERE ANY MORE (policy `one-promotion-gate`).
       # Phases A and B above promote the set for CI — every consumer that compiles, tests or bakes
       # against a platform reads it from there on. Phases C and D (the portal's version tag, which
@@ -3011,14 +3258,21 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
           # The set's fifth digest (D3), carried in the record every later reader of the set uses.
           CORE_TESTS_DIGEST: ${{ needs.core-tests-image.outputs.digest }}
+          # The line the set belongs to (policy `major-lines-run-separately`) — recorded so `arm` and
+          # every later reader of the set can key on it; nothing reads it yet.
+          LINE: ${{ needs.gate.outputs.line }}
+          # The base is the newest armed set OF THIS LINE'S MAJOR — another major's armed set is not
+          # an ancestor this bundle's merges are measured from (policy `major-lines-run-separately`).
+          MAJOR: ${{ needs.gate.outputs.major }}
         run: |
           set -euo pipefail
+          [ -n "$MAJOR" ] || { echo "::error::gate produced no platform major — refusing to name a base across majors"; exit 1; }
           parent=$(gh api "repos/$GITHUB_REPOSITORY/commits/$CORE_SHA" --jq '.parents[0].sha')
           [[ "$parent" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot read the first parent of $CORE_SHA ('$parent')"; exit 1; }
           base="$parent"; kind=unresolved; why=""
           if az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
                -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json" \
-             && armed=$(python3 .github/scripts/arm-promoted-set.py armed-base --manifests "$RUNNER_TEMP/portal-manifests.json"); then
+             && armed=$(python3 .github/scripts/arm-promoted-set.py armed-base --major "$MAJOR" --manifests "$RUNNER_TEMP/portal-manifests.json"); then
             a_short=$(printf '%s' "$armed" | jq -r '.armed_short'); a_version=$(printf '%s' "$armed" | jq -r '.armed_version')
             if [ -z "$a_short" ]; then
               kind=first-parent; why="no set has ever been armed"
@@ -3042,8 +3296,8 @@ jobs:
           jq -n --argjson n "$RUN_NUMBER" --arg c "$CORE_SHA" --arg b "$base" --arg bk "$kind" --arg p "$PLUGINS_SHA" \
                 --arg s "$SHA" --arg ps "$PLUGINS_SHORT" --arg st "$STAGING" \
                 --arg vp "$V_PORTAL" --arg vm "$V_MIGRATION" --arg vt "$V_PLUGIN" \
-                --arg vct "$V_CORE_TESTS" --arg dct "$CORE_TESTS_DIGEST" \
-            '{run_number: $n, core_sha: $c, base: $b, base_kind: $bk, plugins_sha: $p, short: $s, plugins_short: $ps,
+                --arg vct "$V_CORE_TESTS" --arg dct "$CORE_TESTS_DIGEST" --arg line "$LINE" \
+            '{run_number: $n, line: $line, core_sha: $c, base: $b, base_kind: $bk, plugins_sha: $p, short: $s, plugins_short: $ps,
               staging: $st, v_portal: $vp, v_migration: $vm, v_plugin: $vt,
               v_core_tests: $vct, core_tests_digest: $dct, key: ("pair-" + $s + "-p" + $ps)}' \
             > "$RUNNER_TEMP/promotion-record/promotion-record.json"
@@ -3090,8 +3344,10 @@ jobs:
   # and deliberately does not need this job (policy `platform-backwards-compatibility`).
   arm:
     name: "Arm the fleet: the newest promoted set control runs and whose ladder passed"
-    needs: [preflight, gate, promote, platform-ladder-compat]
-    if: always() && needs.preflight.result == 'success' && needs.promote.result != 'failure' && needs.promote.result != 'cancelled'
+    needs: [preflight, line, gate, promote, platform-ladder-compat]
+    # `needs.line.result == 'success'`: without its line (and major) `arm` could only select across
+    # majors — a refused or failed `line` is RED on its own job, and nothing is armed for it.
+    if: always() && needs.preflight.result == 'success' && needs.line.result == 'success' && needs.promote.result != 'failure' && needs.promote.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # 🚨 ONE ARMING AT A TIME, ACROSS EVERY main-cd RUN. The workflow's own concurrency keeps the
@@ -3100,8 +3356,13 @@ jobs:
     # release event) after the NEWER one armed. A job-level group shared by every run serialises the
     # read-select-write, so `select` always sees the previous arming's cursor. Never cancel: a
     # half-written arming is exactly the state the resume below exists for, not something to cause.
+    #
+    # 🚨 PER MAJOR (policy `major-lines-run-separately`): the group protects the CURSOR — the newest
+    # armed set — and the cursor is per major (`armed-state --major`). Lines of different majors never
+    # share it, so they never wait on or evict each other here; two lines of the SAME major (main and
+    # main3 while both carry 3.x) share one cursor and one `<major>-latest`, so they must serialise.
     concurrency:
-      group: main-cd-arm
+      group: main-cd-arm-${{ needs.line.outputs.major }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -3119,6 +3380,13 @@ jobs:
     env:
       OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && inputs.arm_override || '' }}
       OVERRIDE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.arm_reason || '' }}
+      # 🚨 THE LINE (policy `major-lines-run-separately`): `select` reads only this line's promotion
+      # records (its own runs) and only sets of its major; the cursor is the newest armed set of that
+      # major; Phase D's never-backwards check compares within the major, and only the line that
+      # moves `latest` (.github/delivery-lines.json) moves the portal's and the migration's `latest`.
+      DELIVERY_LINE: ${{ needs.line.outputs.line }}
+      MAJOR: ${{ needs.line.outputs.major }}
+      MOVES_LATEST: ${{ needs.line.outputs.moves_latest }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -3152,7 +3420,8 @@ jobs:
           set -euo pipefail
           az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
             -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
-          python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json"
+          [ -n "$MAJOR" ] && [ -n "$DELIVERY_LINE" ] || { echo "::error::gate produced no line/major — refusing to read a cursor across lines"; exit 1; }
+          python3 .github/scripts/arm-promoted-set.py armed-state --major "$MAJOR" --manifests "$RUNNER_TEMP/portal-manifests.json"
       # The platform verdict reads only this repository (promotion records, each run's ladder job,
       # compare for ancestry — the workflow's own token) and control's PUBLIC /api/version + /health.
       # No MeshWeaver.Plugins credential: nothing of Plugins is read (policy `platform-module-deploy-separate`).
@@ -3167,7 +3436,7 @@ jobs:
           set -euo pipefail
           # --unarmed-out: every promoted set still newer than the armed one after this selection,
           # with its verdict — the reading the fleet-unarmed alert (last step) clocks a stall from.
-          python3 .github/scripts/arm-promoted-set.py select --armed-max "$ARMED_MAX" \
+          python3 .github/scripts/arm-promoted-set.py select --branch "$DELIVERY_LINE" --major "$MAJOR" --armed-max "$ARMED_MAX" \
             --armed-version "$ARMED_VERSION" --unarmed-out "$RUNNER_TEMP/unarmed.json" \
             ${OVERRIDE:+--override "$OVERRIDE"} ${RESUME:+--resume "$RESUME"}
       - name: ACR login
@@ -3275,8 +3544,12 @@ jobs:
           # $V_PORTAL, so even this run's own tag would be missing), is no evidence this set is newest.
           portal_tags=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 200 -o tsv) \
             || { echo "::error::could not list memex-portal-ai tags — refusing to move the line pointers on no evidence"; exit 1; }
-          n_max=$(printf '%s\n' "$portal_tags" | python3 .github/scripts/platform-version.py max-ordinal)
-          [ -n "$n_max" ] || { echo "::error::memex-portal-ai lists no run-numbered tag, not even this run's $V_PORTAL written by phase C — the listing is not trustworthy"; exit 1; }
+          # Within THIS LINE'S MAJOR only: the lines share one run counter, so another major's newer
+          # set must never hold `<major>-latest` back (its pointers are its own — `4-latest`, not `3-latest`).
+          case "${MAJOR:-}" in ''|*[!0-9]*) echo "::error::MAJOR '${MAJOR:-}' is not a platform major — refusing to compare sets across majors"; exit 1 ;; esac
+          case "${MOVES_LATEST:-}" in true|false) ;; *) echo "::error::MOVES_LATEST '${MOVES_LATEST:-}' is not true/false — refusing to guess whether this line moves \`latest\`"; exit 1 ;; esac
+          n_max=$(printf '%s\n' "$portal_tags" | grep -E "^${MAJOR}\." | python3 .github/scripts/platform-version.py max-ordinal || true)
+          [ -n "$n_max" ] || { echo "::error::memex-portal-ai lists no run-numbered tag of major $MAJOR, not even this run's $V_PORTAL written by phase C — the listing is not trustworthy"; exit 1; }
           if [ "$n_max" -gt "$n_self" ]; then
             echo "::notice::a newer set (run $n_max) was armed while this job ran — leaving the line pointers where it put them"
             exit 0
@@ -3295,7 +3568,9 @@ jobs:
           # never selects it: `latest` has no numeric core, so it is no version at all.
           # FAIL CLOSED: a version the reader cannot place moves NOTHING — never `latest` alone with
           # its line pointers silently missing (a failure inside `$( )` in a `for` list is not errexit).
-          line_tags() { local p; p=$(python3 .github/scripts/platform-version.py line-pointers "$1") && [ -n "$p" ] || return 1; printf '%s latest' "$p"; }
+          # `latest` only from the ONE line delivery-lines.json says moves it (MOVES_LATEST): two lines
+          # of different majors would otherwise hand it back and forth on every arming.
+          line_tags() { local p; p=$(python3 .github/scripts/platform-version.py line-pointers "$1") && [ -n "$p" ] || return 1; if [ "$MOVES_LATEST" = "true" ]; then printf '%s latest' "$p"; else printf '%s' "$p"; fi; }
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
           # 🚨 THE TESTER GETS THE ARMED SET'S LINE POINTERS TOO, AND FIRST — a MATCHED channel. The
           # bake (`mw build plugin`) runs the tester against the portal and refuses a pair whose
@@ -4043,7 +4318,9 @@ jobs:
     # starts the fleet's rolls and names `memex-portal-ai:<version>`, which exists only once `arm`
     # wrote it — for a set whose platform verdict is green, possibly in a LATER run than the one that
     # built it. So the version and commits below are the ARMED set's, read from `arm`.
-    needs: [preflight, arm]
+    # `line` for the LINE and its MAJOR only (policy `major-lines-run-separately`): the "still the
+    # newest armed set?" re-check compares within the major, never against another line's set.
+    needs: [preflight, line, arm]
     # The ONLY condition, and it is about the RUN, not about an input: notify when this run
     # actually ARMED something. Never "notify if the secret happens to be set".
     if: always() && needs.preflight.result == 'success' && needs.arm.outputs.armed == 'true'
@@ -4074,11 +4351,14 @@ jobs:
         id: current
         env:
           V_SELF: ${{ needs.arm.outputs.version }}
+          MAJOR: ${{ needs.line.outputs.major }}
+          DELIVERY_LINE: ${{ needs.line.outputs.line }}
         run: |
           set -euo pipefail
+          [ -n "$MAJOR" ] || { echo "::error::gate produced no platform major — refusing to compare across majors"; exit 1; }
           az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
             -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
-          st=$(python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json")
+          st=$(python3 .github/scripts/arm-promoted-set.py armed-state --major "$MAJOR" --manifests "$RUNNER_TEMP/portal-manifests.json")
           newest=$(printf '%s' "$st" | jq -r '.version')
           # Both notations, ONE lineage (policy `platform-semver-versioning`): the run number is read
           # by the one reader, never `${v##*ci.}` — which leaves `3.1.10001` whole, makes `-gt` an
@@ -4669,7 +4949,9 @@ jobs:
       # this run resolved: the satellites are not part of the image set, so there is no set identity
       # to keep consistent (contrast the Plugins checkouts, pinned to gate's plugins_sha), and each
       # leg checks out exactly once and RECORDS the sha it judged in its verdict artifact.
-      content-ref: main
+      # The LINE's satellite branch (.github/delivery-lines.json `satelliteRef`): `main` for every line
+      # until a satellite cuts a branch of its own for an older line.
+      content-ref: ${{ needs.gate.outputs.satellite_ref }}
       platform-ref: ${{ needs.gate.outputs.sha }}
       test-image: ${{ needs.satellite-compat-image.outputs.image }}:${{ needs.plugin-test-image.outputs.version }}
       image-digest: ${{ needs.satellite-compat-image.outputs.digest }}
@@ -4856,6 +5138,8 @@ jobs:
           .github/scripts/check-image-set.sh
           "${{ needs.gate.outputs.short_sha }}"
           --pointers "${{ needs.portal-image.outputs.version }}"
+          --line-label "${{ needs.gate.outputs.label }}"
+          --moves-latest "${{ needs.gate.outputs.moves_latest }}"
       # A heal that WORKED has to say so on the same issue that recorded the attempt, or the
       # ledger only ever grows and nobody can tell a fixed hole from an open one.
       # 🚨 HEALING IS AN OUTCOME, NOT A PATH. This used to require
@@ -5034,6 +5318,11 @@ jobs:
           GATE_RESULT: ${{ needs.gate.result }}
           UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
           UPSTREAM_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # The branch whose copy of this file is running — on a workflow_run, the DEFAULT branch, the
+          # only line a workflow_run may deliver. And the line `gate` derived, whose tip decides
+          # "superseded" vs "stuck". Both are policy `major-lines-run-separately`'s, never `main`.
+          RUN_REF: ${{ github.ref_name }}
+          LINE: ${{ needs.gate.outputs.line }}
           # 🚨 Passed through `env:` rather than written as `${{ github.repository }}` inside the
           # body, and that is load-bearing rather than stylistic: `test-cd-steps.py` EXTRACTS this
           # step from this file by its `id:` and executes it against fixtures, and it REFUSES a
@@ -5065,8 +5354,8 @@ jobs:
             # saying so is not the same as claiming a delivery.
             if [ "$GATE_RESULT" = "skipped" ] \
                && [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] \
-               && { [ "$UPSTREAM_EVENT" != "push" ] || [ "$UPSTREAM_BRANCH" != "main" ]; }; then
-              echo "not applicable — upstream was '${UPSTREAM_EVENT}' on '${UPSTREAM_BRANCH}', not a push to main. No delivery was due, and none is claimed."
+               && { [ "$UPSTREAM_EVENT" != "push" ] || [ "$UPSTREAM_BRANCH" != "$RUN_REF" ]; }; then
+              echo "not applicable — upstream was '${UPSTREAM_EVENT}' on '${UPSTREAM_BRANCH}', not a push to ${RUN_REF}. No delivery was due, and none is claimed."
               exit 0
             fi
             # (b) EVERYTHING ELSE with no verdict is the invisible state this job exists to catch:
@@ -5202,7 +5491,7 @@ jobs:
           # hole and it must stay loud. So the discriminator is tip-ness, not colour.
           if [ "$REASON" = "push" ] && [ "$PUBLISH" != "true" ] && [ "$GREEN" != "true" ] \
              && [ "${CONCLUSION#*/}" = "cancelled" ]; then
-            TIP=$(gh api "repos/$REPO/commits/main" --jq '.sha' || echo "")
+            TIP=$(gh api "repos/$REPO/commits/$LINE" --jq '.sha' || echo "")
             if [ -z "$TIP" ]; then
               # \U0001f6a8 Say what is true, not what is convenient. Tip-ness was NOT established, so
               # claiming it (either way) would be the same sin this step exists to correct: a
@@ -5388,6 +5677,9 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           WORKFLOW_NAME: ${{ github.workflow }}
           WORKFLOW_FILE: main-cd.yml
+          # The line this run delivered: its tip is the HEAD to hand on, and the dispatch runs this
+          # file AT that line's branch — so a hand-over never runs one line's file for another.
+          LINE: ${{ needs.gate.outputs.line }}
           SHA: ${{ needs.gate.outputs.sha }}
           PUBLISH: ${{ needs.gate.outputs.publish }}
           COMPLETE: ${{ needs.gate.outputs.complete }}
@@ -5439,7 +5731,7 @@ jobs:
 
           # main's HEAD *now*. The gate's reading was taken before any leg ran; asking again is the
           # whole point — the lane is about to be free and HEAD has usually moved.
-          if ! HEAD=$(gh api "repos/$REPO/commits/main" --jq '.sha') || [ -z "$HEAD" ]; then
+          if ! HEAD=$(gh api "repos/$REPO/commits/$LINE" --jq '.sha') || [ -z "$HEAD" ]; then
             echo "::warning::could not resolve main's tip, so this run cannot tell whether it is leaving HEAD without a publisher. NOT dispatching — this degrades to the hourly reconcile, which is where delivery stood before this step existed, rather than to silence. The API failure is the bug to chase."
             exit 0
           fi
@@ -5503,11 +5795,11 @@ jobs:
           # running for it. That is the state the hourly tick was supposed to catch and has been
           # standing down on. Say it, then create the publisher.
           say "### 🔁 HANDED ON — main's HEAD \`$SHORT_HEAD\` is green and has NO run of this workflow queued or running, so this run is leaving it without a publisher. Dispatching one now rather than waiting up to an hour for the reconcile tick (which stands down whenever a queued run exists — measured 3 of 3 ticks on 2026-09-17)."
-          if ! gh workflow run "$WORKFLOW_FILE" --repo "$REPO" --ref main; then
-            echo "::error::main's HEAD \`$SHORT_HEAD\` is GREEN, has no complete image set from this run and NOTHING queued or running to publish it — and the dispatch that would have created its publisher FAILED. Delivery is left with no producer but the hourly reconcile, which stands down whenever a queued run appears. Check that this job still holds \`actions: write\`, then dispatch \`$WORKFLOW_FILE\` on main by hand."
+          if ! gh workflow run "$WORKFLOW_FILE" --repo "$REPO" --ref "$LINE"; then
+            echo "::error::main's HEAD \`$SHORT_HEAD\` is GREEN, has no complete image set from this run and NOTHING queued or running to publish it — and the dispatch that would have created its publisher FAILED. Delivery is left with no producer but the hourly reconcile, which stands down whenever a queued run appears. Check that this job still holds \`actions: write\`, then dispatch \`$WORKFLOW_FILE\` on $LINE by hand."
             exit 1
           fi
-          say "   Dispatched \`$WORKFLOW_FILE\` on \`main\`. It enters the RECONCILE lane (so the push lane cannot discard it), resolves HEAD itself, and consumes the same per-commit heal budget as any other reconcile. It will NOT hand on again — the chain is bounded at one hop."
+          say "   Dispatched \`$WORKFLOW_FILE\` on \`$LINE\`. It enters the RECONCILE lane (so the push lane cannot discard it), resolves HEAD itself, and consumes the same per-commit heal budget as any other reconcile. It will NOT hand on again — the chain is bounded at one hop."
 
 
   alert-on-failure:
@@ -5528,7 +5820,7 @@ jobs:
     # `image-closure-record` is in this list ON PURPOSE (#4066): it is outside `delivery-verdict` so a
     # control-side outage cannot stop an image shipping, and main CD has no PR observer — so without a
     # direct need here its red would be an unattended job and never a durable alert.
-    needs: [preflight, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
+    needs: [preflight, line, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     # 🚨 A DIRECT need failed — never `failure()`, which is true when ANY ANCESTOR failed. The
     # compatibility legs need `published-modules`, so under `failure()` a missing module
     # publication filed THIS issue ("no deployable image was published") over a platform set that

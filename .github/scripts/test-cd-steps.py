@@ -369,6 +369,11 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         e.setdefault("RUN_ID", "1000")
         e.setdefault("WORKFLOW_NAME", "Continuous Delivery (main)")
         e.setdefault("REPO", "Systemorph/MeshWeaver")
+        # The delivery line `gate` derives (policy `major-lines-run-separately`) and the branch whose
+        # copy of main-cd.yml runs. Every case models the DEFAULT line unless it says otherwise —
+        # which is exactly "main's behaviour is unchanged"; the main3 cases override both.
+        e.setdefault("LINE", "main")
+        e.setdefault("RUN_REF", "main")
         e.pop("GH_RUNS_RESULT", None)
         e.pop("GH_RUNS_FAIL", None)
         e.pop("GH_RUNS_FIXTURE", None)
@@ -949,6 +954,18 @@ def run_verdict_cases(root, case) -> None:
                                 None, runs=[me, twin])
     case("a PR-triggered workflow_run is still the legitimate no-op it always was",
          rc == 0 and "not applicable" in log, f"rc={rc} log={log}")
+    rc, log, outputs = run_step(body, {**shape, "REASON": "", "GATE_RESULT": "skipped",
+                                       "GITHUB_EVENT_NAME": "workflow_run", "RUN_REF": "main",
+                                       "UPSTREAM_EVENT": "push", "UPSTREAM_BRANCH": "main3"},
+                                None, runs=[me, twin])
+    case("a workflow_run for a push to ANOTHER line is a no-op on the default branch's file (main3 delivers itself)",
+         rc == 0 and "not applicable" in log and "not a push to main" in log, f"rc={rc} log={log}")
+    rc, log, outputs = run_step(body, {**shape, "REASON": "", "GATE_RESULT": "skipped",
+                                       "GITHUB_EVENT_NAME": "workflow_run", "RUN_REF": "main",
+                                       "UPSTREAM_EVENT": "push", "UPSTREAM_BRANCH": "main"},
+                                None, runs=[me, twin])
+    case("a skipped gate on a push to the default line is still RED (no verdict)",
+         rc != 0 and "NO verdict" in log, f"rc={rc} log={log}")
 
     # The superseded-burst branch still resolves the tip through the API this step also uses for
     # the probe — proof the two reads did not get crossed when REPO moved into `env:`.
@@ -1080,6 +1097,15 @@ def run_handoff_cases(root, case) -> None:
          rc == 0 and dispatched and "HANDED ON" in log, f"rc={rc} dispatched={dispatched} log={log}")
     case("...and the dispatch names this workflow and main, not a guess",
          any("workflow run main-cd.yml" in c and "--ref main" in c for c in calls), f"calls={calls}")
+
+    # 🚨 PER LINE: a run of `main3` hands main3's HEAD on, by dispatching main3's OWN copy of the
+    # file — never `--ref main`, which would run main's file for main3's line.
+    rc, log, dispatched, calls = drive(handoff(LINE="main3"), [me])
+    case("a main3 run reads main3's tip and dispatches main-cd.yml AT main3",
+         rc == 0 and dispatched
+         and any("commits/main3" in c for c in calls)
+         and any("workflow run main-cd.yml" in c and "--ref main3" in c for c in calls)
+         and not any(re.search(r"--ref main(\s|$)", c) for c in calls), f"calls={calls}")
 
     # 🚨 THE SELF-EXCLUSION CASE, and it is the one that would disable the drain forever. The
     # terminating run is itself non-completed in the very list it reads (it is still running THIS
@@ -1472,7 +1498,8 @@ def line_pointer_step(root: Path) -> str:
 
 def run_line_pointer_step(root: Path, body: str, portal_tags: list[str],
                           platform_version: str | None = None,
-                          v_plugin: str = LP_VERSION) -> tuple[int, str, list[str], list[str]]:
+                          v_plugin: str = LP_VERSION,
+                          extra_env: dict[str, str] | None = None) -> tuple[int, str, list[str], list[str]]:
     """Run Phase D in a scratch tree: the real platform-version.py (or a replacement), a recording
     `docker` and mirror script, and the stub `az` answering memex-portal-ai's tag listing."""
     with tempfile.TemporaryDirectory() as td:
@@ -1500,7 +1527,11 @@ def run_line_pointer_step(root: Path, body: str, portal_tags: list[str],
             "PATH": f"{binp}:{e['PATH']}", "DOCKER_CALLS": str(docker_calls), "MIRROR_CALLS": str(mirror_calls),
             "GITHUB_STEP_SUMMARY": str(summary), "AZ_TAGS": "memex-portal-ai=" + ",".join(portal_tags),
             "V_PORTAL": LP_VERSION, "V_MIGRATION": LP_VERSION, "V_PLUGIN": v_plugin, "SRC_PORTAL_TAG": LP_STAGING,
+            # The line (policy `major-lines-run-separately`): the default line, major 3, which moves
+            # `latest` — main's behaviour. The per-line cases override these.
+            "MAJOR": "3", "MOVES_LATEST": "true",
         })
+        e.update(extra_env or {})
         p = subprocess.run(["bash", "-c", body], env=e, cwd=tmp / "tree", capture_output=True, text=True)
         return (p.returncode, p.stdout + p.stderr + summary.read_text(),
                 docker_calls.read_text().splitlines(), mirror_calls.read_text().splitlines())
@@ -1596,6 +1627,25 @@ def run_line_pointer_cases(root, case) -> None:
     case("a NEWER armed set leaves `latest` (and every line pointer) where that set put it",
          rc == 0 and not docker and not mirror and "newer set" in log, f"rc={rc} docker={docker} mirror={mirror}")
 
+    # 2b ── PER MAJOR (policy `major-lines-run-separately`): a NEWER set of ANOTHER major does not
+    #       hold this major's pointers back — and the negative control (the major filter removed)
+    #       proves that is the filter's doing, not the fixture's.
+    other_major = ["4.0.10500"] + newest
+    rc, log, docker, mirror = run_line_pointer_step(root, body, other_major)
+    case("a newer 4.x set does NOT hold the 3.x line's pointers back (within-major never-backwards)",
+         rc == 0 and any("/memex-portal-ai:3-latest" in c for c in docker), f"rc={rc} docker={docker} log={log}")
+    unfiltered = body.replace('| grep -E "^${MAJOR}\\." ', '', 1)
+    rc, log, docker_u, _ = run_line_pointer_step(root, unfiltered, other_major)
+    case("NEGATIVE CONTROL — without the major filter the 4.x set freezes the 3.x pointers",
+         unfiltered != body and rc == 0 and not docker_u, f"mutation applied={unfiltered != body} rc={rc} docker={docker_u}")
+    rc, log, docker, mirror = run_line_pointer_step(root, body, newest, extra_env={"MOVES_LATEST": "false"})
+    case("a line that does not move `latest` moves its major's pointers and NO `latest` anywhere",
+         rc == 0 and any("/memex-portal-ai:3-latest" in c for c in docker) and not latest_writes(docker, mirror),
+         f"rc={rc} docker={docker}")
+    rc, log, docker, mirror = run_line_pointer_step(root, body, newest, extra_env={"MAJOR": ""})
+    case("no major moves NOTHING (never a comparison across majors)", rc != 0 and not docker and not mirror,
+         f"rc={rc} docker={docker}")
+
     # 3 ── FAIL CLOSED: the pointer reader fails — nothing moves, never `latest` alone.
     real = (root / ".github/scripts/platform-version.py").read_text()
     broken = real.replace('if len(argv) == 3 and argv[1] == "line-pointers":',
@@ -1635,8 +1685,8 @@ def run_line_pointer_cases(root, case) -> None:
     problems = promote_latest_problems(text)
     case("`promote` writes `latest` on the tester only — never on a set that is not armed", not problems, "; ".join(problems))
     leaked = text.replace(
-        '            docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" "${{ env.ACR }}/$repo:$STAGING"\n',
-        '            docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" --tag "${{ env.ACR }}/$repo:latest" "${{ env.ACR }}/$repo:$STAGING"\n', 1)
+        '            docker buildx imagetools create --tag "${{ env.ACR }}/$repo:$LABEL" "${{ env.ACR }}/$repo:$STAGING"\n',
+        '            docker buildx imagetools create --tag "${{ env.ACR }}/$repo:$LABEL" --tag "${{ env.ACR }}/$repo:latest" "${{ env.ACR }}/$repo:$STAGING"\n', 1)
     case("control: the guard catches phase B moving the portal's `latest` on a promoted, unarmed set",
          leaked != text and bool(promote_latest_problems(leaked)), "the mutation could not apply, or passed")
 
@@ -2008,8 +2058,8 @@ def main() -> int:
          back_verdict != workflow_text and any("PLUGINS_TOKEN" in p for p in separation_problems(back_verdict)),
          "the mutation passed (or could not apply) with a Plugins credential on the arm")
     no_ladder = workflow_text.replace(
-        "    needs: [preflight, gate, promote, platform-ladder-compat]",
-        "    needs: [preflight, gate, promote]", 1)
+        "    needs: [preflight, line, gate, promote, platform-ladder-compat]",
+        "    needs: [preflight, line, gate, promote]", 1)
     case("...and the guard catches the arm losing the ladder half of its verdict",
          no_ladder != workflow_text and any("platform-ladder-compat" in p for p in separation_problems(no_ladder)),
          "the mutation passed (or could not apply) with an arm that no longer waits for the ladder")
@@ -2044,8 +2094,8 @@ def main() -> int:
     case("...and a workflow without that declaration makes the reader RED (never an empty pass)",
          no_set != workflow_text and rc != 0 and "PUBLISHED_MODULES" in out, f"rc={rc} out={out}")
     module_gates_arm = workflow_text.replace(
-        "    needs: [preflight, gate, promote, platform-ladder-compat]",
-        "    needs: [preflight, gate, promote, platform-ladder-compat, published-modules]", 1)
+        "    needs: [preflight, line, gate, promote, platform-ladder-compat]",
+        "    needs: [preflight, line, gate, promote, platform-ladder-compat, published-modules]", 1)
     case("...and the guard catches a module job gating the platform arm",
          any("published-modules" in p and "arm" in p for p in separation_problems(module_gates_arm)),
          "the mutation passed with a module job in the arm's needs")
