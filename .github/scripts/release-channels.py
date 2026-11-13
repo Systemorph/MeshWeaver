@@ -40,6 +40,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_FILE = HERE.parent / "release-channels.json"
+# The DELIVERY LINES (policy `major-lines-run-separately`): a channel carrying `line` is that line's
+# floating label, written only by a run of that line. `check` holds the two files to each other.
+DELIVERY_LINES_FILE = HERE.parent / "delivery-lines.json"
 
 STATUSES = ("written", "declared", "retired")
 NOTATIONS = ("any", "legacy")
@@ -167,6 +170,8 @@ def validate(doc: dict) -> list[str]:
                 template_regex(tag)
             except ChannelError as error:
                 problems.append(f"{where}: {error}")
+        if "line" in entry and not (isinstance(entry["line"], str) and entry["line"].strip()):
+            problems.append(f"{where} ({cid}): `line` must name a delivery line (a branch), got {entry['line']!r}")
         if entry.get("status") not in STATUSES:
             problems.append(f"{where} ({cid}): status {entry.get('status')!r} is not one of {STATUSES}")
         if entry.get("notation") not in NOTATIONS:
@@ -224,15 +229,34 @@ def version_core(version: str) -> tuple[int, int, int]:
     return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
+def default_line(path: Path = DELIVERY_LINES_FILE) -> str:
+    """The repository's default delivery line, as .github/delivery-lines.json declares it."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8")).get("defaultBranch")
+    except (FileNotFoundError, json.JSONDecodeError, AttributeError) as error:
+        raise ChannelError(f"{path} cannot be read for the default delivery line: {error}") from error
+    if not isinstance(value, str) or not value:
+        raise ChannelError(f"{path} declares no `defaultBranch`")
+    return value
+
+
 def tags_for(doc: dict, version: str, workflow: str, job: str | None = None,
-             repository: str | None = None) -> list[str]:
+             repository: str | None = None, line: str | None = None) -> list[str]:
     """The `written` labels `workflow` (optionally `job`) moves for a set of `version` — templated
-    line labels rendered for that line, and literal labels (`main`, `latest`) unchanged."""
+    line labels rendered for that line, and literal labels (`main`, `latest`) unchanged.
+
+    `line` is the DELIVERY line of the run (default: the declared default line). A channel that
+    carries a `line` is returned only to a run of that line; a line-less label is returned to every
+    line — which line moves the tester's `latest` is delivery-lines.json's `movesLatest`, not this."""
     major, minor, patch = version_core(version)
     legacy = bool(LEGACY_SET_RE.match(version.strip()))
+    if line is None:
+        line = default_line()
     out: list[str] = []
     for entry in channels(doc):
         if entry.get("status") != "written":
+            continue
+        if entry.get("line") not in (None, line):
             continue
         for binding in entry.get("writers") or []:
             if binding.get("workflow") != workflow:
@@ -309,6 +333,26 @@ def check(doc: dict, root: Path, platform_version=None, is_floating=None) -> lis
                 for repo in binding["repositories"]:
                     if repo not in text:
                         problems.append(f"{entry['id']}: {wf} never names repository `{repo}` — the binding is stale")
+    # Every delivery line's floating label is a channel declaring THAT line, and every line-bound
+    # channel names a declared line with that label — a line whose label is undeclared moves a tag
+    # retention may delete; a channel for a line nobody declares protects a tag nothing moves.
+    lines_path = root / ".github" / "delivery-lines.json"
+    try:
+        lines_doc = json.loads(lines_path.read_text(encoding="utf-8"))
+        delivery = {l["branch"]: l["label"] for l in lines_doc["lines"]}
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError) as error:
+        problems.append(f"{lines_path} cannot be read for the delivery lines: {error}")
+        delivery = {}
+    bound = {e["line"]: e for e in channels(doc) if "line" in e}
+    for branch, label in delivery.items():
+        entry = bound.get(branch)
+        if entry is None:
+            problems.append(f"delivery line {branch!r} (label {label!r}) has no channel declaring `\"line\": \"{branch}\"`")
+        elif entry["tag"] != label:
+            problems.append(f"delivery line {branch!r} moves label {label!r}, but its channel {entry['id']!r} declares {entry['tag']!r}")
+    for branch, entry in bound.items():
+        if delivery and branch not in delivery:
+            problems.append(f"{entry['id']}: names delivery line {branch!r}, which .github/delivery-lines.json does not declare")
     # The line pointers are spelled by platform-version.py in main-cd today. They must be EXACTLY
     # the `written` main-cd labels declared here — a pointer CD moves but this file does not declare
     # is a pointer retention may delete, and a declared one CD never moves protects nothing.
@@ -365,6 +409,30 @@ def self_test() -> int:
            sorted(tags_for(flipped, "3.1.0", "release.yml", repository="memex-portal-ai")) == ["3-enterprise"])
     expect("literal labels are returned to their writer (promote moves main and latest on the tester)",
            sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="mw-plugin-test")) == ["latest", "main"])
+    expect("a run of line main3 is handed `main3`, never `main`",
+           sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="mw-plugin-test", line="main3"))
+           == ["latest", "main3"]
+           and tags_for(real, "3.1.10050", "main-cd.yml", job="control-promote", repository="memex-control",
+                        line="main3") == ["main3"])
+    expect("a run of the default line is never handed `main3`",
+           "main3" not in tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="memex-portal-ai"))
+    expect("the line pointers do not depend on the line (they separate by MAJOR)",
+           sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="arm", line="main3"))
+           == sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="arm")))
+    root = HERE.parent.parent
+    expect("check: the committed channels and delivery lines agree", check(real, root) == [])
+    unbound = json.loads(json.dumps(real))
+    unbound["channels"] = [e for e in unbound["channels"] if e["id"] != "main3"]
+    expect("check: a delivery line whose label no channel declares is caught",
+           any("main3" in p and "no channel" in p for p in check(unbound, root)))
+    stray = json.loads(json.dumps(real))
+    for e in stray["channels"]:
+        if e["id"] == "main3":
+            e["line"] = "main9"
+    expect("check: a channel bound to an undeclared line is caught",
+           any("main9" in p for p in check(stray, root)))
+    expect("a blank `line` is malformed",
+           any("`line`" in p for p in validate({**real, "channels": [{**real["channels"][0], "line": " "}]})))
     expect("bindings hold together: promote does NOT write `latest` to the portal",
            tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="memex-portal-ai") == ["main"])
     expect("bindings hold together: promote writes no `main` to memex-control (control-promote does)",
@@ -400,7 +468,7 @@ def self_test() -> int:
         expect("a non-version is refused, never guessed", True)
 
     # is_protected — every status protects; immutable tags never do
-    for tag in ("3-latest", "3.1-latest", "3.0.0-latest", "3-mac", "3-enterprise", "4-mac", "main", "latest", "3-LATEST"):
+    for tag in ("3-latest", "3.1-latest", "3.0.0-latest", "3-mac", "3-enterprise", "4-mac", "main", "main3", "latest", "3-LATEST"):
         expect(f"{tag} is protected", is_protected(real, tag))
     for tag in ("3.1.10050", "3.0.0-ci.8080", "staging-abc1234-123", "abc1234", "3-latest-old", "mac", "3-macos", "arm-complete-3.1.10050"):
         expect(f"{tag} is NOT protected", not is_protected(real, tag))
@@ -586,7 +654,8 @@ def main(argv: list[str], declaration: Path = DEFAULT_FILE) -> int:
             opts = dict(zip(argv[2::2], argv[3::2]))
             if "--version" not in opts or "--writer" not in opts:
                 raise ChannelError("tags needs --version <v> and --writer <workflow>")
-            for tag in tags_for(load(declaration), opts["--version"], opts["--writer"], opts.get("--job"), opts.get("--repository")):
+            for tag in tags_for(load(declaration), opts["--version"], opts["--writer"], opts.get("--job"),
+                                opts.get("--repository"), opts.get("--line")):
                 print(tag)
             return 0
     except ChannelError as error:

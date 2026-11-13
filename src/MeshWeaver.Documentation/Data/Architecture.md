@@ -521,6 +521,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Onboarding a New Environment](OnboardingNewEnvironment)
 - [Unclaimed Control-Plane Requests](UnclaimedControlPlaneRequests) — an InstanceAction at version 1 with an empty log means "queued", "nobody is listening" and "the operator died holding it" in the same bytes; the 2026-09-10 measurement, the `Ops/Status` staleness that DOES discriminate, and the acceptance signal that does not exist
 - [Release & Self-Update Strategy](ReleaseStrategy)
+- [CD Delivery Lines](CdDeliveryLines) — one `main-cd.yml` delivers every branch line (`main`, `main3`): the line is derived from the event and refused by name otherwise, each line runs its own copy of the file, its own Plugins branch, floating label and concurrency lanes, and every "newest set" selection stays inside the line's major (policy `major-lines-run-separately`)
 - [Release Channels](ReleaseChannels) — a channel is a named, moving pointer to an immutable release; `latest` is derived and only `stable` is promoted, and a channel names what to SELECT while the selection always resolves to an immutable id that is what gets pinned, recorded and run
 - [Release Editions and the Declared Labels](ReleaseEditions) — every moving image label (`3-latest`, `3.1-stable`, `3-mac`, `3-enterprise`, `main`) declared in one file that retention excludes by name; who writes each one, and the gap to close before a Mac Studio or Mac mini can host an instance
 - [Release Support Policy](/Doc/Architecture/SupportPolicy)
