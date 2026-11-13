@@ -35,7 +35,7 @@ public class ProjectFileTest : IDisposable
 
     private const string MinimalProject = """
         <Project Sdk="Microsoft.NET.Sdk">
-          <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+          <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
         </Project>
         """;
 
@@ -61,7 +61,7 @@ public class ProjectFileTest : IDisposable
     {
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup><Compile Remove="Legacy/**/*.cs" /></ItemGroup>
             </Project>
             """);
@@ -80,7 +80,7 @@ public class ProjectFileTest : IDisposable
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
               </PropertyGroup>
               <ItemGroup><Compile Include="Shared.cs" /></ItemGroup>
@@ -150,7 +150,7 @@ public class ProjectFileTest : IDisposable
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <GenerateDocumentationFile>false</GenerateDocumentationFile>
                 <AssemblyName>Renamed</AssemblyName>
                 <RootNamespace>Some.Namespace</RootNamespace>
@@ -236,7 +236,7 @@ public class ProjectFileTest : IDisposable
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup Condition="'$([System.DateTime]::Now.Year)' &gt; '2000'">
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
               </PropertyGroup>
             </Project>
             """);
@@ -254,7 +254,7 @@ public class ProjectFileTest : IDisposable
     {
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <Import Project="Nowhere.targets" />
             </Project>
             """);
@@ -273,7 +273,7 @@ public class ProjectFileTest : IDisposable
     {
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <Target Name="VerifySomething" BeforeTargets="CoreCompile" />
             </Project>
             """);
@@ -292,7 +292,7 @@ public class ProjectFileTest : IDisposable
     {
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <Choose><When Condition="true" /></Choose>
             </Project>
             """);
@@ -318,7 +318,7 @@ public class ProjectFileTest : IDisposable
     {
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup><EmbeddedResource Include="Data.txt" /></ItemGroup>
             </Project>
             """);
@@ -350,7 +350,7 @@ public class ProjectFileTest : IDisposable
             """);
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup>
                 <ProjectReference Include="../Lib/Lib.csproj" />
                 <PackageReference Include="Some.Library" />
@@ -376,7 +376,7 @@ public class ProjectFileTest : IDisposable
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <ImplicitUsings>enable</ImplicitUsings>
               </PropertyGroup>
               <ItemGroup><Using Include="System.Collections.Immutable" /></ItemGroup>
@@ -404,7 +404,7 @@ public class ProjectFileTest : IDisposable
         var project = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <OnMac Condition="$([MSBuild]::IsOSPlatform('OSX'))">yes</OnMac>
                 <OnLinux Condition="$([MSBuild]::IsOSPlatform('Linux'))">yes</OnLinux>
               </PropertyGroup>
@@ -423,12 +423,14 @@ public class ProjectFileTest : IDisposable
     [Fact]
     public void TheTargetFrameworkLadderIsDefined_SoAnIfDirectiveCompilesTheSameCode()
     {
-        var symbols = ProjectFile.FrameworkSymbols("net10.0");
+        var symbols = ProjectFile.FrameworkSymbols("net11.0");
 
         symbols.Should().Contain("NET");
-        symbols.Should().Contain("NET10_0");
+        symbols.Should().Contain("NET11_0");
         symbols.Should().Contain("NET8_0_OR_GREATER");
         symbols.Should().Contain("NET10_0_OR_GREATER");
+        symbols.Should().Contain("NET11_0_OR_GREATER");
+        symbols.Should().NotContain("NET10_0");
         symbols.Should().Contain("NETCOREAPP");
     }
 }

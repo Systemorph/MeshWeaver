@@ -149,7 +149,7 @@ public static class ModulePackCommand
             Console.WriteLine("""
                 usage: meshweaver-plugin-build module-pack <moduleOutputDir> [options]
 
-                  <moduleOutputDir>           the built module's output folder (bin/Release/net10.0,
+                  <moduleOutputDir>           the built module's output folder (bin/Release/net11.0,
                                               a publish folder, or a curated modules/<Name>/ layout)
                   --module-name <name>        the module's entry-assembly name without extension
                                               (default: the folder name)
@@ -434,7 +434,7 @@ public static class ModulePackCommand
             // #3154's (version, identity) comparison against a value that means nothing. Refused
             // where it is created; the caller names the platform's own copy instead.
             // CONTAINMENT, not directory equality: the shape this refuses is literally a nested one
-            // — the CD error named '…/src/MeshWeaver.Maps/bin/Release/net10.0/publish/…' — so a
+            // — the CD error named '…/src/MeshWeaver.Maps/bin/Release/net11.0/publish/…' — so a
             // caller passing a deeper path under the module directory must be refused too, or the
             // guard would only catch the anchor sitting directly beside the entry DLL. The trailing
             // separator is what stops a sibling whose name merely starts the same ('/a/mod2' is not
