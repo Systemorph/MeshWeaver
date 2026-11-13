@@ -1,0 +1,58 @@
+{
+  "_comment": [
+    "THE DELIVERY LINES — every branch core's CD (main-cd.yml) delivers, in ONE place (policy",
+    "`major-lines-run-separately`; manual Doc/Architecture/MajorLinesRunSeparately).",
+    "",
+    "A LINE is a branch. main-cd.yml derives it ONCE per run (`gate`'s `line` step, through",
+    "`.github/scripts/cd-line.py derive`) from the event — push / workflow_dispatch: the ref;",
+    "workflow_run: the triggering run's branch; schedule: the default branch — and REFUSES, RED and",
+    "by name, a branch that is not declared here. Every place CD means \"this line's branch\" reads",
+    "the derived line, never a `main` literal (`cd-line.py check-workflow` holds it to that).",
+    "",
+    "The SAME file ships on every line's branch, so one commit applies to each: the branch decides",
+    "the line, nothing in this file has to differ between them.",
+    "",
+    "FIELDS",
+    "  defaultBranch — the repository's default branch, DECLARED: workflow_run and schedule run that",
+    "                 branch's copy of main-cd.yml, so it is the line they deliver. `derive` refuses",
+    "                 a run whose payload names another default branch.",
+    "  branch      — the branch of this repository that IS the line.",
+    "  pluginsRef   — the MeshWeaver.Plugins branch the line's image sets are built against (the",
+    "                 portal HOST lives there). `vars.MW_PLUGINS_REF` still overrides it per run.",
+    "  satelliteRef — the branch of each satellite `satellite-compat` compiles against the line's set.",
+    "                 A satellite has a v3 branch only if it must keep shipping v3, so it is `main`",
+    "                 for every line until a satellite cuts one (design §4).",
+    "  label        — the line's FLOATING image label: the newest PROMOTED set of the line. Declared",
+    "                 in .github/release-channels.json with this line; `release-channels.py check`",
+    "                 holds the two files to each other.",
+    "  movesLatest  — whether this line moves the line-less `latest` labels (the tester's",
+    "                 MW_TEST_IMAGE). EXACTLY ONE line does: two lines interleave run numbers, so a",
+    "                 forward-only check alone would hand `latest` back and forth between majors.",
+    "",
+    "WHO DELIVERS EACH LINE",
+    "  the default branch — workflow_run after Build-and-Test, the hourly schedule, dispatch.",
+    "  every other line    — `push` to its branch (that branch's own copy of main-cd.yml), dispatch,",
+    "                        and the default branch's hourly reconcile, which dispatches main-cd.yml",
+    "                        AT that branch (`reconcile-lines` job). workflow_run and schedule always",
+    "                        run the DEFAULT branch's copy of the file, so neither may deliver a",
+    "                        non-default line's commit."
+  ],
+  "schema": 1,
+  "defaultBranch": "main",
+  "lines": [
+    {
+      "branch": "main",
+      "pluginsRef": "main",
+      "satelliteRef": "main",
+      "label": "main",
+      "movesLatest": true
+    },
+    {
+      "branch": "main3",
+      "pluginsRef": "main3",
+      "satelliteRef": "main",
+      "label": "main3",
+      "movesLatest": false
+    }
+  ]
+}
