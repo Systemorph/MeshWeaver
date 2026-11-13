@@ -362,6 +362,25 @@ thinking"*. Policy [`internal-code-review`](../PolicyNotProse) is in force again
   when this pull request carries the internal reviewer's review it belongs to (`internal_run_unbound`):
   on the head for a review run, and on the named head for `Review carried from <sha>`. A second pull
   request at the same commit cannot borrow it.
+- **A carry of more than one hop is followed to its root.** The steward carries a review across every
+  merge-only push, so after two such pushes the head's run reads `Review carried from <previous head> —
+  Review carried from <reviewed head> — …`, and the head it names holds only another carried run. The
+  gate used to look one hop back only, so such a head could never go green (MeshWeaver.Plugins#5408,
+  #5396: red with every thread answered). The gate now follows the chain (`internal_carry_chain`,
+  read by `read_internal_chain`) and binds the run to this pull request only when all of these hold:
+  - every hop is one of the pull request's OWN commits (compare(base...head)), and its newest
+    `internal-review` run is a carried review run of the reviewer's App;
+  - the chain ends at a head that carries the internal reviewer's landed review of THIS pull request;
+  - the commits from that root to the head are merges only, and the pull request's own diff has the
+    same patch-id at both ends (`merge_only_same_diff`). The patch-id is transitive, so this holds
+    exactly when every hop holds.
+
+  Anything else fails closed and the head stays red: a hop that is not one of the pull request's
+  commits, an ambiguous short sha, a hop with no review run, a real review run without this pull
+  request's review beside it (another pull request's run at that commit), a cycle, more than 20 hops,
+  a real-change hop, or an unreadable input. A one-hop carry is bound exactly as before and reads nothing
+  more. The request lane (`internal_review_state`) still binds one hop only. It reads a multi-hop head
+  as not yet covered, and with the Copilot fallback retired that means it waits and requests nothing.
 - **The fallback is retired (2026-11-08).** The bar was 10 pull requests reviewed by the internal reviewer
   across the repositories. It reviewed 18, across MeshWeaver, MeshWeaver.Plugins, Memex and
   MeshWeaver.Deploy, within 20 minutes of being switched back on. `copilot-fallback-minutes` now
