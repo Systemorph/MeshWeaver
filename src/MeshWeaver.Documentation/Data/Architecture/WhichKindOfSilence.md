@@ -297,6 +297,30 @@ their innermost 12 frames, the largest group first:
   filed) without starting. The line then begins `a probe work item queued N s ago had not started`,
   and its groups name what the workers were busy with while the queue backed up. The two triggers
   share one cooldown and one in-flight capture.
+- **Idle workers and the queue census (#5388, #5799, after the 2026-11-11 captures).** The first
+  production queue-delay capture (memex-cloud `…69f587c4c8-fxvlm`, 14:40:57Z: probe waited 5.19 s,
+  69,012 queued over 42 threads) printed its largest shape, `×20` of 44 workers, as
+  `LowLevelLifoSemaphore.WaitForSignal` directly under `PortableThreadPool+WorkerThread.WorkerThreadStart`
+  — the pool's own wait for work. It was read as twenty workers busy in a hub handler, because the
+  `×20:` header and the frames under it were read from separate log rows. Twenty idle workers beside
+  a five-second queue is the opposite finding: the pool was not short of threads and nothing held
+  it; it was draining a backlog at fewer workers than it had, so the item that names the producer
+  was in the QUEUE, on no stack. The line now says both:
+  - after the shape count, `N of them IDLE (parked in the pool's own semaphore …)` and how many were
+    running — so an idle shape is never again taken for what held the pool
+    (`ThreadPoolStall.IsIdleWorker`);
+  - a last section, `QUEUED WORK: N item(s) read, in M producer(s)`, grouping every queued item by
+    the code it will run — a `Task`'s delegate, an async method's state machine, or the first
+    delegate a work-item wrapper holds — largest first (`ThreadPoolQueueCensus`). A hub drain reads
+    `MeshWeaver.Messaging.MessageService.DrainOne`. The census is read through the runtime's debugger
+    enumeration `ThreadPool.GetQueuedWorkItems()` (internal, reached by reflection, the same walk SOS's
+    `!ThreadPoolQueue` does over a full dump), BEFORE the dump suspends the process, bounded at
+    500,000 items. A runtime without that method gets `the queue could NOT be read (…)`, never an
+    empty census.
+
+  When reading a capture through a `Logs` action, include the header rows in the query
+  (`|~ "^\\s+(at |×|->|LOCK|…|QUEUED|    ×)|POOLSTALL"`): a filter on `at ` alone drops every `×N:` and
+  `-> ×N called from:` row, and the groups can then no longer be told apart.
 - **Cost.** The dump suspends the process for about a second. It is taken at most once every
   30 minutes (`ThreadPoolStall.CaptureCooldown`), and only after a whole period in which the pool
   served nothing, or once a queued item has waited 5 s. The probe itself is one queued no-op at a
@@ -319,6 +343,11 @@ their innermost 12 frames, the largest group first:
   parks pool workers 20 frames below a known outer method, waiting on a monitor a dedicated
   non-pool thread holds, and requires the line from a real dump to name the outer method (asserted
   to sit deeper than frame 12, so a 12-frame line cannot pass) and the holder's frame.
+  `ThreadPoolStallTest.IdleWorkers_AreCountedByName_SoAnIdleShapeIsNotReadAsWhatHeldThePool` replays
+  the fxvlm idle frames (with a busy worker and a semaphore wait under a work item as controls), and
+  `ThreadPoolQueueCensusTest.OnTheRealThreadPool_TheCensusNamesTheItemsActuallyQueued` parks every pool
+  worker, queues 1,000 marker items from the test thread and requires the census of the real queue to
+  count all 1,000 under the marker's method — and none before they were queued.
 
 ### The stall that made this necessary
 
