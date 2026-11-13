@@ -189,6 +189,20 @@ def run_compose(workdir: Path, root: Path, *, upstreams: str = SOURCE, packages:
     return proc, out / MODULE
 
 
+def run_compose_bundles(workdir: Path, root: Path, *, packages: str = "*",
+                        ) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """compose-sealed-modules.sh with --bundles-out: the combo gate's sealed-bundle fetch."""
+    out = workdir / "ext"
+    bundles = workdir / "bundles"
+    out.mkdir(parents=True, exist_ok=True)
+    argv = [str(COMPOSE), "--identity", IDENTITY, "--packages", packages,
+            "--upstreams", SOURCE, "--out", str(out),
+            "--storage-target", f"{ACCOUNT}/{SHARE}", "--bundles-out", str(bundles)]
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=180, check=False,
+                          env=environment(workdir, root))
+    return proc, bundles
+
+
 def run_availability(workdir: Path, root: Path, *, sources: str = SOURCE,
                      provenance: Path | None = None) -> subprocess.CompletedProcess[str]:
     """The upstream gate every publishing repo runs, asked about ONE identity.
@@ -705,6 +719,38 @@ def main() -> int:
         check("legacy (no record): a synthesized address beside a pre-compatibility host identity is NOT refused",
               proc.returncode == 0 and read(bundle) == GEN_BYTES,
               f"seeded {read(bundle)!r} — the no-record fallback was refused on an address nothing was read from", proc)
+
+        # ── compose --bundles-out: the combo's sealed NodeType bundles (MeshWeaver#4413) ──────
+        # The combo gate reuses each source's sealed bundles instead of re-baking them. They must
+        # come from the SAME publication directory the module set was read from, by NAME off
+        # `_complete` — never a recursive batch, which would flatten the flat copy's Legacy.zip in.
+        print("compose --bundles-out (the combo's sealed bundles, #4413):")
+        for label, pointer, generation, want in (
+                ("a pointed generation", GENERATION, True, GEN_BYTES),
+                ("the flat layout (no pointer)", None, False, FLAT_BYTES)):
+            slug = "bundles-gen" if pointer else "bundles-flat"
+            root = base / slug / "remote"
+            stage(root, pointer=pointer, generation=generation)
+            proc, bundles = run_compose_bundles(base / slug / "compose", root)
+            held = sorted(p.name for p in bundles.glob("*")) if bundles.is_dir() else []
+            check(f"--bundles-out over {label}: exactly the listed bundle, the module set's publication's bytes",
+                  proc.returncode == 0 and held == [BUNDLE] and read(bundles / BUNDLE) == want,
+                  f"held {held} with {read(bundles / BUNDLE)!r}, wanted [{BUNDLE!r}] with {want!r} — a "
+                  "bundle from another publication than its module set carries dependency records "
+                  "naming module builds the gate does not load", proc)
+
+        root = base / "bundles-missing" / "remote"
+        stage(root, pointer=GENERATION)
+        (root / ACCOUNT / SHARE / "prebuilt-bundles" / IDENTITY / SOURCE / GENERATION / BUNDLE).unlink()
+        proc, _ = run_compose_bundles(base / "bundles-missing" / "compose", root)
+        check("--bundles-out REFUSES a listed bundle the store will not serve",
+              proc.returncode != 0 and "seal and the store disagree" in proc.stdout,
+              "handing on part of a seal would let the gate rebuild the rest silently", proc)
+
+        proc, _ = run_compose_bundles(base / "bundles-named" / "compose", root, packages="AI")
+        check("--bundles-out with a named package list is a usage error",
+              proc.returncode == 2 and "--packages '*' only" in proc.stdout,
+              "the bundles are one source's whole sealed set, never a caller's subset", proc)
 
     print("")
     if FAILURES:
