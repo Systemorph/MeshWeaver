@@ -379,12 +379,12 @@ jobs:
         if: inputs.executor != 'host'
         with:
           python-version: "3.12"
-      # compile-check.py shells out to `dotnet build` on a generated net11.0 check.csproj — pin
+      # compile-check.py shells out to `dotnet build` on a generated net10.0 check.csproj — pin
       # the SDK rather than depend on whatever the runner image happens to preinstall.
       - uses: actions/setup-dotnet@v6
         if: inputs.executor != 'host'
         with:
-          dotnet-version: "11.0.x"
+          dotnet-version: "10.0.x"
       - name: Log in to the image registry
         if: inputs.executor != 'host'
         env:

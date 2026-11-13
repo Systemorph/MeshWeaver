@@ -251,28 +251,6 @@ public class DegradedContentLogsShapeNotValuesTest
         Assert.StartsWith("no $type, JSON Array, ~", ContentShapes.Describe(new JsonArray(1, 2, 3)));
     }
 
-    /// <summary>
-    /// The same budget for constructed INTEGERS. On System.Text.Json 11 a missed
-    /// <c>TryGetValue&lt;T&gt;</c> boxes the stored number, so the probe order decides what each
-    /// entry costs. The double array above is the probe that hits first; this pins the next one,
-    /// which pays exactly one miss.
-    /// </summary>
-    [Fact]
-    public void ALargeConstructedIntegerArray_IsBudgeted()
-    {
-        var array = new JsonArray();
-        for (var i = 0; i < 100_000; i++)
-            array.Add(i);
-        _ = ContentShapes.Describe(array);
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var shape = ContentShapes.Describe(array);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.StartsWith("no $type, JSON Array, ≥", shape);
-        Assert.True(allocated < 64_000, $"Describing a 100k-integer array allocated {allocated:N0} bytes.");
-    }
-
     [Fact]
     public void NonObjectsAndNonJson_NameTheirKindOnly()
     {

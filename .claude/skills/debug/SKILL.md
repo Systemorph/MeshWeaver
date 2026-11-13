@@ -52,7 +52,7 @@ keep digging in the bulk run.**
 
 1. **Crank logging to Trace** in the test's *runtime* appsettings — NOT in `src/` (log levels in
    source are a billed production contract; flipping them bleeds App Insights budget). Edit
-   `test/<Suite>/bin/Debug/net11.0/appsettings.json` (`reloadOnChange: true` is wired); revert
+   `test/<Suite>/bin/Debug/net10.0/appsettings.json` (`reloadOnChange: true` is wired); revert
    before committing:
    ```json
    { "Logging": { "LogLevel": {
@@ -67,7 +67,7 @@ keep digging in the bulk run.**
    ```bash
    dotnet test test/<Suite> --no-build --filter "FullyQualifiedName~<TestName>" > /tmp/trace.log 2>&1
    ```
-   Per-test logs also land at `test/<Suite>/bin/Debug/net11.0/test-logs/<Class>_<Method>.log`.
+   Per-test logs also land at `test/<Suite>/bin/Debug/net10.0/test-logs/<Class>_<Method>.log`.
 
 3. **Grep the structured tags:**
    ```bash

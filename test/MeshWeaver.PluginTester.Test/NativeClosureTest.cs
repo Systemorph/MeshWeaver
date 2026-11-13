@@ -126,7 +126,7 @@ public class NativeClosureTest : IDisposable
                       "runtimes/osx-arm64/native/libe_sqlite3.dylib": { "rid": "osx-arm64", "assetType": "native" },
                       "runtimes/ios-arm64/native/e_sqlite3.a": { "rid": "ios-arm64", "assetType": "native" },
                       "runtimes/linux-x64/nativeassets/net9.0/e_sqlite3.so": { "rid": "linux-x64", "assetType": "native" },
-                      "runtimes/unix/lib/net11.0/Rid.Specific.Managed.dll": { "rid": "unix", "assetType": "runtime" },
+                      "runtimes/unix/lib/net10.0/Rid.Specific.Managed.dll": { "rid": "unix", "assetType": "runtime" },
                       "runtimes/win/lib/netstandard2.0/System.Security.Cryptography.ProtectedData.dll": { "rid": "win", "assetType": "runtime" },
                       "runtimes/browser-wasm/nativeassets/net9.0/e_sqlite3.so": { "rid": "browser-wasm", "assetType": "native" }
                     }
@@ -248,7 +248,7 @@ public class NativeClosureTest : IDisposable
     // its fallback chain, `unix` included). The two FOREIGN ones are the measured #4445 case — a
     // Windows-only managed implementation — and a browser-wasm native: information, never refused.
     private const string UnprobedTargeted = "runtimes/linux-x64/nativeassets/net9.0/e_sqlite3.so";
-    private const string RidManaged = "runtimes/unix/lib/net11.0/Rid.Specific.Managed.dll";
+    private const string RidManaged = "runtimes/unix/lib/net10.0/Rid.Specific.Managed.dll";
     private const string ForeignManaged =
         "runtimes/win/lib/netstandard2.0/System.Security.Cryptography.ProtectedData.dll";
     private const string ForeignNative = "runtimes/browser-wasm/nativeassets/net9.0/e_sqlite3.so";
@@ -295,7 +295,7 @@ public class NativeClosureTest : IDisposable
     [Fact]
     public void ARIDSpecificImagesNativeAtAnUnprobedKey_IsNamedToo()
     {
-        const string key = "runtimes/linux-x64/nativeassets/net11.0/libodd.so";
+        const string key = "runtimes/linux-x64/nativeassets/net10.0/libodd.so";
         var app = Path.Combine(_root, "rid-unprobed");
         Directory.CreateDirectory(app);
         Dll(app, "MeshWeaver.Data");

@@ -310,7 +310,7 @@ jobs:
           fetch-depth: 1
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 11.0.x
+          dotnet-version: 10.0.x
 
       - name: "The derivation can say no (self-test)"
         run: python3 "$FEED_TOOL" --self-test

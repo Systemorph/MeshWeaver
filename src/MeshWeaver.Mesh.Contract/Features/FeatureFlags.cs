@@ -130,7 +130,7 @@ public sealed record FeatureComposition(
 /// <para>A <b>mesh-scoped singleton</b> registered by <c>MeshBuilder</c> — it holds its state on an
 /// INSTANCE field and dies with the mesh, so nothing bleeds between tests or between users
 /// (Doc/Architecture/NoStaticState). Reloads arrive as a PUSH from the configuration provider
-/// (<see cref="ChangeToken.OnChange(Func{IChangeToken}, Action)"/>): no timer, no poller, no watchdog.</para>
+/// (<see cref="ChangeToken.OnChange{TState}"/>): no timer, no poller, no watchdog.</para>
 /// </summary>
 public sealed class ConfigurationFeatureFlags : IFeatureFlags, IDisposable
 {

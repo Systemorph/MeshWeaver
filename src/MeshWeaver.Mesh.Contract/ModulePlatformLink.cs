@@ -404,13 +404,6 @@ public sealed class ModulePlatformSurface
     /// no collection had run yet, so two builds of one tree published different surfaces. A
     /// portal's boot probe and landing check keep <see cref="OfRunningProcess"/>, because there a
     /// landed module's context IS what a module binds to.
-    ///
-    /// <para>🚨 It also lists every TRUSTED PLATFORM assembly as a file, loaded or not. A
-    /// shared-framework assembly binds ahead of a module's copy whether or not this process has touched
-    /// it yet. Measured from the loaded set alone, the surface depended on timing: a parallel bake that
-    /// loaded one more framework assembly than its serial twin published a different document
-    /// (Doc/Architecture/Platform4Net11). Types are read from the file either way, so a loaded and an
-    /// unloaded copy list the same names.</para>
     /// </summary>
     /// <param name="probeDirectories">Directories to add — the application base directory.
     /// Missing directories are skipped.</param>
@@ -418,16 +411,10 @@ public sealed class ModulePlatformSurface
         OfProcessAssemblies(
             AppDomain.CurrentDomain.GetAssemblies().Where(assembly =>
                 AssemblyLoadContext.GetLoadContext(assembly) == AssemblyLoadContext.Default),
-            probeDirectories,
-            TrustedPlatformAssemblyPaths());
-
-    private static ImmutableArray<string> TrustedPlatformAssemblyPaths() =>
-        [.. (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)];
+            probeDirectories);
 
     private static ModulePlatformSurface OfProcessAssemblies(
-        IEnumerable<Assembly> processAssemblies, string[]? probeDirectories,
-        ImmutableArray<string> platformFiles = default)
+        IEnumerable<Assembly> processAssemblies, string[]? probeDirectories)
     {
         // 🚨 What binds AHEAD of a module's own copy on this process (#4083): the trusted platform
         // assemblies (the application's closure plus the shared frameworks — the TPA binder is
@@ -458,7 +445,7 @@ public sealed class ModulePlatformSurface
             foreach (var file in Directory.EnumerateFiles(directory, "*.dll"))
                 platformBound.Add(Path.GetFileNameWithoutExtension(file));
         }
-        return Of(loadedAssemblies, platformBound.ToImmutable(), probeDirectories, platformFiles);
+        return Of(loadedAssemblies, platformBound.ToImmutable(), probeDirectories);
     }
 
     /// <summary>
@@ -486,7 +473,7 @@ public sealed class ModulePlatformSurface
 
     private static ModulePlatformSurface Of(
         IEnumerable<Assembly> loadedAssemblies, ImmutableHashSet<string> platformBound,
-        string[]? probeDirectories, ImmutableArray<string> platformFiles = default)
+        string[]? probeDirectories)
     {
         var loaded = ImmutableDictionary.CreateBuilder<string, Assembly>(StringComparer.OrdinalIgnoreCase);
         foreach (var assembly in loadedAssemblies)
@@ -504,9 +491,6 @@ public sealed class ModulePlatformSurface
             foreach (var file in Directory.EnumerateFiles(directory, "*.dll"))
                 files.TryAdd(Path.GetFileNameWithoutExtension(file), file);
         }
-        if (!platformFiles.IsDefault)
-            foreach (var file in platformFiles.Where(File.Exists))
-                files.TryAdd(Path.GetFileNameWithoutExtension(file), file);
 
         return new ModulePlatformSurface(
             files.ToImmutable(), loaded.ToImmutable(), platformBound: platformBound);

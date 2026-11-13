@@ -214,8 +214,8 @@ def _self_test() -> int:
     digest = "sha256:" + "ab" * 32
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        x64 = root / "bin/Release/net11.0/linux-x64/publish"
-        arm = root / "bin/Release/net11.0/linux-arm64/publish"
+        x64 = root / "bin/Release/net10.0/linux-x64/publish"
+        arm = root / "bin/Release/net10.0/linux-arm64/publish"
         for d, native in ((x64, b"x64"), (arm, b"arm64")):
             (d / "modules/Foo").mkdir(parents=True)
             (d / SURFACE_MANIFEST).write_text("MeshWeaver.Messaging.Hub\n")
@@ -278,7 +278,7 @@ def _self_test() -> int:
             {"platform": {"os": "linux", "architecture": "arm64"}},
             {"platform": {"os": "unknown", "architecture": "unknown"}},
         ]}
-        outer = root / "bin/Release/net11.0/publish"
+        outer = root / "bin/Release/net10.0/publish"
         outer.mkdir(parents=True)
         (outer / SURFACE_MANIFEST).write_text("x")
         (outer / "a.dll").write_bytes(b"a")

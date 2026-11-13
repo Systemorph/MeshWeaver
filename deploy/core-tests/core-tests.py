@@ -10,7 +10,7 @@ the runner that reads a manifest is always the one that wrote it.
     core-tests.py pack --repo <core checkout> --out <dir> --sha <40 hex> --version <set version>
         Reads CI_SHARD_TOTAL from .github/workflows/dotnet-test.yml, asks .github/scripts/shard-assign.sh
         — the SAME script CI's build and test jobs use — for every shard's units, and stores each
-        assigned project's bin/Release/net11.0 CONTENT-ADDRESSED under <out>/blobs/<sha256>, with
+        assigned project's bin/Release/net10.0 CONTENT-ADDRESSED under <out>/blobs/<sha256>, with
         <out>/manifest.json naming every shard's units and every project's files. Self-contained
         test bins carry near-identical copies of the framework and MeshWeaver assemblies; storing
         each distinct file once is what keeps the image a fraction of the bins' sum (CI's per-shard
@@ -72,7 +72,7 @@ SCHEMA = 1
 WORKFLOW = ".github/workflows/dotnet-test.yml"
 SHARD_ASSIGN = ".github/scripts/shard-assign.sh"
 TESTER_PROJECT = "tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj"
-TFM_DIR = os.path.join("bin", "Release", "net11.0")
+TFM_DIR = os.path.join("bin", "Release", "net10.0")
 # dotnet-test.yml's per-unit cap (`timeout … 8m`): a unit past it is a wedge, never a slow pass.
 UNIT_TIMEOUT_SECONDS = 480
 # How long a timed-out unit's process group gets between SIGTERM and SIGKILL.
@@ -814,8 +814,8 @@ def _self_test() -> int:
                f"test/test-results.log carries CI's `[CI] <name> exit=N` markers ({markers.strip()[:120]})")
         unit = os.path.join(art, "testResults-shard1")
         handed = sorted(os.path.relpath(os.path.join(dp, n), unit) for dp, _, ns in os.walk(unit) for n in ns)
-        expect(handed == ["collected-logs/_meshweaver-test-trace.log", "test/B/bin/Release/net11.0/TestResults/B.trx",
-                          "test/Split/bin/Release/net11.0/TestResults/Split.part2.trx", "test/test-results.log"],
+        expect(handed == ["collected-logs/_meshweaver-test-trace.log", "test/B/bin/Release/net10.0/TestResults/B.trx",
+                          "test/Split/bin/Release/net10.0/TestResults/Split.part2.trx", "test/test-results.log"],
                f"the hand-back is the `test` job's artifact tree — THIS run's trx (not the reused directory's "
                f"A.trx / Split.part1.trx), markers, collected-logs, and no bins ({handed})")
         expect(not os.path.exists(os.path.join(tempfile.gettempdir(), "meshweaver-test-trace.log")),

@@ -127,7 +127,7 @@ internal static class SourceGeneratorLoader
                 return Path.GetRelativePath(packageRoot, f);
             });
         var assets = MeshWeaver.NuGet.RuntimeAssetSelector.Select(
-            packageRoot, files, global::NuGet.Frameworks.NuGetFramework.Parse("net11.0"),
+            packageRoot, files, global::NuGet.Frameworks.NuGetFramework.Parse("net10.0"),
             MeshWeaver.NuGet.RuntimeAssetSelector.RidFallbackChain());
         var fileName = Path.GetFileName(compilePath);
         return assets.Runtime.FirstOrDefault(p => string.Equals(Path.GetFileName(p), fileName, StringComparison.OrdinalIgnoreCase));

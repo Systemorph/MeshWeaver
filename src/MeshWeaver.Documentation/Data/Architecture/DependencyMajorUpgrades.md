@@ -225,7 +225,7 @@ Then run the **full** suites, not a filter. A major bump is exactly where a filt
 executables; `dotnet test` drives them through the VSTest bridge, and on the longer suites here that
 bridge has been seen to die with `SIGABRT` after ~70 s, print **no results at all**, and still exit
 **0** — a textbook false pass. Running
-`test/<Project>/bin/Release/net11.0/<Project>` directly prints an explicit
+`test/<Project>/bin/Release/net10.0/<Project>` directly prints an explicit
 `=== TEST EXECUTION SUMMARY ===` with totals, which is the positive signal to demand.
 
 And a red after a major bump is a real behavioural change until proven otherwise — that is the entire
@@ -358,7 +358,7 @@ accepted, so it cannot break a caller that compiled before.
 **Target frameworks.** Rx 7 drops the `net6.0` asset and adds `ref/` assemblies (6.1.0 had none), so
 the compile surface and the runtime surface are now genuinely different artefacts — which is exactly
 why the UI removal above is invisible to a `lib`-only diff. `netstandard2.0` is still shipped, so a
-net6/net7 consumer still resolves *something*; it is simply unsupported. We are on net11.0 and
+net6/net7 consumer still resolves *something*; it is simply unsupported. We are on net10.0 and
 resolve `net8.0`.
 
 **One trap worth knowing, in the sibling product.** Ix.NET's `System.Linq.Async` v7 removed its LINQ
@@ -522,16 +522,3 @@ exactly one error each in `MeshWeaver.Graph.Test` (`SamplesGraphData`) and
 take their cluster from `OrleansMeshTestBase`, and no Graph test class joined the serialized
 collection. Both definitions were **deleted, not suppressed**: a definition nothing joins changes no
 scheduling, so the deletion changes no test's behaviour.
-
-### .NET 11 train, HtmlSanitizer 9 → 11, NuGet 7 → 8 — the platform 4.0 break
-
-Measured 2026-11-12, as part of the declared break [Platform 4 on .NET 11](../Platform4Net11)
-(policy `platform-4-net11`).
-
-| Step | Result |
-|---|---|
-| Registry | `…/v3-flatcontainer/<id>/index.json` → newest stable `HtmlSanitizer` **11.0.26**, `NuGet.*` **8.0.0** (all six ids), every `Microsoft.Extensions.*` / `System.*` / `Microsoft.AspNetCore.TestHost` **11.0.0** (released 2026-11-10 with the runtime). |
-| Licence | **MIT at both ends** for HtmlSanitizer, **Apache-2.0 at both ends** for NuGet.Protocol (nuspec `<license type="expression">`). `check-licenses.py`: 133 shipping packages, passed. |
-| API removals we touch | **None.** All 61 projects build `-c Release -warnaserror` on SDK 11.0.100 with 0 warnings. The one source change came from an ADDITION: Primitives 11 overloads `ChangeToken.OnChange`, which made a `<see cref="ChangeToken.OnChange{TState}"/>` ambiguous (`CS0419`, `FeatureFlags.cs`). The cref now names the overload the code calls. |
-| Behaviour | HtmlSanitizer is the mail sanitizer (`MailHtml`). `MeshWeaver.Graph.Test` MailHtml, NuGet resolution, deps-closure and module-pack classes: **138 passed, 0 failed**. |
-| Suites (local, macOS arm64, net11.0) | Messaging.Hub 796/0 failed · Data 622/0 · Layout 1145/0 · Updates 22/0 · Documentation 854/0 · Hosting.Orleans 453/**3 failed**. The three failures (`IoPoolSiloTeardownTest` ×2, `BlockedThreadStacksThreadExitTest`) are thread-dump readings: the parked thread showed no managed frame. Run alone on the same net11 build they pass 13/13 in 3 s. In the failing run they took 20 s and 1 m 34 s, while four parallel builds loaded the machine. NOT established: whether main fails the same way under the same load. CI's full run is the verdict. |

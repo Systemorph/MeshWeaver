@@ -133,7 +133,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "11.0.x"
+          dotnet-version: "10.0.x"
 
       # Results are evidence, not console-output patterns. Both arms must execute tests;
       # an incomplete arm cannot clear an existing report or establish a baseline pass.

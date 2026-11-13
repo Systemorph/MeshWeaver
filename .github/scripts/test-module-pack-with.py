@@ -68,7 +68,7 @@ DECLARING = """<Project Sdk="Microsoft.NET.Sdk">
 </Project>
 """
 DECLARING_NONE = """<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
 </Project>
 """
 
