@@ -415,6 +415,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Bundle Transfer Budget](BundleTransferBudget) — a module adopt's 120 s attempt used to cover the whole archive download, so the budget measured size ÷ throughput instead of whether the registry was answering; 18 adopts failed at exactly the outer 3-minute bound recording neither bytes nor elapsed time, which is why they could not be explained
 - [Plugin Publication Provenance](PluginPublicationProvenance) — the signed publication callback names the CONTENT commit that was built and the platform version read from the selected portal image, never the calling workflow's commit or event; core CD building Plugins used to announce a core sha as a Plugins commit
 - [Plugin Update on Green Build](PluginUpdateOnGreenBuild)
+- [The Plugin Registry Serves Each Line](PluginRegistryServesEachLine) — a registry source declares its ref per platform line (`lineRefs`), every consumer states its line, so a v3 instance is listed and served `main3` and a v4 instance `main`
 
 ### Reliability & wedges
 
@@ -527,6 +528,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Release Support Policy](/Doc/Architecture/SupportPolicy)
 - [Released Artifact Retention](ReleasedArtifactRetention) — retain artifacts for at least 30 days, supported releases for their support lifetime, and every artifact still needed by a published set or consumer
 - [Platform Versioning (SemVer)](PlatformVersioning) — continuous builds move from `3.0.0-ci.<run>` to plain `3.<minor>.<run>`, where the patch is the same CD run number, so both notations share one lineage; `3-latest` is a seed pointer and never a record value; the inventory of every producer and parser across core, Plugins and Memex; and the readers → records → minter migration order
+- [Major Lines Run Separately](MajorLinesRunSeparately) — a new major launches as its own line: `main` for v4, `main3` for v3, each with its own build-server channel (`latest4`, `latest3`), images, SDK and resolution, so a major bump never reaches a dependent on the previous one.
 - [Self-Update Target Selection](SelfUpdateTargetSelection) — candidates are ranked by the CD run number, not the version string; a mislabelled line outranked every sealed set for ever, and an install on a withdrawn tag could never see anything newer
 - [The Self-Update Registry Credential](SelfUpdateRegistryCredential) — which plugin-registry key may be presented to a container registry: a DECLARED pairing, never host equality or name resemblance; an absent declaration refuses
 - [Package Uninstall](PackageUninstall) — one request in two phases: retire the module, close the hubs, remove the install record, block re-install and preview what would be destroyed; drop the partition storage and its registry record only on the requester's exact confirmation; refuse a shared partition or one holding user data

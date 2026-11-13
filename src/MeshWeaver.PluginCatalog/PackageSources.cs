@@ -79,6 +79,37 @@ public sealed record ConfiguredPackageSource(IPackageSource Source, string GitRe
     /// the deployment configuration's authority, whatever its name (Doc/Architecture/InstanceRepositoryAccess).
     /// </summary>
     public bool InstanceLocal { get; init; }
+
+    /// <summary>
+    /// The ref this source was CONFIGURED with (<c>PluginCatalog:Sources:N:Ref</c>) — the ref served to
+    /// a line <see cref="LineRefs"/> does not name. <see cref="GitRef"/> is the ref actually read, which
+    /// <see cref="ForLine"/> moves. Empty for a source that did not come from configuration.
+    /// </summary>
+    public string ConfiguredRef { get; init; } = "";
+
+    /// <summary>
+    /// The ref this source is served at per platform line (<c>PluginCatalog:LineRefs:{name}:{major}</c>,
+    /// policy <c>major-lines-run-separately</c>). Empty — the default — keeps the single configured ref.
+    /// </summary>
+    public System.Collections.Immutable.ImmutableSortedDictionary<string, string> LineRefs { get; init; }
+        = System.Collections.Immutable.ImmutableSortedDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// This source as read for a caller on <paramref name="line"/>: <see cref="GitRef"/> becomes the ref
+    /// <see cref="LineRefs"/> declares for that line, else <see cref="ConfiguredRef"/>. A source that
+    /// declares no line refs is returned unchanged, whatever the line. Pure.
+    /// </summary>
+    /// <param name="line">The caller's platform major, or null when unstated.</param>
+    /// <returns>The source at the line's ref.</returns>
+    public ConfiguredPackageSource ForLine(string? line)
+    {
+        if (LineRefs.Count == 0)
+            return this;
+        var target = PlatformLine.Normalize(line) is { } l && LineRefs.TryGetValue(l, out var lineRef)
+            ? lineRef
+            : string.IsNullOrEmpty(ConfiguredRef) ? GitRef : ConfiguredRef;
+        return string.Equals(target, GitRef, StringComparison.Ordinal) ? this : this with { GitRef = target };
+    }
 }
 
 /// <summary>
@@ -300,6 +331,12 @@ public static class PackageSources
                 ? null
                 : new ConfiguredPackageSource(source, gitRef ?? "HEAD", name ?? repo ?? "")
                 {
+                    ConfiguredRef = gitRef ?? "HEAD",
+                    // Declared per source NAME on the record (PluginRepoMount.LineRefs) and applied
+                    // below for THIS instance's own line: every in-process reader — the default
+                    // install, discovery, the update watcher — reads the repository at the ref of
+                    // the line this instance runs, and the registry endpoints re-target per caller.
+                    LineRefs = PlatformLine.RefsFor(config, name ?? repo),
                     RepoPath = repo ?? "",
                     Subdir = subdir ?? "",
                     // The same split FromRepo makes: a URL is fetched, anything else is read off
@@ -314,12 +351,13 @@ public static class PackageSources
                 };
         }
 
+        var ownLine = PlatformLine.Of(config);
         var configured = config.GetSection("PluginCatalog:Sources").GetChildren()
             .Select(s => Build(
                 s["RepoPath"], s["Subdir"] ?? "", s["Ref"], s["Format"], s["Name"],
                 s["AutoDiscover"], s["AutoSync"]))
-            .Where(s => s is not null)
-            .Select(s => s!)
+            .OfType<ConfiguredPackageSource>()
+            .Select(s => s.ForLine(ownLine))
             .ToList();
         if (configured.Count > 0)
             return configured;
@@ -332,7 +370,7 @@ public static class PackageSources
             name: "registry",
             config["PluginCatalog:SourceAutoDiscover"],
             config["PluginCatalog:SourceAutoSync"]);
-        return legacy is null ? [] : [legacy];
+        return legacy is null ? [] : [legacy.ForLine(ownLine)];
     }
 
     /// <summary>
