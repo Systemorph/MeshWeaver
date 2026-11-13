@@ -88,22 +88,50 @@ public record PluginRepoMount
     public string EffectiveRef => string.IsNullOrWhiteSpace(Ref) ? "main" : Ref!.Trim();
 
     /// <summary>
-    /// <see cref="LineRefs"/> trimmed, entries with a blank line or ref dropped, in line order — the
-    /// form every renderer uses. Pure.
+    /// A stated platform line in its ONE canonical form — a non-negative integer without leading
+    /// zeros (<c>" 03 "</c> → <c>"3"</c>), or null for anything else (blank, <c>*</c>, a word). Every
+    /// reader of a line goes through this rule — <see cref="RefForLine"/>, <see cref="NormalizedLineRefs"/>,
+    /// <see cref="Problem"/> and the portal's <c>PlatformLine.Normalize</c> — so no two of them can
+    /// disagree about which line a key names. Pure.
     /// </summary>
-    public ImmutableSortedDictionary<string, string> NormalizedLineRefs =>
-        (LineRefs ?? ImmutableSortedDictionary<string, string>.Empty)
-            .Where(kv => !string.IsNullOrWhiteSpace(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value))
-            .ToImmutableSortedDictionary(kv => kv.Key.Trim(), kv => kv.Value.Trim(), StringComparer.Ordinal);
+    /// <param name="line">The stated line.</param>
+    /// <returns>The canonical line, or null.</returns>
+    public static string? NormalizeLine(string? line)
+    {
+        var s = (line ?? "").Trim();
+        return s.Length > 0 && s.All(char.IsAsciiDigit) && int.TryParse(s, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var major)
+            ? major.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : null;
+    }
+
+    /// <summary>
+    /// <see cref="LineRefs"/> keyed by canonical line (<see cref="NormalizeLine"/>), refs trimmed, in
+    /// line order — the form every renderer uses. TOTAL: an entry whose line is not a number or whose
+    /// ref is blank is dropped, and of two keys naming the same line (<c>"3"</c>, <c>" 3 "</c>,
+    /// <c>"03"</c>) the first in ordinal key order is kept — never an exception. Such a record is
+    /// refused by name by <see cref="Problem"/>, so a usable mount never reaches either case. Pure.
+    /// </summary>
+    public ImmutableSortedDictionary<string, string> NormalizedLineRefs
+    {
+        get
+        {
+            var builder = ImmutableSortedDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+            foreach (var (key, value) in LineRefs ?? ImmutableSortedDictionary<string, string>.Empty)
+                if (NormalizeLine(key) is { } line && !string.IsNullOrWhiteSpace(value) && !builder.ContainsKey(line))
+                    builder[line] = value.Trim();
+            return builder.ToImmutable();
+        }
+    }
 
     /// <summary>
     /// The ref a caller on <paramref name="line"/> is served: its <see cref="NormalizedLineRefs"/>
-    /// entry, else <see cref="EffectiveRef"/>. Pure.
+    /// entry, the line canonicalised by <see cref="NormalizeLine"/>, else <see cref="EffectiveRef"/>. Pure.
     /// </summary>
     /// <param name="line">The caller's platform major (<c>"3"</c>), or null when unstated.</param>
     /// <returns>The ref to read the repository at.</returns>
     public string RefForLine(string? line) =>
-        !string.IsNullOrWhiteSpace(line) && NormalizedLineRefs.TryGetValue(line.Trim(), out var lineRef)
+        NormalizeLine(line) is { } canonical && NormalizedLineRefs.TryGetValue(canonical, out var lineRef)
             ? lineRef
             : EffectiveRef;
 
@@ -194,12 +222,16 @@ public record PluginRepoMount
                    + "is served its own record's line by the registry, it does not choose a ref";
         if (KeySegment.Length == 0)
             return $"plugin mount '{NormalizedName}' names lineRefs but its name has no letter or digit to key them by";
+        var seen = ImmutableDictionary<string, string>.Empty;
         foreach (var (line, lineRef) in declared)
         {
-            var l = (line ?? "").Trim();
-            if (l.Length == 0 || !l.All(char.IsAsciiDigit))
+            if (NormalizeLine(line) is not { } l)
                 return $"plugin mount '{NormalizedName}' names lineRefs entry '{line}' — a line is a platform "
                        + "major (\"3\", \"4\")";
+            if (seen.TryGetValue(l, out var first))
+                return $"plugin mount '{NormalizedName}' names line {l} twice in lineRefs ('{first}' and '{line}') "
+                       + "— declare each line once";
+            seen = seen.Add(l, line);
             if (string.IsNullOrWhiteSpace(lineRef))
                 return $"plugin mount '{NormalizedName}' names line {l} with no ref";
         }

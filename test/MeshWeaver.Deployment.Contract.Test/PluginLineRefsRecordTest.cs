@@ -92,6 +92,37 @@ public class PluginLineRefsRecordTest
         Assert.Contains(expected, Assert.Single(problems));
     }
 
+    /// <summary>
+    /// Two keys naming ONE line — <c>"3"</c>, <c>" 3 "</c>, <c>"03"</c> — are a named problem from
+    /// <see cref="DeploymentPortalConfig.Validate"/>, never an exception, and <see cref="PluginRepoMount.NormalizedLineRefs"/>
+    /// stays total on such a record.
+    /// </summary>
+    [Theory]
+    [InlineData("3", " 3 ")]
+    [InlineData("3", "03")]
+    [InlineData(" 3 ", "03")]
+    public void TwoKeysNamingOneLine_AreANamedProblem_NotAnException(string first, string second)
+    {
+        var mount = Plugins with
+        {
+            LineRefs = ImmutableSortedDictionary<string, string>.Empty.Add(first, "main3").Add(second, "other"),
+        };
+
+        var normalized = mount.NormalizedLineRefs;
+        var (usable, problems) = DeploymentPortalConfig.Validate([mount]);
+
+        Assert.Equal("3", Assert.Single(normalized).Key);
+        Assert.Empty(usable);
+        Assert.Contains("names line 3 twice in lineRefs", Assert.Single(problems));
+    }
+
+    [Theory]
+    [InlineData("3")]
+    [InlineData("03")]
+    [InlineData(" 3 ")]
+    public void RefForLine_CanonicalisesTheLine(string line)
+        => Assert.Equal("main3", Plugins.RefForLine(line));
+
     [Fact]
     public void TwoSourcesKeyingTheirLineRefsAlike_TheSecondIsRefused()
     {
@@ -109,8 +140,9 @@ public class PluginLineRefsRecordTest
         var record = new DeploymentContent { PluginRepos = [Plugins] };
 
         var read = System.Text.Json.JsonSerializer.Deserialize<DeploymentContent>(
-            DeploymentRecordJson.Write(record), DeploymentRecordJson.Options)!;
+            DeploymentRecordJson.Write(record), DeploymentRecordJson.Options);
 
+        Assert.NotNull(read);
         Assert.Equal("main3", Assert.Single(read.PluginRepos).NormalizedLineRefs["3"]);
         Assert.Contains("\"lineRefs\":{\"3\":\" main3 \"}", DeploymentRecordJson.Write(record));
     }

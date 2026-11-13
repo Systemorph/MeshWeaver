@@ -155,6 +155,38 @@ public class EachPlatformLineReadsItsOwnRefTest(ITestOutputHelper output) : Mono
         source.ForLine("4").Should().BeSameAs(source);
     }
 
+    /// <summary>
+    /// The record's <see cref="MeshWeaver.Deployment.PluginRepoMount.RefForLine"/> and the portal's
+    /// <see cref="ConfiguredPackageSource.ForLine"/> canonicalise a line through the ONE rule, so they
+    /// answer the same for every spelling of a line.
+    /// </summary>
+    [Theory]
+    [InlineData("3")]
+    [InlineData("03")]
+    [InlineData(" 3 ")]
+    [InlineData("4")]
+    [InlineData(null)]
+    [InlineData("three")]
+    public void TheRecordAndThePortal_AnswerTheSameRefForEverySpellingOfALine(string? line)
+    {
+        var mount = new MeshWeaver.Deployment.PluginRepoMount
+        {
+            Name = "Plugins", Url = "https://github.com/example/plugins", Ref = "main", IsRegistrySource = true,
+            LineRefs = ImmutableSortedDictionary<string, string>.Empty.Add("3", "main3"),
+        };
+        var source = PackageSources.FromConfiguration(Mesh, BuildConfiguration(new Dictionary<string, string?>
+        {
+            [PlatformLine.ConfigKey] = "4",
+            ["PluginCatalog:Sources:0:Name"] = "Plugins",
+            ["PluginCatalog:Sources:0:RepoPath"] = SourceDirectory,
+            ["PluginCatalog:Sources:0:Format"] = "node-repo",
+            ["PluginCatalog:Sources:0:Ref"] = "main",
+            ["PluginCatalog:LineRefs:Plugins:3"] = "main3",
+        })).Should().ContainSingle().Subject;
+
+        source.ForLine(line).GitRef.Should().Be(mount.RefForLine(line));
+    }
+
     /// <summary>The line rule: explicit override, then the pattern's major, then the running major.</summary>
     [Theory]
     [InlineData("4", "3.*", "3.1.0", "4")]
@@ -200,15 +232,21 @@ public class EachPlatformLineReadsItsOwnRefTest(ITestOutputHelper output) : Mono
 
         private HttpResponseMessage Answer(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var path = request.RequestUri!.AbsolutePath;
+            if (request.RequestUri is not { } uri)
+                throw new InvalidOperationException(
+                    "RecordingRegistry: a request reached the registry with no RequestUri — the client sent nothing to record.");
+            var path = uri.AbsolutePath;
             if (path == RegistryPackageSource.RoutePrefix)
             {
-                ImmutableInterlocked.Update(ref listingQueries, l => l.Add(request.RequestUri.Query));
+                ImmutableInterlocked.Update(ref listingQueries, l => l.Add(uri.Query));
                 return Json(PluginRegistryPayloads.List([]));
             }
             if (path == RegistryPackageSource.RoutePrefix + "/files")
             {
-                using var reader = new System.IO.StreamReader(request.Content!.ReadAsStream(cancellationToken));
+                if (request.Content is not { } content)
+                    throw new InvalidOperationException(
+                        "RecordingRegistry: the files request carried no body — the client must post {id, ref, paths[, line]}.");
+                using var reader = new System.IO.StreamReader(content.ReadAsStream(cancellationToken));
                 var body = reader.ReadToEnd();
                 ImmutableInterlocked.Update(ref filesBodies, l => l.Add(body));
                 return Json(PluginRegistryPayloads.Files([new PackageFile("index.json", "{}")]));

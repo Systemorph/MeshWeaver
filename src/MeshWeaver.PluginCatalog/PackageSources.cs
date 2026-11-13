@@ -356,8 +356,8 @@ public static class PackageSources
             .Select(s => Build(
                 s["RepoPath"], s["Subdir"] ?? "", s["Ref"], s["Format"], s["Name"],
                 s["AutoDiscover"], s["AutoSync"]))
-            .Where(s => s is not null)
-            .Select(s => s!.ForLine(ownLine))
+            .OfType<ConfiguredPackageSource>()
+            .Select(s => s.ForLine(ownLine))
             .ToList();
         if (configured.Count > 0)
             return configured;

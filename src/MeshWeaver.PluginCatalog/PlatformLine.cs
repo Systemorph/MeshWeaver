@@ -58,17 +58,12 @@ public static class PlatformLine
     public static string? Resolve(string? explicitLine, string? pattern, string? runningVersion) =>
         Normalize(explicitLine) ?? MajorOf(pattern) ?? MajorOf(runningVersion);
 
-    /// <summary>A stated line in its canonical form — a non-negative integer without leading zeros,
-    /// or null for anything else (blank, <c>*</c>, a word). Pure.</summary>
+    /// <summary>A stated line in its canonical form — the ONE rule,
+    /// <see cref="PluginRepoMount.NormalizeLine"/>, which the record's <see cref="PluginRepoMount.RefForLine"/>
+    /// applies too. Pure.</summary>
     /// <param name="line">The stated line.</param>
     /// <returns>The canonical line, or null.</returns>
-    public static string? Normalize(string? line)
-    {
-        var s = (line ?? "").Trim();
-        return s.Length > 0 && s.All(char.IsAsciiDigit) && int.TryParse(s, out var major)
-            ? major.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : null;
-    }
+    public static string? Normalize(string? line) => PluginRepoMount.NormalizeLine(line);
 
     /// <summary>The leading major of a version or pattern (<c>3.*</c> → <c>"3"</c>, <c>3.1.0-ci.1</c> →
     /// <c>"3"</c>, <c>*</c> → null). Pure.</summary>
