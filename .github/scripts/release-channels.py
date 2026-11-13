@@ -199,6 +199,8 @@ def validate(doc: dict) -> list[str]:
                 problems.append(f"{at}: `repositories` must be a list of repository names")
             if binding.get("notation", "any") not in NOTATIONS:
                 problems.append(f"{at}: notation {binding.get('notation')!r} is not one of {NOTATIONS}")
+            if "onlyTheLineThatMovesLatest" in binding and not isinstance(binding["onlyTheLineThatMovesLatest"], bool):
+                problems.append(f"{at}: `onlyTheLineThatMovesLatest` must be true or false")
             if "repo" in binding and not (isinstance(binding["repo"], str) and REPO_RE.match(binding["repo"])):
                 problems.append(f"{at}: `repo` must be '<owner>/<name>', got {binding['repo']!r}")
     return problems
@@ -229,15 +231,30 @@ def version_core(version: str) -> tuple[int, int, int]:
     return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
+def _delivery_lines(path: Path = DELIVERY_LINES_FILE) -> dict:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as error:
+        raise ChannelError(f"{path} cannot be read for the delivery lines: {error}") from error
+    if not isinstance(doc, dict):
+        raise ChannelError(f"{path} is not an object")
+    return doc
+
+
 def default_line(path: Path = DELIVERY_LINES_FILE) -> str:
     """The repository's default delivery line, as .github/delivery-lines.json declares it."""
-    try:
-        value = json.loads(path.read_text(encoding="utf-8")).get("defaultBranch")
-    except (FileNotFoundError, json.JSONDecodeError, AttributeError) as error:
-        raise ChannelError(f"{path} cannot be read for the default delivery line: {error}") from error
+    value = _delivery_lines(path).get("defaultBranch")
     if not isinstance(value, str) or not value:
         raise ChannelError(f"{path} declares no `defaultBranch`")
     return value
+
+
+def moves_latest(line: str, path: Path = DELIVERY_LINES_FILE) -> bool:
+    """Whether `line` is the ONE delivery line that moves `latest`. An undeclared line moves nothing."""
+    for entry in _delivery_lines(path).get("lines") or []:
+        if isinstance(entry, dict) and entry.get("branch") == line:
+            return entry.get("movesLatest") is True
+    return False
 
 
 def tags_for(doc: dict, version: str, workflow: str, job: str | None = None,
@@ -246,12 +263,14 @@ def tags_for(doc: dict, version: str, workflow: str, job: str | None = None,
     line labels rendered for that line, and literal labels (`main`, `latest`) unchanged.
 
     `line` is the DELIVERY line of the run (default: the declared default line). A channel that
-    carries a `line` is returned only to a run of that line; a line-less label is returned to every
-    line — which line moves the tester's `latest` is delivery-lines.json's `movesLatest`, not this."""
+    carries a `line` is returned only to a run of that line, and a binding marked
+    `onlyTheLineThatMovesLatest` only to the line delivery-lines.json marks `movesLatest` — so a
+    `main3` run is never handed `latest`. Other line-less labels go to every line."""
     major, minor, patch = version_core(version)
     legacy = bool(LEGACY_SET_RE.match(version.strip()))
     if line is None:
         line = default_line()
+    line_moves_latest = moves_latest(line)
     out: list[str] = []
     for entry in channels(doc):
         if entry.get("status") != "written":
@@ -264,6 +283,8 @@ def tags_for(doc: dict, version: str, workflow: str, job: str | None = None,
             if job is not None and binding.get("job") != job:
                 continue
             if repository is not None and repository not in (binding.get("repositories") or []):
+                continue
+            if binding.get("onlyTheLineThatMovesLatest") and not line_moves_latest:
                 continue
             notation = binding.get("notation") or entry.get("notation")
             if notation == "legacy" and not legacy:
@@ -343,7 +364,18 @@ def check(doc: dict, root: Path, platform_version=None, is_floating=None) -> lis
     except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError) as error:
         problems.append(f"{lines_path} cannot be read for the delivery lines: {error}")
         delivery = {}
-    bound = {e["line"]: e for e in channels(doc) if "line" in e}
+    bound: dict[str, dict] = {}
+    for e in channels(doc):
+        if "line" not in e:
+            continue
+        if e["line"] in bound:
+            # A dict keyed on the line would silently keep the LAST binding, and the cross-check
+            # below would then pass vacuously for the one it shadowed — so a duplicate is its own
+            # problem, naming both channels.
+            problems.append(f"channels {bound[e['line']]['id']!r} and {e['id']!r} both declare delivery line "
+                            f"{e['line']!r} — a line has ONE floating label")
+            continue
+        bound[e["line"]] = e
     for branch, label in delivery.items():
         entry = bound.get(branch)
         if entry is None:
@@ -353,6 +385,16 @@ def check(doc: dict, root: Path, platform_version=None, is_floating=None) -> lis
     for branch, entry in bound.items():
         if delivery and branch not in delivery:
             problems.append(f"{entry['id']}: names delivery line {branch!r}, which .github/delivery-lines.json does not declare")
+    # Every main-cd.yml binding of `latest` is gated on the line that moves it: two lines interleave
+    # run numbers, so an ungated binding would hand `latest` back and forth between majors.
+    for entry in channels(doc):
+        if entry["tag"] != "latest":
+            continue
+        for binding in entry["writers"]:
+            if binding.get("workflow") == "main-cd.yml" and binding.get("repo", THIS_REPO) == THIS_REPO \
+                    and binding.get("onlyTheLineThatMovesLatest") is not True:
+                problems.append(f"{entry['id']}: main-cd.yml#{binding['job']} writes `latest` without "
+                                "`onlyTheLineThatMovesLatest: true` — every line's run would be handed it")
     # The line pointers are spelled by platform-version.py in main-cd today. They must be EXACTLY
     # the `written` main-cd labels declared here — a pointer CD moves but this file does not declare
     # is a pointer retention may delete, and a declared one CD never moves protects nothing.
@@ -409,16 +451,29 @@ def self_test() -> int:
            sorted(tags_for(flipped, "3.1.0", "release.yml", repository="memex-portal-ai")) == ["3-enterprise"])
     expect("literal labels are returned to their writer (promote moves main and latest on the tester)",
            sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="mw-plugin-test")) == ["latest", "main"])
-    expect("a run of line main3 is handed `main3`, never `main`",
+    expect("a run of line main3 is handed `main3`, never `main`, and NEVER `latest` (it does not move it)",
            sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="mw-plugin-test", line="main3"))
-           == ["latest", "main3"]
+           == ["main3"]
+           and "latest" not in tags_for(real, "3.1.10050", "main-cd.yml", job="arm", line="main3")
            and tags_for(real, "3.1.10050", "main-cd.yml", job="control-promote", repository="memex-control",
                         line="main3") == ["main3"])
     expect("a run of the default line is never handed `main3`",
            "main3" not in tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="memex-portal-ai"))
-    expect("the line pointers do not depend on the line (they separate by MAJOR)",
-           sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="arm", line="main3"))
+    expect("the line pointers do not depend on the line (they separate by MAJOR); only `latest` does",
+           sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="arm", line="main3")) + ["latest"]
            == sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="arm")))
+    expect("the line that moves `latest` (main) is still handed it by promote and arm",
+           "latest" in tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="mw-plugin-test")
+           and "latest" in tags_for(real, "3.1.10050", "main-cd.yml", job="arm", repository="memex-portal-ai"))
+    ungated = json.loads(json.dumps(real))
+    for e in ungated["channels"]:
+        if e["id"] == "latest":
+            for b in e["writers"]:
+                b.pop("onlyTheLineThatMovesLatest", None)
+    expect("NEGATIVE CONTROL — without the binding flag a main3 run IS handed `latest`",
+           "latest" in tags_for(ungated, "3.1.10050", "main-cd.yml", job="promote", repository="mw-plugin-test", line="main3"))
+    expect("check: a main-cd.yml binding of `latest` without the gate is caught",
+           any("onlyTheLineThatMovesLatest" in p for p in check(ungated, HERE.parent.parent)))
     root = HERE.parent.parent
     expect("check: the committed channels and delivery lines agree", check(real, root) == [])
     unbound = json.loads(json.dumps(real))
@@ -431,6 +486,13 @@ def self_test() -> int:
             e["line"] = "main9"
     expect("check: a channel bound to an undeclared line is caught",
            any("main9" in p for p in check(stray, root)))
+    dup = json.loads(json.dumps(real))
+    for e in dup["channels"]:
+        if e["id"] == "main":
+            e["line"] = "main3"
+    found = check(dup, root)
+    expect("check: two channels binding the SAME line is its own problem, naming both",
+           any("both declare delivery line 'main3'" in p and "'main'" in p and "'main3'" in p for p in found))
     expect("a blank `line` is malformed",
            any("`line`" in p for p in validate({**real, "channels": [{**real["channels"][0], "line": " "}]})))
     expect("bindings hold together: promote does NOT write `latest` to the portal",
