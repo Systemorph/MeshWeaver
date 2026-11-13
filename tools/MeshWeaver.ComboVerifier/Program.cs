@@ -182,12 +182,17 @@ if (hostDir is null)
         + "tester CLI beside it (.github/scripts/compose-gate-host.sh). Try --help.");
     return 2;
 }
-if (!sealedBundleDirs.IsEmpty && string.IsNullOrWhiteSpace(frameworkIdentity))
+SealedBundleSource? sealedBundles = null;
+if (!sealedBundleDirs.IsEmpty)
 {
-    Console.Error.WriteLine(
-        "--sealed-bundles needs --framework-identity <id>: the candidate's identity is the address "
-        + "every reused bundle must carry. Try --help.");
-    return 2;
+    if (frameworkIdentity is not { } identity || string.IsNullOrWhiteSpace(identity))
+    {
+        Console.Error.WriteLine(
+            "--sealed-bundles needs --framework-identity <id>: the candidate's identity is the address "
+            + "every reused bundle must carry. Try --help.");
+        return 2;
+    }
+    sealedBundles = new SealedBundleSource([.. sealedBundleDirs.Select(Path.GetFullPath)], identity);
 }
 if (!File.Exists(comboPath))
 {
@@ -294,9 +299,6 @@ if (declaredModules.Length > 0)
             + $"NOT loaded: {string.Join(", ", moduleSet.NotDeclared)}");
 }
 
-var sealedBundles = sealedBundleDirs.IsEmpty
-    ? null
-    : new SealedBundleSource([.. sealedBundleDirs.Select(Path.GetFullPath)], frameworkIdentity!);
 var gate = new DockerImageGate(
     pools, gateTimeout, Console.Out, platform, hostDir, moduleSet, sealedBundles);
 

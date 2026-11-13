@@ -263,6 +263,9 @@ sealed_args=()
 # publication directory, so the two halves cannot come from two publications. For a source that
 # lands no module, a failed fetch is NOT a red: it costs only the reuse, its packages are then baked
 # from source exactly as before, and the line below says so by name.
+if [ -n "$module_sources" ] && printf '%s\n' "$module_sources" | grep -qx ''; then
+  fail "a package in the combo read from $where declares a compiled module but names no source, so there is no sealed publication to take its module from — nothing was verified and nothing is landed."
+fi
 sealed_root="$host_root/sealed-bundles"
 rm -rf "$sealed_root"
 storage_target="${BAKE_PUBLISH_TARGETS:-}"

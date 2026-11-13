@@ -145,7 +145,7 @@ public sealed class ComboGateReusesSealedBundlesTest : IDisposable
         Assert.Equal(Identity, File.ReadAllText(Path.Combine(seed, DockerImageGate.FrameworkMvidFile)));
         Assert.Equal(
             ["App", "Lib", "Other"],
-            Directory.EnumerateFiles(seed, "*.zip").Select(f => BundleReader.ReadManifest(f)!.Plugin)
+            Directory.EnumerateFiles(seed, "*.zip").Select(f => BundleReader.ReadManifest(f)?.Plugin)
                 .OrderBy(p => p, StringComparer.Ordinal));
     }
 
@@ -170,7 +170,7 @@ public sealed class ComboGateReusesSealedBundlesTest : IDisposable
         var seed = DockerImageGate.BakeRootFor(WorkRoot);
         Assert.Equal(
             ["App", "Lib", "Other"],
-            Directory.EnumerateFiles(seed, "*.zip").Select(f => BundleReader.ReadManifest(f)!.Plugin)
+            Directory.EnumerateFiles(seed, "*.zip").Select(f => BundleReader.ReadManifest(f)?.Plugin)
                 .OrderBy(p => p, StringComparer.Ordinal));
     }
 

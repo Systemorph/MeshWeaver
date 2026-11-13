@@ -119,9 +119,9 @@ public static class SealedBundleReuse
         var candidates = ImmutableSortedDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
         foreach (var package in packages)
         {
-            var reason = Disqualify(package, tree, sealedBundles, source.FrameworkIdentity, out var bundle);
-            if (reason is null)
-                candidates[package.Id] = bundle!;
+            var (bundle, reason) = Decide(package, tree, sealedBundles, source.FrameworkIdentity);
+            if (bundle is not null)
+                candidates[package.Id] = bundle;
             else
                 rebuilt[package.Id] = reason;
         }
@@ -227,30 +227,32 @@ public static class SealedBundleReuse
     private sealed record SealedBundle(string File, BundleReader.Manifest Manifest,
         IReadOnlyList<BundleReader.ContentFile> Content);
 
-    private static string? Disqualify(
+    /// <summary>The sealed bundle that stands for <paramref name="package"/> and an empty reason, or
+    /// no bundle and the reason it is rebuilt — one value, so "reused" and "why not" cannot disagree.</summary>
+    private static (string? Bundle, string Reason) Decide(
         PackageManifest package, Tree tree,
-        ImmutableDictionary<string, ImmutableList<SealedBundle>> seals, string identity, out string? bundle)
+        ImmutableDictionary<string, ImmutableList<SealedBundle>> seals, string identity)
     {
-        bundle = null;
         if (!seals.TryGetValue(package.Id, out var offered) || offered.IsEmpty)
-            return "no fetched seal carries a bundle for it";
+            return Rebuild("no fetched seal carries a bundle for it");
         if (offered.Count > 1)
-            return $"{offered.Count} seals carry a bundle for it ({string.Join(", ", offered.Select(b => b.File))}) "
-                   + "— which one is this instance's build is not decidable here";
+            return Rebuild($"{offered.Count} seals carry a bundle for it ({string.Join(", ", offered.Select(b => b.File))}) "
+                   + "— which one is this instance's build is not decidable here");
         var sealedBundle = offered[0];
         var manifest = sealedBundle.Manifest;
         if (!string.Equals(manifest.FrameworkMvid, identity, StringComparison.Ordinal))
-            return $"its sealed bundle is keyed to '{manifest.FrameworkMvid}', not the candidate's '{identity}'";
+            return Rebuild($"its sealed bundle is keyed to '{manifest.FrameworkMvid}', not the candidate's '{identity}'");
         if (manifest.Assemblies is not { Count: > 0 })
-            return "its sealed bundle carries no assembly";
+            return Rebuild("its sealed bundle carries no assembly");
         if (manifest.Misses is { Count: > 0 } misses)
-            return $"its sealed bundle records {misses.Count} producer miss(es)";
+            return Rebuild($"its sealed bundle records {misses.Count} producer miss(es)");
         if (sealedBundle.Content.Count == 0)
-            return "its sealed bundle carries no node-definition content to compare the tree against";
+            return Rebuild("its sealed bundle carries no node-definition content to compare the tree against");
         if (ContentDifference(package, tree, sealedBundle.Content) is { } difference)
-            return $"the sealed build is not this tree's ({difference})";
-        bundle = sealedBundle.File;
-        return null;
+            return Rebuild($"the sealed build is not this tree's ({difference})");
+        return (sealedBundle.File, "");
+
+        static (string? Bundle, string Reason) Rebuild(string reason) => (null, reason);
     }
 
     /// <summary>Null when the bundle's content is byte-for-byte the package as materialised; else the
