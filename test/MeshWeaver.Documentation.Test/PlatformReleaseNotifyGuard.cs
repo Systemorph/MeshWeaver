@@ -258,7 +258,9 @@ public class PlatformReleaseNotifyGuard
         // often in a later run — so it is NOT a leg of the platform delivery verdict any more. It
         // is still alerted (AFailedReleaseEventIsAlerted), and it must still follow the arming.
         Assert.DoesNotContain("notify-platform-update=", legs, StringComparison.Ordinal);
-        Assert.Contains("needs: [preflight, arm]", JobBlock(body, "notify-platform-update"), StringComparison.Ordinal);
+        // `line` beside them (policy `major-lines-run-separately`): the re-check of "still the newest
+        // armed set?" compares within the line's major — it decides nothing about WHEN the event goes.
+        Assert.Contains("needs: [preflight, line, arm]", JobBlock(body, "notify-platform-update"), StringComparison.Ordinal);
     }
 
     /// <summary>
