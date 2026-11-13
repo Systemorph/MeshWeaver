@@ -295,8 +295,8 @@ def self_test() -> int:
                 "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
 
     good = [rc("testResults-shard1/test/test-results.log", log),
-            rc("testResults-shard1/test/A/bin/Release/net11.0/TestResults/R.trx", trx_a),
-            rc("testResults-shard1/test/B/bin/Release/net11.0/TestResults/R.trx", trx_b),
+            rc("testResults-shard1/test/A/bin/Release/net10.0/TestResults/R.trx", trx_a),
+            rc("testResults-shard1/test/B/bin/Release/net10.0/TestResults/R.trx", trx_b),
             rc("testResults-shard1/collected-logs/_meshweaver-test-trace.log", trace),
             rc("Store/Store.zip", trx_a, "build")]
 
@@ -319,11 +319,11 @@ def self_test() -> int:
     try:
         got = run(good, name="good")
         check("a complete tree is fetched with its paths PRESERVED (two R.trx do not collide)",
-              got == sorted(["test/test-results.log", "test/A/bin/Release/net11.0/TestResults/R.trx",
-                             "test/B/bin/Release/net11.0/TestResults/R.trx",
+              got == sorted(["test/test-results.log", "test/A/bin/Release/net10.0/TestResults/R.trx",
+                             "test/B/bin/Release/net10.0/TestResults/R.trx",
                              "collected-logs/_meshweaver-test-trace.log"]), got)
         check("the bytes are the receipt's",
-              open(os.path.join(tmp, "good", "test", "B", "bin", "Release", "net11.0", "TestResults", "R.trx"), "rb").read() == trx_b)
+              open(os.path.join(tmp, "good", "test", "B", "bin", "Release", "net10.0", "TestResults", "R.trx"), "rb").read() == trx_b)
     except Red as e:
         check("a complete tree is fetched", False, e)
     check("a receipt repeated by a later stage with the SAME content is one file",
@@ -349,7 +349,7 @@ def self_test() -> int:
     check("RED: a test-results.log with no exit marker",
           red([rc("testResults-shard1/test/test-results.log", unmarked)] + good[1:4]))
     check("RED: a FOREIGN file in the tree (a dll is not a result)",
-          red(good + [rc("testResults-shard1/test/A/bin/Release/net11.0/A.dll", trx_a)]))
+          red(good + [rc("testResults-shard1/test/A/bin/Release/net10.0/A.dll", trx_a)]))
     check("RED: a FOREIGN file at the tree's root", red(good + [rc("testResults-shard1/notes.txt", trx_a)]))
     for bad in ("testResults-shard1/../etc/passwd", "testResults-shard1/test//x.trx", "testResults-shard1/test/./x.trx",
                 "testResults-shard1/collected-logs/x\n::stop-commands::m", "testResults-shard1/collected-logs/a\\b"):

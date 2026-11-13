@@ -1476,7 +1476,7 @@ jobs:
       - uses: actions/setup-dotnet@v6
         if: (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('repo/global.json') == ''
         with:
-          dotnet-version: "11.0.x"
+          dotnet-version: "10.0.x"
       - name: Resolve the SDK the build extension is published with
         id: ext-sdk
         if: inputs.build-extensions-project != '' || inputs.module-libraries-project != ''
@@ -1956,7 +1956,7 @@ jobs:
       - uses: actions/setup-dotnet@v6
         if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true' && steps.tool-store.outputs.hit != 'true'
         with:
-          dotnet-version: "11.0.x"
+          dotnet-version: "10.0.x"
       - name: Publish the module-pack tool (once for every pack job)
         if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true' && steps.tool-store.outputs.hit != 'true'
         run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
@@ -2387,7 +2387,7 @@ jobs:
         if: inputs.module-libraries-project != '' || inputs.build-extensions-project != ''
         with:
           # EXACTLY the SDK select keyed the extension with; floating only when no extension is named.
-          dotnet-version: ${{ needs.select.outputs.build-extensions-sdk || '11.0.x' }}
+          dotnet-version: ${{ needs.select.outputs.build-extensions-sdk || '10.0.x' }}
       - name: Publish the caller's module-libraries shelf
         id: shelf
         if: inputs.module-libraries-project != ''
@@ -3116,7 +3116,7 @@ jobs:
       - uses: actions/setup-dotnet@v6
         if: steps.sdk.outputs.install == 'true'
         with:
-          dotnet-version: "11.0.x"
+          dotnet-version: "10.0.x"
 
       # Per module: the released version and the platform floor from the content half, and the
       # assertion that the two halves of the mixed package name each other. A module whose floor
@@ -3582,13 +3582,13 @@ jobs:
                   # 🚨 The SAME reference set as the build: --no-build re-evaluates the project, and
                   # without -p:MeshWeaverRefs the platform ProjectReferences the build had dropped come
                   # back — publish then copies their outputs, which were never built ("MSB3030: Could
-                  # not copy meshweaver/src/MeshWeaver.Graph/bin/Release/net11.0/MeshWeaver.Graph.dll",
+                  # not copy meshweaver/src/MeshWeaver.Graph/bin/Release/net10.0/MeshWeaver.Graph.dll",
                   # Plugins #940).
                   dotnet publish "$PROJECT" -c Release --no-build \
                     -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" \
                     -p:Version="$VERSION" \
                     ${REFS:+-p:MeshWeaverRefs=$REFS}
-                  packdir="$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net11.0/publish"
+                  packdir="$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0/publish"
                   printf '%s\n' --deps-closure >> "$packargs"
                   # >>> module pack additions (#4367) — EXECUTED by .github/scripts/test-module-pack-with.py
                   # 🚨 THE MODULE'S OWN CARRIERS. --deps-closure REFUSES the pack (exit 2) for a
@@ -3600,7 +3600,7 @@ jobs:
                   #   <MeshWeaverPackWith Include="<file name>" />        → --with <file name>
                   #   <MeshWeaverPackWithNative Include="runtimes/<rid>/native/<file>" /> → --with-native …
                   # (module-pack's refusal prints the exact lines). Read by MSBuild's OWN evaluation —
-                  # `-getItem` prints JSON on SDK ≥ 8, and this job runs 11.0.x — under the SAME
+                  # `-getItem` prints JSON on SDK ≥ 8, and this job runs 10.0.x — under the SAME
                   # properties as the build, so an item conditioned on them reads as the build saw
                   # it. Every step fails the module RED rather than reading as "declares none": a
                   # failed evaluation, output that is not the JSON shape, and (in module-pack) a value
@@ -5351,7 +5351,7 @@ jobs:
           generator: build-logic/.github/scripts/gen-manifests.py
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "11.0.x"
+          dotnet-version: "10.0.x"
       - name: Build every owed suite (one graph, Release)
         env:
           BATCHES: ${{ needs.select.outputs.test-batches }}
@@ -5632,7 +5632,7 @@ jobs:
           echo ".NET SDK on the runner: INSTALLED — policy '$POLICY'; this job's one declared consumer is the modules' own suites ('dotnet test' for $MODULES), which the pinned platform image cannot run."
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "11.0.x"
+          dotnet-version: "10.0.x"
       - name: Fetch the suites `tests-build` compiled
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:

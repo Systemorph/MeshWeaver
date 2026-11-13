@@ -254,7 +254,7 @@ env:
   # The Playwright the shards' headless browser comes from, and the one whose `install-deps
   # --dry-run` the font set is checked against. Keep it in step with
   # deploy/base-images/portal-ai/Dockerfile.
-  PLAYWRIGHT_VERSION: 1.65.0
+  PLAYWRIGHT_VERSION: 1.62.1
 
 jobs:
   # 🚨 No `jlumbroso/free-disk-space` in any job — do not re-add it. Removed 2026-08-09 after
@@ -867,7 +867,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 11.0.x
+        dotnet-version: 10.0.x
     # The NuGet shelf (Memex ci-runners, mounted at /nuget-shelf on the self-hosted sets; absent on
     # ubuntu-latest, where both steps say so and do nothing): immutable per-version zips, the mesh's
     # own FileSystemNuGetPackageCache protocol, extracted into THIS runner's packages folder before
@@ -1142,7 +1142,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 11.0.x
+        dotnet-version: 10.0.x
     - name: "Download artifact: this shard's build output"
       uses: actions/download-artifact@v8
       with:
@@ -1433,7 +1433,7 @@ jobs:
           name=$(basename "$csproj" .csproj)
           label="$name"
           [ "$parts" -gt 1 ] && label="$name (part $part/$parts)"
-          dir=$(dirname "$csproj")/bin/Release/net11.0
+          dir=$(dirname "$csproj")/bin/Release/net10.0
           # Helper projects (TestDomain, Hub.Fixture, AI.Test.FakeCli) ship no
           # xunit.v3 host — nothing to run. Recorded so the log shows they were
           # consciously skipped, not lost.
@@ -1667,7 +1667,7 @@ jobs:
         # dump was produced by — the matching DAC is what makes SOS work at all.
         while read -r sigproj; do
           [ -z "$sigproj" ] && continue
-          bindir=$(find test -type d -path "*/$sigproj/bin/Release/net11.0" | head -1)
+          bindir=$(find test -type d -path "*/$sigproj/bin/Release/net10.0" | head -1)
           [ -z "$bindir" ] && continue
           echo "Collecting symbols for signal-killed $sigproj from $bindir"
           mkdir -p "collected-logs/symbols-$sigproj"
@@ -2017,7 +2017,7 @@ jobs:
         main-sha: ${{ needs.build.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 11.0.x
+        dotnet-version: 10.0.x
     - name: "Download artifact: build output (shard 0)"
       uses: actions/download-artifact@v8
       with:
@@ -2225,7 +2225,7 @@ jobs:
         main-sha: ${{ needs.build.outputs.main-sha || needs.host-build-outputs.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 11.0.x
+        dotnet-version: 10.0.x
     - name: "Download artifact: build output (shard 0)"
       uses: actions/download-artifact@v8
       with:

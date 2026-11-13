@@ -80,7 +80,7 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
     // quotas). Locally you can flip this on for the hung-test workflow:
     //   set MESHWEAVER_TEST_FILE_LOGS=1
     //   dotnet test … --filter X
-    // and the per-method files appear at bin/Debug/net11.0/test-logs/.
+    // and the per-method files appear at bin/Debug/net10.0/test-logs/.
     // ITestOutputHelper.WriteLine is unaffected — xUnit console output remains.
     private static readonly bool FileLogsEnabled =
         string.Equals(Environment.GetEnvironmentVariable("MESHWEAVER_TEST_FILE_LOGS"), "1", StringComparison.Ordinal)

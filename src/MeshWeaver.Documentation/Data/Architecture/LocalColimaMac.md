@@ -205,7 +205,7 @@ docker tag memex-migration-local:latest ghcr.io/systemorph/memex-migration:lates
 
 Notes:
 
-- The local build uses the **default** `mcr.microsoft.com/dotnet/aspnet:11.0` base image, **not** the custom `memex-portal-ai-base` (that base bundles Node / Claude Code / Copilot, is now multi-arch in ACR, and is unneeded for the local inner loop).
+- The local build uses the **default** `mcr.microsoft.com/dotnet/aspnet:10.0` base image, **not** the custom `memex-portal-ai-base` (that base bundles Node / Claude Code / Copilot, is now multi-arch in ACR, and is unneeded for the local inner loop).
 - Because k3s runs the Docker runtime (`docker://`), the retag is visible to the cluster immediately — there is no `docker push` / registry step.
 - This is the only step that is slow. Once the image exists, config-only changes (§5) don't need a rebuild.
 

@@ -140,12 +140,11 @@ public static class ContentShapes
         JsonObject => nameof(JsonValueKind.Object),
         JsonArray => nameof(JsonValueKind.Array),
         JsonValue value when value.TryGetValue<JsonElement>(out var element) => element.ValueKind.ToString(),
-        // Same order as LeafSize, for the same measured reason: numbers, then bool, then string.
-        JsonValue value when value.TryGetValue<double>(out _) || value.TryGetValue<int>(out _)
-                             || value.TryGetValue<long>(out _) || value.TryGetValue<decimal>(out _)
-            => nameof(JsonValueKind.Number),
-        JsonValue value when value.TryGetValue<bool>(out var flag) => flag ? nameof(JsonValueKind.True) : nameof(JsonValueKind.False),
         JsonValue value when value.TryGetValue<string>(out _) => nameof(JsonValueKind.String),
+        JsonValue value when value.TryGetValue<bool>(out var flag) => flag ? nameof(JsonValueKind.True) : nameof(JsonValueKind.False),
+        JsonValue value when value.TryGetValue<double>(out _) || value.TryGetValue<decimal>(out _)
+                             || value.TryGetValue<long>(out _) || value.TryGetValue<int>(out _)
+            => nameof(JsonValueKind.Number),
         _ => "value of an unrecognised CLR type",
     };
 
@@ -237,18 +236,12 @@ public static class ContentShapes
             case JsonObject or JsonArray:
                 partial = true;
                 return 2; // "{}" / "[]" at least
-            // 🚨 The probe ORDER is the allocation budget. A MISSED TryGetValue<T> on a constructed
-            // number or bool boxes the stored value on System.Text.Json 11 (24 B a miss; free on 10),
-            // while misses on a stored string or decimal stay free on both. So the numeric kinds go
-            // first, double before the integers, bool after them and string LAST. A double array
-            // then costs nothing per entry, and the order is no worse than before on .NET 10.
-            // GetValueKind would dispatch for free, but it runs a customised value's converter.
-            // Measured: Doc/Architecture/Platform4Net11.
             case JsonValue value when value.TryGetValue<JsonElement>(out var element):
                 return JsonMarshal.GetRawUtf8Value(element).Length;
-            case JsonValue value when value.TryGetValue<double>(out var real)
-                                      && real.TryFormat(digits, out var written, "R", CultureInfo.InvariantCulture):
-                return written;
+            case JsonValue value when value.TryGetValue<string>(out var text):
+                return Encoding.UTF8.GetByteCount(text) + 2;
+            case JsonValue value when value.TryGetValue<bool>(out var flag):
+                return flag ? 4 : 5;
             case JsonValue value when value.TryGetValue<int>(out var small)
                                       && small.TryFormat(digits, out var written, default, CultureInfo.InvariantCulture):
                 return written;
@@ -258,10 +251,9 @@ public static class ContentShapes
             case JsonValue value when value.TryGetValue<decimal>(out var number)
                                       && number.TryFormat(digits, out var written, default, CultureInfo.InvariantCulture):
                 return written;
-            case JsonValue value when value.TryGetValue<bool>(out var flag):
-                return flag ? 4 : 5;
-            case JsonValue value when value.TryGetValue<string>(out var text):
-                return Encoding.UTF8.GetByteCount(text) + 2;
+            case JsonValue value when value.TryGetValue<double>(out var real)
+                                      && real.TryFormat(digits, out var written, "R", CultureInfo.InvariantCulture):
+                return written;
             default:
                 partial = true;
                 return 0;

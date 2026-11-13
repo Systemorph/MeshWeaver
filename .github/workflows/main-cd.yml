@@ -1501,7 +1501,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 11.0.x
+          dotnet-version: 10.0.x
       # 🚂 /next RIDES IN THIS IMAGE (policy `portal-next-in-platform-image`). The Next.js front end used to be its own image,
       # `memex-portal-next:3.0.0-next.<run>`, outside this set and never moved by a roll, so every
       # deployment that enabled it pinned it. It is built HERE now, from the SAME Plugins commit as the
@@ -1815,7 +1815,7 @@ jobs:
           digest=$(docker buildx imagetools inspect "${{ env.ACR }}/memex-portal-ai:$STAGING" --format '{{json .Manifest.Digest}}' | tr -d '"')
           mkdir -p "$RUNNER_TEMP/image-closure"
           # 🚨 The IMAGE selects the directories, never the find above alone (#6402): a multi-RID
-          # PublishContainer also lays down a RID-less outer `net11.0/publish` that carries the
+          # PublishContainer also lays down a RID-less outer `net10.0/publish` that carries the
           # surface manifest but is in no image layer, and recording it refused every publishing run
           # (38020659588, 38021975367, 38023872356). The manifest list names the platforms the
           # image actually carries; the script takes exactly one directory per platform and refuses
@@ -1980,7 +1980,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 11.0.x
+          dotnet-version: 10.0.x
       # 🚨 Read the version from a project that stays in THIS repo — the same rule, and the same
       # project, the portal leg above already follows, and for the same reason. This used to read
       # `plugins-repo/src/Memex.Database.Migration`, which lives in MeshWeaver.Plugins and does NOT
@@ -2102,7 +2102,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 11.0.x
+          dotnet-version: 10.0.x
       # The same computed version as `portal-image` — the control image is not a separately
       # versioned product (design §3.2), it is the same build under another repository name.
       - name: Compute image version
@@ -2593,7 +2593,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 11.0.x
+          dotnet-version: 10.0.x
       # Same $(Version) computation as the other legs — GITHUB_RUN_NUMBER is shared across the
       # run, so the <major>.<minor>.<run> tag matches the portal/migration images by construction.
       - name: Compute image version
@@ -2689,7 +2689,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 11.0.x
+          dotnet-version: 10.0.x
       # The SAME $(Version) computation as mw-plugin-test's leg, on the same project, so the two
       # carry one version by construction (promote asserts it).
       - name: Compute image version

@@ -55,7 +55,7 @@ public class DepsClosureTest
                 "runtimeTargets": { "runtimes/linux-x64/lib/net8.0/msalruntime.dll": { "rid": "linux-x64", "assetType": "native" } }
               },
               "Microsoft.Extensions.Options/10.0.0": {
-                "runtime": { "lib/net11.0/Microsoft.Extensions.Options.dll": {} }
+                "runtime": { "lib/net10.0/Microsoft.Extensions.Options.dll": {} }
               }
             }
           },
@@ -143,9 +143,9 @@ public class DepsClosureTest
                 }
               },
               "RidPicky/1.0.0": {
-                "runtime": { "lib/net11.0/RidPicky.dll": {} },
+                "runtime": { "lib/net10.0/RidPicky.dll": {} },
                 "runtimeTargets": {
-                  "runtimes/linux-x64/lib/net11.0/RidPicky.dll": { "rid": "linux-x64", "assetType": "runtime" }
+                  "runtimes/linux-x64/lib/net10.0/RidPicky.dll": { "rid": "linux-x64", "assetType": "runtime" }
                 }
               }
             }
@@ -273,7 +273,7 @@ public class DepsClosureTest
         var managed = Assert.Single(pure.Uncarried);
         Assert.Equal(DepsClosure.UncarriedKind.RidSpecificManaged, managed.Kind);
         Assert.Equal("RidPicky", managed.Package);
-        Assert.Equal("runtimes/linux-x64/lib/net11.0/RidPicky.dll", managed.RelativePath);
+        Assert.Equal("runtimes/linux-x64/lib/net10.0/RidPicky.dll", managed.RelativePath);
         Assert.Equal("linux-x64", managed.Rid);
         Assert.Equal("RidPicky.dll", managed.FileName);
         // A managed assembly has no probed NATIVE layout — --with is its only carrier.
@@ -290,7 +290,7 @@ public class DepsClosureTest
 
         // The finding is the ONE spelling both lanes share, so one grep measures both (#4445).
         Assert.StartsWith(
-            UncarriedAssetFindings.RidSpecificManaged("RidPicky", "runtimes/linux-x64/lib/net11.0/RidPicky.dll"),
+            UncarriedAssetFindings.RidSpecificManaged("RidPicky", "runtimes/linux-x64/lib/net10.0/RidPicky.dll"),
             managed.Describe(), StringComparison.Ordinal);
         Assert.StartsWith(
             UncarriedAssetFindings.UnprobedNative("Microsoft.Identity.Client", "runtimes/linux-x64/lib/net8.0/msalruntime.dll"),
@@ -355,7 +355,7 @@ public class DepsClosureTest
         // Still dropped — but NAMED, which is the half the old warning got right and could not
         // deliver for a pure-native package.
         Assert.Contains(result.Warnings,
-            w => w.Contains("RidPicky") && w.Contains("runtimes/linux-x64/lib/net11.0/RidPicky.dll"));
+            w => w.Contains("RidPicky") && w.Contains("runtimes/linux-x64/lib/net10.0/RidPicky.dll"));
         // The RID-agnostic copy still rides, exactly as before.
         Assert.Contains("RidPicky.dll", result.Files);
     }
@@ -379,10 +379,10 @@ public class DepsClosureTest
                 }
               },
               "Mixed/1.0.0": {
-                "runtime": { "lib/net11.0/Mixed.dll": {} },
+                "runtime": { "lib/net10.0/Mixed.dll": {} },
                 "runtimeTargets": {
                   "runtimes/browser-wasm/nativeassets/net9.0/mixed.so": { "rid": "browser-wasm", "assetType": "native" },
-                  "runtimes/unix/lib/net11.0/Mixed.dll": { "rid": "unix", "assetType": "runtime" }
+                  "runtimes/unix/lib/net10.0/Mixed.dll": { "rid": "unix", "assetType": "runtime" }
                 }
               }
             }
@@ -415,7 +415,7 @@ public class DepsClosureTest
 
         var refused = Assert.Single(result.Uncarried);
         Assert.Equal("unix", refused.Rid);
-        Assert.Equal("runtimes/unix/lib/net11.0/Mixed.dll", refused.RelativePath);
+        Assert.Equal("runtimes/unix/lib/net10.0/Mixed.dll", refused.RelativePath);
         Assert.DoesNotContain(result.Warnings, w => w.Contains("runtimes/win/", StringComparison.Ordinal)
                                                    || w.Contains("browser-wasm", StringComparison.Ordinal));
         // The facade still rides — leaving the Windows implementation out costs nothing.

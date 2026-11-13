@@ -29,16 +29,16 @@ public class ModuleLibrariesShelfTest : IDisposable
         File.WriteAllText(Path.Combine(_root, "MeshWeaver.ModuleLibraries.deps.json"), """
             {
               "targets": {
-                "net11.0": {
+                "net10.0": {
                   "Provider.Sdk/2.0.0": {
-                    "runtime": { "lib/net11.0/Provider.Sdk.dll": {} },
+                    "runtime": { "lib/net10.0/Provider.Sdk.dll": {} },
                     "dependencies": { "Provider.Transitive": "1.0.0", "Azure.Core": "1.60.0" }
                   },
                   "Provider.Transitive/1.0.0": {
-                    "runtime": { "lib/net11.0/Provider.Transitive.dll": {} }
+                    "runtime": { "lib/net10.0/Provider.Transitive.dll": {} }
                   },
                   "Azure.Core/1.60.0": {
-                    "runtime": { "lib/net11.0/Azure.Core.dll": {} }
+                    "runtime": { "lib/net10.0/Azure.Core.dll": {} }
                   }
                 }
               }
@@ -87,13 +87,13 @@ public class ModuleLibrariesShelfTest : IDisposable
         File.WriteAllText(Path.Combine(root, "MeshWeaver.ModuleLibraries.deps.json"), """
             {
               "targets": {
-                "net11.0": {
+                "net10.0": {
                   "Acme.Bundle/1.0.0": {
-                    "runtime": { "lib/net11.0/Acme.Widget.dll": {} },
+                    "runtime": { "lib/net10.0/Acme.Widget.dll": {} },
                     "dependencies": { "Acme.Transitive": "1.0.0" }
                   },
                   "Acme.Transitive/1.0.0": {
-                    "runtime": { "lib/net11.0/Acme.Transitive.dll": {} }
+                    "runtime": { "lib/net10.0/Acme.Transitive.dll": {} }
                   }
                 }
               }

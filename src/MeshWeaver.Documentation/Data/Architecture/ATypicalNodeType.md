@@ -138,7 +138,7 @@ own closure.
 dotnet build tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj -c Release -warnaserror
 bash .github/scripts/stage-doc-gate.sh src/MeshWeaver.Documentation/Data /tmp/doc
 bash .github/scripts/bake-then-gate.sh \
-  tools/MeshWeaver.PluginTester/bin/Release/net11.0/mw-plugin-test.dll \
+  tools/MeshWeaver.PluginTester/bin/Release/net10.0/mw-plugin-test.dll \
   /tmp/doc /tmp/bake/doc .github/doc-gate.allow "$(git rev-parse HEAD)" \
   /tmp/doc-gate .github/doc-gate-warnings.allow
 python3 .github/scripts/check-tests-area-verdicts.py \

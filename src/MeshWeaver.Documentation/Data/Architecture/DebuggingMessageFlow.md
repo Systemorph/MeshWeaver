@@ -63,7 +63,7 @@ Two sanctioned paths to raise verbosity:
 
 | Context | What to edit |
 |---|---|
-| Test debugging session | `test/<Suite>/bin/Debug/net11.0/appsettings.json` (or the shared `test/appsettings.json` at the runtime location). `reloadOnChange: true` is wired, so the level flips mid-run without a rebuild. **Revert before committing.** |
+| Test debugging session | `test/<Suite>/bin/Debug/net10.0/appsettings.json` (or the shared `test/appsettings.json` at the runtime location). `reloadOnChange: true` is wired, so the level flips mid-run without a rebuild. **Revert before committing.** |
 | Production debugging session | `../MeshWeaver.Plugins/src/Memex.Portal.Distributed/appsettings.json` under the top-level `Logging:LogLevel`. That gates what reaches stdout, which Promtail ships to Loki. |
 
 If a `Log*` call is genuinely too noisy or too quiet at its current level, fix it permanently with a commit explaining the cost/value trade-off — never sneak it in alongside an unrelated change.
@@ -104,7 +104,7 @@ grep -E "MESSAGE_FLOW|SYNC_STREAM|exception occurred|deliveryId" /tmp/trace.log
 ```
 
 If the test hangs inside the runner, per-test log files are captured here:
-`test/<Suite>/bin/Debug/net11.0/test-logs/<TestClass>_<TestMethod>.log`
+`test/<Suite>/bin/Debug/net10.0/test-logs/<TestClass>_<TestMethod>.log`
 
 ---
 
