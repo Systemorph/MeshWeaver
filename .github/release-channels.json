@@ -3,7 +3,7 @@
     "THE DECLARED RELEASE CHANNELS — every MOVING image label the platform publishes or reserves,",
     "in ONE place (policy `declared-release-channels`; manual Doc/Architecture/ReleaseEditions).",
     "",
-    "A channel label is a TAG that moves (`3-latest`, `3-mac`, `3-enterprise`, `main`), never a",
+    "A channel label is a TAG that moves (`3-latest`, `3-mac`, `3-enterprise`, `main`, `main3`), never a",
     "version: versions stay plain SemVer and carry no channel word (policy",
     "`platform-semver-versioning`). A label names WHICH build an edition currently offers; a",
     "deployment still runs a resolved VERSION (a pointer is a seed, never a running pin).",
@@ -23,7 +23,13 @@
     "`status`: written  — a writer moves it today.",
     "          declared — reserved and protected; no writer yet (`writer.state` says what is owed).",
     "          retired  — no writer moves it any more; still protected while a consumer may resolve it.",
-    "`notation`: any | legacy — `legacy` labels are written only for a pre-SemVer set (`3.0.0-ci.<n>`)."
+    "`notation`: any | legacy — `legacy` labels are written only for a pre-SemVer set (`3.0.0-ci.<n>`).",
+    "`line`: (optional) the DELIVERY LINE (.github/delivery-lines.json) whose runs write the label — a",
+    "         line's floating label (`main`, `main3`). Its writers write it only in a run of that line,",
+    "         and every delivery line's `label` must be a channel declaring that line.",
+    "`onlyTheLineThatMovesLatest`: (binding, optional) a main-cd.yml writer that moves the label ONLY in a",
+    "         run of the line .github/delivery-lines.json marks `movesLatest` — `tags_for` hands it to no",
+    "         other line, and every main-cd.yml binding of `latest` must carry it."
   ],
   "schema": 1,
   "placeholders": {
@@ -286,8 +292,9 @@
     {
       "id": "main",
       "tag": "main",
+      "line": "main",
       "edition": "continuous",
-      "meaning": "The newest PROMOTED set (before arming). What CI consumers and memex-local's default pull read; not a fleet seed.",
+      "meaning": "The newest PROMOTED set (before arming) of the `main` delivery line. What CI consumers and memex-local's default pull read; not a fleet seed.",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
@@ -337,6 +344,48 @@
       ]
     },
     {
+      "id": "main3",
+      "tag": "main3",
+      "line": "main3",
+      "edition": "continuous",
+      "meaning": "The newest PROMOTED set (before arming) of the `main3` delivery line — the previous major, which delivers beside `main` from its own branch (policy `major-lines-run-separately`, .github/delivery-lines.json). What a dependent still on that line reads; not a fleet seed.",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "notation": "any",
+      "status": "written",
+      "writers": [
+        {
+          "workflow": "main-cd.yml",
+          "job": "promote",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration",
+            "mw-plugin-test"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "phase B of a run on branch main3, forward only within the line (GHCR carries mw-plugin-test:main3 only)"
+        },
+        {
+          "workflow": "main-cd.yml",
+          "job": "control-promote",
+          "repositories": [
+            "memex-control"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "identity tags of the accepted control image of a run on branch main3"
+        }
+      ]
+    },
+    {
       "id": "latest",
       "tag": "latest",
       "edition": "continuous",
@@ -359,7 +408,8 @@
             "ghcr.io/systemorph",
             "cr.meshweaver.cloud"
           ],
-          "state": "phase B — MeshWeaver.Plugins pins MW_TEST_IMAGE to it"
+          "state": "phase B — MeshWeaver.Plugins pins MW_TEST_IMAGE to it",
+          "onlyTheLineThatMovesLatest": true
         },
         {
           "workflow": "main-cd.yml",
@@ -373,7 +423,8 @@
             "ghcr.io/systemorph",
             "cr.meshweaver.cloud"
           ],
-          "state": "Phase D, after the arming PUT, beside `{major}-latest`, forward only"
+          "state": "Phase D, after the arming PUT, beside `{major}-latest`, forward only",
+          "onlyTheLineThatMovesLatest": true
         },
         {
           "workflow": "release.yml",

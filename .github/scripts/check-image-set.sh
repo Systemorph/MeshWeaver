@@ -2,7 +2,7 @@
 #
 # Is the COMPLETE deployment image set present in ACR for one commit?
 #
-#   .github/scripts/check-image-set.sh <short-sha> [--pointers <version>]
+#   .github/scripts/check-image-set.sh <short-sha> [--pointers <version> --line-label <label> --moves-latest true|false]
 #   exit 0 = complete   exit 1 = something is missing / malformed / could not be verified
 #
 # 🚨 NO PLUGINS SHA, NO PAIR TAG (policy `platform-module-deploy-separate`). This used to take a
@@ -70,12 +70,18 @@
 set -uo pipefail
 
 usage() {
-  echo "usage: check-image-set.sh <short-sha> [--pointers <version>]" >&2
+  echo "usage: check-image-set.sh <short-sha> [--pointers <version> --line-label <label> --moves-latest true|false]" >&2
 }
 
 SHA=""
 POINTER_VERSION=""
 CHECK_POINTERS=0
+# 🚨 The delivery LINE's floating label (`main`, `main3`) and whether that line moves the tester's
+# `latest` (policy `major-lines-run-separately`, .github/delivery-lines.json). Required with
+# `--pointers`, never defaulted: a check that assumed `main` would assert another line's pointer and
+# read a correct main3 promotion as torn — or a torn one as whole.
+LINE_LABEL=""
+MOVES_LATEST=""
 positional=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -86,6 +92,12 @@ while [ $# -gt 0 ]; do
       # could not be verified" as its headline instead of a usage message about a flag.
       if [ $# -ge 2 ]; then POINTER_VERSION="$2"; shift 2; else shift; fi
       ;;
+    --line-label)
+      [ $# -ge 2 ] || { echo "::error::check-image-set.sh: --line-label needs a value"; usage; exit 1; }
+      LINE_LABEL="$2"; shift 2 ;;
+    --moves-latest)
+      [ $# -ge 2 ] || { echo "::error::check-image-set.sh: --moves-latest needs true or false"; usage; exit 1; }
+      MOVES_LATEST="$2"; shift 2 ;;
     --*) echo "::error::check-image-set.sh: unknown option '$1'"; usage; exit 1 ;;
     *)
       positional=$((positional + 1))
@@ -103,6 +115,17 @@ if [ -z "$SHA" ]; then
   usage
   exit 1
 fi
+if [ "$CHECK_POINTERS" -eq 1 ]; then
+  if [ -z "$LINE_LABEL" ]; then
+    echo "::error::check-image-set.sh: --pointers needs --line-label <the line's floating label, e.g. main or main3> — the pointers are per line, and none is assumed."
+    usage; exit 1
+  fi
+  case "$MOVES_LATEST" in
+    true|false) ;;
+    *) echo "::error::check-image-set.sh: --pointers needs --moves-latest true|false (got '$MOVES_LATEST') — only the line .github/delivery-lines.json names moves the tester's \`latest\`."
+       usage; exit 1 ;;
+  esac
+fi
 REGISTRY="${ACR_NAME:-meshweaver}"
 
 # Reads manifests through ARM (an `az login` is enough — `az acr login` is for docker push creds).
@@ -114,7 +137,7 @@ summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$1" >> "$GITHUB_STEP_SUMM
 report()  { echo "::error::$1"; summary "- ❌ $1"; fail=1; }
 ok()      { echo "$1";          summary "- ✅ $1"; }
 
-summary "### Images for main \`$SHA\`"
+summary "### Images for \`$SHA\`${LINE_LABEL:+ (line label \`$LINE_LABEL\`)}"
 
 # THE REPOSITORIES OF THE SET. Every assertion below iterates THIS list — a repository added here
 # is asserted for its sha tag and for every set-wide pointer, in one edit.
@@ -186,11 +209,15 @@ done
 if [ "$CHECK_POINTERS" -eq 1 ]; then
   summary "### Pointers"
   for repo in $REPOS; do
-    assert_index "$repo" main \
-      "Phase B must publish \`main\` on all three repositories (Doc/Architecture/ImageTagContract)." || true
+    assert_index "$repo" "$LINE_LABEL" \
+      "Phase B must publish the line label \`$LINE_LABEL\` on all three repositories (Doc/Architecture/ImageTagContract)." || true
   done
-  assert_index mw-plugin-test latest \
-    "Satellites resolve this tag as \`vars.MW_TEST_IMAGE\`; phase B must publish it beside \`mw-plugin-test:main\`." || true
+  if [ "$MOVES_LATEST" = "true" ]; then
+    assert_index mw-plugin-test latest \
+      "Satellites resolve this tag as \`vars.MW_TEST_IMAGE\`; phase B must publish it beside \`mw-plugin-test:$LINE_LABEL\`." || true
+  else
+    ok "mw-plugin-test:latest not asserted — the line labelled \`$LINE_LABEL\` does not move it (.github/delivery-lines.json)"
+  fi
   if [ -z "$POINTER_VERSION" ]; then
     report "--pointers was given an EMPTY version, so the set's immutable pointer could not be asserted. The caller must pass the version this run promoted (every leg's \$(Version), e.g. 3.0.0-ci.8079). An empty value means the leg that computes it never ran — the set is not promoted."
   else
