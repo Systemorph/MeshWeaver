@@ -1,5 +1,7 @@
 // One plugin repository a deployment mounts — moved with the Deployment record (see DeploymentContent.cs).
 using System;
+using System.Collections.Immutable;
+using System.Linq;
 
 namespace MeshWeaver.Deployment;
 
@@ -31,6 +33,20 @@ public record PluginRepoMount
 
     /// <summary>Git ref, for a registry source. Blank → <c>main</c>. Ignored by a consumer mount.</summary>
     public string? Ref { get; init; }
+
+    /// <summary>
+    /// 🚨 The ref this registry source is served at PER PLATFORM LINE — major → ref, e.g.
+    /// <c>{ "3": "main3" }</c> (policy <c>major-lines-run-separately</c>,
+    /// Doc/Architecture/MajorLinesRunSeparately §4b). A caller on line 3 is listed and served the
+    /// repository at <c>main3</c>; a caller on any line this map does not name is served
+    /// <see cref="EffectiveRef"/>, exactly as before. Empty (the default) renders nothing, so a record
+    /// that declares none keeps today's single-ref behaviour byte for byte.
+    /// <para>Declared, never derived from a branch-naming convention: a repository that has no
+    /// <c>main3</c> must not be asked for one. Only a registry source carries it
+    /// (<see cref="Problem"/> refuses it on a consumer mount, whose line is its own record's).</para>
+    /// </summary>
+    public ImmutableSortedDictionary<string, string> LineRefs { get; init; }
+        = ImmutableSortedDictionary<string, string>.Empty;
 
     /// <summary>
     /// True when this deployment SERVES this repo (it is the registry) rather than consuming it.
@@ -71,6 +87,26 @@ public record PluginRepoMount
     /// <summary>Git ref, defaulted to <c>main</c> the way the catalog defaults it. Pure.</summary>
     public string EffectiveRef => string.IsNullOrWhiteSpace(Ref) ? "main" : Ref!.Trim();
 
+    /// <summary>
+    /// <see cref="LineRefs"/> trimmed, entries with a blank line or ref dropped, in line order — the
+    /// form every renderer uses. Pure.
+    /// </summary>
+    public ImmutableSortedDictionary<string, string> NormalizedLineRefs =>
+        (LineRefs ?? ImmutableSortedDictionary<string, string>.Empty)
+            .Where(kv => !string.IsNullOrWhiteSpace(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value))
+            .ToImmutableSortedDictionary(kv => kv.Key.Trim(), kv => kv.Value.Trim(), StringComparer.Ordinal);
+
+    /// <summary>
+    /// The ref a caller on <paramref name="line"/> is served: its <see cref="NormalizedLineRefs"/>
+    /// entry, else <see cref="EffectiveRef"/>. Pure.
+    /// </summary>
+    /// <param name="line">The caller's platform major (<c>"3"</c>), or null when unstated.</param>
+    /// <returns>The ref to read the repository at.</returns>
+    public string RefForLine(string? line) =>
+        !string.IsNullOrWhiteSpace(line) && NormalizedLineRefs.TryGetValue(line.Trim(), out var lineRef)
+            ? lineRef
+            : EffectiveRef;
+
     /// <summary>Trimmed <see cref="SecretName"/>, or null when blank. Pure.</summary>
     public string? NormalizedSecretName => string.IsNullOrWhiteSpace(SecretName) ? null : SecretName!.Trim();
 
@@ -90,18 +126,24 @@ public record PluginRepoMount
     /// letter or digit becomes a single <c>_</c> (<c>:</c> and <c>__</c> are separators in a
     /// configuration key and an environment variable). Pure.
     /// </summary>
-    public string KeySegment
+    public string KeySegment => KeySegmentOf(NormalizedName);
+
+    /// <summary>
+    /// <paramref name="name"/> as ONE configuration-key segment — the rule <see cref="KeySegment"/>
+    /// applies, exposed so the portal reading a name-keyed section (<c>PluginCatalog:LineRefs</c>)
+    /// keys a source exactly as the renderer did. Pure.
+    /// </summary>
+    /// <param name="name">A source name.</param>
+    /// <returns>The key segment, possibly empty.</returns>
+    public static string KeySegmentOf(string? name)
     {
-        get
+        var builder = new System.Text.StringBuilder();
+        foreach (var c in (name ?? "").Trim())
         {
-            var builder = new System.Text.StringBuilder();
-            foreach (var c in NormalizedName)
-            {
-                if (char.IsAsciiLetterOrDigit(c)) builder.Append(c);
-                else if (builder.Length > 0 && builder[^1] != '_') builder.Append('_');
-            }
-            return builder.ToString().Trim('_');
+            if (char.IsAsciiLetterOrDigit(c)) builder.Append(c);
+            else if (builder.Length > 0 && builder[^1] != '_') builder.Append('_');
         }
+        return builder.ToString().Trim('_');
     }
 
     /// <summary>
@@ -139,5 +181,28 @@ public record PluginRepoMount
         : IsRegistrySource && NormalizedSecretName is not null && KeySegment.Length == 0
             ? $"plugin mount '{NormalizedName}' names secretName but its name has no letter or digit "
               + "to key the token by"
-        : null;
+        : LineRefsProblem();
+
+    /// <summary>Why <see cref="LineRefs"/> cannot be used, or null. Pure.</summary>
+    private string? LineRefsProblem()
+    {
+        var declared = LineRefs ?? ImmutableSortedDictionary<string, string>.Empty;
+        if (declared.Count == 0)
+            return null;
+        if (!IsRegistrySource)
+            return $"plugin mount '{NormalizedName}' names lineRefs but is not a registry source — a consumer "
+                   + "is served its own record's line by the registry, it does not choose a ref";
+        if (KeySegment.Length == 0)
+            return $"plugin mount '{NormalizedName}' names lineRefs but its name has no letter or digit to key them by";
+        foreach (var (line, lineRef) in declared)
+        {
+            var l = (line ?? "").Trim();
+            if (l.Length == 0 || !l.All(char.IsAsciiDigit))
+                return $"plugin mount '{NormalizedName}' names lineRefs entry '{line}' — a line is a platform "
+                       + "major (\"3\", \"4\")";
+            if (string.IsNullOrWhiteSpace(lineRef))
+                return $"plugin mount '{NormalizedName}' names line {l} with no ref";
+        }
+        return null;
+    }
 }

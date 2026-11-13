@@ -721,6 +721,7 @@ public static class DeploymentPortalConfig
         var problems = ImmutableList.CreateBuilder<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var tokenKeys = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        var lineRefKeys = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mount in mounts ?? Enumerable.Empty<PluginRepoMount>())
         {
             if (mount is null)
@@ -749,6 +750,20 @@ public static class DeploymentPortalConfig
                     continue;
                 }
                 tokenKeys[tokenKey] = mount.NormalizedName;
+            }
+            // The same rule for the name-keyed per-line refs (PluginCatalog:LineRefs:{segment}): two
+            // sources keyed alike would read each other's line refs, so the second is refused.
+            if (mount.NormalizedLineRefs.Count > 0)
+            {
+                if (lineRefKeys.TryGetValue(mount.KeySegment, out var lineHolder))
+                {
+                    problems.Add(
+                        $"plugin mount '{mount.NormalizedName}' keys its lineRefs as '{mount.KeySegment}', which mount "
+                        + $"'{lineHolder}' already uses — rename one so each source's line refs have their own key");
+                    seen.Remove(mount.NormalizedName);
+                    continue;
+                }
+                lineRefKeys[mount.KeySegment] = mount.NormalizedName;
             }
             usable.Add(mount);
         }
@@ -787,9 +802,34 @@ public static class DeploymentPortalConfig
             if (sources[i].NormalizedInstallationOwner is { } owner)
                 entries.Add($"{CatalogSection}:Sources:{i}:InstallationOwner={owner}");
         }
+        entries.AddRange(LineRefEntries(sources));
         var patterns = InstallPatterns(mounts, preInstall);
         for (var i = 0; i < patterns.Count; i++)
             entries.Add($"{CatalogSection}:InstallByDefault:{i}={patterns[i]}");
+        return entries.ToImmutable();
+    }
+
+    /// <summary>
+    /// The configuration section the per-line refs of the registry's git sources render into,
+    /// NAME-keyed (<c>PluginCatalog:LineRefs:{source key segment}:{major}={ref}</c>) so the Helm route,
+    /// whose <c>Sources:N</c> list the chart renders, and the boot/Aspire route, which renders it here,
+    /// cannot disagree about which index a line ref belongs to (policy <c>major-lines-run-separately</c>).
+    /// </summary>
+    public const string LineRefsSection = CatalogSection + ":LineRefs";
+
+    /// <summary>
+    /// The per-line ref entries of the usable registry-source mounts (<see cref="PluginRepoMount.LineRefs"/>),
+    /// in source then line order. Empty when no source declares any — so a record without them renders
+    /// exactly what it rendered before. Pure.
+    /// </summary>
+    /// <param name="mounts">The deployment's plugin mounts.</param>
+    /// <returns>Flat <c>Key=Value</c> entries.</returns>
+    public static ImmutableList<string> LineRefEntries(IEnumerable<PluginRepoMount>? mounts)
+    {
+        var entries = ImmutableList.CreateBuilder<string>();
+        foreach (var source in (mounts ?? Enumerable.Empty<PluginRepoMount>()).Where(m => m is { IsRegistrySource: true }))
+            foreach (var (line, lineRef) in source.NormalizedLineRefs)
+                entries.Add($"{LineRefsSection}:{source.KeySegment}:{line}={lineRef}");
         return entries.ToImmutable();
     }
 
@@ -1243,6 +1283,17 @@ public static class DeploymentPortalConfig
         // the entries above cannot — which is the whole reason the empty list can mean "none".
         if (d.RequiredModulesAuthoritative)
             Set(RequiredIsAuthoritativeKey.Replace(":", "__"), "true");
+
+        // The per-line refs of the registry's git sources (policy major-lines-run-separately). Under Helm
+        // the chart renders the Sources list from its own values and knows nothing of line refs, so they
+        // reach the pod through this map's pass-through, name-keyed; under Aspire the boot entries below
+        // carry the identical keys. A record that declares none renders nothing here.
+        if (!options.IncludeBootEntries)
+            foreach (var entry in LineRefEntries(Validate(d.PluginRepos).Usable))
+            {
+                var eq = entry.IndexOf('=');
+                Set(entry[..eq].Replace(":", "__"), entry[(eq + 1)..]);
+            }
 
         // The catalog wiring rides with the record on BOTH routes, but the chart delivers it through
         // the operator's catalog config file (BootConfigurationEntries → HOSTING_CATALOG_CONFIG)
