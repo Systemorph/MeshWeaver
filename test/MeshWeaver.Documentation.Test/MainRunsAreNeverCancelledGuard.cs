@@ -255,14 +255,23 @@ public class MainRunsAreNeverCancelledGuard
     /// from it in its cancel or its group — a copy of the shipped row expecting a problem would be a
     /// control that cannot be told apart from a broken judge.
     /// </summary>
+    // An InlineData cell the theory declares as a string: a row that carries anything else is a broken
+    // fixture, named, never a null read past.
+    private static string RowString(InlineDataAttribute row, int index) =>
+        row.Data.Length > index && row.Data[index] is string value
+            ? value
+            : throw new InvalidOperationException($"an InlineData row of the delivery-guard theory has no string at position {index}");
+
     [Fact]
     public void DeliveryGuard_MutationRows_AreRealMutationsOfTheShippedShape()
     {
-        var rows = typeof(MainRunsAreNeverCancelledGuard)
-            .GetMethod(nameof(DeliveryGuard_FiresOnEachMutation_AndStaysSilentOnTheShippedShape))!
+        var theory = typeof(MainRunsAreNeverCancelledGuard)
+            .GetMethod(nameof(DeliveryGuard_FiresOnEachMutation_AndStaysSilentOnTheShippedShape));
+        Assert.NotNull(theory);
+        var rows = theory
             .GetCustomAttributes(typeof(InlineDataAttribute), false)
             .Cast<InlineDataAttribute>()
-            .Select(a => (Cancel: (string)a.Data[0]!, Group: (string)a.Data[1]!, Expected: (string)a.Data[2]!))
+            .Select(a => (Cancel: RowString(a, 0), Group: RowString(a, 1), Expected: RowString(a, 2)))
             .ToList();
 
         var silent = Assert.Single(rows, r => r.Expected.Length == 0);
