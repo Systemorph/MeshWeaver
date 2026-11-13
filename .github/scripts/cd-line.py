@@ -91,12 +91,17 @@ def validate(doc) -> list[str]:
         if "movesLatest" in line and not isinstance(line.get("movesLatest"), bool):
             problems.append(f"{where}: `movesLatest` must be true or false")
         branch = line.get("branch")
-        if branch in branches:
-            problems.append(f"{where}: duplicate branch {branch!r}")
-        branches.add(branch)
-        if label in labels:
-            problems.append(f"{where}: duplicate label {label!r} — two lines would move one pointer")
-        labels.add(label)
+        # Only a STRING enters the duplicate sets: an object or an array is unhashable, and a
+        # TypeError there would escape load() as a traceback instead of the named refusal (exit 2).
+        # Its own wrong type is already a problem above.
+        if isinstance(branch, str):
+            if branch in branches:
+                problems.append(f"{where}: duplicate branch {branch!r}")
+            branches.add(branch)
+        if isinstance(label, str):
+            if label in labels:
+                problems.append(f"{where}: duplicate label {label!r} — two lines would move one pointer")
+            labels.add(label)
         if line.get("movesLatest") is True:
             movers.append(branch)
     if len(movers) != 1:
@@ -237,14 +242,47 @@ LINE_LITERALS = [
     (re.compile(r"branches:\s*\[[^\]]*(?<![A-Za-z0-9_.-])main(?![A-Za-z0-9_.-])"), "a branches: filter"),
 ]
 
-# The ONE place `main` may stay spelled, and why. Keyed on the stripped line, so a second occurrence
-# of the same text elsewhere is still allowed only because it is the same statement.
+# The ONE place `main` may stay spelled, and why — keyed on its POSITION (the YAML path of the key
+# the line belongs to), never on its text: the same `branches: [main]` under `on.push` or any other
+# trigger is a finding, because only workflow_run's reason applies to workflow_run.
 ALLOWED = {
-    "branches: [main]":
+    ("on", "workflow_run", "branches"):
         "on.workflow_run.branches: workflow_run runs the DEFAULT branch's copy of this file, so it may "
         "only ever deliver the default line; the guard below holds it equal to delivery-lines.json's "
         "defaultBranch.",
 }
+
+_KEY_RE = re.compile(r"^(?P<indent> *)(?P<key>[A-Za-z_][A-Za-z0-9_-]*|'[^']*'|\"[^\"]*\"):(?:\s|$)")
+
+
+def _key_paths(text: str) -> dict[int, tuple[str, ...]]:
+    """Line number → the YAML path of the mapping key that line opens (`("on", "workflow_run",
+    "branches")`), for every line that opens one. Indentation-tracked, which is all a workflow's
+    block-style mappings need; a line inside a `run: |` scalar is never a key (its indent is deeper
+    than any key it could be read as, and it is not on the stack's path)."""
+    paths: dict[int, tuple[str, ...]] = {}
+    stack: list[tuple[int, str]] = []
+    block_indent: int | None = None
+    for number, raw in enumerate(text.splitlines(), 1):
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if block_indent is not None:
+            if indent > block_indent:
+                continue            # inside a block scalar (`run: |`, `>-`)
+            block_indent = None
+        m = _KEY_RE.match(raw)
+        if not m:
+            continue
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        key = m.group("key").strip("'\"")
+        stack.append((indent, key))
+        paths[number] = tuple(k for _, k in stack)
+        rest = raw[m.end():].strip()
+        if rest.startswith(("|", ">")):
+            block_indent = indent
+    return paths
 
 
 def _code_lines(text: str):
@@ -257,8 +295,9 @@ def _code_lines(text: str):
 
 def literal_findings(text: str) -> list[str]:
     out = []
+    paths = _key_paths(text)
     for number, stripped in _code_lines(text):
-        if stripped in ALLOWED:
+        if paths.get(number) in ALLOWED:
             continue
         for pattern, what in LINE_LITERALS:
             if pattern.search(stripped):
@@ -310,13 +349,37 @@ def trigger_findings(doc: dict, cd: dict, test: dict) -> list[str]:
     return out
 
 
+def concurrency_findings(doc: dict, test_text: str) -> list[str]:
+    """Build-and-Test's per-commit concurrency group and its cancel-in-progress name every delivery
+    line, and no other branch (policy `major-lines-run-separately`). A line missing from the group
+    would group its pushes by branch NAME — landed commits evicting each other from the pending
+    slot — and one missing from cancel-in-progress would cancel its own runs: either way commits
+    of that line never get the green check CD ships on."""
+    out = []
+    every = sorted(by_branch(doc))
+    group = re.search(r"^\s*group:\s*(?P<v>.+?)\s*$", test_text, re.MULTILINE)
+    cancel = re.search(r"^\s*cancel-in-progress:\s*(?P<v>.+?)\s*$", test_text, re.MULTILINE)
+    if not group or not cancel:
+        return [f"{TEST_WORKFLOW}: no concurrency group / cancel-in-progress found — this guard cannot see them"]
+    in_group = sorted(set(re.findall(r"github\.ref\s*==\s*'refs/heads/([^']+)'", group.group("v"))))
+    in_cancel = sorted(set(re.findall(r"github\.ref\s*!=\s*'refs/heads/([^']+)'", cancel.group("v"))))
+    if in_group != every:
+        out.append(f"{TEST_WORKFLOW}: the concurrency group gives a per-commit group to {in_group}, must be every "
+                   f"delivery line {every} — a line grouped by branch NAME evicts its own landed commits")
+    if in_cancel != every:
+        out.append(f"{TEST_WORKFLOW}: cancel-in-progress exempts {in_cancel}, must exempt every delivery line "
+                   f"{every} — a line it does not exempt cancels its own runs on every merge")
+    return out
+
+
 def check_workflow(root: Path) -> list[str]:
     sys.path.insert(0, str(HERE))
     import workflow_yaml  # noqa: PLC0415 — the shared extractor; needs PyYAML, as every harness does
     doc = load(root / ".github" / "delivery-lines.json")
     text = (root / CD_WORKFLOW).read_text(encoding="utf-8")
     return (literal_findings(text)
-            + trigger_findings(doc, workflow_yaml.load(root / CD_WORKFLOW), workflow_yaml.load(root / TEST_WORKFLOW)))
+            + trigger_findings(doc, workflow_yaml.load(root / CD_WORKFLOW), workflow_yaml.load(root / TEST_WORKFLOW))
+            + concurrency_findings(doc, (root / TEST_WORKFLOW).read_text(encoding="utf-8")))
 
 
 # ─────────────────────────────── self-test ───────────────────────────────
@@ -394,6 +457,22 @@ def self_test() -> int:
     expect("an undeclared default branch is malformed",
            any("not a declared line" in p for p in broken(lambda d: d.update(defaultBranch="trunk"))))
     expect("an empty line list is malformed", bool(broken(lambda d: d.update(lines=[]))))
+    for field in ("branch", "label"):
+        for bad in ({"x": 1}, ["main"]):
+            try:
+                problems = broken(lambda d, f=field, v=bad: d["lines"][1].update({f: v}))
+                expect(f"a non-string {field} ({type(bad).__name__}) is a NAMED problem, never a TypeError",
+                       any(f"`{field}` must" in p for p in problems), "; ".join(problems))
+            except TypeError as error:
+                expect(f"a non-string {field} ({type(bad).__name__}) is a NAMED problem, never a TypeError",
+                       False, f"TypeError: {error}")
+    with tempfile.TemporaryDirectory() as tmp:
+        unhashable = json.loads(json.dumps(doc))
+        unhashable["lines"][1]["branch"] = {"x": 1}
+        bad_file = Path(tmp) / "unhashable.json"
+        bad_file.write_text(json.dumps(unhashable), encoding="utf-8")
+        expect("cli: an object-valued branch exits 2 with the named refusal, never a traceback",
+               main(["x", "derive"], env={"CD_EVENT": "schedule", "CD_REF_NAME": "main"}, declaration=bad_file) == 2)
     expect("a missing field is malformed", bool(broken(lambda d: d["lines"][0].pop("pluginsRef"))))
 
     # The line's major, from its own Directory.Build.props.
@@ -443,7 +522,27 @@ def self_test() -> int:
     expect("guard: `$repo:main` is caught", bool(literal_findings('  x "${{ env.ACR }}/$repo:main"\n')))
     expect("guard: a comment that says main is not a finding",
            literal_findings("# resolves commits/main and tags :main\n") == [])
-    expect("guard: the allowed workflow_run filter is not a finding", literal_findings("    branches: [main]\n") == [])
+    expect("guard: the allowed filter, UNDER on.workflow_run, is not a finding",
+           literal_findings("on:\n  workflow_run:\n    types: [completed]\n    branches: [main]\n") == [])
+    expect("guard: the SAME text under on.push is a finding (the exemption is positional, not textual)",
+           any("branches: filter" in f for f in
+               literal_findings("on:\n  workflow_run:\n    branches: [main]\n  push:\n    branches: [main]\n")))
+    expect("guard: the same text under a job (not a trigger) is a finding",
+           bool(literal_findings("jobs:\n  x:\n    branches: [main]\n")))
+    expect("guard: a key-shaped line inside a `run: |` block is not read as a key",
+           _key_paths("jobs:\n  a:\n    run: |\n      on: x\n      branches: [main]\n").get(5) is None)
+    test_text = (root / TEST_WORKFLOW).read_text(encoding="utf-8")
+    expect("guard: Build-and-Test's group and cancel-in-progress name every line (shipped file)",
+           concurrency_findings(doc, test_text) == [], "; ".join(concurrency_findings(doc, test_text)))
+    third = json.loads(json.dumps(doc))
+    third["lines"].append({"branch": "main2", "pluginsRef": "main2", "satelliteRef": "main",
+                           "label": "main2", "movesLatest": False})
+    found = concurrency_findings(third, test_text)
+    expect("guard: a THIRD declared line that the group and cancel-in-progress do not name is caught (both)",
+           len(found) == 2 and all("main2" in f for f in found), "; ".join(found))
+    dropped = test_text.replace(" || github.ref == 'refs/heads/main3'", "", 1)
+    expect("guard: main3 dropped from the per-commit group is caught",
+           dropped != test_text and any("concurrency group" in f for f in concurrency_findings(doc, dropped)))
     cd_doc = {"on": {"workflow_run": {"branches": ["main"]}, "push": {"branches": ["main3"]},
                      "schedule": [{}], "workflow_dispatch": {}}, "jobs": {"reconcile-lines": {}}}
     test_doc = {"on": {"push": {"branches": ["main", "main3"]}}}

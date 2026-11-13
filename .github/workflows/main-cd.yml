@@ -3151,6 +3151,9 @@ jobs:
           # phase C, made only for a set whose platform verdict is green (policy `one-promotion-gate`).
           promote memex-portal-ai   "$SHA"
       - name: "Phase B — moving pointers (the line's label, latest, GHCR mirror)"
+        # Executed by test-cd-steps.py (stubbed registries): which pointers each LINE moves — a line
+        # that does not move `latest` (main3) writes `latest` nowhere.
+        id: pointers_b
         env:
           GH_TOKEN: ${{ github.token }}
           # 🚨 PER LINE (policy `major-lines-run-separately`): the line's OWN floating label (`main`,

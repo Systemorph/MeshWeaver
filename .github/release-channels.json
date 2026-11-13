@@ -26,7 +26,10 @@
     "`notation`: any | legacy — `legacy` labels are written only for a pre-SemVer set (`3.0.0-ci.<n>`).",
     "`line`: (optional) the DELIVERY LINE (.github/delivery-lines.json) whose runs write the label — a",
     "         line's floating label (`main`, `main3`). Its writers write it only in a run of that line,",
-    "         and every delivery line's `label` must be a channel declaring that line."
+    "         and every delivery line's `label` must be a channel declaring that line.",
+    "`onlyTheLineThatMovesLatest`: (binding, optional) a main-cd.yml writer that moves the label ONLY in a",
+    "         run of the line .github/delivery-lines.json marks `movesLatest` — `tags_for` hands it to no",
+    "         other line, and every main-cd.yml binding of `latest` must carry it."
   ],
   "schema": 1,
   "placeholders": {
@@ -405,7 +408,8 @@
             "ghcr.io/systemorph",
             "cr.meshweaver.cloud"
           ],
-          "state": "phase B — MeshWeaver.Plugins pins MW_TEST_IMAGE to it"
+          "state": "phase B — MeshWeaver.Plugins pins MW_TEST_IMAGE to it",
+          "onlyTheLineThatMovesLatest": true
         },
         {
           "workflow": "main-cd.yml",
@@ -419,7 +423,8 @@
             "ghcr.io/systemorph",
             "cr.meshweaver.cloud"
           ],
-          "state": "Phase D, after the arming PUT, beside `{major}-latest`, forward only"
+          "state": "Phase D, after the arming PUT, beside `{major}-latest`, forward only",
+          "onlyTheLineThatMovesLatest": true
         },
         {
           "workflow": "release.yml",

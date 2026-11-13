@@ -1565,6 +1565,130 @@ def promote_latest_problems(workflow_text: str) -> list[str]:
     return problems
 
 
+# ── promote, Phase B: the line's OWN label, and `latest` only from the line that moves it ─────────
+# Policy `major-lines-run-separately`. Executed against stub registries and a stub `gh` (the other
+# lines' CD runs), so "main3's promote never tags `latest`" is a reading of the real step, not a
+# claim about it.
+POINTERS_B_STEP_ID = "pointers_b"
+PB_STAGING = "staging-abc1234-888"
+
+PB_GH_STUB = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALLS"
+case "$*" in
+  *"actions/workflows/main-cd.yml/runs?branch="*)
+    all="$*"; b="${all#*branch=}"; b="${b%%&*}"
+    if [ -n "${PB_GH_FAIL:-}" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
+    for entry in ${PB_FOREIGN_RUNS:-}; do
+      [ "${entry%%=*}" = "$b" ] && printf '%s\n' ${entry#*=} | tr ',' '\n'
+    done
+    exit 0 ;;
+esac
+echo "stub gh: unexpected call $*" >&2
+exit 1
+'''
+
+
+def pointers_b_step(root: Path) -> str:
+    try:
+        return workflow_yaml.step_run(root / WORKFLOW, POINTERS_B_STEP_ID, job_name="promote", expressions={
+            "env.ACR": LP_ACR, "env.REGISTRY": LP_REGISTRY, "github.repository_owner": "Systemorph"})
+    except workflow_yaml.WorkflowYamlError as e:
+        die(str(e))
+
+
+def run_pointers_b_step(root: Path, body: str, tester_tags: list[str], line: str, label: str,
+                        moves_latest: str, foreign: str = "", v_plugin: str = LP_VERSION,
+                        gh_fail: bool = False) -> tuple[int, str, list[str], list[str]]:
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        tree = tmp / "tree"
+        scripts = tree / ".github" / "scripts"
+        scripts.mkdir(parents=True)
+        for name in ("platform-version.py", "cd-line.py"):
+            (scripts / name).write_text((root / ".github/scripts" / name).read_text())
+        (tree / ".github" / "delivery-lines.json").write_text((root / ".github/delivery-lines.json").read_text())
+        (scripts / "mirror-image-to-registry.sh").write_text(RECORDING_MIRROR)
+        (scripts / "mirror-image-to-registry.sh").chmod(0o755)
+        binp = tmp / "bin"
+        binp.mkdir()
+        for name, text in (("docker", RECORDING_DOCKER), ("az", AZ_STUB), ("gh", PB_GH_STUB)):
+            (binp / name).write_text(text)
+            (binp / name).chmod(0o755)
+        docker_calls, mirror_calls, summary, gh_calls = tmp / "docker", tmp / "mirror", tmp / "summary", tmp / "gh"
+        for f in (docker_calls, mirror_calls, summary, gh_calls):
+            f.touch()
+        e = dict(os.environ)
+        for knob in ("AZ_FAIL", "AZ_TAGS_FAIL", "PB_GH_FAIL"):
+            e.pop(knob, None)
+        e.update({
+            "PATH": f"{binp}:{e['PATH']}", "DOCKER_CALLS": str(docker_calls), "MIRROR_CALLS": str(mirror_calls),
+            "GH_CALLS": str(gh_calls), "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": str(tmp),
+            "GITHUB_REPOSITORY": "Systemorph/MeshWeaver", "GH_TOKEN": "",
+            "AZ_TAGS": "mw-plugin-test=" + ",".join(tester_tags),
+            "V_PLUGIN": v_plugin, "STAGING": PB_STAGING, "SHA": "abc1234",
+            "LINE": line, "LABEL": label, "MOVES_LATEST": moves_latest, "PB_FOREIGN_RUNS": foreign,
+        })
+        if gh_fail:
+            e["PB_GH_FAIL"] = "1"
+        p = subprocess.run(["bash", "-c", body], env=e, cwd=tree, capture_output=True, text=True)
+        return (p.returncode, p.stdout + p.stderr,
+                docker_calls.read_text().splitlines(), mirror_calls.read_text().splitlines())
+
+
+def run_pointers_b_cases(root, case) -> None:
+    body = pointers_b_step(root)
+    if "cd-line.py line-max-ordinal" not in body or "MOVES_LATEST" not in body:
+        die(f"step `{POINTERS_B_STEP_ID}` no longer reads the line's own sets or its `movesLatest` — "
+            "these cases would pass vacuously")
+    own = [LP_VERSION, "3.1.10399", PB_STAGING, "main", "latest"]
+
+    def refs(docker: list[str], mirror: list[str]) -> set[str]:
+        out = set()
+        for c in docker:
+            words = c.split()
+            out.update(words[i + 1] for i, w in enumerate(words) if w == "--tag" and i + 1 < len(words))
+        for c in mirror:
+            out.update(c.split()[1:])
+        return out
+
+    rc, log, docker, mirror = run_pointers_b_step(root, body, own, "main3", "main3", "false")
+    r3 = refs(docker, mirror)
+    case("promote (line main3): moves `main3` on every repository of the set, in ACR, cr and GHCR",
+         rc == 0 and all(f"{LP_ACR}/{repo}:main3" in r3 for repo in ("memex-migration", "memex-portal-ai", "mw-core-tests", "mw-plugin-test"))
+         and f"{LP_REGISTRY}/mw-plugin-test:main3" in r3 and "ghcr.io/systemorph/mw-plugin-test:main3" in r3,
+         f"rc={rc} refs={sorted(r3)} log={log}")
+    case("promote (line main3) writes `latest` NOWHERE — not ACR, not cr, not GHCR (it does not move it)",
+         rc == 0 and not any(r.endswith(":latest") for r in r3), f"refs={sorted(r3)}")
+    case("promote (line main3) never writes the `main` label",
+         rc == 0 and not any(r.endswith(":main") for r in r3), f"refs={sorted(r3)}")
+    rc, log, docker, mirror = run_pointers_b_step(root, body, own, "main", "main", "true")
+    rm = refs(docker, mirror)
+    case("promote (line main, moves `latest`): `main` plus the tester's `latest` in ACR, cr and GHCR — unchanged",
+         rc == 0 and {f"{LP_ACR}/mw-plugin-test:latest", f"{LP_REGISTRY}/mw-plugin-test:latest",
+                      "ghcr.io/systemorph/mw-plugin-test:latest", f"{LP_ACR}/memex-portal-ai:main"} <= rm
+         and not any(r.endswith(":latest") and "mw-plugin-test" not in r for r in rm), f"rc={rc} refs={sorted(rm)}")
+    leaky = body.replace('if [ "$MOVES_LATEST" = "true" ]; then', 'if true; then', 1)
+    rc, log, docker, mirror = run_pointers_b_step(root, leaky, own, "main3", "main3", "false")
+    case("MUTATION CONTROL — with the `movesLatest` gate removed, main3's promote DOES tag `latest` (the case above can fail)",
+         leaky != body and any(r.endswith("mw-plugin-test:latest") for r in refs(docker, mirror)),
+         f"mutation applied={leaky != body}")
+    # never-backwards, per line: another line's newer set does not hold this line's label back …
+    newer_other = ["3.1.10450"] + own
+    rc, log, docker, mirror = run_pointers_b_step(root, body, newer_other, "main3", "main3", "false",
+                                                  foreign="main=10450")
+    case("a NEWER set of the OTHER line (its run listed) does not hold main3's label back",
+         rc == 0 and any(r.endswith("memex-portal-ai:main3") for r in refs(docker, mirror)), f"rc={rc} log={log}")
+    rc, log, docker, mirror = run_pointers_b_step(root, body, newer_other, "main3", "main3", "false")
+    case("… while a newer set NOT from another line (same line) still holds it (never backwards)",
+         rc == 0 and not any(r.endswith(":main3") for r in refs(docker, mirror)), f"rc={rc} log={log}")
+    rc, log, docker, mirror = run_pointers_b_step(root, body, own, "main3", "main3", "false", gh_fail=True)
+    case("an unreadable list of the other lines' runs moves NOTHING (fail-closed)",
+         rc != 0 and not docker and not mirror, f"rc={rc} docker={docker}")
+    rc, log, docker, mirror = run_pointers_b_step(root, body, own, "main3", "main3", "")
+    case("an empty MOVES_LATEST moves NOTHING (never a guess whether the line moves `latest`)",
+         rc != 0 and not docker and not mirror, f"rc={rc}")
+
+
 def run_line_pointer_cases(root, case) -> None:
     body = line_pointer_step(root)
     if "line-pointers" not in body or "mirror-image-to-registry.sh" not in body:
@@ -2249,6 +2373,10 @@ def main() -> int:
     print()
     print(f"── steps `{IMAGE_VERSION_STEP_NAME}` (every image leg) ──")
     run_image_version_cases(root, case)
+
+    print()
+    print(f"── step `{POINTERS_B_STEP_ID}` (promote, Phase B: the line's label, `latest` per line) ──")
+    run_pointers_b_cases(root, case)
 
     print()
     print(f"── step `{LINE_POINTERS_STEP_ID}` (arm, Phase D: line pointers + `latest`) ──")

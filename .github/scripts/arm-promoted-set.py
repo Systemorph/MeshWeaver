@@ -217,6 +217,25 @@ def armed_state(manifests: object, major: int | None = None) -> tuple[int, str, 
     return run_number_of(version) or 0, version, f"{ARM_COMPLETE_PREFIX}{version}" in tags
 
 
+def arming_cursor(manifests: object, major: int | None = None) -> dict | None:
+    """The `arm` job's CURSOR for a line of `major` — {"max", "version", "complete", "cold_start"} —
+    or None when memex-portal-ai carries no armed set of ANY major (a broken read, or a registry that
+    was never armed: refused, never read as "nothing armed", which would arm anything). Pure.
+
+    🚨 COLD START OF A MAJOR (policy `major-lines-run-separately`). When a line moves to a NEW major
+    (main → 4.x) no set of that major has ever been armed, yet the fleet is armed — on the previous
+    major. That is not "nothing armed": it is a cold start FOR THAT MAJOR. The cursor is then 0 of
+    that major, nothing is resumed, and `select` arms the newest set of the major whose platform
+    verdict is green — through the ordinary path, never `--override`. The previous major's pointers
+    (`3-latest`, …) are untouched by construction: Phase D moves only the armed set's own major."""
+    if armed_commit(manifests, require_sha=False) is None:
+        return None
+    st = armed_state(manifests, major=major)
+    if st is None:
+        return {"max": "0", "version": "", "complete": "true", "cold_start": "true"}
+    return {"max": str(st[0]), "version": st[1], "complete": "true" if st[2] else "false", "cold_start": "false"}
+
+
 def armed_commit(manifests: object, require_sha: bool = True, major: int | None = None) -> tuple[str, str] | None:
     """(the newest ARMED version, its seven-character core sha) from memex-portal-ai's manifest
     metadata (`az acr manifest list-metadata -o json`), or None when no manifest carries a version
@@ -1340,6 +1359,32 @@ def self_test() -> int:
           armed_commit(mixed) == ("4.0.11005", "4444444"))
     check("armed-state: a major with no armed set is None (main-cd reds it, never 'arm anything')",
           armed_state(mixed, major=5) is None)
+    # COLD START of a line's major: the fleet is armed on 3.x only, and main has moved to 4.x.
+    only3 = [r for r in mixed if not any(str(t).startswith("4.") for t in r["tags"])]
+    cur = arming_cursor(only3, major=4)
+    check("cold start: the FIRST set of a new major is armable — cursor 0 of major 4, nothing to resume",
+          cur == {"max": "0", "version": "", "complete": "true", "cold_start": "true"}, str(cur))
+    cur3 = arming_cursor(only3, major=3)
+    check("cold start is per major: the 3.x line keeps its own cursor beside it",
+          cur3 == {"max": "11003", "version": "3.1.11003", "complete": "true", "cold_start": "false"}, str(cur3))
+    check("cold start is never 'nothing armed for the fleet': a registry with NO armed set at all is still refused",
+          arming_cursor([{"tags": ["main", "staging-1111111-1"]}], major=4) is None
+          and arming_cursor([{"tags": ["main"]}]) is None)
+    check("NEGATIVE CONTROL — the per-major reading alone (what the job used to red on) has NO cursor for 4.x",
+          armed_state(only3, major=4) is None)
+
+    def first_of_major(n: int, core: str, version: str) -> dict:
+        r = rec(n, core, "9")
+        return {**r, "v_portal": version, "v_migration": version, "v_plugin": version}
+    first4 = first_of_major(11006, "e", "4.0.11006")
+    cs_ctl = {"commit": "e" * 40, "healthy": True, "contains": {"e" * 40: True}, "why": ""}
+    chosen, _ = select([first4], {11006: "success"}, cs_ctl, int(cur["max"]))
+    check("cold start: `select` arms the first 4.x set on its green verdict from cursor 0 — no --override",
+          chosen is not None and chosen["v_portal"] == "4.0.11006", str(chosen))
+    chosen, _ = select([first4], {11006: "waiting"}, cs_ctl, int(cur["max"]))
+    check("cold start still needs the verdict: a 4.x set whose ladder has not finished is NOT armed",
+          chosen is None)
+
     # MUTATION CONTROL: disable the filter itself — the per-major cases above must then FAIL.
     real_filter = globals()["_in_major"]
     globals()["_in_major"] = lambda _version, _major: True
@@ -1436,15 +1481,16 @@ def main() -> int:
         if a.manifests is None:
             ap.error("armed-state needs --manifests")
         try:
-            st = armed_state(json.loads(a.manifests.read_text()), major=a.major)
+            rows = arming_cursor(json.loads(a.manifests.read_text()), major=a.major)
         except (OSError, ValueError) as e:
             print(f"::error::the arming cursor cannot be read: {e}")
             return 1
-        if st is None:
-            print("::error::memex-portal-ai carries no version tag" + (f" of major {a.major}" if a.major is not None else " at all")
-                  + " — refusing to treat that as 'nothing armed' (it would arm anything)")
+        if rows is None:
+            print("::error::memex-portal-ai carries no version tag at all — refusing to treat that as 'nothing armed' (it would arm anything)")
             return 1
-        rows = {"max": str(st[0]), "version": st[1], "complete": "true" if st[2] else "false"}
+        if rows["cold_start"] == "true":
+            print(f"::notice title=Cold start of major {a.major}::no set of major {a.major} has been armed yet (the fleet is "
+                  f"armed on another major) — the newest green {a.major}.x set is armed through the ordinary verdict")
         _write_rows(rows)
         print(json.dumps(rows))
         return 0

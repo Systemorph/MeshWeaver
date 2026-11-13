@@ -75,6 +75,18 @@ lines' trees diverge, that copy must never decide anything about another line's 
 | `notify-platform-update` | the "still the newest armed set?" re-check reads within the major |
 | `delivery-verdict` | resolves the line's tip, and its hand-over dispatches `--ref <line>` |
 
+**Cold start of a major.** When a line moves to a new major (main to 4.x), no set of that major has
+been armed yet, while the fleet is armed on the previous one. `armed-state --major 4` then answers
+a cursor of 0 for major 4 (`cold_start: true`, nothing to resume), and `select` arms the newest 4.x
+set whose platform verdict is green through the ordinary path, without `--override`. A registry
+with no armed set of ANY major is still refused: that is a broken read, never "nothing armed".
+
+**Who may move `latest`.** In `.github/release-channels.json` every main-cd.yml binding of `latest`
+carries `onlyTheLineThatMovesLatest: true`, and `release-channels.py check` refuses one without
+it. `tags_for` therefore hands `latest` only to the line that moves it. Phase B is executed in
+`test-cd-steps.py` (step `pointers_b`) for both lines, with a mutation control: a `main3` promote
+writes `main3` on every repository and `latest` nowhere.
+
 The workflow-level concurrency group is per line: the push lane is `github.ref`, and the reconcile
 lane is `reconcile-<ref name>` (`main-cd-reconcile-main`, `main-cd-reconcile-main3`).
 `MainRunsAreNeverCancelledGuard` evaluates the expression for both lines.

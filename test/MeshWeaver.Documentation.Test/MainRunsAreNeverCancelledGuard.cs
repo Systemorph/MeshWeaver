@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
 using MeshWeaver.Fixture;
@@ -245,6 +246,40 @@ public class MainRunsAreNeverCancelledGuard
             Assert.Empty(problems);
         else
             Assert.Contains(problems, p => p.Contains(expectedProblem, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 🚨 The rows above are only controls if each MUTATION row is a different expression from the
+    /// shipped one (review on #8141 asked exactly this). Read off the theory's own attributes: the one
+    /// silent row must equal what the workflow ships, and every row expecting a problem must differ
+    /// from it in its cancel or its group — a copy of the shipped row expecting a problem would be a
+    /// control that cannot be told apart from a broken judge.
+    /// </summary>
+    [Fact]
+    public void DeliveryGuard_MutationRows_AreRealMutationsOfTheShippedShape()
+    {
+        var rows = typeof(MainRunsAreNeverCancelledGuard)
+            .GetMethod(nameof(DeliveryGuard_FiresOnEachMutation_AndStaysSilentOnTheShippedShape))!
+            .GetCustomAttributes(typeof(InlineDataAttribute), false)
+            .Cast<InlineDataAttribute>()
+            .Select(a => (Cancel: (string)a.Data[0]!, Group: (string)a.Data[1]!, Expected: (string)a.Data[2]!))
+            .ToList();
+
+        var silent = Assert.Single(rows, r => r.Expected.Length == 0);
+        var body = File.ReadAllText(Path.Combine(RepoPaths.Root, DeliveryWorkflow));
+        Assert.Equal(ExtractConcurrencyValue(body, "cancel-in-progress"), silent.Cancel);
+        Assert.Equal(ExtractConcurrencyValue(body, "group"), silent.Group);
+
+        var copies = rows.Where(r => r.Expected.Length > 0 && r.Cancel == silent.Cancel && r.Group == silent.Group)
+            .Select(r => r.Expected).ToList();
+        Assert.True(copies.Count == 0,
+            "mutation rows identical to the shipped shape (they can never fire): " + string.Join(", ", copies));
+
+        // And each mutation really is judged differently from the shipped shape.
+        foreach (var row in rows.Where(r => r.Expected.Length > 0))
+            Assert.Contains(DeliveryConcurrencyProblems(row.Cancel, row.Group),
+                p => p.Contains(row.Expected, StringComparison.Ordinal));
+        Assert.Empty(DeliveryConcurrencyProblems(silent.Cancel, silent.Group));
     }
 
     private static string ExtractConcurrencyValue(string body, string key)
