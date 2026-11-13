@@ -54,12 +54,12 @@ on:
     inputs:
       scripts-ref:
         description: >-
-          The Systemorph/MeshWeaver ref check-review-answered.py is fetched at. Callers float on `main`
+          The Systemorph/MeshWeaver ref check-review-answered.py is fetched at. Callers float on `main3`
           (no pins — MeshWeaver#3842); core's own caller passes github.sha so a pull request that
           changes the predicate is judged by its own copy.
         required: false
         type: string
-        default: main
+        default: main3
       fallback-minutes:
         description: >-
           Minutes after the head's CI run was created with NO completed review, after which stage 2
@@ -119,7 +119,7 @@ jobs:
       mode: ${{ steps.judge.outputs.mode }}
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - name: Fetch the platform's review predicate at the lane's scripts ref
         # Only the review hold (the opt-in) reads the predicate; the opt-out judges stage 0 alone.
         if: ${{ inputs.review-before-suites }}

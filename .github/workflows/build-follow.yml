@@ -12,7 +12,7 @@ name: Build follow — stream a standing build host's stage log
 # (Doc/Architecture/RenamingARequiredCheck):
 #
 #   modules-follow:
-#     uses: Systemorph/MeshWeaver/.github/workflows/build-follow.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/build-follow.yml@main3
 #     permissions: { contents: read, id-token: write }
 #     with:
 #       api-url: ${{ vars.MW_BUILD_API }}        # https://<operations instance>/api/builds
@@ -119,7 +119,7 @@ on:
         description: The Systemorph/MeshWeaver ref build-follow.py is fetched at (the lane's own vintage).
         required: false
         type: string
-        default: main
+        default: main3
 
 jobs:
   follow:
@@ -156,7 +156,7 @@ jobs:
             *) echo "::error title=Build follow::executor '$EXECUTOR' is neither 'host' nor 'actions' — refusing to guess"; exit 1 ;;
           esac
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
         if: steps.executor.outputs.followed == 'true'
       - uses: actions/setup-python@v7
         if: steps.executor.outputs.followed == 'true'

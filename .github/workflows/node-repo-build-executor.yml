@@ -7,14 +7,14 @@ name: Build executor — a standing build host, or GitHub Actions
 # with the same script.
 #
 #   executor:
-#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-build-executor.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-build-executor.yml@main3
 #     permissions: { contents: read }
 #     secrets:
 #       build-webhook-secret: ${{ secrets.BUILD_WEBHOOK_SECRET }}
 #   compile-check-follow:                 # ALWAYS runs: a no-op success (followed=false) on Actions,
 #     needs: [executor]                   # so no job downstream inherits a skip (actions/runner#2205)
 #     if: ${{ !cancelled() }}
-#     uses: Systemorph/MeshWeaver/.github/workflows/build-follow.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/build-follow.yml@main3
 #     permissions: { contents: read, id-token: write }
 #     with:
 #       executor: ${{ needs.executor.outputs.executor || 'actions' }}
@@ -24,7 +24,7 @@ name: Build executor — a standing build host, or GitHub Actions
 #   compile-check:                        # the REQUIRED context, unchanged by name
 #     needs: [executor, compile-check-follow]
 #     if: ${{ !cancelled() }}
-#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-compile-check.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-compile-check.yml@main3
 #     with:
 #       executor: ${{ needs.executor.outputs.executor || 'actions' }}
 #       host-verdict: ${{ needs.compile-check-follow.result }}
@@ -61,10 +61,10 @@ on:
         type: string
         default: ''
       scripts-ref:
-        description: The ref of Systemorph/MeshWeaver whose build-executor.py runs (default main).
+        description: The ref of Systemorph/MeshWeaver whose build-executor.py runs (default main3, the v3 line).
         required: false
         type: string
-        default: main
+        default: main3
     secrets:
       build-webhook-secret:
         description: The org's BUILD_WEBHOOK_SECRET — signs the build-request. Absent = actions, said.
@@ -92,7 +92,7 @@ jobs:
       api-url: ${{ steps.decide.outputs.api-url }}
       stage-executors: ${{ steps.decide.outputs.stage-executors || '{}' }}
     steps:
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - name: The repository's stage declaration (head)
         uses: actions/checkout@v7
         with:

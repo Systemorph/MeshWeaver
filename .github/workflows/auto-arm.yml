@@ -211,13 +211,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The predicate is the platform's, checked out from the platform's DEFAULT branch (no `ref:`) —
-      # never a copy, and never a file from the pull request's own tree (on `pull_request_target` the
-      # workspace is not checked out at all). Core is public, so the caller's token reads it.
+      # The predicate is the platform's, checked out from THIS LINE's branch (`main3`, the v3 line —
+      # policy major-lines-run-separately; the default branch is the v4 line) — never a copy, and
+      # never a file from the pull request's own tree (on `pull_request_target` the workspace is not
+      # checked out at all). Core is public, so the caller's token reads it.
       - name: Check out the platform's review-answered predicate
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
+          ref: main3
           path: mw-core
           persist-credentials: false
           sparse-checkout: .github/scripts/check-review-answered.py

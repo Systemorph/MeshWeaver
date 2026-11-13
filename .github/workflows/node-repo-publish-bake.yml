@@ -410,8 +410,8 @@ on:
           per-caller opt-in cost instead was a silent default: a node repo that says nothing — and
           every node repo that will ever be created — published in place. Measured 2026-09-14 over
           the `ci.yml` on `main` of all six node repos (Plugins, Crm, Education, Reinsurance,
-          SocialMedia, Manufacturing): every `uses:` of a `node-repo-*.yml` lane is `@main`, every
-          `scripts-ref:` is `main`, and NONE passes this input — so flipping the default here is
+          SocialMedia, Manufacturing): every `uses:` of a `node-repo-*.yml` lane is `@main3`, every
+          `scripts-ref:` is `main3`, and NONE passes this input — so flipping the default here is
           what flips the five single-producer prefixes, with no change in their repositories.
 
           🚨 THE LAYOUT BELONGS TO THE PREFIX, NOT TO THIS INPUT — so a prefix may be flipped ONE
@@ -442,11 +442,11 @@ on:
         default: 'generation'
       platform-ref:
         description: >-
-          Ref of Systemorph/MeshWeaver to take the canonical publish script from. Default main;
+          Ref of Systemorph/MeshWeaver to take the canonical publish script from. Default main3 (the v3 line);
           pin only to bisect a script regression.
         required: false
         type: string
-        default: 'main'
+        default: 'main3'
       epoch-leg:
         description: >-
           Which live framework identity this call bakes for (policy bake-per-live-identity).
@@ -473,7 +473,7 @@ on:
           images, core source). Empty (the default) means "the same as platform-ref" — right for a
           caller that pins the lane and the platform to one commit. A caller that pins NOTHING
           (MeshWeaver#3842: the platform resolved at run time to the newest SEALED set, the lane
-          called at `@main`) passes `main` here, because a sealed set is hours behind the lane's own
+          called at `@main3`) passes `main3` here, because a sealed set is hours behind the lane's own
           tip: on 2026-09-09 this lane at @main fetched check-abbreviated-shas.py — added at 17:06Z
           (022ab4a9d) — at a platform-ref cut at 3cda3efde a few hours earlier, and the fetch 404'd
           (Plugins#1566). `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a
@@ -652,7 +652,7 @@ jobs:
       run: ${{ steps.leg.outputs.run }}
       ceiling: ${{ steps.leg.outputs.ceiling }}
     steps:
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - name: "Decide the leg"
         id: leg
         env:
@@ -742,10 +742,10 @@ jobs:
       id-token: write     # azure/login OIDC — no long-lived storage secret in any node repo
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - name: Resolve and bind the artifact store
         id: store
-        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main3
         with:
           store: ${{ inputs.artifact-store || 'gha' }}
           expected-store-id: ${{ inputs.artifact-store-id }}
@@ -908,7 +908,7 @@ jobs:
           sparse-checkout: .github/scripts/gen-manifests.py
           sparse-checkout-cone-mode: false
       - name: Materialize main-owned manifest locks
-        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main3
         with:
           generator: .materialize-generator/.github/scripts/gen-manifests.py
       # 🚨 The CONTENT commit, not $GITHUB_SHA. They differ exactly when content-repository is set
@@ -1540,7 +1540,7 @@ jobs:
       # carry-forward step runs on every leg and says which one it is.
       - name: Download this run's module-bundle artifacts
         if: inputs.module-artifacts != '' && needs.epoch-leg.outputs.ceiling == ''
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ steps.store.outputs.store || 'unresolved' }}
           expected-store-id: ${{ steps.store.outputs.store-id }}
@@ -1657,7 +1657,7 @@ jobs:
           # 🚨 THE PUBLISHER MOVES AT ITS OWN REF, so this step must not assume it understands the
           # split (Copilot review, #4172). `publish-bake-bundles.sh` is checked out at
           # `scripts-ref || platform-ref` — a satellite resolves that to the newest SEALED set, which
-          # lags core `main` by up to an hour — while this workflow is whatever `uses: …@main` gives.
+          # lags core `main` by up to an hour — while this workflow is whatever `uses: …@main3` gives.
           # A NEW workflow staging own-only against an OLD publisher would hit its
           # "composed modules but staged none" refusal, which names the wrong cause ("bump the
           # caller's pin") and would red every satellite publish-bake in the window, since the
@@ -2183,7 +2183,7 @@ jobs:
         # failure cannot be swallowed"): a missing file only warns, but a failed upload means this
         # job's own artifact store is failing, and that is RED. It sits BEFORE the lock and every
         # publishing step, so a red here publishes nothing half-way — a re-run starts clean.
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ steps.store.outputs.store || 'unresolved' }}
           expected-store-id: ${{ steps.store.outputs.store-id }}

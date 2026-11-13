@@ -22,7 +22,7 @@
 #     workflow_dispatch: { inputs: { pr: {...}, dry-run: {...} } }
 #   jobs:
 #     resolve:
-#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-resolve-locks.yml@main
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-resolve-locks.yml@main3
 #       with: { pr: ${{ inputs.pr }}, dry-run: ${{ inputs.dry-run == true }} }
 #       secrets:
 #         MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
@@ -46,7 +46,7 @@ on:
         description: The ref of Systemorph/MeshWeaver the resolver and the manifest checker are fetched at.
         required: false
         type: string
-        default: main
+        default: main3
     secrets:
       MESHWEAVER_APP_ID:
         description: App id of the org's meshweaver-cloud GitHub App (Contents + Pull requests write on the caller).
@@ -69,7 +69,7 @@ jobs:
       pull-requests: write
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - name: The App credential, or a red run naming what to provision
         env:
           MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}

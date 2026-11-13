@@ -16,7 +16,7 @@ name: Node repo validate (reusable)
 #
 # REF CONTRACT DEPENDS ON THE CALLER. Reproducible callers pin `uses:` and the script refs to a
 # commit sha and bump them together (CiContentBake.md -> "The workflow ref is PINNED"). The
-# platform-resolved node-repo callers instead intentionally follow shared CI logic at `@main` and
+# platform-resolved node-repo callers instead intentionally follow shared CI logic at `@main3` and
 # pass `scripts-ref: main`: their tested platform is resolved separately, while central policy
 # updates reach the next run without a manual pin. A fetched helper script follows that caller's
 # `scripts-ref`; it does not add a new trust root beyond the reusable workflow ref the caller has
@@ -34,7 +34,7 @@ on:
           of identical code able to disagree (the same argument as the image digest).
         required: false
         type: string
-        default: main
+        default: main3
       scripts-ref:
         description: >-
           The Systemorph/MeshWeaver ref this lane's OWN helper scripts are fetched at (the guards,
@@ -43,7 +43,7 @@ on:
           images, core source). Empty (the default) means "the same as platform-ref" — right for a
           caller that pins the lane and the platform to one commit. A caller that pins NOTHING
           (MeshWeaver#3842: the platform resolved at run time to the newest SEALED set, the lane
-          called at `@main`) passes `main` here, because a sealed set is hours behind the lane's own
+          called at `@main3`) passes `main3` here, because a sealed set is hours behind the lane's own
           tip: on 2026-09-09 this lane at @main fetched check-abbreviated-shas.py — added at 17:06Z
           (022ab4a9d) — at a platform-ref cut at 3cda3efde a few hours earlier, and the fetch 404'd
           (Plugins#1566). `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a
@@ -97,7 +97,7 @@ jobs:
       contents: read
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
@@ -369,7 +369,7 @@ jobs:
       # ref the script cannot be fetched at fails RED naming it, never "skipped".
       #
       # 🚨 WHY THE SCRIPTS REF IS NOT `platform-ref` (MeshWeaver#3842). A caller that pins nothing calls
-      # this lane at `@main` and resolves its platform to the newest SEALED set — a commit hours behind
+      # this lane at `@main3` and resolves its platform to the newest SEALED set — a commit hours behind
       # the lane. Every guard fetched here is the LANE's tooling and must be the lane's vintage: fetched
       # at the platform commit, a guard core added since the seal does not exist there and the lane
       # fails on the 404 while the caller changed nothing (check-abbreviated-shas.py, 2026-09-09,

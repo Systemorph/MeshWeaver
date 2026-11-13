@@ -60,7 +60,7 @@ jobs:
       workflow: dotnet-test.yml
       mode: pr
       pr: ${{ github.event.pull_request.number }}
-      scripts-ref: main
+      scripts-ref: main3
   sweep:
     if: github.event_name == 'schedule'
     uses: ./.github/workflows/node-repo-stage-advance.yml
