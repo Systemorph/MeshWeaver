@@ -474,12 +474,98 @@ def internal_run_unbound(run: dict, reviews, head: str, as_of: str | None) -> st
             "so another pull request at the same commit could have posted it (policy internal-code-review)")
 
 
+def _reviewed_at(reviews, sha_prefix: str, as_of: str | None) -> str | None:
+    """The full commit sha of the internal reviewer's landed review on this pull request at a head starting with
+    `sha_prefix` (as of `as_of`), or None. Pure."""
+    for r in landed_internal_reviews(reviews):
+        commit = str(r.get("commit_id") or "")
+        if sha_prefix and commit.startswith(sha_prefix) and not_after(r.get("submitted_at"), as_of):
+            return commit
+    return None
+
+
+def carried_source_bound(run: dict, reviews, as_of: str | None) -> bool:
+    """True when `run` is a carried run (`Review carried from <sha> …`) whose NAMED head carries the internal
+    reviewer's landed review on this pull request — the one-hop binding `internal_run_unbound` accepts. Pure."""
+    carried = CARRIED_FROM.match(((run.get("output") or {}).get("title") or "").strip())
+    return bool(carried) and _reviewed_at(reviews, carried.group("sha"), as_of) is not None
+
+
+def internal_carry_chain(head: str, run: dict, own_commits, runs_of, reviews, as_of: str | None) -> tuple[str | None, tuple, str]:
+    """(root, hops, '') or (None, (), why not) — the transitive carry chain behind the carried run `run` on `head`.
+
+    The steward posts `Review carried from <prev> — <prev's title>` on every merge-only push, so after two such
+    pushes the head's run names a head that carries only ANOTHER carried run, and the review it all rests on is
+    one more hop back (MeshWeaver.Plugins#5408: review on 672d0f0f1f, carried to 90c0552371, carried again to
+    302415a9c8 — red, because only the immediate source was looked at). Each hop is verified the way the one hop
+    is: the named head is one of the pull request's OWN commits (compare(base...head), never another branch's),
+    its newest `internal-review` run is a REVIEW run of the reviewer's App (`real_review_run`) that is itself
+    carried, until a head is reached that carries the internal reviewer's landed review ON THIS PULL REQUEST
+    (`_reviewed_at`) — the root. Anything else fails CLOSED: a hop off the pull request, an ambiguous short sha,
+    a hop with no review run, a real review run with no review of this pull request beside it (another pull
+    request's run at that commit), a cycle, or more than CARRY_MAX_WALK hops. `runs_of(sha)` lists that commit's
+    `internal-review` runs. That root..head is merges only with the own diff unchanged is `internal_chain_carry`'s
+    half. Pure."""
+    own = [str(s) for s in own_commits or ()]
+    seen = {head}
+    hops: list = [head]
+    current = run
+    for _ in range(CARRY_MAX_WALK):
+        title = ((current.get("output") or {}).get("title") or "").strip()
+        carried = CARRIED_FROM.match(title)
+        at = hops[-1]
+        if not carried:
+            return None, (), (f"`{DEGRADATION_CHECK_NAME}` run {current.get('id')} on {at[:10]} (\"{title}\") is a review run, but "
+                              "this pull request carries no review of the internal reviewer at that commit — another pull request "
+                              "at the same commit could have posted it")
+        name = carried.group("sha")
+        root = _reviewed_at(reviews, name, as_of)
+        if root is not None:
+            return root, tuple(hops), ""
+        matches = [s for s in own if s.startswith(name)]
+        if len(matches) != 1:
+            return None, (), (f"{at[:10]}'s run names {name[:10]}, which is "
+                              + ("not among the pull request's own commits" if not matches
+                                 else f"ambiguous ({len(matches)} of the pull request's own commits match)"))
+        nxt = matches[0]
+        if nxt in seen:
+            return None, (), f"the carry chain revisits {nxt[:10]} — a cycle is no evidence"
+        seen.add(nxt)
+        hops.append(nxt)
+        current = real_review_run([c for c in runs_of(nxt) or () if not_after(c.get("completed_at"), as_of)], nxt)
+        if current is None:
+            return None, (), f"{nxt[:10]}, named by the carry chain, has no `{DEGRADATION_CHECK_NAME}` review run of the reviewer's App"
+    return None, (), f"no review of this pull request within {CARRY_MAX_WALK} carry hops of {head[:10]}"
+
+
+def internal_chain_carry(head: str, run: dict, new_cmp: dict, runs_of, reviews, as_of: str | None, old_cmp_of) -> Carry:
+    """The carried run `run` on `head`, counted for THIS pull request across a multi-hop carry (policies
+    internal-code-review, review-on-real-change): `internal_carry_chain` finds the root review of this pull
+    request, and `merge_only_same_diff` proves from the repository that every commit from the root to the head is
+    a merge of the base branch and the own diff is byte-identical (patch-id equality is transitive, so root..head
+    holds exactly when every hop holds). `old_cmp_of(root)` reads compare(base...root). `run` of the returned Carry
+    is `run` when it holds. Pure apart from `runs_of`/`old_cmp_of`."""
+    own = [c.get("sha") for c in new_cmp.get("commits") or []]
+    root, hops, why = internal_carry_chain(head, run, own, runs_of, reviews, as_of)
+    if root is None:
+        return Carry(False, f"the carry chain behind run {run.get('id')} on {head[:10]} does not reach a review of this pull request: {why}")
+    path = " <- ".join(h[:10] for h in hops) + f" <- {root[:10]}"
+    why, evidence = merge_only_same_diff(head, new_cmp, old_cmp_of(root), root)
+    if why:
+        return Carry(False, f"the carry chain {path} reaches this pull request's review at {root[:10]}, but not across clean merges: {why}", root)
+    return Carry(True, (f"review CARRIED over {len(hops)} merge-only hop(s) {path} (`{DEGRADATION_CHECK_NAME}` run {run.get('id')}), "
+                        f"rooted in the internal reviewer's review of this pull request at {root[:10]}: {evidence} "
+                        "(policies internal-code-review, review-on-real-change)"), root, run)
+
+
 def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str | None = None,
              check_runs: list | tuple = (), files: list | None = None, commits: list | None = None,
-             copilot_carry: Carry | None = None) -> Verdict:
+             copilot_carry: Carry | None = None, internal_chain: Carry | None = None) -> Verdict:
     """`copilot_carry` is the adapter's `copilot_carry_over` from Copilot's newest landed review to the
     head (None when there is nothing to carry, or it was not computed — then an earlier head's review
-    does NOT cover the head: policy review-on-real-change fails closed)."""
+    does NOT cover the head: policy review-on-real-change fails closed). `internal_chain` is the adapter's
+    `internal_chain_carry` for a head whose carried run names a head with no review of this pull request
+    (None when not computed — then only a one-hop carry is bound)."""
     reasons: list[str] = []
     notes: list[str] = []
     refused: list[str] = []
@@ -521,6 +607,13 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
     # one sha would otherwise share one run, and the second could turn green on the first one's findings.
     # The run counts only when THIS pull request carries the internal reviewer's review it belongs to.
     unbound = internal_run_unbound(internal, reviews, head, as_of) if internal is not None else ""
+    if unbound and internal_chain is not None and internal_chain.ok and (internal_chain.run or {}).get("id") == internal.get("id"):
+        # A carry of more than one hop (a merge-only push after a merge-only push) is bound to this pull request
+        # through its chain: every hop one of its own commits, the root its own review (`internal_chain_carry`).
+        notes.append(internal_chain.why)
+        unbound = ""
+    elif unbound and internal_chain is not None:
+        unbound += f"; {internal_chain.why}"
     if unbound:
         notes.append(unbound)
         internal = None
@@ -2531,7 +2624,26 @@ def read_inputs(gh: Gh, number: int, as_of: str | None):
         files = gh.api(f"pulls/{number}/files?per_page=100", paginate=True)
         commits = gh.api(f"pulls/{number}/commits?per_page=100", paginate=True)
     return (pr, reviews, comments, Waiver(present, events, roles), author_role, check_runs, files, commits,
-            read_copilot_carry(gh, pr, reviews, as_of))
+            read_copilot_carry(gh, pr, reviews, as_of), read_internal_chain(gh, pr, check_runs, reviews, as_of))
+
+
+def read_internal_chain(gh: Gh, pr: dict, check_runs, reviews, as_of: str | None = None) -> Carry | None:
+    """The merge gate's input for a carry of more than one hop: None when the head's review run is not carried,
+    or its named head already carries this pull request's review (the one-hop binding needs no read). Otherwise
+    `internal_chain_carry`, every input read through REST — the base tip, compare(base...head) for the pull
+    request's own commits, each hop's `internal-review` runs, compare(base...root). A failed read is a Carry that
+    does NOT hold, never an exception: an unprovable chain binds nothing (fails closed)."""
+    head = str((pr.get("head") or {}).get("sha") or "")
+    run = real_review_run([c for c in check_runs or () if not_after(c.get("completed_at"), as_of)], head) if head else None
+    if run is None or not CARRIED_FROM.match(((run.get("output") or {}).get("title") or "").strip()) \
+            or carried_source_bound(run, reviews, as_of):
+        return None
+    try:
+        base_sha = base_tip(gh, pr)
+        return internal_chain_carry(head, run, read_compare(gh, base_sha, head), lambda sha: internal_review_listing(gh, sha),
+                                    reviews, as_of, lambda root: read_compare(gh, base_sha, root))
+    except (ReadError, KeyError, TypeError, AttributeError) as e:
+        return Carry(False, f"the carry chain behind run {run.get('id')} on {head[:10]} could not be read ({e})")
 
 
 def read_arm_inputs(gh: Gh, number: int, carry: bool = True):
@@ -3672,7 +3784,7 @@ def run_verdict(repo: str, number: int, name: str, gh=None) -> int:
     read_at = epoch_stamp(gh)
     head = ""
     try:
-        pr, reviews, comments, waiver, author_role, check_runs, files, commits, copilot_carry = read_inputs(gh, number, None)
+        pr, reviews, comments, waiver, author_role, check_runs, files, commits, copilot_carry, internal_chain = read_inputs(gh, number, None)
         head = str((pr.get("head") or {}).get("sha") or "")
         existing = read_verdict_runs(gh, head, name)
     except (ReadError, KeyError) as e:
@@ -3695,7 +3807,7 @@ def run_verdict(repo: str, number: int, name: str, gh=None) -> int:
             return 1
         _append("GITHUB_OUTPUT", "verdict-state=failure\n")
         return VERDICT_UNPUBLISHED_EXIT
-    verdict = evaluate(pr, reviews, comments, waiver, None, check_runs, files, commits, copilot_carry)
+    verdict = evaluate(pr, reviews, comments, waiver, None, check_runs, files, commits, copilot_carry, internal_chain)
     now = epoch_stamp(gh)
     reported = reported_state(verdict, now, first_judged(existing, now))
     print(render(number, pr, verdict, author_role, None, reported))
@@ -3922,11 +4034,11 @@ def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0,
     settled_for = 0.0
     while True:
         try:
-            pr, reviews, comments, waiver, author_role, check_runs, files, commits, copilot_carry = read_inputs(gh, number, as_of)
+            pr, reviews, comments, waiver, author_role, check_runs, files, commits, copilot_carry, internal_chain = read_inputs(gh, number, as_of)
         except (ReadError, KeyError) as e:
             print(f"::error::check-review-answered cannot read the review of #{number}, so it cannot say it was answered: {e}")
             return 1
-        verdict = evaluate(pr, reviews, comments, waiver, as_of, check_runs, files, commits, copilot_carry)
+        verdict = evaluate(pr, reviews, comments, waiver, as_of, check_runs, files, commits, copilot_carry, internal_chain)
         left = deadline - clock()
         if waiting_would_help(verdict) and left > POLL_SECONDS:
             print(f"  the automatic review has not landed yet; waiting up to {int(left)}s more for it "
@@ -4991,6 +5103,106 @@ def self_test() -> int:
     ok = -1 < idx[f"commits/{M}/check-runs"] < idx["pulls/1/reviews"] < idx["pulls/1/comments"]
     failures += 0 if ok else 1
     print(f"self-test {'ok' if ok else 'FAIL':4} {'read order: check runs, then reviews, then comments':60} {idx}")
+
+    # ── the MULTI-HOP carry (MeshWeaver.Plugins#5408/#5396): the steward carries a review across every merge-only
+    # push, so after two of them the head's run names a head that holds only ANOTHER carried run. The gate follows
+    # the chain to this pull request's own review, each hop one of its own commits, root..head merges only with the
+    # own diff unchanged. Topology: P1 ── O (reviewed) ── H1 ── H2 ── H3, each Hk a merge of the base branch.
+    H1, H2, H3, H2X, CB = sha("c"), sha("d"), sha("e"), sha("9"), sha("b")
+    IREV_O = dict(_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER, rid=5882), commit_id=O)
+    def hop_run(at, frm, rest, crid):
+        return _ir(sha=at, crid=crid, title=f"Review carried from {frm[:10]} — {rest}")
+    RUN_H1 = hop_run(H1, O, "No blocking findings", 1311)
+    RUN_H2 = hop_run(H2, H1, f"Review carried from {O[:10]} — No blocking findings", 1312)
+    RUN_H3 = hop_run(H3, H2, f"Review carried from {H1[:10]} — Review carried from {O[:10]} — No blocking findings", 1313)
+    CHAIN_RUNS = {O: [REVIEW_O], H1: [RUN_H1], H2: [RUN_H2], H3: [RUN_H3]}
+    def head_cmp(*tail, patch=PATCH_SHIFTED):
+        return cmp_(OLD_CMP["commits"] + list(tail), files(patch), B2)
+    CMP_H2 = head_cmp(commit(H1, O, B2), commit(H2, H1, B2))
+    CMP_H3 = head_cmp(commit(H1, O, B2), commit(H2, H1, B2), commit(H3, H2, B2))
+    def chain_of(head, run, new_cmp, runs=CHAIN_RUNS, reviews=(IREV_O,)):
+        return internal_chain_carry(head, run, new_cmp, lambda s_: runs.get(s_, []), list(reviews), None, lambda _r: OLD_CMP)
+    def chain_case(name, want_green, head, run, chain, reviews=(IREV_O,), says=""):
+        nonlocal failures
+        v = evaluate(dict(_pr(0), head={"sha": head}), list(reviews), [], NO_WAIVER, None, [run], copilot_carry=None, internal_chain=chain)
+        text = "\n".join(v.reasons + v.notes)
+        ok = v.green == want_green and says in text and (want_green or any("has not landed" in r for r in v.reasons))
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} multi-hop carry: {name:62} green={v.green}" + ("" if ok else f" {v.reasons} {v.notes}"))
+    chain_case("ONE hop (named head reviewed on this PR) needs no chain -> green", True, H1, RUN_H1, None, says="Review carried from")
+    chain_case("TWO hops O <- H1 <- H2 (Plugins#5408) -> green", True, H2, RUN_H2, chain_of(H2, RUN_H2, CMP_H2),
+               says="CARRIED over 2 merge-only hop(s)")
+    chain_case("THREE hops O <- H1 <- H2 <- H3 -> green", True, H3, RUN_H3, chain_of(H3, RUN_H3, CMP_H3),
+               says="CARRIED over 3 merge-only hop(s)")
+    chain_case("NEG control: two hops, chain not computed -> red (only one hop binds)", False, H2, RUN_H2, None,
+               says="NOT counted for this pull request")
+    # The root review belongs to ANOTHER pull request: O carries a real review run, but this pull request has no
+    # review of the internal reviewer at O — exactly the commit-scoped borrowing the binding exists to refuse.
+    chain_case("NEG: the chain's root review is ANOTHER PR's (no review of this PR at O) -> red", False, H2, RUN_H2,
+               chain_of(H2, RUN_H2, CMP_H2, reviews=()), reviews=(), says="another pull request at the same commit")
+    chain_case("NEG: this PR's review is at an UNRELATED head, not the chain's root -> red", False, H2, RUN_H2,
+               chain_of(H2, RUN_H2, CMP_H2, reviews=(dict(IREV_O, commit_id=sha("f")),)), reviews=(dict(IREV_O, commit_id=sha("f")),),
+               says="another pull request at the same commit")
+    # A real-change hop: H2X is a NON-merge commit on top of H1 (new content), yet carries a carried run; the
+    # repository says otherwise, so the chain does not hold.
+    RUN_H2X = hop_run(H2X, H1, "No blocking findings", 1314)
+    RUN_H3X = hop_run(H3, H2X, "No blocking findings", 1315)
+    CMP_H3X = head_cmp(commit(H1, O, B2), commit(H2X, H1), commit(H3, H2X, B2))
+    chain_case("NEG: a hop is a REAL change (non-merge commit) -> red", False, H3, RUN_H3X,
+               chain_of(H3, RUN_H3X, CMP_H3X, runs=dict(CHAIN_RUNS, **{H2X: [RUN_H2X], H3: [RUN_H3X]})), says="non-merge commit(s)")
+    chain_case("NEG: every hop a merge, but the own diff CHANGED -> red", False, H2, RUN_H2,
+               chain_of(H2, RUN_H2, head_cmp(commit(H1, O, B2), commit(H2, H1, B2), patch=PATCH_RESOLVED)), says="own diff changed")
+    # Broken and cyclic chains fail CLOSED.
+    RUN_H2_OFF = hop_run(H2, sha("a"), "No blocking findings", 1316)
+    chain_case("NEG: a hop names a commit NOT on this PR -> red", False, H2, RUN_H2_OFF, chain_of(H2, RUN_H2_OFF, CMP_H2),
+               says="not among the pull request's own commits")
+    chain_case("NEG: a hop with no review run of the App -> red", False, H2, RUN_H2,
+               chain_of(H2, RUN_H2, CMP_H2, runs={O: [REVIEW_O], H2: [RUN_H2]}), says="has no `internal-review` review run")
+    chain_case("NEG: a hop whose newest run is the degradation -> red", False, H2, RUN_H2,
+               chain_of(H2, RUN_H2, CMP_H2, runs=dict(CHAIN_RUNS, **{H1: [_check_run(crid=1317, sha=H1, at="2026-10-05T08:00:00Z"), RUN_H1]})),
+               says="has no `internal-review` review run")
+    RUN_H2_CYC, RUN_H3_CYC = hop_run(H2, H3, "No blocking findings", 1318), hop_run(H3, H2, "No blocking findings", 1319)
+    chain_case("NEG: a CYCLIC chain H3 -> H2 -> H3 -> red", False, H3, RUN_H3_CYC,
+               chain_of(H3, RUN_H3_CYC, CMP_H3, runs={H2: [RUN_H2_CYC], H3: [RUN_H3_CYC]}), says="a cycle is no evidence")
+    # Distinct merges (two-digit shas, none of them O), each carried from the next, the last reviewed on this PR —
+    # so the ONLY thing wrong is the length: one hop more than CARRY_MAX_WALK.
+    LONG = [f"{i + 10:02d}" * 20 for i in range(CARRY_MAX_WALK + 2)]
+    long_runs = {LONG[i]: [hop_run(LONG[i], LONG[i + 1], "No blocking findings", 1400 + i)] for i in range(len(LONG) - 1)}
+    long_cmp = cmp_([commit(x) for x in LONG], files(PATCH_SHIFTED), B2)
+    LONG_REV = (dict(IREV_O, commit_id=LONG[-1]),)
+    chain_case(f"NEG: a chain longer than {CARRY_MAX_WALK} hops -> red", False, LONG[0], long_runs[LONG[0]][0],
+               chain_of(LONG[0], long_runs[LONG[0]][0], long_cmp, runs=long_runs, reviews=LONG_REV), reviews=LONG_REV,
+               says=f"within {CARRY_MAX_WALK} carry hops")
+    chain_case("NEG: a chain carry for a DIFFERENT run is not this run's binding -> red", False, H2, dict(RUN_H2, id=9999),
+               chain_of(H2, RUN_H2, CMP_H2), says="NOT counted for this pull request")
+    # ...and the ADAPTER end to end: read_inputs reads the base tip, compare(base...head), each hop's runs and
+    # compare(base...root), and evaluate turns the chain into the verdict.
+    chain_routes = {
+        "pulls/1/reviews": [IREV_O], "pulls/1/comments": [], "issues/1/events": [],
+        "pulls/1": dict(_pr(0), head={"sha": H2}, base={"ref": "main"}),
+        f"commits/{H2}/check-runs": listing([RUN_H2]), f"commits/{H1}/check-runs": listing([RUN_H1]),
+        "branches/main": {"commit": {"sha": CB}},
+        f"compare/{CB}...{H2}": CMP_H2, f"compare/{CB}...{O}": OLD_CMP,
+        "collaborators/": {"role_name": "admin"},
+    }
+    def chain_e2e(name, routes, want_green, says):
+        nonlocal failures
+        got = read_inputs(_RestStub(routes), 1, None)
+        v = evaluate(*got[:3], got[3], None, got[5], got[6], got[7], got[8], got[9])
+        ok = v.green == want_green and says in "\n".join(v.reasons + v.notes)
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} multi-hop carry adapter: {name:54} green={v.green}" + ("" if ok else f" {v.reasons} {v.notes}"))
+    chain_e2e("two hops read end to end -> GREEN", chain_routes, True, "CARRIED over 2 merge-only hop(s)")
+    chain_e2e("NEG: a hop's runs unreadable -> RED (fails closed)",
+              {k: v for k, v in chain_routes.items() if k != f"commits/{H1}/check-runs"}, False, "could not be read")
+    chain_e2e("NEG: the root's compare unreadable -> RED (fails closed)",
+              {k: v for k, v in chain_routes.items() if k != f"compare/{CB}...{O}"}, False, "could not be read")
+    one_hop = _RestStub(dict(chain_routes, **{"pulls/1": dict(_pr(0), head={"sha": H1}, base={"ref": "main"}),
+                                              f"commits/{H1}/check-runs": listing([RUN_H1])}))
+    got = read_inputs(one_hop, 1, None)
+    ok = got[9] is None and not any(c.startswith("compare/") for c in one_hop.calls)
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} {'multi-hop carry adapter: a one-hop carry reads no chain':60} got={got[9]}")
     # ── the REVIEW-ON-CHANGE lane (step 1): request ONE review exactly when the head owes one.
     RPR = dict(MPR, node_id="PR_node", head={"sha": M, "repo": {"full_name": "Systemorph/MeshWeaver"}})
     COVERED = copilot_carry_over(M, NEW_CMP, OLD_CMP, COP_O)
