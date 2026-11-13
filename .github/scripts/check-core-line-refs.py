@@ -17,7 +17,8 @@ NOT a declared line — a stacked pull request, a feature-branch dispatch, a loc
 cannot read the line from the branch, so it demands CONSISTENCY instead: every reference names one
 and the same declared line. It never skips: both modes read every file and print the denominator.
 
-Refused (non-comment lines of every yml/yaml under `.github/`), for any declared line L other
+Refused (code, not comments — whole-line and trailing comments are stripped first — of every
+yml/yaml under `.github/`), for any declared line L other
 than the expected one:
   * `Systemorph/MeshWeaver/<path>@L`                     a shared workflow or composite action;
   * `"$RUNNER_TEMP/mw-core-file" L <path>`               a core-file read;
@@ -57,6 +58,22 @@ INPUT_KEY = re.compile(r"^(?P<indent>\s+)(?:scripts-ref|platform-ref):\s*$")
 DEFAULT = re.compile(r"^\s+default:\s*['\"]?" + _REF + r"['\"]?\s*$")
 CORE_REPOSITORY = re.compile(r"^(?P<indent>\s*)repository:\s*['\"]?Systemorph/MeshWeaver['\"]?\s*$")
 CHECKOUT_REF = re.compile(r"^\s*ref:\s*(?P<ref>.*?)\s*$")
+
+
+def _code(line: str) -> str:
+    """`line` without its comment: a whole-line `#`, or a ` #` outside quotes."""
+    if line.lstrip().startswith("#"):
+        return ""
+    quote = None
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
+            return line[:i].rstrip()
+    return line
 
 
 def declaration(root: Path) -> tuple[list[str], str]:
@@ -108,9 +125,9 @@ def references(root: Path, lines: list[str], default: str) -> tuple[list[tuple[s
     out = []
     for path in files:
         rel = path.relative_to(root).as_posix()
-        text = path.read_text(encoding="utf-8").splitlines()
+        text = [_code(line) for line in path.read_text(encoding="utf-8").splitlines()]
         for n, raw in enumerate(text, 1):
-            if raw.lstrip().startswith("#"):
+            if not raw.strip():
                 continue
             for kind, pattern in SINGLE:
                 for m in pattern.finditer(raw):
@@ -183,6 +200,10 @@ def self_test() -> int:
         ("a sha is not a line", "main3", {"w.yml": lane.format(r="a" * 40)}, False),
         ("another repo at main is not core", "main3", {"w.yml": "jobs:\n  a:\n    steps:\n      - uses: jlumbroso/free-disk-space@main\n"}, False),
         ("a comment naming main", "main3", {"w.yml": "# was uses: Systemorph/MeshWeaver/.github/workflows/x.yml@main\njobs: {}\n"}, False),
+        ("a TRAILING comment naming main", "main3",
+         {"w.yml": lane.format(r="main3").rstrip("\n") + "   # was @main\n"}, False),
+        ("a quoted '#' is not a comment", "main3",
+         {"w.yml": "jobs:\n  a:\n    steps:\n      - run: echo '#x' https://raw.githubusercontent.com/Systemorph/MeshWeaver/main/x\n"}, True),
         ("a default of another input", "main3", {"w.yml": default.replace("platform-ref", "lane-id").format(r="main")}, False),
         ("stacked PR, all main3", "feature/x", {"w.yml": lane.format(r="main3"), "v.yml": caller.format(r="main3")}, False),
         ("stacked PR, all main", "feature/x", {"w.yml": lane.format(r="main")}, False),
