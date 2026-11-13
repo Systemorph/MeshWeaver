@@ -69,10 +69,21 @@ The owner decided on a dedicated `main3` branch for the v3 line, with `main` the
 applies to MeshWeaver.Plugins too. Core CD builds the portal and control images against a Plugins
 commit (`gate.outputs.plugins_sha`), so the v3 line's CD takes that commit from Plugins
 **`main3`** and the v4 line's from Plugins `main`. No image ever mixes majors, and v3 stays a
-real line that a fix can still land on, not a frozen commit. A satellite gets a `main3` only if it
-must keep shipping v3 changes. One that simply waits for v4 stays on `main` and calls core's lanes
-`@main3` until it opts in. In-mesh modules are baked per live framework identity (policy
+real line that a fix can still land on, not a frozen commit. Every PLUGIN repository gets a `main3` as well: MeshWeaver.Plugins and each satellite (Education, Reinsurance, SocialMedia, Manufacturing, Crm, FundReporting). Each `main3` calls core's lanes `@main3`, and each `main` calls them `@main` once it has opted into v4. In-mesh modules are baked per live framework identity (policy
 `bake-per-live-identity`), so v3 instances keep receiving bundles built for `c003…`.
+
+## 4a. Versions follow the line
+
+On the v4 line every package and module version is `4.0.0`, and every floor (`content.minMeshVersion`,
+MeshWeaver.Plugins `scripts/platform-floor.json`) names the first sealed 4.0 set. The `main3` copies keep
+their v3 versions (1.x / 0.x), so a version number says which line it belongs to. The renumbering is made
+once, in each repository's v4 opt-in pull request.
+
+## 4b. The plugin registry serves each line
+
+The registry lists what MeshWeaver.Plugins `main` holds. Once `main` is v4, a v3 instance must still be
+offered v3 packages: the registry serves `main3` to instances whose record says `updatePattern: "3.*"`,
+and `main` to `4.*`.
 
 ## 5. Order of work
 
@@ -84,7 +95,7 @@ Each step is its own pull request and lands before the next begins:
    (`main-cd.yml` `branches:`), and each line's CD reads the Plugins commit of its own line.
    🚨 A ruleset is a maintainer's change.
 3. **Dependents name their line**: every `uses: …@main` → `@main3` in Plugins, the
-   satellites, Deploy and Memex, and every core checkout pinned to the line. The two branches are
+   satellites, Deploy and Memex, and then each plugin repository cuts its own `main3` from that `main`, and every core checkout pinned to the line. The two branches are
    identical at this point, so this changes no behaviour and can land in any order.
 4. **Per-major build-server channels**: `latest3` and `latest4` on the operations record, the
    cross-major refusal in `BuildHostUpdates`, and the resolver reading the channel of the floor's
