@@ -7,7 +7,7 @@ it: it compiles every NodeType's C# `Source` against the framework assemblies EX
 does on import, and fails on any *regression*.
 
 Faithful mesh reproduction (mirrors scratchpad/build-check.sh, proven against the live compile):
-  * ref assemblies = every `<core>/src/*/bin/(Debug|Release)/net11.0/*.dll`, deduped by filename,
+  * ref assemblies = every `<core>/src/*/bin/(Debug|Release)/net10.0/*.dll`, deduped by filename,
     preferring the assembly's OWN project dir + newest mtime;
   * ONE COMPILATION UNIT per NodeType (`UNIT_FILE`): every source concatenated in node-path order
     with the `using` directives hoisted and deduped, which is what
@@ -643,7 +643,7 @@ def discover_refs(refs_arg):
        COMPLETE set means (see `short_reference_set_refusal`): `"image"` — a FLAT directory of
        assemblies extracted from the platform image (`--image`'s cache, CI's `refs/`), whose
        contents are CONTAINER-built and therefore need the image's shared frameworks too; or
-       `"source-build"` — the per-project `<proj>/bin/<cfg>/net11.0` layout of a core checkout
+       `"source-build"` — the per-project `<proj>/bin/<cfg>/net10.0` layout of a core checkout
        built on this host with the SDK, which needs the reference pack and no shared frameworks; or
        `"host-build"` — a FLAT directory carrying `HOST_REFERENCE_SET_MANIFEST`: the image's
        closure published on this host by `build-host-reference-set.py`. Like a source build it
@@ -652,7 +652,7 @@ def discover_refs(refs_arg):
     layout = "source-build"
     if refs_arg:
         # Prefer the PRECISE per-project output glob (the same clean set auto-discovery uses below):
-        # <refs>/<proj>/bin/(Debug|Release)/net11.0/*.dll. A bare recursive **/*.dll also sweeps
+        # <refs>/<proj>/bin/(Debug|Release)/net10.0/*.dll. A bare recursive **/*.dll also sweeps
         # obj/ intermediates, bin/.../ref/ metadata-only reference assemblies and runtimes/<rid>/
         # copies; on some CI runners that larger set deduped by filename to a mix that OMITTED the
         # real framework assemblies, so every NodeType failed CS0246 'MeshWeaver' could not be found
@@ -660,7 +660,7 @@ def discover_refs(refs_arg):
         # points at a FLAT assemblies dir (no src/*/bin layout), the other documented --refs usage.
         dlls = []
         for cfg in ("Debug", "Release"):
-            dlls = glob.glob(os.path.join(refs_arg, "*", "bin", cfg, "net11.0", "*.dll"))
+            dlls = glob.glob(os.path.join(refs_arg, "*", "bin", cfg, "net10.0", "*.dll"))
             if dlls:
                 break
         if not dlls:
@@ -697,7 +697,7 @@ def discover_refs(refs_arg):
         core_used = None
         for core in candidates:
             for cfg in ("Debug", "Release"):
-                dlls = glob.glob(str(core / "src" / "*" / "bin" / cfg / "net11.0" / "*.dll"))
+                dlls = glob.glob(str(core / "src" / "*" / "bin" / cfg / "net10.0" / "*.dll"))
                 if dlls:
                     core_used = core
                     break
@@ -798,7 +798,7 @@ MODULE_REFS_NOT_IN_IMAGE = ("MeshWeaver.AI", "MeshWeaver.Markdown.Collaboration"
 def discover_module_refs(search_roots, include_repo_build: bool = True):
     """Locate the MODULE assemblies that are no longer in the platform image. CI supplies them in
        the flat `--refs` dir (unpacked from the run's module bundles); locally they come from this
-       repo's own `src/<Module>/bin/{Release,Debug}/net11.0/`, since all three are built HERE.
+       repo's own `src/<Module>/bin/{Release,Debug}/net10.0/`, since all three are built HERE.
        Returns {name.dll: abspath} for whatever was found — the caller decides what a miss means.
        Prefers Release over Debug, and the newest file within a tier.
 
@@ -823,7 +823,7 @@ def discover_module_refs(search_roots, include_repo_build: bool = True):
     if include_repo_build:
         for name in MODULE_REFS_NOT_IN_IMAGE:
             for cfg in ("Release", "Debug"):
-                for dll in glob.glob(str(ROOT / "src" / name / "bin" / cfg / "net11.0" / f"{name}.dll")):
+                for dll in glob.glob(str(ROOT / "src" / name / "bin" / cfg / "net10.0" / f"{name}.dll")):
                     consider(dll, cfg == "Release")
     # …then anything the reference roots already carry (CI's flat dir, a sibling checkout's bins).
     for root in search_roots:
@@ -834,7 +834,7 @@ def discover_module_refs(search_roots, include_repo_build: bool = True):
             for dll in glob.glob(str(root / f"{name}.dll")):
                 consider(dll, True)
             for cfg in ("Release", "Debug"):
-                for dll in glob.glob(str(root / "**" / "bin" / cfg / "net11.0" / f"{name}.dll"),
+                for dll in glob.glob(str(root / "**" / "bin" / cfg / "net10.0" / f"{name}.dll"),
                                      recursive=True):
                     consider(dll, cfg == "Release")
     # Absolutize — these become <HintPath>s in a csproj that `dotnet build` runs from a TEMP dir.
@@ -844,7 +844,7 @@ def discover_module_refs(search_roots, include_repo_build: bool = True):
 def discover_ai_refs(search_roots):
     """Locate the `Microsoft.Extensions.AI*` assemblies the mesh supplies at runtime but that are
        NOT in the core `src/*/bin` set discover_refs globs (they live under the core's `test/*/bin`
-       output and in NuGet). Returns {name.dll: path} for net11.0, or {} if none can be found — in
+       output and in NuGet). Returns {name.dll: path} for net10.0, or {} if none can be found — in
        which case the AI-using sets stay UNVERIFIABLE. Prefers a build-output dll over a NuGet one,
        newest mtime within a tier."""
     found = {}   # name -> (path, from_build_output, mtime)
@@ -864,16 +864,16 @@ def discover_ai_refs(search_roots):
             continue
         root = Path(root)
         for cfg in ("Debug", "Release"):
-            for dll in glob.glob(str(root / "**" / "bin" / cfg / "net11.0" /
+            for dll in glob.glob(str(root / "**" / "bin" / cfg / "net10.0" /
                                     "Microsoft.Extensions.AI*.dll"), recursive=True):
                 consider(dll, True)
         # a flat --refs directory
         for dll in glob.glob(str(root / "Microsoft.Extensions.AI*.dll")):
             consider(dll, True)
-    # NuGet fallback (net11.0) only if nothing was found in the build output
+    # NuGet fallback (net10.0) only if nothing was found in the build output
     if not found:
         for dll in glob.glob(os.path.expanduser(
-                "~/.nuget/packages/microsoft.extensions.ai*/**/lib/net11.0/"
+                "~/.nuget/packages/microsoft.extensions.ai*/**/lib/net10.0/"
                 "Microsoft.Extensions.AI*.dll"), recursive=True):
             consider(dll, False)
     # Absolutize — same reason as discover_refs: these paths become <HintPath>s in a check.csproj
@@ -1198,7 +1198,7 @@ def build_csproj(work: Path, ref_xml: str, impl_frameworks: bool = False) -> str
     docfile = "true" if WARNINGS_AS_ERRORS else "false"
     return f'''<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <!-- Disable the SDK's implicit usings: the MESH compiler injects ONLY the explicit prelude
          (IMPLICIT_USINGS, lifted from DynamicMeshNodeAttributeGenerator) plus the authored
          `using`s the unit hoists. `ImplicitUsings=enable` would auto-add System.IO / System.Net.Http /
@@ -1961,14 +1961,14 @@ def _self_test() -> int:
             {k: v for k, v in complete_image.items() if k != "System.Reactive.dll"},
             "image", "NO System.Reactive.dll")
     refuses("a source build with no Rx",
-            {"MeshWeaver.Messaging.Hub.dll": "/x/bin/Release/net11.0/MeshWeaver.Messaging.Hub.dll"},
+            {"MeshWeaver.Messaging.Hub.dll": "/x/bin/Release/net10.0/MeshWeaver.Messaging.Hub.dll"},
             "source-build", "NO System.Reactive.dll")
     # 🚨 THE CONTROL ARM. A refusal that also fires on a GOOD set is a gate nobody can use: a complete
     # image cache, and the host-SDK core build that legitimately has no shared frameworks, must pass.
     refuses("a complete image cache", complete_image, "image", None)
     refuses("a core source build (the ref pack is correct there)",
-            {"MeshWeaver.Messaging.Hub.dll": "/c/src/X/bin/Release/net11.0/MeshWeaver.Messaging.Hub.dll",
-             "System.Reactive.dll": "/c/src/X/bin/Release/net11.0/System.Reactive.dll"},
+            {"MeshWeaver.Messaging.Hub.dll": "/c/src/X/bin/Release/net10.0/MeshWeaver.Messaging.Hub.dll",
+             "System.Reactive.dll": "/c/src/X/bin/Release/net10.0/System.Reactive.dll"},
             "source-build", None)
     # 🚨 THE HOST-BUILT FLAT SET. It has no System.Private.CoreLib.dll, legitimately, so it must PASS
     # as `host-build` and must NOT pass as `image`. The classification is read from its manifest. A

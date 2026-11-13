@@ -39,7 +39,7 @@ public class RepoPathsTest
             var worktree = Directory.CreateDirectory(Path.Combine(outer.FullName, ".claude", "worktrees", "x"));
             File.WriteAllText(Path.Combine(worktree.FullName, RepoPaths.RootMarker), "<Solution />");
             File.WriteAllText(Path.Combine(worktree.FullName, ".git"), "gitdir: ../../../.git/worktrees/x\n");
-            var bin = Directory.CreateDirectory(Path.Combine(worktree.FullName, "test", "T", "bin", "Release", "net11.0"));
+            var bin = Directory.CreateDirectory(Path.Combine(worktree.FullName, "test", "T", "bin", "Release", "net10.0"));
 
             Assert.Equal(worktree.FullName, RepoPaths.TryFindRoot(bin.FullName));
 

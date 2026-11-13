@@ -129,7 +129,7 @@ printf 'internal static class PlatformReferenceSetProbe { }\n' > "$probe/Probe.c
 cat > "$probe/Probe.csproj" <<'PROJ'
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
   </PropertyGroup>

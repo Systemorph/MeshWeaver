@@ -19,7 +19,7 @@
 # packing, on the architecture the image is for:
 #   python3 deploy/core-tests/core-tests.py pack --repo . --out artifacts/core-tests --sha <sha> --version <v>
 #   docker build -f deploy/core-tests/Dockerfile -t mw-core-tests:local .
-FROM mcr.microsoft.com/dotnet/sdk:11.0
+FROM mcr.microsoft.com/dotnet/sdk:10.0
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 \

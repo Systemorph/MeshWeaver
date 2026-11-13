@@ -9,7 +9,7 @@ root never sees the caller's pin. It keys a version the publish job then refuses
 names an SDK the caller pinned away from.
 
 This harness reads the workflow (never a copy) and checks the structure: `select` installs from
-`repo/global.json` when the caller has one, falls back to the floating `11.0.x` only when it has
+`repo/global.json` when the caller has one, falls back to the floating `10.0.x` only when it has
 none, and runs the resolve step with `working-directory: repo`. `build-workspace` then installs the
 version `select` keyed. It also RUNS the resolve step's real bash, from the working directory the
 workflow declares, against a stub `dotnet` that answers the way SDK resolution does: the pinned

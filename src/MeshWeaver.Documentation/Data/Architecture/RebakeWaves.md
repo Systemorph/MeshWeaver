@@ -165,7 +165,7 @@ is reproducible in three commands:
 ```bash
 dotnet build src/MeshWeaver.Utils/MeshWeaver.Utils.csproj -c Release --no-incremental \
   -p:CIRun=true -p:GITHUB_ACTIONS=true -p:SourceRevisionId=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-shasum -a 256 src/MeshWeaver.Utils/obj/Release/net11.0/ref/MeshWeaver.Utils.dll
+shasum -a 256 src/MeshWeaver.Utils/obj/Release/net10.0/ref/MeshWeaver.Utils.dll
 # …repeat with a different SourceRevisionId and no source change.
 ```
 

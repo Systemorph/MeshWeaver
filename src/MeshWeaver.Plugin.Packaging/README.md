@@ -9,7 +9,7 @@ package for the same plugin**, so the format lives here rather than in each.
 
 ## What the format encodes
 
-- **Assemblies under `meshweaver/assemblies/`, never `lib/net11.0/`.** A plugin's units compile
+- **Assemblies under `meshweaver/assemblies/`, never `lib/net10.0/`.** A plugin's units compile
   separately at runtime and may declare the same type names; under `lib/` NuGet would surface them
   all as compile-time references and collide them.
 - **The nuspec is a projection, not an invention.** `version` comes from `manifest.lock` (the number

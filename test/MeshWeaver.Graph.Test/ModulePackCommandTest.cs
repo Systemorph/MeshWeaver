@@ -208,7 +208,7 @@ public class ModulePackCommandTest : IDisposable
 
     /// <summary>
     /// 🚨 Containment, not directory equality (Copilot review on #3306). The real CD path was
-    /// NESTED — `…/src/MeshWeaver.Maps/bin/Release/net11.0/publish/MeshWeaver.Compiler.dll` — so an
+    /// NESTED — `…/src/MeshWeaver.Maps/bin/Release/net10.0/publish/MeshWeaver.Compiler.dll` — so an
     /// anchor deeper inside the module tree is the shape this guard most needs to catch. A check
     /// that compared the anchor's immediate directory against the module directory accepted this
     /// case, which would have let a per-module rebuilt identity through exactly where it lives.
@@ -217,7 +217,7 @@ public class ModulePackCommandTest : IDisposable
     public void AnAnchorNestedDeeperInsideTheModuleTree_IsAlsoRefused()
     {
         var moduleDirectory = Path.Combine(root, "closure");
-        var nested = Path.Combine(moduleDirectory, "bin", "Release", "net11.0", "publish");
+        var nested = Path.Combine(moduleDirectory, "bin", "Release", "net10.0", "publish");
         Directory.CreateDirectory(nested);
         var nestedAnchor = Path.Combine(nested, FrameworkIdentity.IdentityAssembly + ".dll");
         File.Copy(typeof(ModulePackCommand).Assembly.Location, nestedAnchor);
@@ -413,7 +413,7 @@ public class ModulePackCommandTest : IDisposable
                     "runtime": { "Widget.dll": {} }
                   },
                   "MeshWeaver.AI/3.0.0": { "runtime": { "MeshWeaver.AI.dll": {} } },
-                  "Gadget.Sdk/2.0.0": { "runtime": { "lib/net11.0/Gadget.Sdk.dll": {} } }
+                  "Gadget.Sdk/2.0.0": { "runtime": { "lib/net10.0/Gadget.Sdk.dll": {} } }
                 }
               },
               "libraries": {
@@ -692,7 +692,7 @@ public class ModulePackCommandTest : IDisposable
     private static string BundleIn(string outDir, string version) =>
         Path.Combine(outDir, $"MeshWeaver.Plugin.WidgetPkg.{version}.module.nupkg");
 
-    private const string RidSpecificManagedAsset = "runtimes/linux-x64/lib/net11.0/RidPicky.dll";
+    private const string RidSpecificManagedAsset = "runtimes/linux-x64/lib/net10.0/RidPicky.dll";
 
     /// <summary>A module whose dependency ships a RID-agnostic managed copy AND a RID-specific one
     /// — the choice the flat closure (one slot per assembly name) cannot make at pack time. The
@@ -711,7 +711,7 @@ public class ModulePackCommandTest : IDisposable
                     "runtime": { "Widget.dll": {} }
                   },
                   "RidPicky/1.0.0": {
-                    "runtime": { "lib/net11.0/RidPicky.dll": {} },
+                    "runtime": { "lib/net10.0/RidPicky.dll": {} },
                     "runtimeTargets": {
                       "{{RidSpecificManagedAsset}}": { "rid": "linux-x64", "assetType": "runtime" }
                     }
@@ -726,7 +726,7 @@ public class ModulePackCommandTest : IDisposable
             """);
     }
 
-    private const string UnprobedNative = "runtimes/linux-x64/nativeassets/net11.0/libodd.so";
+    private const string UnprobedNative = "runtimes/linux-x64/nativeassets/net10.0/libodd.so";
 
     /// <summary>Where the loader probes for that same file and RID — the slot
     /// <c>--with-native</c> takes.</summary>
@@ -812,9 +812,9 @@ public class ModulePackCommandTest : IDisposable
                     "runtime": { "Widget.dll": {} }
                   },
                   "RidPicky/1.0.0": {
-                    "runtime": { "lib/net11.0/RidPicky.dll": {} },
+                    "runtime": { "lib/net10.0/RidPicky.dll": {} },
                     "runtimeTargets": {
-                      "runtimes/win/lib/net11.0/RidPicky.dll": { "rid": "win", "assetType": "runtime" }
+                      "runtimes/win/lib/net10.0/RidPicky.dll": { "rid": "win", "assetType": "runtime" }
                     }
                   }
                 }
@@ -835,7 +835,7 @@ public class ModulePackCommandTest : IDisposable
         // the path and the foreign RID — and not a word of it on stderr, where a refusal goes.
         var info = Assert.Single(output.Split('\n'), l => l.StartsWith("deps-closure: info:", StringComparison.Ordinal));
         Assert.Contains("'RidPicky'", info, StringComparison.Ordinal);
-        Assert.Contains("runtimes/win/lib/net11.0/RidPicky.dll", info, StringComparison.Ordinal);
+        Assert.Contains("runtimes/win/lib/net10.0/RidPicky.dll", info, StringComparison.Ordinal);
         Assert.Contains("RID 'win'", info, StringComparison.Ordinal);
         Assert.DoesNotContain("runtimes/win/", error, StringComparison.Ordinal);
     }
@@ -969,7 +969,7 @@ public class ModulePackCommandTest : IDisposable
     [Fact]
     public void DepsClosure_ANativeNamedWithWith_DifferingOnlyInCaseFromAManagedFileInTheClosure_IsRefused()
     {
-        const string declared = "runtimes/linux-x64/nativeassets/net11.0/LIBODD.DLL";
+        const string declared = "runtimes/linux-x64/nativeassets/net10.0/LIBODD.DLL";
         File.WriteAllBytes(Path.Combine(root, "closure", "libodd.dll"), "MANAGED"u8.ToArray());
         if (!File.Exists(Path.Combine(root, "closure", "LIBODD.DLL")))
             File.WriteAllBytes(Path.Combine(root, "closure", "LIBODD.DLL"), "NATIVE"u8.ToArray());
@@ -983,7 +983,7 @@ public class ModulePackCommandTest : IDisposable
                     "dependencies": { "Odd.Managed": "1.0.0", "Odd.Natives": "1.0.0" },
                     "runtime": { "Widget.dll": {} }
                   },
-                  "Odd.Managed/1.0.0": { "runtime": { "lib/net11.0/libodd.dll": {} } },
+                  "Odd.Managed/1.0.0": { "runtime": { "lib/net10.0/libodd.dll": {} } },
                   "Odd.Natives/1.0.0": {
                     "runtimeTargets": {
                       "{{declared}}": { "rid": "linux-x64", "assetType": "native" }
@@ -1095,8 +1095,8 @@ public class ModulePackCommandTest : IDisposable
                     "dependencies": { "Gadget.Sdk": "2.0.0", "Microsoft.Extensions.Options": "10.0.0" },
                     "runtime": { "Widget.dll": {} }
                   },
-                  "Gadget.Sdk/2.0.0": { "runtime": { "lib/net11.0/Gadget.Sdk.dll": {} } },
-                  "Microsoft.Extensions.Options/10.0.0": { "runtime": { "lib/net11.0/Microsoft.Extensions.Options.dll": {} } }
+                  "Gadget.Sdk/2.0.0": { "runtime": { "lib/net10.0/Gadget.Sdk.dll": {} } },
+                  "Microsoft.Extensions.Options/10.0.0": { "runtime": { "lib/net10.0/Microsoft.Extensions.Options.dll": {} } }
                 }
               },
               "libraries": {
@@ -1149,7 +1149,7 @@ public class ModulePackCommandTest : IDisposable
                     "runtime": { "MeshWeaver.AI.dll": {} }
                   },
                   "System.Reactive/6.0.0": { "runtime": { "lib/net6.0/System.Reactive.dll": {} } },
-                  "Microsoft.Extensions.Options/10.0.0": { "runtime": { "lib/net11.0/Microsoft.Extensions.Options.dll": {} } }
+                  "Microsoft.Extensions.Options/10.0.0": { "runtime": { "lib/net10.0/Microsoft.Extensions.Options.dll": {} } }
                 }
               },
               "libraries": {
@@ -1198,7 +1198,7 @@ public class ModulePackCommandTest : IDisposable
                     "dependencies": { "Absent.Sdk": "1.0.0" },
                     "runtime": { "Widget.dll": {} }
                   },
-                  "Absent.Sdk/1.0.0": { "runtime": { "lib/net11.0/Absent.Sdk.dll": {} } }
+                  "Absent.Sdk/1.0.0": { "runtime": { "lib/net10.0/Absent.Sdk.dll": {} } }
                 }
               },
               "libraries": {

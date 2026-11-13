@@ -385,7 +385,7 @@ jobs:
       - uses: actions/setup-dotnet@v6
         if: inputs.publish-newest-only && (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('newest/global.json') == ''
         with:
-          dotnet-version: "11.0.x"
+          dotnet-version: "10.0.x"
       - name: Check out the platform's MSBuild files for the evaluation
         if: inputs.publish-newest-only && (inputs.build-extensions-project != '' || inputs.module-libraries-project != '')
         uses: actions/checkout@v7

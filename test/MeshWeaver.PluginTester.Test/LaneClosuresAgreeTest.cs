@@ -45,20 +45,20 @@ public class LaneClosuresAgreeTest : IDisposable
               },
               "Provider.Sdk/2.0.0": {
                 "dependencies": { "Provider.Transitive": "1.0.0", "Framework.Riding.Package": "10.0.0" },
-                "runtime": { "lib/net11.0/Provider.Sdk.dll": {} }
+                "runtime": { "lib/net10.0/Provider.Sdk.dll": {} }
               },
               "Provider.Transitive/1.0.0": {
-                "runtime": { "lib/net11.0/Provider.Transitive.dll": {} }
+                "runtime": { "lib/net10.0/Provider.Transitive.dll": {} }
               },
               "Framework.Riding.Package/10.0.0": {
-                "runtime": { "lib/net11.0/System.Framework.Thing.dll": {} }
+                "runtime": { "lib/net10.0/System.Framework.Thing.dll": {} }
               },
               "MeshWeaver.Data/3.0.0": {
                 "dependencies": { "Platform.Only.Lib": "7.0.0" },
                 "runtime": { "MeshWeaver.Data.dll": { "assemblyVersion": "3.0.0.0" } }
               },
               "Platform.Only.Lib/7.0.0": {
-                "runtime": { "lib/net11.0/Platform.Only.Lib.dll": {} }
+                "runtime": { "lib/net10.0/Platform.Only.Lib.dll": {} }
               }
             }
           },

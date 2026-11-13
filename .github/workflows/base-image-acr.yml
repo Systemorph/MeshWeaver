@@ -2,7 +2,7 @@ name: Rebuild portal-ai base image (ACR, multi-arch)
 
 # Operator runbook: (re)bake the ONE hand-authored base image into ACR, MULTI-ARCH.
 #
-#   memex-portal-ai-base = aspnet + node26 + @anthropic-ai/claude-code + @github/copilot
+#   memex-portal-ai-base = aspnet + node20 + @anthropic-ai/claude-code + @github/copilot
 #
 # Why a dedicated workflow_dispatch (and NOT part of main-cd): the base changes rarely (it is the
 # slow apt + npm layer), so main-cd does NOT rebuild it per merge — main-cd layers the published

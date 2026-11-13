@@ -5628,7 +5628,7 @@ def self_test() -> int:
 
     def _receipt(sha: str = RECEIPT_SHA, release: str = "3.0.0-ci.8207", **over) -> str:
         fields = {"source": "meshweaver-content", "source-sha": sha, "release": release,
-                  "arch": "linux-x64", "identity": "net11.0-abc", "bundles": "3",
+                  "arch": "linux-x64", "identity": "net10.0-abc", "bundles": "3",
                   "targets-published": "3", "targets-converged": "0", "release-markers": "1"}
         fields.update(over)
         body = " ".join(f"{k}={v}" for k, v in fields.items())
