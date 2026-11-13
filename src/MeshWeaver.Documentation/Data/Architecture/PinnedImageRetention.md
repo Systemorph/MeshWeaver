@@ -914,6 +914,32 @@ asked once (37e); the pool really has more than one call in flight with 4 worker
 with 1 — the negative control that proves the gauge can tell — and the plan, the writes and the
 verdict are identical either way (ARM 38); and a progress line is flushed (ARM 39).
 
+#### 🚨 The pool was not enough once the index closure grew: index reads go over HTTP (MeshWeaver#7991)
+
+The ~108 indexes of 2026-10-10 became **2,371 on 2026-11-08 and 2,824 on 2026-11-13**. The set grows
+by about 90 a day while the purge is paused and protected builds accumulate. One `az
+acr manifest show` per index cost about 3.8 s each on the 8-wide pool. That phase took ~950 s of the
+job on 11-08 and ~1,350 s on 11-13. The scheduled job on 2026-11-12 ran 1,702 s of its 1,800 s cap. On
+2026-11-13 (run `43341717311`) it was **cut mid read-back** and returned no verdict at all.
+
+The fix is to remove the per-call process, and the cap is unchanged. `Registry.index_children`
+takes **one** ACR refresh token per run (`az acr login --expose-token`), and **one** pull-scoped
+access token per repository (`POST /oauth2/token`). It then reads each index with a plain `GET
+/v2/<repo>/manifests/<digest>`. The read is also stronger than before. The returned bytes must hash
+to the digest that was asked for before a single child is believed, where `az` trusted whatever JSON
+came back. Everything else keeps its meaning:
+
+- a 404, a non-JSON body, or a child with no usable digest is INDETERMINATE (a blocker), never an
+  empty closure;
+- a 429, a 5xx or a transport fault is retried twice, and the third failure is INDETERMINATE;
+- an expired pull token (401) is exchanged once more;
+- a refused login names itself;
+- no diagnostic carries a header or the form, so no diagnostic carries a token.
+
+ARM 8d drives the real method with `az` and the transport faked. Each check is falsified by a
+sabotage: dropping the hash check, dropping the retry, or reading a 404 as an empty index each turns
+the self-test red.
+
 ### Two questions about the lock job, settled by measurement rather than reasoning
 
 🚨 **"Should the scan read each repo's DEFAULT branch rather than every branch?" — it already does,
