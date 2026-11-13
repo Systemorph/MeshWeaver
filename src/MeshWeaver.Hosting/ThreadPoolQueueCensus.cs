@@ -1,0 +1,180 @@
+using System.Collections.Immutable;
+using System.Globalization;
+using System.Reflection;
+using System.Text;
+
+namespace MeshWeaver.Hosting;
+
+/// <summary>
+/// What the ThreadPool's queue HELD at the moment of a <c>[POOLSTALL]</c> capture, grouped by the code
+/// each queued item will run (MeshWeaver#5388, MeshWeaver#5799). The stacks say what the workers were
+/// doing; this says what the backlog they were draining IS — the producer of the queue.
+///
+/// <para>🚨 <b>Why the stacks were not enough.</b> The 2026-11-11 14:40:57Z capture on memex-cloud read
+/// 69,012 queued items over 42 threads and printed its largest shape, <c>×20</c> of 44 workers, as the
+/// pool's own idle wait (<c>LowLevelLifoSemaphore.WaitForSignal</c>). A pool that has idle threads and a
+/// five-second queue is not short of threads and is not blocked: it is draining a backlog at the
+/// concurrency it chose, and no worker stack can say what that backlog consists of — every item in it is
+/// still waiting to run. The previous reading took the idle shape for twenty busy hub handlers and asked
+/// for "a capture that keeps the handler's message type"; the item that names the producer is not on any
+/// stack at all. It is in the queue, and this reads the queue.</para>
+///
+/// <para><b>How.</b> The runtime's debugger enumeration of queued work items,
+/// <c>ThreadPool.GetQueuedWorkItems()</c> (internal; the same walk SOS's <c>!ThreadPoolQueue</c> does over
+/// a full dump). It is reached by reflection because no public API exposes the queue, and it is
+/// deliberately allowed to be missing: a runtime without it yields a census that SAYS so, and the stall
+/// line still prints. Each item is keyed by the delegate it will invoke — a <see cref="Task"/>'s action,
+/// an async method's state machine, or the first delegate a work-item wrapper holds — so a hub drain reads
+/// <c>MeshWeaver.Messaging.MessageService.DrainOne</c> and an awaited continuation reads its method.</para>
+///
+/// <para><b>Cost.</b> One pass over the queue on the heartbeat's capture thread, bounded by
+/// <see cref="MaxItems"/>, at most once per <see cref="ThreadPoolStall.CaptureCooldown"/>. It allocates
+/// nothing in the queue and runs nothing from it.</para>
+/// </summary>
+/// <param name="Groups">The producers, largest first: the key and how many queued items it accounts for.</param>
+/// <param name="Read">How many items were read.</param>
+/// <param name="Cut">Whether the walk stopped at <see cref="MaxItems"/> with more items still queued.</param>
+/// <param name="Failure">Why the queue could not be read, or null when it was.</param>
+public sealed record ThreadPoolQueueCensus(
+    ImmutableArray<(string Producer, int Count)> Groups, int Read, bool Cut, string? Failure)
+{
+    /// <summary>The most queued items one census reads; the rest are reported as not read.</summary>
+    public const int MaxItems = 500_000;
+
+    /// <summary>How many producer groups the line prints, largest first; the rest are counted.</summary>
+    public const int MaxGroups = 15;
+
+    /// <summary>The runtime's own enumeration of the queued items, or null on a runtime without it.</summary>
+    private static readonly MethodInfo? QueuedWorkItems = typeof(ThreadPool).GetMethod(
+        "GetQueuedWorkItems", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public, Type.EmptyTypes);
+
+    /// <summary>Whether this runtime exposes the enumeration the census reads.</summary>
+    public static bool IsAvailable => QueuedWorkItems is not null;
+
+    /// <summary>
+    /// Reads the real ThreadPool's queue. Never throws: a queue that cannot be read becomes a census
+    /// whose <see cref="Failure"/> says why.
+    /// </summary>
+    /// <returns>The census.</returns>
+    public static ThreadPoolQueueCensus Take()
+    {
+        if (QueuedWorkItems is null)
+            return Unavailable("this runtime has no ThreadPool.GetQueuedWorkItems()");
+        try
+        {
+            return QueuedWorkItems.Invoke(null, null) is IEnumerable<object> items
+                ? Of(items, MaxItems)
+                : Unavailable("ThreadPool.GetQueuedWorkItems() answered no sequence");
+        }
+        catch (Exception exception)
+        {
+            var cause = exception is TargetInvocationException { InnerException: { } inner } ? inner : exception;
+            return Unavailable($"{cause.GetType().Name}: {cause.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The census of a given sequence of queued items — the production walk's grouping, and what the
+    /// tests drive with items whose producers they know.
+    /// </summary>
+    /// <param name="items">The queued work items.</param>
+    /// <param name="maxItems">The most items to read.</param>
+    /// <returns>The census.</returns>
+    public static ThreadPoolQueueCensus Of(IEnumerable<object> items, int maxItems)
+    {
+        var read = 0;
+        var cut = false;
+        var counts = ImmutableDictionary.CreateBuilder<string, int>(StringComparer.Ordinal);
+        foreach (var item in items)
+        {
+            if (item is null)
+                continue;
+            if (read == maxItems)
+            {
+                cut = true;
+                break;
+            }
+            read++;
+            var producer = ProducerOf(item);
+            counts[producer] = counts.GetValueOrDefault(producer) + 1;
+        }
+
+        var groups = counts
+            .OrderByDescending(entry => entry.Value)
+            .ThenBy(entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry => (entry.Key, entry.Value))
+            .ToImmutableArray();
+        return new ThreadPoolQueueCensus(groups, read, cut, null);
+    }
+
+    private static ThreadPoolQueueCensus Unavailable(string why) => new([], 0, false, why);
+
+    /// <summary>
+    /// The code a queued item will run: a <see cref="Task"/>'s delegate, an async method's state machine,
+    /// or — for a work-item wrapper (<c>QueueUserWorkItemCallback</c>, a continuation) — the wrapper's type
+    /// and the first delegate it holds. Falls back to the item's type.
+    /// </summary>
+    /// <param name="item">One queued work item.</param>
+    /// <returns>Its producer key.</returns>
+    internal static string ProducerOf(object item)
+    {
+        var type = item.GetType();
+        if (item is Task)
+        {
+            if (FieldValue(item, typeof(Task), "m_action") is Delegate action)
+                return MethodOf(action);
+            return StateMachineOf(type) is { } machine ? Display(machine) : Display(type);
+        }
+
+        if (item is Delegate direct)
+            return MethodOf(direct);
+        return FirstDelegate(item) is { } held ? $"{Display(type)} → {MethodOf(held)}" : Display(type);
+    }
+
+    /// <summary>The state-machine type an async method's box carries as its last generic argument.</summary>
+    private static Type? StateMachineOf(Type box)
+    {
+        for (var current = box; current is not null; current = current.BaseType)
+            if (current is { IsGenericType: true, Name: var name } && name.StartsWith("AsyncStateMachineBox", StringComparison.Ordinal))
+                return current.GetGenericArguments()[^1];
+        return null;
+    }
+
+    private static object? FieldValue(object item, Type declaring, string name) =>
+        declaring.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)?.GetValue(item);
+
+    private static Delegate? FirstDelegate(object item)
+    {
+        for (var type = item.GetType(); type is not null && type != typeof(object); type = type.BaseType)
+            foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly))
+                if (typeof(Delegate).IsAssignableFrom(field.FieldType) && field.GetValue(item) is Delegate value)
+                    return value;
+        return null;
+    }
+
+    private static string MethodOf(Delegate action) =>
+        $"{(action.Method.DeclaringType is { } owner ? Display(owner) : "?")}.{action.Method.Name}";
+
+    /// <summary><see cref="Type.ToString"/>: the namespace-qualified name with generic arguments and no assembly names.</summary>
+    private static string Display(Type type) => type.ToString();
+
+    /// <summary>The census as the <c>[POOLSTALL]</c> line's last section.</summary>
+    /// <returns>The rendered section, starting on a new line.</returns>
+    public string Render()
+    {
+        var text = new StringBuilder().Append(Environment.NewLine).Append("  QUEUED WORK: ");
+        if (Failure is not null)
+            return text.Append("the queue could NOT be read (").Append(Failure)
+                .Append("), so this line cannot name what the backlog consisted of.").ToString();
+
+        text.Append(CultureInfo.InvariantCulture, $"{Read} item(s) read")
+            .Append(Cut ? string.Create(CultureInfo.InvariantCulture, $" — the walk stopped at {MaxItems}, more were queued") : "")
+            .Append(CultureInfo.InvariantCulture, $", in {Groups.Length} producer(s), largest first (keyed by the code each item will run):");
+        foreach (var (producer, count) in Groups.Take(MaxGroups))
+            text.Append(Environment.NewLine).Append(CultureInfo.InvariantCulture, $"    ×{count} {producer}");
+        if (Groups.Length > MaxGroups)
+            text.Append(Environment.NewLine).Append(CultureInfo.InvariantCulture,
+                $"    … {Groups.Length - MaxGroups} more producer(s) holding {Groups.Skip(MaxGroups).Sum(group => group.Count)} item(s).");
+        return text.ToString();
+    }
+}
