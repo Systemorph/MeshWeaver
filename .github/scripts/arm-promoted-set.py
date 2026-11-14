@@ -5,7 +5,7 @@
     python3 .github/scripts/arm-promoted-set.py armed-state --manifests portal.json   # the cursor
     python3 .github/scripts/arm-promoted-set.py control-first --control-manifests control.json --version V
     python3 .github/scripts/arm-promoted-set.py control-announcement --version V --image-repository R --instance URL
-    python3 .github/scripts/arm-promoted-set.py control-lag        # policy control-always-latest (platform half)
+    python3 .github/scripts/arm-promoted-set.py control-lag --control-record control.json  # control-always-latest, per line
     python3 .github/scripts/arm-promoted-set.py armed-base --manifests portal.json   # promote's record base
     python3 .github/scripts/arm-promoted-set.py --self-test
 
@@ -49,7 +49,8 @@ CONTROL FIRST. `control-first` decides the control image's tags for THIS run's a
 every platform build that passed the control image's own acceptance is tagged
 `memex-control:<version>` (+ line pointers, never backwards) in the run that built it — before,
 and independent of, any arming. `control-lag` is the alarm on the other end: control not running
-the newest build it was given, past the bound in `.github/control-instance.json`, is RED.
+the newest build it was given, past the bound in `.github/control-instance.json`, is RED — read
+against the builds of the ONE line control's record's `updatePattern` names, never across lines.
 
 ARMING IS COMPLETE ONLY WHEN THE WHOLE SEQUENCE LANDED. The cursor — the newest `<version>` tag on
 memex-portal-ai — moves at phase C, before phase D (the line pointers) and before the release event.
@@ -375,6 +376,53 @@ def control_announcement(deployment: str, version: str, image_repository: str, i
     }
 
 
+# Only the matched version prefix is ever echoed (into a ::notice:: and the step summary) — never the raw
+# /api/version string, so nothing after it can spoof an annotation or render as markdown.
+RUNNING_MAJOR = re.compile(r"^\s*((\d+)\.\d+(?:\.\d+)?)")
+
+
+def control_line(version: str, code: int, body: str) -> dict:
+    """Policy `major-lines-run-separately`, the ANNOUNCING half of `platform-deploy-control-first`:
+    whether THIS line's build may be handed to control at all. A line announces only a build of the
+    MAJOR control currently runs (its public `/api/version`, `code`/`body` as fetched). Pure.
+
+    🚨 WHY (2026-11-14): core `main` became the v4 line while control stayed on v3 (its record
+    declares `updatePattern: 3.*`). `control-first` on `main` announced `4.0.13212` and `4.0.13217`
+    for control anyway — the announcement names only the BUILD's own line (`line_pattern`) — and the
+    control plane opened an approvable Roll; it was approved and control stuck mid-roll, because v3
+    modules do not load on v4. The control plane now refuses any build outside the record's
+    `updatePattern` (MeshWeaver.Plugins `SelfUpdateRouting.PatternRefusal`) and records the refusal;
+    this is the first layer, so a line never even offers control a build of another major.
+
+    The RECORD stays the one declaration of control's line: a cross-line move is declared there
+    (`updatePattern: 4.*`) and its first roll is a deliberate, hand-filed Roll; once control RUNS the
+    new major, that major's line announces and the old line stops — the same rule, from both ends.
+
+    Returns `{"line_announce", "control_major", "build_major", "line_reason"}`; a control whose
+    `/api/version` cannot be read, or names no version, is a ValueError — "could not decide" is RED,
+    never "announce anyway" and never a silent skip (policy `control-first-never-silent`)."""
+    build_major = major_of(version)
+    if build_major is None:
+        raise ValueError(f"{version!r} is not a set name — it names no major")
+    try:
+        running = str(json.loads(body).get("version") or "") if code == 200 else ""
+    except (ValueError, AttributeError):
+        running = ""
+    m = RUNNING_MAJOR.match(running)
+    if m is None:
+        raise ValueError(f"control's /api/version answered {code} without a version (body: {str(body)[:200]!r}) — "
+                         "cannot tell which major control runs, so this build is NOT handed to it")
+    control_major = int(m.group(2))
+    running = m.group(1)
+    if control_major == build_major:
+        return {"line_announce": True, "control_major": control_major, "build_major": build_major,
+                "line_reason": f"control runs {running} (major {control_major}) — this {build_major}.x build is on its line"}
+    return {"line_announce": False, "control_major": control_major, "build_major": build_major,
+            "line_reason": f"control runs {running} (major {control_major}); this line's build {version} is major "
+                           f"{build_major} — NOT announced (policy major-lines-run-separately). A move of control to "
+                           f"{build_major}.x is declared on its record (updatePattern) and rolled deliberately"}
+
+
 # ───────────────────────────────── transport ──────────────────────────────────────────────
 
 def http_get(url: str, token: str, raw: bool = False) -> tuple[int, object]:
@@ -396,7 +444,8 @@ def http_get(url: str, token: str, raw: bool = False) -> tuple[int, object]:
 
 def read_records(get: Callable[..., tuple[int, object]], core_token: str,
                  above: int = 0, log: Callable[[str], None] = print, max_pages: int = 1,
-                 coverage: dict | None = None, branch: str = "main", major: int | None = None) -> list[dict]:
+                 coverage: dict | None = None, branch: str = "main", major: int | None = None,
+                 major_start: bool = False) -> list[dict]:
     """Promotion records of main-cd runs on `branch` (the delivery LINE) numbered ABOVE `above`,
     newest first — and, with `major`, only records whose set is of that major (policy
     `major-lines-run-separately`: a line never arms another major's set).
@@ -405,51 +454,54 @@ def read_records(get: Callable[..., tuple[int, object]], core_token: str,
     fill it. With `max_pages` > 1 the listing pages on until it reaches a run at or below `above`
     (the armed cursor), the runs run out, or the cap — so a still-unarmed promotion cannot age out of
     the window and read as "armed" (Copilot on MeshWeaver#6367). `coverage`, when given, receives
-    `reached` (the listing got down to the cursor) and `floor_at` (the oldest run's `created_at`)."""
+    `reached` (the listing got down to the cursor) and `floor_at` (the oldest run's `created_at`).
+
+    🚨 COLD START OF A MAJOR (`major_start`, MeshWeaver#8208). When no set of `major` was ever armed
+    the cursor is 0, and no run is numbered at or below 0 — so the listing could never "reach" it,
+    the window always read incomplete, and the fleet-unarmed alert clocked the stall from the oldest
+    run the bounded listing happened to hold (measured: 83.6 h, off pre-split 3.1 runs, when the
+    line's first 4.x set was 5.6 h old). With `major_start` the window is complete once the listing
+    passes the line's FIRST set of `major`: a promotion record of an OLDER major on the line's own
+    branch is the set the line carried before it moved, so nothing of `major` lies beyond it.
+    `coverage["major_start_run"]` names that run."""
     runs: list[dict] = []
-    reached = False
-    for page_no in range(1, max(1, max_pages) + 1):
-        url = f"repos/{CORE}/actions/workflows/{WORKFLOW}/runs?branch={branch}&per_page={RUNS_EXAMINED}"
-        code, page = get(url + (f"&page={page_no}" if page_no > 1 else ""), core_token)
-        if code != 200 or not isinstance(page, dict):
-            raise RuntimeError(f"cannot list {WORKFLOW} runs (HTTP {code}, page {page_no}) — refusing to decide on nothing")
-        batch = [r for r in page.get("workflow_runs", []) if isinstance(r, dict)]
-        runs.extend(batch)
-        if any(int(r.get("run_number", 0)) <= above for r in batch) or len(batch) < RUNS_EXAMINED:
-            reached = True
-            break
-    if coverage is not None:
-        coverage["reached"] = reached
-        coverage["floor_at"] = str(runs[-1].get("created_at") or "") if runs else ""
     out: list[dict] = []
-    for run in runs:
+    reached = False
+    boundary: int | None = None
+
+    def record_of(run: dict) -> None:
+        nonlocal boundary
         number = int(run.get("run_number", 0))
-        if number <= above:
-            continue
         code, arts = get(f"repos/{CORE}/actions/runs/{run['id']}/artifacts?name={RECORD_ARTIFACT}", core_token)
         if code != 200 or not isinstance(arts, dict):
             log(f"  run #{number}: artifacts unreadable (HTTP {code}) — skipped")
-            continue
+            return
         found = [a for a in arts.get("artifacts", []) if a.get("name") == RECORD_ARTIFACT and not a.get("expired")]
         if not found:
-            continue          # not a promoting run (reconcile, superseded, or still before promote)
+            return            # not a promoting run (reconcile, superseded, or still before promote)
         code, blob = get(found[0]["archive_download_url"], core_token, raw=True)  # type: ignore[call-arg]
         if code != 200 or not isinstance(blob, (bytes, bytearray)):
             log(f"  run #{number}: record download failed (HTTP {code}) — skipped")
-            continue
+            return
         try:
             with zipfile.ZipFile(io.BytesIO(blob)) as z:
                 rec = json.loads(z.read(z.namelist()[0]).decode())
         except (zipfile.BadZipFile, IndexError, ValueError, KeyError) as e:
             log(f"  run #{number}: record unreadable ({e}) — skipped")
-            continue
+            return
         why = check_record(rec)
         if why:
             log(f"  run #{number}: record refused — {why}")
-            continue
+            return
         if not _in_major(str(rec["v_portal"]), major):
-            log(f"  run #{number}: {rec['v_portal']} is not of major {major} — another line's set, skipped")
-            continue
+            older = major_of(str(rec["v_portal"]))
+            if major_start and major is not None and older is not None and older < major:
+                boundary = number
+                log(f"  run #{number}: {rec['v_portal']} is the line's last set before major {major} — "
+                    f"the cold-start window is complete here")
+            else:
+                log(f"  run #{number}: {rec['v_portal']} is not of major {major} — another line's set, skipped")
+            return
         rec["run_url"] = run.get("html_url", "")
         rec["run_id"] = run.get("id")
         # WHEN the set was promoted: `promote` itself uploads the record, so the artifact's
@@ -457,6 +509,27 @@ def read_records(get: Callable[..., tuple[int, object]], core_token: str,
         # alert clocks a stall from it (fleet-unarmed-alert.py, MeshWeaver#6042).
         rec["promoted_at"] = str(found[0].get("created_at") or run.get("created_at") or "")
         out.append(rec)
+
+    for page_no in range(1, max(1, max_pages) + 1):
+        url = f"repos/{CORE}/actions/workflows/{WORKFLOW}/runs?branch={branch}&per_page={RUNS_EXAMINED}"
+        code, page = get(url + (f"&page={page_no}" if page_no > 1 else ""), core_token)
+        if code != 200 or not isinstance(page, dict):
+            raise RuntimeError(f"cannot list {WORKFLOW} runs (HTTP {code}, page {page_no}) — refusing to decide on nothing")
+        batch = [r for r in page.get("workflow_runs", []) if isinstance(r, dict)]
+        runs.extend(batch)
+        for run in batch:
+            # Runs are listed newest first: once the line's last older-major set is passed, every
+            # run below it is older still, so nothing more is read.
+            if boundary is None and int(run.get("run_number", 0)) > above:
+                record_of(run)
+        if any(int(r.get("run_number", 0)) <= above for r in batch) or len(batch) < RUNS_EXAMINED \
+                or boundary is not None:
+            reached = True
+            break
+    if coverage is not None:
+        coverage["reached"] = reached
+        coverage["floor_at"] = str(runs[-1].get("created_at") or "") if runs else ""
+        coverage["major_start_run"] = boundary
     out.sort(key=lambda r: int(r["run_number"]), reverse=True)
     return out
 
@@ -719,6 +792,123 @@ def unarmed_sets(records: list[dict], ladders: dict[int, str | None], control: d
         out.append({"v_portal": rec["v_portal"], "run_number": n, "core_sha": rec["core_sha"], "state": state,
                     "sentence": text, "run_url": rec.get("run_url", ""), "promoted_at": rec.get("promoted_at", "")})
     return out
+
+
+def cold_start_of(major: int | None, armed_max: int, armed_version: str, override: str) -> bool:
+    """Whether `select` runs at the COLD START of its line's major: no set of `major` was ever armed
+    (`armed-state` answered cursor 0 with no version). Pure. Only a line that names its major can be
+    at a cold start; an override names its set and reads no window."""
+    return major is not None and armed_max <= 0 and not armed_version and not override
+
+
+def armed_name(rec: dict | None, armed_version: str, armed_max: int, major: int | None, cold: bool) -> str:
+    """The newest ARMED set of the line, as the fleet-unarmed reading names it. Pure. 🚨 A cold start
+    is NAMED as one (MeshWeaver#8208): it used to render the cursor `ci.0`, which reads as a set
+    called `ci.0` the fleet runs rather than "this major has never been armed"."""
+    if rec:
+        return str(rec["v_portal"])
+    if armed_version:
+        return armed_version
+    if cold:
+        return f"no {major}.x set armed yet"
+    if armed_max <= 0:
+        return f"no {major}.x set armed yet" if major is not None else "no set armed yet"
+    return f"ci.{armed_max}"
+
+
+def pattern_major(pattern: object) -> int:
+    """The ONE platform major a record's `updatePattern` admits: `3.*` → 3, `3.1.*` → 3,
+    `3.0.0-ci*` → 3. Pure. 🚨 A pattern that admits more than one major (`*`, `3*`, which also
+    admits 30.x) or none names no line, and is a ValueError — the control-lag reading never guesses
+    which line control follows (MeshWeaver#8197)."""
+    text = str(pattern or "").strip()
+    m = re.fullmatch(r"(\d+)\.[0-9A-Za-z.*+-]*", text)
+    if not m:
+        raise ValueError(f"updatePattern {pattern!r} does not name exactly one platform major "
+                         "(expected `<major>.…`, e.g. `3.*`) — control's line cannot be derived from it")
+    return int(m.group(1))
+
+
+def record_update_pattern(record: object) -> str:
+    """`content.updatePattern` of a Hosting/Deployment record (the MeshNode JSON as the deployments
+    repository stores it). Pure; a record without one is a ValueError, never a default line."""
+    content = record.get("content") if isinstance(record, dict) else None
+    pattern = content.get("updatePattern") if isinstance(content, dict) else None
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise ValueError("the control record carries no `content.updatePattern` — which line control follows "
+                         "is declared there, and is never assumed")
+    return pattern.strip()
+
+
+def line_of_major(majors: dict[str, int | None], major: int) -> str:
+    """The ONE declared delivery line (branch) whose PlatformVersion is of `major`. Pure. `majors`
+    maps every declared line to the major its branch's Directory.Build.props declares (None when
+    unreadable). No line, or two lines, of that major is a ValueError naming every line read."""
+    hits = [b for b, m in majors.items() if m == major]
+    seen = ", ".join(f"{b}={m if m is not None else 'unreadable'}" for b, m in majors.items()) or "none declared"
+    if len(hits) != 1:
+        raise ValueError(f"{len(hits)} declared delivery line(s) carry major {major} (lines read: {seen}) — "
+                         "control's line must be exactly one")
+    if any(m is None for m in majors.values()):
+        raise ValueError(f"a declared line's major could not be read (lines read: {seen}) — refusing to pick "
+                         f"control's line from a partial reading")
+    return hits[0]
+
+
+def _cd_line():
+    """cd-line.py (beside this file) — the ONE reader of the declared delivery lines and of a line's
+    PlatformVersion major; loaded, never re-implemented here."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("cd_line", Path(__file__).resolve().parent / "cd-line.py")
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+def declared_line_majors(lines_file: Path, core_token: str, get: Get | None = None) -> dict[str, int | None]:
+    """Every declared delivery line → the platform major its branch's Directory.Build.props declares
+    (REST contents at `ref=<branch>`), None when unreadable. The major is READ from each line's own
+    tree — the same source main-cd's `gate` reads — never a number written here."""
+    get = get or http_get
+    cd = _cd_line()
+    try:
+        doc = cd.load(lines_file)
+    except (OSError, ValueError) as e:
+        raise ValueError(f"{lines_file}: the declared delivery lines cannot be read ({e})") from None
+    out: dict[str, int | None] = {}
+    for line in doc["lines"]:
+        branch = str(line["branch"])
+        code, body = get(f"repos/{CORE}/contents/Directory.Build.props?ref={branch}", core_token)
+        major: int | None = None
+        if code == 200 and isinstance(body, dict) and body.get("encoding") == "base64":
+            import base64
+            try:
+                major = cd.platform_major(base64.b64decode(str(body.get("content") or "")).decode("utf-8"))
+            except (cd.Refusal, ValueError):  # no or two PlatformVersion majors, or undecodable: unreadable
+                major = None
+        out[branch] = major
+    return out
+
+
+def given_to_control(records: list[dict], control: dict, jobs_of: Callable[[dict], list[dict] | None],
+                     contains_of: Callable[[str], bool | None]) -> list[dict]:
+    """The builds given to control, newest first, back to the first one control CONTAINS — the
+    `control-lag` walk (the lag clock starts at the oldest one it does not, see `control_lag`).
+    Ancestry is monotone along ONE line, so the walk stops at the first contained build: one jobs
+    read and one compare per build control is behind. Fills `control["contains"]` as it goes."""
+    given: list[dict] = []
+    for r in records:
+        at = control_given_at(jobs_of(r))
+        if not at:
+            continue
+        given.append({"core_sha": r["core_sha"], "v_portal": r["v_portal"], "given_at": _iso_epoch(at)})
+        if not control.get("commit"):
+            break
+        verdict = contains_of(r["core_sha"])
+        control.setdefault("contains", {})[r["core_sha"]] = verdict
+        if verdict is not False:
+            break
+    return given
 
 
 def control_lag(given: list[dict] | dict | None, control: dict, now: float, bound_minutes: int) -> tuple[str, str]:
@@ -1200,6 +1390,59 @@ def self_test() -> int:
           and ann["pattern"] == "3.0.0-ci*" and ann["detectedAt"] == "2026-10-06T06:00:00Z", json.dumps(ann))
     check("control_announcement: the pattern ADMITS the tag it announces (else the roll would park for an approval)",
           re.fullmatch(re.escape(ann["pattern"][:-1]) + ".*", ann["newVersion"]) is not None, json.dumps(ann))
+    # 🚨 The incident of 2026-11-14: the v4 line announced 4.0.13212 to a control running v3.
+    v3_body = json.dumps({"version": "3.1.0+60fa43e8f7c0b1178088d8ae8aaacdcc7e500dd1", "commit": "6" * 40})
+    out_of_line = control_line("4.0.13212", 200, v3_body)
+    check("control_line: a 4.x build is NOT announced to a control running 3.x",
+          out_of_line["line_announce"] is False and out_of_line["control_major"] == 3 and out_of_line["build_major"] == 4
+          and "NOT announced" in out_of_line["line_reason"], json.dumps(out_of_line))
+    on_line = control_line("3.1.13192", 200, v3_body)
+    check("control_line: a 3.x build IS announced to a control running 3.x (the rule refuses nothing it should hand over)",
+          on_line["line_announce"] is True, json.dumps(on_line))
+    check("control_line: the old notation is on the 3 line too",
+          control_line("3.0.0-ci.10052", 200, v3_body)["line_announce"] is True)
+    after_cutover = control_line("3.1.13300", 200, json.dumps({"version": "4.0.13250+" + "a" * 40}))
+    check("control_line: once control RUNS 4.x the v3 line stops announcing — lines run separately both ways",
+          after_cutover["line_announce"] is False and after_cutover["control_major"] == 4, json.dumps(after_cutover))
+    check("control_line: …and the v4 line announces to it",
+          control_line("4.0.13260", 200, json.dumps({"version": "4.0.13250"}))["line_announce"] is True)
+    spoof = control_line("4.0.13212", 200, json.dumps({"version": "3.1.0+abc\n::error::spoofed **bold**"}))
+    check("control_line: only the matched version prefix is echoed — nothing after it reaches a ::notice:: or the summary",
+          "3.1.0 (major 3)" in spoof["line_reason"] and "::" not in spoof["line_reason"]
+          and "\n" not in spoof["line_reason"] and "**" not in spoof["line_reason"], json.dumps(spoof))
+    # The workflow compares `steps.control_line.outputs.line_announce == 'true'` — so the ROUND TRIP through
+    # GITHUB_OUTPUT must spell a Python bool in lowercase, or the handover never runs (and fails soft).
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        out_file = Path(tmp) / "out"
+        saved = os.environ.get("GITHUB_OUTPUT")
+        os.environ["GITHUB_OUTPUT"] = str(out_file)
+        try:
+            _write_rows(control_line("3.1.13192", 200, v3_body))
+            _write_rows({"line_announce": control_line("4.0.13212", 200, v3_body)["line_announce"]})
+        finally:
+            if saved is None:
+                os.environ.pop("GITHUB_OUTPUT", None)
+            else:
+                os.environ["GITHUB_OUTPUT"] = saved
+        lines = out_file.read_text().splitlines()
+    check("control_line → GITHUB_OUTPUT: the workflow reads `line_announce=true` / `line_announce=false` (lowercase)",
+          "line_announce=true" in lines and "line_announce=false" in lines
+          and not any(l in ("line_announce=True", "line_announce=False") for l in lines), str(lines))
+    for bad_code, bad_body, why in ((0, "connection refused", "an unreachable control"),
+                                    (200, json.dumps({"commit": "6" * 40}), "a /api/version naming no version"),
+                                    (503, "", "a 503"),
+                                    (200, "<html>", "a body that is not JSON")):
+        try:
+            control_line("4.0.13212", bad_code, bad_body)
+            check(f"control_line: {why} is RED, never 'announce anyway' or a silent skip", False)
+        except ValueError:
+            check(f"control_line: {why} is RED, never 'announce anyway' or a silent skip", True)
+    # NEGATIVE CONTROL: the announcement alone (what control-first sent before) carries the build's own
+    # line and is composed for ANY major — so without control_line the 4.x build WOULD have been handed over.
+    neg = control_announcement("control", "4.0.13212", "meshweaver.azurecr.io/memex-control", "u", "t")
+    check("NEGATIVE CONTROL — control_announcement composes a 4.0.* announcement for control regardless of its line",
+          neg["pattern"] == "4.0.*" and neg["deployment"] == "control", json.dumps(neg))
     for bad_dep, bad_repo, why in (("", "meshweaver.azurecr.io/memex-control", "no deployment"),
                                    ("control; rm", "meshweaver.azurecr.io/memex-control", "a deployment that is not a plain id"),
                                    ("control", "meshweaver.azurecr.io/memex-control:3.0.0-ci.1", "a repository carrying a tag"),
@@ -1424,6 +1667,142 @@ def self_test() -> int:
     unfiltered = read_records(lfake(seen, both), "t", above=0, log=lambda _l: None)
     check("NEGATIVE CONTROL — without the line, read_records lists `main` and hands back the 4.x set first",
           seen == ["main"] and unfiltered[0]["v_portal"] == "4.0.11006", f"{seen} {unfiltered}")
+
+    # ── a line, read over REST: runs per branch, records, jobs, compare (MeshWeaver#8208 / #8197) ──
+    def line_api(by_branch: dict[str, list[tuple[int, dict | None]]], given_at: dict[int, str] | None = None,
+                 contained: dict[tuple[str, str], str] | None = None, props: dict[str, str] | None = None,
+                 urls: list[str] | None = None):
+        """A fake GitHub REST over several delivery lines. `by_branch` lists each branch's runs NEWEST
+        FIRST as (run_number, promotion record or None for a run that promoted nothing)."""
+        records = {n: r for runs in by_branch.values() for n, r in runs}
+        given_at, contained, props = given_at or {}, contained or {}, props or {}
+
+        def get(url: str, _token: str, raw: bool = False):
+            if urls is not None:
+                urls.append(url)
+            if "/actions/workflows/" in url:
+                branch = url.split("branch=", 1)[1].split("&", 1)[0]
+                page = int(url.split("&page=", 1)[1]) if "&page=" in url else 1
+                runs = by_branch.get(branch, [])[(page - 1) * RUNS_EXAMINED: page * RUNS_EXAMINED]
+                return 200, {"workflow_runs": [{"id": n, "run_number": n, "html_url": f"https://run/{n}",
+                                                "created_at": "2026-11-11T00:00:00Z"} for n, _ in runs]}
+            if "/artifacts?" in url:
+                rid = int(url.split("/runs/", 1)[1].split("/", 1)[0])
+                if records.get(rid) is None:
+                    return 200, {"artifacts": []}
+                return 200, {"artifacts": [{"name": RECORD_ARTIFACT, "expired": False,
+                                            "archive_download_url": f"blob/{rid}", "created_at": f"promoted-{rid}"}]}
+            if url.startswith("blob/"):
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, "w") as z:
+                    z.writestr("promotion-record.json", json.dumps(records[int(url.split("/", 1)[1])]))
+                return 200, buf.getvalue()
+            if "/jobs?" in url:
+                rid = int(url.split("/runs/", 1)[1].split("/", 1)[0])
+                jobs = [{"name": "Deploy control first", "status": "completed", "conclusion": "success",
+                         "completed_at": given_at[rid]}] if rid in given_at else [{"name": "promote"}]
+                return 200, {"jobs": jobs}
+            if "/compare/" in url:
+                sha, commit = url.rsplit("/", 1)[1].split("...", 1)
+                return 200, {"status": contained.get((sha, commit), "diverged")}
+            if "/contents/Directory.Build.props?ref=" in url:
+                ref = url.split("ref=", 1)[1]
+                if ref not in props:
+                    return 404, None
+                import base64
+                return 200, {"encoding": "base64", "content": base64.b64encode(props[ref].encode()).decode()}
+            return 404, None
+        return get
+
+    # (a) COLD START of a major: the window is complete once the listing passes the line's FIRST set
+    # of the major — not after the bounded listing runs out of pages over the previous major's runs.
+    full_page = [(13230 - i, None) for i in range(RUNS_EXAMINED)]       # 13230 … 13191, a FULL page
+    full_page[15] = (13215, mrec(13215, "e", "4.0.13215"))
+    full_page[30] = (13200, mrec(13200, "f", "4.0.13200"))                # the line's FIRST 4.x set
+    full_page[35] = (13195, mrec(13195, "a", "3.1.13195"))                # the last 3.x set before the move
+    older_page = [(13190 - i, mrec(13190 - i, "b", f"3.1.{13190 - i}")) for i in range(5)]
+    urls: list[str] = []
+    cov: dict = {}
+    got = read_records(line_api({"main": full_page + older_page}, urls=urls), "t", above=0, log=lambda _l: None,
+                       max_pages=UNARMED_MAX_PAGES, coverage=cov, branch="main", major=4, major_start=True)
+    check("cold start: the window is COMPLETE once the listing passes the line's first set of the major",
+          cov.get("reached") is True and cov.get("major_start_run") == 13195, str(cov))
+    check("cold start: the unarmed sets are the major's own, oldest = the line's FIRST 4.x set",
+          [r["v_portal"] for r in got] == ["4.0.13215", "4.0.13200"] and got[-1]["promoted_at"] == "promoted-13200",
+          str([r["v_portal"] for r in got]))
+    check("cold start: no page beyond the boundary is listed",
+          not any("&page=2" in u for u in urls), str([u for u in urls if "workflows" in u]))
+    cov = {}
+    read_records(line_api({"main": full_page + older_page}), "t", above=0, log=lambda _l: None,
+                 max_pages=1, coverage=cov, branch="main", major=4)
+    check("NEGATIVE CONTROL — without major_start the same full page never reaches cursor 0 (the 83.6 h floor)",
+          cov.get("reached") is False, str(cov))
+    cov = {}
+    read_records(line_api({"main3": older_page}), "t", above=0, log=lambda _l: None, max_pages=1,
+                 coverage=cov, branch="main3", major=3, major_start=True)
+    check("cold start: a run of a NEWER major is never a boundary (only the line's own previous major is)",
+          cov.get("major_start_run") is None, str(cov))
+    check("cold start is the line's own: major named, cursor 0, no armed version, no override",
+          cold_start_of(4, 0, "", "") and not cold_start_of(4, 13192, "4.0.13192", "")
+          and not cold_start_of(None, 0, "", "") and not cold_start_of(4, 0, "", "4.0.13200"))
+    check("a cold start is NAMED as one — never the cursor `ci.0`",
+          armed_name(None, "", 0, 4, True) == "no 4.x set armed yet", armed_name(None, "", 0, 4, True))
+    check("NEGATIVE CONTROL — an armed line still names its armed set (and a selection beats it)",
+          armed_name(None, "3.1.13192", 13192, 3, False) == "3.1.13192"
+          and armed_name({"v_portal": "3.1.13199"}, "3.1.13192", 13192, 3, False) == "3.1.13199")
+
+    # (d) CONTROL-LAG PER LINE: the line is derived from control's record, never `main` by default.
+    check("updatePattern → major: `3.*`, `3.1.*`, `3.0.0-ci*`, `4.*`",
+          [pattern_major(p) for p in ("3.*", "3.1.*", "3.0.0-ci*", "4.*")] == [3, 3, 3, 4])
+    for bad in ("*", "3*", "", "latest", None):
+        check(f"updatePattern {bad!r} names no single major — REFUSED, never guessed",
+              _raises(lambda bad=bad: pattern_major(bad)))
+    check("the record's pattern is read off content.updatePattern",
+          record_update_pattern({"content": {"$type": "DeploymentContent", "updatePattern": "3.*"}}) == "3.*")
+    check("a record without updatePattern is REFUSED (no default line)",
+          _raises(lambda: record_update_pattern({"content": {}})) and _raises(lambda: record_update_pattern([])))
+    check("line of major 3 among {main: 4, main3: 3} is main3", line_of_major({"main": 4, "main3": 3}, 3) == "main3")
+    check("no declared line of the major, two of it, or an unreadable line — each REFUSED",
+          _raises(lambda: line_of_major({"main": 4, "main3": 3}, 5))
+          and _raises(lambda: line_of_major({"main": 3, "main3": 3}, 3))
+          and _raises(lambda: line_of_major({"main": 4, "main3": None}, 4)))
+    lines_file = Path(__file__).resolve().parent.parent / "delivery-lines.json"
+    props = {"main": "<PlatformVersion>4.0.0</PlatformVersion>", "main3": "<PlatformVersion>3.1.0</PlatformVersion>"}
+    majors = declared_line_majors(lines_file, "t", line_api({}, props=props))
+    check("each declared line's major is READ from its own Directory.Build.props",
+          majors == {"main": 4, "main3": 3}, str(majors))
+    check("a line whose props cannot be read reads None (and line_of_major then refuses)",
+          declared_line_majors(lines_file, "t", line_api({}, props={"main": props["main"]}))["main3"] is None)
+
+    from datetime import datetime as _dt
+    now_ep = _dt.fromisoformat("2026-11-14T18:00:00+00:00").timestamp()
+    ctl_commit = "c" * 40                                   # control runs the main3 cherry-pick (#8177)
+    ancestor_on_main = mrec(13189, "a", "3.1.13189")        # built on main before the split (3c2cb9d1a)
+    v4 = mrec(13212, "d", "4.0.13212")
+    cherry = mrec(13192, "c", "3.1.13192")                  # = control's own commit, on main3
+    lanes = {"main": [(13212, v4), (13189, ancestor_on_main)], "main3": [(13192, cherry)]}
+    given = {13212: "2026-11-14T12:00:00Z", 13189: "2026-11-14T06:00:00Z", 13192: "2026-11-14T10:00:00Z"}
+    contained = {("c" * 40, ctl_commit): "identical"}
+
+    def lag_on(lanes_, branch, major, contained_=contained, given_=given):
+        api = line_api(lanes_, given_at=given_, contained=contained_)
+        recs = read_records(api, "t", above=0, log=lambda _l: None, branch=branch, major=major)
+        control = {"commit": ctl_commit, "healthy": True, "contains": {}, "why": ""}
+        walk = given_to_control(recs, control, lambda r: read_run_jobs(api, "t", r.get("run_id")),
+                                lambda sha: contains_commit(api, "t", ctl_commit, sha))
+        return control_lag(walk, control, now_ep, 180)
+
+    state, text = lag_on(lanes, line_of_major(majors, pattern_major("3.*")), 3)
+    check("a control on the main3 CHERRY-PICK of a main commit is NOT behind (read per line)",
+          state == "ok" and "3.1.13192" in text, f"{state}: {text}")
+    state, text = lag_on(lanes, "main", None)
+    check("NEGATIVE CONTROL — the old reading (main's builds, every major) calls the same control behind",
+          state == "lag", f"{state}: {text}")
+    newer3 = mrec(13199, "e", "3.1.13199")                  # a newer v3 build control did not take
+    state, text = lag_on({**lanes, "main3": [(13199, newer3), (13192, cherry)]}, "main3", 3,
+                         given_={**given, 13199: "2026-11-14T13:00:00Z"})
+    check("a REAL lag on control's own line is still reported, clocked from the first build it missed",
+          state == "lag" and "3.1.13199" in text and "300 min" in text, f"{state}: {text}")
     print(f"arm-promoted-set self-test: {failures} failure(s)")
     return 1 if failures else 0
 
@@ -1446,7 +1825,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("command", nargs="?",
-                    choices=("select", "armed-base", "armed-state", "control-first", "control-announcement", "control-lag"))
+                    choices=("select", "armed-base", "armed-state", "control-first", "control-announcement", "control-line",
+                             "control-lag"))
     ap.add_argument("--manifests", type=Path, help="armed-base/armed-state: memex-portal-ai manifest metadata (JSON list)")
     ap.add_argument("--control-manifests", type=Path, help="control-first: memex-control manifest metadata (JSON list)")
     ap.add_argument("--version", default="", help="control-first/control-announcement: THIS run's accepted platform version")
@@ -1461,8 +1841,15 @@ def main() -> int:
     # predates the lines (all majors, records of `main`).
     ap.add_argument("--major", type=int, default=None,
                     help="armed-state/armed-base/select/control-lag: only sets of this platform major count")
-    ap.add_argument("--branch", default="main",
-                    help="select/control-lag: the delivery line whose main-cd runs hold the promotion records")
+    ap.add_argument("--branch", default=None,
+                    help="select: the delivery line whose main-cd runs hold the promotion records (default main)")
+    # 🚨 control-lag reads the line CONTROL follows, never `main` by default (MeshWeaver#8197): control
+    # ran the main3 cherry-pick of a commit built on main before the split and read "behind" it.
+    ap.add_argument("--control-record", type=Path, default=None,
+                    help="control-lag: control's Hosting/Deployment record (JSON); its `updatePattern` names the "
+                         "major, and the declared line of that major is the one control is compared with")
+    ap.add_argument("--delivery-lines", type=Path, default=Path(".github/delivery-lines.json"),
+                    help="control-lag: the declared delivery lines (.github/delivery-lines.json)")
     ap.add_argument("--armed-max", type=int, default=0,
                     help="run number of the newest ARMED set (memex-portal-ai's newest version tag)")
     ap.add_argument("--override", default="", help="arm exactly this set name, platform verdict or not")
@@ -1505,6 +1892,22 @@ def main() -> int:
         _write_rows(rows)
         print(json.dumps(rows))
         return 0
+    if a.command == "control-line":
+        # Reads control's PUBLIC /api/version (no credential) from the url `.github/control-instance.json`
+        # declares, and decides whether this line may hand its build to control (major-lines-run-separately).
+        if not a.version:
+            ap.error("control-line needs --version")
+        try:
+            ci = load_control_instance(a.control_instance)
+            url = f"{str(ci['url']).rstrip('/')}/api/version"
+            code, body = _fetch_public(url)
+            rows = control_line(a.version, code, body)
+        except (OSError, ValueError) as e:
+            print(f"::error::cannot decide whether {a.version} is on control's line: {e}")
+            return 1
+        _write_rows(rows)
+        print(json.dumps(rows))
+        return 0
     if a.command == "control-announcement":
         # Offline and pure: prints the ONE body the workflow signs and POSTs — compact, so the bytes
         # signed are the bytes sent. The deployment is the one `.github/control-instance.json` names.
@@ -1543,33 +1946,42 @@ def main() -> int:
         print(f"::error::which instance is control cannot be read: {e}")
         return 1
     if a.command == "control-lag":
+        # 🚨 PER LINE (MeshWeaver#8197, policy `major-lines-run-separately`): control is compared ONLY
+        # with builds of the line its record's `updatePattern` names. Ancestry across lines means
+        # nothing — a main3 cherry-pick does not contain its main original — so a reading over `main`
+        # called a control on the newest v3 build "behind". The record is required: there is no
+        # default line, and an explicit --branch/--major beside it would be a second declaration.
+        if a.control_record is None:
+            print("::error::control-lag needs --control-record (control's Hosting/Deployment record): which line "
+                  "control follows is declared by its updatePattern and is never assumed to be `main`")
+            return 1
+        if a.branch is not None or a.major is not None:
+            print("::error::control-lag derives its line from --control-record; --branch/--major beside it would be a "
+                  "second declaration of the same fact")
+            return 1
         try:
-            records = read_records(http_get, core_token, above=0, branch=a.branch, major=a.major)
+            pattern = record_update_pattern(json.loads(a.control_record.read_text()))
+            major = pattern_major(pattern)
+            line = line_of_major(declared_line_majors(a.delivery_lines, core_token), major)
+        except (OSError, ValueError, RuntimeError) as e:
+            print(f"::error::control's line cannot be derived: {e}")
+            return 1
+        print(f"control follows major {major} (record updatePattern {pattern!r}) — the declared line {line}")
+        try:
+            records = read_records(http_get, core_token, above=0, branch=line, major=major)
         except RuntimeError as e:
             print(f"::error::{e}")
             return 1
-        # Every build given to control, newest first, back to the first one control CONTAINS — the
-        # lag clock starts at the oldest one it does not (see `control_lag`). Ancestry is monotone
-        # along main, so the walk stops at the first contained build: one jobs read and one compare
-        # per build control is behind, never the whole history.
-        given: list[dict] = []
         control = read_control(ci["url"], http_get, core_token, [])
-        for r in records:
-            at = control_given_at(read_run_jobs(http_get, core_token, r.get("run_id")))
-            if not at:
-                continue
-            given.append({"core_sha": r["core_sha"], "v_portal": r["v_portal"], "given_at": _iso_epoch(at)})
-            if not control.get("commit"):
-                break
-            verdict = contains_commit(http_get, core_token, control["commit"], r["core_sha"])
-            control["contains"][r["core_sha"]] = verdict
-            if verdict is not False:
-                break
+        given = given_to_control(
+            records, control, lambda r: read_run_jobs(http_get, core_token, r.get("run_id")),
+            lambda sha: contains_commit(http_get, core_token, control["commit"], sha))
         newest = given[0] if given else None
         import time
         state, text = control_lag(given, control, time.time(), int(ci["platformLagBoundMinutes"]))
+        text = f"[line {line}, major {major} — record updatePattern `{pattern}`] {text}"
         rows = {"state": state, "sentence": text, "control": ci["url"], "running": control.get("commit", ""),
-                "newest": newest["v_portal"] if newest else ""}
+                "newest": newest["v_portal"] if newest else "", "line": line, "major": major}
         _write_rows(rows)
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
@@ -1577,14 +1989,16 @@ def main() -> int:
                 f.write(f"### control-always-latest — platform: **{state}**\n\n{text}\n")
         print(f"control-always-latest (platform): {state} — {text}")
         return 0
+    branch = a.branch or "main"
     try:
         above = 0 if a.override else (a.armed_max - 1 if a.resume else a.armed_max)
         # The alert's reading must reach the armed cursor, so it pages on (bounded) past the
         # promotion-free reconcile ticks; an override names one set and needs no window.
         coverage: dict = {}
+        cold = cold_start_of(a.major, a.armed_max, a.armed_version, a.override)
         records = read_records(http_get, core_token, above=above, coverage=coverage,
                                max_pages=UNARMED_MAX_PAGES if a.unarmed_out is not None and not a.override else 1,
-                               branch=a.branch, major=a.major)
+                               branch=branch, major=a.major, major_start=cold)
     except RuntimeError as e:
         print(f"::error::{e}")
         return 1
@@ -1628,8 +2042,16 @@ def main() -> int:
         # Written BEFORE a frozen exit, so the alert reads the very verdicts this run decided on.
         cursor = int(rec["run_number"]) if rec else a.armed_max
         a.unarmed_out.write_text(json.dumps({
-            "armed": rec["v_portal"] if rec else (a.armed_version or f"ci.{a.armed_max}"),
+            "armed": armed_name(rec, a.armed_version, a.armed_max, a.major, cold),
             "armed_run": cursor,
+            # 🚨 The LINE this reading is of (MeshWeaver#8208): fleet-unarmed-alert.py keeps ONE issue
+            # per major, opened and closed only by that line's own arm run — v4's cold start and v3's
+            # armed fleet are two different facts and must never share (and flap) one issue.
+            "major": a.major,
+            "line": branch,
+            # No set of `major` was ever armed: `armed` says so in words, and the window is complete
+            # once the listing passed the line's first set of the major (read_records `major_start`).
+            "cold_start": cold,
             # False when the bounded listing never got down to the armed cursor: the list below is
             # then a FLOOR, and the alert clocks the stall from `window_floor_at` at least.
             "window_complete": bool(coverage.get("reached")) or a.override != "",

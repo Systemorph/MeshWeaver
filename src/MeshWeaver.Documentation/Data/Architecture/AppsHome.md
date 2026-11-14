@@ -1,11 +1,13 @@
 # The Apps Home
 
 The default user home is, top to bottom: a heading welcoming the owner by first name
-("Welcome back, Jane"), the **message box** (start a thread), the **Apps** grid, then the **type
-sections** — one per kind of content the viewer has that no app of theirs catalogs — and nothing
-else (policy [`home-is-composer-apps-types`](../PolicyNotProse)). The welcome template is that
-heading, `@@("area/Composer")`, then `@@("area/Catalog")`; there is no contributed card, no
-searchable content list and no footer note.
+("Welcome back, Jane"), the **message box** (start a thread), the **Getting started** guide until
+the owner hides it, the **Apps** grid, then the **type sections** — one per kind of content the
+viewer has that no app of theirs catalogs — and nothing else (policies
+[`home-is-composer-apps-types`](../PolicyNotProse) and
+[`home-getting-started-guide`](../PolicyNotProse)). The welcome template is that heading,
+`@@("area/Composer")`, `@@("area/GettingStarted")`, then `@@("area/Catalog")`; there is no
+contributed card, no searchable content list and no footer note.
 
 | Band | Contents | Order |
 |---|---|---|
@@ -20,6 +22,33 @@ so their discovery never holds up the Apps grid. The presentation screen (#1803)
 space or grant before any section query is built. The regions that left the default
 (`area/HomeCards`, `area/Threads`) stay registered, so an authored home `Body` that embeds them
 keeps working.
+
+## Getting started
+
+Below the message box the default home shows a short **Getting started** guide — five steps a new
+user takes, each pointing at a real feature:
+
+1. **Ask the assistant** — the message box just above.
+2. **Open or create a space** — the Spaces section further down, or **+ New** in the header.
+3. **Install an app from the [Store](/Store)** — installed apps appear in the Apps grid.
+4. **Pin what you use** — **Pin** in any page's ⋯ menu.
+5. **Browse the [documentation](/Doc)**.
+
+Everyone sees it on the default home until they press **Hide**. The choice is stored per user on
+the owner's own node, `User.HideGettingStarted`, written through
+`GetMeshNodeStream(userPath).Update` (never browser storage), so it holds on every device and in
+every tab. The guide is its own area on the user hub (`HomeGettingStarted`, area
+`GettingStarted`), and a template: it is emitted at once with its style bound to
+`/data/gettingStartedStyle`, which the user node feeds. It stays hidden until the node answers (so a
+hidden guide never flashes), shows while the flag is off, and disappears the moment the flag is
+written — a data change, never a rebuild. Only the home's owner sees it. A home whose owner wrote
+their own `Body` shows only what that page embeds, so the guide appears there only if the page
+embeds `@@("area/GettingStarted")`.
+
+The text is platform-owned and follows the viewer's language: the catalog keys
+`home.gettingStarted.*` in `strings.{en,de}.json` (mirrored to MeshWeaver.Plugins
+`clients/react/src/i18n/`). Changing a step is a catalog change, not a content edit. Tests:
+`HomeGettingStartedTest` (`test/MeshWeaver.Graph.Test`).
 
 ## Type sections (2026-11-08)
 

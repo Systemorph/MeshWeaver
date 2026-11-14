@@ -1887,6 +1887,16 @@ def separation_problems(workflow_text: str) -> list[str]:
                      and "secrets.CONTROL_WEBHOOK_SECRET" in json.dumps(st.get("env") or {}) for st in hand):
             problems.append("`control-first`'s handover is not signed to the control plane's inbox "
                             "(vars.CONTROL_WEBHOOK_URL + secrets.CONTROL_WEBHOOK_SECRET)")
+        # 8. ...but ONLY a build of control's own major (policy `major-lines-run-separately`): the v4
+        #    line announced 4.0.13212 to a control on 3.* and the approved roll stuck it (2026-11-14).
+        #    A `control-line` step decides, and the handover is conditioned on its verdict.
+        if not any("arm-promoted-set.py control-line" in str(st.get("run", "")) and st.get("id") == "control_line"
+                   for st in steps):
+            problems.append("`control-first` has no `control_line` step running `arm-promoted-set.py control-line` — "
+                            "every line would announce its build to control whatever major control runs")
+        if hand and not all("steps.control_line.outputs.line_announce == 'true'" in str(st.get("if", "")) for st in hand):
+            problems.append("`control-first`'s handover is not conditioned on `steps.control_line.outputs.line_announce == 'true'` "
+                            "— a build of another major would be announced to control")
     for name in ("published-modules", "platform-ladder-compat"):
         job = jobs.get(name)
         if job is None:
@@ -2195,9 +2205,17 @@ def main() -> int:
          no_decl != workflow_text and any("control-instance.json" in p for p in separation_problems(no_decl)),
          "the mutation passed (or could not apply) with an arm that cannot read which instance is control")
     alarm = (root / ".github/workflows/control-always-latest.yml").read_text()
+    alarm_checkout = alarm.split("\n  platform:", 1)[-1].split("steps:", 1)[-1].split("- name:", 1)[0]
     case("the control-always-latest alarm checks out the control declaration it reads",
-         ".github/control-instance.json" in alarm.split("steps:", 1)[1].split("- name:", 1)[0],
+         ".github/control-instance.json" in alarm_checkout,
          "control-always-latest.yml's checkout omits .github/control-instance.json — every tick would refuse")
+    # MeshWeaver#8197: control-lag derives control's LINE from its record and the declared lines.
+    case("the control-always-latest alarm checks out the declared delivery lines it derives control's line from",
+         ".github/delivery-lines.json" in alarm_checkout,
+         "control-always-latest.yml's checkout omits .github/delivery-lines.json — control-lag would refuse")
+    case("the control-always-latest alarm reads control per LINE (--control-record), never `main` by default",
+         re.search(r"arm-promoted-set\.py control-lag[^\n]*--control-record", alarm) is not None,
+         "control-always-latest.yml runs control-lag without --control-record")
     # 🚨 The one-producer gate in `portal-image` READS the published module set out of this workflow
     # (check-platform-reference-set.sh). #6143 removed the job it read and CD published nothing for
     # ~30 runs — so the reader is executed here against the real workflow, and against a mutation.
@@ -2233,6 +2251,16 @@ def main() -> int:
     case("...and the guard catches control-first TAGGING control without handing it the build (the 2026-10-06 outage)",
          undelivered != workflow_text and any("never hands the build" in p for p in separation_problems(undelivered)),
          "the mutation passed (or could not apply) with no handover step in control-first")
+    cross_line = workflow_text.replace(
+        "if: steps.control_tags.outputs.announce == 'true' && steps.control_line.outputs.line_announce == 'true'",
+        "if: steps.control_tags.outputs.announce == 'true'", 1)
+    case("...and the guard catches a handover NOT conditioned on control's line (the 2026-11-14 v4-to-v3 announcement)",
+         cross_line != workflow_text and any("line_announce" in p for p in separation_problems(cross_line)),
+         "the mutation passed (or could not apply) with an unconditioned handover")
+    no_line_step = workflow_text.replace("arm-promoted-set.py control-line", "arm-promoted-set.py control-REMOVED", 1)
+    case("...and the guard catches control-first with no control_line decision at all",
+         no_line_step != workflow_text and any("no `control_line` step" in p for p in separation_problems(no_line_step)),
+         "the mutation passed (or could not apply) with no control-line step")
     case("...and the shipped control-first hands the build over (no handover problem on main-cd.yml)",
          not any("hands the build" in p or "handover" in p for p in separation_problems(workflow_text)),
          str(separation_problems(workflow_text)))

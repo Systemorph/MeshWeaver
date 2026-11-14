@@ -176,10 +176,48 @@ and never-backwards.
 - The record also declares `moduleUpdatePolicy: Auto`, so control takes every newest compatible
   module (`packages-auto-update`).
 
+### Each line announces only to control's own major
+
+With two delivery lines (policy `major-lines-run-separately`), every line's `control-first` runs.
+Until this change, each line also announced its build to control, whatever major control was on.
+**Measured 2026-11-14:** core `main` (the v4 line) announced `4.0.13212`, and later `4.0.13217`,
+for the `control` record. That record declares `updatePattern: 3.*`. The control plane opened an
+approvable Roll, someone approved it, and control got stuck mid-roll, because v3 modules do not
+load on v4.
+
+Two layers now prevent that.
+
+1. **The announcing side (this repo, on every line).** The step *Is this build on control's line?*
+   runs `arm-promoted-set.py control-line`. It reads control's public `/api/version` from the URL
+   in `.github/control-instance.json`. The build is handed over only when its major equals the
+   major control runs. Otherwise the job writes a notice and a summary line, *"control NOT handed
+   `<version>`: control runs 3.1.0+… (major 3); this line's build 4.0.… is major 4 — NOT
+   announced"*, and the tag stays written. A control whose `/api/version` cannot be read fails the
+   job red, and the red is reported on the `control-image` issue. It is never treated as
+   "announce anyway", and never skipped in silence.
+2. **The receiving side (MeshWeaver.Plugins `SelfUpdateRouting.PatternRefusal`).** An announced
+   build outside the record's `updatePattern` opens nothing. The control plane refuses it, and
+   records the refusal as `Ops/Issue/<record>__AnnouncementOutsidePattern`. The record is the one
+   declaration of an instance's line (Plugins `Hosting/RecordBoundsTheUnattendedRoll`, *Outside
+   the record's line, nothing opens*).
+
+**Moving control to another major is a deliberate act.** First set the record's `updatePattern`
+to the new line (`4.*`). Then file the first roll by hand, as an approved `Roll`. Once control
+runs the new major, that major's line announces to it and the old line stops: it is the same rule,
+applied from both ends.
+
 ## The alarm (`control-always-latest`)
 
 **Platform half.** The core workflow `.github/workflows/control-always-latest.yml` runs every 30
-minutes and calls `arm-promoted-set.py control-lag`. It finds the newest promoted set whose
+minutes and calls `arm-promoted-set.py control-lag --control-record <record>`. It reads only the
+builds of the ONE delivery line control follows: the `updatePattern` of control's record (located by
+`record` in `.github/control-instance.json`, read with the read-only fleet-reader App) names the
+major, and the declared line whose `Directory.Build.props` carries that major is the branch. Nothing
+is hard-coded, so when the record moves to `4.*` the reading follows `main`. Ancestry means
+something only along one line: a `main3` cherry-pick does not contain its `main` original, so a
+reading over `main`'s builds once called a control running the newest v3 build "behind"
+(MeshWeaver#8197). A pattern naming no single major (`*`), or no declared line of that major, is RED.
+Within that line it finds the newest promoted set whose
 `Deploy control first` job succeeded, and checks whether control's running commit contains that
 set. When it does not, it walks back through the earlier builds given to control until it reaches
 one control contains. The **first build control was given and did not take** starts the clock. The
