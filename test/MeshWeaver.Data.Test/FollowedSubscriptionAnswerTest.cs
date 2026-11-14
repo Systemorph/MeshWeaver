@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
@@ -24,6 +25,12 @@ public class FollowedSubscriptionAnswerTest(ITestOutputHelper output) : HubTestB
     private volatile bool holdVerdicts;
     private readonly Subject<bool> release = new();
 
+    /// <summary>
+    /// Completed the first time a verdict is asked for while verdicts are held — the positive proof
+    /// that the re-subscribe's snapshot has REACHED its verdict and is parked behind it.
+    /// </summary>
+    private readonly AsyncSubject<Unit> verdictHeld = new();
+
     /// <summary>The subscriber every recording is scoped to.</summary>
     private volatile Address? subscriber;
 
@@ -41,7 +48,14 @@ public class FollowedSubscriptionAnswerTest(ITestOutputHelper output) : HubTestB
         => base.ConfigureHost(configuration)
             .AddData(data => data.AddSource(ds => ds.WithType<MyData>(t => t.WithKey(d => d.Id))))
             .WithClientSubscriptionReadAdmission((_, _) => new ClientReadFollow(
-                _ => holdVerdicts ? release.Take(1) : Observable.Return(true),
+                _ =>
+                {
+                    if (!holdVerdicts)
+                        return Observable.Return(true);
+                    verdictHeld.OnNext(Unit.Default);
+                    verdictHeld.OnCompleted();
+                    return release.Take(1);
+                },
                 TestTimeouts.Convergence))
             .AddPostPipeline(p => p.AddPipeline((d, next) =>
             {
@@ -92,8 +106,16 @@ public class FollowedSubscriptionAnswerTest(ITestOutputHelper output) : HubTestB
         recording = true;
         client.Post(new SubscribeRequest(mirrorStreamId!, reference), o => o.WithTarget(CreateHostAddress()));
 
+        // 🚨 Not a real-time window: the positive proof that the snapshot answering the re-subscribe
+        // has reached its verdict and is parked there. Pre-fix the ack was posted from the re-assert's
+        // `applied` callback, which runs in the SAME turn right after the frame is set — and setting
+        // the frame is what asks for the verdict. So once the verdict has been asked for, an
+        // overtaking ack is either already recorded or microseconds away on the owner's turn; the
+        // short window after the signal covers only that remainder of one turn.
+        await verdictHeld.Should().Within(TestTimeouts.Convergence)
+            .Emit("the re-subscribe's re-assert snapshot must reach its read verdict");
         await postedChanged.Where(list => list.Contains("ack")).Take(1)
-            .Should().NotEmit(TestTimeouts.Quick,
+            .Should().NotEmit(TestTimeouts.Quick / 30,
                 "the re-subscribe's snapshot is still waiting for its verdict, so nothing answers it yet");
 
         holdVerdicts = false;

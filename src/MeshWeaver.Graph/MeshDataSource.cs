@@ -1120,6 +1120,41 @@ public static class MeshDataSourceExtensions
         /// <summary>Latest own-node state that passed the sampler's gates (candidate for save).</summary>
         public void Track(MeshNode node) => latest = node;
 
+        /// <summary>
+        /// Adopts <paramref name="committed"/> — the own node as the hub's AUTHORITATIVE store holds
+        /// it at teardown — as the latest state when it is NEWER than everything the sampler tracked
+        /// and than the persisted snapshot. Returns whether it was adopted.
+        ///
+        /// <para>🚨 The sampler tracks emissions of the REDUCED own-node stream, which lives on its own
+        /// <c>sync/</c> hub. The host's DisposeHostedHubs phase disposes that hub and the store's hub
+        /// in PARALLEL, so an own write still queued on the store's hub when the reduced stream's hub
+        /// has already gone commits to the store and is never emitted to the tracker. The flush then
+        /// read the older tracked state, and the committed write was lost on recycle. Reading the
+        /// store itself closes that: by the ShutDown phase every hosted hub — the store's included —
+        /// has drained its queue, so the store holds every write it accepted.</para>
+        ///
+        /// <para>Strictly newer only, by the node's own monotonic <see cref="MeshNode.Version"/>: a
+        /// state the sampler already tracked, or one that arrived from storage, is never adopted, so a
+        /// load is never echoed back. With nothing to compare against (no tracked state and no
+        /// persisted snapshot) nothing is adopted.</para>
+        /// </summary>
+        /// <param name="committed">The own node read from the authoritative store, or null.</param>
+        /// <param name="persistedSnapshot">The latest instance known to be persisted.</param>
+        /// <returns><c>true</c> when <paramref name="committed"/> became the latest state.</returns>
+        public bool TrackCommitted(MeshNode? committed, MeshNode? persistedSnapshot)
+        {
+            if (committed is null)
+                return false;
+            var tracked = latest;
+            if (tracked is null && persistedSnapshot is null)
+                return false;
+            var baseline = Math.Max(tracked?.Version ?? long.MinValue, persistedSnapshot?.Version ?? long.MinValue);
+            if (committed.Version <= baseline)
+                return false;
+            latest = committed;
+            return true;
+        }
+
         /// <summary>Marks <paramref name="node"/>'s save as dispatched — its
         /// <c>SaveMeshNodeRequest</c> was ACCEPTED by the hub (not rejected by the
         /// teardown guard), so the inbox will process it before the FIFO-ordered
@@ -1961,7 +1996,10 @@ public static class MeshDataSourceExtensions
     /// at flush time (IsDeleted, PersistedSnapshot identity, and the post-commit flush's
     /// durable-version high-water — see <see cref="PostCommitFlushRegistry"/>). A fault
     /// propagates to DisposeImpl's Catch wrapper and is logged as
-    /// <c>[DISPOSE-ACTION] … faulted</c>.
+    /// <c>[DISPOSE-ACTION] … faulted</c>. Before deciding, it adopts the own node from the
+    /// authoritative store when that is newer than what the sampler tracked
+    /// (<see cref="PendingOwnSave.TrackCommitted"/>): a write that commits after the reduced
+    /// own-node stream's hub is gone is still persisted.
     /// </summary>
     private static IObservable<System.Reactive.Unit> FlushPendingOwnSave(
         IMessageHub hub, OwnNodeCache cache, PendingOwnSave pending)
@@ -1976,10 +2014,58 @@ public static class MeshDataSourceExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
         var options = hub.JsonSerializerOptions;
+        // 🚨 The AUTHORITATIVE store, resolved now while the workspace is alive. The tracker sees only
+        // what the reduced own-node stream emitted, and that stream's hub can be torn down before an
+        // own write queued on the store's hub commits — see PendingOwnSave.TrackCommitted.
+        var store = ResolveOwnStore(hub, logger);
+        var ownPath = hub.Address.Path;
         // Queued behind every own write still in flight (PendingOwnSave.Enqueue), so the flush both
         // decides after they settled AND can never be overtaken by one of them.
         return Observable.Defer(() => pending.Enqueue(() =>
-            FlushUnsaved(cache, pending, flushed, persistence, recentlyDeleted, options, logger)));
+        {
+            if (pending.TrackCommitted(CommittedOwnNode(store, ownPath), cache.PersistedSnapshot))
+                // Information, not Debug: this fires only in the teardown race window, and the loss it
+                // closes was invisible precisely because nothing was logged.
+                logger?.LogInformation(
+                    "[SaveMeshNode] dispose-flush adopted the store's newer committed state for {Path}: "
+                    + "the reduced own-node stream was torn down before it emitted it", ownPath);
+            return FlushUnsaved(cache, pending, flushed, persistence, recentlyDeleted, options, logger);
+        }));
+    }
+
+    /// <summary>
+    /// The MeshNode data source's store stream — the one every own write commits to (see
+    /// <c>MeshNodeStreamHandle.UpdateOwn</c>). Null, logged, when it cannot be resolved; the flush then
+    /// writes only what the sampler tracked.
+    /// </summary>
+    private static ISynchronizationStream<EntityStore>? ResolveOwnStore(IMessageHub hub, ILogger? logger)
+    {
+        try
+        {
+            return hub.GetWorkspace().DataContext.GetDataSourceForType(typeof(MeshNode))
+                ?.GetStreamForPartition(null);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "[SaveMeshNode] dispose-flush for {Path} could not resolve the MeshNode store; it writes "
+                + "only what the persistence sampler tracked", hub.Address.Path);
+            return null;
+        }
+    }
+
+    /// <summary>The own node as <paramref name="store"/> currently holds it, matched on the full path.</summary>
+    /// <remarks>Read off the store hub's thread (the flush runs on the own-write queue). <c>Current</c> is
+    /// an immutable snapshot swapped by reference, so the read is atomic; the full fence makes the store
+    /// hub's last committed swap visible here by construction (ARM64 included) instead of relying on the
+    /// barriers the shutdown handshake happens to carry.</remarks>
+    private static MeshNode? CommittedOwnNode(ISynchronizationStream<EntityStore>? store, string path)
+    {
+        Interlocked.MemoryBarrier();
+        return store?.Current?.Value?.Collections.GetValueOrDefault(nameof(MeshNode)) is { } collection
+            ? collection.Instances.Values.OfType<MeshNode>()
+                .FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase))
+            : null;
     }
 
     private static IObservable<System.Reactive.Unit> FlushUnsaved(
