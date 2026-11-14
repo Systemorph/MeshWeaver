@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace MeshWeaver.Hosting;
@@ -81,6 +83,18 @@ public sealed record ThreadPoolQueueCensus(
     /// <param name="maxItems">The most items to read.</param>
     /// <returns>The census.</returns>
     public static ThreadPoolQueueCensus Of(IEnumerable<object> items, int maxItems)
+        => Of(items, maxItems, linkResolver: null);
+
+    /// <summary>
+    /// <see cref="Of(IEnumerable{object}, int)"/> with the runtime-async link resolver replaceable,
+    /// so a test can make the runtime-private read THROW and see that one item reports it while
+    /// the census goes on.
+    /// </summary>
+    /// <param name="items">The queued work items.</param>
+    /// <param name="maxItems">The most items to read.</param>
+    /// <param name="linkResolver">Maps one continuation link to the method it resumes, or null for the runtime's own.</param>
+    /// <returns>The census.</returns>
+    internal static ThreadPoolQueueCensus Of(IEnumerable<object> items, int maxItems, Func<object, MethodBase?>? linkResolver)
     {
         var read = 0;
         var cut = false;
@@ -95,7 +109,7 @@ public sealed record ThreadPoolQueueCensus(
                 break;
             }
             read++;
-            var producer = ProducerOf(item);
+            var producer = ProducerOf(item, linkResolver);
             counts[producer] = counts.GetValueOrDefault(producer) + 1;
         }
 
@@ -115,12 +129,16 @@ public sealed record ThreadPoolQueueCensus(
     /// and the first delegate it holds. Falls back to the item's type.
     /// </summary>
     /// <param name="item">One queued work item.</param>
+    /// <param name="linkResolver">Maps one runtime-async continuation link to the method it resumes,
+    /// or null for the runtime's own (<see cref="RuntimeAsync"/>); replaceable for tests only.</param>
     /// <returns>Its producer key.</returns>
-    internal static string ProducerOf(object item)
+    internal static string ProducerOf(object item, Func<object, MethodBase?>? linkResolver = null)
     {
         var type = item.GetType();
         if (item is Task)
         {
+            if (RuntimeAsync.IsRuntimeAsyncTask(type))
+                return RuntimeAsync.ProducerOf(item, linkResolver);
             if (FieldValue(item, typeof(Task), "m_action") is Delegate action)
                 return MethodOf(action);
             return StateMachineOf(type) is { } machine ? Display(machine) : Display(type);
@@ -129,6 +147,114 @@ public sealed record ThreadPoolQueueCensus(
         if (item is Delegate direct)
             return MethodOf(direct);
         return FirstDelegate(item) is { } held ? $"{Display(type)} → {MethodOf(held)}" : Display(type);
+    }
+
+    /// <summary>
+    /// 🚨 <b>Runtime Async (.NET 11).</b> The runtime libraries are compiled with
+    /// <c>runtime-async=on</c>, so a BCL async method (<c>Stream.CopyToAsync</c>,
+    /// <c>StreamReader.ReadToEndAsync</c>, …) is no longer an <c>AsyncStateMachineBox</c>. Its
+    /// task is an <c>AsyncHelpers+RuntimeAsyncTask&lt;T&gt;</c> whose <c>m_action</c> is the
+    /// runtime's own <c>DispatchContinuations</c>. Keyed by that delegate, every such item of every
+    /// producer collapsed into one group per RESULT TYPE. Measured on 11.0.0: four
+    /// <c>Stream.CopyToAsync</c> continuations and five continuations of our own runtime-async
+    /// methods all read <c>RuntimeAsyncTask`1[VoidTaskResult].DispatchContinuations</c>.
+    ///
+    /// <para>The method lives in the task's continuation chain instead (<c>m_stateObject</c>, then
+    /// <c>Continuation.Next</c> link by link). Each link carries a <c>ResumeInfo*</c> whose
+    /// <c>DiagnosticIP</c> is an address inside the method that will resume, and the runtime maps
+    /// it back with <c>StackFrame.GetMethodFromNativeIP</c>, the same address the debugger and SOS
+    /// use. All of it is internal and reached by reflection, and all of it is allowed to be
+    /// missing: a runtime without it keys the item as an unresolved runtime-async continuation and
+    /// SAYS so, rather than keying it as the dispatcher.</para>
+    ///
+    /// <para>🚨 <c>GetType()</c> on a continuation object throws <see cref="NotSupportedException"/>
+    /// ("not supported for continuations"), so the chain is walked through the base type's
+    /// <see cref="FieldInfo"/>s only.</para>
+    ///
+    /// <para>🚨 A runtime-private read that THROWS (the pointer read, the native-IP lookup) costs
+    /// that ONE item its name, never the census: the item is keyed
+    /// <c>runtime-async continuation (method unresolved: &lt;ExceptionType&gt;: &lt;message&gt;)</c>
+    /// and the walk goes on. The census is a diagnostic over state the runtime does not promise to
+    /// keep, so a fault there is a fact to report, not a reason to lose every other producer.</para>
+    /// </summary>
+    private static class RuntimeAsync
+    {
+        private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+        private const int MaxLinks = 64;
+        private const string Unresolved = "runtime-async continuation (method unresolved: ";
+
+        /// <summary>The runtime internals the chain is read through, every one present.</summary>
+        private sealed record Internals(
+            FieldInfo Next, FieldInfo ResumeInfo, MethodInfo PointerValue, MethodInfo MethodFromNativeIp, int DiagnosticIpOffset);
+
+        /// <summary>The internals on this runtime, or why they cannot be had.</summary>
+        private static readonly (Internals? Found, string? Missing) Resolved = Resolve();
+
+        private static (Internals? Found, string? Missing) Resolve()
+        {
+            var coreLib = typeof(object).Assembly;
+            if (coreLib.GetType("System.Runtime.CompilerServices.Continuation") is not { } continuation)
+                return (null, "no Continuation type");
+            if (continuation.GetField("Next", Instance) is not { } next
+                || continuation.GetField("ResumeInfo", Instance) is not { } resumeInfo)
+                return (null, "Continuation lacks Next/ResumeInfo");
+            if (typeof(Pointer).GetMethod("GetPointerValue", Instance, Type.EmptyTypes) is not { } pointerValue)
+                return (null, "no Pointer.GetPointerValue");
+            if (typeof(StackFrame).GetMethod("GetMethodFromNativeIP",
+                    BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public, [typeof(IntPtr)]) is not { } fromIp)
+                return (null, "no StackFrame.GetMethodFromNativeIP");
+            if (coreLib.GetType("System.Runtime.CompilerServices.ResumeInfo") is not { } resumeInfoType
+                || resumeInfoType.GetField("DiagnosticIP", Instance) is not { FieldType.IsPointer: true })
+                return (null, "no ResumeInfo.DiagnosticIP field");
+            try
+            {
+                var offset = (int)Marshal.OffsetOf(resumeInfoType, "DiagnosticIP");
+                return (new Internals(next, resumeInfo, pointerValue, fromIp, offset), null);
+            }
+            catch (ArgumentException exception)
+            {
+                return (null, $"ResumeInfo.DiagnosticIP is present but its layout is unreadable ({exception.Message})");
+            }
+        }
+
+        /// <summary>Whether <paramref name="type"/> is the runtime's task for a runtime-async method.</summary>
+        public static bool IsRuntimeAsyncTask(Type type) =>
+            type is { IsGenericType: true, Name: "RuntimeAsyncTask`1", DeclaringType.FullName: "System.Runtime.CompilerServices.AsyncHelpers" };
+
+        /// <summary>The method a runtime-async task resumes into first, or an unresolved key that says why.</summary>
+        /// <param name="task">The runtime-async task.</param>
+        /// <param name="linkResolver">Replaces the per-link read; null for the runtime's own.</param>
+        public static string ProducerOf(object task, Func<object, MethodBase?>? linkResolver)
+        {
+            if (Resolved is not { Found: { } internals })
+                return $"{Unresolved}{Resolved.Missing})";
+            var methodAt = linkResolver ?? (link => MethodAt(internals, link));
+            try
+            {
+                var link = FieldValue(task, typeof(Task), "m_stateObject");
+                for (var hops = 0; link is not null && hops < MaxLinks; hops++)
+                {
+                    if (methodAt(link) is { } method)
+                        return $"{(method.DeclaringType is { } owner ? Display(owner) : "?")}.{method.Name}";
+                    link = internals.Next.GetValue(link);
+                }
+                return $"{Unresolved}no link carried a diagnostic address)";
+            }
+            catch (Exception exception)
+            {
+                var cause = exception is TargetInvocationException { InnerException: { } inner } ? inner : exception;
+                return $"{Unresolved}{cause.GetType().Name}: {cause.Message})";
+            }
+        }
+
+        private static MethodBase? MethodAt(Internals internals, object link)
+        {
+            if (internals.ResumeInfo.GetValue(link) is not Pointer boxed
+                || internals.PointerValue.Invoke(boxed, null) is not IntPtr info || info == IntPtr.Zero)
+                return null;
+            var ip = Marshal.ReadIntPtr(info, internals.DiagnosticIpOffset);
+            return ip == IntPtr.Zero ? null : internals.MethodFromNativeIp.Invoke(null, [ip]) as MethodBase;
+        }
     }
 
     /// <summary>The state-machine type an async method's box carries as its last generic argument.</summary>
