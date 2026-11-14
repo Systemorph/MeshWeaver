@@ -68,7 +68,7 @@ public sealed class HubStepsInFlight
     /// </summary>
     /// <returns>One emission when the hub is idle.</returns>
     public IObservable<Unit> Idle() =>
-        Observable.Defer(() => ended.Merge(Observable.Return(Unit.Default)))
+        Observable.Defer(() => ended.MergeInline(Observable.Return(Unit.Default)))
             .Where(_ => Count == 0)
             .Take(1);
 }

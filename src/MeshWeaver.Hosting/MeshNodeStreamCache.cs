@@ -2793,7 +2793,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     // delivery); the pending marker is emitted ON it, so a revision that arrives after
                     // the commit already waits for the re-check.
                     .SubscribeOn(Scheduler.Default)
-                    .StartWith(StandingRead.Pending))
+                    .StartWithInline(StandingRead.Pending))
                 .Switch()
                 .Catch((Exception ex) =>
                 {
@@ -2878,7 +2878,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     .DefaultIfEmpty(PermissionCheckOutcome.Undetermined(
                         $"the read rule answered nothing on a revision of '{revision.Path}'"))
                     .Select(outcome => (PermissionCheckOutcome?)outcome)
-                    .StartWith((PermissionCheckOutcome?)null)
+                    .StartWithInline((PermissionCheckOutcome?)null)
                 : Observable.Return(read.Outcome))
             .Switch();
 

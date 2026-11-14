@@ -105,7 +105,7 @@ public sealed class RoutingQuiescence : IDisposable
         counts = deltas
             .ObserveOn(scheduler)
             .Scan(0, (running, delta) => running + delta)
-            .StartWith(0)
+            .StartWithInline(0)
             .Replay(1);
         counts.ConnectOwnedBy(connections);
     }

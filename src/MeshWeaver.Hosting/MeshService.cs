@@ -495,7 +495,7 @@ internal sealed class MeshService(
                 // SUBSCRIBING thread, off an immutable snapshot: the provider is then subscribed inside
                 // the caller's own Subscribe — deterministically, never on a hop that a teardown or the
                 // caller's next step could overtake. Later changes follow, de-duplicated.
-                ? changes.StartWith(known).DistinctUntilChanged()
+                ? changes.StartWithInline(known).DistinctUntilChanged()
                 : changes)
             .Timeout(Observable.Timer(budget), _ => Observable.Never<long>())
             .Catch((TimeoutException ex) => Observable.Throw<bool>(new TimeoutException(

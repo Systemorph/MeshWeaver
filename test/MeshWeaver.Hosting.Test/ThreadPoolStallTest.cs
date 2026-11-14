@@ -86,6 +86,60 @@ public class ThreadPoolStallTest
         line.Should().Contain("at Held.Here()");
     }
 
+    /// <summary>
+    /// 🚨 The largest shape of the 2026-11-11 14:40:57Z capture (×20 of 44) was the pool's own idle wait,
+    /// and it was read as twenty busy handlers. The line now counts idle workers by name. Control: a busy
+    /// worker and a worker whose semaphore wait sits under a work item are not idle.
+    /// </summary>
+    [Fact]
+    public void IdleWorkers_AreCountedByName_SoAnIdleShapeIsNotReadAsWhatHeldThePool()
+    {
+        string[] idle =
+        [
+            "System.Threading.LowLevelLifoSemaphore.<WaitNative>g____PInvoke|3_0(IntPtr, Int32)",
+            "System.Threading.LowLevelLifoSemaphore.WaitNative(Microsoft.Win32.SafeHandles.SafeWaitHandle, Int32)",
+            "System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32)",
+            "System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()",
+            "System.Threading.Thread.StartCallback()",
+        ];
+        string[] busy =
+        [
+            "MeshWeaver.Messaging.MessageService.DrainOne()",
+            "System.Threading.ThreadPoolWorkQueue.Dispatch()",
+            "System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()",
+        ];
+        string[] semaphoreUnderAWorkItem =
+        [
+            "System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32)",
+            "Some.Handler.Blocks()",
+            "System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()",
+        ];
+
+        ThreadPoolStall.IsIdleWorker(idle).Should().BeTrue();
+        ThreadPoolStall.IsIdleWorker(busy).Should().BeFalse("a worker running a work item is busy");
+        ThreadPoolStall.IsIdleWorker(semaphoreUnderAWorkItem).Should().BeFalse(
+            "a wait inside a work item holds the worker; only the pool's own loop directly under it is idle");
+
+        var line = ThreadPoolStall.Describe(Stalled(), [Stack(idle), Stack(idle), Stack(busy)], null);
+        line.Should().Contain("3 worker stack(s) in 2 distinct shape(s), 2 of them IDLE");
+        line.Should().Contain("so only 1 worker(s) were running while the queue waited");
+
+        ThreadPoolStall.Describe(Stalled(), [Stack(busy)], null).Should().Contain("0 of them IDLE");
+        ThreadPoolStall.Describe(Stalled(), [Stack(busy)], null).Should().Contain("every worker was busy");
+    }
+
+    /// <summary>The census, when one was taken, is the line's last section.</summary>
+    [Fact]
+    public void TheQueueCensus_IsAppendedAsTheLastSection()
+    {
+        var census = ThreadPoolQueueCensus.Of([new System.Threading.Tasks.Task(() => { })], 10);
+        var line = ThreadPoolStall.Describe(Stalled(), [Stack("Held.Here()", "Worker.Loop()")], null, census: census);
+
+        line.Should().Contain("QUEUED WORK: 1 item(s) read");
+        line.IndexOf("QUEUED WORK", StringComparison.Ordinal).Should()
+            .BeGreaterThan(line.IndexOf("at Held.Here()", StringComparison.Ordinal), "the census follows the stacks");
+    }
+
     /// <summary>The innermost 12 frames of the 2026-11-07 shape: a worker waiting on an Rx Zip gate.</summary>
     private static string[] ZipWaiter() =>
     [

@@ -247,16 +247,19 @@ internal sealed class ProcessLivenessHeartbeatService(
     /// </summary>
     private static string DescribeStall(ProcessLivenessReading reading, IThreadPoolWorkerStacks? workerStacks)
     {
+        // The queue is read BEFORE the dump: the dump suspends the process, and the backlog the census
+        // names is the one the stall is measured against (MeshWeaver#5388).
+        var census = ThreadPoolQueueCensus.Take();
         if (workerStacks is null)
-            return ThreadPoolStall.Describe(reading, null, null);
+            return ThreadPoolStall.Describe(reading, null, null, census: census);
         try
         {
             var stacks = workerStacks.CaptureStacks();
-            return ThreadPoolStall.Describe(reading, stacks.Workers, null, stacks.OtherThreads);
+            return ThreadPoolStall.Describe(reading, stacks.Workers, null, stacks.OtherThreads, census);
         }
         catch (Exception exception)
         {
-            return ThreadPoolStall.Describe(reading, null, $"{exception.GetType().Name}: {exception.Message}");
+            return ThreadPoolStall.Describe(reading, null, $"{exception.GetType().Name}: {exception.Message}", census: census);
         }
     }
 
@@ -264,16 +267,17 @@ internal sealed class ProcessLivenessHeartbeatService(
     private static string DescribeQueueDelay(
         ProcessLivenessSample sample, TimeSpan wait, IThreadPoolWorkerStacks? workerStacks)
     {
+        var census = ThreadPoolQueueCensus.Take();
         if (workerStacks is null)
-            return ThreadPoolStall.DescribeQueueDelay(sample, wait, null, null);
+            return ThreadPoolStall.DescribeQueueDelay(sample, wait, null, null, census: census);
         try
         {
             var stacks = workerStacks.CaptureStacks();
-            return ThreadPoolStall.DescribeQueueDelay(sample, wait, stacks.Workers, null, stacks.OtherThreads);
+            return ThreadPoolStall.DescribeQueueDelay(sample, wait, stacks.Workers, null, stacks.OtherThreads, census);
         }
         catch (Exception exception)
         {
-            return ThreadPoolStall.DescribeQueueDelay(sample, wait, null, $"{exception.GetType().Name}: {exception.Message}");
+            return ThreadPoolStall.DescribeQueueDelay(sample, wait, null, $"{exception.GetType().Name}: {exception.Message}", census: census);
         }
     }
 
