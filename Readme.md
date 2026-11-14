@@ -26,16 +26,18 @@ Portal at `https://localhost:7202`, with PostgreSQL persistence and the Aspire d
 
 ### Create your own portal
 
+Start from an Aspire AppHost and add the integration:
+
 ```bash
-dotnet new install MeshWeaver.MemexTemplate
-dotnet new meshweaver-memex -n MyPortal
+dotnet new aspire-apphost -n MyPortal
 cd MyPortal
-dotnet run --project MyPortal.Portal.Monolith
+dotnet add package MeshWeaver.Aspire.Hosting.Memex
 ```
 
-> ⚠️ **The template is not on nuget.org right now** — see the NuGet section below.
-
-The template contains the complete Memex portal solution (Blazor Server monolith + Aspire microservices, Graph + AI integration), renamed to your project name.
+Then compose the portal in `Program.cs` with `builder.AddMemex("memex")`. It runs the portal, its
+PostgreSQL database and its migration from the published container images, with no portal source
+tree. The options (sign-in, plugins, secrets, publishing to Docker Compose, Kubernetes or Azure
+Container Apps) are in the integration's README in MeshWeaver.Plugins (`src/Memex.Aspire.Hosting`).
 
 ### Local Kubernetes stack (macOS)
 
@@ -77,43 +79,37 @@ If you are **operating an installation Systemorph runs**, its per-environment co
 record of what runs where live in the private
 **[Systemorph/Memex](https://github.com/Systemorph/Memex)** repo. Start there.
 
-### CLI
+### Install
 
-The `memex` CLI operates any portal's mesh from the shell — its mesh commands are generated at run
-time from the connected instance's MCP tool catalog — and builds plugins inside the platform image.
-It is a dotnet tool, `MeshWeaver.Cli`, with its own version. Its first stable release, `3.1.0`, is
-**not on nuget.org yet** — see
-[NuGet Package Retirement §1a](src/MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md);
-once it is:
+One line each, no .NET needed for the CLI:
 
 ```bash
-dotnet tool install -g MeshWeaver.Cli
+brew trust --formula systemorph/memex/memex && brew install systemorph/memex/memex   # the memex CLI — macOS, Linux
+winget install Systemorph.Memex                                                        # the memex CLI — Windows
+dotnet add package MeshWeaver.Aspire.Hosting.Memex                                     # the Aspire integration, in your AppHost
+```
+
+With the .NET SDK, the CLI also installs on any OS as `dotnet tool install -g MeshWeaver.Cli`.
+
+The `memex` CLI operates any portal's mesh from the shell (its mesh commands are generated at run
+time from the connected instance's MCP tool catalog) and builds plugins inside the platform image:
+
+```bash
 memex login mw_yourtoken --base-url https://portal.example.com
 memex search "nodeType:Agent"
 ```
 
-Its source and its publish lane live in `Systemorph/MeshWeaver.Plugins` (`src/MeshWeaver.Cli`,
-published together with the Aspire integration). In CI the same verbs come from the
-`mw-plugin-test` container image, which is what every pipeline here actually runs.
-
-### NuGet packages
-
-**MeshWeaver publishes exactly two packages**, and they are the two you start from:
+**MeshWeaver publishes exactly two packages:**
 
 | Package | What it does |
 |---|---|
-| [`MeshWeaver.MemexTemplate`](https://www.nuget.org/packages/MeshWeaver.MemexTemplate) | `dotnet new install MeshWeaver.MemexTemplate` — scaffolds a portal solution |
-| [`MeshWeaver.Aspire.Hosting.Memex`](https://www.nuget.org/packages/MeshWeaver.Aspire.Hosting.Memex) | `builder.AddMemex()` — the Aspire integration that runs the portal, its database and its migration |
+| [`MeshWeaver.Cli`](https://www.nuget.org/packages/MeshWeaver.Cli) | the `memex` CLI; also a self-contained binary through [Homebrew](https://github.com/Systemorph/homebrew-memex) and winget |
+| [`MeshWeaver.Aspire.Hosting.Memex`](https://www.nuget.org/packages/MeshWeaver.Aspire.Hosting.Memex) | `builder.AddMemex()`: the Aspire integration that runs the portal, its database and its migration |
 
-> ⚠️ **`MeshWeaver.MemexTemplate` is not resolvable right now.** Its last published version is
-> `3.0.0-rc7` and every version of it is unlisted, so `dotnet new install MeshWeaver.MemexTemplate`
-> cannot find it. Two reasons: its pack target was broken (it never passed the generator the
-> platform checkout it requires — now fixed), and republishing it is blocked on an open decision,
-> because the template can only be generated together with a UI project that currently lives in a
-> private repository ([#3653](https://github.com/Systemorph/MeshWeaver/issues/3653) and
-> [NuGet Package Retirement](src/MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md)).
-> Until that is answered, generate the template from a checkout —
-> `tools/generate-memex-template.cs` in MeshWeaver.Plugins.
+Both have their own version, released when they change rather than with every platform build. They
+are built and published from `Systemorph/MeshWeaver.Plugins` (`src/MeshWeaver.Cli`,
+`src/Memex.Aspire.Hosting`). In CI the CLI's verbs come from the `mw-plugin-test` container image,
+which is what every pipeline here runs.
 
 The framework itself is **not** distributed as libraries. It ships as a container image: your mesh
 content compiles against the running portal, plugins ship as module bundles, and startup
