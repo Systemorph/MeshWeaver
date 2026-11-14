@@ -1484,7 +1484,9 @@ jobs:
         run: |
           set -euo pipefail
           v="$(dotnet --version)"
-          [[ "$v" =~ ^10\.0\.[0-9]+$ ]] || { echo "::error::dotnet --version answered '$v', not an exact 10.0 SDK version — the extension's generator bytes come from this SDK, so it must be named exactly."; exit 1; }
+          # EXACT, not a particular major: the line's SDK (10.0.x on main3, 11.0.x on main) is keyed as
+          # the full X.Y.Z it reports. A range or prerelease string is refused.
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::dotnet --version answered '$v', not an exact SDK version (X.Y.Z) — the extension's generator bytes come from this SDK, so it must be named exactly."; exit 1; }
           echo "build extension SDK: $v"
           echo "version=$v" >> "$GITHUB_OUTPUT"
       # 🔎 What the caller's shelf / build extension EVALUATES, asked of MSBuild itself (never a
