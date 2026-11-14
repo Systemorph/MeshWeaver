@@ -227,13 +227,11 @@ public static class WebhookInbox
         /// reading <see cref="ReadTargets"/> gives a blank configuration value.</remarks>
         public ImmutableHashSet<string>? AcceptedEvents
         {
-            get => acceptedEvents;
-            init => acceptedEvents = value is null || value.IsEmpty
+            get;
+            init => field = value is null || value.IsEmpty
                 ? null
                 : value.WithComparer(StringComparer.OrdinalIgnoreCase);
         }
-
-        private readonly ImmutableHashSet<string>? acceptedEvents;
 
         /// <summary>
         /// Whether a delivery carrying <paramref name="gitHubEvent"/> is one this target takes in:
