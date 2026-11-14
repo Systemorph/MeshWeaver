@@ -1079,6 +1079,27 @@ is refused, and that the flag is refused with a named package list.
    orders an install. A source dependency with no bundle of its own cannot be shown equal, so it
    counts as rebuilt.
 
+**A package with no NodeType is outside these rules.** It has nothing to compile, so no bake
+writes a bundle for it (`TreeBake.WriteBundles` skips a package with no compiled entry), and none is
+needed. `NodeRepoPackageGraph.DefinesNodeTypes` decides it with the same `$type` test the
+source-edge reader uses. Such a package is neither reused nor rebuilt. It is staged only when a
+rebuilt package needs it installed, and the plan line counts it separately (`N declare no NodeType
+(nothing to bake)`). One case stays conservative: a package whose NodeType includes sources from a
+package with no NodeType is rebuilt, because no seal carries those source bytes.
+
+The first run after the reuse landed showed why this matters. In run
+[43586622051](https://github.com/Systemorph/MeshWeaver/actions/runs/43586622051), slot 2, the plan
+read `35 package(s) reuse …; 46 rebuilt; the bake mounts 54 package(s)`. 37 of the 46 were marked
+`no fetched seal carries a bundle for it`, and 36 of those 37 declare no NodeType on the plugins
+repository's `main` (the provider and channel modules, for example; the 37th, `Deployments`, is not
+in that repository). Each one was staged with its whole install closure. The bake still compiled
+155 NodeTypes in 547 s, against 218 in 542 s before the reuse. The other 9 rebuilds are real:
+`Hosting`, `Store` and `Governance` differ from their seals, and 6 packages include `Store`'s
+sources. How much of the 155 the typeless roots accounted for is measured by the first run after
+this change, not here.
+`ComboGateReusesSealedBundlesTest.APackageWithNoNodeType_IsNotRebuilt_AndStagesNothing` pins the
+change.
+
 **What is baked.** Only the rebuilt packages, together with everything they need installed (every
 edge kind, `NodeRepoPackageGraph.DependencyMap`). These are copied into `<work root>.stage`, and that
 directory is mounted as `/work` for the `compile` call. This is the same narrowing a publish-bake

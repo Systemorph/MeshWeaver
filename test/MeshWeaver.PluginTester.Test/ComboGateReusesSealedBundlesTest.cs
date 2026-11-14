@@ -115,6 +115,42 @@ public sealed class ComboGateReusesSealedBundlesTest : IDisposable
         Assert.Empty(plan.Reused);
     }
 
+    /// <summary>🚨 A package that declares NO NodeType has nothing to compile, so no producer ever
+    /// seals a bundle for it. It is neither rebuilt nor a root of the bake — and above all its install
+    /// closure is not dragged into the bake. The first combo run after the reuse landed (43586622051,
+    /// slot 2) counted every such package as "no fetched seal carries a bundle for it" and staged it
+    /// with its dependencies: 35 of 81 packages reused, 155 NodeTypes still compiled. Fails on that
+    /// code: <c>Docs</c> lands in <c>Rebuilt</c> and <c>Lib</c>, whose seal stands, is staged.</summary>
+    [Fact]
+    public void APackageWithNoNodeType_IsNotRebuilt_AndStagesNothing()
+    {
+        SealAll();
+        WriteTypelessPackage("Docs", nodeTypedBy: "Lib/Thing");
+        var plan = Plan();
+
+        Assert.Equal(["App", "Lib", "Other"], plan.Reused.Keys);
+        Assert.Empty(plan.Rebuilt);
+        Assert.Equal(["Docs"], plan.NoNodeTypes);
+        Assert.True(plan.BakesNothing);
+    }
+
+    /// <summary>A package with no NodeType can still hold SOURCES another package's NodeType includes.
+    /// No seal carries those bytes, so the includer cannot be shown to be its seal's build and is
+    /// rebuilt — conservative, as for a rebuilt source package — and the source package is staged
+    /// with it, because the includer's bake needs it installed.</summary>
+    [Fact]
+    public void APackageIncludingSourcesOfAPackageWithNoNodeType_IsRebuilt()
+    {
+        WriteTypelessPackage("Snippets");
+        WritePackage("App", "app v1", sources: "shared=@Snippets/Shared/Source");
+        SealAll();
+        var plan = Plan();
+
+        Assert.Equal(["Lib", "Other"], plan.Reused.Keys);
+        Assert.Contains("includes sources of 'Snippets', which declares no NodeType", plan.Rebuilt["App"]);
+        Assert.Equal(["App", "Snippets"], plan.Staged);
+    }
+
     /// <summary>An unreadable seal file reuses nothing, and is NAMED rather than skipped.</summary>
     [Fact]
     public void AnUnreadableSeal_IsNamed()
@@ -212,6 +248,22 @@ public sealed class ComboGateReusesSealedBundlesTest : IDisposable
         Directory.CreateDirectory(Path.Combine(root, "Shared", "Source"));
         foreach (var (path, content) in PackageFiles(id, text, sources))
             File.WriteAllText(Path.Combine(root, path), content);
+    }
+
+    /// <summary>A package with an index, a guide page and shared sources — but no NodeType. With
+    /// <paramref name="nodeTypedBy"/> its guide is typed by a path into another package, which is an
+    /// INSTALL edge to that package and no compile input.</summary>
+    private void WriteTypelessPackage(string id, string? nodeTypedBy = null)
+    {
+        var root = Path.Combine(WorkRoot, id);
+        if (Directory.Exists(root))
+            Directory.Delete(root, recursive: true);
+        Directory.CreateDirectory(Path.Combine(root, "Shared", "Source"));
+        File.WriteAllText(Path.Combine(root, "index.json"),
+            $$"""{"id":"{{id}}","name":"{{id}}","nodeType":"Markdown"}""");
+        File.WriteAllText(Path.Combine(root, "Guide.json"),
+            $$"""{"id":"Guide","nodeType":"{{nodeTypedBy ?? "Markdown"}}","content":"a guide"}""");
+        File.WriteAllText(Path.Combine(root, "Shared", "Source", "Code.cs"), $"// {id}");
     }
 
     private static IEnumerable<(string Path, string Content)> PackageFiles(
