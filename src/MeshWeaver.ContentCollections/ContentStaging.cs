@@ -165,8 +165,16 @@ internal static class OutOfBandContentTransfer
                 // change watcher — which on a client partition's content share took the producer
                 // past the upload's deadline before a byte was staged. Staging writes, probes and
                 // deletes one blob; it reads nothing the scan would load.
+                var notReachable = $"content collection '{collectionName}' on node '{node}' is declared "
+                    + $"(source '{config.SourceType}') but could not be opened from the "
+                    + "posting hub — its backing store is not reachable from here";
                 var store = contentService is ContentService own
-                    ? own.OpenStore(registered).Select(collection => (ContentCollection?)collection)
+                    // A store that fails to open is the same fact as the null below, so it says
+                    // the same sentence, carrying the open's own fault as the inner exception.
+                    ? own.OpenStore(registered)
+                        .Select(collection => (ContentCollection?)collection)
+                        .Catch((Exception ex) => Observable.Throw<ContentCollection?>(
+                            new InvalidOperationException($"{notReachable} ({ex.Message})", ex)))
                     : contentService.GetCollection(qualifiedName);
                 return store
                     // 🚨 The two "no collection" answers are NOT the same fact and must not read the
@@ -176,10 +184,7 @@ internal static class OutOfBandContentTransfer
                     // acts on those differently, so the second says so instead of borrowing the
                     // first's sentence.
                     .SelectMany(collection => collection is null
-                        ? Observable.Throw<ContentCollection?>(new InvalidOperationException(
-                            $"content collection '{collectionName}' on node '{node}' is declared "
-                            + $"(source '{config.SourceType}') but could not be opened from the "
-                            + "posting hub — its backing store is not reachable from here"))
+                        ? Observable.Throw<ContentCollection?>(new InvalidOperationException(notReachable))
                         : Observable.Return(collection));
             });
     }

@@ -374,20 +374,20 @@ public class ContentService : IContentService
     /// upload's write was not even posted until it finished. A watcher attached there would also
     /// re-ingest every later change of that collection on a hub that does not own it.
     ///
-    /// <para>Reuses the collection when this hub has already opened (or is opening) it under
-    /// <paramref name="config"/>'s name; otherwise opens a bare store once per name and keeps it
-    /// until the config's base path changes (<see cref="AddConfiguration"/>). A failed open is
-    /// evicted, so the next caller tries again; it surfaces to the caller unchanged.</para>
+    /// <para>Opens a bare store once per <paramref name="config"/> name and keeps it until the
+    /// config's base path changes (<see cref="AddConfiguration"/>). It never reuses a collection
+    /// <see cref="GetCollection"/> opened under the same name, because that one may still be
+    /// scanning. A failed open is evicted, so the next caller tries again, and it reaches the caller
+    /// as an error.</para>
     /// </summary>
     /// <param name="config">The resolved (never mapped) config of the collection to open.</param>
     /// <returns>A collection whose file operations work; its markdown stream is never loaded.</returns>
     internal IObservable<ContentCollection> OpenStore(ContentCollectionConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
-        if (collections.TryGetValue(config.Name, out var opened))
-            return opened.Select(collection => collection
-                ?? throw new InvalidOperationException(
-                    $"content collection '{config.Name}' could not be opened on this hub"));
+        // 🚨 Never the entry in `collections`, even when one exists: it may still be SCANNING, and
+        // waiting it out is the stall this method exists to remove. A second, bare instance over
+        // the same store costs one provider and no I/O.
         return stores.GetOrAdd(config.Name, _ => CreateStore(config)
             .Replay(1)
             .AutoConnectOwnedBy(hub, nameof(ContentService)));

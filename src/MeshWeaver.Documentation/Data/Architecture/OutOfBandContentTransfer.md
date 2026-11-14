@@ -81,9 +81,11 @@ none of that. Until MeshWeaver#8158 it paid for all of it anyway. On a client pa
 share the scan is one network round-trip per file, and no deadline bounds it. The producer's
 write was not posted until the scan finished. That matches the reported symptom: a staged save
 timed out after 30–45 s, while the same file uploaded through the web UI (which never stages)
-landed at once. The pod logs that would confirm it were not readable. `OpenStore` reuses a
-collection the hub already holds under that name; otherwise it opens a bare store once per name
-and never scans or watches it. Regression test: `AStagedUploadDoesNotScanTheCollectionTest`
+landed at once. The pod logs that would confirm it were not readable. `OpenStore` opens a
+bare store once per name and never scans or watches it. It does not reuse a collection that
+`GetCollection` opened under the same name, because that one may still be scanning. A store that
+fails to open reaches the producer as the same "could not be opened from the posting hub" fault, and
+the transfer falls back to inline as before. Regression test: `AStagedUploadDoesNotScanTheCollectionTest`
 (Orleans), which parks the provider's whole-tree scan and requires the staged upload to land
 without starting one.
 
