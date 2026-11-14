@@ -20,12 +20,15 @@ NEGATIVE CONTROLS, each decided by MSBuild itself on a scratch repository, never
   - an item transform: the path a transform produces is an input (and appearing re-keys);
   - an Exists()-guarded import, absent: it is in reach, and appearing re-keys;
   - an UNIMPORTED `Directory.Unused.props`: its own Compile item is NOT an input. The file itself
-    stays a conservative hashing extra, because a new ancestor Directory.* file is a change.
+    stays a conservative hashing extra, because a new ancestor Directory.* file is a change;
+  - a DELETED import, with the MSBuild server forced on: a server remembers it (the negative
+    control shows that), and the evaluation still answers for the tree on disk.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -56,10 +59,18 @@ def load(name: str, module: str):
     return mod
 
 
-def run_evaluate(root: Path, project: str, out: Path, *extra: str):
+def run_evaluate(root: Path, project: str, out: Path, *extra: str, env: dict[str, str] | None = None):
     return subprocess.run([sys.executable, str(SCRIPTS / "msbuild-evaluate.py"), "--root", str(root),
                            "--project", project, "--out", str(out), "--property", f"MeshWeaverRoot={ROOT}/", *extra],
-                          capture_output=True, text=True, timeout=900)
+                          capture_output=True, text=True, timeout=900, env=env)
+
+
+def server_on_env() -> dict[str, str]:
+    """The caller's environment with the MSBuild server FORCED ON, whatever this SDK's default
+    and whatever the developer's shell set (MSBUILDDISABLENODEREUSE also keeps it off)."""
+    env = {k: v for k, v in os.environ.items() if k != "MSBUILDDISABLENODEREUSE"}
+    env["DOTNET_CLI_USE_MSBUILD_SERVER"] = "1"
+    return env
 
 
 def evaluate(root: Path, project: str, out: Path, *extra: str) -> dict:
@@ -408,6 +419,63 @@ def run_controls() -> int:
         check("a $(MSBuildProjectDirectory)/.. root pulls in NO directory and never the repository root",
               all((repo / s_).is_file() for s_ in entry["swept"]) and not ({"", "."} & set(sreach))
               and "**" not in sreach, f"swept={entry['swept']}")
+
+        print("== A DELETED import, with the MSBuild server ON in the caller's environment")
+        # A long-lived MSBuild server (`/nodemode:8`, on by default in SDK 11.0.100) keeps the project files
+        # it loaded, so an Exists()-guarded import evaluated once and then deleted is still imported:
+        # its -pp banner names a file that is gone, and the reader failed with ENOENT. msbuild-evaluate
+        # must answer for the tree on disk, so it runs every evaluation in a fresh process.
+        ev_mod = load("msbuild-evaluate.py", "msbuild_evaluate")
+        srv = server_on_env()
+        (repo / "Del").mkdir()
+        (repo / "Del/Del.csproj").write_text("""<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <Import Project="../Lib/Gone.props" Condition="Exists('../Lib/Gone.props')" />
+</Project>
+""", encoding="utf-8")
+        gone, gone_rel, dproj = repo / "Lib/Gone.props", "Lib/Gone.props", "Del/Del.csproj"
+
+        def raw_imports_gone() -> bool:
+            out = tmp / "raw-pp.xml"
+            subprocess.run(["dotnet", "msbuild", dproj, "-nologo", f"-pp:{out}"], cwd=repo, env=srv,
+                           capture_output=True, text=True, timeout=600, check=True)
+            return gone_rel in ev_mod.pp_imports(repo.resolve(), out.read_text(encoding="utf-8", errors="replace"))
+
+        try:
+            # NEGATIVE CONTROL: without it the case below could pass on an SDK whose server never
+            # remembers, having tested nothing. The server's memory is not certain on every round
+            # (8–9 of 10 measured), so up to ten rounds, stopping at the first stale one.
+            stale_round = 0
+            for i in range(1, 11):
+                gone.write_text("<Project />\n")
+                present = raw_imports_gone()
+                gone.unlink()
+                if present and raw_imports_gone():
+                    stale_round = i
+                    break
+            check("negative control — through the MSBuild server, a raw `dotnet msbuild -pp` still imports "
+                  "the DELETED Lib/Gone.props (so the case below has a subject on this SDK)",
+                  stale_round > 0, "no stale round in 10: if MSBuild's server no longer remembers deleted "
+                  "imports, this case has no subject left — say so and retire it, do not weaken it")
+            bad: list[str] = []
+            for i in range(1, 6):
+                gone.write_text("<Project />\n")
+                r1 = run_evaluate(repo, dproj, tmp / "del1.json", env=srv)
+                gone.unlink()
+                r2 = run_evaluate(repo, dproj, tmp / "del2.json", env=srv)
+                if r1.returncode != 0 or gone_rel not in json.loads((tmp / "del1.json").read_text())["projects"][dproj]["imports"]:
+                    bad.append(f"round {i}, present: exit={r1.returncode} {r1.stderr[-300:]}")
+                elif r2.returncode != 0:
+                    bad.append(f"round {i}, deleted: exit={r2.returncode} {r2.stderr[-300:]}")
+                elif gone_rel in json.loads((tmp / "del2.json").read_text())["projects"][dproj]["imports"]:
+                    bad.append(f"round {i}, deleted: still listed as an import")
+            check("msbuild-evaluate.py with the server ON in its environment evaluates the tree ON DISK: the "
+                  "import is listed while it exists and gone once deleted, 5 of 5 rounds", not bad, "; ".join(bad))
+        finally:
+            gone.unlink(missing_ok=True)
+            # The server this section started is not left running (it is per SDK, so ask from the tree).
+            subprocess.run(["dotnet", "build-server", "shutdown", "--msbuild"], cwd=repo, env=srv,
+                           capture_output=True, text=True, timeout=120)
 
         print("== THE HEAD's SDK, pinned for another tree")
         pinned = evaluate(repo, "./Ext/../Ext/Ext.csproj", tmp / "pinned.json", "--pin-sdk", sdk)
