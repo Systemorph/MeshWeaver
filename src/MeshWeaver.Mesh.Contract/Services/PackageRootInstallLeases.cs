@@ -138,7 +138,7 @@ public sealed class PackageRootInstallLeases
     /// </summary>
     /// <param name="rootPath">The root path to count waiters on.</param>
     public int DeferredOn(string? rootPath) =>
-        !string.IsNullOrWhiteSpace(rootPath) && deferred.TryGetValue(rootPath!, out var count)
+        !string.IsNullOrWhiteSpace(rootPath) && deferred.TryGetValue(rootPath, out var count)
             ? count
             : 0;
 
