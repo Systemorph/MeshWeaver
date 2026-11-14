@@ -66,6 +66,16 @@ public sealed class PackageRootInstallLeases
     private readonly ISubject<string> released = Subject.Synchronize(new Subject<string>());
 
     /// <summary>
+    /// Root path → how many <see cref="WhenReleased"/> waiters are PARKED on it right now, i.e.
+    /// subscribed while an install held the root and not yet answered. Removed at zero, like
+    /// <see cref="held"/>.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, int> deferred =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly ISubject<string> deferredChanged = Subject.Synchronize(new Subject<string>());
+
+    /// <summary>
     /// Marks <paramref name="rootPath"/> as being written by an install until the returned handle
     /// is disposed. Prefer <see cref="HoldDuring{T}"/>, which ties the handle to a subscription's
     /// lifetime so the release cannot be forgotten.
@@ -122,6 +132,47 @@ public sealed class PackageRootInstallLeases
             : null;
 
     /// <summary>
+    /// How many recycles are DEFERRED on <paramref name="rootPath"/> right now: waiters that
+    /// subscribed to <see cref="WhenReleased"/> while an install held the root and have not been
+    /// answered yet. Zero when nothing waits.
+    /// </summary>
+    /// <param name="rootPath">The root path to count waiters on.</param>
+    public int DeferredOn(string? rootPath) =>
+        !string.IsNullOrWhiteSpace(rootPath) && deferred.TryGetValue(rootPath, out var count)
+            ? count
+            : 0;
+
+    /// <summary>
+    /// Emits once, as soon as at least one recycle is DEFERRED on <paramref name="rootPath"/> —
+    /// parked in <see cref="WhenReleased"/> behind a held lease — and immediately when one already
+    /// is. Cold, and it completes.
+    ///
+    /// <para>🚨 <b>This is the POSITIVE signal that a recycle reached the lease and is waiting on
+    /// it</b>, which is what lets a caller prove "the recycle did not tear the root down" without
+    /// sitting out a wall-clock window. Every recycler composes its teardown DOWNSTREAM of
+    /// <see cref="WhenReleased"/>, so while a waiter is parked here and the lease is held, the
+    /// teardown it guards cannot have been posted — the absence is decided by the composition, not
+    /// by how long somebody watched for it. Same subscribe-first, re-check-second construction as
+    /// <see cref="WhenReleased"/>, so a waiter that parks between the subscription and the check
+    /// is never missed.</para>
+    /// </summary>
+    /// <param name="rootPath">The root path to watch.</param>
+    public IObservable<Unit> WhenDeferredOn(string rootPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        return Observable.Defer(() => Observable
+            .Merge(
+                deferredChanged
+                    .Where(path => string.Equals(path, rootPath, StringComparison.OrdinalIgnoreCase))
+                    .Where(_ => DeferredOn(rootPath) > 0)
+                    .Select(_ => Unit.Default),
+                Observable.Defer(() => DeferredOn(rootPath) > 0
+                    ? Observable.Return(Unit.Default)
+                    : Observable.Empty<Unit>()))
+            .Take(1));
+    }
+
+    /// <summary>
     /// Emits exactly once, as soon as no install holds <paramref name="rootPath"/> — immediately
     /// when none does. Cold, and it completes.
     ///
@@ -161,7 +212,10 @@ public sealed class PackageRootInstallLeases
                     .Where(_ => !IsHeld(rootPath))
                     .Select(_ => Unit.Default),
                 Observable.Defer(() => IsHeld(rootPath)
-                    ? Observable.Empty<Unit>()
+                    // Held: this waiter is PARKED until the release leg answers, and is counted as
+                    // deferred for exactly that long — Take(1) below disposes the Merge, and with
+                    // it this Using, the moment the release leg emits (or the caller gives up).
+                    ? Observable.Using(() => Park(rootPath), _ => Observable.Never<Unit>())
                     : Observable.Return(Unit.Default)))
             .Take(1)
             // The release fires on the INSTALL's own thread, and what the waiter does next is post
@@ -176,6 +230,19 @@ public sealed class PackageRootInstallLeases
             .SelectMany(_ => IsHeld(rootPath)
                 ? WhenReleased(rootPath)
                 : Observable.Return(Unit.Default)));
+    }
+
+    private IDisposable Park(string rootPath)
+    {
+        deferred.AddOrUpdate(rootPath, 1, (_, count) => count + 1);
+        deferredChanged.OnNext(rootPath);
+        return System.Reactive.Disposables.Disposable.Create(() =>
+        {
+            var remaining = deferred.AddOrUpdate(rootPath, 0, (_, count) => count - 1);
+            if (remaining <= 0)
+                deferred.TryRemove(new KeyValuePair<string, int>(rootPath, remaining));
+            deferredChanged.OnNext(rootPath);
+        });
     }
 
     private void Release(string rootPath, string holder)
