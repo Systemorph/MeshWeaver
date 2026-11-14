@@ -203,19 +203,32 @@ public class CdImageVersionsShareOneSourceGuard
             + string.Join("\n  ", plugins.Select(x => $"line {x.Line}")));
 
         // The matrix entries carry no `ref:` of their own; the ONE ref for the whole register is the
-        // reusable call's `content-ref:`, and it is the satellite's default branch — what that
-        // satellite's daily run would bake. A sha here would be one this run resolved for itself,
-        // which is precisely the shape the rule above forbids for a set member; for a non-member it
-        // would merely be a stale measurement wearing a pin's name.
+        // reusable call's `content-ref:`, and it is a satellite BRANCH — what that satellite's daily
+        // run would bake. A sha here would be one this run resolved for itself, which is precisely
+        // the shape the rule above forbids for a set member; for a non-member it would merely be a
+        // stale measurement wearing a pin's name. Since policy `major-lines-run-separately` the
+        // branch is the delivery LINE's declared `satelliteRef` (.github/delivery-lines.json), read
+        // through `gate` — so both halves are asserted: the call reads that output, and every line
+        // declares a branch name there, never a sha.
         var lines = File.ReadAllLines(Path.Combine(RepoPaths.Root, Workflow));
         var (start, end) = SatelliteCompatRange(lines);
         var contentRef = lines[start..end]
             .Where(l => !Regex.IsMatch(l, @"^\s*#"))
-            .Select(l => Regex.Match(l, @"^\s*content-ref:\s*(?<ref>\S+)\s*$"))
+            .Select(l => Regex.Match(l, @"^\s*content-ref:\s*(?<ref>.+?)\s*$"))
             .Where(m => m.Success)
             .Select(m => m.Groups["ref"].Value)
             .ToList();
-        Assert.Equal(new[] { "main" }, contentRef);
+        Assert.Equal(new[] { "${{ needs.gate.outputs.satellite_ref }}" }, contentRef);
+
+        using var declaration = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(RepoPaths.Root, ".github/delivery-lines.json")));
+        var satelliteRefs = declaration.RootElement.GetProperty("lines").EnumerateArray()
+            .Select(l => l.GetProperty("satelliteRef").GetString() ?? "")
+            .ToList();
+        Assert.NotEmpty(satelliteRefs);
+        Assert.All(satelliteRefs, r => Assert.False(
+            Regex.IsMatch(r, "^[0-9a-f]{7,40}$") || r.Length == 0,
+            $"a delivery line declares satelliteRef '{r}' — it must be a satellite BRANCH, never a sha"));
     }
 
     /// <summary>The one accepted ref: the sha <c>gate</c> resolved, and nothing else beside it.</summary>

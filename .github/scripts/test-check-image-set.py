@@ -27,7 +27,7 @@ ARMING_TAG = "memex-portal-ai:3.0.0-ci.42"
 
 class ImageSetTests(unittest.TestCase):
     def check(self, failed_tag="", diagnostic="", exit_code=0, index=INDEX, failed_tags=(),
-              args=("abcdef1", "--pointers", "3.0.0-ci.42")):
+              args=("abcdef1", "--pointers", "3.0.0-ci.42", "--line-label", "main", "--moves-latest", "true")):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             az = root / "az"
@@ -105,6 +105,40 @@ print(os.environ['INDEX'])
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("retired", result.stdout)
         self.assertEqual(calls, [], "a refused invocation must read nothing")
+
+    # ── the pointers are PER LINE (policy `major-lines-run-separately`) ──────────────────────
+    #
+    # main3's promotion writes `main3`, never `main`, and leaves the tester's `latest` to the ONE line
+    # .github/delivery-lines.json names. A checker that assumed `main` would red every correct main3
+    # promotion — or vouch for a torn one by reading main's pointer.
+
+    def test_a_non_default_line_asserts_its_own_label_and_not_latest(self):
+        result, calls = self.check(args=("abcdef1", "--pointers", "3.0.0-ci.42",
+                                         "--line-label", "main3", "--moves-latest", "false"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        want = {t.replace(":main", ":main3") for t in EXPECTED_TAGS if t != "mw-plugin-test:latest"}
+        self.assertEqual(set(calls), want)
+        self.assertFalse([c for c in calls if c.endswith(":main")], calls)
+
+    def test_a_missing_line_label_on_a_non_default_line_is_red_by_its_own_label(self):
+        result, _ = self.check("mw-core-tests:main3", "ERROR: MANIFEST_UNKNOWN: tag does not exist", 3,
+                               args=("abcdef1", "--pointers", "3.0.0-ci.42",
+                                     "--line-label", "main3", "--moves-latest", "false"))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+
+    def test_pointers_without_a_line_are_refused_before_any_read(self):
+        for args in (("abcdef1", "--pointers", "3.0.0-ci.42"),
+                     ("abcdef1", "--pointers", "3.0.0-ci.42", "--line-label", "main"),
+                     ("abcdef1", "--pointers", "3.0.0-ci.42", "--line-label", "main", "--moves-latest", "yes")):
+            with self.subTest(args=args):
+                result, calls = self.check(args=args)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(calls, [], "a refused invocation must read nothing")
+
+    def test_without_pointers_no_line_is_needed(self):
+        result, calls = self.check(args=("abcdef1",))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(set(calls), {t for t in EXPECTED_TAGS if t.endswith(":abcdef1")})
 
     def test_a_missing_image_is_still_red(self):
         result, _ = self.check("memex-migration:abcdef1", "ERROR: MANIFEST_UNKNOWN: tag does not exist", 3)

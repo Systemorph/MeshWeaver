@@ -1808,7 +1808,7 @@ public sealed class MessageHub : IMessageHub
         var timeout = Configuration.RequestTimeout;
         // Fires `timeout` after the LATEST of {the start of the wait, the last progress report}.
         var silence = progress
-            .StartWith(Unit.Default)
+            .StartWithInline(Unit.Default)
             .Select(_ => Observable.Timer(timeout).Select(_ => Unit.Default))
             .Switch();
         // A single reply needs no bound after it arrives; a STREAM is bounded by the silence
@@ -3028,7 +3028,7 @@ public sealed class MessageHub : IMessageHub
         var own = runLevelChanged.Select(level => $"{Address} → {level}");
         return depth >= MaxHostedHubRecursionDepth
             ? own
-            : own.Merge(hostedHubs.SubtreeDisposalProgress(depth + 1));
+            : own.MergeInline(hostedHubs.SubtreeDisposalProgress(depth + 1));
     }
 
     /// <summary>
@@ -3253,7 +3253,7 @@ public sealed class MessageHub : IMessageHub
         // budget — report a hang with these diagnostics attached instead of a lie about
         // completion. See OnDisposalStall for the verdicts, one of which is an explicit unknown.
         watchdogSubscription = DisposalProgress
-            .StartWith($"{Address} Dispose() called")
+            .StartWithInline($"{Address} Dispose() called")
             .Select(reason => Observable.Timer(DisposalWatchdogTimeout, DisposalWatchdogTimeout).Select(_ => reason))
             .Switch()
             .TakeUntil(disposalCompleted)
@@ -3721,7 +3721,7 @@ public sealed class MessageHub : IMessageHub
             });
             // Each leg is Catch-wrapped above, so a fault here is unexpected — log it
             // rather than swallowing (an empty onError hides plumbing bugs in Merge).
-            Observable.Merge(legs).Subscribe(
+            legs.MergeInline().Subscribe(
                 _ => { },
                 ex => TryLog(LogLevel.Warning,
                     "[DISPOSE-ACTION] {Address}: dispose-action merge faulted: {Type}: {Message}",
@@ -4137,7 +4137,7 @@ public sealed class MessageHub : IMessageHub
                 //
                 // Reactive poll: `Observable.Interval` ticks on the DefaultScheduler (off the
                 // action block); each tick checks whether `responseSubjects` has drained. The
-                // leading StartWith(-1) probes ONCE inline (so an already-drained hub advances
+                // leading StartWithInline(-1) probes ONCE inline (so an already-drained hub advances
                 // without a scheduler hop). `Amb` races the drain signal against a single
                 // `Observable.Timer(QuiesceTimeout)` deadline and takes whichever fires first —
                 // drained → true, budget exceeded → false. (Note: a between-emissions
@@ -4314,7 +4314,7 @@ public sealed class MessageHub : IMessageHub
     {
         var drained = Observable
             .Interval(QuiescePollInterval)
-            .StartWith(-1L)
+            .StartWithInline(-1L)
             .Select(_ => { lock (responseSubjects) return responseSubjects.Count == 0; })
             .Where(empty => empty)
             .Take(1)

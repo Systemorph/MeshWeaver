@@ -66,6 +66,8 @@ var gateTimeout = TimeSpan.FromMinutes(45);
 var sources = ImmutableDictionary<string, string>.Empty
     .WithComparers(StringComparer.OrdinalIgnoreCase);
 var moduleBundleDirs = ImmutableList<string>.Empty;
+var sealedBundleDirs = ImmutableArray<string>.Empty;
+string? frameworkIdentity = null;
 
 for (var i = 0; i < args.Length; i++)
 {
@@ -114,6 +116,15 @@ for (var i = 0; i < args.Length; i++)
         case "--module-bundles" when i + 1 < args.Length:
             moduleBundleDirs = moduleBundleDirs.Add(args[++i]);
             break;
+        // The combo's sealed NodeType bundles (MeshWeaver#4413, option C): a directory of one
+        // source's bundles sealed for the candidate's framework identity. Repeatable. Packages whose
+        // sealed bundle is this tree's build are not re-baked. See SealedBundleReuse.
+        case "--sealed-bundles" when i + 1 < args.Length:
+            sealedBundleDirs = sealedBundleDirs.Add(args[++i]);
+            break;
+        case "--framework-identity" when i + 1 < args.Length:
+            frameworkIdentity = args[++i];
+            break;
         case "--fetch-timeout" when i + 1 < args.Length:
             fetchTimeout = TimeSpan.FromSeconds(
                 double.Parse(args[++i], CultureInfo.InvariantCulture));
@@ -126,7 +137,7 @@ for (var i = 0; i < args.Length; i++)
         // case as "Unknown argument" — a misleading message for a missing value.
         case "--work-root" or "--verdict" or "--tag" or "--source" or "--default-source"
             or "--token-env" or "--fetch-timeout" or "--gate-timeout" or "--platform" or "--host"
-            or "--module-bundles":
+            or "--module-bundles" or "--sealed-bundles" or "--framework-identity":
             Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
             return 2;
         case "--help" or "-h":
@@ -135,11 +146,14 @@ for (var i = 0; i < args.Length; i++)
                 + "[--verdict <file>] [--tag <candidate-tag>] [--allow-moving] "
                 + "[--allow-incomplete] [--source <name>=<url>]... [--default-source <url>] "
                 + "[--fetch-timeout <s>] [--gate-timeout <s>] [--token-env <VAR>] "
-                + "[--module-bundles <dir>]... "
+                + "[--module-bundles <dir>]... [--sealed-bundles <dir>... --framework-identity <id>] "
                 + $"[--platform <os/arch>, default {DockerImageGate.FleetPlatform}]\n"
                 + "  --module-bundles <dir>: sealed module bundles for the candidate's framework "
                 + "identity. Required when the combo's packages declare compiled modules: the "
-                + "tester ships none, so without them every Skill/Agent install is refused.");
+                + "tester ships none, so without them every Skill/Agent install is refused.\n"
+                + "  --sealed-bundles <dir>: one source's NodeType bundles sealed for "
+                + "--framework-identity. A package whose sealed bundle is byte-for-byte this tree's "
+                + "build is not re-baked; only the rest is compiled.");
             return 0;
         default:
             if (args[i].StartsWith('-') || imageRef is not null)
@@ -167,6 +181,18 @@ if (hostDir is null)
         "--host <gate-host-dir> is required: the candidate portal's /app with the candidate set's "
         + "tester CLI beside it (.github/scripts/compose-gate-host.sh). Try --help.");
     return 2;
+}
+SealedBundleSource? sealedBundles = null;
+if (!sealedBundleDirs.IsEmpty)
+{
+    if (frameworkIdentity is not { } identity || string.IsNullOrWhiteSpace(identity))
+    {
+        Console.Error.WriteLine(
+            "--sealed-bundles needs --framework-identity <id>: the candidate's identity is the address "
+            + "every reused bundle must carry. Try --help.");
+        return 2;
+    }
+    sealedBundles = new SealedBundleSource([.. sealedBundleDirs.Select(Path.GetFullPath)], identity);
 }
 if (!File.Exists(comboPath))
 {
@@ -273,7 +299,8 @@ if (declaredModules.Length > 0)
             + $"NOT loaded: {string.Join(", ", moduleSet.NotDeclared)}");
 }
 
-var gate = new DockerImageGate(pools, gateTimeout, Console.Out, platform, hostDir, moduleSet);
+var gate = new DockerImageGate(
+    pools, gateTimeout, Console.Out, platform, hostDir, moduleSet, sealedBundles);
 
 // 🚨 THE INSTRUMENT FIRST (#3848). A gate with no tester to start exits 127 with no report, which
 // folds into a NotVerifiable that reads as a statement about the candidate — and was landed on live
@@ -330,6 +357,7 @@ Console.WriteLine(
 // gate report are exactly what an operator inspects next.
 if (!explicitWorkRoot)
     ComboWorkRoots.Settle(
-        run.ExitCode, workRoot, moduleSet?.Root, Console.Out, DockerImageGate.BakeRootFor(workRoot));
+        run.ExitCode, workRoot, moduleSet?.Root, Console.Out, DockerImageGate.BakeRootFor(workRoot),
+        SealedBundleReuse.StageRootFor(workRoot));
 
 return run.ExitCode;

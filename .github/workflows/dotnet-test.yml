@@ -102,11 +102,15 @@ name: MeshWeaver Build and Test
 # the stacked run wrote and skips build+test. A stacked series pays for one full suite
 # per layer, not two.
 #
-# `push:` stays `main`-only on purpose — a full suite on every feature-branch push
-# would double every PR's cost for no extra evidence (the PR run already covers it).
+# `push:` stays on the DELIVERY LINES only on purpose — a full suite on every feature-branch push
+# would double every PR's cost for no extra evidence (the PR run already covers it). Every line of
+# .github/delivery-lines.json is listed (`main`, and `main3` for the previous major — policy
+# `major-lines-run-separately`): CD ships only a commit whose `Consolidate test results` is green,
+# and only a push run puts that check on a landed commit. `cd-line.py check-workflow` holds the list
+# equal to the declaration. A line is a `main` in every rule below — tested per commit, never cancelled.
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "main3" ]
   pull_request:      # ← NO `branches:` filter. See the block above (#1401) before adding one.
   # 🚨 THE MERGE QUEUE CANNOT WORK WITHOUT THIS TRIGGER, and its absence does not look like a
   # missing trigger — it looks like a PR that queues and then sits there. The queue builds a
@@ -190,7 +194,7 @@ concurrency:
   #
   # A per-SHA group cannot contend with anything, so every commit that lands on main gets its own
   # full run — which is precisely the cost the note below says is deliberately accepted.
-  group: build-test-${{ github.event_name == 'workflow_dispatch' && github.run_id || (github.ref == 'refs/heads/main' && github.sha || github.ref) }}
+  group: build-test-${{ github.event_name == 'workflow_dispatch' && github.run_id || ((github.ref == 'refs/heads/main' || github.ref == 'refs/heads/main3') && github.sha || github.ref) }}
   # 🚨 NEVER cancel a run on `main` (#2412). Superseding is safe on a PR branch — the later
   # push tests a strict successor of what was cancelled, and that is where #2316's ~28% of
   # runner demand is saved. On `main` it is neither safe nor recoverable, for two reasons:
@@ -213,7 +217,7 @@ concurrency:
   # 🚨 This line is now the BELT, not the braces: with main grouped by SHA above, no two main runs
   # ever share a group, so there is nothing for it to cancel. It stays because it is the statement
   # of intent, and because it still governs any future ref that groups by name.
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref != 'refs/heads/main' && github.ref != 'refs/heads/main3' }}
 
 # publish-unit-test-result-action runs ONCE, in the collector (never per shard — see the shard
 # job's note where that step used to be). It needs checks: write to create check-runs and pull-requests: write to comment.
@@ -2706,6 +2710,22 @@ jobs:
     - name: "Every moving image label is declared, and retention reads it as protected"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/release-channels.py check .
+
+    # The DELIVERY LINES (policy `major-lines-run-separately`): main-cd.yml derives its line once and
+    # refuses an undeclared one (`derive`, driven here against fabricated events), and never spells a
+    # `main` that means "the line" (`check-workflow`, which also holds main-cd's and this file's
+    # triggers to .github/delivery-lines.json).
+    - name: "The delivery line is derived from the event and refused by name otherwise (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/cd-line.py --self-test
+    - name: "main-cd.yml reads the derived line everywhere — no hard-coded main"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/cd-line.py check-workflow .
+    # Set selection follows the LINE's major (policy `major-lines-run-separately`): mixed 3.x/4.x
+    # fixtures, and a mutation control proving the major filter is what makes the difference.
+    - name: "The arming selection stays inside the line's major (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/arm-promoted-set.py --self-test
 
     # The seal-time floor gate node-repo-publish-bake.yml runs before every publication
     # (MeshWeaver.Manufacturing#84): a bundle floor above the portal the set names is refused, and

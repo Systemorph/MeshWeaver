@@ -89,7 +89,16 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
         _httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
         _http = hub.ServiceProvider.GetService<IHttpClientFactory>()
             ?.CreateClient(InstanceRegistrationClient.HttpClientName) ?? SharedHttp;
+        Line = PlatformLine.Of(hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
     }
+
+    /// <summary>
+    /// The platform line this installation STATES on every request (<see cref="PlatformLine"/>, policy
+    /// <c>major-lines-run-separately</c>): the registry lists and serves each source at the ref that
+    /// source declares for this line. Null states nothing — the request is byte-identical to the one
+    /// sent before lines existed, and the registry serves its configured refs.
+    /// </summary>
+    public string? Line { get; init; }
 
     /// <summary>The registry this source reads, as an install ORIGIN (MeshWeaver#6526): a package
     /// installed through it records this, so an update watcher on the same instance never binds it
@@ -135,7 +144,8 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
     public IObservable<RegistryListing> ListCatalog(string gitRef) =>
         _credential.SelectMany(token => _httpPool.Invoke(async ct =>
         {
-            var url = $"{_registryUrl}{RoutePrefix}?ref={Uri.EscapeDataString(gitRef ?? "")}";
+            var url = $"{_registryUrl}{RoutePrefix}?ref={Uri.EscapeDataString(gitRef ?? "")}"
+                      + (Line is { } line ? $"&{PlatformLine.WireName}={Uri.EscapeDataString(line)}" : "");
             using var request = Request(token, HttpMethod.Get, url);
             using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -184,7 +194,10 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
             // paths; `paths` only FILTERS within that package's own files (the manifest-diff fast
             // path: unchanged files never travel). An old registry ignores the extra field and
             // returns everything — the consumer's manifest diff still upserts only what changed.
-            var body = JsonSerializer.Serialize(new { id = package.Id, @ref = gitRef, paths }, Json);
+            // The line rides only when stated, so a line-less installation sends the body it always sent.
+            var body = Line is { } line
+                ? JsonSerializer.Serialize(new { id = package.Id, @ref = gitRef, paths, line }, Json)
+                : JsonSerializer.Serialize(new { id = package.Id, @ref = gitRef, paths }, Json);
             using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
             using var request = Request(token, HttpMethod.Post, $"{_registryUrl}{RoutePrefix}/files", content);
             using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);

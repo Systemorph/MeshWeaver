@@ -485,6 +485,14 @@ the undo deleted the edit and answered "moved back" — now both survive and the
   refusal a DELETE of the source would get — if you may not delete it, you may not move it — and every
   create validator that refuses the copy leg. `ValidationFailed` is a verdict: do not retry it
   unchanged.
+- **A refusal is logged as a refusal, not as a fault.** When the copy leg's create is refused with a
+  typed verdict — the target is taken (`NodeAlreadyExists`, #8073), a validator refused it
+  (`ValidationFailed`), or the path cannot hold the node (`InvalidPath`, e.g. a `Space` moved under
+  another partition root, which the partition-ownership guard refuses, #8126) — the copy and move
+  handlers log it at Warning, naming both paths. A check that could not be established
+  (`Unavailable`), an unresolvable NodeType (`InvalidNodeType`) and every untyped failure stay at
+  Error with their stack: those are the mesh's faults, not the caller's. Pinned by
+  `ATakenTargetIsARefusalNotAFaultTest` and `ARefusedTargetIsARefusalNotAFaultTest`.
 - **Renaming by case is a move.** Send `MoveNodeRequest(old, newCasing)`; a move onto itself or into
   its own subtree is refused with `ValidationFailed`.
 - **Do not write to a node while it is being moved.** The write is refused (*"Node being deleted"*)
