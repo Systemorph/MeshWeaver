@@ -375,7 +375,9 @@ def control_announcement(deployment: str, version: str, image_repository: str, i
     }
 
 
-RUNNING_MAJOR = re.compile(r"^\s*(\d+)\.\d+")
+# Only the matched version prefix is ever echoed (into a ::notice:: and the step summary) — never the raw
+# /api/version string, so nothing after it can spoof an annotation or render as markdown.
+RUNNING_MAJOR = re.compile(r"^\s*((\d+)\.\d+(?:\.\d+)?)")
 
 
 def control_line(version: str, code: int, body: str) -> dict:
@@ -409,7 +411,8 @@ def control_line(version: str, code: int, body: str) -> dict:
     if m is None:
         raise ValueError(f"control's /api/version answered {code} without a version (body: {str(body)[:200]!r}) — "
                          "cannot tell which major control runs, so this build is NOT handed to it")
-    control_major = int(m.group(1))
+    control_major = int(m.group(2))
+    running = m.group(1)
     if control_major == build_major:
         return {"line_announce": True, "control_major": control_major, "build_major": build_major,
                 "line_reason": f"control runs {running} (major {control_major}) — this {build_major}.x build is on its line"}
@@ -1260,6 +1263,29 @@ def self_test() -> int:
           after_cutover["line_announce"] is False and after_cutover["control_major"] == 4, json.dumps(after_cutover))
     check("control_line: …and the v4 line announces to it",
           control_line("4.0.13260", 200, json.dumps({"version": "4.0.13250"}))["line_announce"] is True)
+    spoof = control_line("4.0.13212", 200, json.dumps({"version": "3.1.0+abc\n::error::spoofed **bold**"}))
+    check("control_line: only the matched version prefix is echoed — nothing after it reaches a ::notice:: or the summary",
+          "3.1.0 (major 3)" in spoof["line_reason"] and "::" not in spoof["line_reason"]
+          and "\n" not in spoof["line_reason"] and "**" not in spoof["line_reason"], json.dumps(spoof))
+    # The workflow compares `steps.control_line.outputs.line_announce == 'true'` — so the ROUND TRIP through
+    # GITHUB_OUTPUT must spell a Python bool in lowercase, or the handover never runs (and fails soft).
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        out_file = Path(tmp) / "out"
+        saved = os.environ.get("GITHUB_OUTPUT")
+        os.environ["GITHUB_OUTPUT"] = str(out_file)
+        try:
+            _write_rows(control_line("3.1.13192", 200, v3_body))
+            _write_rows({"line_announce": control_line("4.0.13212", 200, v3_body)["line_announce"]})
+        finally:
+            if saved is None:
+                os.environ.pop("GITHUB_OUTPUT", None)
+            else:
+                os.environ["GITHUB_OUTPUT"] = saved
+        lines = out_file.read_text().splitlines()
+    check("control_line → GITHUB_OUTPUT: the workflow reads `line_announce=true` / `line_announce=false` (lowercase)",
+          "line_announce=true" in lines and "line_announce=false" in lines
+          and not any(l in ("line_announce=True", "line_announce=False") for l in lines), str(lines))
     for bad_code, bad_body, why in ((0, "connection refused", "an unreachable control"),
                                     (200, json.dumps({"commit": "6" * 40}), "a /api/version naming no version"),
                                     (503, "", "a 503"),
