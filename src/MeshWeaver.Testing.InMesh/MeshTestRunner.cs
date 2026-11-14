@@ -207,8 +207,7 @@ public static partial class MeshTestRunner
             try
             {
                 CaseGate.Enter(token);
-                if (context is not null)
-                    context.CancellationToken = ct;
+                context?.CancellationToken = ct;
                 var result = c.Method.Invoke(instance, Arguments(c, ct));
                 switch (result)
                 {
@@ -219,8 +218,7 @@ public static partial class MeshTestRunner
             }
             finally
             {
-                if (context is not null)
-                    context.CancellationToken = CancellationToken.None;
+                context?.CancellationToken = CancellationToken.None;
                 unwound.OnNext(Unit.Default);
                 unwound.OnCompleted();
             }

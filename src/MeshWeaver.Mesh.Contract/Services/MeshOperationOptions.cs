@@ -36,15 +36,13 @@ public sealed record MeshOperationOptions
     /// same tick.</exception>
     public TimeSpan Timeout
     {
-        get => timeout;
-        init => timeout = value >= TimeSpan.FromMilliseconds(1)
+        get;
+        init => field = value >= TimeSpan.FromMilliseconds(1)
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), value,
                 "MeshOperationOptions.Timeout must be at least 1 ms — the domain on which the "
                 + "nested-budget ladder is strictly decreasing (issue #1198).");
-    }
-
-    private readonly TimeSpan timeout = TimeSpan.FromSeconds(30);
+    } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// How much of an enclosing bound each nesting level hands back, so the level that encloses it
@@ -66,15 +64,13 @@ public sealed record MeshOperationOptions
     /// type exists to make unrepresentable.</exception>
     public TimeSpan NestingReserve
     {
-        get => nestingReserve;
-        init => nestingReserve = value > TimeSpan.Zero
+        get;
+        init => field = value > TimeSpan.Zero
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), value,
                 "NestingReserve must be positive: a nested bound that does not contract cannot "
                 + "fire before the bound that encloses it, which is issue #1198.");
-    }
-
-    private readonly TimeSpan nestingReserve = TimeSpan.FromSeconds(5);
+    } = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Floor for <see cref="Nest"/>, as a fraction of the bound being nested inside. Must be in
@@ -87,15 +83,13 @@ public sealed record MeshOperationOptions
     /// one it stops contracting, at or below zero it collapses the rung to nothing.</exception>
     public double MinNestingFraction
     {
-        get => minNestingFraction;
-        init => minNestingFraction = value is > 0 and < 1
+        get;
+        init => field = value is > 0 and < 1
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), value,
                 "MinNestingFraction must be strictly between 0 and 1 so that every nested bound is "
                 + "strictly smaller than the bound enclosing it (issue #1198).");
-    }
-
-    private readonly double minNestingFraction = 0.5;
+    } = 0.5;
 
     /// <summary>
     /// How many per-node delete legs a recursive delete's COMMIT keeps in flight at once, across the
@@ -118,14 +112,12 @@ public sealed record MeshOperationOptions
     /// <exception cref="ArgumentOutOfRangeException">The value is below 1.</exception>
     public int CascadeFanOutConcurrency
     {
-        get => cascadeFanOutConcurrency;
-        init => cascadeFanOutConcurrency = value >= 1
+        get;
+        init => field = value >= 1
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), value,
                 "CascadeFanOutConcurrency must be at least 1 (issue #6351).");
-    }
-
-    private readonly int cascadeFanOutConcurrency = 64;
+    } = 64;
 
     /// <summary>
     /// The satellite segments whose rows are RECORDS. A record needs no per-node hub to be deleted:
@@ -168,14 +160,12 @@ public sealed record MeshOperationOptions
     /// <exception cref="ArgumentOutOfRangeException">The value is below 1.</exception>
     public int RecordSatelliteBatchSize
     {
-        get => recordSatelliteBatchSize;
-        init => recordSatelliteBatchSize = value >= 1
+        get;
+        init => field = value >= 1
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), value,
                 "RecordSatelliteBatchSize must be at least 1.");
-    }
-
-    private readonly int recordSatelliteBatchSize = 100;
+    } = 100;
 
     /// <summary>
     /// The most candidates a <c>sort:subtreeLastModified</c> query may order (<see cref="SubtreeSort"/>).
@@ -193,14 +183,12 @@ public sealed record MeshOperationOptions
     /// <exception cref="ArgumentOutOfRangeException">The value is below 1.</exception>
     public int SubtreeSortMaxCandidates
     {
-        get => subtreeSortMaxCandidates;
-        init => subtreeSortMaxCandidates = value >= 1
+        get;
+        init => field = value >= 1
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), value,
                 "SubtreeSortMaxCandidates must be at least 1.");
-    }
-
-    private readonly int subtreeSortMaxCandidates = 500;
+    } = 500;
 
     /// <summary>
     /// <b>Rung 2 — work that runs INSIDE another operation's bounded stage.</b> Two shapes on the
