@@ -1119,7 +1119,11 @@ jobs:
           # A FREEZE (the incident instruction) wins over the ceiling; the ceiling selects its own set.
           SELECT="${FREEZE:-${CEILING:-}}"
           echo "platform: no pin from the caller — resolving $([ -n "${CEILING:-}" ] && [ -z "${FREEZE:-}" ] && echo "the ceiling set ${CEILING}" || echo "the newest platform-sealed set") (freeze: '${FREEZE:-none}')"
-          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${SELECT:+--freeze "$SELECT"}
+          # 🚨 THE CORE LINE (policy `major-lines-run-separately`): the resolver lists the CD runs of
+          # the line it was fetched at — `scripts-ref: main3` resolves 3.1.N sets, `main` 4.0.N — and
+          # says so (`core line: …`). A sha/tag scripts-ref names no line: the resolver then takes the
+          # declared default line with a warning (Doc/Architecture/CdDeliveryLines → the resolver).
+          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --scripts-ref "$SCRIPTS_REF" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${SELECT:+--freeze "$SELECT"}
           python3 - "$ROWS" >> "$GITHUB_OUTPUT" <<'PY'
           import json, sys
           rows = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1], encoding="utf-8") if "=" in line)
@@ -1468,7 +1472,9 @@ jobs:
           # the baseline is a valid answer (see the script's FRESHNESS section). The CEILING selects
           # its own set exactly as in `plan`, so a refresh can never move a pull request past it.
           SELECT="${FREEZE:-${CEILING:-}}"
-          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${SELECT:+--freeze "$SELECT"}
+          # The same core line as `plan` (the ref the resolver was fetched at), so a refresh can
+          # never move a shard onto another major's set.
+          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --scripts-ref "$SCRIPTS_REF" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${SELECT:+--freeze "$SELECT"}
           python3 - "$ROWS" >> "$GITHUB_OUTPUT" <<'PY'
           import sys
           rows = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1], encoding="utf-8") if "=" in line)
