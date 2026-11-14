@@ -8754,6 +8754,8 @@ public static class MeshExtensions
             // note) — but nothing here leans on it: `inner.CreatedBy` pins the identity as a request
             // FIELD, the post stamps `inboundCtx` explicitly, `ApplyUpdateViaStream` opens its own
             // `SwitchAccessContext(inboundCtx)`, and PostOk/PostFail are `ResponseFor` posts.
+            // Resolved while this hub is alive; the verdict deadline fires later.
+            var reportTimeout = hub.ServiceProvider.TimeoutTerminalReporter();
             hub.Observe(inner, o =>
                 {
                     var withTarget = o.WithTarget(hub.Address);
@@ -8851,6 +8853,10 @@ public static class MeshExtensions
                         if (ex is TimeoutException)
                         {
                             hub.NoteRequestStage(request.Id, "UPSERT_CREATE_NO_VERDICT");
+                            reportTimeout(new TimeoutTerminal(
+                                TimeoutTerminalKinds.CreateVerdict, node.Path,
+                                $"the inner CreateNode for '{node.Path}' produced no response within "
+                                + $"{InnerCreateVerdictBound.TotalSeconds:0}s"));
                             logger.LogWarning(
                                 "[CreateOrUpdate] the inner CreateNode for {Path} produced no response "
                                 + "within {Bound} — answering the caller with a refusal rather than "
