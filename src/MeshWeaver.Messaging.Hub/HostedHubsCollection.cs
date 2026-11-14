@@ -116,7 +116,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     internal IObservable<string> SubtreeDisposalProgress(int depth) =>
         // Defer so the snapshot is taken at SUBSCRIBE time (the owner subscribes inside its own
         // Dispose, by which point the children it must wait for are present).
-        Observable.Defer(() => Hubs.ToArray().ToObservable().Merge(HubAdded))
+        Observable.Defer(() => Hubs.ToArray().ToObservable().MergeInline(HubAdded))
             .SelectMany(h => h is MessageHub concrete
                 ? concrete.DisposalProgressAtDepth(depth)
                 : Observable.Empty<string>())
@@ -843,8 +843,8 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         // construction that declared WithTeardownAfterSiblings (#6078) is a dependency like any
         // other and joins the SECOND wave below, so a first-time cache resolution overlapping the
         // teardown cannot bring back the race the two waves exist to prevent.
-        var inflightDrain = Observable
-            .Merge(inflightChanged, Observable.Return(Unit.Default))
+        var inflightDrain = inflightChanged
+            .MergeInline(Observable.Return(Unit.Default))
             .Where(_ => Volatile.Read(ref inflightCreations) == 0)
             .Take(1)
             .SelectMany(_ =>

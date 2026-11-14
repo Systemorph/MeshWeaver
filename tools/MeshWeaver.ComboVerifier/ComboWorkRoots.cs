@@ -3,12 +3,14 @@ namespace MeshWeaver.ComboVerifier;
 /// <summary>
 /// What happens to an automatically allocated work root once a verification has run.
 ///
-/// <para>Three directories belong to one run: the materialised combo (the work root), its composed
-/// module set beside it (<c>&lt;work root&gt;.modules</c>, MeshWeaver#4413) and the run's mesh-free
-/// bake (<c>&lt;work root&gt;.bake</c>, <see cref="DockerImageGate.BakeRootFor"/>). They are one unit: a
-/// Green deletes all three — deleting only the first left a whole module set (DLLs, closure files,
-/// native payloads) behind on every successful run — and anything else keeps all three, because the
-/// tree, the modules and the bake it ran against are exactly what an operator inspects next.</para>
+/// <para>Up to four directories belong to one run: the materialised combo (the work root), its
+/// composed module set beside it (<c>&lt;work root&gt;.modules</c>, MeshWeaver#4413), the run's
+/// mesh-free bake (<c>&lt;work root&gt;.bake</c>, <see cref="DockerImageGate.BakeRootFor"/>) and, when
+/// sealed bundles were reused, the staging tree that bake mounted (<c>&lt;work root&gt;.stage</c>).
+/// They are one unit: a Green deletes all of them — deleting only the first left a whole module set
+/// (DLLs, closure files, native payloads) behind on every successful run — and anything else keeps
+/// all of them, because the tree, the modules and the bake it ran against are exactly what an
+/// operator inspects next.</para>
 ///
 /// <para>A directory the run never created (a run that failed before its gate wrote a bake, a combo
 /// that declared no module) is neither deleted nor named: "kept for inspection" pointing at a
@@ -22,10 +24,13 @@ public static class ComboWorkRoots
     /// <param name="modulesRoot">The composed module set, or null when the combo declared none.</param>
     /// <param name="output">Where a kept directory is named.</param>
     /// <param name="bakeRoot">The run's mesh-free bake, or null when none was written.</param>
+    /// <param name="stageRoot">The staging tree the bake mounted when sealed bundles were reused
+    /// (<see cref="SealedBundleReuse.StageRootFor"/>), or null.</param>
     public static void Settle(
-        int exitCode, string workRoot, string? modulesRoot, TextWriter output, string? bakeRoot = null)
+        int exitCode, string workRoot, string? modulesRoot, TextWriter output, string? bakeRoot = null,
+        string? stageRoot = null)
     {
-        foreach (var directory in new[] { workRoot, modulesRoot, bakeRoot }.OfType<string>())
+        foreach (var directory in new[] { workRoot, modulesRoot, bakeRoot, stageRoot }.OfType<string>())
         {
             if (!Directory.Exists(directory))
                 continue;

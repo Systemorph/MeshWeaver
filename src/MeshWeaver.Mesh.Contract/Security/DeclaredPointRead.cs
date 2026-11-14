@@ -266,7 +266,7 @@ public static class DeclaredPointRead
                 ? Observable.Timer(budget, scheduler)
                     .Select(_ => (PermissionCheckOutcome?)PermissionCheckOutcome.Undetermined(
                         $"the Read check on '{path}' stayed undecided past the permission-establishment budget ({budget})"))
-                    .StartWith((PermissionCheckOutcome?)null)
+                    .StartWithInline((PermissionCheckOutcome?)null)
                 : Observable.Return(outcome))
             .Switch()
             .DistinctUntilChanged();
@@ -455,7 +455,7 @@ public static class DeclaredPointRead
             PermissionCheckOutcome? pending = null;
             return evaluations
                 .Select(next => next.withdraw && Volatile.Read(ref emitted) == 1
-                    ? next.evaluation.StartWith(pending)
+                    ? next.evaluation.StartWithInline(pending)
                     : next.evaluation)
                 .Switch()
                 .Do(_ => Volatile.Write(ref emitted, 1));
@@ -759,7 +759,7 @@ public static class DeclaredPointRead
     /// <summary><c>true</c> until <paramref name="until"/>, then <c>false</c>; always <c>true</c> when nothing ends it.</summary>
     private static IObservable<bool> Open(DateTimeOffset? until)
         => until is { } at
-            ? Observable.Timer(at).Select(_ => false).StartWith(true)
+            ? Observable.Timer(at).Select(_ => false).StartWithInline(true)
             : Observable.Return(true);
 
     /// <summary>
@@ -889,7 +889,7 @@ public static class DeclaredPointRead
         bool stalledIsUndecided = false)
         => AttachedThenSeeded(changed, Unit.Default)
             // Each re-read is pending (null) until it answers; a replacement re-read starts pending too.
-            .Select(_ => Observable.Defer(read).Select(owned => (bool?)owned).StartWith((bool?)null))
+            .Select(_ => Observable.Defer(read).Select(owned => (bool?)owned).StartWithInline((bool?)null))
             .Switch()
             // One unanswered period: consecutive pending markers collapse, so its deadline starts once.
             .DistinctUntilChanged()
@@ -971,7 +971,7 @@ public static class DeclaredPointRead
                 ? Observable.Return<MeshNode?>(null)
                 : SystemRead(hub, access, path)
                     .Where(mirror => mirror is null || mirror.Version >= current.Version)
-                    .StartWith(current));
+                    .StartWithInline(current));
     }
 
     /// <summary>

@@ -168,17 +168,19 @@ public static class ThreadPoolStall
     /// <param name="failure">Why no stacks were captured, when <paramref name="stacks"/> is null.</param>
     /// <param name="otherThreads">The process's other managed threads' stacks, searched for lock holders;
     /// null when they were not read, which the line then says instead of blaming the holder's location.</param>
+    /// <param name="census">What the queue held at the capture, printed as the line's last section; null
+    /// when no census was taken.</param>
     /// <returns>The line.</returns>
     public static string Describe(
         ProcessLivenessReading reading, IReadOnlyList<string>? stacks, string? failure,
-        IReadOnlyList<string>? otherThreads = null)
+        IReadOnlyList<string>? otherThreads = null, ThreadPoolQueueCensus? census = null)
     {
         var current = reading.Current;
         var line = new StringBuilder(4096)
             .Append(CultureInfo.InvariantCulture, $"[POOLSTALL] tick={current.TickSeq}: the ThreadPool completed no work item in the last ")
             .Append(CultureInfo.InvariantCulture, $"{Seconds(reading.Gap ?? reading.Period)} with {current.ThreadPoolPending} queued over ")
             .Append(CultureInfo.InvariantCulture, $"{current.ThreadPoolThreads} thread(s)");
-        return Render(line, stacks, failure, otherThreads);
+        return Render(line, stacks, failure, otherThreads) + census?.Render();
     }
 
     /// <summary>
@@ -192,17 +194,19 @@ public static class ThreadPoolStall
     /// <param name="stacks">The workers' stacks, or null when none could be captured.</param>
     /// <param name="failure">Why no stacks were captured, when <paramref name="stacks"/> is null.</param>
     /// <param name="otherThreads">The process's other managed threads' stacks, or null when not read.</param>
+    /// <param name="census">What the queue held at the capture — the backlog whose delay this line reports —
+    /// printed as the line's last section; null when no census was taken.</param>
     /// <returns>The line.</returns>
     public static string DescribeQueueDelay(
         ProcessLivenessSample current, TimeSpan probeWait, IReadOnlyList<string>? stacks, string? failure,
-        IReadOnlyList<string>? otherThreads = null)
+        IReadOnlyList<string>? otherThreads = null, ThreadPoolQueueCensus? census = null)
     {
         var line = new StringBuilder(4096)
             .Append(CultureInfo.InvariantCulture, $"[POOLSTALL] tick={current.TickSeq}: a probe work item queued {Seconds(probeWait)} ago ")
             .Append("had not started (the queue delay Orleans' LocalSiloHealthMonitor reports as a stall), with ")
             .Append(CultureInfo.InvariantCulture, $"{current.ThreadPoolPending} queued over {current.ThreadPoolThreads} thread(s) ")
             .Append(CultureInfo.InvariantCulture, $"and {current.ThreadPoolCompleted} completed since start");
-        return Render(line, stacks, failure, otherThreads);
+        return Render(line, stacks, failure, otherThreads) + census?.Render();
     }
 
     private static string Render(
@@ -226,7 +230,13 @@ public static class ThreadPoolStall
             .ThenBy(group => group.Key, StringComparer.Ordinal)
             .ToArray();
 
+        var idle = workers.Count(IsIdleWorker);
         line.Append(CultureInfo.InvariantCulture, $". {stacks.Count} worker stack(s) in {groups.Length} distinct shape(s), ")
+            .Append(CultureInfo.InvariantCulture, $"{idle} of them IDLE (parked in the pool's own semaphore, waiting to be handed work — ")
+            .Append(idle == 0
+                ? "every worker was busy), "
+                : string.Create(CultureInfo.InvariantCulture,
+                    $"so only {stacks.Count - idle} worker(s) were running while the queue waited; an idle shape is NOT what held the pool), "))
             .Append(CultureInfo.InvariantCulture, $"largest first (grouped by the innermost {FramesPerGroup} frames, each distinct caller in full; ")
             .Append(otherThreads is null
                 ? "the other threads were NOT read, so only pool workers are searched for lock holders):"
@@ -334,6 +344,28 @@ public static class ThreadPoolStall
             if (string.Equals(frames[i], site, StringComparison.Ordinal))
                 return i == 0 || !IsMonitorFrame(frames[i - 1]);
         return false;
+    }
+
+    /// <summary>
+    /// Whether a worker is IDLE: its innermost frames are the pool's own wait for work
+    /// (<c>LowLevelLifoSemaphore</c>) directly under the pool's own worker loop, with no work item between.
+    ///
+    /// <para>🚨 <b>Why the line counts these by name.</b> The 2026-11-11 14:40:57Z capture on memex-cloud
+    /// (MeshWeaver#5388) printed its largest shape, <c>×20</c> of 44 workers, as exactly this stack — and
+    /// it was read as twenty workers busy in a hub handler, because the group header and the frames that
+    /// followed it were read apart. Twenty idle workers beside 69,012 queued items is the opposite
+    /// finding: the pool was not short of threads, it was running fewer of them than it had.</para>
+    /// </summary>
+    /// <param name="frames">The worker's frames, innermost first.</param>
+    /// <returns>Whether the worker was parked waiting for work.</returns>
+    internal static bool IsIdleWorker(IReadOnlyList<string> frames)
+    {
+        var i = 0;
+        while (i < frames.Count && frames[i].StartsWith("System.Threading.LowLevelLifoSemaphore", StringComparison.Ordinal))
+            i++;
+        return i > 0
+            && i < frames.Count
+            && frames[i].StartsWith("System.Threading.PortableThreadPool+WorkerThread.", StringComparison.Ordinal);
     }
 
     private static bool IsMonitorFrame(string frame) =>

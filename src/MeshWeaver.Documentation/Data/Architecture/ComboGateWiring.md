@@ -1043,6 +1043,95 @@ the 25-minute budget was raised: the mesh's job is to consume a bake, not to be 
 against a fake docker. Each of its cases fails on the fused call, which runs one container, no
 `compile` and no `--seed`.
 
+## The combo reuses the sealed bundles, and bakes only what they do not cover (#4413)
+
+The split above still compiled the instance's whole tree in every slot of every run: 218 NodeTypes,
+9.0 of the 25-minute budget on memex (run 43319782317, job 131538029960, `compiled 218 NodeType(s)`
+from 22:34:31 to 22:43:34). Each of those types is already baked and sealed, for the same framework
+identity, by its producing repository's own publish lane. [Module Build
+Architecture](../ModuleBuildArchitecture) makes outputs content-addressed so that an unchanged input
+is never compiled again, and the combo was the one bake that ignored that. The owner chose option C
+on the issue: reuse the seals first, then find the Hosting read storm (below).
+
+**Where the bundles come from.** For every source a package of the combo comes from,
+`combo-verify-instance.sh` calls `compose-sealed-modules.sh --packages '*' --bundles-out <dir>`. The
+call reads that source's sealed publication for the candidate's identity and writes the module set
+and the NodeType bundles. The bundles are every `*.zip` that `_complete` lists, read from the same
+publication directory (generation) as the module set. They are fetched by name, never by a recursive
+batch, so the two halves always belong to one publication. For a module source, a failed fetch is
+red, as it was before. For a source that lands no module, a failed fetch only costs the reuse: its
+packages are baked from source and the log says so. `test-publication-pointer-readers.py` runs the
+real script against the share stub. It checks that the generation's bytes are fetched and not the
+flat copy, that only the listed bundles are fetched, that a listed bundle the store does not serve
+is refused, and that the flag is refused with a named package list.
+
+**When a sealed bundle stands** (`SealedBundleReuse` in `mw-combo-verify`):
+
+1. Exactly one fetched seal carries a bundle for the package. That bundle is keyed to the candidate's
+   identity, carries assemblies, and records no producer misses.
+2. The bundle's node-definition content is byte-for-byte the package as the combo materialised it.
+   Every bake writes the package tree it compiled into the bundle, so this comparison is the content
+   address. An instance on an older commit than the sealed one has a different tree, so its build is
+   compiled.
+3. No package it reads sources from is rebuilt, transitively. `NodeRepoPackageGraph.SourceDependencyMap`
+   gives these compile-input edges, and only them: a `shared=@Other/…` include puts another
+   package's bytes into this package's assembly, while a `requires` entry or a `nodeType` path only
+   orders an install. A source dependency with no bundle of its own cannot be shown equal, so it
+   counts as rebuilt.
+
+**What is baked.** Only the rebuilt packages, together with everything they need installed (every
+edge kind, `NodeRepoPackageGraph.DependencyMap`). These are copied into `<work root>.stage`, and that
+directory is mounted as `/work` for the `compile` call. This is the same narrowing a publish-bake
+does, where the mount is the filter. When nothing is rebuilt, no compile runs. The seed is the bake
+plus every reused bundle the bake did not produce. A bake keyed to a different identity from the
+reused bundles cannot form one seed with them, so that run is NotVerifiable. The run log prints the
+plan: how many packages reused their seal, how many were rebuilt, and why each one was.
+
+**The safety net.** The gate's seeder still checks every adopted bundle per NodeType, the same way a
+portal does: framework identity, source fingerprint, and dependency record. A decline turns the
+bake-consumption postcondition red by name, so a wrong reuse decision fails loudly and never passes
+green.
+
+The edge reader moved from the tester's `LocalNodeRepo` to `NodeRepoPackageGraph` in
+`MeshWeaver.PluginCatalog`, because `mw-combo-verify` does not reference the tester. `LocalNodeRepo`
+forwards to it, so there is still one reader. `ComboGateReusesSealedBundlesTest` pins the decision
+and the docker calls. Its regression guard, a tree whose every package is sealed, runs a single
+container with no `compile`, and it fails on the previous code, which always compiled the whole work
+root.
+
+## The Hosting read storm: why Hosting compiles in the mesh even when seeded (#4413)
+
+This is the evidence from the slot measured above (memex, run 43319782317, job 131538029960). The
+defect is not yet fixed. With the bake consumed (`consuming bake '/seed' — 45 bundle(s), 218
+assembly(ies)`), every package except `Hosting` adopted its seed. For all 64 `Hosting` types the
+chain was:
+
+1. `Hosting: installing 993 file(s)` starts at 22:46:22. While those writes are still landing
+   (`installed` at 22:47:03), every `Hosting` NodeType hub reads its include network of sources.
+   Between 22:46:51 and 22:47:13 the log carries 3,329 warnings of the form `GetMeshNode('Hosting/…/Source/…')
+   timed out after 10.0s … the owning per-node hub never answered the GetDataRequest`. They cover 790
+   distinct source nodes and come from 64 reader hubs. `Hosting/InstanceAction` alone issued 323,
+   and `Hosting/ActionList` held 258 pending callbacks at once.
+2. The release watcher cannot read those sources, so all 64 types log `[ReleaseRequestWatcher] … the
+   owner of source … could not be read, so whether the source snapshot is current is unknown —
+   deciding as NOT up to date`.
+3. The adoption stamp is a write to the type's own owner. That owner is busy, and on 63 type paths
+   the write is not acknowledged within the bound: `[UpdateQueue] ADVANCE_WITHOUT_HANDOFF
+   path=Hosting/<type> … bound=5000ms`.
+4. The compile watcher waits 5 s for the stamp to land (`AdoptionStampBudget`) and then gives up.
+   All 64 types log `reported 1 adopted assembly(ies) but the node still has no usable build 5s
+   later — compiling instead`.
+5. All 64 types are then compiled in the mesh (`COMPILE WOULD REFUSE DynamicNode_Hosting_*` from
+   22:49:43 on). This is the "13 s per type" the earlier reading measured: it is Roslyn running in
+   the mesh, not adoption.
+
+Not established yet: why the per-node owners of `Hosting`'s source nodes do not answer within 10 s
+while the same package's own install is writing them. The candidates are a read issued against a
+node whose write is still queued, or plain starvation from roughly 64 × network-size reads at once.
+Also not established: whether the producing repository's own seeded gate shows the same chain at a
+smaller scale. The 5 s stamp budget is not the fix. Raising it would hide the unanswered reads, and
+the reads would still cost every type its adoption.
+
 ## Known boundary: the combo moves
 
 A verdict names the `ComboReadAt` of the snapshot it verified. An instance whose modules sync forward
