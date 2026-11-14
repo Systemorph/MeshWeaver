@@ -27,7 +27,9 @@ The base the host merges onto is the admission's: `MAIN_SHA` (policy `suites-tes
 rides as the request's `ref.baseSha`, so the host tests the same merged tree the Actions legs would.
 
 🧵 THE LINE PICKS THE CHANNEL (policy `major-lines-run-separately`; Doc/Architecture/MajorLinesRunSeparately).
-With `LINES_FILE` (core's `.github/delivery-lines.json`, read at the BASE line's commit), the channel is
+With `LINES_FILE` (core's `.github/delivery-lines.json`, read at `scripts-ref` — the run's own commit, a pull
+request's MERGE commit, the same ref this script is fetched from; so a pull request that edits the declaration
+runs under its edit, exactly as it runs under its own edit of this script), the channel is
 DECLARED per line (`buildHostChannel`), never the caller's default: a pull request's channel is its BASE
 line's (`main` → the v4 host, `main3` → `latest3`), a trunk run's is its branch's. A pull request whose base
 is not a declared line, or a declared line that names no channel, is RED by name (exit 2) — never a run
@@ -161,6 +163,12 @@ def resolve_line_channel(i: Inputs) -> tuple[Inputs, str]:
     lines = doc.get("lines") if isinstance(doc, dict) else None
     if not isinstance(lines, list) or not all(isinstance(l, dict) and isinstance(l.get("branch"), str) for l in lines):
         raise BadInput(f"LINES_FILE {i.lines_file} declares no `lines` [{{branch, buildHostChannel}}]")
+    seen: set[str] = set()
+    for l in lines:
+        if l["branch"] in seen:
+            # A dict keyed on the branch would silently keep the LAST entry and pick its channel with no red.
+            raise BadInput(f"LINES_FILE {i.lines_file} declares the line {l['branch']!r} twice — a line has ONE build-host channel")
+        seen.add(l["branch"])
     by_branch = {l["branch"]: l for l in lines}
     pr = i.event == "pull_request" and bool(i.pr)
     branch = i.base_ref if pr else i.ref_name
@@ -1129,6 +1137,15 @@ def self_test() -> int:
         check("line/a declared line with no buildHostChannel is red", False, "decided")
     except BadInput as e:
         check("line/a declared line with no buildHostChannel is red", "declares no build-host channel" in str(e), str(e))
+    twice = os.path.join(tmp, "lines-twice.json")
+    with open(twice, "w") as fh:
+        json.dump({"lines": [{"branch": "main", "buildHostChannel": "latest4"},
+                             {"branch": "main", "buildHostChannel": "latest3"}]}, fh)
+    try:
+        decide(with_(repo="Systemorph/MeshWeaver", lines_file=twice, base_ref="main"), routes_q, ok_post)
+        check("line/a line declared twice is red (never the last entry's channel)", False, "decided")
+    except BadInput as e:
+        check("line/a line declared twice is red (never the last entry's channel)", "declares the line 'main' twice" in str(e), str(e))
     # NEGATIVE CONTROL: the same pull requests on an instance that does NOT declare routesRequestChannel are never queued
     # (it would put them on latest — the v3 host — which is exactly the measured NETSDK1045 / wrong-merge-base defect)
     for base_line in ("main", "main3"):

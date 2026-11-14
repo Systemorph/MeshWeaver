@@ -49,13 +49,13 @@ on:
         default: latest
       line-channels:
         description: >-
-          'true' = the channel is the run's LINE's, declared in core's .github/delivery-lines.json
+          true = the channel is the run's LINE's, declared in core's .github/delivery-lines.json
           (`buildHostChannel`, read at scripts-ref): a pull request takes its BASE line's, a trunk run
           its branch's; a pull request onto an undeclared line is red, by name (policy
           major-lines-run-separately). Core's own admission only — a satellite's lines are not core's.
         required: false
-        type: string
-        default: 'false'
+        type: boolean
+        default: false
       main-sha:
         description: >-
           Pull requests only: the base tip the heavy legs merge the head onto (policy
@@ -120,7 +120,7 @@ jobs:
           "$RUNNER_TEMP/mw-core-file" "$REF" .github/scripts/build-executor.py > "$RUNNER_TEMP/build-executor.py"
           python3 "$RUNNER_TEMP/build-executor.py" --self-test
       - name: The delivery lines (line-channels only)
-        if: ${{ inputs.line-channels == 'true' }}
+        if: ${{ inputs.line-channels }}
         env:
           REF: ${{ inputs.scripts-ref }}
         run: |
@@ -147,5 +147,5 @@ jobs:
           REQUESTED_BY: ${{ github.actor }}
           CHANGE_MODE: ${{ inputs.change-mode }}
           CHANNEL: ${{ inputs.channel }}
-          LINES_FILE: ${{ inputs.line-channels == 'true' && format('{0}/delivery-lines.json', runner.temp) || '' }}
+          LINES_FILE: ${{ inputs.line-channels && format('{0}/delivery-lines.json', runner.temp) || '' }}
         run: python3 "$RUNNER_TEMP/build-executor.py"

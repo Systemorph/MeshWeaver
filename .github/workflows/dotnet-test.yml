@@ -685,7 +685,7 @@ jobs:
     with:
       change-mode: ${{ needs.precheck.outputs.tests-mode }}
       scripts-ref: ${{ github.sha }}
-      line-channels: 'true'
+      line-channels: true
     secrets:
       build-webhook-secret: ${{ secrets.BUILD_WEBHOOK_SECRET }}
 
