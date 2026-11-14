@@ -21,7 +21,7 @@ from the branch and never written into the file.
 |---|---|
 | `branch` | the branch that IS the line |
 | `pluginsRef` | the MeshWeaver.Plugins branch the line's portal host is built from (`main` → `main`, `main3` → `main3`); `vars.MW_PLUGINS_REF` still overrides it per run |
-| `satelliteRef` | the satellite branch `satellite-compat` compiles against the line's set (`main` for every line until a satellite cuts its own) |
+| `satelliteRef` | the satellite branch `satellite-compat` compiles against the line's set (`main` → `main`, `main3` → `main3`: every satellite in the `satellite-compat` register carries a protected `main3`, protected exactly like its `main`) |
 | `label` | the line's floating image label: the newest PROMOTED set of the line (`main`, `main3`), declared in `.github/release-channels.json` with `"line"` |
 | `movesLatest` | whether the line moves the line-less `latest` labels. Exactly one line does |
 
