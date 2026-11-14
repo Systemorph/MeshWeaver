@@ -40,8 +40,8 @@ image, and they are not in this set either. Locally `compile-check.py` takes the
 repository's own `src/<Module>/bin`, so build them there first. Its refusal names the commands.
 
 STALENESS AND IDENTITY. The manifest records the core commit the set was published from. `compile-check.py` refuses
-the set (exit 3, the same code as a stale sibling checkout) once that checkout's `origin/main` has
-moved past the commit. Rebuild after you update core. The default output directory is keyed by the
+the set (exit 3, the same code as a stale sibling checkout) once that checkout's delivery line
+(`origin/main`, or `origin/main3` for a v3 checkout — `.github/delivery-lines.json`) has moved past the commit. Rebuild after you update core. The default output directory is keyed by the
 commit, so an old set is never overwritten in place.
 """
 from __future__ import annotations
