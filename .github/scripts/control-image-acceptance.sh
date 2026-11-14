@@ -142,7 +142,11 @@ boot_and_wait() {
   # still running first; the port is read only from a live container.
   if ! port="$(docker port "$name" 8080/tcp 2>/dev/null | head -n 1 | sed 's/.*://')" || [ -z "$port" ]; then
     echo "--- log tail:"; docker logs --tail 120 "$name" 2>&1 || true
-    echo "::error::leg $leg: the container EXITED during startup (exit code $(docker inspect -f '{{.State.ExitCode}}' "$name" 2>/dev/null || echo unknown)) — the log above names why"
+    if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || echo false)" = true ]; then
+      echo "::error::leg $leg: the container is RUNNING but port 8080/tcp is not published — check the -p flag of the docker run above"
+    else
+      echo "::error::leg $leg: the container EXITED during startup (exit code $(docker inspect -f '{{.State.ExitCode}}' "$name" 2>/dev/null || echo unknown)) — the log above names why"
+    fi
     return 1
   fi
   started=$(date +%s)
