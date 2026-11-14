@@ -200,6 +200,8 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var ct = TestContext.Current.CancellationToken;
         await CreateTarget("WakeMe", ct);
         var address = new Address("WakeMe");
+        Mesh.GetHostedHub(address, HostedHubCreation.Never).Should().BeNull(
+            "creating the owner activates nothing — otherwise this test could not tell a wake from a create");
         var hosted = Mesh.ServiceProvider.GetRequiredService<HostedHubsCollection>();
         var built = hosted.HubAdded.Where(h => (h.Address with { Host = null }) == address).Replay();
         using (built.Connect())
