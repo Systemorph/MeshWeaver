@@ -2413,9 +2413,13 @@ class Gh:
     drives the outage path through a FAKE `gh` — nothing in a self-test reaches GitHub."""
 
     def __init__(self, repo: str, runner=None, sleep=None, clock=None, budget_s: float | None = None,
-                 conditional: bool | None = None):
+                 conditional: bool | None = None, token: str | None = None):
         self.repo = repo
-        self._run = runner or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True, check=False))
+        # `token`: run every `gh` call of THIS adapter as that token instead of the inherited GH_TOKEN —
+        # the verdict writer's App adapter (verdict_app_adapter), so its check-run lands in the App's own
+        # suite. None = the environment's token, exactly as before.
+        env = dict(os.environ, GH_TOKEN=token) if token else None
+        self._run = runner or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True, check=False, env=env))
         self._sleep, self._clock = sleep or time.sleep, clock or time.time
         self.budget_s = outage_budget_seconds() if budget_s is None else budget_s
         self.waited_s = 0.0
@@ -3563,6 +3567,23 @@ VERDICT_WRITER_JOB = "Review answered — verdict writer"
 #: The App every GITHUB_TOKEN-written check-run belongs to (GitHub Actions, app id 15368 — the id
 #: MeshWeaver.Plugins' classic protection pins its required review context to).
 ACTIONS_APP_SLUG = "github-actions"
+#
+# 🚨 WHERE THE VERDICT LANDS DECIDES WHETHER THE RULESET SEES IT (Doc/Architecture/ReviewFindingsAnswered →
+# "Which suite holds the verdict"). A check-run POSTed with a GITHUB_TOKEN is filed by GitHub into the OLDEST
+# github-actions check suite on the head sha — measured on 65 of 65 core heads, 2026-11-14 — and the oldest
+# suite is whichever workflow happened to start first (usually `Disarm auto-merge on push`, a
+# `pull_request_target` run). When THAT workflow runs AGAIN on the same sha for the same event (a draft marked
+# ready re-runs the Disarm workflow), the older run's suite is superseded and branch protection no longer
+# reads the check-runs inside it: the verdict reads success on the commit and the merge is refused with
+# "Required status check \"Automatic review answered\" is expected" (#8164, #8165, #8168 — 3 of 3 refused
+# heads superseded, 0 of 121 merged heads). Nothing a workflow does can choose that suite, so core's
+# required writer publishes through a GitHub App's installation token instead: the check-run then lands in
+# THAT App's own suite, which no workflow run owns and nothing ever supersedes. The ruleset pins no
+# integration for the context, so the App's check-run satisfies it with no ruleset change.
+#: The App core's required verdict is written as (`--verdict-app`). It holds `checks: write` on the fleet.
+VERDICT_APP_SLUG = "meshweaver-cloud"
+#: The environment variable the App installation token arrives in (never a command-line argument).
+VERDICT_APP_TOKEN_ENV = "MW_VERDICT_APP_TOKEN"
 #: Policy review-answer-deadline. A thread unanswered this long after the review that opened it is RED.
 ANSWER_DEADLINE_HOURS = 24
 #: Policy review-answer-deadline. A head whose review has not landed this long after the gate first judged
@@ -3666,12 +3687,13 @@ def parse_verdict_external_id(external_id) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m else None
 
 
-def verdict_runs(check_runs, name: str) -> list:
-    """The verdict check-runs THIS file wrote for `name` — provenance (the Actions App) AND the
-    external_id this file stamps. A job's own check-run of the same name (a fork's, an older shape's)
-    carries no such id and is never touched. Pure."""
+def verdict_runs(check_runs, name: str, app: str = ACTIONS_APP_SLUG) -> list:
+    """The verdict check-runs THIS file wrote for `name` as `app` — provenance (the writing App: the Actions
+    App for a GITHUB_TOKEN writer, VERDICT_APP_SLUG for core's required writer) AND the external_id this file
+    stamps. A job's own check-run of the same name (a fork's, an older shape's) carries no such id and is never
+    touched, and neither is another App's. Pure."""
     return [c for c in check_runs or () if isinstance(c, dict) and c.get("name") == name
-            and ((c.get("app") or {}).get("slug") == ACTIONS_APP_SLUG)
+            and ((c.get("app") or {}).get("slug") == app)
             and parse_verdict_external_id(c.get("external_id")) is not None]
 
 
@@ -3709,22 +3731,29 @@ def verdict_body(name: str, head: str, reported: Reported, summary: str, read_at
     return body
 
 
-def read_verdict_runs(gh, head: str, name: str) -> list:
+def read_verdict_runs(gh, head: str, name: str, app: str = ACTIONS_APP_SLUG) -> list:
     listing = gh.api(f"commits/{head}/check-runs?check_name={urllib.parse.quote(name)}&filter=all&per_page=100")
     runs = (listing or {}).get("check_runs") if isinstance(listing, dict) else None
     if not isinstance(runs, list) or not isinstance(listing.get("total_count"), int) or len(runs) < listing["total_count"]:
         raise ReadError(f"commits/{head[:10]}/check-runs did not return the complete `{name}` listing")
-    return verdict_runs(runs, name)
+    return verdict_runs(runs, name, app)
 
 
 def write_verdict_check_run(gh, head: str, name: str, reported: Reported, summary: str, read_at: str, now: str,
-                            existing: list | None = None) -> str:
+                            existing: list | None = None, writer=None, app: str = ACTIONS_APP_SLUG,
+                            create: bool = True) -> str:
     """Create or PATCH the head's verdict check-run. Returns what was done. A failed write raises ReadError
-    (an outage raises ApiOutage) — the caller turns either into a RED job, never a silent pass."""
+    (an outage raises ApiOutage) — the caller turns either into a RED job, never a silent pass. `gh` reads;
+    `writer` (default `gh`) writes, as `app` — only the App that created a check-run may update it. With
+    `create=False` it only converges check-runs already on the head (the legacy GITHUB_TOKEN verdicts, see
+    run_verdict) and never adds one."""
+    writer = gh if writer is None else writer
     # 🚨 Read the head's verdicts AGAIN, immediately before the write, whatever the caller passed (#7653 review): the
     # listing taken before the evaluation can be seconds old, and a newer evaluation may have written meanwhile — an
     # older read must never overwrite it (newest READ stands). The residual window is this one read-then-write.
-    existing = read_verdict_runs(gh, head, name)
+    existing = read_verdict_runs(gh, head, name, app)
+    if not existing and not create:
+        return f"no {app} verdict check-run on this head to converge"
     action, ids, why = verdict_write_plan(existing, read_at)
     if action == "skip":
         return f"skip: {why}"
@@ -3733,11 +3762,11 @@ def write_verdict_check_run(gh, head: str, name: str, reported: Reported, summar
     body = verdict_body(name, head, reported, summary, read_at, now, details)
     patch = {k: v for k, v in body.items() if k != "head_sha"}
     if action == "create":
-        made = gh.write("POST", "check-runs", body)
+        made = writer.write("POST", "check-runs", body)
         return f"created verdict check-run {(made or {}).get('id')} ({reported.state}): {why}"
     if reported.state != "pending":
         for cid in ids:
-            gh.write("PATCH", f"check-runs/{cid}", patch)
+            writer.write("PATCH", f"check-runs/{cid}", patch)
         return f"patched verdict check-run(s) {ids} to {reported.state}: {why}"
     # PENDING over a head whose verdict had COMPLETED (a new thread on an answered head, a read that now
     # completes): a completed check-run is re-opened when GitHub allows it; when it refuses, the old one is
@@ -3747,26 +3776,65 @@ def write_verdict_check_run(gh, head: str, name: str, reported: Reported, summar
     for c in existing:
         kind = parse_verdict_external_id(c.get("external_id"))[1]
         if c.get("status") != "completed":
-            gh.write("PATCH", f"check-runs/{c.get('id')}", patch)
+            writer.write("PATCH", f"check-runs/{c.get('id')}", patch)
             done.append(f"{c.get('id')} updated")
             open_runs += 1
         elif kind != SUPERSEDED_KIND:
             try:
-                gh.write("PATCH", f"check-runs/{c.get('id')}", patch)
+                writer.write("PATCH", f"check-runs/{c.get('id')}", patch)
                 done.append(f"{c.get('id')} re-opened")
                 open_runs += 1
             except ReadError as e:
-                gh.write("PATCH", f"check-runs/{c.get('id')}", {
+                writer.write("PATCH", f"check-runs/{c.get('id')}", {
                     "status": "completed", "conclusion": "failure", "completed_at": now,
                     "external_id": verdict_external_id(read_at, SUPERSEDED_KIND),
                     "output": {"title": "Superseded — a newer, pending verdict is on this head",
                                "summary": f"GitHub refused to re-open this check-run ({str(e)[:200]}), so it was closed and "
                                           "a new one carries the verdict. Policy review-pending-while-answering."}})
                 done.append(f"{c.get('id')} superseded")
-    if not open_runs:
-        made = gh.write("POST", "check-runs", body)
+    if not open_runs and create:
+        made = writer.write("POST", "check-runs", body)
         done.append(f"created {(made or {}).get('id')}")
     return f"pending verdict: {', '.join(done)}: {why}"
+
+
+def verdict_publisher_problems(text: str, app: str = VERDICT_APP_SLUG) -> list:
+    """What is wrong with WHERE core's required verdict is published, read off review-answered.yml's text
+    ([] = nothing). Pure. Pins the fix for the superseded-suite defect (see VERDICT_APP_SLUG): every writer
+    invocation passes `--verdict-app <app>`, the token it reads is minted for checks: write by a step that runs
+    for EXACTLY the writer shape (the job name's and VERDICT_CHECK_RUN's condition — a narrower one would leave
+    the writer with no token, a wider one would make a fork's job-shaped check need a secret it cannot have),
+    a credential step names what to provision, and nothing in the file may continue on error."""
+    problems = []
+    cond = re.findall(r"VERDICT_CHECK_RUN:\s*\$\{\{\s*(\(.+?\))\s*&&", text)
+    if len(cond) != 1:
+        return [f"expected ONE VERDICT_CHECK_RUN condition, found {len(cond)}"]
+    gate = "${{ " + cond[0] + " }}"
+    invocations = re.findall(r"--verdict-check-run \"\$VERDICT_CHECK_RUN\"[^\n]*", text)
+    if len(invocations) < 2:
+        problems.append(f"expected the writer's two invocations (--pr and --verdict-sweep), found {len(invocations)}")
+    for line in invocations:
+        if f"--verdict-app {app}" not in line:
+            problems.append(f"a writer invocation does not publish as the App `{app}`: {line.strip()[:160]}")
+    mint = re.search(r"- name: [^\n]*\n\s+id: verdict-app\n((?:\s{8,}[^\n]*\n)+)", text)
+    if not mint:
+        problems.append("no step `id: verdict-app` mints the verdict App's token")
+    else:
+        block = mint.group(1)
+        if "uses: actions/create-github-app-token@" not in block:
+            problems.append("step `verdict-app` does not use actions/create-github-app-token")
+        if not re.search(r"^\s+permission-checks:\s*write\s*$", block, re.MULTILINE):
+            problems.append("step `verdict-app` does not mint `permission-checks: write`")
+        if f"if: {gate}" not in block:
+            problems.append("step `verdict-app` does not run for exactly the writer condition")
+    cred = re.search(r"- name: The verdict App's credential[^\n]*\n((?:\s{8,}[^\n]*\n)+)", text)
+    if not cred or f"if: {gate}" not in cred.group(1) or "exit 1" not in cred.group(1):
+        problems.append("no credential step that runs for exactly the writer condition and goes RED naming what is missing")
+    if not re.search(rf"{VERDICT_APP_TOKEN_ENV}:\s*\$\{{\{{\s*steps\.verdict-app\.outputs\.token\s*\}}\}}", text):
+        problems.append(f"the judge step does not pass {VERDICT_APP_TOKEN_ENV} from steps.verdict-app.outputs.token")
+    if re.search(r"^\s*continue-on-error:", text, re.MULTILINE):
+        problems.append("a step continues on error")
+    return problems
 
 
 def epoch_stamp(gh) -> str:
@@ -3775,18 +3843,45 @@ def epoch_stamp(gh) -> str:
     return _stamp(datetime.datetime.fromtimestamp(t, datetime.UTC).replace(tzinfo=None))
 
 
-def run_verdict(repo: str, number: int, name: str, gh=None) -> int:
+def verdict_app_adapter(repo: str, app: str | None):
+    """(writer, app slug) for the verdict writer. `app` None = the job's own token (GITHUB_TOKEN, the Actions
+    App) — the fleet lane's default. `app` given = core's required writer: the App installation token MUST be
+    in VERDICT_APP_TOKEN_ENV, and an absent one is a ReadError (a RED job naming it), never a quiet fallback to
+    the job token — that fallback is exactly the write whose suite GitHub may supersede."""
+    if not app:
+        return None, ACTIONS_APP_SLUG
+    token = os.environ.get(VERDICT_APP_TOKEN_ENV, "").strip()
+    if not token:
+        raise ReadError(f"--verdict-app {app} needs the App's installation token in {VERDICT_APP_TOKEN_ENV} (mint it with "
+                        "permission-checks: write) — the verdict is never written with the job token instead")
+    return Gh(repo, token=token), app
+
+
+def run_verdict(repo: str, number: int, name: str, gh=None, writer=None, app: str = ACTIONS_APP_SLUG) -> int:
     """The verdict WRITER (policy review-pending-while-answering): judge the pull request ONCE (no review
     wait, no settle wait — a pending verdict is not red), write the head's verdict check-run, exit 0 for
     success or pending and 1 for failure. A read that fails is UNMEASURABLE: written as `failure` when the
-    head is known, and the job is red either way."""
+    head is known, and the job is red either way.
+
+    `writer`/`app`: who writes the verdict (default: `gh`, the job token, as the Actions App). When an App
+    writes it (core's required context), the job token's older verdicts on the same head (written before the
+    writer moved to the App) are CONVERGED to the same state and never created again — two check-runs of the
+    required name must never disagree."""
     gh = gh if gh is not None else Gh(repo)
+    legacy = app != ACTIONS_APP_SLUG
+
+    def write_all(reported_, summary_, read_at_, now_, existing_=None) -> str:
+        done_ = write_verdict_check_run(gh, head, name, reported_, summary_, read_at_, now_, existing_, writer=writer, app=app)
+        if legacy:
+            done_ += "; legacy: " + write_verdict_check_run(gh, head, name, reported_, summary_, read_at_, now_,
+                                                             app=ACTIONS_APP_SLUG, create=False)
+        return done_
     read_at = epoch_stamp(gh)
     head = ""
     try:
         pr, reviews, comments, waiver, author_role, check_runs, files, commits, copilot_carry, internal_chain = read_inputs(gh, number, None)
         head = str((pr.get("head") or {}).get("sha") or "")
-        existing = read_verdict_runs(gh, head, name)
+        existing = read_verdict_runs(gh, head, name, app) + (read_verdict_runs(gh, head, name) if legacy else [])
     except (ReadError, KeyError) as e:
         print(f"::error::check-review-answered cannot read the review of #{number}, so it cannot say it was answered: {e}")
         if not head:
@@ -3798,7 +3893,7 @@ def run_verdict(repo: str, number: int, name: str, gh=None) -> int:
         if head:
             unmeasured = Reported("failure", "unmeasurable", f"Could not measure — {str(e)[:200]}")
             try:
-                print("  " + write_verdict_check_run(gh, head, name, unmeasured, f"### ❌ {unmeasured.title}\n", read_at, epoch_stamp(gh)))
+                print("  " + write_all(unmeasured, f"### ❌ {unmeasured.title}\n", read_at, epoch_stamp(gh)))
             except ReadError as w:
                 print(f"::error::and the verdict check-run `{name}` could not be written either: {w}")
                 _append("GITHUB_OUTPUT", "verdict-state=failure\n")
@@ -3813,7 +3908,7 @@ def run_verdict(repo: str, number: int, name: str, gh=None) -> int:
     print(render(number, pr, verdict, author_role, None, reported))
     summary = verdict_summary(number, verdict, reported)
     try:
-        done = write_verdict_check_run(gh, head, name, reported, summary, read_at, now, existing)
+        done = write_all(reported, summary, read_at, now, existing)
     except ReadError as e:
         print(f"::error::the verdict ({reported.state}) was taken, but the check-run `{name}` could not be written on "
               f"{head[:10]}: {e}. The required context is NOT updated — this run is red so the gap is seen.")
@@ -3825,7 +3920,8 @@ def run_verdict(repo: str, number: int, name: str, gh=None) -> int:
     return 1 if reported.state == "failure" else 0
 
 
-def run_verdict_sweep(repo: str, name: str, gh=None, now_epoch: int | None = None) -> int:
+def run_verdict_sweep(repo: str, name: str, gh=None, now_epoch: int | None = None, writer=None,
+                      app: str = ACTIONS_APP_SLUG) -> int:
     """The scheduled half of the verdict writer: re-judge every open, non-draft, same-repository pull
     request whose verdict check-run on its CURRENT head is pending or unmeasured (SWEEP_KINDS) — a review
     that landed, or a deadline that passed, raises no event here. Every other pull request costs one
@@ -3850,7 +3946,7 @@ def run_verdict_sweep(repo: str, name: str, gh=None, now_epoch: int | None = Non
             continue
         head = str((p.get("head") or {}).get("sha") or "")
         try:
-            existing = read_verdict_runs(gh, head, name)
+            existing = read_verdict_runs(gh, head, name, app)
         except ReadError as e:
             print(f"::error::#{p['number']}: {e}")
             failed.append(p["number"])
@@ -3864,7 +3960,7 @@ def run_verdict_sweep(repo: str, name: str, gh=None, now_epoch: int | None = Non
                 print(f"  #{p['number']}: Dependabot — its context is the job-shaped check, not the writer's")
                 continue
             judged.append(p["number"])
-            if run_verdict(repo, p["number"], name, gh=gh) == VERDICT_UNPUBLISHED_EXIT:
+            if run_verdict(repo, p["number"], name, gh=gh, writer=writer, app=app) == VERDICT_UNPUBLISHED_EXIT:
                 print(f"::error::#{p['number']}: no verdict on {head[:10]}, and it could NOT be published")
                 failed.append(p["number"])
             continue
@@ -3875,7 +3971,7 @@ def run_verdict_sweep(repo: str, name: str, gh=None, now_epoch: int | None = Non
             print(f"  #{p['number']}: verdict `{kind}` on {head[:10]} changes only on an event — not re-judged")
             continue
         judged.append(p["number"])
-        rc = run_verdict(repo, p["number"], name, gh=gh)
+        rc = run_verdict(repo, p["number"], name, gh=gh, writer=writer, app=app)
         if rc == VERDICT_UNPUBLISHED_EXIT:
             print(f"::error::#{p['number']}: the verdict could NOT be published")
             failed.append(p["number"])
@@ -6107,6 +6203,88 @@ def pending_self_test(HEAD: str) -> int:
     rc, out, _ = drive(g)
     check("race: a newer verdict written during the evaluation is never overwritten by an older read",
           rc == 0 and g.writes == [] and g.listings == 2, f"rc={rc} writes={g.writes} listings={g.listings}")
+
+    # ── WHERE the verdict is published (Doc/Architecture/ReviewFindingsAnswered → "Which suite holds the verdict"):
+    # core's required writer writes as an App, so the check-run lands in that App's own suite; reads stay on the job
+    # token; the job token's older verdicts on the head are converged, never created again.
+    class _AppWriter:
+        """Writes into the reader's check-runs AS `slug` — what GitHub does with an App installation token."""
+        repo = "o/r"
+
+        def __init__(self, reader, slug=VERDICT_APP_SLUG):
+            self.reader, self.slug, self.writes = reader, slug, []
+
+        def write(self, method, path, body):
+            self.writes.append((method, path, body))
+            if method == "PATCH":
+                cid = int(path.rsplit("/", 1)[1])
+                run_ = next(c for c in self.reader.runs if c["id"] == cid)
+                if (run_.get("app") or {}).get("slug") != self.slug:
+                    raise ReadError(f"PATCH {path} failed (1): gh: Resource not accessible by integration (HTTP 403)")
+                run_.update({k: v for k, v in body.items() if k != "output"})
+                return run_
+            self.reader.next_id += 1
+            made = dict(body, id=self.reader.next_id, app={"slug": self.slug}, started_at=epoch_stamp(self.reader))
+            self.reader.runs.append(made)
+            return made
+
+    def drive_app(g, w, app=VERDICT_APP_SLUG):
+        saved = os.environ.get("GITHUB_OUTPUT")
+        os.environ.pop("GITHUB_OUTPUT", None)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as printed:
+                rc = run_verdict("o/r", 7, "Automatic review answered", gh=g, writer=w, app=app)
+        finally:
+            if saved is not None:
+                os.environ["GITHUB_OUTPUT"] = saved
+        return rc, printed.getvalue()
+
+    g = _VerdictGh([ONE, ANSWER])
+    w = _AppWriter(g)
+    rc, text = drive_app(g, w)
+    check("app writer: the verdict is CREATED by the App (its own suite), nothing through the job token",
+          rc == 0 and [x[0] for x in w.writes] == ["POST"] and g.writes == []
+          and [(c["app"]["slug"], c.get("conclusion")) for c in g.runs] == [(VERDICT_APP_SLUG, "success")], f"rc={rc} app={w.writes} job={g.writes} {text[-300:]}")
+    g.t += 60
+    rc, _ = drive_app(g, w)
+    check("app writer: the next evaluation PATCHes the App's own check-run, creating nothing more",
+          rc == 0 and len(g.runs) == 1 and [x[0] for x in w.writes] == ["POST", "PATCH"], f"app={w.writes} runs={g.runs}")
+    g = _VerdictGh([ONE, ANSWER], runs=[mine(5, T0)])      # a pending verdict the JOB token wrote before the move
+    w = _AppWriter(g)
+    rc, text = drive_app(g, w)
+    legacy = next(c for c in g.runs if c["id"] == 5)
+    check("app writer: an older job-token verdict on the head is CONVERGED to the same state (never left pending)",
+          rc == 0 and [x[0] for x in w.writes] == ["POST"] and [x[:2] for x in g.writes] == [("PATCH", "check-runs/5")]
+          and legacy.get("conclusion") == "success", f"rc={rc} app={w.writes} job={g.writes} {text[-300:]}")
+    check("app writer: the first-judged clock still starts at the older job-token verdict",
+          first_judged(read_verdict_runs(g, HEAD, "Automatic review answered", ACTIONS_APP_SLUG)
+                       + read_verdict_runs(g, HEAD, "Automatic review answered", VERDICT_APP_SLUG), FRESH) == "2026-10-30T10:05:00Z")
+    # NEG control: the SAME evaluation without the App writer files the verdict under github-actions — the shape
+    # GitHub drops into the oldest Actions suite, the one a re-run of that workflow supersedes.
+    g = _VerdictGh([ONE, ANSWER])
+    rc, _, _ = drive(g)
+    check("NEG app writer: without it the verdict is the Actions App's (the superseded-suite shape)",
+          rc == 0 and [c["app"]["slug"] for c in g.runs] == [ACTIONS_APP_SLUG], f"runs={g.runs}")
+    saved_tok = os.environ.pop(VERDICT_APP_TOKEN_ENV, None)
+    try:
+        try:
+            verdict_app_adapter("o/r", VERDICT_APP_SLUG)
+            refused = False
+        except ReadError as e:
+            refused = VERDICT_APP_TOKEN_ENV in str(e)
+        check("NEG app writer: --verdict-app with no token is RED, named — never a fallback to the job token", refused)
+        check("app writer: no --verdict-app keeps the job token (the fleet lane's default)",
+              verdict_app_adapter("o/r", None) == (None, ACTIONS_APP_SLUG))
+    finally:
+        if saved_tok is not None:
+            os.environ[VERDICT_APP_TOKEN_ENV] = saved_tok
+    g = _VerdictGh([ONE, ANSWER], pulls=[{"number": 7, "draft": False, "head": {"sha": HEAD, "repo": {"full_name": "o/r"}}}],
+                   runs=[dict(mine(5, T0, "answered", "completed"), conclusion="success")])
+    w = _AppWriter(g)
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_verdict_sweep("o/r", "Automatic review answered", gh=g, now_epoch=0, writer=w, app=VERDICT_APP_SLUG)
+    check("app sweep: a head carrying only a job-token verdict has NO App verdict, so it is judged and gets one",
+          rc == 0 and [x[0] for x in w.writes] == ["POST"], f"rc={rc} app={w.writes}")
     # ── the sweep: only a pending/unmeasured verdict of a same-repo, non-draft pull request is re-judged
     def pull(n, draft=False, repo="o/r"):
         return {"number": n, "draft": draft, "head": {"sha": HEAD, "repo": {"full_name": repo}}}
@@ -6159,6 +6337,21 @@ def pending_self_test(HEAD: str) -> int:
             check(f"{wf}: the condition excludes forks, Dependabot and the merge queue",
                   bool(named) and "head.repo.full_name == github.repository" in named[0]
                   and "dependabot[bot]" in named[0], f"{named}")
+            if wf == "review-answered.yml":
+                # 🚨 WHERE the required verdict is published — pinned, with negative controls that prove the pin can fail.
+                found = verdict_publisher_problems(text)
+                check("review-answered.yml: the required verdict is published as the App, in its own suite", found == [], f"{found}")
+                for label, mutated in [
+                    ("the --verdict-app flag dropped", text.replace(f" --verdict-app {VERDICT_APP_SLUG}", "", 1)),
+                    ("the token not passed", text.replace("MW_VERDICT_APP_TOKEN: ${{ steps.verdict-app.outputs.token }}", "")),
+                    ("checks: write not minted", text.replace("permission-checks: write", "permission-pull-requests: read")),
+                    ("the mint narrowed to pull_request only", text.replace(
+                        "        id: verdict-app\n        if: ${{ (github.event_name == 'schedule' || ",
+                        "        id: verdict-app\n        if: ${{ (github.event_name == 'pull_request' || ", 1)),
+                    ("a step that continues on error", text + "      - run: 'true'\n        continue-on-error: true\n"),
+                ]:
+                    check(f"NEG review-answered.yml: {label} -> the pin reports it", mutated != text and verdict_publisher_problems(mutated) != [],
+                          f"changed={mutated != text}")
     else:
         print(f"self-test note pending: the workflows are not beside this copy ({wf_dir}) — the workflow check runs in core's tree")
     return failures
@@ -6682,6 +6875,10 @@ def _main(argv=None) -> int:
                     help="policy review-pending-while-answering: judge --pr ONCE and write the verdict as the check-run NAME "
                          "(the required context's exact name) — success, PENDING (in_progress) while threads await answers or "
                          "the head awaits its review within the deadlines, failure otherwise; exit 1 only on failure")
+    ap.add_argument("--verdict-app", metavar="SLUG",
+                    help="--verdict-check-run / --verdict-sweep: write the verdict as this GitHub App (its installation token "
+                         f"in {VERDICT_APP_TOKEN_ENV}), so the check-run lands in the App's own suite, which no workflow run "
+                         "can supersede (Doc/Architecture/ReviewFindingsAnswered → \"Which suite holds the verdict\")")
     ap.add_argument("--verdict-sweep", action="store_true",
                     help="the scheduled half: re-judge every open pull request whose --verdict-check-run is pending or "
                          "unmeasured (a review landing or a deadline passing raises no event here)")
@@ -6721,15 +6918,21 @@ def _main(argv=None) -> int:
             print("::error::--verdict-check-run takes --repo and --pr (or --verdict-sweep) only — a merge-queue entry, a "
                   "replay and the review/settle waits all belong to the job-shaped check (policy review-pending-while-answering)")
             return 2
+        try:
+            writer, app = verdict_app_adapter(args.repo, (args.verdict_app or "").strip() or None)
+        except ReadError as e:
+            print(f"::error::{e}")
+            _append("GITHUB_OUTPUT", "verdict-state=failure\n")
+            return VERDICT_UNPUBLISHED_EXIT
         if args.verdict_sweep:
             if args.pr:
                 print("::error::--verdict-sweep re-judges every open pull request; it takes no --pr")
                 return 2
-            return run_verdict_sweep(args.repo, name)
+            return run_verdict_sweep(args.repo, name, writer=writer, app=app)
         if not args.pr or not re.fullmatch(r"[1-9]\d*", args.pr):
             print(f"::error::--verdict-check-run needs --pr <number>, got {args.pr!r}")
             return 2
-        return run_verdict(args.repo, int(args.pr), name)
+        return run_verdict(args.repo, int(args.pr), name, writer=writer, app=app)
     if args.request_review_sweep:
         if args.pr or args.merge_group_ref or args.before:
             print("::error::--request-review-sweep takes --repo only")
