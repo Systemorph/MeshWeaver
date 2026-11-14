@@ -325,7 +325,11 @@ def _msbuild_paths(root: Path, csproj: Path, configuration: str, msbuild_args: l
            "-getProperty:TargetRefPath", "-getProperty:TargetPath", "-getProperty:AssemblyName",
            "-getProperty:UsingMicrosoftNETSdkRazor", "-getProperty:EnableDefaultRazorComponentItems",
            "-getItem:Compile", "-getItem:EmbeddedResource", "-getItem:Content", *msbuild_args]
-    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=600)
+    # A fresh MSBuild process per evaluation, never the MSBuild server: the server keeps the project
+    # files it loaded, so an item or import deleted since it last evaluated this tree is still listed
+    # (see msbuild-evaluate.py `_FRESH_MSBUILD`) — and a probe evaluates two checkouts in turn.
+    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=600,
+                          env={**os.environ, "DOTNET_CLI_USE_MSBUILD_SERVER": "0"})
     if proc.returncode != 0:
         raise RuntimeError(f"msbuild evaluation of {csproj} failed: {proc.stderr.strip()[-400:] or proc.stdout.strip()[-400:]}")
     doc = json.loads(proc.stdout)
