@@ -38,7 +38,7 @@ public class StringDeltaTest
 
         // The wire round trip is where a lone surrogate turns into U+FFFD.
         var wire = System.Text.Json.JsonSerializer.Serialize(d.Inserted);
-        var back = System.Text.Json.JsonSerializer.Deserialize<string>(wire)!;
+        var back = System.Text.Json.JsonSerializer.Deserialize<string>(wire) ?? throw new InvalidOperationException($"the wire form {wire} read back as null");
         new StringDelta(d.Start, d.RemovedLength, back).Apply(oldValue).Should().Be(newValue);
     }
 
