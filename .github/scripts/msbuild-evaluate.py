@@ -71,8 +71,22 @@ def _in_repo(root: Path, path: str) -> str | None:
         return None
 
 
+# 🚨 Every evaluation runs in a FRESH MSBuild process, never in the long-lived MSBuild server.
+# SDK 11.0.100 `dotnet msbuild` hands the command line to a persistent server (`/nodemode:8`)
+# unless DOTNET_CLI_USE_MSBUILD_SERVER says otherwise (10.0.301 does so only when it is set), and
+# that server keeps the project files it
+# loaded between invocations: an `Exists()`-guarded import evaluated once and then DELETED is still
+# imported — the `-pp` banner names it, and reading it fails with ENOENT (measured on SDK 11.0.100
+# and on 10.0.301 with the server forced on: the deleted import still imported in 8–9 rounds of 10;
+# with the server off, in no round; an EDITED import is re-read either way). This script answers for
+# the tree on disk NOW, so it never asks a process that remembers an earlier tree.
+# `test-build-extension-reading.py` holds it: it forces the server ON in the caller's environment.
+_FRESH_MSBUILD = {"DOTNET_CLI_USE_MSBUILD_SERVER": "0"}
+
+
 def _run(argv: list[str], cwd: Path) -> str:
-    r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=600)
+    r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=600,
+                       env={**os.environ, **_FRESH_MSBUILD})
     if r.returncode != 0:
         raise RuntimeError(f"`{' '.join(argv)}` failed (exit {r.returncode}):\n{(r.stdout + r.stderr)[-2000:]}")
     return r.stdout

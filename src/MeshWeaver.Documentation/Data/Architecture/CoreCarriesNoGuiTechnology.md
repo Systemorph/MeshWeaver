@@ -166,6 +166,21 @@ project. Core keeps the *mechanism* and the module repository owns the *list*:
    same test-only diff now selects the 7 always-composed modules, a `src/MeshWeaver.Maps` edit 11, and
    `src/Directory.Packages.Plugins.props` still all 42. The FULL reason now names the reach entry that
    matched, so the next such entry is visible in the log.
+
+   **Every evaluation runs in a FRESH MSBuild process, never the MSBuild server.** SDK 11.0.100's
+   `dotnet msbuild` hands the command line to a long-lived server (`/nodemode:8`) unless
+   `DOTNET_CLI_USE_MSBUILD_SERVER` is set (10.0.301 only when it is set to `1`), and the server keeps
+   the project files it loaded. An `Exists()`-guarded import evaluated once and then deleted is still
+   imported on a later evaluation: the `-pp` banner names the deleted file and reading it failed with
+   ENOENT. That was the intermittent red of `test-build-extension-reading.py` (`Lib/Optional.props`).
+   Measured on macOS with a minimal project that alternates present → evaluate → delete →
+   evaluate: the deleted import was still imported in 8 of 10 rounds on 11.0.100 and in 9 of 10 on
+   10.0.301 with the server forced on, and in no round with the server off. An EDITED import was
+   re-read in 6 of 6 rounds even through the server, so only existence goes stale. Because the server's
+   memory is not certain on every round, the failure is intermittent rather than constant.
+   `msbuild-evaluate.py` therefore runs every `dotnet` call with `DOTNET_CLI_USE_MSBUILD_SERVER=0`,
+   and the self-test forces the server ON in the caller's environment. A negative control proves
+   that the raw server still remembers, and five rounds prove that the evaluation does not.
 2. **Plugins — in place.** `src/MeshWeaver.ModuleLibraries` carries every entry only Plugins
    modules use (Plugins#4303), `src/Directory.Packages.Plugins.props` pins them — members of a
    family core still pins part of take their version from that sibling — and the module-pack call
