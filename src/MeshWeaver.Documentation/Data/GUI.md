@@ -96,6 +96,7 @@ Browse the full set of controls, layout primitives, and data-binding guides:
 | [Buttons: Pending State & Navigate-on-Accepted](ButtonPendingState) | Every clickable button shows itself pressed until the owner confirms the click — and can jump straight to a progress view on acceptance |
 | [Node Menu](NodeMenu) | Context menus on mesh nodes |
 | [Profile Page](ProfilePage) | The owner's profile page — picture upload, display name, language, bio — and how modules add sections to it |
+| [What's New in the header](WhatsNewHeader) | The ✨ header entry that opens the newest release notes, and the per-user dot that shows until you have opened them |
 | [Unreadable Content Is Not Empty Content](UnreadableContentIsNotEmpty) | An empty state is an INVITATION — rendering it over content the view could not interpret is how the stored text gets overwritten |
 | [React Frontend](React) | The client-side React frontend — same `UiControl` contract, rendered in the browser over gRPC-web: running it, rendering, theming, chat, testing |
 | [Custom Blazor Controls](BlazorCustomControls) | Extend the Blazor portal with your own control — a `UiControl` subclass + a `BlazorView`, registered with `WithView`; ships from core, a pack, or a plugin at runtime |

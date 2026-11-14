@@ -607,6 +607,16 @@ entry is individually defensible and the aggregate is unusable.
 | **It links out** | each item points at the doc page that explains it; that page is the durable form |
 | **It does not explain** | if an item needs more than a sentence, the sentence belongs in the doc and the link belongs here |
 
+### The release-notes page is what the header opens
+
+Each released version also has ONE release-notes page, `Doc/ReleaseNotes/<major>_<minor>_<patch>`
+(`3_0_0`): the map of that release. The header's ✨ **What's New** entry opens the NEWEST of them,
+chosen by version, and shows a dot until the viewer has opened it (policy
+[`whats-new-header`](/Doc/Architecture/PolicyNotProse), manual
+[What's New in the header](/Doc/GUI/WhatsNewHeader)). So a release cut without its page leaves the
+button on the previous release: write the page as part of the release, name it by the version,
+and link the day-by-day feed (`/_Setting/GlobalSettings/WhatsNew`) from it.
+
 ### What replaces the per-change note
 
 Nothing is lost, because the durable form never was the What's New entry — the
