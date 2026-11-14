@@ -1,0 +1,4 @@
+<Project>
+  <!-- Stops the upward walk to the repository's central package versions: AbiSyntax.csproj pins its one package
+       itself, so the comparer builds identically wherever its directory is fetched. -->
+</Project>
