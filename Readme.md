@@ -84,9 +84,9 @@ record of what runs where live in the private
 One line each, no .NET needed for the CLI:
 
 ```bash
-brew install systemorph/tap/memex                    # the memex CLI — macOS and Linux
-winget install Systemorph.Memex                      # the memex CLI — Windows
-dotnet add package MeshWeaver.Aspire.Hosting.Memex   # the Aspire integration, in your AppHost
+brew trust --formula systemorph/memex/memex && brew install systemorph/memex/memex   # the memex CLI — macOS, Linux
+winget install Systemorph.Memex                                                        # the memex CLI — Windows
+dotnet add package MeshWeaver.Aspire.Hosting.Memex                                     # the Aspire integration, in your AppHost
 ```
 
 With the .NET SDK, the CLI also installs on any OS as `dotnet tool install -g MeshWeaver.Cli`.
@@ -103,7 +103,7 @@ memex search "nodeType:Agent"
 
 | Package | What it does |
 |---|---|
-| [`MeshWeaver.Cli`](https://www.nuget.org/packages/MeshWeaver.Cli) | the `memex` CLI; also a self-contained binary through [Homebrew](https://github.com/Systemorph/homebrew-tap) and winget |
+| [`MeshWeaver.Cli`](https://www.nuget.org/packages/MeshWeaver.Cli) | the `memex` CLI; also a self-contained binary through [Homebrew](https://github.com/Systemorph/homebrew-memex) and winget |
 | [`MeshWeaver.Aspire.Hosting.Memex`](https://www.nuget.org/packages/MeshWeaver.Aspire.Hosting.Memex) | `builder.AddMemex()`: the Aspire integration that runs the portal, its database and its migration |
 
 Both have their own version, released when they change rather than with every platform build. They
