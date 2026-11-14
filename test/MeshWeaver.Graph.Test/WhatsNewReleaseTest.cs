@@ -87,7 +87,9 @@ public class WhatsNewReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
         before.Href.Should().Be("/Doc/ReleaseNotes/3_1_0", "the entry opens the newest release notes");
         before.Unseen.Should().BeTrue("the reader has opened no release notes yet");
 
-        await Mesh.MarkReleaseNotesSeen(Reader, before.NewestPath!).FirstAsync().Timeout(Bound).Await(ct);
+        var newest = before.NewestPath;
+        Assert.NotNull(newest);
+        await Mesh.MarkReleaseNotesSeen(Reader, newest).FirstAsync().Timeout(Bound).Await(ct);
 
         var after = await states.FirstAsync(s => s.NewestPath is not null && !s.Unseen).Timeout(Bound).Await(ct);
         after.NewestPath.Should().Be("Doc/ReleaseNotes/3_1_0");
@@ -95,7 +97,8 @@ public class WhatsNewReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
             .Select(node => node?.ContentAs<User>(Mesh.JsonSerializerOptions))
             .FirstAsync(user => user?.LastSeenReleaseNotes is not null)
             .Timeout(Bound).Await(ct);
-        stored!.LastSeenReleaseNotes.Should().Be("Doc/ReleaseNotes/3_1_0");
+        Assert.NotNull(stored);
+        stored.LastSeenReleaseNotes.Should().Be("Doc/ReleaseNotes/3_1_0");
         stored.Email.Should().Be($"{Reader}@meshweaver.io", "recording the visit touches no other field");
     }
 }

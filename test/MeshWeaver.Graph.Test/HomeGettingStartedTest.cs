@@ -70,7 +70,9 @@ public class HomeGettingStartedTest(ITestOutputHelper output) : MonolithMeshTest
             Content = new User { Body = "# My own page" },
         }, Mesh.JsonSerializerOptions);
 
-        ((MarkdownControl)authored).Markdown!.ToString().Should().NotContain("area/GettingStarted",
+        var markdown = authored.Should().BeOfType<MarkdownControl>().Which.Markdown?.ToString();
+        Assert.NotNull(markdown);
+        markdown.Should().NotContain("area/GettingStarted",
             "a home whose owner wrote their own Body shows only what that page embeds");
     }
 
@@ -138,7 +140,8 @@ public class HomeGettingStartedTest(ITestOutputHelper output) : MonolithMeshTest
             .Select(node => node?.ContentAs<User>(Mesh.JsonSerializerOptions))
             .FirstAsync(user => user?.HideGettingStarted == true)
             .Timeout(Bound).Await(ct);
-        stored!.Email.Should().Be($"{Alice}@meshweaver.io", "hiding the guide touches no other field of the profile");
+        Assert.NotNull(stored);
+        stored.Email.Should().Be($"{Alice}@meshweaver.io", "hiding the guide touches no other field of the profile");
 
         // Bob is untouched: the preference is Alice's, not the platform's.
         TestUsers.DevLogin(Mesh, Login(Bob));
