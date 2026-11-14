@@ -69,6 +69,43 @@ channel only while a dependent still reads it, and every reader moves to the exp
   resolved declares, never a version core's branch hard-codes, so one lane file can serve either
   line without guessing.
 
+## 3a. A run reaches its line's build server
+
+A run on the build server must be built by the host of ITS line, merged onto ITS line, with packages
+warmed from ITS line. Measured 2026-11-14, before this was wired: every core pull request was queued
+on `latest`, whose host ran a 3.1 set with SDK 10, so each `main` (net11.0) shadow run died in about a
+second with `NETSDK1045`; and a `main3` pull request was merged by the host onto a `main` commit,
+because the host merged every pull request onto the default branch's tip.
+
+- **Core declares the channel per line.** `.github/delivery-lines.json` carries `buildHostChannel` on
+  each line (`main` → `latest4`, `main3` → `latest3`). Core's admission passes `line-channels: 'true'`
+  to `node-repo-build-executor.yml`, and `build-executor.py` reads the run's line: a pull request takes
+  its BASE line's channel and a trunk run its own branch's. A pull request onto a branch that is not a
+  declared line is RED at admission, naming the base. The caller's `channel` input never overrides a
+  declared line. The admission's `channel` output reaches the follow jobs, so they read
+  `build-<channel>/<stage>` checks off `latest`.
+- **A channel is only queued where the receiver routes it.** The build-request carries `channel` off
+  `latest`. The executor queues a non-latest channel only when the instance's
+  `GET /api/builds/queue?channel=<c>` answer declares `"routesRequestChannel": true`. An instance that
+  does not declare it puts every build-request on `latest`, and the follower would wait on a run of
+  another channel, so the run stays on Actions and the reason is printed. Core's shadow runs are
+  therefore not queued at all until the receiver half lands (MeshWeaver.Plugins `Hosting/Build`:
+  `BuildRequest.Parse` reads `channel`, the scheduler enqueues the run on it, and the queue answer
+  declares `routesRequestChannel`).
+- **The host merges onto the base line and warms from it.** MeshWeaver.Deploy `build-run.py` merges a
+  pull-request head onto the tip of the claim's `refs[].baseRef` (fetched into the host's mirror),
+  never onto the default branch's tip, and runs the warm NuGet restore from that line's tip.
+- **Each line's channel needs a host.** The channel is declared on MeshWeaver.Deploy
+  `.github/build-hosts.json` and on the operations record's `buildHosts` block (through its approval
+  path). MeshWeaver.Deploy `build-host.yml` runs one hand-over leg per major line: each leg takes the
+  newest armed set of its own major (`arm-promoted-set.py armed-state --major`) and moves only that
+  line's channels, so `latest4` gets only sealed 4.x sets and the first armed 4.x set never stops the
+  v3 channels moving.
+- **A declared channel is not yet a running host.** The chart runs a host for `latest`, `stable` and
+  `buildHosts.extraChannels` only, and the record's Helm values (MeshWeaver.Plugins `HelmValues`)
+  render no `extraChannels`. So `latest3` and `latest4` hold their sets on the record with no host of
+  their own until that renderer lists the line channels it should run.
+
 ## 4. Every repository with a v3 tree gets `main3`
 
 The owner decided on a dedicated `main3` branch for the v3 line, with `main` the line for v4. That

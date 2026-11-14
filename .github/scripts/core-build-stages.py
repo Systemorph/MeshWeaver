@@ -485,6 +485,10 @@ def fixture_problems(root: str) -> list[str]:
 FOLLOW_MATRIX = re.compile(r"^  host-follow:\n(?:    .*\n|\n)*?        stage: \[([^\]]*)\]", re.M)
 RESULTS_MATRIX = re.compile(r"^  host-results:\n(?:    .*\n|\n)*?        shard: \[([^\]]*)\]", re.M)
 FOLLOW_INPUT = re.compile(r"^  host-follow:\n(?:    .*\n|\n)*?      stage: ([^\n]*)\n", re.M)
+# The channel-qualified check prefix (policy major-lines-run-separately): the admission's channel picks
+# `build` on latest and `build-<channel>` off it, so the follower reads the check of the line's host.
+CHANNEL_PREFIX = "${{ needs.admission.outputs.channel == 'latest' && 'build' || format('build-{0}', needs.admission.outputs.channel) }}"
+FOLLOW_CHANNELS = ("latest", "latest3", "latest4")
 
 
 def _stage_of():
@@ -514,13 +518,18 @@ def route_problems(workflow_text: str, total: int) -> list[str]:
         out.append(f"{WORKFLOW} job host-follow passes no `stage: …${{{{ matrix.stage }}}}` input ({passed!r})")
     else:
         stage_of, failure = _stage_of()
-        for s in want:
-            value = passed.replace("${{ matrix.stage }}", s)
-            try:
-                if stage_of(value, "latest") != s:
-                    out.append(f"{WORKFLOW} job host-follow passes --stage {value!r}, which build-follow.py reads as another stage than {s!r}")
-            except failure as e:
-                out.append(f"{WORKFLOW} job host-follow passes --stage {value!r}, which build-follow.py refuses: {e}")
+        # with the channel-qualified prefix, every channel the admission may answer must reach the follower as
+        # that channel's check name; without it, the route follows latest only
+        channels = FOLLOW_CHANNELS if CHANNEL_PREFIX in passed else ("latest",)
+        for channel in channels:
+            prefix = "build" if channel == "latest" else f"build-{channel}"
+            for s in want:
+                value = passed.replace(CHANNEL_PREFIX, prefix).replace("${{ matrix.stage }}", s)
+                try:
+                    if stage_of(value, channel) != s:
+                        out.append(f"{WORKFLOW} job host-follow passes --stage {value!r} on {channel}, which build-follow.py reads as another stage than {s!r}")
+                except failure as e:
+                    out.append(f"{WORKFLOW} job host-follow passes --stage {value!r}, which build-follow.py refuses: {e}")
     m = RESULTS_MATRIX.search(workflow_text)
     got = [x.strip() for x in m.group(1).split(",")] if m else None
     if got != [str(i) for i in range(total)]:
@@ -679,6 +688,10 @@ def _self_test() -> int:
     expect(any("host-results" in p for p in route_problems(route.replace("[0, 1]", "[0]"), 2)), "RED: a shard whose results are never fetched")
     expect(any("refuses" in p for p in route_problems(route.replace("build/${{ matrix.stage }}", "${{ matrix.stage }}"), 2)),
            "RED: the bare `build` entry reaches build-follow.py as the aggregate check, which it refuses")
+    expect(route_problems(route.replace("build/${{ matrix.stage }}", CHANNEL_PREFIX + "/${{ matrix.stage }}"), 2) == [],
+           "the channel-qualified route reaches the follower as each channel's check name (latest, latest3, latest4)")
+    expect(any("refuses" in p for p in route_problems(route.replace("build/${{ matrix.stage }}", CHANNEL_PREFIX.replace("build-{0}", "build") + "/${{ matrix.stage }}"), 2)),
+           "RED (negative control): a prefix that names `build` off latest is refused by the follower")
     expect(len(route_problems("jobs:\n", 2)) == 3, "RED: no host route at all")
     real_wf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workflows", "dotnet-test.yml")
     if os.path.isfile(real_wf):

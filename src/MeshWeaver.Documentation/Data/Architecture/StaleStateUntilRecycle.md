@@ -101,6 +101,12 @@ whatever the store and the adoption lane then offer.
   on error and on unsubscribe; there is deliberately no timer that force-releases one. It scopes to
   the root path **exactly**, never the subtree, because an install *waits on* the per-type rebuilds
   beneath its root and deferring those would deadlock.
+- **A deferred recycle is observable.** `PackageRootInstallLeases.WhenDeferredOn(root)` emits once a
+  recycle is PARKED behind a held lease, and `DeferredOn(root)` counts the parked waiters. Every
+  recycler composes its teardown downstream of `WhenReleased`, so "parked while the lease is held"
+  proves the teardown has not been posted — which is how a test asserts the deferral
+  (`NotEmitBefore(leases.WhenDeferredOn(root))`) instead of sitting out a wall-clock `NotEmit`
+  window.
 - 🚨 **The caller's hub must OUTLIVE the target.** A dying hub cannot be relied on to deliver its own
   last frame, so a recycle driven from the hub being recycled loses its confirmation, its redirect,
   or both — structurally, not by a race you can re-order away (#2202). Callers pass a surviving hub:

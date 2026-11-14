@@ -15,41 +15,69 @@ method bodies. This script keys dependents on that.
 
 THE POLICY (owner-facing, kept exactly)
 ---------------------------------------
-  * internal-only change (D's reference assembly byte-identical at base and head) — D and D's own
-    suite (its sibling `<D>.Test`) compile and test; every other dependent is SKIPPED with the reason
-    `public API unchanged (ref asm <hash>)`.
-  * public-API change (reference assembly differs — this also catches the optional-constructor-
-    parameter BINARY break AGENTS.md warns about, because the ctor signature is public surface) —
+  * internal-only change (D's public SURFACE unchanged at base and head) — D and D's own suite (its
+    sibling `<D>.Test`) compile and test; every other dependent is SKIPPED with the reason
+    `public API unchanged (surface <hash>)`.
+  * public-API change (the surface differs — this also catches the optional-constructor-parameter
+    BINARY break AGENTS.md warns about, because the ctor signature and its defaults are surface) —
     dependents rebuild and run their tests as before.
   * full runs (schedule, platform releases, trunk publication) never consult this: the CALLER only
     applies a verdict on a pull request / merge-group diff.
 
+HOW THE PROBE MEASURES THE SURFACE — Roslyn's syntax tree, no build (owner: "analyze the Roslyn tree
+rather than lots of builds")
+--------------------------------------------------------------------------------------------------
+  The comparer `abi-syntax/` (a small console on Microsoft.CodeAnalysis.CSharp) parses each changed file at
+  base and at head and reduces it to a SKELETON: every declaration with its modifiers, attributes, type
+  parameters, constraints, base list, parameter defaults, enum values and const values — private and internal
+  ones included — with every member BODY, constructor initializer and non-const initializer removed (a body
+  leaves a marker: `{}`, `__iterator__` when it yields, `__field__` when an accessor uses `field`), all trivia
+  dropped except preprocessor directives and disabled text, kept verbatim. Equal skeletons for EVERY changed file
+  of D ⇒ unchanged. The reference assembly is a function of exactly that declaration set (plus what rule 1
+  excludes), so a body-only edit cannot move it; the replay of merged pull requests against the old build-based
+  verdicts is in Doc/Architecture/ModuleBuildArchitecture → "ABI-keyed rebuild". Surfaces are cached by git blob
+  sha + the comparer's own content hash + PARSE_OPTIONS (`--cache-dir`, the fleet's file store in CI): a hit
+  counts only under its full key, and an unreachable cache only means parsing.
+
 WHAT MAKES A SKIP SOUND — every rule below errs toward REBUILD
 -------------------------------------------------------------
-  1. ELIGIBLE ONLY FOR C# BODY EDITS. D is eligible only when EVERY changed file under D is `*.cs`.
-     A changed csproj, resx, json, md, razor, wwwroot asset, embedded resource or content file makes
-     D "changed" without building anything: those reach a dependent through paths the reference
-     assembly does not describe (content copied to output, a resource stream, a package reference
-     that flows transitively). Hence the ABI identity is `sha256(ref asm || non-C# tree hash)`.
+  1. ELIGIBLE ONLY FOR C# EDITS OF EXISTING FILES. D is eligible only when EVERY changed file under D is
+     an existing `*.cs` (an added or deleted file is a change), D cannot embed `.cs` as payload (a Compile
+     Remove / resource include — `payload_risk`), and D switches on no generator driven by method BODIES
+     (interceptors). A changed csproj, resx, json, md, razor, wwwroot asset or content file makes D
+     "changed": those reach a dependent through paths the surface does not describe. (The build hosts'
+     `key` keeps the ABI identity `sha256(ref asm || non-C# tree hash)`.)
   2. INTERNALSVISIBLETO. A dependent X that sees D's internals (D declares InternalsVisibleTo X)
-     keys on D's FULL implementation assembly, never the reference assembly: a unit is never skipped
-     when ANY project in its closure is a friend of D. Friends are the UNION of (a) the compiled
-     assembly's InternalsVisibleTo attribute blobs (base and head), (b) csproj
-     `<InternalsVisibleTo Include=…>` items and (c) `[assembly: InternalsVisibleTo("…")]` in D's
-     sources — over-approximation is the safe direction.
-  3. DETERMINISM IS MEASURED, NOT ASSUMED. The probe builds D at head, swaps D's changed files to
-     the base, rebuilds D, restores head and rebuilds D AGAIN; if the two head reference assemblies
-     differ the toolchain is not deterministic for D and EVERY project is reported changed. (Roslyn
-     emits a deterministic reference assembly whose MVID is derived from its content when
-     Deterministic=true, the SDK default; both builds run in the same directory, so absolute paths
-     — which DO enter the implementation assembly's MVID — cannot differ.)
+     keys on D's FULL implementation, never the surface: a unit is never skipped when ANY project in
+     its closure is a friend of D. Friends are the UNION of csproj `<InternalsVisibleTo Include=…>` items,
+     `[assembly: InternalsVisibleTo("…")]` in D's sources and, for the build hosts' manifest, the compiled
+     assembly's attribute blobs — over-approximation is the safe direction.
+  3. FAIL SAFE IN THE COMPARER. A file that does not parse, top-level statements, an `#if` edit (directives are
+     surface), and a file that feeds a source generator (a partial member declared without a body, or a known
+     generator attribute such as `[GeneratedRegex]`, compared TOKEN for token) all read as changed; a struct with
+     a primary constructor keeps its member bodies (a captured parameter is a private field — layout).
   4. CONTENT READERS. A unit whose declared inputs or linked `../` includes READ one of D's changed
      files as text (a census ratchet over `src/**/*.cs`) is never skipped — it reads source, not
      surface.
   5. ANYTHING ELSE IN THE DIFF. The verdict speaks only for D's files. The CALLER must re-select on
      the diff WITHOUT them (`decide --reselected`): a unit any other changed path still reaches stays.
-  6. A base that does not build against the head's dependencies, a head that does not build, an
-     unreadable reference assembly — all mean "changed". A probe that cannot answer narrows nothing.
+  6. A comparer that cannot be built or cannot answer makes the whole verdict `unavailable`. A probe that
+     cannot answer narrows nothing.
+
+WHAT MAKES A PROBE WORTH RUNNING — it never burns its budget on a range it cannot narrow
+-------------------------------------------------------------------------------------
+  7. SHORT-CIRCUIT. A range that changes an input EVERY project's build imports moves every reference
+     assembly, and the caller re-selects every unit on that path anyway (rule 5) — so the probe answers
+     `{"unavailable": "<input> changed — every reference assembly moves; nothing narrowed"}` BEFORE it
+     builds anything. The set is module-build-key.py's own input model, widened to err wide: every
+     GLOBAL_INPUTS basename (global.json, nuget.config, …) and every `Directory.*.props|targets`
+     (directory_imports' rule) at ANY depth, `scripts/platform-floor.json` (the platform the caller
+     resolves), and an added or removed `<TargetFramework(s)>` line in any .csproj/.props/.targets.
+     Measured on MeshWeaver.Plugins#5421 (net11 retarget, package versions moved): the probe built
+     every changed project at head and base and its job was killed by its own 25-minute limit.
+  8. A DEADLINE. With `--deadline <epoch>` the probe starts nothing it cannot finish by then: when the
+     comparer's build (TOOL_BUILD_SECONDS, cached by content hash) + one parse per file version exceed the
+     time left it answers `unavailable` without starting.
 
 THE KEY (the interface the build hosts rely on)
 -----------------------------------------------
@@ -85,12 +113,14 @@ CLI
       → JSON {projectDir: {assembly, refasm, full, noncode, abi, friends[]}} of BUILT projects.
         Default asks MSBuild (`dotnet msbuild -getProperty:TargetRefPath,TargetPath,AssemblyName`);
         `--glob` reads obj/<cfg>/*/ref/*.dll + bin/<cfg>/*/<Asm>.dll instead (no SDK needed).
-  abi-key.py probe --root R (--range A...B | --base SHA) [--configuration Release] [--msbuild-arg A …]
+  abi-key.py probe --root R (--range A...B | --base SHA) [--deadline EPOCH] [--cache-dir DIR] [--no-strip]
                    [--out verdict.json]
-      → the VERDICT: builds each eligible changed project at head and base (swapping only that
-        project's changed files in place, restoring them after) and compares reference assemblies:
-        {schema, base, head, projects: {dir: {assembly, eligible, unchanged, refasm, baseRefasm,
-        files[], friends[], reason}}, deterministic}. Leaves every probed project built at HEAD.
+      → the VERDICT: compares each eligible changed project's syntax surface at base and head (git blobs —
+        the working tree is never touched, nothing is built): {schema, method: "syntax", base, head,
+        projects: {dir: {assembly, eligible, unchanged, refasm (= the head SURFACE hash), baseRefasm, files[],
+        friends[], reason}}, deterministic, cache: {hits, misses}} — or, short-circuited (rule 7) or out of
+        time (rule 8), the same envelope with `unavailable` set and no projects.
+  abi-key.py --self-test-syntax        builds the real comparer on this host's SDK and runs its cases.
   abi-key.py decide --root R --verdict V --units U.json [--reselected ids.json] [--out decision.json]
       U.json = [{id, project, reads?: [prefix|glob …], closure?: [dir …]}] (closure: the caller's own graph; [] means "no dependencies"); ids.json = ids still selected when the
       verdict's unchanged files are removed from the diff (the caller's own selector). REQUIRED for any
@@ -113,6 +143,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -300,12 +331,38 @@ def friends_from_assembly(data: bytes) -> set[str]:
     return out
 
 
+UNKNOWN_FRIEND = "?unresolved-friend"
+_IVT_ASSEMBLY_ATTRIBUTE = re.compile(r"<AssemblyAttribute\s[^>]*Include=[\"'][^\"']*InternalsVisibleTo[^\"']*[\"'][^>]*?(?:/>|>(.*?)</AssemblyAttribute>)",
+                                     re.DOTALL)
+
+
 def friends_from_source(root: Path, rel_dir: str) -> set[str]:
+    """InternalsVisibleTo grants readable WITHOUT a build: csproj and every Directory.Build.* above it (items and
+    AssemblyAttribute items), and `[assembly:]` attributes in the sources. A grant whose name cannot be read
+    (a property other than the project's own name, an attribute item without a literal) is UNKNOWN_FRIEND —
+    every dependent then keeps (the probe no longer has the compiled attribute blobs to read it from)."""
     out: set[str] = set()
     base = root / rel_dir
-    for csproj in base.glob("*.csproj"):
-        for a, b in _IVT_ITEM.findall(csproj.read_text(encoding="utf-8", errors="replace")):
-            out.add(_name(a or b))
+    own = assembly_names(root, rel_dir)
+    texts = [c.read_text(encoding="utf-8", errors="replace") for c in base.glob("*.csproj")]
+    # MSBuild's Directory.Build.* search starts at the project's OWN directory, so that one is read first.
+    here = base.resolve()
+    while True:
+        texts += [f.read_text(encoding="utf-8", errors="replace") for f in here.glob("Directory.Build.*") if f.is_file()]
+        if here == root.resolve() or here.parent == here:
+            break
+        here = here.parent
+    for text in texts:
+        for a, b in _IVT_ITEM.findall(text):
+            name = _name(a or b)
+            if "$(" in name:
+                expanded = {re.sub(r"\$\((?:AssemblyName|MSBuildProjectName|TargetName)\)", n, name) for n in own}
+                out.update(UNKNOWN_FRIEND if "$(" in e or UNKNOWN_ASSEMBLY in e else e for e in expanded)
+            else:
+                out.add(name)
+        for body in _IVT_ASSEMBLY_ATTRIBUTE.findall(text):
+            m = re.search(r"<_Parameter1>\s*([^<$]+?)\s*</_Parameter1>", body or "")
+            out.add(_name(m.group(1)) if m else UNKNOWN_FRIEND)
     for dirpath, dirnames, filenames in os.walk(base):
         dirnames[:] = [d for d in dirnames if d not in _MBK.SKIP_DIRS]
         for name in filenames:
@@ -432,13 +489,18 @@ def resolve_range(root: Path, diff_range: str | None, base: str | None) -> tuple
         return git(root, "rev-parse", base).strip(), head
     if not diff_range:
         raise ValueError("probe needs --range A...B or --base SHA")
-    if "..." in diff_range:
-        a, b = diff_range.split("...", 1)
-        return git(root, "merge-base", a or "HEAD", b or "HEAD").strip(), head
-    if ".." in diff_range:
-        a, _ = diff_range.split("..", 1)
-        return git(root, "rev-parse", a).strip(), head
-    return git(root, "rev-parse", diff_range).strip(), head
+    sep = "..." if "..." in diff_range else ".." if ".." in diff_range else None
+    if sep is None:
+        return git(root, "rev-parse", diff_range).strip(), head
+    a, b = diff_range.split(sep, 1)
+    # The file list, the short-circuit and every project-file read (payload items, friends, assembly names)
+    # see the WORKING TREE, so a range whose head is not the checked-out HEAD would mix two trees: refused.
+    if b and git(root, "rev-parse", b).strip() != head:
+        raise ValueError(f"probe reads project files from the checkout, so the range's head ({b}) must be the "
+                         f"checked-out HEAD ({head[:12]}) — check it out first")
+    if sep == "...":
+        return git(root, "merge-base", a or "HEAD", head).strip(), head
+    return git(root, "rev-parse", a or "HEAD").strip(), head
 
 
 def changed_files(root: Path, base: str) -> list[str]:
@@ -446,131 +508,324 @@ def changed_files(root: Path, base: str) -> list[str]:
     return sorted(p for p in out.split("\0") if p)
 
 
-Builder = Callable[[str, bool], bool]   # (project dir, with_references) → built?
-Reader = Callable[[str], dict]          # project dir → manifest entry
+# ── rule 7: inputs every project's build imports ──
+GLOBAL_PATHS = ("scripts/platform-floor.json",)
+GLOBAL_NAMES = frozenset(Path(p).name.lower() for p in _MBK.GLOBAL_INPUTS if not Path(p).name.startswith("Directory."))
+_DIRECTORY_IMPORT = re.compile(r"(?:^|/)Directory\.[^/]+\.(?:props|targets)$", re.IGNORECASE)
+_TFM_LINE = re.compile(r"^[+-](?![+-]{2} ).*<TargetFrameworks?\b", re.IGNORECASE)
+MSBUILD_EXTS = (".csproj", ".props", ".targets")
+def global_input(files: list[str], diff_text: str) -> str | None:
+    """Rule 7: the first changed input every project's build imports, named — None when there is none.
+    `diff_text` is `git diff -U0` over the range's MSBuild files (for the TargetFramework lines)."""
+    for f in sorted(files):
+        if f in GLOBAL_PATHS or f.rsplit("/", 1)[-1].lower() in GLOBAL_NAMES or _DIRECTORY_IMPORT.search(f):
+            return f
+    current = None
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            current = line.split(" b/", 1)[-1].strip()
+            continue
+        if line.startswith(("+++ ", "--- ")):
+            continue
+        if current and current.lower().endswith(MSBUILD_EXTS) and _TFM_LINE.match(line):
+            return f"the target framework in {current}"
+    return None
 
 
-def dotnet_builder(root: Path, configuration: str, msbuild_args: list[str]) -> Builder:
-    def build(rel_dir: str, with_references: bool) -> bool:
-        csproj = sorted((root / rel_dir).glob("*.csproj"))[0]
-        cmd = ["dotnet", "build", str(csproj), "-nologo", "-v:q", "-c", configuration,
-               "-p:ProduceReferenceAssembly=true", "-p:Deterministic=true",
-               # The SDK stamps the git commit into AssemblyInformationalVersion, which the REFERENCE
-               # assembly carries too (measured: `1.0.0+<sha>` in obj/…/ref/<Asm>.dll). The probe builds
-               # base and head at one HEAD, but a key compared ACROSS commits must not move with it.
-               "-p:IncludeSourceRevisionInInformationalVersion=false", *msbuild_args]
-        if not with_references:
-            cmd.append("-p:BuildProjectReferences=false")
-        proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=1800)
-        if proc.returncode != 0:
-            tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-15:])
-            print(f"abi-key: dotnet build {rel_dir} ({'with' if with_references else 'without'} references) failed:\n{tail}",
-                  file=sys.stderr)
-        return proc.returncode == 0
-    return build
+def short_circuit(root: Path, base: str, files: list[str]) -> str | None:
+    msbuild = [f for f in files if f.lower().endswith(MSBUILD_EXTS)]
+    diff_text = git(root, "diff", "--no-renames", "-U0", base, "HEAD", "--", *msbuild) if msbuild else ""
+    hit = global_input(files, diff_text)
+    return None if hit is None else f"{hit} changed — every reference assembly moves; nothing narrowed"
 
 
-def probe(root: Path, base: str, head: str, files: list[str], build: Builder, read: Reader) -> dict:
-    """The verdict for every project owning a changed file (see the module docstring, rules 1–6)."""
+def unavailable(base: str, head: str, why: str) -> dict:
+    """A verdict that narrows nothing: no project is `unchanged`, so `decide` keeps every unit."""
+    return {"schema": SCHEMA, "base": base, "head": head, "projects": {}, "unavailable": why, "method": METHOD}
+
+
+# ───────────────────────────── the surface: Roslyn's syntax tree, never a build ─────────────────────────────
+
+SYNTAX_DIR = _HERE / "abi-syntax"
+# The parse options every surface is computed under — part of every cache key. The tool parses at the newest
+# language version (a superset of every LangVersion) with NO preprocessor symbol, and keeps directives and
+# disabled text verbatim, so no project's symbols are needed and a `#if` edit is always a surface change.
+PARSE_OPTIONS = "lang=preview;symbols=none;directives=verbatim"
+METHOD = "syntax"
+# Rule 8's per-file prior: one Roslyn parse + skeleton is milliseconds; this bounds the tool's whole call.
+PARSE_SECONDS = 0.05
+TOOL_BUILD_SECONDS = 90.0
+# The project text that switches on a generator driven by method BODIES (interceptors): a body edit there can
+# change generated code, so its projects are never eligible.
+_BODY_GENERATORS = re.compile(r"Interceptors(?:Preview)?Namespaces|EnableConfigurationBindingGenerator|"
+                              r"EnableRequestDelegateGenerator", re.IGNORECASE)
+
+SurfaceFn = Callable[[dict], dict]   # {blob sha: bytes} → {blob sha: {surface: str|None, mode, reason}}
+
+
+def tool_hash(tool_dir: Path = SYNTAX_DIR) -> str:
+    """The comparer's own content address: every source file of its directory (bin/obj excluded)."""
+    entries = []
+    for p in sorted(tool_dir.rglob("*")):
+        rel = p.relative_to(tool_dir)
+        if p.is_file() and not ({"bin", "obj"} & set(rel.parts)):
+            entries.append(f"{rel.as_posix()}={sha256(p.read_bytes())}")
+    return sha256("\n".join(entries).encode())
+
+
+def surface_key(blob: str, strip: bool = True, tool: str | None = None) -> str:
+    """A cached surface is authoritative only under its FULL key: the comparer's content, the parse options and
+    the blob — git's own content address of the file."""
+    return sha256(f"abi-surface/1\n{tool or tool_hash()}\n{PARSE_OPTIONS}\nstrip={strip}\n{blob}".encode())
+
+
+class SurfaceCache:
+    """Content-addressed surfaces under a directory (a runner-local one, or the fleet's file store — the share a
+    runner pod mounts). A hit counts only when the entry names its full key; anything unreadable or unwritable is a
+    MISS — the file is parsed, never a wrong verdict."""
+
+    def __init__(self, directory: Path | None):
+        self.dir = directory
+        self.hits = self.misses = 0
+
+    def _path(self, key: str) -> Path | None:
+        return self.dir / "surfaces" / key[:2] / f"{key}.json" if self.dir else None
+
+    def get(self, key: str) -> dict | None:
+        p = self._path(key)
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8")) if p and p.is_file() else None
+        except (OSError, ValueError):
+            doc = None
+        if isinstance(doc, dict) and doc.get("key") == key and "surface" in doc:
+            self.hits += 1
+            return doc
+        self.misses += 1
+        return None
+
+    def put(self, key: str, doc: dict) -> None:
+        p = self._path(key)
+        if p is None:
+            return
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps({**doc, "key": key}, sort_keys=True), encoding="utf-8")
+            os.replace(tmp, p)
+        except OSError:
+            pass
+
+
+def syntax_tool(cache_dir: Path | None, dotnet: str = "dotnet") -> Path:
+    """The comparer's built entry point, cached by its content hash + the SDK + the runner — built once per run
+    at most. Raises RuntimeError when it cannot be built (the probe then answers `unavailable`)."""
+    sdk = subprocess.run([dotnet, "--version"], capture_output=True, text=True, timeout=120)
+    if sdk.returncode != 0:
+        raise RuntimeError(f"no .NET SDK to build the syntax comparer: {sdk.stderr.strip()[-200:]}")
+    version = sdk.stdout.strip()
+    major = version.split(".", 1)[0]
+    ident = sha256(f"{tool_hash()}\n{version}\n{sys.platform}\n{os.uname().machine}".encode())[:24]
+    base = (cache_dir or Path(os.environ.get("RUNNER_TEMP") or "/tmp") / "abi-cache") / "tool"
+    done = base / ident / "abi-syntax.dll"
+    if (base / ident / ".complete").is_file() and done.is_file():
+        return done
+    staging = base / f"{ident}.{os.getpid()}.tmp"
+    proc = subprocess.run([dotnet, "build", str(SYNTAX_DIR / "AbiSyntax.csproj"), "-nologo", "-v:q", "-c", "Release",
+                           f"-p:AbiSyntaxTfm=net{major}.0", "-o", str(staging),
+                           f"-p:BaseIntermediateOutputPath={staging}.obj/"],
+                          capture_output=True, text=True, timeout=900,
+                          env={**os.environ, "DOTNET_CLI_USE_MSBUILD_SERVER": "0", "DOTNET_NOLOGO": "1"})
+    if proc.returncode != 0 or not (staging / "abi-syntax.dll").is_file():
+        tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-15:])
+        raise RuntimeError(f"the syntax comparer did not build:\n{tail}")
+    import shutil
+    shutil.rmtree(f"{staging}.obj", ignore_errors=True)
+    (staging / ".complete").write_text(ident)
+    try:
+        os.replace(staging, base / ident)
+    except OSError:
+        if not (base / ident / ".complete").is_file():   # another run won the rename: theirs is identical
+            raise
+    return done
+
+
+def roslyn_surfaces(cache: SurfaceCache, cache_dir: Path | None, strip: bool = True, dotnet: str = "dotnet") -> SurfaceFn:
+    """The production SurfaceFn: cache first, the Roslyn comparer for every miss, written back."""
+    tool = tool_hash()
+
+    def surfaces(blobs: dict) -> dict:
+        import tempfile
+        out: dict[str, dict] = {}
+        misses: dict[str, bytes] = {}
+        for blob, data in blobs.items():
+            hit = cache.get(surface_key(blob, strip, tool))
+            if hit is not None:
+                out[blob] = {k: hit.get(k) for k in ("surface", "mode", "reason")}
+            else:
+                misses[blob] = data
+        if misses:
+            entry = syntax_tool(cache_dir, dotnet)
+            with tempfile.TemporaryDirectory() as tmp:
+                req = {"strip": strip, "blobs": []}
+                for blob, data in misses.items():
+                    (Path(tmp) / blob).write_bytes(data)
+                    req["blobs"].append({"id": blob, "file": str(Path(tmp) / blob)})
+                (Path(tmp) / "request.json").write_text(json.dumps(req))
+                proc = subprocess.run([dotnet, str(entry), str(Path(tmp) / "request.json")], capture_output=True,
+                                      text=True, timeout=600)
+            if proc.returncode != 0:
+                raise RuntimeError(f"the syntax comparer failed: {proc.stderr.strip()[-400:]}")
+            got = json.loads(proc.stdout)
+            for blob in misses:
+                doc = got.get(blob)
+                if not isinstance(doc, dict):
+                    raise RuntimeError(f"the syntax comparer gave no answer for blob {blob}")
+                out[blob] = doc
+                cache.put(surface_key(blob, strip, tool), doc)
+        return out
+    return surfaces
+
+
+def _blob(root: Path, rev: str, path: str) -> str | None:
+    proc = subprocess.run(["git", "rev-parse", "--verify", "-q", f"{rev}:{path}"], cwd=root, capture_output=True, text=True)
+    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
+
+
+def _blob_bytes(root: Path, blob: str) -> bytes:
+    return subprocess.run(["git", "cat-file", "blob", blob], cwd=root, capture_output=True, check=True, timeout=120).stdout
+
+
+_ITEM_PATTERN = re.compile(r"<(Compile|EmbeddedResource|Content|None|AdditionalFiles)\s[^>]*?\b(Include|Update|Remove)=(?:\"([^\"]*)\"|'([^']*)')")
+
+
+def _glob_regex(pattern: str) -> str:
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("$(", i):
+            j = pattern.find(")", i)
+            out.append(".*")                # an unexpanded property: anything (over-approximates coverage)
+            i = len(pattern) if j < 0 else j + 1
+        elif pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return "".join(out)
+
+
+def payload_item(root: Path, rel_dir: str, rel_file: str) -> str | None:
+    """Why the changed `.cs` file may NOT be plain compiler input of the project at rel_dir — the item that
+    covers it (a `Compile Remove`, or an EmbeddedResource/Content/None/AdditionalFiles include of it), or default
+    compile items switched off — read from the project file and every Directory.Build.* above it. None ⇒ the
+    SDK's default `**/*.cs` compiles it. Patterns with unexpanded properties match ANYTHING their literal parts
+    allow (the safe direction); the build hosts' manifest still asks MSBuild itself (`code_from_evaluation`)."""
+    text = _project_text(root, rel_dir)
+    if re.search(r"<EnableDefaultCompileItems>\s*false", text, re.IGNORECASE):
+        return "EnableDefaultCompileItems=false"
+    for kind, attr, a, b in _ITEM_PATTERN.findall(text):
+        if kind == "Compile" and attr != "Remove":
+            continue
+        for piece in (a or b).split(";"):
+            piece = piece.strip().replace("\\", "/")
+            if not piece:
+                continue
+            if "$(" in piece:
+                rx = "(?:.*/)?" + _glob_regex(piece.lstrip("/"))
+            else:
+                rx = _glob_regex(os.path.normpath(f"{rel_dir}/{piece}").replace("\\", "/"))
+            if re.fullmatch(rx, rel_file):
+                return f"<{kind} {attr}=\"{piece}\">"
+    return None
+
+
+def _project_text(root: Path, rel_dir: str) -> str:
+    """The project file and every Directory.Build.* above it — where a body-driven generator is switched on."""
+    texts = [c.read_text(encoding="utf-8", errors="replace") for c in (root / rel_dir).glob("*.csproj")]
+    here = (root / rel_dir).resolve()
+    while True:
+        texts += [f.read_text(encoding="utf-8", errors="replace") for f in here.glob("Directory.Build.*") if f.is_file()]
+        if here == root.resolve() or here.parent == here:
+            break
+        here = here.parent
+    return "\n".join(texts)
+
+
+def probe(root: Path, base: str, head: str, files: list[str], surfaces: SurfaceFn,
+          deadline: float | None = None, clock: Callable[[], float] = time.time) -> dict:
+    """The verdict for every project owning a changed file (see the module docstring)."""
     root = root.resolve()
+    why = short_circuit(root, base, files)
+    if why:
+        return unavailable(base, head, why)
     dirs = project_dirs(root)
     owned: dict[str, list[str]] = {}
     for f in files:
         d = owner_of(f, dirs)
         if d is not None:
             owned.setdefault(d, []).append(f)
-    verdict: dict = {"schema": SCHEMA, "base": base, "head": head, "deterministic": True, "projects": {}}
+    verdict: dict = {"schema": SCHEMA, "base": base, "head": head, "deterministic": True, "projects": {}, "method": METHOD}
     projects = verdict["projects"]
-    eligible: list[str] = []
+    pairs: dict[str, list[tuple[str, str | None, str | None]]] = {}
     for d, fs in sorted(owned.items()):
         names = sorted(assembly_names(root, d))
         entry = {"assembly": names[0] if names else Path(d).name, "files": sorted(fs), "eligible": False,
                  "unchanged": False, "refasm": "", "baseRefasm": "", "friends": sorted(friends_from_source(root, d))}
-        other = [f for f in fs if not f.endswith(CODE_EXTS)]
-        if other:
-            entry["reason"] = f"a non-code input changed ({other[0]}{f' +{len(other) - 1}' if len(other) > 1 else ''}) — not described by the reference assembly"
-        else:
-            entry["eligible"] = True
-            eligible.append(d)
         projects[d] = entry
-    head_entries: dict[str, dict] = {}
-    for d in eligible:
-        if not build(d, True):
-            projects[d].update(eligible=False, reason="did not build at head — the regular legs report why")
+        other = [f for f in fs if not f.endswith(".cs")]
+        if other:
+            entry["reason"] = f"a non-C# input changed ({other[0]}{f' +{len(other) - 1}' if len(other) > 1 else ''}) — not described by its syntax surface"
             continue
-        try:
-            head_entry = read(d)
-        except (RuntimeError, OSError, ValueError, IndexError) as exc:
-            projects[d].update(eligible=False, reason=f"head reference assembly unreadable: {exc}")
-            continue
-        # A `.cs` extension is not compiler input (review of core #7986): a project can embed C# as a
-        # resource (`<Compile Remove="Data/**"/><EmbeddedResource Include="Data/**"/>`). Every changed
-        # file must be an evaluated Compile item at head — a deleted one, absent a payload risk.
-        code = set(head_entry["code"]) if head_entry.get("code") is not None else None
-        payload = [f for f in projects[d]["files"]
-                   if not (is_code(root, f, d, code) if (root / f).is_file() else not payload_risk(root, d))]
+        payload = next(((f, why) for f in sorted(fs) if (why := payload_item(root, d, f))), None)
         if payload:
-            projects[d].update(eligible=False, reason=f"{payload[0]} is not compiler input (resource/content payload) — "
-                                                     "not described by the reference assembly")
+            entry["reason"] = f"{payload[0]} may not be compiler input ({payload[1]}) — not judged by syntax"
             continue
-        head_entries[d] = head_entry
-    for d, head_entry in head_entries.items():
+        if _BODY_GENERATORS.search(_project_text(root, d)):
+            entry["reason"] = "a source generator driven by method bodies (interceptors) is switched on — a body edit can move generated code"
+            continue
+        trio = [(f, _blob(root, base, f), _blob(root, head, f)) for f in sorted(fs)]
+        added = [f for f, b, h in trio if b is None or h is None]
+        if added:
+            entry["reason"] = f"a file was added or deleted ({added[0]}) — treated as an API change"
+            continue
+        entry["eligible"] = True
+        pairs[d] = trio
+    blobs = {b for trio in pairs.values() for _, bb, hb in trio for b in (bb, hb)}
+    if blobs and deadline is not None and clock() + TOOL_BUILD_SECONDS + len(blobs) * PARSE_SECONDS > deadline:
+        return unavailable(base, head, f"{len(blobs)} file version(s) to parse (+ the comparer's build) exceed the "
+                                       f"{max(0, int(deadline - clock()))} s left before the deadline — nothing narrowed")
+    try:
+        got = surfaces({b: _blob_bytes(root, b) for b in sorted(blobs)}) if blobs else {}
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        return unavailable(base, head, f"the syntax comparer could not answer: {str(exc)[-300:]} — nothing narrowed")
+    for d, trio in pairs.items():
         entry = projects[d]
-        saved: dict[str, bytes | None] = {}
-        for f in entry["files"]:
-            p = root / f
-            saved[f] = p.read_bytes() if p.is_file() else None
-        base_entry = None
-        try:
-            for f in entry["files"]:
-                p = root / f
-                show = subprocess.run(["git", "show", f"{base}:{f}"], cwd=root, capture_output=True, timeout=120)
-                if show.returncode == 0:
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_bytes(show.stdout)
-                elif p.exists():
-                    p.unlink()   # added by the change: absent at base
-            if build(d, False):
-                try:
-                    base_entry = read(d)
-                except (RuntimeError, OSError, ValueError, IndexError):
-                    base_entry = None
-        finally:
-            for f, data in saved.items():
-                p = root / f
-                if data is None:
-                    if p.exists():
-                        p.unlink()
-                else:
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_bytes(data)
-        again = None
-        if build(d, False):
-            try:
-                again = read(d)
-            except (RuntimeError, OSError, ValueError, IndexError):
-                again = None
-        entry["refasm"] = head_entry["refasm"]
-        entry["friends"] = sorted(set(entry["friends"]) | set(head_entry.get("friends") or [])
-                                  | set((base_entry or {}).get("friends") or []))
-        if again is None or again["refasm"] != head_entry["refasm"]:
-            verdict["deterministic"] = False
-            entry["reason"] = "the head's reference assembly did not rebuild byte-identical — not deterministic"
-            continue
-        if base_entry is None:
-            entry["reason"] = "the base did not build against the head's dependencies — treated as an API change"
-            continue
-        entry["baseRefasm"] = base_entry["refasm"]
-        if base_entry["abi"] == head_entry["abi"]:
-            entry["unchanged"] = True
-            entry["reason"] = f"{SKIP_PREFIX} (ref asm {head_entry['refasm'][:12]})"
+        head_s, base_s, moved = [], [], None
+        for f, bb, hb in trio:
+            b, h = got.get(bb) or {}, got.get(hb) or {}
+            if not b.get("surface") or not h.get("surface"):
+                moved = moved or f"{f}: {(h.get('reason') or b.get('reason') or 'no surface')} — treated as an API change"
+                continue
+            base_s.append(f"{f}={b['surface']}")
+            head_s.append(f"{f}={h['surface']}")
+            if b["surface"] != h["surface"]:
+                moved = moved or f"public API changed ({f}: surface {b['surface'][:12]} → {h['surface'][:12]})"
+        entry["refasm"] = sha256("\n".join(head_s).encode()) if head_s else ""
+        entry["baseRefasm"] = sha256("\n".join(base_s).encode()) if base_s else ""
+        if moved:
+            entry["reason"] = moved
         else:
-            entry["reason"] = f"public API changed (ref asm {base_entry['refasm'][:12]} → {head_entry['refasm'][:12]})"
-    if not verdict["deterministic"]:
-        for entry in projects.values():
-            if entry["unchanged"]:
-                entry["unchanged"] = False
-                entry["reason"] = "withdrawn: another project's reference assembly was not deterministic in this run"
+            entry["unchanged"] = True
+            entry["reason"] = f"{SKIP_PREFIX} (surface {entry['refasm'][:12]})"
     return verdict
 
 
@@ -639,7 +894,10 @@ def decide(root: Path, verdict: dict, units: list[dict], reselected: set[str] | 
                 friends = set(entry.get("friends") or []) | friends_from_source(root, d)
                 others = set().union(*(assembly_names(root, x) for x in closure if x != d))
                 seen = sorted(others & friends)
-                if UNKNOWN_ASSEMBLY in others and friends:
+                if UNKNOWN_FRIEND in friends:
+                    keep = (f"{entry.get('assembly') or d} grants InternalsVisibleTo to an assembly whose name cannot be "
+                            "read without a build — a friend cannot be ruled out")
+                elif UNKNOWN_ASSEMBLY in others and friends:
                     keep = (f"an assembly name in its closure cannot be read from the project text, and "
                             f"{entry.get('assembly') or d} grants InternalsVisibleTo — a friend cannot be ruled out")
                 elif seen:
@@ -655,7 +913,7 @@ def decide(root: Path, verdict: dict, units: list[dict], reselected: set[str] | 
             out[uid] = {"decision": "keep", "reason": keep, "dependencies": hit}
         else:
             hashes = ", ".join(projects[d]["refasm"][:12] for d in hit)
-            out[uid] = {"decision": "skip", "reason": f"{SKIP_PREFIX} (ref asm {hashes})",
+            out[uid] = {"decision": "skip", "reason": f"{SKIP_PREFIX} (surface {hashes})",
                         "dependencies": [projects[d].get("assembly") or d for d in hit]}
     return out
 
@@ -700,7 +958,7 @@ def abi_key(root: Path, project: str, manifest: dict, platform: str = "", reads:
             continue
         friends = set(entry.get("friends") or []) | friends_from_source(root, d)
         others = set().union(*(a for x, a in assemblies.items() if x != d))
-        if friends & others or (friends and UNKNOWN_ASSEMBLY in others):
+        if friends & others or UNKNOWN_FRIEND in friends or (friends and UNKNOWN_ASSEMBLY in others):
             if not entry.get("full"):
                 raise ValueError(f"{d}: a friend in {project}'s closure needs the full assembly hash, the manifest has none")
             # The full assembly AND the non-compiled files (review of core #7986): a content file copied to
@@ -778,6 +1036,23 @@ def _fake_builder(root: Path, log: list, nondeterministic: set[str] | None = Non
     return build, read
 
 
+def _fake_surfaces(log: list) -> SurfaceFn:
+    """A stand-in for the Roslyn comparer (this self-test runs where no SDK is installed): the surface of a file is
+    its sorted public declaration lines; "SYNTAX ERROR" is a parse error. `--self-test-syntax` runs the real one."""
+    def surfaces(blobs: dict) -> dict:
+        log.append(sorted(blobs))
+        out = {}
+        for blob, data in blobs.items():
+            text = data.decode("utf-8", "replace")
+            if "SYNTAX ERROR" in text:
+                out[blob] = {"surface": None, "mode": "error", "reason": "parse error CS1002 at line 1"}
+                continue
+            public = sorted(set(re.findall(r"public (?:class \w+|[\w<>?]+ \w+\([^)]*\)|[\w<>?]+ \w+ \{)", text)))
+            out[blob] = {"surface": sha256("\n".join(public).encode()), "mode": "skeleton", "reason": ""}
+        return out
+    return surfaces
+
+
 def self_test() -> int:
     import tempfile
     checks = 0
@@ -802,39 +1077,56 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _fixture(root)
+        gitc = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
-        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
-        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"], cwd=root, check=True)
+        subprocess.run([*gitc, "add", "-A"], cwd=root, check=True)
+        subprocess.run([*gitc, "commit", "-qm", "base"], cwd=root, check=True)
         base = git(root, "rev-parse", "HEAD").strip()
         check(friends_from_source(root, "src/Lib") == {"Lib.Test", "Friend"}, "csproj IVT items read")
+        (root / "src/Directory.Build.targets").write_text('<Project><ItemGroup><InternalsVisibleTo Include="$(AssemblyName).Bench" />'
+                                                         '</ItemGroup></Project>')
+        check("Lib.Bench" in friends_from_source(root, "src/Lib"), "a Directory.Build.* grant naming the project's own name is expanded")
+        (root / "src/Directory.Build.targets").write_text('<Project><ItemGroup><InternalsVisibleTo Include="$(Vendor).Tests" />'
+                                                         '<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">'
+                                                         '<_Parameter1>Lib.Probe</_Parameter1></AssemblyAttribute></ItemGroup></Project>')
+        got_f = friends_from_source(root, "src/Lib")
+        check(UNKNOWN_FRIEND in got_f and "Lib.Probe" in got_f, f"an unreadable grant is UNKNOWN; an AssemblyAttribute grant is read: {got_f}")
+        (root / "src/Directory.Build.targets").unlink()
+        (root / "src/Lib/Directory.Build.props").write_text('<Project><ItemGroup><InternalsVisibleTo Include="Lib.Beside" />'
+                                                           '</ItemGroup></Project>')
+        check("Lib.Beside" in friends_from_source(root, "src/Lib"), "a Directory.Build.* in the project's OWN directory is read")
+        (root / "src/Lib/Directory.Build.props").unlink()
+        check(resolve_range(root, "HEAD...HEAD", None) == (base, base), "a range ending at HEAD resolves")
+        try:
+            resolve_range(root, f"{base}...{base}~0^{{tree}}", None)
+            check(False, "a range whose head is not the checked-out HEAD is refused")
+        except (ValueError, RuntimeError, subprocess.CalledProcessError):
+            check(True, "a range whose head is not the checked-out HEAD is refused")
         check(own_dirs(root, "src/App/App.csproj") == {"src/App", "src/App.Test"}, "own dirs = entry + sibling .Test")
 
         units = [{"id": u, "project": f"src/{u}/{u}.csproj"} for u in ("Lib", "Lib.Test", "App", "App.Test", "Friend", "Friend.Test")]
         units.append({"id": "Census.Test", "project": "src/Census.Test/Census.Test.csproj", "reads": ["src/**/*.cs"]})
 
         def commit(msg: str) -> None:
-            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", msg], cwd=root, check=True)
+            subprocess.run([*gitc, "add", "-A"], cwd=root, check=True)
+            subprocess.run([*gitc, "commit", "-qm", msg], cwd=root, check=True)
 
-        def run_probe(nondet: set[str] | None = None) -> tuple[dict, list]:
+        def run_probe(**kw) -> tuple[dict, list]:
             log: list = []
-            build, read = _fake_builder(root, log, nondet)
-            v = probe(root, base, git(root, "rev-parse", "HEAD").strip(), changed_files(root, base), build, read)
+            v = probe(root, base, git(root, "rev-parse", "HEAD").strip(), changed_files(root, base), _fake_surfaces(log), **kw)
             return v, log
 
-        # ── BRANCH 1: an internal-only change (a method body) ──
+        # ── BRANCH 1: an internal-only change (a method body) — no build, one parse per file version ──
         (root / "src/Lib/A.cs").write_text("public class A { public int F() => 2; private int H() => 3; }\n")
         commit("internal")
-        head_text = (root / "src/Lib/A.cs").read_text()
         v, log = run_probe()
         lib = v["projects"]["src/Lib"]
-        check(v["deterministic"] and lib["eligible"] and lib["unchanged"], f"internal-only ⇒ unchanged: {lib}")
-        check(lib["reason"].startswith("public API unchanged (ref asm ") and lib["refasm"] == lib["baseRefasm"], lib["reason"])
-        check((root / "src/Lib/A.cs").read_text() == head_text, "the probe restores the head's files")
-        check(log[0] == ("src/Lib", True) and log[1:] == [("src/Lib", False), ("src/Lib", False)],
-              f"head with references, then base and head-again without: {log}")
+        check(v["method"] == "syntax" and lib["eligible"] and lib["unchanged"], f"internal-only ⇒ unchanged: {lib}")
+        check(lib["reason"].startswith("public API unchanged (surface ") and lib["refasm"] == lib["baseRefasm"], lib["reason"])
+        check(len(log) == 1 and len(log[0]) == 2, f"ONE comparer call over the two versions of the one file — nothing built: {log}")
         d = decide(root, v, units, set())
         check(d["App"]["decision"] == "skip" and d["App.Test"]["decision"] == "skip", f"dependents skipped: {d}")
-        check(d["App.Test"]["reason"] == f"public API unchanged (ref asm {lib['refasm'][:12]})", d["App.Test"]["reason"])
+        check(d["App.Test"]["reason"] == f"public API unchanged (surface {lib['refasm'][:12]})", d["App.Test"]["reason"])
         check(d["Lib"]["decision"] == "keep" and d["Lib.Test"]["decision"] == "keep", "the changed module and its own suite run")
         check(d["Friend"]["decision"] == "keep" and "InternalsVisibleTo" in d["Friend"]["reason"], f"an IVT friend keys on the full assembly: {d['Friend']}")
         check(d["Friend.Test"]["decision"] == "keep" and "Friend sees" in d["Friend.Test"]["reason"], "…and so does every unit whose closure holds the friend")
@@ -846,15 +1138,17 @@ def self_test() -> int:
               "a .Test entry owns its production sibling: Lib.Test keeps on an internal Lib change even without IVT")
         d2 = decide(root, v, units, reselected={"App.Test"})
         check(d2["App.Test"]["decision"] == "keep" and d2["App"]["decision"] == "skip", "a unit another changed path reaches stays")
-        # The KEY: equal across the internal change for a non-friend dependent, `full:` for a friend.
-        mh = {"src/Lib": _fake_builder(root, [])[1]("src/Lib")}
+        # The KEY (build hosts): equal across the internal change for a non-friend dependent, `full:` for a friend.
+        build0, read0 = _fake_builder(root, [])
+        build0("src/Lib", True)
+        mh = {"src/Lib": read0("src/Lib")}
         ka = abi_key(root, "src/App.Test/App.Test.csproj", mh)
         check(ka["inputs"]["closure"]["src/Lib"].startswith("abi:"), "a non-friend dependency keys on abi:")
         check(ka["inputs"]["closure"]["src/App.Test"].startswith("tree:"), "own dirs key on their tree")
         kf = abi_key(root, "src/Friend.Test/Friend.Test.csproj", mh)
         check(kf["inputs"]["closure"]["src/Lib"].startswith("full:"), "a friend's closure keys D on full:")
         (root / "src/Lib/data.json").write_text('{"copied": "to output"}\n')
-        kf2 = abi_key(root, "src/Friend.Test/Friend.Test.csproj", {"src/Lib": _fake_builder(root, [])[1]("src/Lib")})
+        kf2 = abi_key(root, "src/Friend.Test/Friend.Test.csproj", {"src/Lib": read0("src/Lib")})
         check(kf2["key"] != kf["key"], "full: carries the non-C# tree too — a content file moves a friend's key")
         subprocess.run(["git", "checkout", "-q", "--", "src/Lib/data.json"], cwd=root, check=True)
         (root / "src/Linker").mkdir()
@@ -897,66 +1191,47 @@ def self_test() -> int:
               f"an unresolved assembly name beside an IVT grant keeps the unit: {du}")
         check(abi_key(root, "src/App.Test/App.Test.csproj", mh)["inputs"]["closure"]["src/Lib"].startswith("full:"),
               "…and keys the IVT-granting dependency on full:")
+        dk = decide(root, {"schema": SCHEMA, "projects": {"src/Lib": {"unchanged": True, "files": ["src/Lib/A.cs"],
+                                                                      "refasm": "a" * 64, "friends": [UNKNOWN_FRIEND]}}},
+                    [{"id": "AT", "project": "src/App.Test/App.Test.csproj"}], set())["AT"]
+        check(dk["decision"] == "keep" and "cannot be read without a build" in dk["reason"],
+              f"an unresolved InternalsVisibleTo grant keeps every dependent: {dk}")
         (root / "src/App/App.csproj").write_text(app_csproj)
 
         # ── BRANCH 2: a public-API change ──
+        base = git(root, "rev-parse", "HEAD").strip()
         (root / "src/Lib/A.cs").write_text("public class A { public int F() => 2; public int F2() => 4; }\n")
         commit("api")
         v, _ = run_probe()
         lib = v["projects"]["src/Lib"]
         check(lib["eligible"] and not lib["unchanged"] and lib["reason"].startswith("public API changed"), f"API change ⇒ changed: {lib}")
-        d = decide(root, v, units, set())
-        check(all(x["decision"] == "keep" for x in d.values()), f"API change ⇒ every dependent rebuilds and tests: {d}")
-        kb = abi_key(root, "src/App.Test/App.Test.csproj", {"src/Lib": _fake_builder(root, [])[1]("src/Lib")})
-        check(kb["key"] != ka["key"], "the ABI key moves with the public surface")
+        check(all(x["decision"] == "keep" for x in decide(root, v, units, set()).values()), "API change ⇒ every dependent rebuilds and tests")
 
-        # ── internal again on top: the key returns to the internal-only shape relative to ITS base ──
-        base = git(root, "rev-parse", "HEAD").strip()
-        k_before = abi_key(root, "src/App.Test/App.Test.csproj", {"src/Lib": _fake_builder(root, [])[1]("src/Lib")})
-        (root / "src/Lib/A.cs").write_text("public class A { public int F() => 9; public int F2() => 4; }\n")
-        commit("internal 2")
-        rebuild, reread = _fake_builder(root, [])
-        rebuild("src/Lib", False)
-        k_after = abi_key(root, "src/App.Test/App.Test.csproj", {"src/Lib": reread("src/Lib")})
-        check(k_before["key"] == k_after["key"], "an internal-only change leaves a dependent's ABI key EQUAL")
-        kl_before = abi_key(root, "src/Lib/Lib.csproj", {})
-        check(kl_before["inputs"]["closure"]["src/Lib"].startswith("tree:"), "the changed project keys on its own tree")
-
-        # ── non-C# input: never eligible, nothing built ──
+        # ── non-C# input: never eligible, nothing parsed ──
         base = git(root, "rev-parse", "HEAD").strip()
         (root / "src/Lib/data.json").write_text('{"x": 1}\n')
         commit("content")
         v, log = run_probe()
-        check(not v["projects"]["src/Lib"]["eligible"] and log == [] and "non-code" in v["projects"]["src/Lib"]["reason"],
-              f"a content edit is not a reference-assembly question: {v['projects']['src/Lib']}")
+        check(not v["projects"]["src/Lib"]["eligible"] and log == [] and "non-C#" in v["projects"]["src/Lib"]["reason"],
+              f"a content edit is not a surface question: {v['projects']['src/Lib']}")
         check(decide(root, v, units, set())["App.Test"]["decision"] == "keep", "…so dependents rebuild")
 
-        # ── Razor markup: a body edit keeps the surface, a [Parameter] is surface ──
+        # ── Razor markup: not judged by C# syntax — never eligible (a [Parameter] there IS surface) ──
+        base = git(root, "rev-parse", "HEAD").strip()
         (root / "src/Lib/V.razor").write_text("<div>hello</div>\n@code { private int n = 1; }\n")
-        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
         commit("a razor view")
-        base = git(root, "rev-parse", "HEAD").strip()
-        (root / "src/Lib/V.razor").write_text("<section class=\"x\">hello again</section>\n@code { private int n = 2; }\n")
-        commit("razor markup")
-        v, _ = run_probe()
-        check(v["projects"]["src/Lib"]["eligible"] and v["projects"]["src/Lib"]["unchanged"],
-              f"a .razor markup/body edit is eligible and keeps the public surface: {v['projects']['src/Lib']}")
-        base = git(root, "rev-parse", "HEAD").strip()
-        (root / "src/Lib/V.razor").write_text("<section>@Title</section>\n@code { [Parameter] public string? Title { get; set; } }\n")
-        commit("razor parameter")
-        v, _ = run_probe()
-        check(v["projects"]["src/Lib"]["eligible"] and not v["projects"]["src/Lib"]["unchanged"],
-              f"a new [Parameter] in .razor is a public-API change: {v['projects']['src/Lib']}")
-        (root / "src/Lib/V.razor.css").write_text(".x { color: red; }\n")
-        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
-        base = git(root, "rev-parse", "HEAD").strip()
-        commit("scoped css")
         v, log = run_probe()
-        check(not v["projects"]["src/Lib"]["eligible"] and log == [], "scoped CSS (.razor.css) is an asset, never eligible")
-        check(not is_code(root, "src/Lib/V.razor", "src/Lib", None) and is_code(root, "src/Lib/A.cs", "src/Lib", None),
-              "unevaluated (--glob): C# only — a .razor needs MSBuild's word that the Razor SDK compiles it")
+        check(not v["projects"]["src/Lib"]["eligible"] and log == [], f"a .razor edit is never eligible: {v['projects']['src/Lib']}")
 
-        # ── MSBuild's evaluation → compiler input (the JSON `dotnet msbuild -getProperty -getItem` answers) ──
+        # ── an ADDED (or deleted) .cs file: an API change, nothing parsed for it ──
+        base = git(root, "rev-parse", "HEAD").strip()
+        (root / "src/Lib/New.cs").write_text("class Hidden { }\n")
+        commit("new file")
+        v, _ = run_probe()
+        check(not v["projects"]["src/Lib"]["unchanged"] and "added or deleted" in v["projects"]["src/Lib"]["reason"],
+              f"a new file is a change: {v['projects']['src/Lib']}")
+
+        # ── MSBuild's evaluation → compiler input (the build hosts' manifest still reads it) ──
         def item(rel_path: str, **meta) -> dict:
             return {"FullPath": str(root / rel_path), **meta}
         evaluation = {"Compile": [item("src/Lib/A.cs")],
@@ -969,75 +1244,214 @@ def self_test() -> int:
               f"Razor SDK: Compile + uncopied .razor are code; a PreserveNewest .cshtml, an embedded one and content are payload: {got}")
         check(code_from_evaluation(root, root / "src/Lib", {}, evaluation) == {"src/Lib/A.cs"},
               "a plain Microsoft.NET.Sdk project: its .razor Content is payload")
-        check(code_from_evaluation(root, root / "src/Lib", {**razor_props, "EnableDefaultRazorComponentItems": "false"}, evaluation)
-              == {"src/Lib/A.cs"}, "default Razor component items switched off: payload")
-        # …and END TO END through probe(): a copied .cshtml edit (MVC/Razor Pages, PreserveNewest) is never
-        # `unchanged` — the evaluated membership marks the project ineligible after the head build.
-        (root / "src/Web").mkdir()
-        (root / "src/Web/Web.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk.Razor"></Project>')
-        (root / "src/Web/W.cs").write_text("public class W { }\n")
-        (root / "src/Web/Page.cshtml").write_text("<p>one</p>\n")
-        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "src/Web"], cwd=root, check=True)
-        commit("web project")
-        base = git(root, "rev-parse", "HEAD").strip()
-        (root / "src/Web/Page.cshtml").write_text("<p>two</p>\n")
-        commit("page edit")
-        wlog: list = []
-        wbuild, wread = _fake_builder(root, wlog)
 
-        def web_read(d: str) -> dict:
-            if d != "src/Web":
-                return wread(d)
-            paths = _glob_paths(root, sorted((root / d).glob("*.csproj"))[0], "Release")
-            paths["code"] = sorted(code_from_evaluation(root, root / d, {"UsingMicrosoftNETSdkRazor": "true"}, {
-                "Compile": [{"FullPath": str(root / "src/Web/W.cs")}],
-                "Content": [{"FullPath": str(root / "src/Web/Page.cshtml"), "CopyToPublishDirectory": "PreserveNewest"}]}))
-            return manifest_entry(root, d, paths)
-        v = probe(root, base, git(root, "rev-parse", "HEAD").strip(), changed_files(root, base), wbuild, web_read)
-        web = v["projects"]["src/Web"]
-        check(not web["eligible"] and not web["unchanged"] and "not compiler input" in web["reason"],
-              f"a copied .cshtml edit is payload end to end, never `unchanged`: {web}")
-
-        # ── C# that is PAYLOAD, not compiler input: never eligible ──
-        base = git(root, "rev-parse", "HEAD").strip()
+        # ── C# that may be PAYLOAD, not compiler input: never eligible ──
         (root / "src/Doc/Data").mkdir(parents=True)
         (root / "src/Doc/Doc.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><Compile Remove="Data/**" />'
                                                  '<EmbeddedResource Include="Data/**" /></ItemGroup></Project>')
         (root / "src/Doc/D.cs").write_text("public class D { }\n")
-        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
+        (root / "src/Doc/Data/Node.cs").write_text("public class N { }\n")
         commit("doc project")
         base = git(root, "rev-parse", "HEAD").strip()
         (root / "src/Doc/Data/Node.cs").write_text("// an embedded C# node\npublic class N { }\n")
-        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
         commit("embedded node")
-        v, _ = run_probe()
+        v, log = run_probe()
         doc = v["projects"]["src/Doc"]
-        check(not doc["eligible"] and "not compiler input" in doc["reason"], f"embedded C# payload is not a surface question: {doc}")
-        check(noncode_hash(root, "src/Doc") != noncode_hash(root, "src/Lib") and payload_risk(root, "src/Doc")
-              and not payload_risk(root, "src/Lib"), "a payload-risk project hashes its .cs into the non-C# identity")
+        check(not doc["eligible"] and "may not be compiler input (<Compile Remove=" in doc["reason"] and log == [],
+              f"embedded C# payload is not a surface question: {doc}")
+        check(payload_item(root, "src/Doc", "src/Doc/D.cs") is None, "…while a .cs the item does not cover is plain compiler input")
+        (root / "src/Fx").mkdir()
+        (root / "src/Fx/Fx.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><None Include="Fixtures\\**" CopyToOutputDirectory="Always" />'
+                                                '<EmbeddedResource Include="$(SomeRoot)Hosting/Console.json" /></ItemGroup></Project>')
+        check(payload_item(root, "src/Fx", "src/Fx/F.cs") is None, "a fixture/resource include that cannot cover the file leaves it eligible")
+        check(payload_item(root, "src/Fx", "src/Fx/Fixtures/Sample.cs") == '<None Include="Fixtures/**">', "…and one that covers it does not")
+        (root / "src/Fx/Fx.csproj").write_text('<Project><ItemGroup><Content Include="$(Root)/**/*" /></ItemGroup></Project>')
+        check(payload_item(root, "src/Fx", "src/Fx/F.cs") is not None, "an unexpanded property in a wildcard include over-approximates: payload")
+        (root / "src/Fx/Fx.csproj").write_text('<Project><PropertyGroup><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup></Project>')
+        check(payload_item(root, "src/Fx", "src/Fx/F.cs") == "EnableDefaultCompileItems=false", "default compile items off: not judged")
+        (root / "src/Fx/Fx.csproj").unlink()
+        (root / "src/Fx").rmdir()
 
-        # ── non-determinism withdraws every skip ──
+        # ── a body-driven generator (interceptors) switched on: never eligible ──
+        (root / "src/Gen").mkdir()
+        (root / "src/Gen/Gen.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+                                                 '<InterceptorsNamespaces>$(InterceptorsNamespaces);X</InterceptorsNamespaces>'
+                                                 '</PropertyGroup></Project>')
+        (root / "src/Gen/G.cs").write_text("public class G { public int F() => 1; }\n")
+        commit("generator project")
         base = git(root, "rev-parse", "HEAD").strip()
-        (root / "src/Lib/A.cs").write_text("public class A { public int F() => 10; public int F2() => 4; }\n")
-        (root / "src/App/B.cs").write_text("public class B { public int G() => new A().F() + 1; }\n")
-        commit("two")
-        v, _ = run_probe(nondet={"src/App"})
-        check(not v["deterministic"] and not v["projects"]["src/Lib"]["unchanged"], f"one non-deterministic project withdraws every skip: {v}")
+        (root / "src/Gen/G.cs").write_text("public class G { public int F() => 2; }\n")
+        commit("generator body")
+        v, log = run_probe()
+        check(not v["projects"]["src/Gen"]["eligible"] and "interceptors" in v["projects"]["src/Gen"]["reason"] and log == [],
+              f"an interceptor-enabled project is not judged by syntax: {v['projects']['src/Gen']}")
 
-        # ── a base that does not build: treated as an API change ──
+        # ── a head that does not parse: changed, its dependents keep ──
         base = git(root, "rev-parse", "HEAD").strip()
         (root / "src/Lib/A.cs").write_text("public class A { public int F() => 10; public int F2() => 4; } // SYNTAX ERROR\n")
         commit("broken head")
         v, _ = run_probe()
-        check(not v["projects"]["src/Lib"]["eligible"], "a head that does not build narrows nothing")
+        check(not v["projects"]["src/Lib"]["unchanged"] and "parse error" in v["projects"]["src/Lib"]["reason"],
+              f"a file that does not parse narrows nothing: {v['projects']['src/Lib']}")
         check(decide(root, v, units, set())["App"]["decision"] == "keep", "…its dependents keep")
-        try:
-            decide(root, {"schema": "nope"}, units)
-        except ValueError:
-            checks += 1
-        else:
-            raise AssertionError("an unknown verdict schema must be refused")
+        # …and a comparer that cannot answer at all makes the whole verdict `unavailable`.
+        def broken(_: dict) -> dict:
+            raise RuntimeError("the syntax comparer did not build")
+        vb = probe(root, base, git(root, "rev-parse", "HEAD").strip(), changed_files(root, base), broken)
+        check("could not answer" in (vb.get("unavailable") or "") and vb["projects"] == {}, f"a comparer failure is unavailable: {vb}")
+
+        # ── rule 7: an input every build imports short-circuits BEFORE anything is parsed ──
+        (root / "src/Lib/A.cs").write_text("public class A { public int F() => 10; public int F2() => 4; }\n")
+        commit("repair the head for the short-circuit cases")
+
+        def sc_case(label: str, writes: dict[str, str], expect: str | None) -> dict:
+            nonlocal base
+            subprocess.run(["git", "checkout", "-q", "--", "."], cwd=root, check=True)
+            base = git(root, "rev-parse", "HEAD").strip()
+            (root / "src/Lib/A.cs").write_text(f"public class A {{ public int F() => {len(label)}; public int F2() => 4; }}\n")
+            for rel, text in writes.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(text)
+            commit(label)
+            v, log = run_probe()
+            if expect is None:
+                check("unavailable" not in v and log, f"{label}: probes (parses): {v.get('unavailable')} {log}")
+            else:
+                check(expect in (v.get("unavailable") or "") and "nothing narrowed" in v["unavailable"] and log == []
+                      and v["projects"] == {} and v["schema"] == SCHEMA, f"{label}: short-circuited, nothing parsed: {v} {log}")
+            return v
+        sc_case("a .cs-only change still probes", {}, None)
+        v = sc_case("Directory.Build.props beside a .cs edit", {"src/Directory.Build.props": "<Project />\n"}, "src/Directory.Build.props changed")
+        check(all(x["decision"] == "keep" for x in decide(root, v, units, set()).values()),
+              "an unavailable verdict narrows nothing: every unit keeps")
+        sc_case("a split pin file at any depth", {"src/Lib/Directory.Packages.Extra.props": "<Project />\n"}, "src/Lib/Directory.Packages.Extra.props")
+        sc_case("global.json", {"global.json": "{}\n"}, "global.json changed")
+        sc_case("NuGet.Config, any case", {"NuGet.Config": "<configuration />\n"}, "NuGet.Config changed")
+        sc_case("the platform floor", {"scripts/platform-floor.json": '{"major": 4}\n'}, "scripts/platform-floor.json changed")
+        sc_case("a TargetFramework retarget", {"src/App/App.csproj": (root / "src/App/App.csproj").read_text().replace(
+            "<ItemGroup>", "<PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup><ItemGroup>", 1)},
+            "the target framework in src/App/App.csproj")
+        # Negative control: the same range WITHOUT the csproj — the old behaviour — is probed.
+        nlog: list = []
+        probe(root, base, git(root, "rev-parse", "HEAD").strip(),
+              [f for f in changed_files(root, base) if not f.endswith(".csproj")], _fake_surfaces(nlog))
+        check(nlog != [], f"negative control — without the short-circuit the same .cs edit is probed: {nlog}")
+
+        # ── rule 8: a deadline the work cannot meet starts nothing ──
+        sc_case("rebase the budget case on a plain .cs edit", {}, None)
+        v, log = run_probe(deadline=1000.0 + 10, clock=lambda: 1000.0)
+        check("exceed the 10 s left" in (v.get("unavailable") or "") and log == [],
+              f"the comparer's build + parses > 10 s ⇒ unavailable, NOTHING started: {v.get('unavailable')} {log}")
+        v, log = run_probe(deadline=1000.0 + 600, clock=lambda: 1000.0)
+        check("unavailable" not in v and log, "negative control — with time left the same range is probed")
+
+        # ── the surface cache: content-addressed, authoritative only under its full key, never load-bearing ──
+        cache = SurfaceCache(root / "cache")
+        key = surface_key("b" * 40, True, "t" * 64)
+        check(cache.get(key) is None and cache.misses == 1, "an empty cache misses")
+        cache.put(key, {"surface": "s" * 64, "mode": "skeleton", "reason": ""})
+        check((cache.get(key) or {}).get("surface") == "s" * 64 and cache.hits == 1, "a stored surface is a hit under its key")
+        check(surface_key("b" * 40, True, "u" * 64) != key and surface_key("b" * 40, False, "t" * 64) != key
+              and surface_key("c" * 40, True, "t" * 64) != key, "the comparer's content, strip and the blob each move the key")
+        path = root / "cache/surfaces" / key[:2] / f"{key}.json"
+        path.write_text(json.dumps({"key": "x" * 64, "surface": "forged", "mode": "skeleton", "reason": ""}))
+        check(cache.get(key) is None, "an entry that does not name its full key is a MISS, never a verdict")
+        path.write_text("{not json")
+        check(cache.get(key) is None, "an unreadable entry is a miss")
+        dead = SurfaceCache(root / "src/Lib/A.cs/not-a-dir")
+        dead.put(key, {"surface": "s"})
+        check(dead.get(key) is None, "an unwritable/unreachable cache only means parsing")
     print(f"abi-key: {checks} self-test assertions passed")
+    return 0
+
+
+# Real-Roslyn cases: (label, base source, head source, expect unchanged?). Run by --self-test-syntax (needs an SDK).
+SYNTAX_CASES: list[tuple[str, str, str, bool]] = [
+    ("a method body edit", "public class A { public int F() { return 1; } }", "public class A { public int F() { return 2 + 3; } }", True),
+    ("an expression body edit", "public class A { public int F() => 1; }", "public class A { public int F() => 2; }", True),
+    ("an accessor body edit", "public class A { int _x; public int P { get { return _x; } set { _x = value; } } }",
+     "public class A { int _x; public int P { get { return _x + 1; } set { } } }", True),
+    ("a field / property initializer edit", "public class A { private int _x = 1; public int P { get; } = 2; }",
+     "public class A { private int _x = 5; public int P { get; } = 9; }", True),
+    ("a constructor initializer and body edit", "public class A : B { public A(int x) : base(x) { } }",
+     "public class A : B { public A(int x) : base(x + 1) { Log(); } }", True),
+    ("comments and whitespace", "public class A { public int F() => 1; }", "// note\npublic   class A {\n  /// doc\n  public int F() => 1;\n}", True),
+    ("a local function inside a body", "public class A { public int F() { return 1; } }",
+     "public class A { public int F() { int G() => 2; return G(); } }", True),
+    ("a signature change", "public class A { public int F(int a) => a; }", "public class A { public int F(long a) => 1; }", False),
+    ("a modifier change", "public class A { public int F() => 1; }", "public class A { public virtual int F() => 1; }", False),
+    ("private to public", "public class A { private int F() => 1; }", "public class A { public int F() => 1; }", False),
+    ("an attribute change", "public class A { public int F() => 1; }", "public class A { [Obsolete] public int F() => 1; }", False),
+    ("a default parameter value", "public class A { public int F(int a = 1) => a; }", "public class A { public int F(int a = 2) => a; }", False),
+    ("a const value", "public class A { public const int C = 1; }", "public class A { public const int C = 2; }", False),
+    ("an enum value", "public enum E { X = 1 }", "public enum E { X = 2 }", False),
+    ("a new private field (struct layout)", "public struct S { public int A; }", "public struct S { public int A; private int b; }", False),
+    ("an auto-property becomes computed (a backing field goes)", "public struct S { public int P { get; } }",
+     "public struct S { public int P => 1; }", False),
+    ("a body becomes an iterator", "public class A { public System.Collections.Generic.IEnumerable<int> F() { return new int[0]; } }",
+     "public class A { public System.Collections.Generic.IEnumerable<int> F() { yield return 1; } }", False),
+    ("an #if edit", "public class A {\n#if DEBUG\n public void D() { }\n#endif\n}", "public class A {\n#if TRACE\n public void D() { }\n#endif\n}", False),
+    ("an edit inside a disabled region", "public class A {\n#if NEVER\n public void D() { }\n#endif\n}",
+     "public class A {\n#if NEVER\n public void D(int x) { }\n#endif\n}", False),
+    ("a partial type: a body edit in one part", "public partial class A { public int F() => 1; }", "public partial class A { public int F() => 2; }", True),
+    ("a partial type: a declaration change in one part", "public partial class A { public int F() => 1; }",
+     "public partial class A { public int F() => 1; public int G() => 2; }", False),
+    ("a generator input ([GeneratedRegex]): any edit", "public partial class A { [GeneratedRegex(\"a\")] private static partial Regex R(); public int F() => 1; }",
+     "public partial class A { [GeneratedRegex(\"a\")] private static partial Regex R(); public int F() => 2; }", False),
+    ("a struct with a primary constructor keeps its bodies", "public struct S(int x) { public int F() => 1; }",
+     "public struct S(int x) { public int F() => x; }", False),
+    ("a record struct: a body edit (positional parameters are properties, never captured)",
+     "public readonly record struct D(int Start) { public static D Of(int a) { return new D(a); } }",
+     "public readonly record struct D(int Start) { public static D Of(int a) { if (a > 0) a--; return new D(a); } }", True),
+    ("a plain using added at the top of the file", "using System;\npublic class A { public int F() => 1; }",
+     "using System;\nusing System.Linq;\npublic class A { public int F() => 1; }", True),
+    ("a using added INSIDE a namespace block (an inner scope can shadow)", "namespace N { public class A { public Foo F() => null; } }",
+     "namespace N { using B; public class A { public Foo F() => null; } }", False),
+    ("a using alias", "public class A { public Foo F() => null; }", "using Foo = B.Bar;\npublic class A { public Foo F() => null; }", False),
+    ("a using static", "public class A { public int F(int a = 1) => a; }", "using static B.C;\npublic class A { public int F(int a = 1) => a; }", False),
+    ("a parse error", "public class A { public int F() => 1; }", "public class A { public int F() => ; ", False),
+    ("top-level statements", "System.Console.WriteLine(1);", "System.Console.WriteLine(2);", False),
+]
+
+
+def syntax_self_test() -> int:
+    """The REAL comparer (built from abi-syntax/ on this host's SDK) over SYNTAX_CASES, the cache's hit path, and a
+    negative control: with stripping off, a body-only edit reads as a change — so `unchanged` comes from the
+    stripping, never from a comparer that always says equal."""
+    import tempfile
+    checks = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        cache_dir = Path(tmp) / "cache"
+        blobs: dict[str, bytes] = {}
+        for _, b, h, _ in SYNTAX_CASES:
+            for src in (b, h):
+                data = src.encode()
+                blobs[sha256(data)[:40]] = data
+        cache = SurfaceCache(cache_dir)
+        got = roslyn_surfaces(cache, cache_dir)(blobs)
+        failed = []
+        for label, b, h, same in SYNTAX_CASES:
+            bs, hs = got[sha256(b.encode())[:40]], got[sha256(h.encode())[:40]]
+            unchanged = bool(bs.get("surface")) and bs.get("surface") == hs.get("surface")
+            checks += 1
+            if unchanged != same:
+                failed.append(f"{label}: expected {'unchanged' if same else 'changed'}, got {bs} / {hs}")
+        if cache.misses != len(blobs) or cache.hits != 0:
+            failed.append(f"a cold cache misses every blob: {cache.hits} hit(s), {cache.misses} miss(es)")
+        warm = SurfaceCache(cache_dir)
+        again = roslyn_surfaces(warm, cache_dir)(blobs)
+        checks += 2
+        if warm.hits != len(blobs) or warm.misses != 0 or again != got:
+            failed.append(f"a warm cache answers every blob, identically: {warm.hits}/{len(blobs)} hit(s)")
+        body = next(c for c in SYNTAX_CASES if c[0] == "a method body edit")
+        raw = roslyn_surfaces(SurfaceCache(None), cache_dir, strip=False)({"b" * 40: body[1].encode(), "h" * 40: body[2].encode()})
+        checks += 1
+        if raw["b" * 40]["surface"] == raw["h" * 40]["surface"]:
+            failed.append("negative control — with stripping OFF a body edit must read as a change")
+    if failed:
+        print("abi-key syntax self-test FAILED:\n  " + "\n  ".join(failed))
+        return 1
+    print(f"abi-key: {checks} syntax self-test assertions passed (real Roslyn comparer, {len(SYNTAX_CASES)} cases)")
     return 0
 
 
@@ -1045,6 +1459,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", choices=["manifest", "probe", "decide", "key"])
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--self-test-syntax", action="store_true", help="build the real Roslyn comparer and run its cases")
     ap.add_argument("--root", default=".")
     ap.add_argument("--project", action="append", default=[])
     ap.add_argument("--configuration", default="Release")
@@ -1059,10 +1474,15 @@ def main() -> int:
     ap.add_argument("--platform", default="")
     ap.add_argument("--read", action="append", default=[], help="key: a caller-declared read (prefix or glob) of the unit")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--deadline", type=float, help="probe: epoch seconds by which it must answer (rule 8)")
+    ap.add_argument("--cache-dir", help="probe: the content-addressed surface + comparer cache (a shared store's directory)")
+    ap.add_argument("--no-strip", action="store_true", help="probe: compare full token streams (a negative control)")
     ap.add_argument("--out")
     a = ap.parse_args()
     if a.self_test:
         return self_test()
+    if a.self_test_syntax:
+        return syntax_self_test()
     if not a.command:
         ap.error("a command (manifest | probe | decide | key) or --self-test is required")
     root = Path(a.root).resolve()
@@ -1080,12 +1500,13 @@ def main() -> int:
             emit(build_manifest(root, a.project, a.configuration, a.msbuild_arg, a.glob))
         elif a.command == "probe":
             base, head = resolve_range(root, a.diff_range, a.base)
-            build = dotnet_builder(root, a.configuration, a.msbuild_arg)
-
-            def read(d: str) -> dict:
-                return build_manifest(root, [d], a.configuration, a.msbuild_arg, a.glob)[d]
-
-            emit(probe(root, base, head, changed_files(root, base), build, read))
+            cache_dir = Path(a.cache_dir) if a.cache_dir else None
+            cache = SurfaceCache(cache_dir)
+            verdict = probe(root, base, head, changed_files(root, base),
+                            roslyn_surfaces(cache, cache_dir, strip=not a.no_strip), a.deadline)
+            verdict["cache"] = {"hits": cache.hits, "misses": cache.misses}
+            print(f"abi-key: surface cache {cache.hits} hit(s), {cache.misses} miss(es)", file=sys.stderr)
+            emit(verdict)
         elif a.command == "decide":
             if not a.verdict or not a.units:
                 ap.error("decide needs --verdict and --units")

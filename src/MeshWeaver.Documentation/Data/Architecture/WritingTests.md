@@ -407,6 +407,20 @@ await nothingElse;
 
 ---
 
+### ❌ Waiting out a framework deadline in real time
+
+A timeout is an error, never a pace: a test that passes only by sitting out a real-time window spends that window on every run, sized for the slowest runner (36 s per test on CI at `TestTimeouts.Quick`). When the deadline firing IS the subject — the text of the request-timeout message, the gate a deferral report names, what a read says when its budget ends — fire it on a **virtual clock**:
+
+| Deadline | Seam |
+|---|---|
+| A hub's request timeout, deferral budget, startup timeout and BuildupAction bound | `MessageHubConfiguration.WithTimeoutClock(TimeProvider)` (production: `TimeProvider.System`) |
+| `GetMeshNodeOutcome`'s read budget | a `ReadBudgetClock` registered in the mesh's services — a dedicated seam, never an ambient `TimeProvider` (absent ⇒ the real clock) |
+| A standalone Rx operator | its `IScheduler` parameter + `TestScheduler` (`ReadBudget`, `ReaskOnceSettled`) |
+
+`MeshWeaver.Fixture.ManualTimeProvider` is the clock. **Arm first, then advance**: a timer is relative to the clock's time when it is created, so wait for `clock.WhenArmed(dueIn)` — and for every precondition the deadline must FOLLOW (the request received, the gate opened, the re-probe delivered) — and only then `clock.Advance(dueIn)`. Bound the wait for the outcome, and assert it carries the framework's own message, so a deadline that did not fire fails by name instead of wedging. Putting every bound of a nested ladder on the same clock keeps their ORDER under test: advancing by the inner bound fires the outer one too whenever the outer is not strictly larger.
+
+---
+
 ### ❌ A "never through" assertion made on one sample
 
 "The type goes `AdoptedVerified` → `AdoptedVerified`, never through `StaleAdopted`" is a claim about **every** state between two points, so a single read afterwards cannot make it. An unconditioned point read samples a value that may still be moving: it fails on a transient the claim allows (#7338: one read caught a `Compiled` stamp landing mid-transition), and it passes on a transient the claim forbids, if the state has settled back by the time of the read. Turning the read into a wait (`DefinitionWhen(d => d.BuildProvenance is AdoptedVerified)`) is worse: it is satisfied by a run that went through the forbidden state and came back, so the assertion can no longer fail at all.
