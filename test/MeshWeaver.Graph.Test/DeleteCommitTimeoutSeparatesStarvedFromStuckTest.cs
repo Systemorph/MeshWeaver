@@ -93,6 +93,8 @@ public class DeleteCommitTimeoutSeparatesStarvedFromStuckTest(ITestOutputHelper 
         }));
 
     [Fact]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.DeleteStage,
+        "the stalled commit's watchdog verdict, and whether it says a pool slot was awaited, is what this test asserts")]
     public async Task AStalledCommit_SaysWhetherAnythingWasWaitingForAPoolSlot()
     {
         var registry = Mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>();

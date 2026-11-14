@@ -247,6 +247,8 @@ public static class NodeTypeAccessRuleGate
         // denial nobody established.
         var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
+        // Resolved while the hub is alive; the budget fires later (Doc/Architecture/TimeoutIsError).
+        var reportTimeout = hub.ServiceProvider.TimeoutTerminalReporter();
         return hub.CheckPermissionOutcome(path, userId, permission)
             .TakeDecisionOutsideGate()
             .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
@@ -255,6 +257,8 @@ public static class NodeTypeAccessRuleGate
             .Timeout(budget)
             .Catch((TimeoutException ex) =>
             {
+                reportTimeout(new TimeoutTerminal(TimeoutTerminalKinds.PermissionEstablishment, path,
+                    $"the {permission} pre-flight on '{path}' for '{userId}' reached no verdict within {budget.TotalSeconds:0.#}s"));
                 logger?.LogWarning(ex,
                     "The {Permission} pre-flight on {Path} for {User} reached no verdict within {Budget} — "
                     + "reporting an availability failure, not a denial", permission, path, userId, budget);
@@ -312,6 +316,7 @@ public static class NodeTypeAccessRuleGate
         // admission answers Undetermined — fail closed, and never a denial nobody established.
         var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
+        var reportTimeout = hub.ServiceProvider.TimeoutTerminalReporter();
         // 🔒 A locked account is never admitted by a declaration either.
         var subject = string.IsNullOrEmpty(caller?.ObjectId) || caller.IsVirtual
             ? WellKnownUsers.Anonymous
@@ -321,8 +326,12 @@ public static class NodeTypeAccessRuleGate
                 .DefaultIfEmpty(false)
                 .Select(admitted => admitted ? PermissionCheckOutcome.FromVerdict(true) : outcome))
             .Timeout(budget)
-            .Catch((TimeoutException _) => Observable.Return(PermissionCheckOutcome.Undetermined(
-                $"the declared point read of '{path}' reached no verdict within {budget.TotalSeconds:0.#}s")));
+            .Catch((TimeoutException _) =>
+            {
+                var reason = $"the declared point read of '{path}' reached no verdict within {budget.TotalSeconds:0.#}s";
+                reportTimeout(new TimeoutTerminal(TimeoutTerminalKinds.PermissionEstablishment, path, reason));
+                return Observable.Return(PermissionCheckOutcome.Undetermined(reason));
+            });
     }
 
     /// <summary>

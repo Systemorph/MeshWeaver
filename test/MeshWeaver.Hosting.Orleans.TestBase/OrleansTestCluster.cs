@@ -112,7 +112,7 @@ internal sealed class OrleansTestBackingStore
 /// <para>Consequence for callers: <c>Cluster.Client</c> is null on these clusters — use
 /// <see cref="ClientServices"/> / <see cref="ClusterClient"/> instead.</para>
 /// </summary>
-public sealed class OrleansTestClusterHost
+public sealed class OrleansTestClusterHost : MeshWeaver.Fixture.ITimeoutTerminalSource
 {
     internal OrleansTestClusterHost(TestCluster cluster, IHost? clientHost)
     {
@@ -134,6 +134,17 @@ public sealed class OrleansTestClusterHost
 
     /// <summary>The services of one silo host in this cluster (default: the first).</summary>
     public IServiceProvider SiloServices(int index = 0) => Cluster.SiloServices(index);
+
+    /// <summary>
+    /// The timeout-terminal recorders of every silo and of the client host
+    /// (<see cref="TimeoutTerminalSiloRecording"/>) — each its own container, which the test
+    /// container's recorder never hears.
+    /// </summary>
+    public IEnumerable<MeshWeaver.Fixture.TimeoutTerminalRecorder> TimeoutTerminalRecorders =>
+        TimeoutTerminalSiloRecording.OfSilos(Cluster)
+            .Concat(ClientHost?.Services.GetService<MeshWeaver.Fixture.TimeoutTerminalRecorder>() is { } client
+                ? [client]
+                : []);
 }
 
 /// <summary>
@@ -186,6 +197,9 @@ internal static class OrleansTestCluster
             // 🚨 Size the grain directory for a TEST cluster — BEFORE `configure`, so a test that
             // genuinely needs a bigger one can still override. See TestGrainDirectorySizing.
             builder.AddSiloBuilderConfigurator<TestGrainDirectorySizing>();
+            // 🚨 Timeout == error: every silo records the timeout terminals its hubs fire, so the
+            // guard sees them (TimeoutTerminalSiloRecording).
+            builder.AddSiloBuilderConfigurator<TimeoutTerminalSiloRecording>();
             configure(builder);
 
             cluster = builder.Build();
@@ -207,7 +221,10 @@ internal static class OrleansTestCluster
                 "MainClient",
                 BuildClientConfiguration(cluster),
                 hostBuilder => hostBuilder.ConfigureServices(services =>
-                    configureClientServices?.Invoke(services, cluster)));
+                {
+                    TimeoutTerminalSiloRecording.Register(services);
+                    configureClientServices?.Invoke(services, cluster);
+                }));
             await clientHost.StartAsync();
         }
 
