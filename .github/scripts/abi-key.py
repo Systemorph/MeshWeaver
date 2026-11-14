@@ -345,10 +345,13 @@ def friends_from_source(root: Path, rel_dir: str) -> set[str]:
     base = root / rel_dir
     own = assembly_names(root, rel_dir)
     texts = [c.read_text(encoding="utf-8", errors="replace") for c in base.glob("*.csproj")]
+    # MSBuild's Directory.Build.* search starts at the project's OWN directory, so that one is read first.
     here = base.resolve()
-    while here != root.resolve() and here.parent != here:
-        here = here.parent
+    while True:
         texts += [f.read_text(encoding="utf-8", errors="replace") for f in here.glob("Directory.Build.*") if f.is_file()]
+        if here == root.resolve() or here.parent == here:
+            break
+        here = here.parent
     for text in texts:
         for a, b in _IVT_ITEM.findall(text):
             name = _name(a or b)
@@ -486,13 +489,18 @@ def resolve_range(root: Path, diff_range: str | None, base: str | None) -> tuple
         return git(root, "rev-parse", base).strip(), head
     if not diff_range:
         raise ValueError("probe needs --range A...B or --base SHA")
-    if "..." in diff_range:
-        a, b = diff_range.split("...", 1)
-        return git(root, "merge-base", a or "HEAD", b or "HEAD").strip(), head
-    if ".." in diff_range:
-        a, _ = diff_range.split("..", 1)
-        return git(root, "rev-parse", a).strip(), head
-    return git(root, "rev-parse", diff_range).strip(), head
+    sep = "..." if "..." in diff_range else ".." if ".." in diff_range else None
+    if sep is None:
+        return git(root, "rev-parse", diff_range).strip(), head
+    a, b = diff_range.split(sep, 1)
+    # The file list, the short-circuit and every project-file read (payload items, friends, assembly names)
+    # see the WORKING TREE, so a range whose head is not the checked-out HEAD would mix two trees: refused.
+    if b and git(root, "rev-parse", b).strip() != head:
+        raise ValueError(f"probe reads project files from the checkout, so the range's head ({b}) must be the "
+                         f"checked-out HEAD ({head[:12]}) — check it out first")
+    if sep == "...":
+        return git(root, "merge-base", a or "HEAD", head).strip(), head
+    return git(root, "rev-parse", a or "HEAD").strip(), head
 
 
 def changed_files(root: Path, base: str) -> list[str]:
@@ -533,8 +541,7 @@ def short_circuit(root: Path, base: str, files: list[str]) -> str | None:
 
 def unavailable(base: str, head: str, why: str) -> dict:
     """A verdict that narrows nothing: no project is `unchanged`, so `decide` keeps every unit."""
-    return {"schema": SCHEMA, "base": base, "head": head, "deterministic": True, "projects": {}, "unavailable": why,
-            "method": METHOD}
+    return {"schema": SCHEMA, "base": base, "head": head, "projects": {}, "unavailable": why, "method": METHOD}
 
 
 # ───────────────────────────── the surface: Roslyn's syntax tree, never a build ─────────────────────────────
@@ -1085,6 +1092,16 @@ def self_test() -> int:
         got_f = friends_from_source(root, "src/Lib")
         check(UNKNOWN_FRIEND in got_f and "Lib.Probe" in got_f, f"an unreadable grant is UNKNOWN; an AssemblyAttribute grant is read: {got_f}")
         (root / "src/Directory.Build.targets").unlink()
+        (root / "src/Lib/Directory.Build.props").write_text('<Project><ItemGroup><InternalsVisibleTo Include="Lib.Beside" />'
+                                                           '</ItemGroup></Project>')
+        check("Lib.Beside" in friends_from_source(root, "src/Lib"), "a Directory.Build.* in the project's OWN directory is read")
+        (root / "src/Lib/Directory.Build.props").unlink()
+        check(resolve_range(root, "HEAD...HEAD", None) == (base, base), "a range ending at HEAD resolves")
+        try:
+            resolve_range(root, f"{base}...{base}~0^{{tree}}", None)
+            check(False, "a range whose head is not the checked-out HEAD is refused")
+        except (ValueError, RuntimeError, subprocess.CalledProcessError):
+            check(True, "a range whose head is not the checked-out HEAD is refused")
         check(own_dirs(root, "src/App/App.csproj") == {"src/App", "src/App.Test"}, "own dirs = entry + sibling .Test")
 
         units = [{"id": u, "project": f"src/{u}/{u}.csproj"} for u in ("Lib", "Lib.Test", "App", "App.Test", "Friend", "Friend.Test")]
