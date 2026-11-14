@@ -30,6 +30,11 @@
     "  label        — the line's FLOATING image label: the newest PROMOTED set of the line. Declared",
     "                 in .github/release-channels.json with this line; `release-channels.py check`",
     "                 holds the two files to each other.",
+    "  buildHostChannel — the standing build host channel a run of this line is queued on",
+    "                 (build-executor.py, with LINES_FILE): a pull request takes its BASE line's, a trunk",
+    "                 run its branch's. main = v4 → `latest4` (SDK 11), main3 = v3 → `latest3` (SDK 10).",
+    "                 A pull request onto an undeclared line is RED there, by name. The channel must also",
+    "                 be declared on MeshWeaver.Deploy .github/build-hosts.json and the operations record.",
     "  movesLatest  — whether this line moves the line-less `latest` labels (the tester's",
     "                 MW_TEST_IMAGE). EXACTLY ONE line does: two lines interleave run numbers, so a",
     "                 forward-only check alone would hand `latest` back and forth between majors.",
@@ -50,6 +55,7 @@
       "pluginsRef": "feat/net11-v4",
       "satelliteRef": "main",
       "label": "main",
+      "buildHostChannel": "latest4",
       "movesLatest": true
     },
     {
@@ -57,6 +63,7 @@
       "pluginsRef": "main3",
       "satelliteRef": "main3",
       "label": "main3",
+      "buildHostChannel": "latest3",
       "movesLatest": false
     }
   ]

@@ -26,6 +26,16 @@ lost verdict.
 The base the host merges onto is the admission's: `MAIN_SHA` (policy `suites-test-fresh-merge`)
 rides as the request's `ref.baseSha`, so the host tests the same merged tree the Actions legs would.
 
+🧵 THE LINE PICKS THE CHANNEL (policy `major-lines-run-separately`; Doc/Architecture/MajorLinesRunSeparately).
+With `LINES_FILE` (core's `.github/delivery-lines.json`, read at the BASE line's commit), the channel is
+DECLARED per line (`buildHostChannel`), never the caller's default: a pull request's channel is its BASE
+line's (`main` → the v4 host, `main3` → `latest3`), a trunk run's is its branch's. A pull request whose base
+is not a declared line, or a declared line that names no channel, is RED by name (exit 2) — never a run
+quietly queued on another major's host (measured: core main on net11 claimed by a net10 host died in
+~1 s with NETSDK1045). A non-latest channel is queued only on an instance that DECLARES it routes the
+request's channel (`routesRequestChannel: true` on its queue answer); an older instance queues every
+build-request on `latest`, so the follower would wait on a run of another channel — that is `actions`, said.
+
     python3 .github/scripts/build-executor.py --self-test
     python3 .github/scripts/build-executor.py        # reads the environment the workflow sets
 
@@ -113,6 +123,9 @@ class Inputs:
     labels: Optional[list] = None
     channel: str = "latest"
     stages_file: str = STAGES_FILE
+    # core's delivery lines (.github/delivery-lines.json): when set, the channel is the line's declared
+    # `buildHostChannel` (resolve_line_channel), never `channel` above.
+    lines_file: str = ""
 
 
 @dataclass
@@ -125,6 +138,56 @@ class Decision:
     # Per declared stage, who carries that stage's verdict: `host` (the follow job), or the run's executor. Empty =
     # no per-stage answer; a consumer then reads the run-level `executor` for every stage (today's behaviour).
     stages: dict = field(default_factory=dict)
+    channel: str = "latest"   # the channel this run was decided for (the follow jobs read it)
+
+
+CHANNEL_SHAPE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+def resolve_line_channel(i: Inputs) -> tuple[Inputs, str]:
+    """The run's channel from its LINE (policy `major-lines-run-separately`): with `lines_file`, a pull request's
+    BASE branch, or any other run's own branch, looked up in the delivery lines' `buildHostChannel`. Returns the
+    inputs with that channel and the sentence that says how it was chosen ('' without a lines file). Raises
+    BadInput — RED, by name — for a pull request whose base is not a declared line, an unreadable or malformed
+    declaration, or a declared line that names no channel. A non-pull-request run on an undeclared branch keeps
+    its channel: it is not trunk and stays on actions anyway. Pure but for the read."""
+    if not i.lines_file:
+        return i, ""
+    try:
+        with open(i.lines_file) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise BadInput(f"LINES_FILE {i.lines_file} is unreadable ({type(e).__name__}) — the run's line has no channel")
+    lines = doc.get("lines") if isinstance(doc, dict) else None
+    if not isinstance(lines, list) or not all(isinstance(l, dict) and isinstance(l.get("branch"), str) for l in lines):
+        raise BadInput(f"LINES_FILE {i.lines_file} declares no `lines` [{{branch, buildHostChannel}}]")
+    by_branch = {l["branch"]: l for l in lines}
+    pr = i.event == "pull_request" and bool(i.pr)
+    branch = i.base_ref if pr else i.ref_name
+    line = by_branch.get(branch)
+    if line is None:
+        if pr:
+            raise BadInput(f"the pull request's base {branch or '(none)'!r} is not a delivery line declared in {i.lines_file} "
+                           f"(declared: {', '.join(sorted(by_branch)) or 'none'}) — a run on an undeclared line has no build-host "
+                           f"channel (policy major-lines-run-separately); declare the line, or retarget the pull request")
+        return i, f"the branch {branch or '?'} is not a delivery line — the channel stays {i.channel}"
+    channel = line.get("buildHostChannel")
+    if not isinstance(channel, str) or not CHANNEL_SHAPE.fullmatch(channel):
+        raise BadInput(f"the delivery line {branch!r} declares no build-host channel (`buildHostChannel` is {channel!r}) in {i.lines_file}")
+    return Inputs(**{**i.__dict__, "channel": channel}), (
+        f"the {'base ' if pr else ''}line {branch} runs on build-{channel} (its declared buildHostChannel)")
+
+
+def channel_unroutable(i: Inputs, answer: object) -> str:
+    """Why this run's channel cannot be queued by a build-request on this instance, or '' when it can. `latest` always
+    can; any other channel only when the instance's queue answer DECLARES `routesRequestChannel: true` — an instance
+    that does not queues every build-request on latest, and the follower would wait on a run of another channel."""
+    if i.channel == "latest":
+        return ""
+    if isinstance(answer, dict) and answer.get("routesRequestChannel") is True:
+        return ""
+    return (f"channel '{i.channel}' cannot be queued by a build-request on this instance yet (its queue answer does not "
+            f"declare routesRequestChannel) — a follower would wait on a run of another channel")
 
 
 def run_page_url(api: str, repo_name: str, sha: str) -> str:
@@ -357,6 +420,9 @@ def request_body(i: Inputs, executor: str = HOST) -> dict:
         ref = {"kind": "branch", "name": i.ref_name}
     body = {"event": "build-request", "repo": i.repo.split("/")[-1], "sha": i.sha, "ref": ref,
             "isTrunk": is_trunk(i), "runId": i.run_id, "runUrl": i.run_url, "runAttempt": i.run_attempt}
+    # the channel the run is FOR — carried only off latest, so a latest request is byte-for-byte what it was
+    if i.channel != "latest":
+        body["channel"] = i.channel
     if i.requested_by:
         body["requestedBy"] = i.requested_by
     if i.change_mode:
@@ -372,22 +438,25 @@ def sign(secret: str, payload: bytes) -> str:
 
 
 def decide(i: Inputs, get: Get, post: Post, routing: Optional[Routing] = None, route_only: bool = False) -> Decision:
-    """The executor for this run. Pure but for the two injected calls."""
+    """The executor for this run. Pure but for the two injected calls (and the lines file's read)."""
     if not re.fullmatch(r"[0-9a-f]{40}", i.sha or ""):
         raise BadInput(f"HEAD_SHA {i.sha!r} is not a 40-hex commit")
-    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", i.channel or ""):
+    i, line_why = resolve_line_channel(i)
+    if not CHANNEL_SHAPE.fullmatch(i.channel or ""):
         raise BadInput(f"CHANNEL {i.channel!r} is not a channel name")
+    d = _decide_on_channel(i, get, post, routing, route_only)
+    d.channel = i.channel
+    if line_why:
+        d.why = f"{d.why} [{line_why}]"
+    return d
 
+
+def _decide_on_channel(i: Inputs, get: Get, post: Post, routing: Optional[Routing], route_only: bool) -> Decision:
     def actions(why: str, warn: bool = True) -> Decision:
         lines = [f"::warning title=Heavy legs on Actions::{why} — the heavy legs run on GitHub Actions (today's behaviour)"] if warn else []
         return Decision(ACTIONS, api, why, lines)
 
     api = api_url_of(i)
-    # 🚨 ONLY `latest` IS QUEUED BY A build-request today (review of #7153): the request carries no
-    # channel, so a `stable` ask would queue a latest run its follower never reads. A non-latest
-    # channel is `actions` — said — until the request and the receiver route a channel.
-    if i.channel != "latest":
-        return actions(f"channel '{i.channel}' cannot be queued by a build-request yet (only latest is) — a follower would wait on a run of another channel")
     # 🚨 ONLY A PULL REQUEST OR A TRUNK RUN (review of #7153): the host merges a non-trunk run onto a
     # base, while Actions tests every other event's commit unmerged — so a branch push or a manual
     # run on a branch would be judged on a different tree. Those stay on actions, said.
@@ -421,6 +490,10 @@ def decide(i: Inputs, get: Get, post: Post, routing: Optional[Routing] = None, r
         return actions("the build queue names no executor (an instance older than H7)")
     if not isinstance(executor, str) or executor.strip().lower() != HOST:
         return actions(f"the instance executes {repo_name} on {executor!s:.40}", warn=False)
+    # 🚨 A NON-LATEST CHANNEL is queued only where the instance routes the request's channel (review of #7153: an
+    # instance that does not queues it on latest, and the follower waits on a run of another channel).
+    if unroutable := channel_unroutable(i, answer):
+        return actions(unroutable)
     if not i.secret or not i.queue_url:
         return actions("the instance says host, but this context has no webhook pair (BUILD_WEBHOOK_URL / BUILD_WEBHOOK_SECRET) to queue the run with")
     if not safe_url(i.queue_url):
@@ -460,16 +533,21 @@ def decide_forced(i: Inputs, get: Get, post: Post, api: str, route_only: bool, d
     if status != 200:
         return actions(f"{repo_name} is host-forced, but the build queue did not answer (GET {api}/queue: {'transport: ' + text if status == 0 else f'HTTP {status}'})")
     try:
-        executor = json.loads(text).get("executor")
+        answer = json.loads(text)
+        executor = answer.get("executor")
     except (ValueError, AttributeError):
-        executor = None
+        answer, executor = None, None
     if not isinstance(executor, str) or executor.strip().lower() != HOST:
         return Decision(ACTIONS, api, f"{repo_name} is host-forced, but the instance executes it on {executor!s:.40}", [])
     names, owes = stage_debt(i.stages_file)
     queued = "not queued (route check only)" if route_only else "not queued (no stages declared)"
     verified = False
+    unroutable = channel_unroutable(i, answer)
     if names and not route_only:
-        if i.secret and safe_url(i.queue_url):
+        if unroutable:
+            # never queued on the wrong host: this instance would put the build-request on latest
+            queued = f"NOT queued on the host ({unroutable})"
+        elif i.secret and safe_url(i.queue_url):
             payload = json.dumps(request_body(i, HOST_FORCED), separators=(",", ":")).encode()
             st, body = post(i.queue_url, payload, {"Content-Type": "application/json", "X-Hub-Signature-256": sign(i.secret, payload),
                                                    "User-Agent": "meshweaver-build-executor"})
@@ -578,7 +656,8 @@ def inputs_from_env(e: dict) -> Inputs:
                   run_id=num("RUN_ID"), run_attempt=num("RUN_ATTEMPT", 1), run_url=e.get("RUN_URL", "").strip(),
                   requested_by=e.get("REQUESTED_BY", "").strip(), change_mode=e.get("CHANGE_MODE", "").strip(),
                   labels=parse_labels(e["LABELS"]) if "LABELS" in e else None,
-                  channel=(e.get("CHANNEL") or "latest").strip(), stages_file=(e.get("STAGES_FILE") or STAGES_FILE).strip())
+                  channel=(e.get("CHANNEL") or "latest").strip(), stages_file=(e.get("STAGES_FILE") or STAGES_FILE).strip(),
+                  lines_file=(e.get("LINES_FILE") or "").strip())
 
 
 def emit(d: Decision, env: dict) -> None:
@@ -589,7 +668,8 @@ def emit(d: Decision, env: dict) -> None:
         with open(env["GITHUB_OUTPUT"], "a") as f:
             # stage-executors: {"<stage>": "host" | "host-forced"} — a consumer reads
             # `fromJSON(stage-executors)['<stage>'] || executor`, so an empty map is today's behaviour for every stage.
-            f.write(f"executor={d.executor}\napi-url={d.api_url}\nstage-executors={json.dumps(d.stages, sort_keys=True, separators=(',', ':'))}\n")
+            f.write(f"executor={d.executor}\napi-url={d.api_url}\nstage-executors={json.dumps(d.stages, sort_keys=True, separators=(',', ':'))}\n"
+                    f"channel={d.channel}\n")
     if env.get("GITHUB_STEP_SUMMARY"):
         with open(env["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(f"- 🏗️ Heavy legs: **{d.executor}** — {d.why.replace(chr(10), ' ')}\n")
@@ -767,7 +847,8 @@ def self_test() -> int:
          host_q, ok_post, "not an https URL", True),
         ("an inbox with credentials in its URL", with_(build_api="https://control.example.com/api/builds",
          queue_url="https://u:p@control.example.com/api/hooks/Hosting/PlatformBuilds"), host_q, ok_post, "not an https URL", True),
-        ("a non-latest channel is never queued", with_(channel="stable"), host_q, ok_post, "only latest is", True),
+        ("a non-latest channel is never queued where the instance does not route it", with_(channel="stable"), host_q, ok_post,
+         "does not declare routesRequestChannel", True),
         ("empty inbox answer", base, host_q, post_answer(200, ""), "did not verify", True),
     ]
     for name, inp, g, p, phrase, warned in cases:
@@ -1003,11 +1084,82 @@ def self_test() -> int:
         arm = [ln for ln in text.splitlines() if ln.strip().startswith("host-forced)") or ln.strip().startswith("actions|host-forced)")]
         check(f"wiring/{name} handles host-forced in its executor switch, and never with exit 1",
               arm and not any("exit 1" in ln for ln in arm), arm)
+    # 5b. 🧵 THE LINE PICKS THE CHANNEL (policy major-lines-run-separately): core's delivery lines name each line's
+    # build-host channel; a pull request runs on its BASE line's, a trunk run on its branch's.
+    lines_doc = {"schema": 1, "defaultBranch": "main", "lines": [
+        {"branch": "main", "buildHostChannel": "latest4"}, {"branch": "main3", "buildHostChannel": "latest3"}]}
+    lines_file = os.path.join(tmp, "delivery-lines.json")
+    with open(lines_file, "w") as fh:
+        json.dump(lines_doc, fh)
+    routes_q = get_answer(200, {"channel": "latest4", "executor": "host", "routesRequestChannel": True})
+    core = with_(repo="Systemorph/MeshWeaver", lines_file=lines_file)
+    for base_line, want in (("main", "latest4"), ("main3", "latest3")):
+        calls.clear()
+        d = decide(with_(repo="Systemorph/MeshWeaver", lines_file=lines_file, base_ref=base_line), routes_q, ok_post)
+        check(f"line/a pull request onto {base_line} is decided for {want}", d.channel == want and d.executor == HOST, d)
+        check(f"line/onto {base_line}: the queue is asked for {want}", calls and f"channel={want}&" in calls[0][1], calls)
+        sent = json.loads(calls[1][2]) if len(calls) > 1 else {}
+        check(f"line/onto {base_line}: the build-request carries channel {want} and its base line",
+              sent.get("channel") == want and sent.get("ref", {}).get("baseRef") == base_line, sent)
+        check(f"line/onto {base_line}: the why names the line", f"line {base_line} runs on build-{want}" in d.why, d.why)
+    check("line/the caller's CHANNEL never overrides the declared line's",
+          decide(with_(repo="Systemorph/MeshWeaver", lines_file=lines_file, base_ref="main3", channel="latest"), routes_q, ok_post).channel == "latest3")
+    d = decide(with_(repo="Systemorph/MeshWeaver", lines_file=lines_file, event="push", ref_name="main", pr=None), routes_q, ok_post)
+    check("line/a trunk push on main runs on its own line's channel", d.channel == "latest4" and d.executor == HOST, d)
+    d = decide(with_(repo="Systemorph/MeshWeaver", lines_file=lines_file, event="push", ref_name="feat/y", pr=None), routes_q, ok_post)
+    check("line/a push to a non-line branch keeps its channel and stays on actions (never red)",
+          d.channel == "latest" and d.executor == ACTIONS, d)
+    for name, inp, phrase in (
+            ("a pull request onto an UNDECLARED line is red, by name", with_(repo="Systemorph/MeshWeaver", lines_file=lines_file, base_ref="feat/stack"),
+             "base 'feat/stack' is not a delivery line"),
+            ("a pull request with no base is red", with_(repo="Systemorph/MeshWeaver", lines_file=lines_file, base_ref=""), "is not a delivery line"),
+            ("an unreadable lines file is red", with_(lines_file=os.path.join(tmp, "absent-lines.json")), "is unreadable"),):
+        calls.clear()
+        try:
+            decide(inp, routes_q, ok_post)
+            check(f"line/{name}", False, "decided")
+        except BadInput as e:
+            check(f"line/{name}", phrase in str(e), str(e))
+        check(f"line/{name}: nothing asked, nothing queued", calls == [], calls)
+    no_channel = os.path.join(tmp, "lines-no-channel.json")
+    with open(no_channel, "w") as fh:
+        json.dump({"lines": [{"branch": "main"}]}, fh)
+    try:
+        decide(with_(lines_file=no_channel), routes_q, ok_post)
+        check("line/a declared line with no buildHostChannel is red", False, "decided")
+    except BadInput as e:
+        check("line/a declared line with no buildHostChannel is red", "declares no build-host channel" in str(e), str(e))
+    # NEGATIVE CONTROL: the same pull requests on an instance that does NOT declare routesRequestChannel are never queued
+    # (it would put them on latest — the v3 host — which is exactly the measured NETSDK1045 / wrong-merge-base defect)
+    for base_line in ("main", "main3"):
+        calls.clear()
+        d = decide(with_(repo="Systemorph/MeshWeaver", lines_file=lines_file, base_ref=base_line), host_q, ok_post)
+        check(f"line/negative control: onto {base_line} on a non-routing instance → actions, said, nothing POSTed",
+              d.executor == ACTIONS and "routesRequestChannel" in d.why and d.lines and not any(c[0] == "POST" for c in calls), (d, calls))
+    # host-forced (core's own route today): routed to the line's channel when the instance routes it, else named and not queued
+    forced_core = route("MeshWeaver")
+    calls.clear()
+    d = decide(with_(repo="Systemorph/MeshWeaver", lines_file=lines_file, stages_file=owing), routes_q, ok_post, forced_core)
+    check("line/forced: a host-forced core pull request onto main is queued on latest4",
+          d.executor == HOST_FORCED and d.channel == "latest4" and "queued on build-latest4" in d.why
+          and json.loads(calls[1][2]).get("channel") == "latest4", (d, calls))
+    calls.clear()
+    d = decide(with_(repo="Systemorph/MeshWeaver", lines_file=lines_file, stages_file=owing), host_q, ok_post, forced_core)
+    check("line/forced negative control: a non-routing instance gets NO request (not queued on the wrong host), said",
+          d.executor == HOST_FORCED and "NOT queued on the host" in d.why and not any(c[0] == "POST" for c in calls), (d, calls))
+    check("line/a latest request is byte-for-byte unchanged (no `channel` key)", "channel" not in request_body(base), request_body(base))
+    check("line/env LINES_FILE reads", inputs_from_env({**e0, "LINES_FILE": " x.json "}).lines_file == "x.json")
+    # POSITIVE CONTROL on the committed declaration: every core line names a channel, main the v4 one, main3 latest3
+    committed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "delivery-lines.json")
+    if os.path.isfile(committed):
+        for b, want in (("main", "latest4"), ("main3", "latest3")):
+            got = resolve_line_channel(with_(repo="Systemorph/MeshWeaver", lines_file=committed, base_ref=b))[0].channel
+            check(f"line/committed delivery-lines.json: {b} → {want}", got == want, got)
     # 6. outputs and summary
     out, summ = os.path.join(tmp, "out"), os.path.join(tmp, "summary")
     emit(Decision(HOST, "https://control.example.com/api/builds", "queued", [], run_page_url("https://control.example.com/api/builds", "MeshWeaver.Plugins", "a" * 40)),
          {"GITHUB_OUTPUT": out, "GITHUB_STEP_SUMMARY": summ})
-    check("emit/outputs", open(out).read() == "executor=host\napi-url=https://control.example.com/api/builds\nstage-executors={}\n", open(out).read())
+    check("emit/outputs", open(out).read() == "executor=host\napi-url=https://control.example.com/api/builds\nstage-executors={}\nchannel=latest\n", open(out).read())
     out2 = os.path.join(tmp, "out2")
     emit(Decision(HOST_FORCED, "https://control.example.com/api/builds", "shadow", [], "", {"gate": HOST_FORCED, "compile-check": HOST}),
          {"GITHUB_OUTPUT": out2})
@@ -1026,7 +1178,8 @@ def self_test() -> int:
         return 1
     print("build-executor self-test: all cases passed (host when declared + said + queued and verified; actions — said — on every failure: "
           "no stages, no API, unsafe URL, unreachable, 503, not JSON, no executor, actions, unknown, no pair, refused, unverified; the "
-          "request's shape, trunk, the admission's base, the signature, outputs; host-forced = shadow: queued, legs on Actions, debt as warnings)")
+          "request's shape, trunk, the admission's base, the signature, outputs; host-forced = shadow: queued, legs on Actions, debt as warnings; "
+          "the line picks the channel — main → latest4, main3 → latest3, an undeclared base red, a non-routing instance never queued)")
     return 0
 
 
