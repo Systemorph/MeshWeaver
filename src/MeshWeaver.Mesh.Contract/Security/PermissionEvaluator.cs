@@ -1396,7 +1396,7 @@ internal static class PermissionEvaluator
         var perType = gates
             .Select(gate => SecurityQuery(cache, $"{GatedQueryPrefix}{gate.NodeType}", options,
                     SecurityQueries.GatedNodes(gate.NodeType))
-                .StartWith(Array.Empty<MeshNode>()))
+                .StartWithInline(Array.Empty<MeshNode>()))
             .ToArray();
 
         return Observable.CombineLatest(perType)

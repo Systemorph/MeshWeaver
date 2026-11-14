@@ -26,7 +26,7 @@
 # decline under a green tick — the exact shape a gate must never take.
 set -euo pipefail
 
-identity="" packages="" upstreams="" out="" registry_url="" registry_key="" storage_target="" generations="" index_out=""
+identity="" packages="" upstreams="" out="" registry_url="" registry_key="" storage_target="" generations="" index_out="" bundles_out=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --identity)       identity="${2:-}";       shift 2 ;;
@@ -54,6 +54,13 @@ while [ $# -gt 0 ]; do
     # publication (MeshWeaver#7409 — main-cd's `published-modules` hands it to the ladder, which
     # refuses a module the index lists but no bundle provides: check-ladder-coverage.py).
     --index-out)      index_out="${2:-}";      shift 2 ;;
+    # With `--packages '*'` and `--storage-target` only: ALSO download the ONE source's sealed
+    # NodeType bundles — every `*.zip` its `_complete` lists — into this directory, from the SAME
+    # publication directory (generation) the module set was read from (MeshWeaver#4413). The combo
+    # gate consumes them instead of re-baking the producing repositories' trees from source; the
+    # module half and the bundle half of one source must be one publication, or the bundles'
+    # dependency records name module builds the gate does not load.
+    --bundles-out)    bundles_out="${2:-}";    shift 2 ;;
     *) echo "::error::compose-sealed-modules.sh: unknown argument '$1'"; exit 2 ;;
   esac
 done
@@ -76,6 +83,12 @@ if [ "$packages" = "*" ]; then
 fi
 if [ -n "$index_out" ] && [ "$ALL_PACKAGES" != "true" ]; then
   echo "::error::compose-sealed-modules.sh: --index-out applies to --packages '*' only — a caller-chosen package list is not the publication's index"; exit 2
+fi
+if [ -n "$bundles_out" ] && [ "$ALL_PACKAGES" != "true" ]; then
+  echo "::error::compose-sealed-modules.sh: --bundles-out applies to --packages '*' only — the bundles are one source's whole sealed set"; exit 2
+fi
+if [ -n "$bundles_out" ] && [ -n "$registry_url" ]; then
+  echo "::error::compose-sealed-modules.sh: --bundles-out reads the publication from --storage-target; the registry path does not carry it"; exit 2
 fi
 if [ -n "$registry_url" ]; then
   [ -n "$registry_key" ] || { echo "::error::compose-sealed-modules.sh: --registry-url needs --registry-key"; exit 2; }
@@ -406,5 +419,40 @@ done
 if [ -n "$index_out" ]; then
   cp "$work/$ALL_SOURCE.list" "$index_out"
   echo "wrote the '$ALL_SOURCE' sealed module index ($(grep -c '[^[:space:]]' "$index_out" || true) bundle(s)) to $index_out"
+fi
+# ── the source's sealed NodeType bundles (MeshWeaver#4413) ────────────────────────────────────
+# Read from the publication directory the module set above came from — the generation it recorded —
+# so the two halves are one publication. 🚨 Every name `_complete` lists is fetched or the script
+# fails RED: a seal that lists a bundle the store will not serve is a seal and a store that disagree,
+# and handing on part of it would let the gate rebuild the rest silently. The listing is read by
+# NAME, never by a recursive batch: the CLI flattens what a batch finds, and a flat prefix may hold
+# generation subdirectories whose bundles would be mixed in.
+if [ -n "$bundles_out" ]; then
+  mkdir -p "$bundles_out"
+  b_account="${storage_target%%/*}"; b_rest="${storage_target#*/}"
+  b_share="${b_rest%%/*}"; b_base=""
+  case "$b_rest" in */*) b_base="${b_rest#*/}" ;; esac
+  b_generation=$(cat "$work/$ALL_SOURCE.generation")
+  b_dir="${b_base:+$b_base/}prebuilt-bundles/$identity/$ALL_SOURCE${b_generation:+/$b_generation}"
+  az storage file download --account-name "$b_account" --share-name "$b_share" \
+    --path "$b_dir/_complete" --dest "$work/$ALL_SOURCE.complete" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null \
+    || { echo "::error::could not read $b_account/$b_share/$b_dir/_complete — the '$ALL_SOURCE' publication's bundle listing for identity $identity cannot be read, so its bundles cannot be handed on."; exit 1; }
+  fetched_bundles=0
+  while IFS= read -r b_name; do
+    b_name="${b_name%%[[:space:]]*}"
+    case "$b_name" in
+      "") continue ;;
+      */*|*..*) echo "::error::$b_dir/_complete lists '$b_name', which is not a bare bundle name — refusing to fetch outside the publication."; exit 1 ;;
+      *.zip) ;;
+      *) continue ;;
+    esac
+    az storage file download --account-name "$b_account" --share-name "$b_share" \
+      --path "$b_dir/$b_name" --dest "$bundles_out/$b_name" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null \
+      || { echo "::error::'$b_name' is listed in $b_account/$b_share/$b_dir/_complete but could not be downloaded — the seal and the store disagree, and that needs a republish of '$ALL_SOURCE'."; exit 1; }
+    fetched_bundles=$((fetched_bundles + 1))
+  done < "$work/$ALL_SOURCE.complete"
+  echo "fetched $fetched_bundles sealed NodeType bundle(s) of '$ALL_SOURCE' for identity $identity into $bundles_out"
 fi
 echo "composed=$composed"

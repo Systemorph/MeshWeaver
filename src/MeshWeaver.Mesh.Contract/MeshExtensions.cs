@@ -10276,10 +10276,13 @@ public static class MeshExtensions
                         // The copy leg's OWN classification and transcript, carried — see
                         // MoveReasonForCopy. Nothing was deleted: the delete leg runs only after a
                         // successful copy.
-                        // A taken target is a refusal the caller is answered with, not a fault (#8073):
-                        // the copy leg has already said so at its own site, at Error with its stack
-                        // whenever the verdict was not a typed NodeAlreadyExists.
-                        if (copyLeg.Reason == NodeMoveRejectionReason.TargetAlreadyExists)
+                        // A taken target is a refusal the caller is answered with, not a fault (#8073),
+                        // and so is a target a create validator refused by name (#8126): the copy leg
+                        // has already said so at its own site — at Error with its stack whenever the
+                        // verdict was not a typed refusal, so the copy site, not this line, carries the
+                        // fault. Unknown and Unavailable (nothing decided) stay at Error here.
+                        if (copyLeg.Reason is NodeMoveRejectionReason.TargetAlreadyExists
+                            or NodeMoveRejectionReason.ValidationFailed)
                             logger.LogWarning("[MoveNode] {Source} -> {Target} refused in its copy leg ({Reason}): {Error}",
                                 sourcePath, targetPath, copyLeg.Reason, copyLeg.Message);
                         else
@@ -11332,7 +11335,15 @@ public static class MeshExtensions
                     // agent moved a file onto a name that was already taken. Only the TYPED verdict
                     // qualifies: a fault whose message merely contains "already exists" (a storage error,
                     // say) still lands at Error with its stack below.
-                    if (IsNodeAlreadyExists(ex))
+                    //
+                    // 🚨 The same holds for a create a VALIDATOR refused by name (#8126): a Space moved
+                    // under another node meets the partition-ownership guard ("a 'Space' owns its
+                    // partition, so it must be created at the top level"), typed InvalidPath. It is a
+                    // deterministic verdict on the request — every retry meets it again, nothing was
+                    // written, the reply names it in the caller's language — not a fault of the mesh.
+                    // A check that could not be ESTABLISHED arrives typed Unavailable (#1446) and stays
+                    // at Error, as does every untyped failure.
+                    if (IsTypedCreateRefusal(ex))
                         logger.LogWarning("[CopyNode] {Source} -> {Target} refused: {Error}",
                             sourcePath, targetPath, msg);
                     else
@@ -11426,6 +11437,22 @@ public static class MeshExtensions
     /// </summary>
     private static bool IsNodeAlreadyExists(Exception ex) =>
         ex.Data[NodeCreationFailure.RejectionReasonKey] is NodeCreationRejectionReason.NodeAlreadyExists;
+
+    /// <summary>
+    /// Whether a per-node create failed with a TYPED refusal of the request itself — the target is
+    /// taken (<see cref="NodeCreationRejectionReason.NodeAlreadyExists"/>), a validator refused it
+    /// (<see cref="NodeCreationRejectionReason.ValidationFailed"/>), or its path cannot hold that node
+    /// (<see cref="NodeCreationRejectionReason.InvalidPath"/>, e.g. a partition-owning type created
+    /// below the top level, #8126). Each is a deterministic verdict the caller is answered with, so a
+    /// copy logs it at Warning. <see cref="NodeCreationRejectionReason.Unavailable"/> (a check that
+    /// could not be established), <see cref="NodeCreationRejectionReason.InvalidNodeType"/> (which a
+    /// type that failed to compile also produces) and every untyped failure are NOT refusals of the
+    /// request and stay at Error.
+    /// </summary>
+    private static bool IsTypedCreateRefusal(Exception ex) =>
+        ex.Data[NodeCreationFailure.RejectionReasonKey] is NodeCreationRejectionReason.NodeAlreadyExists
+            or NodeCreationRejectionReason.ValidationFailed
+            or NodeCreationRejectionReason.InvalidPath;
 
     /// <summary>
     /// Whether <paramref name="existing"/> — what storage holds at a relocation's target — IS

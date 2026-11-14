@@ -50,7 +50,7 @@ namespace MeshWeaver.ComboVerifier;
 /// </summary>
 public sealed class DockerImageGate(
     IoPoolRegistry pools, TimeSpan runBudget, TextWriter output, string platform, string hostDir,
-    ComboModuleComposition? modules = null)
+    ComboModuleComposition? modules = null, SealedBundleSource? sealedBundles = null)
 {
     /// <summary>How many trailing characters of the combined docker output the run keeps for
     /// diagnostics.</summary>
@@ -206,11 +206,14 @@ public sealed class DockerImageGate(
         // A stale report from an earlier run must never masquerade as this run's evidence,
         if (File.Exists(reportFile))
             File.Delete(reportFile);
-        // …nor a stale bake as this run's bytes.
+        // …nor a stale bake as this run's bytes, nor a stale staging tree as this run's mount.
         var bakeRoot = BakeRootFor(fullRoot);
         if (Directory.Exists(bakeRoot))
             Directory.Delete(bakeRoot, recursive: true);
         Directory.CreateDirectory(bakeRoot);
+        var stageRoot = SealedBundleReuse.StageRootFor(fullRoot);
+        if (Directory.Exists(stageRoot))
+            Directory.Delete(stageRoot, recursive: true);
 
         // The image's tester runs as a non-root user and writes its report and its bake to the
         // mounts.
@@ -225,32 +228,79 @@ public sealed class DockerImageGate(
         var fullHost = Path.GetFullPath(hostDir);
         var started = Clock.GetTimestamp();
 
-        output.WriteLine(
-            $"baking the combo with mw-plugin-test compile as {imageRef} ({Platform}), gate host "
-            + $"'{fullHost}', over '{fullRoot}' into '{bakeRoot}' (no mesh) …");
-        var compile = RunDocker(
-            CompileArgs(imageRef, fullRoot, fullHost, bakeRoot, Platform, modules), ct, runBudget);
-        if (compile.TimedOut)
-            return new CandidateGateRun
+        // 🚨 REUSE THE SEALS FIRST (MeshWeaver#4413, option C step 1). Every package whose sealed
+        // bundle is this tree's build is taken as sealed; only the rest is compiled, from a staging
+        // tree holding them and what they need installed. See SealedBundleReuse.
+        SealedBundlePlan? plan = null;
+        var compileRoot = fullRoot;
+        if (sealedBundles is not null)
+        {
+            try
             {
-                ImageDigest = digest,
-                Platform = Platform,
-                Error = $"the mesh-free bake exceeded the run's {runBudget} budget and was killed — "
-                        + "something inside the candidate's compiler did not complete.",
-                LogTail = Tail(compile.Output),
-            };
+                plan = SealedBundleReuse.Plan(fullRoot, sealedBundles);
+                foreach (var line in plan.Describe())
+                    output.WriteLine(line);
+                if (!plan.BakesNothing)
+                    compileRoot = SealedBundleReuse.Stage(fullRoot, plan);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                           or InvalidOperationException)
+            {
+                return new CandidateGateRun
+                {
+                    ImageDigest = digest,
+                    Platform = Platform,
+                    Error = $"the sealed-bundle reuse plan over '{fullRoot}' could not be made "
+                            + $"({ex.GetType().Name}: {ex.Message}) — nothing about the candidate was "
+                            + "verified.",
+                };
+            }
+        }
 
-        var bake = ReadBake(bakeRoot);
-        if (bake == BakeReading.Unsealed)
+        var compileTail = "";
+        if (plan is { BakesNothing: true })
+            output.WriteLine(
+                "every package's sealed bundle is this tree's build — there is nothing to compile, "
+                + "so no bake runs.");
+        else
+        {
+            output.WriteLine(
+                $"baking the combo with mw-plugin-test compile as {imageRef} ({Platform}), gate host "
+                + $"'{fullHost}', over '{compileRoot}' into '{bakeRoot}' (no mesh) …");
+            var compile = RunDocker(
+                CompileArgs(imageRef, compileRoot, fullHost, bakeRoot, Platform, modules), ct, runBudget);
+            compileTail = Tail(compile.Output);
+            if (compile.TimedOut)
+                return new CandidateGateRun
+                {
+                    ImageDigest = digest,
+                    Platform = Platform,
+                    Error = $"the mesh-free bake exceeded the run's {runBudget} budget and was killed — "
+                            + "something inside the candidate's compiler did not complete.",
+                    LogTail = compileTail,
+                };
+            if (ReadBake(bakeRoot) == BakeReading.Unsealed)
+                return new CandidateGateRun
+                {
+                    ImageDigest = digest,
+                    Platform = Platform,
+                    Error = $"the mesh-free bake (exit {compile.ExitCode}) sealed no framework identity "
+                            + $"in '{bakeRoot}' — the bake died, so there are no bytes to gate and "
+                            + "nothing about the candidate was verified.",
+                    LogTail = compileTail,
+                };
+        }
+
+        // The seed is the bake PLUS every reused bundle the bake did not itself produce.
+        if (plan is not null && SealedBundleReuse.CompleteSeed(bakeRoot, plan) is { } seedProblem)
             return new CandidateGateRun
             {
                 ImageDigest = digest,
                 Platform = Platform,
-                Error = $"the mesh-free bake (exit {compile.ExitCode}) sealed no framework identity "
-                        + $"in '{bakeRoot}' — the bake died, so there are no bytes to gate and "
-                        + "nothing about the candidate was verified.",
-                LogTail = Tail(compile.Output),
+                Error = seedProblem + " Nothing about the candidate was verified.",
+                LogTail = compileTail,
             };
+        var bake = ReadBake(bakeRoot);
 
         var remaining = runBudget - Clock.GetElapsedTime(started);
         if (remaining <= TimeSpan.Zero)
@@ -260,7 +310,7 @@ public sealed class DockerImageGate(
                 Platform = Platform,
                 Error = $"the mesh-free bake used the run's whole {runBudget} budget — the gate "
                         + "never started.",
-                LogTail = Tail(compile.Output),
+                LogTail = compileTail,
             };
 
         var seed = bake == BakeReading.Bundles ? bakeRoot : null;
