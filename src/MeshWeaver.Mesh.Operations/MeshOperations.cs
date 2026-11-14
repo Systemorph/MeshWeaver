@@ -2972,13 +2972,66 @@ public partial class MeshOperations
         .Catch((Exception ex) =>
         {
             logger.LogWarning(ex, "Upload failed for {Path}", path);
-            var message = ex is TimeoutException
-                ? $"the node for '{path}' did not respond to the content-collection lookup in time — " +
-                  "confirm the path resolves to a content-enabled node (one configured with AddContentCollections)."
-                : ex.Message;
-            return Observable.Return($"Error: {message}");
+            return Observable.Return($"Error: {UploadFailureMessage(path, bytes.Length, ex)}");
         });
     }
+
+    /// <summary>
+    /// The step of <see cref="Upload"/> that timed out. 🚨 The two awaited legs to the owning node are
+    /// different facts with different remedies: a LOOKUP that never answered means the node is not
+    /// content-enabled (or not reachable) and nothing was written; a WRITE that never answered means
+    /// the lookup DID answer — the collection exists and is editable — and the bytes may have landed.
+    /// </summary>
+    internal enum UploadStep
+    {
+        /// <summary>The collection-config <c>GetDataRequest</c> to the owning node.</summary>
+        CollectionLookup,
+
+        /// <summary>The <c>SaveContentFileRequest</c> that carries the bytes (inline or as a staged handle).</summary>
+        Write,
+    }
+
+    /// <summary>A <see cref="TimeoutException"/> that knows which <see cref="UploadStep"/> it ended.</summary>
+    internal sealed class UploadStepTimeoutException(UploadStep step, TimeoutException inner)
+        : TimeoutException(inner.Message, inner)
+    {
+        /// <summary>The step that timed out.</summary>
+        public UploadStep Step { get; } = step;
+    }
+
+    /// <summary>Re-raises a timeout of <paramref name="source"/> as one that names <paramref name="step"/>.</summary>
+    private static IObservable<T> NamingTimeoutAs<T>(IObservable<T> source, UploadStep step)
+        => source.Catch((TimeoutException timeout) => Observable.Throw<T>(
+            timeout as UploadStepTimeoutException ?? new UploadStepTimeoutException(step, timeout)));
+
+    /// <summary>
+    /// What <see cref="Upload"/> answers for a fault, after <c>Error: </c>. Until 2026-11-14 every
+    /// <see cref="TimeoutException"/> read "did not respond to the content-collection lookup in time"
+    /// — including a write the owner never answered, which on the control instance sent the
+    /// investigation of a 4.9 MB save to a collection the web UI was writing to fine. Pure.
+    /// </summary>
+    internal static string UploadFailureMessage(string path, int byteCount, Exception ex) => ex switch
+    {
+        UploadStepTimeoutException { Step: UploadStep.CollectionLookup } =>
+            $"the node for '{path}' did not respond to the content-collection lookup in time — "
+            + "confirm the path resolves to a content-enabled node (one configured with AddContentCollections). "
+            + "Nothing was written.",
+        UploadStepTimeoutException { Step: UploadStep.Write } timeout =>
+            $"the owning node of '{path}' answered the content-collection lookup (the collection exists and is "
+            + $"editable) but did not answer the write of {byteCount:N0} bytes, sent {DescribeTransport(path, byteCount)}, "
+            + $"in time ({timeout.Message}). It may or may not have been written; read the target back before saving again.",
+        TimeoutException timeout =>
+            $"the upload to '{path}' timed out ({timeout.Message}). It may or may not have been written; "
+            + "read the target back before saving again.",
+        _ => ex.Message,
+    };
+
+    /// <summary>How the write carried <paramref name="byteCount"/> bytes — the first thing to know about a stalled one.</summary>
+    private static string DescribeTransport(string path, int byteCount)
+        => ContentDeliveryBudget.PackagedCost(path, byteCount) <= ContentDeliveryBudget.BudgetBytes
+            ? "inline on the write delivery"
+            : $"out of band (over one delivery's {ContentDeliveryBudget.BudgetBytes:N0}-byte budget, so the bytes "
+              + "were staged in the collection's staging folder and the delivery carried a handle)";
 
     /// <summary>
     /// The write pre-flight of <see cref="Upload"/>: <c>null</c> when <paramref name="caller"/> holds
@@ -3034,11 +3087,11 @@ public partial class MeshOperations
             // falls through to the .Catch below and surfaces as a clean "Error: …" string.
             // 🚨 ISSUED OFF THE ROUTER (#1140) — see ReadHub. The read runs on the TARGET node hub;
             // this hub is only the reply mailbox, so it is the read seam, not the write one.
-            return ReadHub.Observe(
-                new GetDataRequest(new ContentCollectionReference([collectionName])),
-                o => o.WithTarget(targetAddress).WithAccessContext(caller))
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(30))
+            return NamingTimeoutAs(ReadHub.Observe(
+                    new GetDataRequest(new ContentCollectionReference([collectionName])),
+                    o => o.WithTarget(targetAddress).WithAccessContext(caller))
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(30)), UploadStep.CollectionLookup)
                 .Select(collectionResponse =>
                 {
                     // Deserialize via the hub's JSON options so the naming policy (camelCase)
@@ -3077,10 +3130,11 @@ public partial class MeshOperations
                     // for the caller on the delivery that carries them — the gate every node write
                     // passes. AuthorizeUpload above is an early answer only: a grant revoked after
                     // it is refused here, and no path can store bytes without passing the owner.
-                    return hub.SaveContentFile(resolution.Prefix)
-                        .To(collectionName, filePath)
-                        .WithAccessContext(caller)
-                        .Post(bytes)
+                    // A timeout from here on is the WRITE's, never the lookup's — the lookup has answered.
+                    return NamingTimeoutAs(hub.SaveContentFile(resolution.Prefix)
+                            .To(collectionName, filePath)
+                            .WithAccessContext(caller)
+                            .Post(bytes), UploadStep.Write)
                         .Catch((DeliveryFailureException refused) =>
                             refused.Failure?.ErrorType == ErrorType.Unauthorized
                                 ? OwnerRefusal(resolution.Prefix, resolvedPath, caller)
