@@ -6,6 +6,21 @@ Read the full documentation online at [memex.meshweaver.cloud/Doc](https://memex
 
 ## Installation
 
+### Try it with Docker: no build, no account
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Systemorph/MeshWeaver/main/deploy/compose/docker-compose.yml -o docker-compose.yml
+docker compose up -d
+```
+
+Then open `http://localhost:8080` and sign in with DevLogin. The file starts PostgreSQL (with
+pgvector), runs the schema migration once, and starts the portal from the public images on GHCR. It
+needs nothing else on the machine, and your data stays in two Docker volumes across restarts
+(`docker compose down -v` deletes it). It is for your own machine only: DevLogin admits anyone, so
+the portal refuses to start with it on a public address. Settings (`MEMEX_TAG`, `MEMEX_PORT`,
+`MEMEX_DB_PASSWORD`) are described at the top of
+[`deploy/compose/docker-compose.yml`](deploy/compose/docker-compose.yml).
+
 ### Run from source
 
 ```bash

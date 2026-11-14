@@ -1,0 +1,99 @@
+# Memex on your own machine, in one file:
+#
+#   curl -fsSL https://raw.githubusercontent.com/Systemorph/MeshWeaver/main/deploy/compose/docker-compose.yml -o docker-compose.yml
+#   docker compose up -d
+#
+# then open http://localhost:8080 and sign in with DevLogin. No cloud account, no registry login: the
+# images are the public builds on GHCR. Stop with `docker compose down`; your data stays in the two
+# volumes (`docker compose down -v` deletes it).
+#
+#   db         PostgreSQL with pgvector, the mesh's store
+#   db-init    creates the second database Orleans keeps its cluster membership in, then exits
+#   migration  creates and upgrades the schema, then exits; the portal waits for it
+#   data-owner hands the data volume to the portal's non-root user, then exits
+#   portal     the Memex portal (Blazor web + co-hosted Orleans silo)
+#
+# DevLogin is a local sign-in with no identity provider. The portal refuses to start with DevLogin on
+# a public address, so this file is for your own machine only.
+#
+# Settings (environment or a .env file beside this one):
+#   MEMEX_TAG          image tag, e.g. 3.1.13165 (default latest)
+#   MEMEX_PORT         host port (default 8080)
+#   MEMEX_DB_PASSWORD  database password (default memex-local)
+name: memex
+
+x-db: &db-connection
+  ConnectionStrings__memex: Host=db;Database=memex;Username=memex;Password=${MEMEX_DB_PASSWORD:-memex-local}
+  ConnectionStrings__orleans: Host=db;Database=orleans;Username=memex;Password=${MEMEX_DB_PASSWORD:-memex-local}
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: memex
+      POSTGRES_PASSWORD: ${MEMEX_DB_PASSWORD:-memex-local}
+      POSTGRES_DB: memex
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memex -d memex"]
+      interval: 5s
+      retries: 30
+
+  db-init:
+    image: pgvector/pgvector:pg17
+    environment:
+      PGPASSWORD: ${MEMEX_DB_PASSWORD:-memex-local}
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        psql -h db -U memex -d memex -tAc "SELECT 1 FROM pg_database WHERE datname = 'orleans'" | grep -q 1
+        || psql -h db -U memex -d memex -c "CREATE DATABASE orleans"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  migration:
+    image: ghcr.io/systemorph/memex-migration:${MEMEX_TAG:-latest}
+    environment:
+      <<: *db-connection
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  data-owner:
+    image: busybox:1.37
+    command: ["chown", "-R", "1654:1654", "/data"]
+    volumes:
+      - data:/data
+
+  portal:
+    image: ghcr.io/systemorph/memex-portal-ai:${MEMEX_TAG:-latest}
+    ports:
+      - "${MEMEX_PORT:-8080}:8080"
+    environment:
+      <<: *db-connection
+      Features__Orleans__Clustering: AdoNet
+      # The Azure-free self-host: object storage, compile cache and keys live on the data volume.
+      Deployment__Backend: Filesystem
+      Deployment__DataRoot: /data
+      Modules__Root: /data
+      Graph__Storage__Type: PostgreSql
+      Graph__Storage__BasePath: /data/graph
+      Storage__Name: content
+      Storage__SourceType: FileSystem
+      Storage__BasePath: /data/content
+      Portal__BaseUrl: http://localhost:${MEMEX_PORT:-8080}
+      Authentication__EnableDevLogin: "true"
+    volumes:
+      - data:/data
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      data-owner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  data:
