@@ -169,12 +169,12 @@ on:
       platform-ref:
         description: >-
           The Systemorph/MeshWeaver ref whose .github/scripts this gate runs (compose-sealed-modules.sh).
-          Default main; pin it to the same sha as the `uses:` line for a reproducible run.
+          Default main3 (the v3 line); pin it to the same sha as the `uses:` line for a reproducible run.
           (`github.job_workflow_sha` is EMPTY inside a reusable called from another repo — measured
           2026-08-30 — so the script's ref is an input, never inferred.)
         required: false
         type: string
-        default: main
+        default: main3
       content-repository:
         description: >-
           The repository whose NodeTypes are compile-checked. Empty = the caller (every node repo
@@ -312,12 +312,12 @@ jobs:
             *) echo "::error title=Build executor::executor '$EXECUTOR' is neither 'actions' nor 'host' — refusing to guess who ran this lane's work"; exit 1 ;;
           esac
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
         if: inputs.executor != 'host'
       - name: Resolve and bind the artifact store
         if: inputs.executor != 'host'
         id: store
-        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main3
         with:
           store: ${{ inputs.artifact-store || 'gha' }}
           expected-store-id: ${{ inputs.artifact-store-id }}
@@ -363,7 +363,7 @@ jobs:
       # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
       - name: Merge the head onto the current base tip
         if: inputs.executor != 'host'
-        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main3
         with:
           path: repo
           main-sha: ${{ inputs.merge-main-sha }}
@@ -516,7 +516,7 @@ jobs:
           fi
       - name: Download this run's module-bundle artifacts
         if: ${{ inputs.executor != 'host' && (inputs.module-artifacts != '') }}
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ steps.store.outputs.store || 'unresolved' }}
           expected-store-id: ${{ steps.store.outputs.store-id }}
@@ -544,7 +544,7 @@ jobs:
               # 🚨 The publication is the unit of consistency (MeshWeaver#2698): module bytes come
               # from the SEALED upstream publication for this identity, never the registry's
               # package endpoint. No fallback — a missing seal or module set is RED in the script.
-              # The compose script at inputs.platform-ref (default main; pin it beside the `uses:` sha for a
+              # The compose script at inputs.platform-ref (default main3; pin it beside the `uses:` sha for a
               # reproducible run). NOT github.job_workflow_sha: it is empty inside a reusable called from
               # another repository, so a fetch keyed on it silently read main while claiming a pin.
               SCRIPT="${RUNNER_TEMP:-/tmp}/compose-sealed-modules.sh"
@@ -650,7 +650,7 @@ jobs:
           echo "baseline framework assemblies: $(find refs-baseline -maxdepth 1 -name 'MeshWeaver.*.dll' | wc -l) from /app of $IMAGE"
       - name: Download the baseline's module bundles
         if: ${{ inputs.executor != 'host' && (inputs.judge-against-baseline && inputs.baseline-image-digest != '' && inputs.baseline-module-artifacts != '') }}
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ steps.store.outputs.store || 'unresolved' }}
           expected-store-id: ${{ steps.store.outputs.store-id }}
@@ -720,7 +720,7 @@ jobs:
       # gate whose result is already decided above, never a step the gate's own colour depends on.
       - name: Upload the verdict
         if: ${{ inputs.executor != 'host' && (always() && inputs.verdict-artifact != '') }}
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ steps.store.outputs.store || 'unresolved' }}
           expected-store-id: ${{ steps.store.outputs.store-id }}

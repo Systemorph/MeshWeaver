@@ -10,7 +10,7 @@ name: Build host — stage a host-executed run's modules for the publish lane
 # UNCHANGED node-repo-module-publish.yml, which collects `module-publication-<lane>-*`:
 #
 #   host-publication:
-#     uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main3
 #     permissions: { contents: read, id-token: write }
 #     with:
 #       api-url: ${{ vars.MW_BUILD_API }}
@@ -19,7 +19,7 @@ name: Build host — stage a host-executed run's modules for the publish lane
 #       artifact-store-id: ${{ needs.select.outputs.artifact-store-id }}
 #   publish:
 #     needs: [host-publication, …]
-#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@main3
 #
 # 🚨 A SEPARATE LANE ON PURPOSE: it needs `id-token: write`, and a reusable workflow's permissions
 # are a hard requirement on EVERY caller (check-workflow-permission-pairing.py). Adding it to the
@@ -38,7 +38,7 @@ name: Build host — stage a host-executed run's modules for the publish lane
 #          `!cancelled() && !failure() && `, as its publisher may (policy
 #          publisher-tolerates-upstream-skips); a skipped pack call then leaves `lane` empty and
 #          this lane red, never a silent pass>
-#     uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main3
 #     permissions: { contents: read, id-token: write }
 #     with:
 #       executor: <the pack call's executor, verbatim>
@@ -52,7 +52,7 @@ name: Build host — stage a host-executed run's modules for the publish lane
 #       artifact-store-id: …
 #   publish:
 #     needs: [host-publication, …]
-#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@main3
 #     with:
 #       lane: ${{ needs.host-publication.outputs.lane }}
 #       selected: ${{ needs.host-publication.outputs.selected }}
@@ -163,7 +163,7 @@ on:
         description: The Systemorph/MeshWeaver ref the scripts are fetched at (the lane's own vintage).
         required: false
         type: string
-        default: main
+        default: main3
     outputs:
       lane:
         description: >-
@@ -237,7 +237,7 @@ jobs:
               fi ;;
             *) echo "::error title=Build executor::executor '$EXECUTOR' is neither 'actions' nor 'host' — refusing to guess who built the bundles"; exit 1 ;;
           esac
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
         if: steps.mode.outputs.fetch == 'true'
       - uses: actions/setup-python@v7
         if: steps.mode.outputs.fetch == 'true'
@@ -315,7 +315,7 @@ jobs:
             --declared "@$RUNNER_TEMP/declared.json" --selected "$SELECTED" --plan "@$RUNNER_TEMP/plan.json"
       - name: Stage them for the publish lane
         if: steps.mode.outputs.fetch == 'true'
-        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main3
         with:
           store: ${{ inputs.artifact-store }}
           expected-store-id: ${{ inputs.artifact-store-id }}

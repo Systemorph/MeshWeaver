@@ -56,7 +56,7 @@ on:
       scripts-ref:
         required: false
         type: string
-        default: main
+        default: main3
       fallback-minutes:
         description: "Must equal the caller's node-repo-stage-gate.yml fallback (both default to the measured value)"
         required: false
@@ -109,7 +109,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - name: Fetch the platform's review predicate at the lane's scripts ref
         env:
           GH_TOKEN: ${{ github.token }}

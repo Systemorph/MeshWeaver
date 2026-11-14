@@ -26,7 +26,7 @@ on:
           as the `uses:` sha of this lane; `main` floats.
         required: false
         type: string
-        default: main
+        default: main3
       scripts-ref:
         description: >-
           The Systemorph/MeshWeaver ref this lane's OWN helper scripts are fetched at (the guards,
@@ -35,7 +35,7 @@ on:
           images, core source). Empty (the default) means "the same as platform-ref" — right for a
           caller that pins the lane and the platform to one commit. A caller that pins NOTHING
           (MeshWeaver#3842: the platform resolved at run time to the newest SEALED set, the lane
-          called at `@main`) passes `main` here, because a sealed set is hours behind the lane's own
+          called at `@main3`) passes `main3` here, because a sealed set is hours behind the lane's own
           tip: on 2026-09-09 this lane at @main fetched check-abbreviated-shas.py — added at 17:06Z
           (022ab4a9d) — at a platform-ref cut at 3cda3efde a few hours earlier, and the fetch 404'd
           (Plugins#1566). `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a
@@ -67,7 +67,7 @@ jobs:
       contents: read
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
