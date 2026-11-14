@@ -62,10 +62,12 @@ WHAT MAKES A PROBE WORTH RUNNING — it never burns its budget on a range it can
      resolves), and an added or removed `<TargetFramework(s)>` line in any .csproj/.props/.targets.
      Measured on MeshWeaver.Plugins#5421 (net11 retarget, package versions moved): the probe built
      every changed project at head and base and its job was killed by its own 25-minute limit.
-  8. A DEADLINE. With `--deadline <epoch>` the probe never starts a build it cannot finish by then: when
-     the eligible projects × 3 builds × the per-build cost (`--build-seconds`, the measured prior,
-     raised to the slowest build seen in this run) exceed the time left it answers `unavailable`
-     without building; a project it reaches with too little time left is reported unprobed (kept).
+  8. A DEADLINE. With `--deadline <epoch>` the probe never starts a build it can skip once the deadline
+     would pass: when the eligible projects × 3 builds × the per-build cost (`--build-seconds`, the
+     measured prior, raised to the slowest build seen in this run) exceed the time left it answers
+     `unavailable` without building; a project it reaches with too little time left is reported
+     unprobed (kept). The mandatory head-restore rebuild can overrun by at most one build, which the
+     caller's reserve absorbs.
 
 THE KEY (the interface the build hosts rely on)
 -----------------------------------------------
