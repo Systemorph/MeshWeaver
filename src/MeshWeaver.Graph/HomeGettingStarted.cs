@@ -127,7 +127,13 @@ public static class HomeGettingStarted
     internal static IObservable<string> LiveStyle(LayoutAreaHost host)
     {
         var options = host.Hub.JsonSerializerOptions;
-        return host.Workspace.GetStream(new MeshNodeReference())!
+        // No own-node stream on this hub is a configuration failure: surfaced on the area (the data
+        // feed reports a fault), never an empty or hidden guide that hides it.
+        var ownNode = host.Workspace.GetStream(new MeshNodeReference());
+        if (ownNode is null)
+            return Observable.Throw<string>(new InvalidOperationException(
+                $"The getting-started guide on '{host.Hub.Address}' has no node stream to bind to."));
+        return ownNode
             .Select(change => StyleFor(change.Value.ContentAs<User>(options)))
             .StartWith(HiddenStyle)
             .DistinctUntilChanged();
