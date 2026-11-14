@@ -201,7 +201,7 @@ exactly that promoted set without a verdict — for an incident, recorded in the
 that has no promotion record is refused, never substituted. A single instance is still forced with
 a `Roll` `Hosting/InstanceAction`, not here.
 
-### A stalled gate files ONE `fleet-unarmed` issue
+### A stalled gate files ONE `fleet-unarmed` issue per major
 
 Waiting and refusing are both correct and both silent: a standing red ladder, or a platform-side
 outage, used to freeze fleet updates while every main-cd run stayed green with `nothing to arm`
@@ -228,6 +228,20 @@ with nothing armed (policy `control-first-never-silent`). The other stalls now h
   files the issue, or rewrites the body to the current table. It comments only when the reading
   changed, never once per tick. On the first run that finds the fleet armed again, it comments
   `armed again` and closes the issue. Duplicates fold into the oldest.
+- **One issue per major.** Each delivery line arms its own major (policy
+  `major-lines-run-separately`), so "the fleet is unarmed" is a fact about one major. The reading
+  names its `major` and `line`. Each major has its own issue, with its own title (`… the 4.x fleet
+  unarmed`) and its own hidden mark (`<!-- fleet-unarmed alert major=4 -->`). Only that major's
+  `arm` run creates, rewrites or closes it. When both lines shared one issue, the v4 line's cold
+  start opened it and the v3 line's armed fleet closed it on every tick (MeshWeaver#8208). An open
+  issue of the old shared shape is closed once as superseded, pointing at the per-major issue.
+- **Cold start of a major.** When no set of the line's major was ever armed, the reading says so in
+  words (`no 4.x set armed yet`, never the cursor `ci.0`) and carries `cold_start: true`. A cursor of
+  0 can never be reached by the run listing, so for a cold start the window is complete once the
+  listing passes the line's FIRST set of the major: a promotion record of an older major on the
+  line's own branch. The stall is then clocked from that first set's promotion. It used to be
+  clocked from the oldest run in the bounded listing (measured: 83.6 h off pre-split 3.1 runs, when
+  the first 4.x set was 5.6 h old).
 - **When it runs.** The alert is the `arm` job's last step, so it runs on every main-cd run,
   including the hourly reconcile. It also runs after a frozen `select`. It never runs after a
   failed arming write (phases C/D), because a set chosen but not written is not armed. The `arm`
