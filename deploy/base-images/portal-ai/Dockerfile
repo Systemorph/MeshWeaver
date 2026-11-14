@@ -1,5 +1,5 @@
 # Base image for the portal-ai flavour: the ASP.NET runtime PLUS the two co-hosted CLIs
-# (Node 20 + Claude Code + GitHub Copilot) PLUS a headless Chromium for document export.
+# (Node 26 + Claude Code + GitHub Copilot) PLUS a headless Chromium for document export.
 # This is the ONE hand-authored image artifact — Aspire's SDK container build can't apt-install
 # Node, so it layers the published portal app
 # ON TOP of this base via the portal's <ContainerBaseImage>. The lean `portal` flavour skips

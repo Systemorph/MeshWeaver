@@ -921,6 +921,7 @@ jobs:
           # The LINE's Plugins branch (main → Plugins main, main3 → Plugins main3), with
           # vars.MW_PLUGINS_REF already folded in as the override by the `line` step.
           PLUGINS_REF: ${{ needs.line.outputs.plugins_ref }}
+          LINE: ${{ needs.line.outputs.line }}
           SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
         run: |
           set -euo pipefail
@@ -936,6 +937,22 @@ jobs:
           # an empty string travelling downstream as "no pair to check".
           full=$(git ls-remote git@github.com:Systemorph/MeshWeaver.Plugins.git \
                    "refs/heads/$PLUGINS_REF" | awk '{print $1}' | head -1)
+          # 🚨 A pluginsRef that is not the line's own branch is a BOOTSTRAP (the first set of a new major is
+          # built against the Plugins branch carrying it — .github/delivery-lines.json). Once that branch is
+          # merged into the line's Plugins branch it is stale, and building from it would go on silently
+          # (Plugins keeps merged branches), so CD refuses it by name. Commits only (tree:0), no clone.
+          if [ -n "$full" ] && [ "$PLUGINS_REF" != "$LINE" ]; then
+            probe=$(mktemp -d)
+            git -C "$probe" init -q --bare
+            git -C "$probe" fetch -q --filter=tree:0 git@github.com:Systemorph/MeshWeaver.Plugins.git \
+              "refs/heads/$PLUGINS_REF:refs/bootstrap" "refs/heads/$LINE:refs/line"
+            if git -C "$probe" merge-base --is-ancestor refs/bootstrap refs/line; then
+              rm -f ~/.ssh/plugins_key
+              echo "::error::the $LINE line builds its portal host from Plugins '$PLUGINS_REF', which is already merged into Plugins '$LINE' — a bootstrap pluginsRef that outlived its merge. Set the $LINE line's pluginsRef back to '$LINE' in .github/delivery-lines.json (and clear vars.MW_PLUGINS_REF if it names that branch)."
+              exit 1
+            fi
+            echo "bootstrap: the $LINE line builds from Plugins '$PLUGINS_REF', not yet merged into Plugins '$LINE'"
+          fi
           rm -f ~/.ssh/plugins_key
           if [ -z "$full" ]; then
             echo "::error::'refs/heads/$PLUGINS_REF' does not resolve in Systemorph/MeshWeaver.Plugins — check MW_PLUGINS_REF, and the line's \`pluginsRef\` in .github/delivery-lines.json."
