@@ -586,7 +586,7 @@ jobs:
       contents: read
       issues: write
       actions: read
-    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main3
     with:
       outcome: failure
       run: ${{ github.run_id }}
@@ -597,7 +597,7 @@ jobs:
       issue-title: "ci-template-feed: generated Memex templates cannot restore the newest set"
       severity: "sev:M"
       control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
-      scripts-ref: main
+      scripts-ref: main3
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
@@ -610,7 +610,7 @@ jobs:
       contents: read
       issues: write
       actions: read
-    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main3
     with:
       outcome: success
       run: ${{ github.run_id }}
@@ -621,7 +621,7 @@ jobs:
       issue-title: "ci-template-feed: generated Memex templates cannot restore the newest set"
       severity: "sev:M"
       control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
-      scripts-ref: main
+      scripts-ref: main3
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}

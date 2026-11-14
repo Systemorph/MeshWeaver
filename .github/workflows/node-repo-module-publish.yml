@@ -260,14 +260,14 @@ jobs:
     steps:
       - name: Resolve and bind the artifact store
         id: store
-        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main3
         with:
           store: ${{ inputs.artifact-store || 'gha' }}
           expected-store-id: ${{ inputs.artifact-store-id }}
           require-expected-store-id: 'true'
       # 🚨 THE LANE'S SCRIPTS COME FROM THE LANE'S OWN COMMIT, never from `platform-ref` (Plugins#4478).
       # `platform-ref` is the released platform the modules were BUILT against, which trails core's
-      # `main` by hours or days, while a caller loads this lane at `@main`. Scripts fetched at the
+      # `main` by hours or days, while a caller loads this lane at `@main3`. Scripts fetched at the
       # platform pin are then OLDER than the workflow calling them: measured while wiring Plugins'
       # staged publisher, the resolved set 3.1.12258 (10287813e) predates both #7774 (`superseded`,
       # which the newest-only step below calls) and #7777 (the publisher prefix `check-caller`
@@ -359,7 +359,7 @@ jobs:
       # collection, but corrupt bytes or a wrong store identity fail RED at the download itself.
       # No transfer failure is swallowed (`verify` in pack collects receipts the same way).
       - name: Collect this call's staged publications
-        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main3
         with:
           store: ${{ steps.store.outputs.store || 'unresolved' }}
           expected-store-id: ${{ steps.store.outputs.store-id }}

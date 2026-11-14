@@ -42,7 +42,7 @@ name: Node repo cap debt (reusable)
 #   jobs:
 #     cap-debt:
 #       permissions: { contents: read }
-#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-cap-debt.yml@main
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-cap-debt.yml@main3
 #       with:
 #         build-api: ${{ vars.MW_BUILD_API }}
 #         mesh-url: ${{ vars.MW_TRIAGE_URL }}
@@ -64,7 +64,7 @@ name: Node repo cap debt (reusable)
 #       needs: [cap-debt]
 #       if: github.event_name != 'pull_request' && failure()
 #       permissions: {contents: read, issues: write, actions: read}
-#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main3
 #       with:
 #         outcome: failure
 #         label: cap-debt-red
@@ -81,7 +81,7 @@ name: Node repo cap debt (reusable)
 #       needs: [cap-debt]
 #       if: github.event_name != 'pull_request' && success()
 #       permissions: {contents: read, issues: write, actions: read}
-#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main3
 #       with:
 #         outcome: success
 #         label: cap-debt-red
@@ -123,7 +123,7 @@ on:
         description: The Systemorph/MeshWeaver ref the scripts are fetched at; pin it beside the `uses:` sha.
         required: false
         type: string
-        default: main
+        default: main3
     secrets:
       triage-token:
         description: The service user's mesh API token on the control instance, holding Create + Update in triage-namespace.
@@ -155,7 +155,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - name: Every input the caller must provision, or a red run naming what and where
         env:
           BUILD_API: ${{ inputs.build-api }}
@@ -176,7 +176,7 @@ jobs:
           [ -n "${WEBHOOK_HOST:-}" ]           || missing+=("inputs.control-webhook-host the host the inbox URL must name (default control.systemorph.com)")
           [ -n "${MW_TRIAGE_TOKEN:-}" ]        || missing+=("secrets.triage-token        pass secrets.MW_TRIAGE_TOKEN (the service user's mesh API token on the control instance)")
           [ -n "${CONTROL_WEBHOOK_SECRET:-}" ] || missing+=("secrets.control-webhook-secret pass secrets.CONTROL_WEBHOOK_SECRET (org secret)")
-          [ -n "${SCRIPTS_REF:-}" ]            || missing+=("inputs.scripts-ref          the Systemorph/MeshWeaver ref the scripts are fetched at (default main)")
+          [ -n "${SCRIPTS_REF:-}" ]            || missing+=("inputs.scripts-ref          the Systemorph/MeshWeaver ref the scripts are fetched at (default main3, the v3 line)")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::the cap-debt lane cannot run — provision the following in the CALLING repository, then re-run:"
             for m in "${missing[@]}"; do echo "  • $m"; done

@@ -34,7 +34,7 @@ name: Node repo retry known transients (reusable)
 #     contents: read
 #   jobs:
 #     retry:
-#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-retry-transients.yml@main
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-retry-transients.yml@main3
 #       permissions:
 #         actions: write     # list the run's jobs, read their logs, POST the one rerun
 #         checks: read       # check-runs/<job>/annotations — the ONLY record of a runner death
@@ -56,11 +56,11 @@ on:
     inputs:
       scripts-ref:
         description: >
-          The Systemorph/MeshWeaver ref the decision script is fetched at. `main` (the default) is
-          what a fleet calling the lane at `@main` wants; a caller pinning the lane to a sha passes
+          The Systemorph/MeshWeaver ref the decision script is fetched at. `main3` (the default, the v3 line) is
+          what a fleet calling the lane at `@main3` wants; a caller pinning the lane to a sha passes
           the SAME sha here.
         type: string
-        default: main
+        default: main3
       rerun-scope:
         description: >
           `failed-jobs` (the default) POSTs rerun-failed-jobs; `all` POSTs rerun (the whole run).
@@ -91,7 +91,7 @@ jobs:
       contents: read
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
 
       - name: The caller wired this lane to a workflow_run completion
         env:

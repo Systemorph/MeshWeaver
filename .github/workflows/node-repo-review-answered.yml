@@ -139,13 +139,13 @@ on:
         description: >-
           The Systemorph/MeshWeaver ref check-review-answered.py is fetched at. A caller pins the
           lane to a 40-char sha and passes the SAME sha here, so the lane and its predicate cannot
-          come from two commits. The `main` default exists only so an unpinned call still fetches a
+          come from two commits. The `main3` default exists only so an unpinned call still fetches a
           predicate rather than failing on an empty ref; it is not the recommended shape.
           `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a reusable called
           from another repository (measured 2026-08-30).
         required: false
         type: string
-        default: main
+        default: main3
       wait-for-review-minutes:
         description: >-
           How long the verdict re-reads while the ONLY thing missing is the review itself, before
@@ -212,7 +212,7 @@ jobs:
     # 🚨 NO `permissions:` BLOCK HERE, ON PURPOSE (policy review-pending-while-answering). The verdict writer
     # needs `checks: write`, and a called job's `permissions:` is a HARD requirement on every caller: writing
     # `checks: write` here would startup_fail every caller that has not granted it — five of six call this lane
-    # at `@main` (the #3933 outage shape, .github/lane-caller-grants.yml). Without a block the job holds exactly
+    # at `@main3` (the #3933 outage shape, .github/lane-caller-grants.yml). Without a block the job holds exactly
     # what its caller grants on the `uses:` job, recorded per caller in that roster: `contents`,
     # `pull-requests`, `issues` and `checks` at `read` for a caller that has not opted in (plus the `actions:
     # write` its `refresh` job needs), and `checks: write` for one that has.
@@ -244,7 +244,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       # The self-hosted scale set a private caller lands on does not promise a Python; every other
       # lane that runs a central guard pins one the same way.
       - uses: actions/setup-python@v7
@@ -359,7 +359,7 @@ jobs:
           private-key: ${{ secrets.api-app-private-key }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"

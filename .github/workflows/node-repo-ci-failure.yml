@@ -108,7 +108,7 @@ name: Node repo ci-failure ledger (reusable)
 #     needs: [validate, compile-check, test-repos, publish-bake]        # ← EVERY gate job
 #     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && failure()
 #     permissions: {contents: read, issues: write, actions: read}
-#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main3
 #     with:
 #       outcome: failure
 #       run: ${{ github.run_id }}
@@ -126,7 +126,7 @@ name: Node repo ci-failure ledger (reusable)
 #     needs: [validate, compile-check, test-repos, publish-bake]        # ← the SAME list
 #     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && success()
 #     permissions: {contents: read, issues: write, actions: read}
-#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main3
 #     with:
 #       outcome: success
 #       run: ${{ github.run_id }}
@@ -238,10 +238,10 @@ on:
       scripts-ref:
         description: >-
           The Systemorph/MeshWeaver ref this lane's ledger script is fetched at. Pin it beside the
-          `uses:` sha; `main` is right for a caller that calls the lane at `@main`.
+          `uses:` sha; `main3` is right for a caller that calls the lane at `@main3`.
         required: false
         type: string
-        default: main
+        default: main3
     secrets:
       github-token:
         description: >-
@@ -273,7 +273,7 @@ jobs:
       actions: read
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
-      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main3
       # No `if:` on any step here except the ledger's own `post` decision and the miss ledger's
       # `!cancelled()`. The assertions below
       # ASSERT and fail; they never choose whether to run. A step asking "is the secret set?" and
@@ -303,7 +303,7 @@ jobs:
           [ -n "${RUN_URL:-}" ]                || missing+=("inputs.run-url                  github.server_url/github.repository/actions/runs/github.run_id")
           [ -n "${SHA:-}" ]                    || missing+=("inputs.sha                      github.sha")
           [ -n "${TRIGGER:-}" ]                || missing+=("inputs.event                    github.event_name")
-          [ -n "${SCRIPTS_REF:-}" ]            || missing+=("inputs.scripts-ref              the Systemorph/MeshWeaver ref the ledger script is fetched at (default main)")
+          [ -n "${SCRIPTS_REF:-}" ]            || missing+=("inputs.scripts-ref              the Systemorph/MeshWeaver ref the ledger script is fetched at (default main3, the v3 line)")
           [ -n "${LEDGER_LABEL:-}" ]           || missing+=("inputs.label                    the ledger's own label (default ci-main-red). Measured, not assumed: the script reads \`env(LEDGER_LABEL) or DEFAULT_LABEL\`, so an EMPTY value does not fail — it silently becomes \`ci-main-red\`, and a lane that meant to keep its own story would append to, reopen and CLOSE the repo's main-build ledger instead. Refused here so the fallback can never be reached by accident")
           # Same trap as the label: the script reads `env(LEDGER_SEVERITY) or DEFAULT_SEVERITY`, so an
           # EMPTY value would silently become sev:H. Refused here; an unknown word is refused by the script.
