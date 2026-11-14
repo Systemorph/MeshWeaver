@@ -943,30 +943,54 @@ def _current(existing: dict | None, plugin: Path, files: dict[str, str], version
         and VERSION_RE.fullmatch(str(existing.get("version", ""))) is not None
 
 
-def materialized_version(plugin: Path, content_hash: str, existing: dict | None) -> str:
-    """The version `--settle` will give this tree, derived from the COMMITTED lock alone.
+def materialized_version(plugin: Path, content_hash: str, existing: dict | None,
+                         root: Path | None = None) -> str:
+    """The version `--settle` will give this tree: the COMMITTED lock, then the LOCAL tags.
 
     Under `lockOwner: main` the committed lock in any checkout is the last SETTLED claim the tree
     descends from — a pull request never writes one — so it is the trunk witness `derive_release`
     reads, already on disk: same patch when the content hash still matches it, +1 when it moved,
-    `.0` for a new series or a new module. The tag witness adds nothing here: tags are cut from
-    settled commits, so no published tag outranks the settled lock a tree descends from.
+    `.0` for a new series or a new module.
 
-    Pure and network-free on purpose. Every job of one run materializes independently, and each
-    must arrive at the SAME bytes — a derivation that read the live remote could move between two
-    jobs of one run (a tag published, the trunk advanced) and name one bundle two versions. The
-    settle job derives the authoritative number with the verified remote and asserts it equals this.
+    🚨 THE LOCAL TAGS ARE THEN READ TOO, never the remote. The lock alone is not enough when a
+    package was PUBLISHED before it ever had a committed lock, or when a tag otherwise sits at or
+    above the lock's number: `Benchmarks/v1.2.0` was tagged (content `4087…`) before Benchmarks had
+    a `manifest.lock`, its content moved afterwards, and "no lock ⇒ the series' `.0`" named the
+    new tree 1.2.0 again — a published number for new content. `--settle`, reading the same tag
+    through `derive_release`, wrote 1.2.1 and then refused ("settled v1.2.1 but --materialize
+    derives v1.2.0"), so the settlement PR could never go green (MeshWeaver.Plugins#5424). So the
+    highest tag of the series REACHABLE from HEAD is weighed exactly as `derive_release` weighs a
+    published tag: at or above the lock's number it decides — its own number when it released
+    this content, the next one past it when it did not. Never a number at or below a published
+    tag for different content.
+
+    Still network-free and deterministic per tree. Only the checkout's own tag database is read,
+    and only tags reachable from HEAD, so a tag published for a LATER trunk commit cannot move the
+    number. A tag that becomes visible to one job of a run and not another can only be the first
+    claim for this very content (same number, same answer) — a tag for a different content at
+    that number is the published-number defect itself, which the settle job reports.
+
+    `root` is the checkout whose tags are read; it defaults to the package's parent (packages are
+    top-level folders), so an existing three-argument caller is tag-aware too.
     """
+    root = root if root is not None else plugin.parent
     major, minor = declared_series(plugin)
     committed = str((existing or {}).get("version", ""))
     if not VERSION_RE.fullmatch(committed):
-        return f"{major}.{minor}.0"
-    c_major, c_minor, c_patch = (int(p) for p in committed.split("."))
-    if (c_major, c_minor) != (major, minor):
-        return f"{major}.{minor}.0"
-    if existing.get("moduleVersion") == content_hash:
-        return committed
-    return f"{major}.{minor}.{c_patch + 1}"
+        patch = 0
+    else:
+        c_major, c_minor, c_patch = (int(p) for p in committed.split("."))
+        if (c_major, c_minor) != (major, minor):
+            patch = 0
+        elif existing.get("moduleVersion") == content_hash:
+            patch = c_patch
+        else:
+            patch = c_patch + 1
+    published = tag_baseline(root, plugin.name, major, minor, as_of="HEAD")
+    if published is not None and published[0] >= patch:
+        tag_patch, tag_content, _ = published
+        patch = tag_patch if tag_content == content_hash else tag_patch + 1
+    return f"{major}.{minor}.{patch}"
 
 
 def materialize(root: Path) -> int:
@@ -992,7 +1016,7 @@ def materialize(root: Path) -> int:
         files = hash_files(plugin, root)
         content_hash = module_version(files)
         existing = read_existing(lock)
-        version = materialized_version(plugin, content_hash, existing)
+        version = materialized_version(plugin, content_hash, existing, root)
         if _current(existing, plugin, files, content_hash) and existing.get("version") == version:
             continue
         lock.write_text(serialize({
@@ -1297,7 +1321,7 @@ def check_main_owned(root: Path) -> list[str]:
                               f"of its own files) — a hand edit, or a merge that mixed two locks")
                 continue
         content_hash = module_version(hash_files(plugin, root))
-        version = materialized_version(plugin, content_hash, existing)
+        version = materialized_version(plugin, content_hash, existing, root)
         if existing is not None and _is_behind(version, str(existing.get("version"))):
             errors.append(f"{plugin.name}: this tree would materialize v{version}, BELOW the committed "
                           f"v{existing.get('version')} — a version never moves backwards")
@@ -1455,7 +1479,7 @@ def settle(root: Path, fetch: bool = True) -> int:
         for plugin in plugin_dirs(root):
             written = read_existing(plugin / "manifest.lock") or {}
             before = _lock_at(root, "HEAD", plugin.name)
-            expected = materialized_version(plugin, str(written.get("moduleVersion")), before)
+            expected = materialized_version(plugin, str(written.get("moduleVersion")), before, root)
             if written.get("version") != expected:
                 failures.append(
                     f"{plugin.name}: settled v{written.get('version')} but --materialize derives "
@@ -2527,6 +2551,7 @@ def self_test() -> int:
 
         failures.extend(_self_test_main_owned(tmp / "main-owned"))
         failures.extend(_self_test_published_tag_wins(tmp / "tag-wins"))
+        failures.extend(_self_test_published_before_first_lock(tmp / "published-before-lock"))
 
     if failures:
         print("✗ gen-manifests self-test:")
@@ -3062,6 +3087,96 @@ def _self_test_settle_behind_tip(tmp: Path) -> list[str]:
     elif (read_existing(work / "Mod" / "manifest.lock") or {}).get("version") != "1.0.1":
         failures.append("--settle behind the tip must derive against ITSELF (#1426): M1 claims 1.0.1")
     _CONFIG_CACHE.pop(work.resolve(), None)
+    return failures
+
+
+def _self_test_published_before_first_lock(tmp: Path) -> list[str]:
+    """A package TAGGED before it ever had a committed lock, whose content then moved.
+
+    The shape MeshWeaver.Plugins reached with `Benchmarks/v1.2.0` (MeshWeaver.Plugins#5424): the
+    tag was cut, annotated with its content, at a commit carrying no `manifest.lock`; the package
+    changed afterwards, still with no lock. `materialized_version` read the lock alone, saw none,
+    and named the moved tree the series' `.0` — the PUBLISHED 1.2.0 — while `--settle`, reading the
+    tag, wrote 1.2.1 and then refused its own claim ("settled v1.2.1 but --materialize derives
+    v1.2.0"). Every case below has its counterpart: the moved tree bumps past the tag, the tagged
+    tree keeps the tag's number, and with NO tag the lock-only behaviour is unchanged.
+    """
+    import contextlib
+    import io as _io
+    failures: list[str] = []
+    origin, work, tagless = tmp / "origin.git", tmp / "work", tmp / "tagless"
+    tmp.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], capture_output=True, check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)], capture_output=True, check=True)
+
+    def g(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(work), *args], capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    def quiet(fn, *a, **kw):
+        with contextlib.redirect_stdout(_io.StringIO()):
+            return fn(*a, **kw)
+
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "t")
+    (work / "scripts").mkdir()
+    (work / "scripts" / CONFIG_NAME).write_text(json.dumps(
+        {"skip": ["scripts"], "lockOwner": LOCK_OWNER_MAIN}) + "\n")
+    (work / "Mod").mkdir()
+    (work / "Mod" / "index.json").write_text('{"content": {"version": "1.2"}}\n')
+    (work / "Mod" / "src.cs").write_text("released\n")
+    _CONFIG_CACHE.pop(work.resolve(), None)
+    plugin = work / "Mod"
+    g("add", "-A")
+    g("commit", "-qm", "Mod published with no manifest.lock")
+    released = module_version(hash_files(plugin, work))
+    g("tag", "-a", "Mod/v1.2.0", "-m", f"Mod 1.2.0 (content {released})")
+    g("push", "-q", "origin", "HEAD:main", "--tags")
+
+    # 1. The tagged tree itself, still with no lock: the tag released THIS content => its number.
+    got = materialized_version(plugin, released, None, work)
+    if got != "1.2.0":
+        failures.append(f"published-before-first-lock — the tagged tree must keep v1.2.0, got v{got}")
+
+    # 2. The content moves after the tag, still with no lock => PAST the tag, never 1.2.0 again.
+    (work / "Mod" / "src.cs").write_text("moved after the tag\n")
+    g("commit", "-qam", "content moves after the tag")
+    g("push", "-q", "origin", "HEAD:main")
+    moved = module_version(hash_files(plugin, work))
+    got = materialized_version(plugin, moved, None, work)
+    if got != "1.2.1":
+        failures.append(f"published-before-first-lock — the moved tree must materialize v1.2.1 "
+                        f"(past the published v1.2.0), got v{got}")
+    # …and end to end: --settle writes 1.2.1 AND its materialize postcondition agrees (the refusal
+    # this case was measured as), and --materialize on the same tree names the same number.
+    rc = quiet(settle, work, True)
+    written = (read_existing(work / "Mod" / "manifest.lock") or {}).get("version")
+    if rc != 0 or written != "1.2.1":
+        failures.append(f"published-before-first-lock — --settle must write and accept v1.2.1, "
+                        f"got exit {rc}, v{written}")
+    (work / "Mod" / "manifest.lock").unlink(missing_ok=True)
+    quiet(materialize, work)
+    written = (read_existing(work / "Mod" / "manifest.lock") or {}).get("version")
+    if written != "1.2.1":
+        failures.append(f"published-before-first-lock — --materialize must write v1.2.1, got v{written}")
+    (work / "Mod" / "manifest.lock").unlink(missing_ok=True)
+
+    # 3. A tag BELOW the lock's number changes nothing: the lock still decides.
+    settled = {"schema": SCHEMA, "module": "Mod", "moduleVersion": moved, "version": "1.2.4"}
+    got = materialized_version(plugin, moved, settled, work)
+    if got != "1.2.4":
+        failures.append(f"published-before-first-lock — a lock above every tag keeps v1.2.4, got v{got}")
+
+    # 4. NEGATIVE CONTROL — the same history with NO tag: the lock-only behaviour, the series' .0.
+    subprocess.run(["git", "clone", "-q", "--no-tags", str(origin), str(tagless)],
+                   capture_output=True, check=True)
+    _CONFIG_CACHE.pop(tagless.resolve(), None)
+    got = materialized_version(tagless / "Mod", moved, None)
+    if got != "1.2.0":
+        failures.append(f"published-before-first-lock — with no tag the moved tree is the series' "
+                        f".0 as before, got v{got} (so cases 1-2 measured nothing about tags)")
+    _CONFIG_CACHE.pop(work.resolve(), None)
+    _CONFIG_CACHE.pop(tagless.resolve(), None)
     return failures
 
 
