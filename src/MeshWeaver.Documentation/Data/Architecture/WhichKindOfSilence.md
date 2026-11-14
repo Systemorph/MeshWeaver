@@ -310,7 +310,9 @@ their innermost 12 frames, the largest group first:
     running — so an idle shape is never again taken for what held the pool
     (`ThreadPoolStall.IsIdleWorker`);
   - a last section, `QUEUED WORK: N item(s) read, in M producer(s)`, grouping every queued item by
-    the code it will run — a `Task`'s delegate, an async method's state machine, or the first
+    the code it will run — a `Task`'s delegate, an async method's state machine, a runtime-async
+    method's resuming method (read off its continuation chain, see
+    [Adopting .NET 11 — measured](../DotNet11Measured)), or the first
     delegate a work-item wrapper holds — largest first (`ThreadPoolQueueCensus`). A hub drain reads
     `MeshWeaver.Messaging.MessageService.DrainOne`. The census is read through the runtime's debugger
     enumeration `ThreadPool.GetQueuedWorkItems()` (internal, reached by reflection, the same walk SOS's

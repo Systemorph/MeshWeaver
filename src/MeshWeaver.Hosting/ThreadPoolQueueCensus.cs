@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace MeshWeaver.Hosting;
@@ -121,6 +123,8 @@ public sealed record ThreadPoolQueueCensus(
         var type = item.GetType();
         if (item is Task)
         {
+            if (RuntimeAsync.IsRuntimeAsyncTask(type))
+                return RuntimeAsync.ProducerOf(item);
             if (FieldValue(item, typeof(Task), "m_action") is Delegate action)
                 return MethodOf(action);
             return StateMachineOf(type) is { } machine ? Display(machine) : Display(type);
@@ -129,6 +133,95 @@ public sealed record ThreadPoolQueueCensus(
         if (item is Delegate direct)
             return MethodOf(direct);
         return FirstDelegate(item) is { } held ? $"{Display(type)} → {MethodOf(held)}" : Display(type);
+    }
+
+    /// <summary>
+    /// 🚨 <b>Runtime Async (.NET 11).</b> The runtime libraries are compiled with
+    /// <c>runtime-async=on</c>, so a BCL async method (<c>Stream.CopyToAsync</c>,
+    /// <c>StreamReader.ReadToEndAsync</c>, …) is no longer an <c>AsyncStateMachineBox</c>. Its
+    /// task is an <c>AsyncHelpers+RuntimeAsyncTask&lt;T&gt;</c> whose <c>m_action</c> is the
+    /// runtime's own <c>DispatchContinuations</c>. Keyed by that delegate, every such item of every
+    /// producer collapsed into one group per RESULT TYPE. Measured on 11.0.0: four
+    /// <c>Stream.CopyToAsync</c> continuations and five continuations of our own runtime-async
+    /// methods all read <c>RuntimeAsyncTask`1[VoidTaskResult].DispatchContinuations</c>.
+    ///
+    /// <para>The method lives in the task's continuation chain instead (<c>m_stateObject</c>, then
+    /// <c>Continuation.Next</c> link by link). Each link carries a <c>ResumeInfo*</c> whose
+    /// <c>DiagnosticIP</c> is an address inside the method that will resume, and the runtime maps
+    /// it back with <c>StackFrame.GetMethodFromNativeIP</c>, the same address the debugger and SOS
+    /// use. All of it is internal and reached by reflection, and all of it is allowed to be
+    /// missing: a runtime without it keys the item as an unresolved runtime-async continuation and
+    /// SAYS so, rather than keying it as the dispatcher.</para>
+    ///
+    /// <para>🚨 <c>GetType()</c> on a continuation object throws <see cref="NotSupportedException"/>
+    /// ("not supported for continuations"), so the chain is walked through the base type's
+    /// <see cref="FieldInfo"/>s only.</para>
+    /// </summary>
+    private static class RuntimeAsync
+    {
+        private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+        private const int MaxLinks = 64;
+
+        private static readonly Assembly CoreLib = typeof(object).Assembly;
+        private static readonly Type? Continuation = CoreLib.GetType("System.Runtime.CompilerServices.Continuation");
+        private static readonly FieldInfo? Next = Continuation?.GetField("Next", Instance);
+        private static readonly FieldInfo? ResumeInfo = Continuation?.GetField("ResumeInfo", Instance);
+        private static readonly MethodInfo? PointerValue = typeof(Pointer).GetMethod("GetPointerValue", Instance, Type.EmptyTypes);
+        private static readonly MethodInfo? MethodFromNativeIp = typeof(StackFrame).GetMethod(
+            "GetMethodFromNativeIP", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public, [typeof(IntPtr)]);
+        private static readonly int DiagnosticIpOffset = OffsetOfDiagnosticIp();
+
+        /// <summary>Why the chain cannot be resolved on this runtime, or null when it can.</summary>
+        private static readonly string? Missing =
+            Continuation is null ? "no Continuation type"
+            : Next is null || ResumeInfo is null ? "Continuation lacks Next/ResumeInfo"
+            : PointerValue is null ? "no Pointer.GetPointerValue"
+            : MethodFromNativeIp is null ? "no StackFrame.GetMethodFromNativeIP"
+            : DiagnosticIpOffset < 0 ? "no ResumeInfo.DiagnosticIP"
+            : null;
+
+        private static int OffsetOfDiagnosticIp()
+        {
+            if (CoreLib.GetType("System.Runtime.CompilerServices.ResumeInfo") is not { } resumeInfo
+                || resumeInfo.GetField("DiagnosticIP", Instance) is not { FieldType.IsPointer: true })
+                return -1;
+            try
+            {
+                return (int)Marshal.OffsetOf(resumeInfo, "DiagnosticIP");
+            }
+            catch (ArgumentException)
+            {
+                return -1;
+            }
+        }
+
+        /// <summary>Whether <paramref name="type"/> is the runtime's task for a runtime-async method.</summary>
+        public static bool IsRuntimeAsyncTask(Type type) =>
+            type is { IsGenericType: true, Name: "RuntimeAsyncTask`1", DeclaringType.FullName: "System.Runtime.CompilerServices.AsyncHelpers" };
+
+        /// <summary>The method a runtime-async task resumes into first, or an unresolved key that says why.</summary>
+        public static string ProducerOf(object task)
+        {
+            if (Missing is not null)
+                return $"runtime-async continuation (method unresolved: {Missing})";
+            var link = FieldValue(task, typeof(Task), "m_stateObject");
+            for (var hops = 0; link is not null && hops < MaxLinks; hops++)
+            {
+                if (MethodAt(link) is { } method)
+                    return $"{(method.DeclaringType is { } owner ? Display(owner) : "?")}.{method.Name}";
+                link = Next!.GetValue(link);
+            }
+            return "runtime-async continuation (method unresolved: no link carried a diagnostic address)";
+        }
+
+        private static MethodBase? MethodAt(object link)
+        {
+            if (ResumeInfo!.GetValue(link) is not Pointer boxed
+                || PointerValue!.Invoke(boxed, null) is not IntPtr info || info == IntPtr.Zero)
+                return null;
+            var ip = Marshal.ReadIntPtr(info, DiagnosticIpOffset);
+            return ip == IntPtr.Zero ? null : MethodFromNativeIp!.Invoke(null, [ip]) as MethodBase;
+        }
     }
 
     /// <summary>The state-machine type an async method's box carries as its last generic argument.</summary>
