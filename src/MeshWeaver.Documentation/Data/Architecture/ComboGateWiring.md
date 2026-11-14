@@ -1083,7 +1083,7 @@ is refused, and that the flag is refused with a named package list.
 writes a bundle for it (`TreeBake.WriteBundles` skips a package with no compiled entry), and none is
 needed. `NodeRepoPackageGraph.DefinesNodeTypes` decides it with the same `$type` test the
 source-edge reader uses. Such a package is neither reused nor rebuilt. It is staged only when a
-rebuilt package needs it installed, and the plan line counts it separately (`N declare no NodeType
+rebuilt package needs it installed, and the plan line counts it separately when there is any (`N declare no NodeType
 (nothing to bake)`). One case stays conservative: a package whose NodeType includes sources from a
 package with no NodeType is rebuilt, because no seal carries those source bytes.
 

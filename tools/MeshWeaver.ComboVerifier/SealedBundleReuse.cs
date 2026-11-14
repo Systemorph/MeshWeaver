@@ -29,17 +29,19 @@ public sealed record SealedBundleSource(ImmutableArray<string> Directories, stri
 /// "the mount is the filter" rule a narrowed publish-bake uses.</param>
 /// <param name="SealProblems">Every fetched seal file that could not be read as a bundle, and every
 /// seal directory that was not there — each one reuses nothing, and is named rather than skipped.</param>
-/// <param name="NoNodeTypes">Packages that declare no NodeType of their own: nothing to compile, so
-/// no bake writes a bundle for them and none is needed. They are neither reused nor rebuilt, and
-/// are staged only when a rebuilt package needs them installed.</param>
 public sealed record SealedBundlePlan(
     string FrameworkIdentity,
     ImmutableSortedDictionary<string, string> Reused,
     ImmutableSortedDictionary<string, string> Rebuilt,
     ImmutableSortedSet<string> Staged,
-    ImmutableArray<string> SealProblems,
-    ImmutableSortedSet<string> NoNodeTypes)
+    ImmutableArray<string> SealProblems)
 {
+    /// <summary>Packages that declare no NodeType of their own: nothing to compile, so no bake writes
+    /// a bundle for them and none is needed. They are neither reused nor rebuilt, and are staged only
+    /// when a rebuilt package needs them installed. An init property, not a constructor parameter, so
+    /// the record's primary constructor keeps its shape (binary compatibility).</summary>
+    public ImmutableSortedSet<string> NoNodeTypes { get; init; } = ImmutableSortedSet<string>.Empty;
+
     /// <summary>True when every package's sealed bytes stand, so there is nothing to compile.</summary>
     public bool BakesNothing => Staged.IsEmpty;
 
@@ -49,7 +51,8 @@ public sealed record SealedBundlePlan(
     {
         yield return $"sealed bundles: {Reused.Count} package(s) reuse the producing repositories' sealed "
                      + $"bytes for identity {FrameworkIdentity}; {Rebuilt.Count} rebuilt; the bake mounts "
-                     + $"{Staged.Count} package(s); {NoNodeTypes.Count} declare no NodeType (nothing to bake)"
+                     + $"{Staged.Count} package(s)"
+                     + (NoNodeTypes.IsEmpty ? "" : $"; {NoNodeTypes.Count} declare no NodeType (nothing to bake)")
                      + (BakesNothing ? " — nothing to compile." : ".");
         foreach (var problem in SealProblems)
             yield return $"  ⚠ {problem}";
@@ -188,7 +191,10 @@ public static class SealedBundleReuse
 
         return new SealedBundlePlan(
             source.FrameworkIdentity, candidates.ToImmutable(), rebuilt.ToImmutable(), staged.ToImmutable(),
-            problems, typeless.ToImmutable());
+            problems)
+        {
+            NoNodeTypes = typeless.ToImmutable(),
+        };
     }
 
     /// <summary>
