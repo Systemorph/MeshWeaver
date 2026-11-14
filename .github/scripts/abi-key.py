@@ -51,6 +51,24 @@ WHAT MAKES A SKIP SOUND — every rule below errs toward REBUILD
   6. A base that does not build against the head's dependencies, a head that does not build, an
      unreadable reference assembly — all mean "changed". A probe that cannot answer narrows nothing.
 
+WHAT MAKES A PROBE WORTH RUNNING — it never burns its budget on a range it cannot narrow
+-------------------------------------------------------------------------------------
+  7. SHORT-CIRCUIT. A range that changes an input EVERY project's build imports moves every reference
+     assembly, and the caller re-selects every unit on that path anyway (rule 5) — so the probe answers
+     `{"unavailable": "<input> changed — every reference assembly moves; nothing narrowed"}` BEFORE it
+     builds anything. The set is module-build-key.py's own input model, widened to err wide: every
+     GLOBAL_INPUTS basename (global.json, nuget.config, …) and every `Directory.*.props|targets`
+     (directory_imports' rule) at ANY depth, `scripts/platform-floor.json` (the platform the caller
+     resolves), and an added or removed `<TargetFramework(s)>` line in any .csproj/.props/.targets.
+     Measured on MeshWeaver.Plugins#5421 (net11 retarget, package versions moved): the probe built
+     every changed project at head and base and its job was killed by its own 25-minute limit.
+  8. A DEADLINE. With `--deadline <epoch>` the probe never starts a build it can skip once the deadline
+     would pass: when the eligible projects × 3 builds × the per-build cost (`--build-seconds`, the
+     measured prior, raised to the slowest build seen in this run) exceed the time left it answers
+     `unavailable` without building; a project it reaches with too little time left is reported
+     unprobed (kept). The mandatory head-restore rebuild can overrun by at most one build, which the
+     caller's reserve absorbs.
+
 THE KEY (the interface the build hosts rely on)
 -----------------------------------------------
     identity(D, as seen by unit U) =
@@ -86,11 +104,13 @@ CLI
         Default asks MSBuild (`dotnet msbuild -getProperty:TargetRefPath,TargetPath,AssemblyName`);
         `--glob` reads obj/<cfg>/*/ref/*.dll + bin/<cfg>/*/<Asm>.dll instead (no SDK needed).
   abi-key.py probe --root R (--range A...B | --base SHA) [--configuration Release] [--msbuild-arg A …]
-                   [--out verdict.json]
+                   [--deadline EPOCH] [--build-seconds S] [--out verdict.json]
       → the VERDICT: builds each eligible changed project at head and base (swapping only that
         project's changed files in place, restoring them after) and compares reference assemblies:
         {schema, base, head, projects: {dir: {assembly, eligible, unchanged, refasm, baseRefasm,
-        files[], friends[], reason}}, deterministic}. Leaves every probed project built at HEAD.
+        files[], friends[], reason}}, deterministic} — or, short-circuited (rule 7) or out of time
+        (rule 8), the same envelope with `unavailable` set and no projects. Leaves every probed project
+        built at HEAD.
   abi-key.py decide --root R --verdict V --units U.json [--reselected ids.json] [--out decision.json]
       U.json = [{id, project, reads?: [prefix|glob …], closure?: [dir …]}] (closure: the caller's own graph; [] means "no dependencies"); ids.json = ids still selected when the
       verdict's unchanged files are removed from the diff (the caller's own selector). REQUIRED for any
@@ -113,6 +133,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -446,6 +467,48 @@ def changed_files(root: Path, base: str) -> list[str]:
     return sorted(p for p in out.split("\0") if p)
 
 
+# ── rule 7: inputs every project's build imports ──
+GLOBAL_PATHS = ("scripts/platform-floor.json",)
+GLOBAL_NAMES = frozenset(Path(p).name.lower() for p in _MBK.GLOBAL_INPUTS if not Path(p).name.startswith("Directory."))
+_DIRECTORY_IMPORT = re.compile(r"(?:^|/)Directory\.[^/]+\.(?:props|targets)$", re.IGNORECASE)
+_TFM_LINE = re.compile(r"^[+-](?![+-]{2} ).*<TargetFrameworks?\b", re.IGNORECASE)
+MSBUILD_EXTS = (".csproj", ".props", ".targets")
+# Rule 8's prior: one `dotnet build` of a probed project, measured on MeshWeaver.Plugins change-set runs
+# (2026-11-13/14: two projects × three builds in 400–460 s, the first — with references — the slowest).
+BUILD_SECONDS = 70.0
+BUILDS_PER_PROJECT = 3
+
+
+def global_input(files: list[str], diff_text: str) -> str | None:
+    """Rule 7: the first changed input every project's build imports, named — None when there is none.
+    `diff_text` is `git diff -U0` over the range's MSBuild files (for the TargetFramework lines)."""
+    for f in sorted(files):
+        if f in GLOBAL_PATHS or f.rsplit("/", 1)[-1].lower() in GLOBAL_NAMES or _DIRECTORY_IMPORT.search(f):
+            return f
+    current = None
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            current = line.split(" b/", 1)[-1].strip()
+            continue
+        if line.startswith(("+++ ", "--- ")):
+            continue
+        if current and current.lower().endswith(MSBUILD_EXTS) and _TFM_LINE.match(line):
+            return f"the target framework in {current}"
+    return None
+
+
+def short_circuit(root: Path, base: str, files: list[str]) -> str | None:
+    msbuild = [f for f in files if f.lower().endswith(MSBUILD_EXTS)]
+    diff_text = git(root, "diff", "--no-renames", "-U0", base, "HEAD", "--", *msbuild) if msbuild else ""
+    hit = global_input(files, diff_text)
+    return None if hit is None else f"{hit} changed — every reference assembly moves; nothing narrowed"
+
+
+def unavailable(base: str, head: str, why: str) -> dict:
+    """A verdict that narrows nothing: no project is `unchanged`, so `decide` keeps every unit."""
+    return {"schema": SCHEMA, "base": base, "head": head, "deterministic": True, "projects": {}, "unavailable": why}
+
+
 Builder = Callable[[str, bool], bool]   # (project dir, with_references) → built?
 Reader = Callable[[str], dict]          # project dir → manifest entry
 
@@ -470,9 +533,24 @@ def dotnet_builder(root: Path, configuration: str, msbuild_args: list[str]) -> B
     return build
 
 
-def probe(root: Path, base: str, head: str, files: list[str], build: Builder, read: Reader) -> dict:
-    """The verdict for every project owning a changed file (see the module docstring, rules 1–6)."""
+def probe(root: Path, base: str, head: str, files: list[str], build: Builder, read: Reader,
+          deadline: float | None = None, build_seconds: float = BUILD_SECONDS,
+          clock: Callable[[], float] = time.time) -> dict:
+    """The verdict for every project owning a changed file (see the module docstring, rules 1–8)."""
     root = root.resolve()
+    why = short_circuit(root, base, files)
+    if why:
+        return unavailable(base, head, why)
+    cost = {"s": float(build_seconds)}
+
+    def timed(d: str, with_refs: bool) -> bool:
+        t0 = clock()
+        ok = build(d, with_refs)
+        cost["s"] = max(cost["s"], clock() - t0)
+        return ok
+
+    def fits(builds: int) -> bool:
+        return deadline is None or clock() + builds * cost["s"] <= deadline
     dirs = project_dirs(root)
     owned: dict[str, list[str]] = {}
     for f in files:
@@ -493,9 +571,18 @@ def probe(root: Path, base: str, head: str, files: list[str], build: Builder, re
             entry["eligible"] = True
             eligible.append(d)
         projects[d] = entry
+    if eligible and not fits(len(eligible) * BUILDS_PER_PROJECT):
+        left = max(0, int(deadline - clock()))
+        return unavailable(base, head, f"{len(eligible)} eligible project(s) × {BUILDS_PER_PROJECT} builds × ~{int(cost['s'])} s "
+                                       f"exceed the {left} s left before the deadline — nothing built, nothing narrowed")
+    out_of_time = "not probed: too little time left before the deadline to build it at head and base — treated as changed"
     head_entries: dict[str, dict] = {}
-    for d in eligible:
-        if not build(d, True):
+    for i, d in enumerate(eligible):
+        if not fits(BUILDS_PER_PROJECT):
+            for rest in eligible[i:]:
+                projects[rest].update(eligible=False, reason=out_of_time)
+            break
+        if not timed(d, True):
             projects[d].update(eligible=False, reason="did not build at head — the regular legs report why")
             continue
         try:
@@ -516,6 +603,9 @@ def probe(root: Path, base: str, head: str, files: list[str], build: Builder, re
         head_entries[d] = head_entry
     for d, head_entry in head_entries.items():
         entry = projects[d]
+        if not fits(BUILDS_PER_PROJECT - 1):
+            entry.update(eligible=False, reason=out_of_time)
+            continue
         saved: dict[str, bytes | None] = {}
         for f in entry["files"]:
             p = root / f
@@ -530,7 +620,7 @@ def probe(root: Path, base: str, head: str, files: list[str], build: Builder, re
                     p.write_bytes(show.stdout)
                 elif p.exists():
                     p.unlink()   # added by the change: absent at base
-            if build(d, False):
+            if timed(d, False):
                 try:
                     base_entry = read(d)
                 except (RuntimeError, OSError, ValueError, IndexError):
@@ -545,7 +635,7 @@ def probe(root: Path, base: str, head: str, files: list[str], build: Builder, re
                     p.parent.mkdir(parents=True, exist_ok=True)
                     p.write_bytes(data)
         again = None
-        if build(d, False):
+        if timed(d, False):
             try:
                 again = read(d)
             except (RuntimeError, OSError, ValueError, IndexError):
@@ -1031,6 +1121,70 @@ def self_test() -> int:
         v, _ = run_probe()
         check(not v["projects"]["src/Lib"]["eligible"], "a head that does not build narrows nothing")
         check(decide(root, v, units, set())["App"]["decision"] == "keep", "…its dependents keep")
+        # ── rule 7: an input every build imports short-circuits BEFORE anything is built ──
+        def sc_case(label: str, writes: dict[str, str], expect: str | None) -> dict:
+            nonlocal base
+            subprocess.run(["git", "checkout", "-q", "--", "."], cwd=root, check=True)
+            base = git(root, "rev-parse", "HEAD").strip()
+            (root / "src/Lib/A.cs").write_text(f"public class A {{ public int F() => {len(label)}; public int F2() => 4; }}\n")
+            for rel, text in writes.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(text)
+            subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=root, check=True)
+            commit(label)
+            v, log = run_probe()
+            if expect is None:
+                check("unavailable" not in v and log, f"{label}: probes (builds): {v.get('unavailable')} {log}")
+            else:
+                check(expect in (v.get("unavailable") or "") and "nothing narrowed" in v["unavailable"] and log == []
+                      and v["projects"] == {} and v["schema"] == SCHEMA, f"{label}: short-circuited, nothing built: {v} {log}")
+            return v
+        subprocess.run(["git", "checkout", "-q", "-B", "sc"], cwd=root, check=True)
+        (root / "src/Lib/A.cs").write_text("public class A { public int F() => 10; public int F2() => 4; }\n")
+        commit("repair the head for the short-circuit cases")
+        sc_case("a .cs-only change still probes", {}, None)
+        v = sc_case("Directory.Build.props beside a .cs edit", {"src/Directory.Build.props": "<Project />\n"}, "src/Directory.Build.props changed")
+        check(all(x["decision"] == "keep" for x in decide(root, v, units, set()).values()),
+              "an unavailable verdict narrows nothing: every unit keeps")
+        sc_case("a split pin file at any depth", {"src/Lib/Directory.Packages.Extra.props": "<Project />\n"}, "src/Lib/Directory.Packages.Extra.props")
+        sc_case("global.json", {"global.json": "{}\n"}, "global.json changed")
+        sc_case("NuGet.Config, any case", {"NuGet.Config": "<configuration />\n"}, "NuGet.Config changed")
+        sc_case("the platform floor", {"scripts/platform-floor.json": '{"major": 4}\n'}, "scripts/platform-floor.json changed")
+        sc_case("a TargetFramework retarget", {"src/App/App.csproj": (root / "src/App/App.csproj").read_text().replace(
+            "<ItemGroup>", "<PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup><ItemGroup>", 1)},
+            "the target framework in src/App/App.csproj")
+        # Negative control: the same range WITHOUT the props file — the old behaviour — builds.
+        nlog: list = []
+        nb, nr = _fake_builder(root, nlog)
+        probe(root, base, git(root, "rev-parse", "HEAD").strip(),
+              [f for f in changed_files(root, base) if not f.endswith(".csproj")], nb, nr)
+        check(nlog != [], f"negative control — without the short-circuit the same .cs edit is built: {nlog}")
+
+        # ── rule 8: a deadline the work cannot meet builds nothing; a slow run stops before the deadline ──
+        sc_case("rebase the budget cases on a plain .cs edit", {}, None)
+        clock = {"t": 1000.0}
+        blog: list = []
+        bb, br = _fake_builder(root, blog)
+
+        def slow(d: str, with_refs: bool) -> bool:
+            clock["t"] += 100.0
+            return bb(d, with_refs)
+        head = git(root, "rev-parse", "HEAD").strip()
+        files = changed_files(root, base)
+        v = probe(root, base, head, files, slow, br, deadline=clock["t"] + 100, build_seconds=70, clock=lambda: clock["t"])
+        check("exceed the 100 s left" in (v.get("unavailable") or "") and blog == [],
+              f"1 project × 3 builds × 70 s > 100 s ⇒ unavailable, NOTHING built: {v.get('unavailable')} {blog}")
+        nlog2: list = []
+        probe(root, base, head, files, _fake_builder(root, nlog2)[0], br)
+        check(len(nlog2) == 3, f"negative control — with no deadline the same range builds 3 times: {nlog2}")
+        (root / "src/App/B.cs").write_text("public class B { public int G() => new A().F() + 2; }\n")
+        commit("a second eligible project")
+        files = changed_files(root, base)
+        v = probe(root, base, git(root, "rev-parse", "HEAD").strip(), files, slow, br,
+                  deadline=clock["t"] + 150, build_seconds=10, clock=lambda: clock["t"])
+        check(len(blog) == 1 and not any(e["unchanged"] for e in v["projects"].values())
+              and all("not probed" in e["reason"] for e in v["projects"].values()),
+              f"a build slower than the prior stops the probe before the deadline, every unprobed project kept: {blog} {v['projects']}")
         try:
             decide(root, {"schema": "nope"}, units)
         except ValueError:
@@ -1059,6 +1213,8 @@ def main() -> int:
     ap.add_argument("--platform", default="")
     ap.add_argument("--read", action="append", default=[], help="key: a caller-declared read (prefix or glob) of the unit")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--deadline", type=float, help="probe: epoch seconds by which it must answer (rule 8)")
+    ap.add_argument("--build-seconds", type=float, default=BUILD_SECONDS, help="probe: the per-build cost prior (rule 8)")
     ap.add_argument("--out")
     a = ap.parse_args()
     if a.self_test:
@@ -1085,7 +1241,7 @@ def main() -> int:
             def read(d: str) -> dict:
                 return build_manifest(root, [d], a.configuration, a.msbuild_arg, a.glob)[d]
 
-            emit(probe(root, base, head, changed_files(root, base), build, read))
+            emit(probe(root, base, head, changed_files(root, base), build, read, a.deadline, a.build_seconds))
         elif a.command == "decide":
             if not a.verdict or not a.units:
                 ap.error("decide needs --verdict and --units")
