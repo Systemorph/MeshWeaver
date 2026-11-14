@@ -181,10 +181,16 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
                 .Should().Be(ReleaseFailureClass.Unavailable, "the class travels with the stamp");
 
             // Negative control 1: while the store still refuses, nothing lands — the pointer stays
-            // on the earlier build's release.
+            // on the earlier build's release. 🚨 Opened only AFTER a positive signal (#6817): the
+            // activation re-issues as soon as it sees its own stamp, and that re-issue reaching the
+            // still-refusing store is the step whose answer a wrongful adoption would follow. Its
+            // answer is processed within the same exchange, so the window after it is short; a fixed
+            // NotEmit(Quick) from before the re-issue spent 36 s of CI here.
+            await refusal.Arrivals.Skip(1).Should().Within(TestTimeouts.Convergence)
+                .Emit("a re-issue reached the store while it still refuses", ct);
             await Mesh.GetMeshNodeStream(typePath)
                 .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.LatestReleasePath == stamped)
-                .Should().NotEmit(TestTimeouts.Quick, "the store has not come back yet");
+                .Should().NotEmit(TestTimeouts.Quick / 10, "the store has not come back yet", ct);
         }
         finally
         {
@@ -268,10 +274,14 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
         recorded.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.UnreleasedBuildPath
             .Should().Be(stamped, "this build still has no release");
 
+        // 🚨 Opened only AFTER the positive signal above (#6817): the verdict on the record is written
+        // by the watch once its one attempt has been answered, and the gap reaches every watcher
+        // synchronously, so a second attempt would already be in flight to the store. A fixed
+        // NotEmit(Quick) spent 36 s of CI here.
         TheStoreAnswersAgain();
         await judged.Arrivals.Skip(1)
-            .Should().NotEmit(TestTimeouts.Quick,
-                "one owner, one attempt: no second cut at the same id, and no re-issue of a judged create");
+            .Should().NotEmit(TestTimeouts.Quick / 10,
+                "one owner, one attempt: no second cut at the same id, and no re-issue of a judged create", ct);
     }
 
     /// <summary>
@@ -298,10 +308,14 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
         TheStoreAnswersAgain();
         TheStoreAnswersAgain();
 
+        // 🚨 Opened only AFTER the positive signal above (#6817): the refused stamp is on the record,
+        // and both gaps reached every watcher synchronously, so a re-issue would already be in flight
+        // to a store that now accepts it. A fixed NotEmit(Quick) spent 36 s of CI here.
         await Mesh.GetMeshNodeStream(typePath)
             .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && (d.UnreleasedBuildPath is null || d.LatestReleasePath == stamped))
-            .Should().NotEmit(TestTimeouts.Quick, "a verdict is never re-issued — the stamp is the report");
+            .Should().NotEmit(TestTimeouts.Quick / 10, "a verdict is never re-issued — the stamp is the report",
+                TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -351,11 +365,14 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
         }
 
         // Watcher recovery: more evidence, the store now taking writes; a judged stamp is never re-issued.
+        // 🚨 Opened only AFTER the positive signal above (#6817): the verdict is on the record and the
+        // gap reaches every watcher synchronously, so a re-issue would already be in flight to a store
+        // that now accepts it. A fixed NotEmit(Quick) spent 36 s of CI here.
         TheStoreAnswersAgain();
         await Mesh.GetMeshNodeStream(typePath)
             .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && (d.LatestReleasePath == stamped || d.UnreleasedBuildPath is null))
-            .Should().NotEmit(TestTimeouts.Quick, "a create the store judged is not re-issued on this activation");
+            .Should().NotEmit(TestTimeouts.Quick / 10, "a create the store judged is not re-issued on this activation", ct);
     }
 
     // ───────────── the re-issue's evidence handling, deterministic (review on #7087) ─────────────

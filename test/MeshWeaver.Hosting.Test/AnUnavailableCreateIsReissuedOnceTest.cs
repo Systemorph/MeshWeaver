@@ -79,6 +79,40 @@ public class AnUnavailableCreateIsReissuedOnceTest(ITestOutputHelper output) : M
             DateTimeOffset.UtcNow,
             "the managed database restarted (#7380)"));
 
+    /// <summary>
+    /// 🚨 "Nothing more is re-issued for <paramref name="path"/>", ended by a POSITIVE signal instead of a
+    /// window (#6817). <paramref name="evidence"/> is the evidence under test. Then a SENTINEL intent is
+    /// recorded in the same ledger and a second piece of evidence is delivered. The recovery takes the whole
+    /// ledger on each piece of evidence, synchronously on the delivering thread, and settles the batches
+    /// strictly one after another (<c>Concat</c>). The sentinel's outcome therefore exists only once every
+    /// batch the evidence under test started has settled, and any re-issue of <paramref name="path"/> in
+    /// those batches has reported its outcome by then. A fixed <c>NotEmit(Quick)</c> spent 36 s of CI per
+    /// case here.
+    /// </summary>
+    /// <param name="ledger">The mesh's ledger.</param>
+    /// <param name="options">The mesh's serializer options, for the sentinel's record.</param>
+    /// <param name="path">The path that must see no further outcome.</param>
+    /// <param name="because">Why nothing more may be re-issued.</param>
+    /// <param name="evidence">Delivers the evidence under test.</param>
+    /// <param name="ct">The test's cancellation token.</param>
+    internal static async Task NothingMoreIsReissued(
+        PendingWriteLedger ledger, System.Text.Json.JsonSerializerOptions options, string path, string because,
+        Action evidence, System.Threading.CancellationToken ct)
+    {
+        var sentinelPath = NewPath();
+        var none = ledger.Outcomes.Where(o => string.Equals(o.Write.Path, path, StringComparison.OrdinalIgnoreCase))
+            .Should().Within(TestTimeouts.CrossSilo)
+            .NotEmitBefore(ledger.Outcomes.Where(o => o.Write.Path == sentinelPath), because, ct);
+        evidence();
+        await ledger.Record(
+                new PendingWrite(NodeAt(sentinelPath), Writer, new AccessContext { ObjectId = Writer },
+                    DateTimeOffset.UtcNow, "sentinel: settles that the evidence above was fully processed"),
+                options)
+            .Should().Within(TestTimeouts.Convergence).Emit("the sentinel intent is recorded", ct);
+        evidence();
+        await none;
+    }
+
     private async Task RefusedAsUnavailable(string path)
     {
         var answer = await CreateAsWriter(path);
@@ -119,10 +153,7 @@ public class AnUnavailableCreateIsReissuedOnceTest(ITestOutputHelper output) : M
         Ledger.Pending.Should().NotContain(w => w.Path == path, "a settled intent is gone from the ledger");
 
         // Once: further evidence re-issues nothing for this path.
-        var again = Ledger.Outcomes.Where(o => o.Write.Path == path)
-            .Should().NotEmit(TestTimeouts.Quick, "a pending write is re-issued once", ct);
-        TheStoreAnswersAgain();
-        await again;
+        await NothingMoreIsReissued(Ledger, Mesh.JsonSerializerOptions, path, "a pending write is re-issued once", TheStoreAnswersAgain, ct);
         (await Stored(path))!.Version.Should().Be(landed.Version, "nothing wrote the node a second time");
     }
 
@@ -155,10 +186,7 @@ public class AnUnavailableCreateIsReissuedOnceTest(ITestOutputHelper output) : M
         }
 
         // Not looped: the store is back and more evidence arrives, and nothing re-issues it.
-        var looped = Ledger.Outcomes.Where(o => o.Write.Path == path)
-            .Should().NotEmit(TestTimeouts.Quick, "a dropped write is never re-issued", ct);
-        TheStoreAnswersAgain();
-        await looped;
+        await NothingMoreIsReissued(Ledger, Mesh.JsonSerializerOptions, path, "a dropped write is never re-issued", TheStoreAnswersAgain, ct);
         (await Stored(path)).Should().BeNull("the dropped write was not retried");
     }
 
@@ -309,12 +337,12 @@ public class ARefusedForPermissionCreateIsNeverReissuedTest(ITestOutputHelper ou
             .Should().NotBe(NodeCreationRejectionReason.Unavailable, "a permission refusal is a verdict");
         ledger.Pending.Should().NotContain(w => w.Path == path, "a verdict is never recorded as a pending write");
 
-        var reissued = ledger.Outcomes.Where(o => o.Write.Path == path)
-            .Should().NotEmit(TestTimeouts.Quick, "a refusal for permission is never re-issued", ct);
-        Storage.DeliverChangeFeedGap(new ChangeFeedGap(
-            "postgresql:mesh_node_changes", DateTimeOffset.UtcNow.AddSeconds(-5), DateTimeOffset.UtcNow,
-            "negative control (#7380)"));
-        await reissued;
+        await AnUnavailableCreateIsReissuedOnceTest.NothingMoreIsReissued(
+            ledger, Mesh.JsonSerializerOptions, path, "a refusal for permission is never re-issued",
+            () => Storage.DeliverChangeFeedGap(new ChangeFeedGap(
+                "postgresql:mesh_node_changes", DateTimeOffset.UtcNow.AddSeconds(-5), DateTimeOffset.UtcNow,
+                "negative control (#7380)")),
+            ct);
         (await Storage.Read(path, Mesh.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
                 .Should().Within(TestTimeouts.Convergence).Emit("the store answers the read", ct))
             .Should().BeNull("nothing re-issued the refused create");
