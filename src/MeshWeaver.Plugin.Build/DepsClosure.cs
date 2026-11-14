@@ -222,7 +222,7 @@ public static class DepsClosure
         /// its own csproj. A portable publish lays every <c>runtimeTargets</c> asset out at its
         /// declared key (measured 2026-09-15 on SDK 10.0.400 for both shapes:
         /// <c>System.IO.Ports</c>' <c>runtimes/unix/lib/net9.0/System.IO.Ports.dll</c>, and a
-        /// native at <c>runtimes/linux-x64/nativeassets/net10.0/</c>), so a copy after Publish
+        /// native at <c>runtimes/linux-x64/nativeassets/net11.0/</c>), so a copy after Publish
         /// from <c>$(PublishDir)&lt;that key&gt;</c> needs no package-cache path, and the item names
         /// the result.
         /// </summary>

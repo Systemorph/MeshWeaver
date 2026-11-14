@@ -20,8 +20,8 @@ from the branch and never written into the file.
 | field | meaning |
 |---|---|
 | `branch` | the branch that IS the line |
-| `pluginsRef` | the MeshWeaver.Plugins branch the line's portal host is built from (`main` → `main`, `main3` → `main3`); `vars.MW_PLUGINS_REF` still overrides it per run |
-| `satelliteRef` | the satellite branch `satellite-compat` compiles against the line's set (`main` for every line until a satellite cuts its own) |
+| `pluginsRef` | the MeshWeaver.Plugins branch the line's portal host is built from (`main` → `main`, `main3` → `main3`); `vars.MW_PLUGINS_REF` still overrides it per run, for EVERY line at once. **Bootstrap of a new major:** the first set of a new major is built against the Plugins branch that carries that major (for 4.0, `feat/net11-v4`), because Plugins `main` still carries the previous one. Only the `main` entry names it, so the previous line's entry, and with it that line's CD, stay untouched. The change that follows the Plugins merge flips it back to `main`. Never use `vars.MW_PLUGINS_REF` for a bootstrap: it would point the previous line at the new major too. |
+| `satelliteRef` | the satellite branch `satellite-compat` compiles against the line's set (`main` → `main`, `main3` → `main3`: every satellite in the `satellite-compat` register carries a protected `main3`, protected exactly like its `main`) |
 | `label` | the line's floating image label: the newest PROMOTED set of the line (`main`, `main3`), declared in `.github/release-channels.json` with `"line"` |
 | `movesLatest` | whether the line moves the line-less `latest` labels. Exactly one line does |
 

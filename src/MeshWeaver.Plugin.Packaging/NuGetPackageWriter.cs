@@ -14,7 +14,7 @@ namespace MeshWeaver.Plugin.Packaging;
 public static class NuGetPackageWriter
 {
     /// <summary>
-    /// 🚨 Assemblies go under <c>meshweaver/assemblies/</c>, NOT <c>lib/net10.0/</c>.
+    /// 🚨 Assemblies go under <c>meshweaver/assemblies/</c>, NOT <c>lib/net11.0/</c>.
     ///
     /// <para>A plugin's units are compiled SEPARATELY at runtime and may legitimately declare the
     /// same type names — <c>TaskAssignmentService</c> exists in two UWDeepfield units. Under
@@ -205,7 +205,7 @@ public static class NuGetPackageWriter
         sb.AppendLine($"    <description>{SecurityElement.Escape(manifest.Description)}</description>");
         sb.AppendLine("    <authors>Systemorph</authors>");
         sb.AppendLine("    <dependencies>");
-        sb.AppendLine("""      <group targetFramework="net10.0">""");
+        sb.AppendLine("""      <group targetFramework="net11.0">""");
         sb.AppendLine(
             $"""        <dependency id="MeshWeaver.Graph" version="{SecurityElement.Escape(frameworkVersion)}" />""");
 
