@@ -1,7 +1,8 @@
 name: CI's own shell — the tools its guards need
 description: >-
-  The ONE tool assertion both halves of "CI's own shell" (dotnet-test.yml: workflow-shell and
-  workflow-shell-executions) run, so the two jobs cannot drift onto different pins. Asserts
+  The ONE tool assertion every job of "CI's own shell" (dotnet-test.yml: workflow-shell,
+  workflow-shell-executions, -executions-publish and -executions-msbuild) runs, so the jobs cannot
+  drift onto different pins. Asserts
   shellcheck, builds the pinned venv and puts it on PATH; a missing tool fails RED rather than
   quietly reducing the gate to the checks it happened to be able to run.
 # jmespath is PINNED, and the pin is the fidelity claim: it is the engine the azure-cli itself
