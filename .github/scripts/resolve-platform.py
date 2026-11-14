@@ -587,7 +587,7 @@ def _created(run: dict) -> float | None:
         return None
 
 
-def _newest_main_run(runs: list[dict], line: str) -> int | None:
+def _newest_line_run(runs: list[dict], line: str) -> int | None:
     """The highest `run_number` among the LINE's rows of one listing page, or None when it has
     none. A row with no `head_branch` counts as the line's — the listing is already filtered to
     `branch=<line>`, and the self-test fixtures leave the field off."""
@@ -602,19 +602,22 @@ def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float,
     Both facts are independent of the page itself: the clock, and a run number this repository's
     own `main` has already passed on. Rows without `created_at` cannot be aged; a page with none
     is judged by the ceiling alone (the live API always sends it — the self-test fixtures don't)."""
-    main_runs = [r for r in runs if r.get("head_branch") in (None, line)]
-    if not main_runs:
+    # The ceiling is the CALLING repository's branch for this line (its declared satelliteRef:
+    # `main3` for the v3 line), so the refusal names that branch, never a bare `main`.
+    ceiling = DELIVERY_LINES.get(line, line)
+    line_runs = [r for r in runs if r.get("head_branch") in (None, line)]
+    if not line_runs:
         # An EMPTY page is proven stale by a ceiling exactly as a short one is: the caller's own
         # `main` passed on core CD #ceiling, so that run exists and page 1 omits it.
         if passed_ceiling is not None:
-            return (f"it holds no main-cd run at all, but this repository's `main` has already "
+            return (f"it holds no main-cd run at all, but this repository's `{ceiling}` has already "
                     f"passed on core CD #{passed_ceiling}, which the page does not contain")
         return None
-    newest = _newest_main_run(runs, line)
+    newest = _newest_line_run(runs, line)
     if passed_ceiling is not None and newest < passed_ceiling:
-        return (f"its newest run is main-cd #{newest}, but this repository's `main` has already "
+        return (f"its newest run is main-cd #{newest}, but this repository's `{ceiling}` has already "
                 f"passed on core CD #{passed_ceiling}, which the page does not contain")
-    stamps = [(stamp, r) for r in main_runs for stamp in [_created(r)] if stamp is not None]
+    stamps = [(stamp, r) for r in line_runs for stamp in [_created(r)] if stamp is not None]
     if not stamps:
         return None
     stamp, run = max(stamps, key=lambda pair: pair[0])
@@ -638,7 +641,7 @@ def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None, line: str) -
     positive witness used by `settle_page_one` for a stale-but-young page (#73)."""
     if passed_ceiling is None:
         return None
-    newest = _newest_main_run(runs, line)
+    newest = _newest_line_run(runs, line)
     if newest is None:
         # An EMPTY page (no main run) under a ceiling is the same proven shortfall, reported as 0:
         # the witnessed run exists and the page holds nothing up to it.
@@ -654,7 +657,7 @@ def recent_listing_witness(fetch: Fetch, runs: list[dict], now: float,
     falls inside the same 12-hour window; run numbers are monotonic within this workflow.
     """
     recent = recent_cd_runs(fetch, now, line)
-    newest_listed = _newest_main_run(runs, line)
+    newest_listed = _newest_line_run(runs, line)
     witnesses = [r for r in recent
                  if r.get("head_branch") in (None, line)
                  and r.get("run_number") is not None
@@ -749,7 +752,7 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
                 "the previous page and its refusal stand")
             continue
         runs = fresh
-        newest = _newest_main_run(runs, line)
+        newest = _newest_line_run(runs, line)
         shortfall = ceiling_shortfall(runs, passed_ceiling, line)
         why_stale = stale_listing(runs, passed_ceiling, now(), line)
         if shortfall is None and witness is not None:
