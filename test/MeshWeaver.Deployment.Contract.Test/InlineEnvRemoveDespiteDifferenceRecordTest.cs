@@ -49,8 +49,11 @@ public class InlineEnvRemoveDespiteDifferenceRecordTest
         Assert.Equal("https://github.com/acme/canonical", declared.ShadowedValue);
 
         var written = DeploymentRecordJson.Write(record);
-        Assert.Contains("\"removeDespiteDifference\":true", written);
-        Assert.Contains("\"shadowedValue\":\"https://github.com/acme/canonical\"", written);
+        // The wire NAMES are what the record files and the control instance's reader depend on, so they are
+        // asserted on the parsed JSON (independent of the writer's formatting), not on the text.
+        var row = System.Text.Json.Nodes.JsonNode.Parse(written)!["inlineEnv"]![0]!;
+        Assert.True(row["removeDespiteDifference"]!.GetValue<bool>());
+        Assert.Equal("https://github.com/acme/canonical", row["shadowedValue"]!.GetValue<string>());
 
         var reread = DeploymentRecordJson.Read(written)!;
         Assert.True(reread.InlineEnv[0].RemoveDespiteDifference);
