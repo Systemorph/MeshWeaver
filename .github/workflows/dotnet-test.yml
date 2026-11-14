@@ -489,9 +489,12 @@ jobs:
     # ── Tests only for changed functionality (the fleet rule, applied to core 2026-09-13) ──────
     # Every run used to execute every test project — 5 shards, ~21 of a run's 31 job-minutes —
     # whatever the change touched. On a PULL REQUEST the diff against the base is mapped to the
-    # ProjectReference graph and only the test projects that reach a changed project run; a
-    # change outside src/ and test/ (a workflow, a props file, an allow list, tools/…) still runs
-    # everything, and docs/markdown-only changes run none. merge_group, push, schedule and
+    # ProjectReference graph and only the test projects that reach a changed project run. A
+    # `.github/**` file runs everything only when THIS lane consumes it (derived from this file's
+    # non-shell jobs and what they call), runs just the test projects that read it otherwise, and
+    # nothing when no .NET test reads it — the `workflow-shell*` jobs cover it
+    # (Doc/Architecture/CoreTestSelection). Any other change outside src/ and test/ (a props file,
+    # an allow list, tools/…) still runs everything; docs/markdown-only changes run none. merge_group, push, schedule and
     # dispatch always run the full suite — the merge queue is the coupling check. The verdict is
     # printed here and asserted downstream: every shard obeys the SAME selection through
     # shard-assign.sh, and the collector accepts "no evidence" ONLY for mode=none.
