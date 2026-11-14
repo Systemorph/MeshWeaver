@@ -559,8 +559,9 @@ publication) never consult a verdict.
     that cost exceed the time left, the probe answers `unavailable` without building. A project it
     reaches with too little time left is reported unprobed, and so kept. The satellite caller derives
     the deadline from its job's start and `timeout-minutes` (MeshWeaver.Plugins
-    `scripts/abi-probe-plan.py`, `Hosting/CiProfile` §9), so the probe always answers before the job's
-    limit.
+    `scripts/abi-probe-plan.py`, `Hosting/CiProfile` §9) and holds a reserve back from the job's limit.
+    The probe never starts a build it can skip once the deadline would pass; the mandatory head-restore
+    rebuild can overrun by at most one build, which the caller's reserve absorbs.
 * `abi-key.py decide --root R --verdict V --units U.json --reselected ids.json` — per unit
   `skip` (with the reason) or `keep` (with why). Without `--reselected` nothing skips: only the
   caller's re-selection can prove that nothing ELSE in the diff reaches a unit.
