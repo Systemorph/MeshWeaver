@@ -83,6 +83,18 @@ public sealed record ThreadPoolQueueCensus(
     /// <param name="maxItems">The most items to read.</param>
     /// <returns>The census.</returns>
     public static ThreadPoolQueueCensus Of(IEnumerable<object> items, int maxItems)
+        => Of(items, maxItems, linkResolver: null);
+
+    /// <summary>
+    /// <see cref="Of(IEnumerable{object}, int)"/> with the runtime-async link resolver replaceable,
+    /// so a test can make the runtime-private read THROW and see that one item reports it while
+    /// the census goes on.
+    /// </summary>
+    /// <param name="items">The queued work items.</param>
+    /// <param name="maxItems">The most items to read.</param>
+    /// <param name="linkResolver">Maps one continuation link to the method it resumes, or null for the runtime's own.</param>
+    /// <returns>The census.</returns>
+    internal static ThreadPoolQueueCensus Of(IEnumerable<object> items, int maxItems, Func<object, MethodBase?>? linkResolver)
     {
         var read = 0;
         var cut = false;
@@ -97,7 +109,7 @@ public sealed record ThreadPoolQueueCensus(
                 break;
             }
             read++;
-            var producer = ProducerOf(item);
+            var producer = ProducerOf(item, linkResolver);
             counts[producer] = counts.GetValueOrDefault(producer) + 1;
         }
 
@@ -117,14 +129,16 @@ public sealed record ThreadPoolQueueCensus(
     /// and the first delegate it holds. Falls back to the item's type.
     /// </summary>
     /// <param name="item">One queued work item.</param>
+    /// <param name="linkResolver">Maps one runtime-async continuation link to the method it resumes,
+    /// or null for the runtime's own (<see cref="RuntimeAsync"/>); replaceable for tests only.</param>
     /// <returns>Its producer key.</returns>
-    internal static string ProducerOf(object item)
+    internal static string ProducerOf(object item, Func<object, MethodBase?>? linkResolver = null)
     {
         var type = item.GetType();
         if (item is Task)
         {
             if (RuntimeAsync.IsRuntimeAsyncTask(type))
-                return RuntimeAsync.ProducerOf(item);
+                return RuntimeAsync.ProducerOf(item, linkResolver);
             if (FieldValue(item, typeof(Task), "m_action") is Delegate action)
                 return MethodOf(action);
             return StateMachineOf(type) is { } machine ? Display(machine) : Display(type);
@@ -156,42 +170,50 @@ public sealed record ThreadPoolQueueCensus(
     /// <para>🚨 <c>GetType()</c> on a continuation object throws <see cref="NotSupportedException"/>
     /// ("not supported for continuations"), so the chain is walked through the base type's
     /// <see cref="FieldInfo"/>s only.</para>
+    ///
+    /// <para>🚨 A runtime-private read that THROWS (the pointer read, the native-IP lookup) costs
+    /// that ONE item its name, never the census: the item is keyed
+    /// <c>runtime-async continuation (method unresolved: &lt;ExceptionType&gt;: &lt;message&gt;)</c>
+    /// and the walk goes on. The census is a diagnostic over state the runtime does not promise to
+    /// keep, so a fault there is a fact to report, not a reason to lose every other producer.</para>
     /// </summary>
     private static class RuntimeAsync
     {
         private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
         private const int MaxLinks = 64;
+        private const string Unresolved = "runtime-async continuation (method unresolved: ";
 
-        private static readonly Assembly CoreLib = typeof(object).Assembly;
-        private static readonly Type? Continuation = CoreLib.GetType("System.Runtime.CompilerServices.Continuation");
-        private static readonly FieldInfo? Next = Continuation?.GetField("Next", Instance);
-        private static readonly FieldInfo? ResumeInfo = Continuation?.GetField("ResumeInfo", Instance);
-        private static readonly MethodInfo? PointerValue = typeof(Pointer).GetMethod("GetPointerValue", Instance, Type.EmptyTypes);
-        private static readonly MethodInfo? MethodFromNativeIp = typeof(StackFrame).GetMethod(
-            "GetMethodFromNativeIP", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public, [typeof(IntPtr)]);
-        private static readonly int DiagnosticIpOffset = OffsetOfDiagnosticIp();
+        /// <summary>The runtime internals the chain is read through, every one present.</summary>
+        private sealed record Internals(
+            FieldInfo Next, FieldInfo ResumeInfo, MethodInfo PointerValue, MethodInfo MethodFromNativeIp, int DiagnosticIpOffset);
 
-        /// <summary>Why the chain cannot be resolved on this runtime, or null when it can.</summary>
-        private static readonly string? Missing =
-            Continuation is null ? "no Continuation type"
-            : Next is null || ResumeInfo is null ? "Continuation lacks Next/ResumeInfo"
-            : PointerValue is null ? "no Pointer.GetPointerValue"
-            : MethodFromNativeIp is null ? "no StackFrame.GetMethodFromNativeIP"
-            : DiagnosticIpOffset < 0 ? "no ResumeInfo.DiagnosticIP"
-            : null;
+        /// <summary>The internals on this runtime, or why they cannot be had.</summary>
+        private static readonly (Internals? Found, string? Missing) Resolved = Resolve();
 
-        private static int OffsetOfDiagnosticIp()
+        private static (Internals? Found, string? Missing) Resolve()
         {
-            if (CoreLib.GetType("System.Runtime.CompilerServices.ResumeInfo") is not { } resumeInfo
-                || resumeInfo.GetField("DiagnosticIP", Instance) is not { FieldType.IsPointer: true })
-                return -1;
+            var coreLib = typeof(object).Assembly;
+            if (coreLib.GetType("System.Runtime.CompilerServices.Continuation") is not { } continuation)
+                return (null, "no Continuation type");
+            if (continuation.GetField("Next", Instance) is not { } next
+                || continuation.GetField("ResumeInfo", Instance) is not { } resumeInfo)
+                return (null, "Continuation lacks Next/ResumeInfo");
+            if (typeof(Pointer).GetMethod("GetPointerValue", Instance, Type.EmptyTypes) is not { } pointerValue)
+                return (null, "no Pointer.GetPointerValue");
+            if (typeof(StackFrame).GetMethod("GetMethodFromNativeIP",
+                    BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public, [typeof(IntPtr)]) is not { } fromIp)
+                return (null, "no StackFrame.GetMethodFromNativeIP");
+            if (coreLib.GetType("System.Runtime.CompilerServices.ResumeInfo") is not { } resumeInfoType
+                || resumeInfoType.GetField("DiagnosticIP", Instance) is not { FieldType.IsPointer: true })
+                return (null, "no ResumeInfo.DiagnosticIP field");
             try
             {
-                return (int)Marshal.OffsetOf(resumeInfo, "DiagnosticIP");
+                var offset = (int)Marshal.OffsetOf(resumeInfoType, "DiagnosticIP");
+                return (new Internals(next, resumeInfo, pointerValue, fromIp, offset), null);
             }
-            catch (ArgumentException)
+            catch (ArgumentException exception)
             {
-                return -1;
+                return (null, $"ResumeInfo.DiagnosticIP is present but its layout is unreadable ({exception.Message})");
             }
         }
 
@@ -200,27 +222,38 @@ public sealed record ThreadPoolQueueCensus(
             type is { IsGenericType: true, Name: "RuntimeAsyncTask`1", DeclaringType.FullName: "System.Runtime.CompilerServices.AsyncHelpers" };
 
         /// <summary>The method a runtime-async task resumes into first, or an unresolved key that says why.</summary>
-        public static string ProducerOf(object task)
+        /// <param name="task">The runtime-async task.</param>
+        /// <param name="linkResolver">Replaces the per-link read; null for the runtime's own.</param>
+        public static string ProducerOf(object task, Func<object, MethodBase?>? linkResolver)
         {
-            if (Missing is not null)
-                return $"runtime-async continuation (method unresolved: {Missing})";
-            var link = FieldValue(task, typeof(Task), "m_stateObject");
-            for (var hops = 0; link is not null && hops < MaxLinks; hops++)
+            if (Resolved is not { Found: { } internals })
+                return $"{Unresolved}{Resolved.Missing})";
+            var methodAt = linkResolver ?? (link => MethodAt(internals, link));
+            try
             {
-                if (MethodAt(link) is { } method)
-                    return $"{(method.DeclaringType is { } owner ? Display(owner) : "?")}.{method.Name}";
-                link = Next!.GetValue(link);
+                var link = FieldValue(task, typeof(Task), "m_stateObject");
+                for (var hops = 0; link is not null && hops < MaxLinks; hops++)
+                {
+                    if (methodAt(link) is { } method)
+                        return $"{(method.DeclaringType is { } owner ? Display(owner) : "?")}.{method.Name}";
+                    link = internals.Next.GetValue(link);
+                }
+                return $"{Unresolved}no link carried a diagnostic address)";
             }
-            return "runtime-async continuation (method unresolved: no link carried a diagnostic address)";
+            catch (Exception exception)
+            {
+                var cause = exception is TargetInvocationException { InnerException: { } inner } ? inner : exception;
+                return $"{Unresolved}{cause.GetType().Name}: {cause.Message})";
+            }
         }
 
-        private static MethodBase? MethodAt(object link)
+        private static MethodBase? MethodAt(Internals internals, object link)
         {
-            if (ResumeInfo!.GetValue(link) is not Pointer boxed
-                || PointerValue!.Invoke(boxed, null) is not IntPtr info || info == IntPtr.Zero)
+            if (internals.ResumeInfo.GetValue(link) is not Pointer boxed
+                || internals.PointerValue.Invoke(boxed, null) is not IntPtr info || info == IntPtr.Zero)
                 return null;
-            var ip = Marshal.ReadIntPtr(info, DiagnosticIpOffset);
-            return ip == IntPtr.Zero ? null : MethodFromNativeIp!.Invoke(null, [ip]) as MethodBase;
+            var ip = Marshal.ReadIntPtr(info, internals.DiagnosticIpOffset);
+            return ip == IntPtr.Zero ? null : internals.MethodFromNativeIp.Invoke(null, [ip]) as MethodBase;
         }
     }
 

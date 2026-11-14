@@ -174,24 +174,73 @@ public class ThreadPoolQueueCensusTest
     }
 
     /// <summary>
+    /// A runtime-private read that THROWS costs that ONE item its name, never the census: the item
+    /// is keyed with the exception's type and message and every other item is still counted.
+    /// Negative control: the same items with the runtime's own resolver name the BCL method, so the
+    /// unresolved key is the injected fault, not a resolver that never works.
+    /// </summary>
+    [Fact]
+    public void AThrowingRuntimeRead_UnresolvesThatOneItem_AndTheCensusGoesOn()
+    {
+        var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        object[] queued = [new PendingStream(gate.Task).CopyToAsync(Stream.Null), new Task(Producers.Drain)];
+        try
+        {
+            var faulted = ThreadPoolQueueCensus.Of(queued, ThreadPoolQueueCensus.MaxItems,
+                _ => throw new InvalidOperationException("runtime layout moved"));
+
+            faulted.Failure.Should().BeNull();
+            faulted.Read.Should().Be(2);
+            faulted.Groups.Select(group => group.Producer).OrderBy(key => key, StringComparer.Ordinal).Should().Equal(
+                $"{typeof(Producers)}.{nameof(Producers.Drain)}",
+                "runtime-async continuation (method unresolved: InvalidOperationException: runtime layout moved)");
+
+            var real = ThreadPoolQueueCensus.Of(queued, ThreadPoolQueueCensus.MaxItems, linkResolver: null);
+            real.Groups.Select(group => group.Producer)
+                .Count(key => key.StartsWith("System.IO.Stream.<CopyToAsync>", StringComparison.Ordinal)).Should().Be(1);
+        }
+        finally
+        {
+            gate.SetResult(0);
+        }
+    }
+
+    /// <summary>A pool item that parks its worker until the test releases it.</summary>
+    private sealed class Parker
+    {
+        private int released;
+
+        public void Park(object? state) => SpinWait.SpinUntil(() => Volatile.Read(ref released) == 1, TimeSpan.FromSeconds(30));
+
+        public void Release() => Volatile.Write(ref released, 1);
+    }
+
+    /// <summary>
     /// The same reading on the REAL ThreadPool for runtime-async continuations: every worker is
     /// parked, 200 BCL <c>Stream.CopyToAsync</c> calls suspend on one gate, and opening the gate
     /// queues all 200 continuations behind the parked items. The census must count them under the
     /// method that resumes. Negative control: before the gate opens none is counted there, and
     /// without the runtime-async branch they are counted under <c>DispatchContinuations</c>.
+    ///
+    /// <para><b>Why a drain cannot shrink the exact 200.</b> More parkers are queued than the pool
+    /// has threads, a dequeued parker holds its thread until release, and the global queue is FIFO.
+    /// So while any parker is still queued no worker can reach a continuation: one queued globally
+    /// is behind the parkers, and one in the test thread's local queue is stolen only from an empty
+    /// global queue. The test ASSERTS that precondition after the census
+    /// (<c>ThreadPool.ThreadCount &lt; parkers</c>, because dequeued parkers ≤ live threads), so a pool
+    /// that injected past the surplus fails by saying so, never by a short count.</para>
     /// </summary>
     [Fact]
     public void OnTheRealThreadPool_QueuedRuntimeAsyncContinuations_AreNamedByTheirMethod()
     {
         const string copyToAsync = "System.IO.Stream.<CopyToAsync>";
-        var released = 0;
+        var parker = new Parker();
         var parkers = ThreadPool.ThreadCount + 64;
         var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             for (var i = 0; i < parkers; i++)
-                ThreadPool.UnsafeQueueUserWorkItem(
-                    _ => SpinWait.SpinUntil(() => Volatile.Read(ref released) == 1, TimeSpan.FromSeconds(30)), null);
+                ThreadPool.UnsafeQueueUserWorkItem(parker.Park, null);
             for (var i = 0; i < 200; i++)
                 _ = new PendingStream(gate.Task).CopyToAsync(Stream.Null);
 
@@ -202,16 +251,18 @@ public class ThreadPoolQueueCensusTest
 
             gate.SetResult(0);
             var after = ThreadPoolQueueCensus.Take();
+            ThreadPool.ThreadCount.Should().BeLessThan(parkers,
+                "parkers must still be queued after the census, or a worker could have reached a continuation");
             after.Failure.Should().BeNull();
             after.Groups.Where(group => group.Producer.StartsWith(copyToAsync, StringComparison.Ordinal))
                 .Sum(group => group.Count).Should().Be(200,
-                    "every continuation sits in the global queue behind parked items, keyed by the method that resumes");
+                    "every continuation sits behind queued parkers, keyed by the method that resumes");
             after.Groups.Should().NotContain(group => group.Producer.Contains("DispatchContinuations", StringComparison.Ordinal));
         }
         finally
         {
             gate.TrySetResult(0);
-            Volatile.Write(ref released, 1);
+            parker.Release();
         }
     }
 }
