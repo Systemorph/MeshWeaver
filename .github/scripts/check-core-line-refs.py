@@ -48,15 +48,17 @@ DECLARATION = Path(".github/delivery-lines.json")
 _REF = r"(?P<ref>[A-Za-z0-9_.-]+)"
 _END = r"(?![A-Za-z0-9_.-])"
 SINGLE = [
-    ("lane or action", re.compile(r"Systemorph/MeshWeaver/[^@\s'\"]+@" + _REF + _END)),
+    ("lane or action", re.compile(r"(?i:Systemorph/MeshWeaver)/[^@\s'\"]+@" + _REF + _END)),
     ("core-file read", re.compile(r"mw-core-file\"?\s+['\"]?" + _REF + _END)),
-    ("raw fetch", re.compile(r"raw\.githubusercontent\.com/Systemorph/MeshWeaver/" + _REF + r"/")),
-    ("contents fetch", re.compile(r"repos/Systemorph/MeshWeaver/[^\s'\"]*\?ref=" + _REF + _END)),
+    ("raw fetch", re.compile(r"raw\.githubusercontent\.com/(?i:Systemorph/MeshWeaver)/" + _REF + r"/")),
+    ("contents fetch", re.compile(r"repos/(?i:Systemorph/MeshWeaver)/[^\s'\"]*\?ref=" + _REF + _END)),
     ("ref input or env", re.compile(r"^\s*(?:-\s*)?(?:scripts-ref|platform-ref|SCRIPTS_REF):\s*['\"]?" + _REF + r"['\"]?\s*$")),
 ]
 INPUT_KEY = re.compile(r"^(?P<indent>\s+)(?:scripts-ref|platform-ref):\s*$")
 DEFAULT = re.compile(r"^\s+default:\s*['\"]?" + _REF + r"['\"]?\s*$")
-CORE_REPOSITORY = re.compile(r"^(?P<indent>\s*)repository:\s*['\"]?Systemorph/MeshWeaver['\"]?\s*$")
+CORE_REPOSITORY = re.compile(r"^(?P<indent>\s*)repository:\s*['\"]?(?i:Systemorph/MeshWeaver)['\"]?\s*$")
+# A script fetches core by URL; GitHub resolves owner/repo case-insensitively, so these match either case.
+SCRIPT_KINDS = ("raw fetch", "contents fetch")
 CHECKOUT_REF = re.compile(r"^\s*ref:\s*(?P<ref>.*?)\s*$")
 
 
@@ -78,8 +80,12 @@ def _code(line: str) -> str:
 
 def declaration(root: Path) -> tuple[list[str], str]:
     """(declared line branches, the repository's default branch) from delivery-lines.json."""
-    doc = json.loads((root / DECLARATION).read_text(encoding="utf-8"))
-    lines = [entry["branch"] for entry in doc.get("lines", [])]
+    try:
+        doc = json.loads((root / DECLARATION).read_text(encoding="utf-8"))
+        lines = [entry["branch"] for entry in doc.get("lines", [])]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        raise SystemExit(f"::error::{DECLARATION} cannot be read as a delivery-line declaration ({e!r}) — "
+                         "this guard has nothing to read") from None
     if not lines or not all(isinstance(b, str) and b for b in lines):
         raise SystemExit(f"::error::{DECLARATION} declares no delivery line — this guard has nothing to read")
     default = doc.get("defaultBranch")
@@ -113,26 +119,34 @@ def this_branch(env: dict) -> str:
         try:
             base = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text())["merge_group"]["base_ref"]
             return base.removeprefix("refs/heads/")
-        except (OSError, KeyError, TypeError, ValueError):
-            return ""
+        except (OSError, KeyError, TypeError, ValueError) as e:
+            raise SystemExit(f"::error::the merge_group event payload names no base branch ({e!r}) — a merge-group "
+                             "run is checked against its base line, never the weaker agree-on-one-line mode") from None
     return env.get("GITHUB_REF_NAME", "")
 
 
 def references(root: Path, lines: list[str], default: str) -> tuple[list[tuple[str, int, str, str, str]], int]:
     """(file, line, kind, ref, text) for every reference naming a DECLARED line; and files read."""
     github = root / ".github"
-    files = sorted([*github.rglob("*.yml"), *github.rglob("*.yaml")])
+    files = sorted([*github.rglob("*.yml"), *github.rglob("*.yaml"), *github.rglob("*.py")])
     out = []
     for path in files:
         rel = path.relative_to(root).as_posix()
+        script = path.suffix == ".py"
         text = [_code(line) for line in path.read_text(encoding="utf-8").splitlines()]
         for n, raw in enumerate(text, 1):
             if not raw.strip():
                 continue
             for kind, pattern in SINGLE:
+                # In a script, a string carrying an escaped newline is an embedded fixture DOCUMENT a self-test
+                # feeds to a checker (a workflow body), not a fetch the script makes.
+                if script and (kind not in SCRIPT_KINDS or "\\n" in raw):
+                    continue
                 for m in pattern.finditer(raw):
                     if m.group("ref") in lines:
                         out.append((rel, n, kind, m.group("ref"), raw.strip()))
+            if script:
+                continue
             repo = CORE_REPOSITORY.match(raw)
             if repo:
                 ref = _checkout_ref(text, n - 1, len(repo.group("indent")))
@@ -169,7 +183,7 @@ def check(root: Path, branch: str) -> tuple[list[str], str]:
         f"`{expected or 'ambiguous'}` ({mode}). Each line's branch references only itself (policy "
         f"major-lines-run-separately): `{text}`"
         for rel, n, kind, ref, text in wrong]
-    summary = (f"check-core-line-refs: {files} workflow file(s) read, {len(refs)} reference(s) to a "
+    summary = (f"check-core-line-refs: {files} workflow/action/script file(s) read, {len(refs)} reference(s) to a "
                f"declared line, {len(violations)} violation(s); {mode}")
     return violations, summary
 
@@ -217,6 +231,22 @@ def self_test() -> int:
          {"w.yml": checkout.format(r="${{ steps.p.outputs.sha }}")}, False),
         ("a Plugins checkout with no ref is not core", "main3",
          {"w.yml": checkout.replace("MeshWeaver\n", "MeshWeaver.Plugins\n").replace("          ref: {r}\n", "")}, False),
+        ("main3 branch: lane in LOWER case at main (GitHub resolves it)", "main3",
+         {"w.yml": lane.replace("Systemorph/MeshWeaver", "systemorph/meshweaver").format(r="main")}, True),
+        ("main3 branch: core checkout in lower case, no ref", "main3",
+         {"w.yml": checkout.replace("Systemorph/MeshWeaver", "systemorph/meshweaver").replace("          ref: {r}\n", "")}, True),
+        ("main3 branch: a SCRIPT raw-fetching core main", "main3",
+         {"../scripts/s.py": 'URL = "https://raw.githubusercontent.com/Systemorph/MeshWeaver/main/x.json"\n'}, True),
+        ("main3 branch: a SCRIPT contents-fetching core main", "main3",
+         {"../scripts/s.py": 'P = "repos/Systemorph/MeshWeaver/contents/x?ref=main"\n'}, True),
+        ("main3 branch: a SCRIPT raw-fetching core main3", "main3",
+         {"../scripts/s.py": 'URL = "https://raw.githubusercontent.com/Systemorph/MeshWeaver/main3/x.json"\n'}, False),
+        ("a SCRIPT's comment naming core main", "main3",
+         {"../scripts/s.py": '# was https://raw.githubusercontent.com/Systemorph/MeshWeaver/main/x\n'}, False),
+        ("a SCRIPT's embedded workflow fixture fetching core main", "main3",
+         {"../scripts/s.py": 'BODY = "      - run: curl https://raw.githubusercontent.com/Systemorph/MeshWeaver/main/x\\n"\n'}, False),
+        ("a SCRIPT spelling a lane @main is a fixture, not a fetch", "main3",
+         {"../scripts/s.py": 'FIXTURE = "uses: Systemorph/MeshWeaver/.github/workflows/x.yml@main"\n'}, False),
         ("composite action file is read", "main3", {"../actions/a/action.yml": "runs:\n  steps:\n    - uses: Systemorph/MeshWeaver/.github/actions/x@main\n"}, True),
     ]
     failures = 0
@@ -248,7 +278,30 @@ def self_test() -> int:
         got = this_branch({"GITHUB_EVENT_NAME": "merge_group", "GITHUB_EVENT_PATH": str(payload)})
     failures += got != "main3"
     print(f"  {'ok  ' if got == 'main3' else 'FAIL'} branch of merge_group{'':<38} expected=main3 got={got}")
-    total = len(cases) + len(env_cases) + 1
+    extra = 0
+    for name, setup in (("an UNREADABLE merge_group payload fails loudly", "payload"),
+                        ("a MISSING delivery-lines.json fails cleanly", "nodecl"),
+                        ("a MALFORMED delivery-lines.json fails cleanly", "baddecl")):
+        extra += 1
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".github").mkdir()
+            try:
+                if setup == "payload":
+                    (root / "e.json").write_text("{not json")
+                    this_branch({"GITHUB_EVENT_NAME": "merge_group", "GITHUB_EVENT_PATH": str(root / "e.json")})
+                else:
+                    if setup == "baddecl":
+                        (root / DECLARATION).write_text('{"lines": [{"name": "main"}]}')
+                    check(root, "main3")
+                got = "no error"
+            except SystemExit as e:
+                got = "::error" if str(e.code).startswith("::error::") else f"exit {e.code!r}"
+            except Exception as e:  # a raw traceback is exactly what must not happen
+                got = f"raw {type(e).__name__}"
+        failures += got != "::error"
+        print(f"  {'ok  ' if got == '::error' else 'FAIL'} {name:<52} expected=::error got={got}")
+    total = len(cases) + len(env_cases) + 1 + extra
     if failures:
         print(f"\n::error::check-core-line-refs self-test: {failures} of {total} case(s) wrong.")
         return 1
