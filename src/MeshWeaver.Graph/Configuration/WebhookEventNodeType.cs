@@ -592,6 +592,11 @@ public static class WebhookInbox
                         // delivery committed in 200 ms. No handler is part of a WebhookEvent's
                         // contract: consumers pick events up from their own inbox query.
                         return mesh.CreateNodeAnsweredOnCommit(hub.ServiceProvider, node)
+                            // The consumer drains its inbox from its OWN hub, which only runs while that
+                            // node is activated — and a committed satellite does not activate its owner. So
+                            // the delivery WAKES the owner; without it a verified delivery waited until
+                            // somebody opened the node (MeshWeaver.Plugins#5435: 140 runs queued overnight).
+                            .Do(_ => WakeOwner(hub, normalized))
                             .Select(_ => new DeliveryResult(DeliveryStatus.Accepted, node.Path)
                             {
                                 SignatureVerified = signatureVerified,
@@ -599,6 +604,32 @@ public static class WebhookInbox
                             });
                     }));
     }
+
+    /// <summary>
+    /// Wakes the inbox's OWNER after a delivery is stored: a <see cref="PingRequest"/> to its address
+    /// activates the owner's hub — where the consumer's inbox watch is armed — so the delivery is
+    /// processed now rather than at the owner's next activation. Fire-and-forget and bounded: the
+    /// answer to the sender never waits on it, and a wake that fails changes nothing (the delivery is
+    /// stored and is drained at the owner's next activation either way).
+    /// </summary>
+    internal static void WakeOwner(IMessageHub hub, string ownerPath)
+    {
+        try
+        {
+            hub.NodeOperationIssuingHub()
+                .Observe(new PingRequest(), o => o.WithTarget(new Address(ownerPath)))
+                .Take(1)
+                .Timeout(OwnerWakeBudget)
+                .Subscribe(_ => { }, _ => { });
+        }
+        catch (Exception)
+        {
+            // a wake is a courtesy, never a precondition of the delivery
+        }
+    }
+
+    /// <summary>How long a wake of the inbox's owner may take before it is abandoned.</summary>
+    internal static readonly TimeSpan OwnerWakeBudget = TimeSpan.FromSeconds(30);
 }
 
 /// <summary>

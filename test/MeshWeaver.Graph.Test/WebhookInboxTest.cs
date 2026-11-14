@@ -188,6 +188,35 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             "every notification is delivered under the subscriber's own identity, never System");
     }
 
+    /// <summary>
+    /// The consumer drains its inbox from its OWN hub, so a stored delivery must ACTIVATE the owner:
+    /// a committed satellite alone does not, and a verified delivery then waited until somebody
+    /// opened the node (MeshWeaver.Plugins#5435, 140 runs queued overnight on the public instance).
+    /// Precondition: creating the owner activates nothing; then the delivery builds the owner's hub.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AStoredDelivery_WakesItsOwnersHub()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await CreateTarget("WakeMe", ct);
+        var address = new Address("WakeMe");
+        Mesh.GetHostedHub(address, HostedHubCreation.Never).Should().BeNull(
+            "creating the owner activates nothing — otherwise this test could not tell a wake from a create");
+        var hosted = Mesh.ServiceProvider.GetRequiredService<HostedHubsCollection>();
+        var built = hosted.HubAdded.Where(h => (h.Address with { Host = null }) == address).Replay();
+        using (built.Connect())
+        {
+            var result = await WebhookInbox.Deliver(
+                    Mesh, ["WakeMe"], "WakeMe", "application/json", [], """{"wake":true}""")
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
+
+            await built.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            Mesh.GetHostedHub(address, HostedHubCreation.Never).Should().NotBeNull(
+                "the delivery wakes the owner, where the consumer's inbox watch is armed");
+        }
+    }
+
     [Fact(Timeout = 120000)]
     public async Task TargetsNotAllowlisted_OrWithoutAnOwnerNode_AreRefused()
     {
