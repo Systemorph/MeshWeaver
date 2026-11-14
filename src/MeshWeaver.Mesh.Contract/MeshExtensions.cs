@@ -852,7 +852,8 @@ public static class MeshExtensions
     // lambda inside the handler shares the handler's display class — and with it the hub —
     // because C# hoists every captured local of a scope into one closure object. The fallback
     // must therefore be BUILT here, so its Defer closes over this tracker alone.
-    private sealed class LifecycleStageProgress(string operation, string subject, TimeSpan budget, string initialStage)
+    private sealed class LifecycleStageProgress(
+        string operation, string subject, TimeSpan budget, string initialStage, Action<TimeoutTerminal> reportTimeout)
     {
         private string stage = initialStage;
         private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> outstanding =
@@ -873,8 +874,12 @@ public static class MeshExtensions
                 : $"{current} (outstanding: {string.Join(", ", outstanding.Keys.OrderBy(k => k, StringComparer.Ordinal).Take(10))})";
         }
 
-        public IObservable<T> StalledVerdict<T>() => Observable.Defer(() => Observable.Throw<T>(
-            new LifecycleVerdictStalledException(operation, subject, Describe(), budget)));
+        public IObservable<T> StalledVerdict<T>() => Observable.Defer(() =>
+        {
+            var stalled = new LifecycleVerdictStalledException(operation, subject, Describe(), budget);
+            reportTimeout(new TimeoutTerminal(TimeoutTerminalKinds.LifecycleStalled, subject, stalled.Message));
+            return Observable.Throw<T>(stalled);
+        });
     }
 
     /// <summary>
@@ -1245,7 +1250,8 @@ public static class MeshExtensions
         // stage that went silent, which is what the trail could not say.
         var createBudget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
         var deadline = DateTimeOffset.UtcNow + createBudget;
-        var createProgress = new LifecycleStageProgress("CreateNode", node.Path, createBudget, CreateStageAuthorshipSource);
+        var createProgress = new LifecycleStageProgress("CreateNode", node.Path, createBudget, CreateStageAuthorshipSource,
+            hub.ServiceProvider.TimeoutTerminalReporter());
         void EnterCreateStage(string stage)
         {
             createProgress.Enter(stage);
@@ -1704,6 +1710,8 @@ public static class MeshExtensions
                     // `<handler> (i/n): discovering additional nodes` and
                     // `<handler> (i/n): additional nodes`, set as the leg enters each.
                     var postCreationStage = new PostCreationStage();
+                    // Resolved while this hub is alive; the post-creation deadline fires later.
+                    var reportPostCreationTimeout = hub.ServiceProvider.TimeoutTerminalReporter();
                     void EnterPostCreationStage(string detail)
                     {
                         postCreationStage.Enter(detail);
@@ -1736,6 +1744,10 @@ public static class MeshExtensions
                         if (!TryClaimResponse())
                             return;
                         PostCreateVerdict(hub, request, verdict, parentHub, logger);
+                        reportPostCreationTimeout(new TimeoutTerminal(
+                            TimeoutTerminalKinds.CreatePostCreation, resultNode.Path,
+                            $"'{resultNode.Path}' was written, but a post-creation step had not finished within "
+                            + $"{seconds}s (waiting at '{waitingAt}')"));
                         hub.NoteRequestStage(request.Id, $"CREATE_STAGE {CreateStagePostCreationHandlers} deadline");
                         logger.LogError(
                             "[CreateNode] {Path} was written, but its post-creation handlers had not finished within {Budget}s (waiting at {Stage}) — answering 'outcome unknown'",
@@ -10086,7 +10098,8 @@ public static class MeshExtensions
         var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
         var moveBudget = opts.Timeout;
         var moveDeadline = DateTimeOffset.UtcNow + moveBudget;
-        var moveProgress = new LifecycleStageProgress("MoveNode", $"{sourcePath} -> {targetPath}", moveBudget, MoveStagePreflight);
+        var moveProgress = new LifecycleStageProgress("MoveNode", $"{sourcePath} -> {targetPath}", moveBudget, MoveStagePreflight,
+            hub.ServiceProvider.TimeoutTerminalReporter());
         // The stage the CURRENT relocation leg reached — what a failed leg of a case-only rename
         // reads to decide what it may undo (#6951). Reset at the start of every leg.
         var moveStage = MoveStagePreflight;
@@ -10711,7 +10724,8 @@ public static class MeshExtensions
         // and for the create leg the TARGET paths still outstanding.
         var copyBudget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
         var copyDeadline = DateTimeOffset.UtcNow + copyBudget;
-        var copyProgress = new LifecycleStageProgress("CopyNode", $"{sourcePath} -> {targetPath}", copyBudget, "authorship-entitlement");
+        var copyProgress = new LifecycleStageProgress("CopyNode", $"{sourcePath} -> {targetPath}", copyBudget, "authorship-entitlement",
+            hub.ServiceProvider.TimeoutTerminalReporter());
         void EnterCopyStage(string stage)
         {
             copyProgress.Enter(stage);

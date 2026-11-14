@@ -35,13 +35,15 @@ The terminals that report today:
 | `WriteVerdict` | `MeshNodeStreamHandle.UpdateRemote` `VERDICT_TIMEOUT` — no owner verdict within the write verdict bound |
 | `WriteTeardownJoin` | `UpdateRemote` `TEARDOWN_JOIN_TIMEOUT` — a shutting-down owner's teardown did not settle within the caller's bound |
 | `CreateVerdict` | the upsert's inner `CreateNodeRequest` got no verdict within `InnerCreateVerdictBound` (derived from `MeshOperationOptions.Timeout`) |
+| `LifecycleStalled` | a create, move or copy did not reach a verdict within `MeshOperationOptions.Timeout` (`LifecycleVerdictStalledException`) |
+| `CreatePostCreation` | a create's row was written but a post-creation step had not finished within `MeshOperationOptions.Timeout` — "outcome unknown" |
 
 A new timeout terminal reports through the same seam: resolve the reporter where the bound is
 armed, invoke it on the timeout path, and add a constant (in its own module if it is not core's).
 The observer must not throw; it is called from inside the product's timeout path.
 
 Not yet reporting (the next candidates, by measured cost): the remaining `MeshOperationOptions`
-budget consumers (`DeclaredPointRead`, `NodeTypeAccessRuleGate`, `RlsNodeValidator`,
+budget consumers (the delete's `DeleteStageTimeout` stages, `DeclaredPointRead`, `NodeTypeAccessRuleGate`, `RlsNodeValidator`,
 `MeshNodeStreamCache`), the base-state read bound (`BaseStateSource`, which has no hub at hand),
 and the write's fast seam `UpdateResponseWaitBound`, which hands over to the late registry rather
 than terminating.
@@ -77,6 +79,29 @@ over-reports.
 
 ## Rollout
 
-The guard ships ARMED but scoped: the enumeration run with `MW_TIMEOUT_TERMINALS_ARE_ERRORS=1`
-names the offenders, the classes that are clean are armed, and each offender is fixed at its root
-before it is armed. The suite-wide arm is the end state.
+The guard ships ARMED but scoped. The enumeration run (`MW_TIMEOUT_TERMINALS_ARE_ERRORS=1` over the
+five projects whose tests the slow-test profile named) found **26 offenders**, none in
+`MeshWeaver.Data.Test` — so that assembly carries `[assembly: TimeoutTerminalsAreErrors]`, as does
+the guard's own test class. The Messaging.Hub and
+Graph runs predate the `LifecycleStalled` / `CreatePostCreation` terminals, so their rows are a
+floor. The offenders:
+
+| project | test class (tests) | terminal |
+|---|---|---|
+| Messaging.Hub.Test | `TimeoutMessageNamesTheCallersOwnStateTest` (5) | `RequestTimeout` (real-time; moving to a virtual hub clock) |
+| Messaging.Hub.Test | `StreamedResponseTest` (1) | `RequestTimeout` |
+| Graph.Test | `KernelIdleClaimIsPerSubmissionTest` (2) | `RequestTimeout` |
+| Graph.Test | `LongCellOutlivesTheDispatchersRequestBudgetTest`, `LongCellOutlivesTheKernelContainersRequestBudgetTest` (1 each) | `RequestTimeout` |
+| Graph.Test | `KernelReplyTimeoutNoticeTest` (2) | `RequestTimeout` |
+| Graph.Test | `StalledDeleteStillTimesItsCallerOutTest` (1) | `RequestTimeout` |
+| Graph.Test | `AnUploadTimeoutNamesTheStepThatTimedOutTest` (2) | `RequestTimeout` |
+| Hosting.Test | `SnapshotFanOutEmitsOnlyAnswersTest` (2) | `QueryInitial` |
+| Hosting.Test | `LifecycleRequestsAlwaysReachAVerdictTest` (4) | `LifecycleStalled`, `CreatePostCreation` |
+| Hosting.Test | `PostCreationVerdictIsSaidOnceTest` (1) | `CreatePostCreation`, `LifecycleStalled` |
+| Hosting.Test | `ACancelledMoveDeleteLeavesNoTombstoneTest` (3) | `LifecycleStalled` |
+| Compiler.Pipeline.Test | `ACreateNeverWaitsOnAModuleContainerUnderConstructionTest` (1) | `CreatePostCreation`, `LifecycleStalled` |
+
+Most of these name a timeout as their subject and run it on the real clock; each moves to virtual
+time and declares its terminal before its assembly is armed. The two `LongCellOutlives…` tests are
+the other kind — a healthy cell that SUCCEEDS while a `RequestTimeout` fires underneath it — and
+need their stall found. The suite-wide arm is the end state.

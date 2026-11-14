@@ -40,6 +40,18 @@ public static class TimeoutTerminalKinds
     /// <c>MeshExtensions.InnerCreateVerdictBound</c> (derived from <c>MeshOperationOptions.Timeout</c>).
     /// </summary>
     public const string CreateVerdict = nameof(CreateVerdict);
+
+    /// <summary>
+    /// A create, move or copy did not reach a verdict within its <c>MeshOperationOptions.Timeout</c>
+    /// and answered with its stalled verdict (<c>LifecycleVerdictStalledException</c>).
+    /// </summary>
+    public const string LifecycleStalled = nameof(LifecycleStalled);
+
+    /// <summary>
+    /// A create's row was written but a post-creation step had not finished within
+    /// <c>MeshOperationOptions.Timeout</c>, so the create answered "outcome unknown".
+    /// </summary>
+    public const string CreatePostCreation = nameof(CreatePostCreation);
 }
 
 /// <summary>
