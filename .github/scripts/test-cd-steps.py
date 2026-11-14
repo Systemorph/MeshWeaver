@@ -2195,9 +2195,17 @@ def main() -> int:
          no_decl != workflow_text and any("control-instance.json" in p for p in separation_problems(no_decl)),
          "the mutation passed (or could not apply) with an arm that cannot read which instance is control")
     alarm = (root / ".github/workflows/control-always-latest.yml").read_text()
+    alarm_checkout = alarm.split("\n  platform:", 1)[-1].split("steps:", 1)[-1].split("- name:", 1)[0]
     case("the control-always-latest alarm checks out the control declaration it reads",
-         ".github/control-instance.json" in alarm.split("steps:", 1)[1].split("- name:", 1)[0],
+         ".github/control-instance.json" in alarm_checkout,
          "control-always-latest.yml's checkout omits .github/control-instance.json — every tick would refuse")
+    # MeshWeaver#8197: control-lag derives control's LINE from its record and the declared lines.
+    case("the control-always-latest alarm checks out the declared delivery lines it derives control's line from",
+         ".github/delivery-lines.json" in alarm_checkout,
+         "control-always-latest.yml's checkout omits .github/delivery-lines.json — control-lag would refuse")
+    case("the control-always-latest alarm reads control per LINE (--control-record), never `main` by default",
+         re.search(r"arm-promoted-set\.py control-lag[^\n]*--control-record", alarm) is not None,
+         "control-always-latest.yml runs control-lag without --control-record")
     # 🚨 The one-producer gate in `portal-image` READS the published module set out of this workflow
     # (check-platform-reference-set.sh). #6143 removed the job it read and CD published nothing for
     # ~30 runs — so the reader is executed here against the real workflow, and against a mutation.
