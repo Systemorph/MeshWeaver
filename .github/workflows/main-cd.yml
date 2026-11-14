@@ -2673,6 +2673,24 @@ jobs:
             -o json --only-show-errors > "$RUNNER_TEMP/control-manifests.json"
           python3 .github/scripts/arm-promoted-set.py control-first \
             --control-manifests "$RUNNER_TEMP/control-manifests.json" --version "$V_CONTROL"
+      # 🚨 LINES RUN SEPARATELY (policy `major-lines-run-separately`). Each line's control-first hands
+      # control ONLY a build of the major control currently RUNS (its public /api/version). Measured
+      # 2026-11-14: `main` (the v4 line) announced 4.0.13212 and 4.0.13217 to a control on 3.* — the
+      # plane opened an approvable Roll, it was approved, and control stuck mid-roll (v3 modules do not
+      # load on v4). The control plane refuses a build outside the record's updatePattern too
+      # (MeshWeaver.Plugins SelfUpdateRouting.PatternRefusal); this is the announcing half. A control
+      # that cannot be read is RED — never "announce anyway", never a silent skip.
+      - name: Is this build on control's line?
+        id: control_line
+        if: steps.control_tags.outputs.announce == 'true'
+        run: python3 .github/scripts/arm-promoted-set.py control-line --version "$V_CONTROL"
+      - name: Not on control's line — say so
+        if: steps.control_tags.outputs.announce == 'true' && steps.control_line.outputs.line_announce != 'true'
+        env:
+          WHY: ${{ steps.control_line.outputs.line_reason }}
+        run: |
+          echo "::notice title=control-first: not announced::$WHY"
+          echo "- control NOT handed \`$V_CONTROL\`: $WHY" >> "$GITHUB_STEP_SUMMARY"
       - name: Already tagged — say where memex-control is
         if: steps.control_tags.outputs.action == 'done'
         run: echo "- memex-control already carries \`$V_CONTROL\` — nothing to write" >> "$GITHUB_STEP_SUMMARY"
@@ -2716,7 +2734,7 @@ jobs:
       # re-delivery is how a lost POST is closed. Never for a build OLDER than control's newest tag.
       # Every non-success ends the job: a build control was never handed is the outage this fixes.
       - name: "Hand the build to control's roll lane (signed self-update-available)"
-        if: steps.control_tags.outputs.announce == 'true'
+        if: steps.control_tags.outputs.announce == 'true' && steps.control_line.outputs.line_announce == 'true'
         env:
           URL: ${{ vars.CONTROL_WEBHOOK_URL }}
           SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}

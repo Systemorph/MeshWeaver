@@ -375,6 +375,53 @@ def control_announcement(deployment: str, version: str, image_repository: str, i
     }
 
 
+# Only the matched version prefix is ever echoed (into a ::notice:: and the step summary) — never the raw
+# /api/version string, so nothing after it can spoof an annotation or render as markdown.
+RUNNING_MAJOR = re.compile(r"^\s*((\d+)\.\d+(?:\.\d+)?)")
+
+
+def control_line(version: str, code: int, body: str) -> dict:
+    """Policy `major-lines-run-separately`, the ANNOUNCING half of `platform-deploy-control-first`:
+    whether THIS line's build may be handed to control at all. A line announces only a build of the
+    MAJOR control currently runs (its public `/api/version`, `code`/`body` as fetched). Pure.
+
+    🚨 WHY (2026-11-14): core `main` became the v4 line while control stayed on v3 (its record
+    declares `updatePattern: 3.*`). `control-first` on `main` announced `4.0.13212` and `4.0.13217`
+    for control anyway — the announcement names only the BUILD's own line (`line_pattern`) — and the
+    control plane opened an approvable Roll; it was approved and control stuck mid-roll, because v3
+    modules do not load on v4. The control plane now refuses any build outside the record's
+    `updatePattern` (MeshWeaver.Plugins `SelfUpdateRouting.PatternRefusal`) and records the refusal;
+    this is the first layer, so a line never even offers control a build of another major.
+
+    The RECORD stays the one declaration of control's line: a cross-line move is declared there
+    (`updatePattern: 4.*`) and its first roll is a deliberate, hand-filed Roll; once control RUNS the
+    new major, that major's line announces and the old line stops — the same rule, from both ends.
+
+    Returns `{"line_announce", "control_major", "build_major", "line_reason"}`; a control whose
+    `/api/version` cannot be read, or names no version, is a ValueError — "could not decide" is RED,
+    never "announce anyway" and never a silent skip (policy `control-first-never-silent`)."""
+    build_major = major_of(version)
+    if build_major is None:
+        raise ValueError(f"{version!r} is not a set name — it names no major")
+    try:
+        running = str(json.loads(body).get("version") or "") if code == 200 else ""
+    except (ValueError, AttributeError):
+        running = ""
+    m = RUNNING_MAJOR.match(running)
+    if m is None:
+        raise ValueError(f"control's /api/version answered {code} without a version (body: {str(body)[:200]!r}) — "
+                         "cannot tell which major control runs, so this build is NOT handed to it")
+    control_major = int(m.group(2))
+    running = m.group(1)
+    if control_major == build_major:
+        return {"line_announce": True, "control_major": control_major, "build_major": build_major,
+                "line_reason": f"control runs {running} (major {control_major}) — this {build_major}.x build is on its line"}
+    return {"line_announce": False, "control_major": control_major, "build_major": build_major,
+            "line_reason": f"control runs {running} (major {control_major}); this line's build {version} is major "
+                           f"{build_major} — NOT announced (policy major-lines-run-separately). A move of control to "
+                           f"{build_major}.x is declared on its record (updatePattern) and rolled deliberately"}
+
+
 # ───────────────────────────────── transport ──────────────────────────────────────────────
 
 def http_get(url: str, token: str, raw: bool = False) -> tuple[int, object]:
@@ -1200,6 +1247,59 @@ def self_test() -> int:
           and ann["pattern"] == "3.0.0-ci*" and ann["detectedAt"] == "2026-10-06T06:00:00Z", json.dumps(ann))
     check("control_announcement: the pattern ADMITS the tag it announces (else the roll would park for an approval)",
           re.fullmatch(re.escape(ann["pattern"][:-1]) + ".*", ann["newVersion"]) is not None, json.dumps(ann))
+    # 🚨 The incident of 2026-11-14: the v4 line announced 4.0.13212 to a control running v3.
+    v3_body = json.dumps({"version": "3.1.0+60fa43e8f7c0b1178088d8ae8aaacdcc7e500dd1", "commit": "6" * 40})
+    out_of_line = control_line("4.0.13212", 200, v3_body)
+    check("control_line: a 4.x build is NOT announced to a control running 3.x",
+          out_of_line["line_announce"] is False and out_of_line["control_major"] == 3 and out_of_line["build_major"] == 4
+          and "NOT announced" in out_of_line["line_reason"], json.dumps(out_of_line))
+    on_line = control_line("3.1.13192", 200, v3_body)
+    check("control_line: a 3.x build IS announced to a control running 3.x (the rule refuses nothing it should hand over)",
+          on_line["line_announce"] is True, json.dumps(on_line))
+    check("control_line: the old notation is on the 3 line too",
+          control_line("3.0.0-ci.10052", 200, v3_body)["line_announce"] is True)
+    after_cutover = control_line("3.1.13300", 200, json.dumps({"version": "4.0.13250+" + "a" * 40}))
+    check("control_line: once control RUNS 4.x the v3 line stops announcing — lines run separately both ways",
+          after_cutover["line_announce"] is False and after_cutover["control_major"] == 4, json.dumps(after_cutover))
+    check("control_line: …and the v4 line announces to it",
+          control_line("4.0.13260", 200, json.dumps({"version": "4.0.13250"}))["line_announce"] is True)
+    spoof = control_line("4.0.13212", 200, json.dumps({"version": "3.1.0+abc\n::error::spoofed **bold**"}))
+    check("control_line: only the matched version prefix is echoed — nothing after it reaches a ::notice:: or the summary",
+          "3.1.0 (major 3)" in spoof["line_reason"] and "::" not in spoof["line_reason"]
+          and "\n" not in spoof["line_reason"] and "**" not in spoof["line_reason"], json.dumps(spoof))
+    # The workflow compares `steps.control_line.outputs.line_announce == 'true'` — so the ROUND TRIP through
+    # GITHUB_OUTPUT must spell a Python bool in lowercase, or the handover never runs (and fails soft).
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        out_file = Path(tmp) / "out"
+        saved = os.environ.get("GITHUB_OUTPUT")
+        os.environ["GITHUB_OUTPUT"] = str(out_file)
+        try:
+            _write_rows(control_line("3.1.13192", 200, v3_body))
+            _write_rows({"line_announce": control_line("4.0.13212", 200, v3_body)["line_announce"]})
+        finally:
+            if saved is None:
+                os.environ.pop("GITHUB_OUTPUT", None)
+            else:
+                os.environ["GITHUB_OUTPUT"] = saved
+        lines = out_file.read_text().splitlines()
+    check("control_line → GITHUB_OUTPUT: the workflow reads `line_announce=true` / `line_announce=false` (lowercase)",
+          "line_announce=true" in lines and "line_announce=false" in lines
+          and not any(l in ("line_announce=True", "line_announce=False") for l in lines), str(lines))
+    for bad_code, bad_body, why in ((0, "connection refused", "an unreachable control"),
+                                    (200, json.dumps({"commit": "6" * 40}), "a /api/version naming no version"),
+                                    (503, "", "a 503"),
+                                    (200, "<html>", "a body that is not JSON")):
+        try:
+            control_line("4.0.13212", bad_code, bad_body)
+            check(f"control_line: {why} is RED, never 'announce anyway' or a silent skip", False)
+        except ValueError:
+            check(f"control_line: {why} is RED, never 'announce anyway' or a silent skip", True)
+    # NEGATIVE CONTROL: the announcement alone (what control-first sent before) carries the build's own
+    # line and is composed for ANY major — so without control_line the 4.x build WOULD have been handed over.
+    neg = control_announcement("control", "4.0.13212", "meshweaver.azurecr.io/memex-control", "u", "t")
+    check("NEGATIVE CONTROL — control_announcement composes a 4.0.* announcement for control regardless of its line",
+          neg["pattern"] == "4.0.*" and neg["deployment"] == "control", json.dumps(neg))
     for bad_dep, bad_repo, why in (("", "meshweaver.azurecr.io/memex-control", "no deployment"),
                                    ("control; rm", "meshweaver.azurecr.io/memex-control", "a deployment that is not a plain id"),
                                    ("control", "meshweaver.azurecr.io/memex-control:3.0.0-ci.1", "a repository carrying a tag"),
@@ -1446,7 +1546,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("command", nargs="?",
-                    choices=("select", "armed-base", "armed-state", "control-first", "control-announcement", "control-lag"))
+                    choices=("select", "armed-base", "armed-state", "control-first", "control-announcement", "control-line",
+                             "control-lag"))
     ap.add_argument("--manifests", type=Path, help="armed-base/armed-state: memex-portal-ai manifest metadata (JSON list)")
     ap.add_argument("--control-manifests", type=Path, help="control-first: memex-control manifest metadata (JSON list)")
     ap.add_argument("--version", default="", help="control-first/control-announcement: THIS run's accepted platform version")
@@ -1501,6 +1602,22 @@ def main() -> int:
             rows = control_first(json.loads(a.control_manifests.read_text()), a.version)
         except (OSError, ValueError) as e:
             print(f"::error::the control image's next version cannot be decided: {e}")
+            return 1
+        _write_rows(rows)
+        print(json.dumps(rows))
+        return 0
+    if a.command == "control-line":
+        # Reads control's PUBLIC /api/version (no credential) from the url `.github/control-instance.json`
+        # declares, and decides whether this line may hand its build to control (major-lines-run-separately).
+        if not a.version:
+            ap.error("control-line needs --version")
+        try:
+            ci = load_control_instance(a.control_instance)
+            url = f"{str(ci['url']).rstrip('/')}/api/version"
+            code, body = _fetch_public(url)
+            rows = control_line(a.version, code, body)
+        except (OSError, ValueError) as e:
+            print(f"::error::cannot decide whether {a.version} is on control's line: {e}")
             return 1
         _write_rows(rows)
         print(json.dumps(rows))
