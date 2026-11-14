@@ -987,7 +987,9 @@ jobs:
           wait=0; [ "${EVENT_NAME:-}" = "schedule" ] && wait=900
           ROWS="${RUNNER_TEMP:-/tmp}/platform-rows.txt"; : > "$ROWS"
           echo "platform: no pin from the caller — resolving the newest platform-sealed set (freeze: '${FREEZE:-none}', wait-for-seal: ${wait}s)"
-          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" --wait-for-seal "$wait" ${FREEZE:+--freeze "$FREEZE"}
+          # The core LINE is the ref the resolver was fetched at (`scripts-ref: main3` → 3.1.N sets;
+          # policy `major-lines-run-separately`, Doc/Architecture/CdDeliveryLines → the resolver).
+          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --scripts-ref "$SCRIPTS_REF" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" --wait-for-seal "$wait" ${FREEZE:+--freeze "$FREEZE"}
           python3 - "$ROWS" >> "$GITHUB_OUTPUT" <<'PY'
           import sys
           rows = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1], encoding="utf-8") if "=" in line)

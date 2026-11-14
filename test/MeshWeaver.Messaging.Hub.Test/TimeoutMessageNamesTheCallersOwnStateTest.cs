@@ -1,5 +1,8 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
@@ -31,37 +34,95 @@ public class TimeoutMessageNamesTheCallersOwnStateTest(ITestOutputHelper output)
     private record NeverAnswer;
 
     /// <summary>
+    /// The hub's own <c>RequestTimeout</c>. It is VIRTUAL: the hub's deadlines run on
+    /// <see cref="clock"/>, and the test fires this one by advancing it, the instant the wait has
+    /// been armed and everything that must happen during it has happened. These tests used to sit
+    /// it out in real time — 36 s each on CI, the whole of their runtime spent proving nothing
+    /// beyond that the clock moves.
+    /// </summary>
+    private static readonly TimeSpan RequestTimeout = TestTimeouts.Quick;
+
+    /// <summary>The clock the host's framework deadlines run on (<c>WithTimeoutClock</c>).</summary>
+    private readonly ManualTimeProvider clock = new();
+
+    /// <summary>Completed by the <see cref="NeverAnswered"/> handler — proof the request was RECEIVED.</summary>
+    private readonly AsyncSubject<Unit> requestReceived = new();
+
+    /// <summary>Completed once the host has handled every <see cref="Noise"/> message the test posts.</summary>
+    private readonly AsyncSubject<Unit> noiseHandled = new();
+
+    private const int NoiseCount = 25;
+    private int noise;
+
+    /// <summary>
     /// A handler that receives the request and deliberately answers nothing, so the requester can
     /// only end by the HUB's own <c>RequestTimeout</c> — which is the message under test. Answering
     /// nothing is the point: an Rx-level <c>.Timeout(...)</c> would raise Rx's own exception and
     /// never reach <c>BuildTimeoutMessage</c> at all.
     ///
-    /// <para>The bound is <c>TestTimeouts.Quick</c>, not a literal: it scales with the host under
-    /// the same factor as every other wait here, and a hand-written one would spend budget from
-    /// <c>TestTimeoutLiteralRatchetGuard</c>, whose inventory may only shrink. These tests also
-    /// carry no <c>[Fact(Timeout = …)]</c> — the hub's own <c>RequestTimeout</c> IS the thing under
-    /// test and already bounds them, and xunit's <c>methodTimeout</c> is the outer net. A second,
-    /// hand-written bound would be a guess about machine speed with nothing left to catch.</para>
+    /// <para>The timeout itself is the hub's own deadline on a virtual clock
+    /// (<see cref="MessageHubConfiguration.WithTimeoutClock"/>): the SAME deadline, the same
+    /// <c>BuildTimeoutMessage</c> and the same terminal as production — only the moment it fires is
+    /// the test's to choose.</para>
     /// </summary>
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
-            .WithRequestTimeout(TestTimeouts.Quick)
-            .WithHandler<NeverAnswered>((_, delivery) => delivery.Processed())
+            .WithRequestTimeout(RequestTimeout)
+            .WithTimeoutClock(clock)
+            .WithHandler<NeverAnswered>((_, delivery) =>
+            {
+                requestReceived.OnNext(Unit.Default);
+                requestReceived.OnCompleted();
+                return delivery.Processed();
+            })
             // Handled and answered nothing — its only job is to make this hub take turns while the
             // request above is outstanding, so the interval count has something to count.
-            .WithHandler<Noise>((_, delivery) => delivery.Processed());
+            .WithHandler<Noise>((_, delivery) =>
+            {
+                if (Interlocked.Increment(ref noise) == NoiseCount)
+                {
+                    noiseHandled.OnNext(Unit.Default);
+                    noiseHandled.OnCompleted();
+                }
+                return delivery.Processed();
+            });
+
+    /// <summary>
+    /// Subscribes <paramref name="pending"/>, waits for the positive proof that the wait is armed
+    /// and the request was received, then fires the hub's <c>RequestTimeout</c> on the virtual clock
+    /// and returns the message the requester was failed with.
+    /// </summary>
+    private async Task<string> TimeOut<T>(IObservable<T> pending, IObservable<Unit>? alsoBefore = null)
+    {
+        var outcome = pending.Await(TestContext.Current.CancellationToken);
+
+        await requestReceived.Should().Within(TestTimeouts.Quick)
+            .Emit("the handler must RECEIVE the request — the timeout under test is of a delivered request");
+        await clock.WhenArmed(RequestTimeout).Should().Within(TestTimeouts.Quick)
+            .Emit("the requester's RequestTimeout must be armed on the hub's timeout clock before it is fired");
+        if (alsoBefore is not null)
+            await alsoBefore.Should().Within(TestTimeouts.Quick)
+                .Emit("everything that must happen DURING the wait has to have happened before it ends");
+
+        clock.Advance(RequestTimeout);
+
+        // Bounded, so a deadline that did not fire fails here instead of wedging the test — and the
+        // bound's own TimeoutException is told apart from the hub's by the message it carries.
+        var act = async () => await outcome.WaitAsync(TestTimeouts.Quick, TestContext.Current.CancellationToken);
+        var message = (await act.Should().ThrowAsync<TimeoutException>()).Which.Message;
+        message.Should().StartWith($"No response received in hub {GetHost().Address} within {RequestTimeout}",
+            "the hub's own RequestTimeout, fired on its timeout clock, must be what ended the wait");
+        return message;
+    }
 
     [Fact]
     public async Task TheTimeoutMessage_NamesThisHubsRunLevelAndQueue_AndDoesNotClaimTwoCausesAreExhaustive()
     {
         var host = GetHost();
 
-        var act = async () => await host
+        var message = await TimeOut(host
             .Observe<NeverAnswer>(new NeverAnswered(), o => o.WithTarget(CreateHostAddress()))
-            .FirstAsync()
-            .Await(TestContext.Current.CancellationToken);
-
-        var message = (await act.Should().ThrowAsync<TimeoutException>()).Which.Message;
+            .FirstAsync());
 
         // The request is still named — the property the previous form already had, and which a
         // rewrite must not lose.
@@ -101,12 +162,9 @@ public class TimeoutMessageNamesTheCallersOwnStateTest(ITestOutputHelper output)
     {
         var host = GetHost();
 
-        var act = async () => await host
+        var message = await TimeOut(host
             .Observe<NeverAnswer>(new NeverAnswered(), o => o.WithTarget(CreateHostAddress()))
-            .FirstAsync()
-            .Await(TestContext.Current.CancellationToken);
-
-        var message = (await act.Should().ThrowAsync<TimeoutException>()).Which.Message;
+            .FirstAsync());
 
         message.Should().Contain("No response received in hub",
             "both IsTransientOwnerFailure and IsTransientHubFailure classify a hub timeout as "
@@ -142,13 +200,13 @@ public class TimeoutMessageNamesTheCallersOwnStateTest(ITestOutputHelper output)
             .FirstAsync();
 
         // Work this hub provably handles WHILE the request above is outstanding, and which is all
-        // drained long before the bound elapses — so the queue is empty at the give-up instant and
-        // the snapshot alone would report "idle".
-        for (var i = 0; i < 25; i++)
+        // drained before the bound is fired — so the queue is empty at the give-up instant and the
+        // snapshot alone would report "idle". "All drained" is a positive signal (the last Noise
+        // handled), not a guess that the window was long enough.
+        for (var i = 0; i < NoiseCount; i++)
             host.Post(new Noise(i), o => o.WithTarget(CreateHostAddress()));
 
-        var act = async () => await pending.Await(TestContext.Current.CancellationToken);
-        var message = (await act.Should().ThrowAsync<TimeoutException>()).Which.Message;
+        var message = await TimeOut(pending, alsoBefore: noiseHandled);
 
         message.Should().Contain("handledWhileWaiting=",
             "the interval — how many messages this hub handled while the request was outstanding — "
@@ -185,12 +243,9 @@ public class TimeoutMessageNamesTheCallersOwnStateTest(ITestOutputHelper output)
     {
         var host = GetHost();
 
-        var act = async () => await host
+        var message = await TimeOut(host
             .Observe<NeverAnswer>(new NeverAnswered(), o => o.WithTarget(CreateHostAddress()))
-            .FirstAsync()
-            .Await(TestContext.Current.CancellationToken);
-
-        var message = (await act.Should().ThrowAsync<TimeoutException>()).Which.Message;
+            .FirstAsync());
 
         message.Should().Contain("THIS HUB IS ALSO THE TARGET",
             "sender == target is the single most common node-CRUD shape in the mesh and it changes "
@@ -218,12 +273,9 @@ public class TimeoutMessageNamesTheCallersOwnStateTest(ITestOutputHelper output)
     {
         var host = GetHost();
 
-        var act = async () => await host
+        var message = await TimeOut(host
             .Observe<NeverAnswer>(new NeverAnswered(), o => o.WithTarget(CreateHostAddress()))
-            .FirstAsync()
-            .Await(TestContext.Current.CancellationToken);
-
-        var message = (await act.Should().ThrowAsync<TimeoutException>()).Which.Message;
+            .FirstAsync());
 
         message.Should().Contain("Trail:",
             "the stage trail is what turns this from a report of silence into a report of WHERE the "

@@ -68,29 +68,27 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
             .WithTypes(typeof(GatedRequest), typeof(GatedResponse), typeof(Blocker));
 
     /// <summary>
-    /// The framework budget each test drives to expiry. Derived, never a literal: it has to
-    /// dominate a handful of in-process posts and one gate open (the <see cref="TestTimeouts.Quick"/>
-    /// class of convergence, CI factor included) while leaving the whole test inside xunit's 30 s
-    /// <c>methodTimeout</c> — the budget IS most of the test's runtime, so it cannot be
-    /// <see cref="TestTimeouts.Quick"/> itself.
+    /// The framework budget each test drives to expiry. It is VIRTUAL: the gated hub's deadlines run
+    /// on <see cref="clock"/> (<see cref="MessageHubConfiguration.WithTimeoutClock"/>) and the test
+    /// fires this one by advancing it, AFTER every precondition has been proven — so the budget costs
+    /// no wall-clock time and the ordering "the gate opened, THEN the budget expired" is the test's
+    /// own sequence rather than a race against the clock. (These tests used to sit it out in real
+    /// time: 18 s each on CI.)
     ///
-    /// <para>🚨 Losing that race does not make a test pass vacuously: if the budget expired before
-    /// the gate opened, the report would say the gates are STILL closed and both assertions below
-    /// would go red. The bound can only produce an honest failure, never a false green.</para>
-    ///
-    /// <para>🚨 But an honest failure is still a flake, so the ordering has headroom BY
-    /// CONSTRUCTION rather than by hope: <see cref="Immediate"/> is a THIRD of this, so the setup
-    /// either finishes inside a third of the budget or the test fails at a named wait — and in
-    /// every case that reaches the assertions, two thirds of the budget is still unspent when the
-    /// gate opens. Equal bounds would have permitted a setup to consume the whole budget.</para>
+    /// <para>🚨 The ordering is still CHECKED, not assumed: had the budget expired before the gate
+    /// opened, the report would say the gates are STILL closed and the assertions below would go
+    /// red.</para>
     /// </summary>
     private static TimeSpan FrameworkBudget => TestTimeouts.Quick / 2;
 
     /// <summary>
-    /// Upper bound on a setup wait that should complete in milliseconds — a wedge, not a pace. A
-    /// third of <see cref="FrameworkBudget"/>: see the headroom note there.
+    /// Upper bound on a wait that should complete in milliseconds — a wedge, not a pace. Every wait
+    /// it bounds is for a positive signal, so it is never spent on a passing run.
     /// </summary>
     private static TimeSpan Immediate => FrameworkBudget / 3;
+
+    /// <summary>The clock the gated hubs' framework deadlines run on.</summary>
+    private readonly ManualTimeProvider clock = new();
 
     private const string LateGate = "gate-the-test-opens";
 
@@ -135,6 +133,7 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
             LateGateAddress,
             c => c.WithTypes(typeof(GatedRequest), typeof(GatedResponse), typeof(Blocker))
                 .WithDeferralTimeout(FrameworkBudget)
+                .WithTimeoutClock(clock)
                 .WithInitializationGate(LateGate)
                 .WithHandler<GatedRequest>((h, d) =>
                 {
@@ -173,6 +172,12 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
             // The restored blocker now holds the loop, so the request sits in the main queue with
             // its tracker still armed and every gate it was parked behind already gone.
             await loopParked.Timeout(Immediate).Await(ct);
+
+            // The budget expires NOW — after the open, with the loop held — by moving the virtual
+            // clock past the deferral timer the parked request armed.
+            await clock.WhenArmed(FrameworkBudget).Should().Within(Immediate)
+                .Emit("the parked request's deferral timer must be armed before the budget is expired");
+            clock.Advance(FrameworkBudget);
 
             var report = await WaitForDeferralTimeoutReport(ct);
             Output.WriteLine(report);
@@ -240,6 +245,7 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
             StartupAddress,
             c => c.WithTypes(typeof(GatedRequest), typeof(GatedResponse))
                 .WithStartupTimeout(FrameworkBudget)
+                .WithTimeoutClock(clock)
                 .WithInitializationGate(GateThatOpens)
                 .WithInitializationGate(GateThatNeverOpens)
                 .WithHandler<GatedRequest>((h, d) =>
@@ -258,6 +264,11 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
 
         gated!.OpenGate(GateThatOpens).Should().BeTrue(
             "the gate must still have been closed when the test opened it");
+
+        // The startup budget expires NOW, after the first gate opened, on the virtual clock.
+        await clock.WhenArmed(FrameworkBudget).Should().Within(Immediate)
+            .Emit("the gated hub's startup timer must be armed before the budget is expired");
+        clock.Advance(FrameworkBudget);
 
         var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
         var reported = failure.Failure!.Message ?? string.Empty;
@@ -355,7 +366,7 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
             .Where(line => line is not null)
             .Select(line => line!)
             .Take(1)
-            .Timeout(FrameworkBudget + Immediate)
+            .Timeout(Immediate)
             .Await(ct);
     }
 
