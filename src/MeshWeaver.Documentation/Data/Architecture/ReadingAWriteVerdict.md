@@ -168,6 +168,26 @@ and replays the write's own outcome to its caller. The queue is a chain of eager
 `ReplaySubject`s — the `IoPoolExtensions.Run` shape — so no connection handle is left unowned, and the
 flush joins it simply by being the last entry. Pinned by `OwnWritesAreSerializedTest` (same file).
 
+**The dispose flush reads the store, not only what the sampler saw.** The sampler tracks what the
+REDUCED own-node stream emits, and that stream lives on its own `sync/` hub, beside the MeshNode
+store's `sync/` hub. An own write is an `UpdateStreamRequest` queued on the store's hub, and the
+host's DisposeHostedHubs phase disposes both hubs in parallel. When the store's hub is scheduled late,
+the reduced stream's hub is gone before the write commits: the store holds the new state, the
+reduced stream never emits it, and a flush that trusted the tracker alone wrote the older state. The
+fresh activation then served that older state with nothing logged. This is how a kernel run failed
+at host shutdown stayed Running (the intermittent `KernelHostDisposedMidRunFailsTheRunTest` timeout):
+the executor writes the Failed verdict at the first instant of teardown, and on a loaded runner the
+verdict reached the store after the reduced stream had been torn down.
+
+By the ShutDown phase every hosted hub has drained its queue, so the store holds every write it
+accepted. `FlushPendingOwnSave` therefore reads the own node from the store and adopts it when its
+version is strictly newer than both the tracked state and the persisted snapshot
+(`PendingOwnSave.TrackCommitted`). A state the sampler already saw, or one loaded from storage, is
+never adopted, so a load is still not echoed back. Pinned by `KernelVerdictOutlivesOwnStreamTeardownTest`
+(MeshWeaver.Graph.Test), which parks the store's hub until the reduced stream's hub has finished
+disposing and then releases it, so the verdict commits late on every run. Without the fix it fails
+exactly as the intermittent failure did.
+
 ## The ack watcher's completion arm (the gap closed by #3033)
 
 `postSub` used to subscribe with **`onNext` and `onError` only**. If the filtered stream *completed
