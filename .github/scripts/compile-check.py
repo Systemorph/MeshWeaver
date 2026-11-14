@@ -476,26 +476,48 @@ def _line_behind(core: "Path | str", rev: str) -> "tuple[int, str] | None":
     `main3` the previous major), and a checkout of one line is NOT stale merely because another
     line moved — measured against `origin/main` alone, every current `main3` checkout was refused
     as hundreds of commits behind once `main` became v4. The lines are read from the checkout's own
-    copy of the file (a tree that predates it has the one line, `main`), and the answer is the
-    NEAREST line: a current checkout of any line is 0, a stale one is behind every line, so the
-    verdict is unchanged for it. None when no line's remote ref resolves (no git, no fetch yet)."""
+    copy of the file (a tree that predates it has the one line, `main`).
+
+    `rev`'s line is the line whose tip CONTAINS it. Among several (a commit older than the fork is in
+    both), the one it is fewest commits behind. When no line contains it (local commits on top), it is
+    the line it carries the fewest commits beyond — the line it was branched from. Containment, not
+    a bare minimum over every line: a line `rev` merely has IN it (a retired line reachable from the
+    current one counts 0 for every checkout) must never answer for it, and a stale checkout must be
+    measured, and told to pull, against its own line. None when no line's remote ref resolves."""
+    core = Path(core)
     branches = ["main"]
-    try:
-        doc = json.loads((Path(core) / ".github" / "delivery-lines.json").read_text(encoding="utf-8"))
-        declared = [ln.get("branch") for ln in doc.get("lines", []) if isinstance(ln, dict) and ln.get("branch")]
-        if declared:
-            branches = declared
-    except (OSError, ValueError, AttributeError):
-        pass
-    best = None
-    for branch in branches:
-        ref = f"origin/{branch}"
-        r = subprocess.run(["git", "-C", str(core), "rev-list", "--count", f"{rev}..{ref}"],
+    lines_file = core / ".github" / "delivery-lines.json"
+    if lines_file.exists():
+        try:
+            doc = json.loads(lines_file.read_text(encoding="utf-8"))
+            declared = [ln.get("branch") for ln in doc.get("lines", []) if isinstance(ln, dict) and ln.get("branch")]
+            if declared:
+                branches = declared
+            else:
+                print(f"  ({lines_file} declares no line; measuring against origin/main)", file=sys.stderr)
+        except (OSError, ValueError, AttributeError) as exc:
+            print(f"  ({lines_file} could not be read ({exc}); measuring against origin/main)", file=sys.stderr)
+
+    def count(spec: str) -> "int | None":
+        r = subprocess.run(["git", "-C", str(core), "rev-list", "--count", spec],
                            capture_output=True, text=True, timeout=15)
         n = r.stdout.strip()
-        if r.returncode == 0 and n.isdigit() and (best is None or int(n) < best[0]):
-            best = (int(n), ref)
-    return best
+        return int(n) if r.returncode == 0 and n.isdigit() else None
+
+    containing, beyond = [], []
+    for branch in branches:
+        ref = f"origin/{branch}"
+        behind, ahead = count(f"{rev}..{ref}"), count(f"{ref}..{rev}")
+        if behind is None or ahead is None:
+            continue
+        (containing if ahead == 0 else beyond).append((behind, ahead, ref))
+    if containing:
+        behind, _, ref = min(containing)
+        return behind, ref
+    if beyond:
+        behind, _, ref = min(beyond, key=lambda t: (t[1], t[0]))
+        return behind, ref
+    return None
 
 
 def _refuse_if_sibling_stale(core: "Path | str") -> None:
@@ -2658,6 +2680,38 @@ def _self_test_exit_codes(failures: list) -> None:
             legacy = _line_behind(core, "HEAD") if git_ok else (1, "origin/main")
             if legacy != (1, "origin/main"):
                 failures.append(f"  line staleness: a tree with no delivery-lines.json measures against main; got {legacy}")
+            # A line that is merely reachable (here main3's tip is inside main, as a retired line
+            # would be) must never answer for a checkout of the other: one behind main is stale.
+            masked = _line_behind(lines_core, "origin/main~1")
+            if masked != (1, "origin/main"):
+                failures.append(f"  line staleness: a reachable line must not mask a stale main checkout; got {masked}")
+
+        # Diverged lines: main3 a-m1-m2-m3, main a-v1. A main3 checkout two behind its own line is
+        # only ONE commit behind main, but main does not contain it: it is (2, origin/main3), and the
+        # remedy names main3. A main3 tip with a local commit on top belongs to main3, 0 behind.
+        div = tmp / "core-diverged"
+        (div / ".github").mkdir(parents=True)
+        (div / ".github" / "delivery-lines.json").write_text(
+            json.dumps({"lines": [{"branch": "main"}, {"branch": "main3"}]}), encoding="utf-8")
+        div_ok = True
+        for cmd in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "a"],
+                    ["commit", "-q", "--allow-empty", "-m", "m1"], ["commit", "-q", "--allow-empty", "-m", "m2"],
+                    ["commit", "-q", "--allow-empty", "-m", "m3"], ["update-ref", "refs/remotes/origin/main3", "HEAD"],
+                    ["checkout", "-q", "--detach", "HEAD~3"], ["commit", "-q", "--allow-empty", "-m", "v1"],
+                    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+                    ["checkout", "-q", "--detach", "origin/main3"], ["commit", "-q", "--allow-empty", "-m", "local"]):
+            if subprocess.run(["git", "-C", str(div), *cmd], env=git_env, capture_output=True).returncode != 0:
+                div_ok = False
+                break
+        if not div_ok:
+            failures.append("  line staleness: could not build the diverged-lines fixture (git)")
+        else:
+            stale3 = _line_behind(div, "origin/main3~2")
+            if stale3 != (2, "origin/main3"):
+                failures.append(f"  line staleness: a stale main3 checkout is measured against main3, not the nearer main; got {stale3}")
+            local3 = _line_behind(div, "HEAD")
+            if local3 != (0, "origin/main3"):
+                failures.append(f"  line staleness: a main3 tip with a local commit belongs to main3; got {local3}")
 
         def run(repo: Path, *argv: str) -> tuple[int, str]:
             env = {k: v for k, v in os.environ.items() if k not in ("CI", "GITHUB_ACTIONS")}
