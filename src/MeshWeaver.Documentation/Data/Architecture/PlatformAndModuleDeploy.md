@@ -176,6 +176,36 @@ and never-backwards.
 - The record also declares `moduleUpdatePolicy: Auto`, so control takes every newest compatible
   module (`packages-auto-update`).
 
+### Each line announces only to control's own major
+
+With two delivery lines (policy `major-lines-run-separately`), every line's `control-first` runs.
+Until this change, each line also announced its build to control, whatever major control was on.
+**Measured 2026-11-14:** core `main` (the v4 line) announced `4.0.13212`, and later `4.0.13217`,
+for the `control` record. That record declares `updatePattern: 3.*`. The control plane opened an
+approvable Roll, someone approved it, and control got stuck mid-roll, because v3 modules do not
+load on v4.
+
+Two layers now prevent that.
+
+1. **The announcing side (this repo, on every line).** The step *Is this build on control's line?*
+   runs `arm-promoted-set.py control-line`. It reads control's public `/api/version` from the URL
+   in `.github/control-instance.json`. The build is handed over only when its major equals the
+   major control runs. Otherwise the job writes a notice and a summary line, *"control NOT handed
+   `<version>`: control runs 3.1.0+… (major 3); this line's build 4.0.… is major 4 — NOT
+   announced"*, and the tag stays written. A control whose `/api/version` cannot be read fails the
+   job red, and the red is reported on the `control-image` issue. It is never treated as
+   "announce anyway", and never skipped in silence.
+2. **The receiving side (MeshWeaver.Plugins `SelfUpdateRouting.PatternRefusal`).** An announced
+   build outside the record's `updatePattern` opens nothing. The control plane refuses it, and
+   records the refusal as `Ops/Issue/<record>__AnnouncementOutsidePattern`. The record is the one
+   declaration of an instance's line (Plugins `Hosting/RecordBoundsTheUnattendedRoll`, *Outside
+   the record's line, nothing opens*).
+
+**Moving control to another major is a deliberate act.** First set the record's `updatePattern`
+to the new line (`4.*`). Then file the first roll by hand, as an approved `Roll`. Once control
+runs the new major, that major's line announces to it and the old line stops: it is the same rule,
+applied from both ends.
+
 ## The alarm (`control-always-latest`)
 
 **Platform half.** The core workflow `.github/workflows/control-always-latest.yml` runs every 30
