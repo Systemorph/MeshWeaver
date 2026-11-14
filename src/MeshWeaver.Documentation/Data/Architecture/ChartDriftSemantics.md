@@ -162,6 +162,7 @@ owned.
 | `CLUSTER-ONLY` | live, in no committed source | on a rebuild or restore, and at every review — **unless the release manifest still owns the key**, when the next upgrade deletes it and the finding reads `PENDING DELETION` |
 | `CHART-ONLY` | rendered, never applied | nobody is getting it today |
 | `DIFFERS` | both sides, values disagree | never resolves itself; needs a decision — except an `inline env`, which helm owns and an upgrade resets |
+| `INFORMATIONAL` | measured, **not counted**: a liveness/readiness probe that differs ONLY in `initialDelaySeconds` on a container that carries a `startupProbe` | never — the delay is inert (see *The probes are inert* below); printed so "not counted" never reads as "not compared" |
 
 ### Any envFrom source can be shadowed, and a secret is the silent version
 
@@ -306,6 +307,14 @@ So the divergence is real but **inert**, and adding `initialDelaySeconds` to the
 enshrine dead config. The reasoning now lives beside the probes in
 `deploy/helm/templates/memex-portal/deployment.yaml`, so the next reader of the drift report does
 not re-derive the wrong answer.
+
+**The comparator no longer counts it.** Such a difference is reported as `INFORMATIONAL`, never as
+`DIFFERS`: it is printed with its reason but is not an `::error::`, does not enter the divergence
+count and does not fail the run (MeshWeaver.Deploy `chart-drift-compare.py`, Memex#148 decision 5c).
+The rule is narrow: `initialDelaySeconds` must be the **only** difference, and the **live** container
+must carry a `startupProbe`. Without a startupProbe the delay is exactly what holds the probe off a
+slow boot, so the same difference still counts as `DIFFERS` — the comparator's self-test pins both
+halves, the second as its negative control.
 
 ## The one drift shape the checker could not see at all
 
