@@ -834,7 +834,7 @@ The workflow is not concealing it. The reuse job writes *"This run **did not exe
 into the step summary with the marker ref, the TTL and a link to the run that gathered the evidence;
 the `main is red` job refuses to take its bisect window from the run list for exactly this reason;
 and `Consolidate test results` carries a zero-evidence gate that fails on zero `.trx` unless the run
-was a reuse or an affected-tests `none`. **The whole gap is in the reader.**
+was a reuse or an affected-tests `none` ([Core Test Selection](../CoreTestSelection)). **The whole gap is in the reader.**
 
 🚨 **So never cite a run's `success` as coverage without reading whether its shards ran.** One REST
 call answers it — `actions/runs/<id>/jobs` — and `Run tests (shard …) | skipped` is the entire tell.
