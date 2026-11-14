@@ -80,7 +80,7 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
     {
         var claimed = declaredId ?? id;
         var folder = Path.Combine(into ?? PackagesFolder, id.ToLowerInvariant(), version.ToLowerInvariant());
-        Directory.CreateDirectory(Path.Combine(folder, "lib", "net10.0"));
+        Directory.CreateDirectory(Path.Combine(folder, "lib", "net11.0"));
         var dependencies = dependsOnId is null
             ? string.Empty
             : $"""
@@ -103,7 +103,7 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
             </package>
             """);
         if (!complete) return;
-        File.WriteAllBytes(Path.Combine(folder, "lib", "net10.0", claimed + ".dll"), [0x4D, 0x5A]);
+        File.WriteAllBytes(Path.Combine(folder, "lib", "net11.0", claimed + ".dll"), [0x4D, 0x5A]);
         File.WriteAllText(Path.Combine(folder, ".nupkg.metadata"),
             """{ "version": 2, "contentHash": "fixture", "source": null }""");
     }
@@ -120,7 +120,7 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
             Description = "offline-first fixture",
         };
         builder.Authors.Add("test");
-        builder.Files.Add(new PhysicalPackageFile { SourcePath = dll, TargetPath = $"lib/net10.0/{id}.dll" });
+        builder.Files.Add(new PhysicalPackageFile { SourcePath = dll, TargetPath = $"lib/net11.0/{id}.dll" });
         if (dependencies.Length > 0)
             builder.DependencyGroups.Add(new PackageDependencyGroup(
                 NuGetFramework.Parse("net8.0"),
@@ -790,7 +790,7 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
 
         public Task<bool> TryHydrateAsync(string packageId, string version, string targetPackageFolder, CancellationToken ct)
         {
-            Directory.CreateDirectory(Path.Combine(targetPackageFolder, "lib", "net10.0"));
+            Directory.CreateDirectory(Path.Combine(targetPackageFolder, "lib", "net11.0"));
             File.WriteAllText(Path.Combine(targetPackageFolder, packageId.ToLowerInvariant() + ".nuspec"), $"""
                 <?xml version="1.0" encoding="utf-8"?>
                 <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
@@ -808,7 +808,7 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
             if (!SpinWait.SpinUntil(() => Volatile.Read(ref resume) == 1, TimeSpan.FromSeconds(60)))
                 throw new InvalidOperationException(
                     "the paused hydration was never resumed — the interleaving under test did not happen");
-            File.WriteAllBytes(Path.Combine(targetPackageFolder, "lib", "net10.0", packageId + ".dll"), [0x4D, 0x5A]);
+            File.WriteAllBytes(Path.Combine(targetPackageFolder, "lib", "net11.0", packageId + ".dll"), [0x4D, 0x5A]);
             return Task.FromResult(true);
         }
 

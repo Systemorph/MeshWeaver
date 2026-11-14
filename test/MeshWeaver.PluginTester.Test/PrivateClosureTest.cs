@@ -45,22 +45,22 @@ public class PrivateClosureTest : IDisposable
             Dll(app, name);
         File.WriteAllText(Path.Combine(app, "Portal.deps.json"), """
             {
-              "runtimeTarget": { "name": "net10.0" },
+              "runtimeTarget": { "name": "net11.0" },
               "targets": {
-                "net10.0": {
+                "net11.0": {
                   "Portal/1.0.0": {},
                   "Provider.Sdk/2.0.0": {
-                    "runtime": { "lib/net10.0/Provider.Sdk.dll": { "assemblyVersion": "2.0.0.0" } },
+                    "runtime": { "lib/net11.0/Provider.Sdk.dll": { "assemblyVersion": "2.0.0.0" } },
                     "dependencies": { "Provider.Transitive": "1.0.0", "Framework.Riding.Package": "10.0.0" }
                   },
                   "Provider.Transitive/1.0.0": {
-                    "runtime": { "lib/net10.0/Provider.Transitive.dll": { "assemblyVersion": "1.0.0.0" } }
+                    "runtime": { "lib/net11.0/Provider.Transitive.dll": { "assemblyVersion": "1.0.0.0" } }
                   },
                   "Framework.Riding.Package/10.0.0": {
-                    "runtime": { "lib/net10.0/System.Framework.Thing.dll": { "assemblyVersion": "10.0.0.0" } }
+                    "runtime": { "lib/net11.0/System.Framework.Thing.dll": { "assemblyVersion": "10.0.0.0" } }
                   },
                   "Platform.Lib/3.0.0": {
-                    "runtime": { "lib/net10.0/Platform.Lib.dll": { "assemblyVersion": "3.0.0.0" } }
+                    "runtime": { "lib/net11.0/Platform.Lib.dll": { "assemblyVersion": "3.0.0.0" } }
                   },
                   "MeshWeaver.Data/3.0.0": {
                     "runtime": { "MeshWeaver.Data.dll": { "assemblyVersion": "3.0.0.0" } }
@@ -97,9 +97,9 @@ public class PrivateClosureTest : IDisposable
         File.WriteAllText(Path.Combine(dir, "MeshWeaver.ModuleLibraries.deps.json"), """
             {
               "targets": {
-                "net10.0": {
+                "net11.0": {
                   "Additional.Lib/5.0.0": {
-                    "runtime": { "lib/net10.0/Additional.Lib.dll": {} }
+                    "runtime": { "lib/net11.0/Additional.Lib.dll": {} }
                   }
                 }
               }

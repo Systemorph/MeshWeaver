@@ -406,9 +406,12 @@ def self_test() -> int:
 
     # The fabricated events the brief names, one per entry shape.
     m = derive(doc, "workflow_run", "main", "main", run_event="push", run_head_branch="main")
-    expect("workflow_run for a push to main → line main, Plugins main, label main, moves latest",
-           m == {"line": "main", "label": "main", "plugins_ref": "main", "satellite_ref": "main",
-                 "moves_latest": "true", "default_line": "true"}, str(m))
+    # The Plugins and satellite refs are the DECLARED ones (the first 4.0 set builds main against a
+    # Plugins branch other than main for one bootstrap commit), so the case compares to the file, not a literal.
+    declared_main = by_branch(doc)["main"]
+    expect("workflow_run for a push to main → line main, its declared Plugins/satellite refs, label main, moves latest",
+           m == {"line": "main", "label": "main", "plugins_ref": declared_main["pluginsRef"],
+                 "satellite_ref": declared_main["satelliteRef"], "moves_latest": "true", "default_line": "true"}, str(m))
     expect("workflow_run for main3 → REFUSED (main's file must never deliver main3)",
            "DEFAULT branch" in refused(derive, doc, "workflow_run", "main", "main", run_event="push",
                                        run_head_branch="main3"))
