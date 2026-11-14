@@ -59,6 +59,12 @@ channel only while a dependent still reads it, and every reader moves to the exp
   `Systemorph/MeshWeaver/.github/workflows/<lane>.yml@main3`, and a v4 dependent calls
   `@main`. Measured 2026-11-13: 92 such references in MeshWeaver.Plugins, 16–30 in each
   satellite, 4 in Deploy and 4 in Memex. They all point at `@main` today.
+- **The resolver lists the dependent's line.** `resolve-platform.py` lists `main-cd.yml` runs only
+  on the line it serves. That line is `--line`, `MW_CORE_LINE`, or the `scripts-ref` it was
+  fetched at, and the shared lanes pass that ref. With none of them it falls back to the default
+  line and warns. So a `main3` caller resolves `3.1.N` and never a `4.0.N` set; only a freeze may
+  name another line's set, and the run warns when it does. See
+  [CD Delivery Lines](../CdDeliveryLines), "The resolver serves ONE line".
 - **The SDK follows the resolved platform.** A shared lane installs the SDK the platform it
   resolved declares, never a version core's branch hard-codes, so one lane file can serve either
   line without guessing.
