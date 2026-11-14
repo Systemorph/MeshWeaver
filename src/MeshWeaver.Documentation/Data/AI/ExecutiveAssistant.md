@@ -105,6 +105,15 @@ To **keep** a file, the agent saves it with `SaveAttachment(id, attachment, targ
 - **Files only, bounded.** An attached mail, event or cloud link is not a file and is refused; so is
   anything over 100 MB, decided from the listed size before a byte is downloaded.
 - Once saved, the file is read from the mesh like any other.
+- **A timeout names its step.** The upload has two awaited legs to the owning space: the
+  content-collection lookup, then the write that carries the bytes — inline when the file packages
+  under one delivery's 1 MiB budget, otherwise staged out of band with only a handle on the
+  delivery. A lookup that never answered means the target is not content-enabled and *nothing was
+  written*; a write that never answered means the lookup DID answer, and the file *may or may not*
+  have landed — read the target back. Until 2026-11-14 both read "did not respond to the
+  content-collection lookup in time", which sent the investigation of a 4.9 MB save that kept timing
+  out (while the web UI wrote the same file into the same collection) to a collection that was fine.
+  Pinned by `AnUploadTimeoutNamesTheStepThatTimedOutTest`.
 
 Policy [`ea-saves-attachments-to-space-content`](/Doc/Architecture/PolicyNotProse); the tool lives in
 MeshWeaver.Plugins (`MeshWeaver.Mail.MicrosoftGraph`).
