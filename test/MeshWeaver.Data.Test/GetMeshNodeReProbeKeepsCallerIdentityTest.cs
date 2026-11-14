@@ -45,9 +45,20 @@ namespace MeshWeaver.Data.Test;
 /// read errored "still recycling after 1 probe(s)" at the end of its budget — on every local run of
 /// core main at the time.</para>
 /// </summary>
-public class GetMeshNodeReProbeKeepsCallerIdentityTest(ITestOutputHelper output) : HubTestBase(output)
+public class GetMeshNodeReProbeKeepsCallerIdentityTest : HubTestBase
 {
     private static readonly AccessContext Reader = new() { ObjectId = "reader-5227", Name = "Reader 5227" };
+
+    /// <summary>
+    /// The mesh's clock, which the read budget of <c>GetMeshNodeOutcome</c> runs on. VIRTUAL, so a
+    /// test whose subject is the budget ELAPSING fires it by advancing the clock once its
+    /// preconditions are proven, instead of sitting the budget out in real time. A read that
+    /// settles on an ANSWER never needs it to move.
+    /// </summary>
+    private readonly ManualTimeProvider clock = new();
+
+    public GetMeshNodeReProbeKeepsCallerIdentityTest(ITestOutputHelper output) : base(output)
+        => Services.AddSingleton(new ReadBudgetClock(clock));
 
     [HubFact]
     public async Task ReProbeAfterShuttingDownNack_CarriesTheCallersIdentity()
@@ -137,13 +148,21 @@ public class GetMeshNodeReProbeKeepsCallerIdentityTest(ITestOutputHelper output)
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var probes = 0;
 
+        var reProbeReceived = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
+
         // The OWNER: NACKs the first probe as recycling, takes the second and never answers it.
         var owner = Mesh.GetHostedHub(
             CreateClientAddress(),
             c => c
                 .WithHandler<GetDataRequest>((hub, d) =>
                 {
-                    if (Interlocked.Increment(ref probes) == 1)
+                    var probe = Interlocked.Increment(ref probes);
+                    if (probe == 2)
+                    {
+                        reProbeReceived.OnNext(System.Reactive.Unit.Default);
+                        reProbeReceived.OnCompleted();
+                    }
+                    if (probe == 1)
                         using (access.SwitchAccessContext(null))
                             hub.Post(
                                 new DeliveryFailure(d)
@@ -162,10 +181,21 @@ public class GetMeshNodeReProbeKeepsCallerIdentityTest(ITestOutputHelper output)
         issuing.Should().NotBeNull();
         await issuing!.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
 
+        var budget = TestTimeouts.Quick;
         var outcomes = new System.Reactive.Subjects.ReplaySubject<NodeReadOutcome>();
         using (access.SwitchAccessContext(Reader))
-            issuing.GetMeshNodeOutcome(owner.Address.ToString(), TestTimeouts.Quick, ReadTimeoutBehavior.EmitNull)
+            issuing.GetMeshNodeOutcome(owner.Address.ToString(), budget, ReadTimeoutBehavior.EmitNull)
                 .Subscribe(outcomes);
+
+        // The budget ends only once the re-probe has demonstrably reached the owner — the state the
+        // verdict under test describes — and then at once, on the virtual clock.
+        await reProbeReceived.Should().Within(TestTimeouts.Convergence).Emit(
+            "the ShuttingDown NACK earns an immediate re-probe, and it must reach the owner");
+        await clock.WhenArmed(budget).Should().Within(TestTimeouts.Convergence).Emit(
+            "the read's budget must be armed on the mesh clock before it is expired");
+        await outcomes.Should().NotEmitBefore(System.Reactive.Linq.Observable.Return(0),
+            "PRECONDITION: the read must still be open — an unanswered re-probe settles only when its budget ends");
+        clock.Advance(budget);
 
         var outcome = await outcomes.Should().Within(TestTimeouts.Convergence).Emit(
             "the read must settle when its budget ends");
