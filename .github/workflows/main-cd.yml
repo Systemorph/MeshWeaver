@@ -4952,8 +4952,8 @@ jobs:
       # this run resolved: the satellites are not part of the image set, so there is no set identity
       # to keep consistent (contrast the Plugins checkouts, pinned to gate's plugins_sha), and each
       # leg checks out exactly once and RECORDS the sha it judged in its verdict artifact.
-      # The LINE's satellite branch (.github/delivery-lines.json `satelliteRef`): `main` for every line
-      # until a satellite cuts a branch of its own for an older line.
+      # The LINE's satellite branch (.github/delivery-lines.json `satelliteRef`): `main` on the default
+      # line, `main3` on the v3 line (every satellite listed here carries a protected `main3`).
       content-ref: ${{ needs.gate.outputs.satellite_ref }}
       platform-ref: ${{ needs.gate.outputs.sha }}
       test-image: ${{ needs.satellite-compat-image.outputs.image }}:${{ needs.plugin-test-image.outputs.version }}
