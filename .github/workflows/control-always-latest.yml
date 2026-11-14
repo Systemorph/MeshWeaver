@@ -14,6 +14,15 @@
 #     records and job timestamps of `main-cd` (this repository's own token);
 #   * containment by ANCESTRY (GitHub compare), never by timestamps or version strings.
 #
+# 🚨 PER LINE (MeshWeaver#8197, policy `major-lines-run-separately`). Ancestry means something only
+# ALONG one line: a `main3` cherry-pick does not contain its `main` original, so a reading over
+# `main`'s builds called a control on the newest v3 build "behind" the pre-split ancestor it was
+# cherry-picked from. Control is compared ONLY with builds of the line its record's `updatePattern`
+# names — the record (`.github/control-instance.json` → `record`, read with the read-only
+# fleet-reader App) gives the major, and the declared line of that major (`.github/delivery-lines.json`,
+# each line's major read from its own Directory.Build.props) gives the branch. Nothing is hard-coded:
+# when the record moves to `4.*`, the reading follows `main` with it.
+#
 # Behind past `platformLagBoundMinutes` → RED, and the ONE open `control-lag` issue gets a comment
 # naming control's commit, the newest build, and the first build it missed and how long ago. Converging inside the
 # bound is said, not red. A control whose running build cannot be read is RED too — an instance that
@@ -46,25 +55,50 @@ concurrency:
 jobs:
   platform:
     name: "Control runs the newest platform build it was given (policy control-always-latest)"
+    needs: [preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
           # The declaration of which instance is control lives BESIDE the scripts, not under them —
-          # without it `control-lag` refuses (RED), so it is checked out explicitly.
+          # without it `control-lag` refuses (RED), so it is checked out explicitly. So do the
+          # declared delivery lines control's line is derived from (MeshWeaver#8197).
           sparse-checkout: |
             .github/scripts
             .github/control-instance.json
+            .github/delivery-lines.json
             scripts/check-issue-taxonomy.py
           sparse-checkout-cone-mode: false
       - name: "The decision can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
-      - name: Is control on the newest platform build?
+      # Control's record lives in the estate's private deployments repository; the READ-ONLY
+      # fleet-reader App (Contents: read) reads it — minted per run, never a stored PAT
+      # (Doc/Architecture/GitHubAppCredentials). A missing grant fails HERE, naming it.
+      - name: Mint a read token for control's record
+        id: record-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: Memex
+          permission-contents: read
+      - name: Read control's record (its updatePattern names the line control follows)
+        env:
+          GH_TOKEN: ${{ steps.record-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          repo=$(jq -er '.record.repository' .github/control-instance.json)
+          path=$(jq -er '.record.path' .github/control-instance.json)
+          gh api "repos/$repo/contents/$path" -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/control-record.json"
+          jq -e '.content.updatePattern | strings' "$RUNNER_TEMP/control-record.json" \
+            || { echo "::error::$repo:$path carries no content.updatePattern — which line control follows is declared there"; exit 1; }
+      - name: Is control on the newest platform build of ITS line?
         id: lag
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/arm-promoted-set.py control-lag
+        run: python3 .github/scripts/arm-promoted-set.py control-lag --control-record "$RUNNER_TEMP/control-record.json"
       - name: File, append to, or close the control-lag issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -109,3 +143,25 @@ jobs:
               exit 1
               ;;
           esac
+
+  # No `if:` anywhere in this job. It asserts, it does not decide whether to assert: a missing
+  # credential is RED naming what to provision, never a skipped (green-looking) reading.
+  preflight:
+    name: Preflight (fleet-reader credential for control's record)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every external input, or a red run naming what to provision
+        env:
+          FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+          FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -n "$FLEET_READER_APP_ID" ] || missing+=("secrets.FLEET_READER_APP_ID           app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read); it reads control's record, whose updatePattern names the line control follows")
+          [ -n "$FLEET_READER_APP_PRIVATE_KEY" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY  that App's private key (PEM). NOT meshweaver-cloud's key: that App holds write and is not installed on Memex")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::control-always-latest cannot read control's line — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "All external inputs are present."
