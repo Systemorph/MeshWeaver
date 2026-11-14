@@ -51,7 +51,12 @@ A plugin that receives webhooks:
 1. Ships the **target node** (e.g. `Store/Payments`) and documents its endpoint URL
    (`{portal}/api/hooks/Store/Payments`).
 2. **Watches its inbox** with a live children query over `{target}/_Inbox` from its hub
-   initialization, processing strictly one event at a time.
+   initialization, processing strictly one event at a time. **The endpoint wakes that hub**: once a delivery is committed it pings the
+   target's address (`WebhookInbox.WakeOwner`), which activates the owner's hub — a committed `_Inbox`
+   satellite alone activates nothing, so before this a verified delivery waited until somebody
+   opened the node (MeshWeaver.Plugins#5435: 140 benchmark runs queued overnight). The wake is
+   fire-and-forget and bounded (30 s); the sender's answer never waits on it, and a failed wake
+   changes nothing — the delivery is stored and is drained at the owner's next activation.
 3. **Verifies authenticity itself** over the stored raw `Body` + `Headers` — e.g. Stripe's
    `t=…,v1=…` HMAC-SHA256 with the endpoint's signing secret. Only a verified event authorizes an
    action. A consumer whose target declares a `SecretConfigKey` has already been verified at the
