@@ -136,7 +136,15 @@ boot_and_wait() {
     -e Features__Orleans__Clustering=Localhost \
     -e Authentication__EnableDevLogin=false \
     "$image" >/dev/null
-  port="$(docker port "$name" 8080/tcp | head -n 1 | sed 's/.*://')"
+  # A container that dies during startup has no published port, and `docker port` then fails under
+  # `set -e` BEFORE the exit branch below could print why (measured: CD run 43592014876, the first
+  # v4 run, ended on "no public port '8080/tcp' published" with no log at all). Ask whether it is
+  # still running first; the port is read only from a live container.
+  if ! port="$(docker port "$name" 8080/tcp 2>/dev/null | head -n 1 | sed 's/.*://')" || [ -z "$port" ]; then
+    echo "--- log tail:"; docker logs --tail 120 "$name" 2>&1 || true
+    echo "::error::leg $leg: the container EXITED during startup (exit code $(docker inspect -f '{{.State.ExitCode}}' "$name" 2>/dev/null || echo unknown)) — the log above names why"
+    return 1
+  fi
   started=$(date +%s)
   local phase=/health
   while :; do
