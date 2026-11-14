@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Immutable;
 using System.IO;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -143,18 +144,39 @@ public class ALateReleaseIsAdoptedWhenItLandsTest(ITestOutputHelper output) : Mo
         var unreleased = ReleasePathFor(typePath, "20260923055416-Hd-IFSiA");
         await SeedAsync(typePath, unreleased);
 
-        await MeshService.CreateNode(ReleaseNodeAt(ReleasePathFor(typePath, "20260923055426-OtherByt"), typePath))
+        var other = ReleasePathFor(typePath, "20260923055426-OtherByt");
+        await MeshService.CreateNode(ReleaseNodeAt(other, typePath))
             .Should().Within(TestTimeouts.Convergence)
             .Emit("an unrelated release lands", cancellationToken: TestContext.Current.CancellationToken);
+        await ListedAsync(typePath, other);
 
+        // 🚨 Opened only AFTER the positive signal (#6817): the listing the watch adopts from now holds
+        // the unrelated release, so a watch that took it would already be writing. A fixed
+        // NotEmit(Quick) from the create onwards spent 36 s of CI here.
         await Mesh.GetMeshNodeStream(typePath)
             .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && (d.UnreleasedBuildPath is null
                             || !string.Equals(d.LatestReleasePath, $"{typePath}/{PreviousRelease}",
                                 StringComparison.Ordinal)))
             .Should()
-            .NotEmit(TestTimeouts.Quick, "a release for other bytes must never be adopted");
+            .NotEmit(TestTimeouts.Quick / 10, "a release for other bytes must never be adopted",
+                TestContext.Current.CancellationToken);
     }
+
+    /// <summary>
+    /// The positive signal a negative wait opens after: the release namespace's LISTING — the source the
+    /// late-release watch adopts from — holds <paramref name="releasePath"/>.
+    /// </summary>
+    private Task ListedAsync(string typePath, string releasePath) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => MeshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{typePath}/{GraphNodeTypeNames.ReleaseSegment} scope:children"))
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .Take(1))
+            .Where(c => c.Items.Any(n => string.Equals(n.Path, releasePath, StringComparison.OrdinalIgnoreCase)))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit($"the release listing shows {releasePath}", TestContext.Current.CancellationToken);
 
     // ───────────── the decision, pure ─────────────
 
@@ -190,9 +212,13 @@ public class ALateReleaseIsAdoptedWhenItLandsTest(ITestOutputHelper output) : Mo
 
         await MeshService.CreateNode(ReleaseNodeAt(unreleased, typePath))
             .Should().Within(TestTimeouts.Convergence).Emit();
+        await ListedAsync(typePath, unreleased);
+        // 🚨 Opened only AFTER the positive signal (#6817): the old release is in the listing a
+        // late-release watch adopts from. A fixed NotEmit(Quick) spent 36 s of CI here.
         await Mesh.GetMeshNodeStream(typePath)
             .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.LatestReleasePath == unreleased)
-            .Should().NotEmit(TestTimeouts.Quick, "the old release cannot become the adopted bundle's release");
+            .Should().NotEmit(TestTimeouts.Quick / 10, "the old release cannot become the adopted bundle's release",
+                TestContext.Current.CancellationToken);
     }
 
     /// <summary>A replay returning the pending build's store coordinates still owes that release.</summary>
