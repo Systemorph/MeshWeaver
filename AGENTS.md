@@ -141,7 +141,7 @@ Full reference: <!--slot:reference-->[/gui](.claude/skills/gui/SKILL.md) · [GUI
 
 ## 🚨🚨🚨 ABSOLUTE: Never change log levels in code for debug reasons
 
-**Editing `LogInformation` ↔ `LogDebug` ↔ `LogTrace` (or `appsettings.json` under `src/`) to dial verbosity for a debugging session is FORBIDDEN** — log levels reflect the production cost model, and `Information` lines ship to Loki. To turn the volume up, edit the appsettings.json in the test's `bin/Debug/net10.0/` (`reloadOnChange: true` flips it mid-run). The src-tree `appsettings.json` and every `Log*` call in `src/` is committed contract; a genuinely mis-levelled call gets a real commit explaining the cost/value trade-off.
+**Editing `LogInformation` ↔ `LogDebug` ↔ `LogTrace` (or `appsettings.json` under `src/`) to dial verbosity for a debugging session is FORBIDDEN** — log levels reflect the production cost model, and `Information` lines ship to Loki. To turn the volume up, edit the appsettings.json in the test's `bin/Debug/net11.0/` (`reloadOnChange: true` flips it mid-run). The src-tree `appsettings.json` and every `Log*` call in `src/` is committed contract; a genuinely mis-levelled call gets a real commit explaining the cost/value trade-off.
 
 ## 🚨🚨🚨 ABSOLUTE: A gate NEVER tests its own inputs — no skip-trapdoors
 

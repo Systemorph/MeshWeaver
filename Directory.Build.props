@@ -2,7 +2,7 @@
     <!-- Only a project that HAS a README declares one: packing one without it fails NU5019, which is how
          the template feed (.github/workflows/template-feed.yml, MeshWeaver.Plugins#4467) first met it. -->
     <PackageReadmeFile Condition="Exists('$(MSBuildProjectDirectory)/README.md')">README.md</PackageReadmeFile>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -119,7 +119,7 @@
          publication). The unverified edge channel spells its own tag in edge-images.yml
          (`<major>.<minor>.0-edge.<run>`). The retired rc line and the `-ci.<run>` notation are READ by
          every consumer and minted by nothing; Doc/Architecture/ReleaseProcess keeps their history. -->
-    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.1.0</PlatformVersion>
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">4.0.0</PlatformVersion>
     <!-- 🚨 THE COMPATIBILITY EPOCH — policy `platform-backwards-compatibility`
          (Doc/Architecture/PolicyNotProse). Compiled NodeType and module bytes are keyed on
          c<major:D3>e<epoch:D3> (MeshWeaver.Compiler.PlatformCompatibility.KeyOf), NOT on a per-build

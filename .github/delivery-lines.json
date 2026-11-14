@@ -19,6 +19,11 @@
     "  branch      — the branch of this repository that IS the line.",
     "  pluginsRef   — the MeshWeaver.Plugins branch the line's image sets are built against (the",
     "                 portal HOST lives there). `vars.MW_PLUGINS_REF` still overrides it per run.",
+    "  BOOTSTRAP (the first 4.0 set): the main line's pluginsRef names MeshWeaver.Plugins' v4 branch",
+    "                 feat/net11-v4, because Plugins main is still the v3 line (net10) until that",
+    "                 branch merges. Flip it back to main in the change that follows that merge;",
+    "                 main3's entry is untouched throughout. Never vars.MW_PLUGINS_REF for this: it",
+    "                 overrides EVERY line, main3 included.",
     "  satelliteRef — the branch of each satellite `satellite-compat` compiles against the line's set.",
     "                 Every satellite `satellite-compat` lists has cut a protected `main3`, so the v3",
     "                 line compiles each satellite's `main3` and the default line its `main` (design §4).",
@@ -42,7 +47,7 @@
   "lines": [
     {
       "branch": "main",
-      "pluginsRef": "main",
+      "pluginsRef": "feat/net11-v4",
       "satelliteRef": "main",
       "label": "main",
       "movesLatest": true
