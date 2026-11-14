@@ -685,9 +685,12 @@ jobs:
     # No `main-sha`: precheck's main is the green-tree PROBE's and may be hours old by the time a held
     # run is released (see precheck's output). Empty, the host resolves the tip once as the suites
     # start — exactly what `build` does on the Actions route (policy suites-test-fresh-merge).
+    # 🧵 The LINE picks the build-host channel (policy major-lines-run-separately): a pull request onto main
+    # runs on the v4 host, onto main3 on latest3 — declared in .github/delivery-lines.json `buildHostChannel`.
     with:
       change-mode: ${{ needs.precheck.outputs.tests-mode }}
       scripts-ref: ${{ github.sha }}
+      line-channels: true
     secrets:
       build-webhook-secret: ${{ secrets.BUILD_WEBHOOK_SECRET }}
 
@@ -709,8 +712,10 @@ jobs:
     with:
       executor: host
       api-url: ${{ needs.admission.outputs.api-url }}
-      # The stage's CHECK name (build/<stage>): build-follow.py refuses a bare `build` as the aggregate check.
-      stage: build/${{ matrix.stage }}
+      # The stage's CHECK name (build/<stage> on latest, build-<channel>/<stage> off it): build-follow.py
+      # refuses a bare `build` as the aggregate check.
+      stage: ${{ needs.admission.outputs.channel == 'latest' && 'build' || format('build-{0}', needs.admission.outputs.channel) }}/${{ matrix.stage }}
+      channel: ${{ needs.admission.outputs.channel || 'latest' }}
       sha: ${{ github.event.pull_request.head.sha || github.sha }}
       scripts-ref: ${{ github.sha }}
 
@@ -745,11 +750,12 @@ jobs:
         API_URL: ${{ needs.admission.outputs.api-url }}
         SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         SHARD: ${{ matrix.shard }}
+        CHANNEL: ${{ needs.admission.outputs.channel || 'latest' }}
       run: |
         set -euo pipefail
         python3 .github/scripts/host-shard-results.py --self-test > /dev/null
         python3 .github/scripts/host-shard-results.py --api-url "$API_URL" --sha "$SHA" --shard "$SHARD" \
-          --channel latest --out "$GITHUB_WORKSPACE/results"
+          --channel "$CHANNEL" --out "$GITHUB_WORKSPACE/results"
     - name: "Upload artifact: shard test results (from the host)"
       uses: actions/upload-artifact@v7
       with:
@@ -791,11 +797,12 @@ jobs:
       env:
         API_URL: ${{ needs.admission.outputs.api-url }}
         SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        CHANNEL: ${{ needs.admission.outputs.channel || 'latest' }}
       run: |
         set -euo pipefail
         python3 .github/scripts/host-build-outputs.py --self-test > /dev/null
         python3 .github/scripts/host-build-outputs.py fetch --api-url "$API_URL" --sha "$SHA" \
-          --channel latest --out "$RUNNER_TEMP/host-build"
+          --channel "$CHANNEL" --out "$RUNNER_TEMP/host-build"
     # 🔀 The consumers merge the head onto this main-sha (policy suites-test-fresh-merge); a fresh merge
     # is a pure function of (main, head), so this one proves theirs is the tree the host compiled.
     - name: Merge the head onto the main the host build compiled

@@ -8776,7 +8776,9 @@ public static class MeshExtensions
                 // 🚨 Take(1) BEFORE Timeout, so the deadline is TOTAL rather than Rx's
                 // inter-emission one — the exact trap #3550 removed from the release wave.
                 .Take(1)
-                .Timeout(InnerCreateVerdictBound)
+                // The bound runs on the mesh's CreateVerdictClock — the real clock unless a test
+                // registered a virtual one to drive this very refusal without sitting it out.
+                .Timeout(InnerCreateVerdictBound, CreateVerdictClock.For(hub.ServiceProvider))
                 .Subscribe(
                     d =>
                     {
