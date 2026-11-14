@@ -110,6 +110,7 @@ public sealed class MessageHub : IMessageHub
         => requestFates.Find(requestId)?.Add(stage, Address);
 
     private readonly ILogger logger;
+    private readonly Action<TimeoutTerminal> reportTimeoutTerminal;
     /// <summary>The immutable configuration this hub was built from.</summary>
     public MessageHubConfiguration Configuration { get; }
 
@@ -611,6 +612,9 @@ public sealed class MessageHub : IMessageHub
         hostedHubs.OwnerDisposalCause = () => DisposalOriginForChildren;
         ServiceProvider = serviceProvider;
         Configuration = configuration;
+        // Resolved ONCE while the container is alive: ApplyTimeout fires on a timer thread, possibly
+        // after this hub's container is gone (TimeoutTerminal.cs).
+        reportTimeoutTerminal = serviceProvider.TimeoutTerminalReporter();
         // #7324: the hub's ONE in-flight marker, created with it so every reader finds the same
         // instance (BeginAsyncOperation marks it, a module swap's recycle wave defers on it).
         Set(new HubStepsInFlight());
@@ -1819,8 +1823,12 @@ public sealed class MessageHub : IMessageHub
             silence,
             _ => perElement ? silence : Observable.Never<Unit>(),
             System.Reactive.Linq.Observable.Defer<IMessageDelivery>(() =>
-                System.Reactive.Linq.Observable.Throw<IMessageDelivery>(
-                    new TimeoutException(BuildTimeoutMessage(requestType, target, messageId)))));
+            {
+                var message = BuildTimeoutMessage(requestType, target, messageId);
+                reportTimeoutTerminal(new TimeoutTerminal(
+                    TimeoutTerminalKinds.RequestTimeout, Address.ToString(), message));
+                return System.Reactive.Linq.Observable.Throw<IMessageDelivery>(new TimeoutException(message));
+            }));
     }
 
     /// <summary>
