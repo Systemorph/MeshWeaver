@@ -362,6 +362,63 @@ public class BundleReaderTest
             $"refusing a lying entry allocated {allocated:N0} bytes — the declared length was trusted");
     }
 
+    /// <summary>
+    /// 🚨 .NET 11 validates an entry's CRC32 while it is read
+    /// (<see href="https://learn.microsoft.com/en-us/dotnet/core/compatibility/core-libraries/11/ziparchive-entry-crc32-validation">breaking
+    /// change</see>). An entry whose bytes no longer match the checksum the archive records was read
+    /// silently on .NET 10. It must now be refused as <see cref="InvalidDataException"/>, the one
+    /// type every bundle reader's caller already treats as "this bundle is unreadable":
+    /// <c>ServedModuleBytes.FromSealed</c> catches it and keeps looking, and the registry route runs
+    /// the read inside <c>IIoPool.InvokeBlocking</c>, so it arrives on the observable's error arm as a
+    /// reported landing outcome. Negative control: the same bundle with its checksum intact reads
+    /// back byte for byte.
+    /// </summary>
+    [Fact]
+    public void AnEntryWhoseChecksumDoesNotMatch_IsRefusedAsInvalidData_NeverReadSilently()
+    {
+        var entry = NuGetPackageWriter.ModuleEntryPathFor("MeshWeaver.Rotten.dll");
+        byte[] Bundle() => WriteModuleBundle(
+            new { assemblyName = "MeshWeaver.Rotten", assemblies = new[] { "MeshWeaver.Rotten.dll" } },
+            ("MeshWeaver.Rotten.dll", "THE MODULE BYTES"u8.ToArray()));
+
+        using (var intact = new MemoryStream(Bundle(), writable: false))
+            Assert.Equal("THE MODULE BYTES",
+                Encoding.UTF8.GetString(Assert.Single(BundleReader.ReadModuleFrom(intact).Files).Bytes));
+
+        var rotten = Bundle();
+        PatchCrc(rotten, entry);
+        using var stream = new MemoryStream(rotten, writable: false);
+        var refusal = Assert.Throws<InvalidDataException>(() => BundleReader.ReadModuleFrom(stream));
+        Assert.Contains("CRC", refusal.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Flips the recorded CRC32 of one entry, in its central-directory record and its local header.</summary>
+    private static void PatchCrc(byte[] zip, string entryName)
+    {
+        var name = Encoding.UTF8.GetBytes(entryName);
+        var patched = 0;
+        for (var i = 0; i + 30 <= zip.Length; i++)
+        {
+            var signature = BitConverter.ToUInt32(zip, i);
+            var (crcAt, nameLengthAt, nameAt) = signature switch
+            {
+                0x02014b50 => (16, 28, 46),
+                0x04034b50 => (14, 26, 30),
+                _ => (-1, -1, -1),
+            };
+            if (crcAt < 0 || i + nameAt > zip.Length)
+                continue;
+            var nameLength = BitConverter.ToUInt16(zip, i + nameLengthAt);
+            if (nameLength == name.Length && i + nameAt + nameLength <= zip.Length
+                && zip.AsSpan(i + nameAt, nameLength).SequenceEqual(name))
+            {
+                zip[i + crcAt] ^= 0xFF;
+                patched++;
+            }
+        }
+        Assert.Equal(2, patched);
+    }
+
     /// <summary>Overwrites the uncompressed-size field of one central-directory record.</summary>
     private static void PatchDeclaredLength(byte[] zip, string entryName, uint length)
     {

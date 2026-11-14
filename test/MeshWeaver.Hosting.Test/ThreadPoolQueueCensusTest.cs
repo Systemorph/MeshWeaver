@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,6 +31,58 @@ public class ThreadPoolQueueCensusTest
         private readonly Action callback = callback;
 
         public void Run() => callback();
+    }
+
+    /// <summary>
+    /// A stream whose reads never complete until the test says so: the BCL's own async methods
+    /// over it suspend at their first await, which is the state a queued or parked continuation
+    /// is in.
+    /// </summary>
+    private sealed class PendingStream(Task<int> gate) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => 0;
+        public override long Position { get => 0; set { } }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => 0;
+        public override long Seek(long offset, SeekOrigin origin) => 0;
+        public override void SetLength(long value) { }
+        public override void Write(byte[] buffer, int offset, int count) { }
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => gate;
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => new(gate);
+    }
+
+    /// <summary>
+    /// 🚨 On .NET 11 the runtime libraries are compiled with Runtime Async, so a BCL async method is
+    /// an <c>AsyncHelpers+RuntimeAsyncTask&lt;T&gt;</c> whose delegate is the runtime's own
+    /// <c>DispatchContinuations</c>, not an <c>AsyncStateMachineBox</c>. Keyed by that delegate,
+    /// every BCL continuation of every producer read as ONE group per result type. The key must be
+    /// the method that resumes. Negative control: without the runtime-async branch in
+    /// <see cref="ThreadPoolQueueCensus.ProducerOf"/> both assertions fail with
+    /// <c>…RuntimeAsyncTask`1[…].DispatchContinuations</c>.
+    /// </summary>
+    [Fact]
+    public void ARuntimeAsyncBclContinuation_IsKeyedByTheMethodThatResumes_NotTheDispatcher()
+    {
+        var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var copy = new PendingStream(gate.Task).CopyToAsync(Stream.Null);
+        var readToEnd = new StreamReader(new PendingStream(gate.Task)).ReadToEndAsync();
+        try
+        {
+            copy.GetType().Name.Should().Be("RuntimeAsyncTask`1",
+                "this pins the premise: the runtime libraries are compiled with runtime-async on .NET 11");
+
+            ThreadPoolQueueCensus.ProducerOf(copy).Should().StartWith("System.IO.Stream.<CopyToAsync>")
+                .And.NotContain("DispatchContinuations");
+            ThreadPoolQueueCensus.ProducerOf(readToEnd).Should().Be("System.IO.StreamReader.ReadBufferAsync",
+                "the innermost method in the chain is the one that resumes first");
+        }
+        finally
+        {
+            gate.SetResult(0);
+        }
     }
 
     [Fact]
@@ -117,6 +170,99 @@ public class ThreadPoolQueueCensusTest
         finally
         {
             Volatile.Write(ref released, 1);
+        }
+    }
+
+    /// <summary>
+    /// A runtime-private read that THROWS costs that ONE item its name, never the census: the item
+    /// is keyed with the exception's type and message and every other item is still counted.
+    /// Negative control: the same items with the runtime's own resolver name the BCL method, so the
+    /// unresolved key is the injected fault, not a resolver that never works.
+    /// </summary>
+    [Fact]
+    public void AThrowingRuntimeRead_UnresolvesThatOneItem_AndTheCensusGoesOn()
+    {
+        var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        object[] queued = [new PendingStream(gate.Task).CopyToAsync(Stream.Null), new Task(Producers.Drain)];
+        try
+        {
+            var faulted = ThreadPoolQueueCensus.Of(queued, ThreadPoolQueueCensus.MaxItems,
+                _ => throw new InvalidOperationException("runtime layout moved"));
+
+            faulted.Failure.Should().BeNull();
+            faulted.Read.Should().Be(2);
+            faulted.Groups.Select(group => group.Producer).OrderBy(key => key, StringComparer.Ordinal).Should().Equal(
+                $"{typeof(Producers)}.{nameof(Producers.Drain)}",
+                "runtime-async continuation (method unresolved: InvalidOperationException: runtime layout moved)");
+
+            var real = ThreadPoolQueueCensus.Of(queued, ThreadPoolQueueCensus.MaxItems, linkResolver: null);
+            real.Groups.Select(group => group.Producer)
+                .Count(key => key.StartsWith("System.IO.Stream.<CopyToAsync>", StringComparison.Ordinal)).Should().Be(1);
+        }
+        finally
+        {
+            gate.SetResult(0);
+        }
+    }
+
+    /// <summary>A pool item that parks its worker until the test releases it.</summary>
+    private sealed class Parker
+    {
+        private int released;
+
+        public void Park(object? state) => SpinWait.SpinUntil(() => Volatile.Read(ref released) == 1, TimeSpan.FromSeconds(30));
+
+        public void Release() => Volatile.Write(ref released, 1);
+    }
+
+    /// <summary>
+    /// The same reading on the REAL ThreadPool for runtime-async continuations: every worker is
+    /// parked, 200 BCL <c>Stream.CopyToAsync</c> calls suspend on one gate, and opening the gate
+    /// queues all 200 continuations behind the parked items. The census must count them under the
+    /// method that resumes. Negative control: before the gate opens none is counted there, and
+    /// without the runtime-async branch they are counted under <c>DispatchContinuations</c>.
+    ///
+    /// <para><b>Why a drain cannot shrink the exact 200.</b> More parkers are queued than the pool
+    /// has threads, a dequeued parker holds its thread until release, and the global queue is FIFO.
+    /// So while any parker is still queued no worker can reach a continuation: one queued globally
+    /// is behind the parkers, and one in the test thread's local queue is stolen only from an empty
+    /// global queue. The test ASSERTS that precondition after the census
+    /// (<c>ThreadPool.ThreadCount &lt; parkers</c>, because dequeued parkers ≤ live threads), so a pool
+    /// that injected past the surplus fails by saying so, never by a short count.</para>
+    /// </summary>
+    [Fact]
+    public void OnTheRealThreadPool_QueuedRuntimeAsyncContinuations_AreNamedByTheirMethod()
+    {
+        const string copyToAsync = "System.IO.Stream.<CopyToAsync>";
+        var parker = new Parker();
+        var parkers = ThreadPool.ThreadCount + 64;
+        var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            for (var i = 0; i < parkers; i++)
+                ThreadPool.UnsafeQueueUserWorkItem(parker.Park, null);
+            for (var i = 0; i < 200; i++)
+                _ = new PendingStream(gate.Task).CopyToAsync(Stream.Null);
+
+            var before = ThreadPoolQueueCensus.Take();
+            before.Failure.Should().BeNull();
+            before.Groups.Where(group => group.Producer.StartsWith(copyToAsync, StringComparison.Ordinal))
+                .Sum(group => group.Count).Should().Be(0, "no continuation has been queued yet");
+
+            gate.SetResult(0);
+            var after = ThreadPoolQueueCensus.Take();
+            ThreadPool.ThreadCount.Should().BeLessThan(parkers,
+                "parkers must still be queued after the census, or a worker could have reached a continuation");
+            after.Failure.Should().BeNull();
+            after.Groups.Where(group => group.Producer.StartsWith(copyToAsync, StringComparison.Ordinal))
+                .Sum(group => group.Count).Should().Be(200,
+                    "every continuation sits behind queued parkers, keyed by the method that resumes");
+            after.Groups.Should().NotContain(group => group.Producer.Contains("DispatchContinuations", StringComparison.Ordinal));
+        }
+        finally
+        {
+            gate.TrySetResult(0);
+            parker.Release();
         }
     }
 }
