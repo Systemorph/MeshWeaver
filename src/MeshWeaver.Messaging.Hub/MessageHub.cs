@@ -1403,7 +1403,9 @@ public sealed class MessageHub : IMessageHub
         return ContinueOffBlockIfDeclared(
             RestoreUserContextOnEmission(
                 WrapWithCancelOnDispose(
-                    ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+                    probeOptions.IsSilenceBounded
+                        ? ApplyTimeout(subject, requestType, probeOptions.Target, messageId)
+                        : subject,
                     messageId, subject),
                 capturedCtx),
             r);
@@ -1450,7 +1452,9 @@ public sealed class MessageHub : IMessageHub
         return ContinueOffBlockIfDeclared(
             RestoreUserContextOnEmission(
                 WrapWithCancelOnDispose(
-                    ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+                    probeOptions.IsSilenceBounded
+                        ? ApplyTimeout(subject, requestType, probeOptions.Target, messageId)
+                        : subject,
                     messageId, subject),
                 capturedCtx),
             r);

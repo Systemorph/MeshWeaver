@@ -234,6 +234,29 @@ public static class MessageHubExtensions
     }
 
     /// <summary>
+    /// One tick once <paramref name="hub"/>'s <c>RequestTimeout</c> has elapsed, on the hub's own
+    /// timeout clock (<see cref="MessageHubConfiguration.WithTimeoutClock"/>), then completion. Cold:
+    /// the clock starts on Subscribe; disposing the subscription disarms it.
+    ///
+    /// <para>For a NOTICE that a reply awaited <see cref="PostOptions.WithoutSilenceBound"/> is
+    /// overdue — "no answer yet" — never for a verdict: nothing is given up when it ticks, so it is
+    /// not a timeout terminal (Doc/Architecture/TimeoutIsError).</para>
+    /// </summary>
+    /// <param name="hub">The hub whose budget and clock are used.</param>
+    /// <returns>A one-shot signal.</returns>
+    public static IObservable<System.Reactive.Unit> RequestBudgetElapsed(this IMessageHub hub)
+    {
+        var clock = hub.Configuration.TimeoutClock;
+        var budget = hub.Configuration.RequestTimeout;
+        return Observable.Create<System.Reactive.Unit>(observer =>
+            clock.CreateTimer(_ =>
+            {
+                observer.OnNext(System.Reactive.Unit.Default);
+                observer.OnCompleted();
+            }, null, budget, System.Threading.Timeout.InfiniteTimeSpan));
+    }
+
+    /// <summary>
     /// Appends a routing-configuration lambda to the hub configuration. The lambda
     /// is applied to the hub's <see cref="RouteConfiguration"/> at build time,
     /// letting callers register address routes and handlers.
