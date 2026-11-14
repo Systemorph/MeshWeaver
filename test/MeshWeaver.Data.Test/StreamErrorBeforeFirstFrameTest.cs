@@ -4,6 +4,7 @@ using System.Reactive.Subjects;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Data.Test;
@@ -69,6 +70,12 @@ public class StreamErrorBeforeFirstFrameTest(ITestOutputHelper output) : HubTest
     /// <summary>
     /// NEGATIVE CONTROL: the same subscription with an admitting verdict serves its first snapshot
     /// and does NOT fault — so the fault in the pin is the refusal's, not the harness's.
+    ///
+    /// <para>🚨 "Does not fault" is PROVEN, not waited out: after the first snapshot the owner
+    /// changes the data, and the mirror must SERVE that later revision. A faulted mirror can emit
+    /// nothing more (its error is terminal and replayed to every subscriber), so a mirror that
+    /// delivers a revision the owner produced after the first frame has demonstrably not faulted
+    /// in between — and the error signal is then checked at once, with no window to sit out.</para>
     /// </summary>
     [HubFact]
     public async Task NegativeControl_AnAdmittedRead_ServesItsSnapshotAndDoesNotFault()
@@ -78,6 +85,20 @@ public class StreamErrorBeforeFirstFrameTest(ITestOutputHelper output) : HubTest
         using var connection = ended.Connect();
 
         await mirror.Should().Within(TestTimeouts.Convergence).Emit("an admitted read serves its first snapshot");
-        await ended.Should().NotEmit(TestTimeouts.Quick, "nothing refused this read");
+
+        var host = GetHost();
+        var access = host.ServiceProvider.GetRequiredService<AccessService>();
+        access.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
+        var collectionName = host.GetWorkspace().DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+        host.Post(new DataChangeRequest().WithUpdates(new MyData("after-first-frame", "later")),
+            o => o.WithAccessContext(access.Context!));
+
+        await mirror
+            .Where(ci => ci.Value?.Collections.GetValueOrDefault(collectionName) is { } coll
+                && coll.Instances.Values.OfType<MyData>().Any(x => x.Id == "after-first-frame"))
+            .Take(1)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("an admitted read keeps serving: the revision after its first snapshot reaches the mirror");
+        await ended.Should().NotEmitBefore(Observable.Return(Unit.Default), "nothing refused this read");
     }
 }

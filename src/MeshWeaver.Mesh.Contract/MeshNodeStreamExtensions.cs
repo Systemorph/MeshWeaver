@@ -3752,7 +3752,12 @@ public static class MeshNodeStreamExtensions
 
             var budget = timeout ?? MeshNodeStreamHandle.DefaultNodeReadBudget;
             var started = Stopwatch.StartNew();
-            var cts = new CancellationTokenSource(budget);
+            // The budget runs on the mesh's TimeProvider when one is registered (the real clock
+            // otherwise — every production mesh). A test whose subject is the budget ELAPSING — what
+            // the verdict says about an unanswered re-probe — registers a virtual one and advances
+            // it, rather than sitting the budget out in real time.
+            var cts = new CancellationTokenSource(budget,
+                hub.ServiceProvider.GetService<TimeProvider>() ?? TimeProvider.System);
             var emitted = 0;
             // Inner hub.Observe subscription tracker. Captured so the returned
             // disposable can tear it down — without this, the outer CTS-timeout
