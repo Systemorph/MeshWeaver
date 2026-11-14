@@ -2024,7 +2024,9 @@ public static class MeshDataSourceExtensions
         return Observable.Defer(() => pending.Enqueue(() =>
         {
             if (pending.TrackCommitted(CommittedOwnNode(store, ownPath), cache.PersistedSnapshot))
-                logger?.LogDebug(
+                // Information, not Debug: this fires only in the teardown race window, and the loss it
+                // closes was invisible precisely because nothing was logged.
+                logger?.LogInformation(
                     "[SaveMeshNode] dispose-flush adopted the store's newer committed state for {Path}: "
                     + "the reduced own-node stream was torn down before it emitted it", ownPath);
             return FlushUnsaved(cache, pending, flushed, persistence, recentlyDeleted, options, logger);
@@ -2053,11 +2055,18 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>The own node as <paramref name="store"/> currently holds it, matched on the full path.</summary>
+    /// <remarks>Read off the store hub's thread (the flush runs on the own-write queue). <c>Current</c> is
+    /// an immutable snapshot swapped by reference, so the read is atomic; the full fence makes the store
+    /// hub's last committed swap visible here by construction (ARM64 included) instead of relying on the
+    /// barriers the shutdown handshake happens to carry.</remarks>
     private static MeshNode? CommittedOwnNode(ISynchronizationStream<EntityStore>? store, string path)
-        => store?.Current?.Value?.Collections.GetValueOrDefault(nameof(MeshNode)) is { } collection
+    {
+        Interlocked.MemoryBarrier();
+        return store?.Current?.Value?.Collections.GetValueOrDefault(nameof(MeshNode)) is { } collection
             ? collection.Instances.Values.OfType<MeshNode>()
                 .FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase))
             : null;
+    }
 
     private static IObservable<System.Reactive.Unit> FlushUnsaved(
         OwnNodeCache cache, PendingOwnSave pending, PostCommitFlushRegistry? flushed,
