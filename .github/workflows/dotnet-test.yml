@@ -2711,6 +2711,17 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/release-channels.py check .
 
+    # The portal-ai BASE (Doc/Architecture/PortalAiBaseImage): CD layers every framework-dependent
+    # portal/control image on the base named by the content of deploy/base-images/portal-ai, and the
+    # Dockerfile's runtime must equal the platform's TargetFramework. The first v4 CD run layered a
+    # net11.0 host on a stale aspnet:10.0 `:latest` and the control image exited before Main.
+    - name: "The portal-ai base is named by its content and held to the target framework (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/portal-ai-base.py --self-test
+    - name: "The base runtime equals the platform's TargetFramework, and no workflow layers on a literal base tag"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/portal-ai-base.py check
+
     # The DELIVERY LINES (policy `major-lines-run-separately`): main-cd.yml derives its line once and
     # refuses an undeclared one (`derive`, driven here against fabricated events), and never spells a
     # `main` that means "the line" (`check-workflow`, which also holds main-cd's and this file's
