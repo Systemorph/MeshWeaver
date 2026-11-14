@@ -419,8 +419,8 @@ def self_test() -> int:
     expect("schedule → line main", s["line"] == "main" and s["default_line"] == "true", str(s))
     expect("schedule on a non-default ref → REFUSED", bool(refused(derive, doc, "schedule", "main3", "main")))
     p3 = derive(doc, "push", "main3", "main")
-    expect("push main3 → line main3, Plugins main3, label main3, does NOT move latest",
-           p3 == {"line": "main3", "label": "main3", "plugins_ref": "main3", "satellite_ref": "main",
+    expect("push main3 → line main3, Plugins main3, satellites main3, label main3, does NOT move latest",
+           p3 == {"line": "main3", "label": "main3", "plugins_ref": "main3", "satellite_ref": "main3",
                   "moves_latest": "false", "default_line": "false"}, str(p3))
     expect("push main → REFUSED (the default line delivers after the tests, on workflow_run)",
            "workflow_run" in refused(derive, doc, "push", "main", "main"))
