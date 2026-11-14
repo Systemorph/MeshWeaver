@@ -58,7 +58,7 @@ public class GetMeshNodeReProbeKeepsCallerIdentityTest : HubTestBase
     private readonly ManualTimeProvider clock = new();
 
     public GetMeshNodeReProbeKeepsCallerIdentityTest(ITestOutputHelper output) : base(output)
-        => Services.AddSingleton<TimeProvider>(clock);
+        => Services.AddSingleton(new ReadBudgetClock(clock));
 
     [HubFact]
     public async Task ReProbeAfterShuttingDownNack_CarriesTheCallersIdentity()

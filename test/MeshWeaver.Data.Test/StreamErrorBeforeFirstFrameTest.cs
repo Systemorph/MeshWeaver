@@ -87,11 +87,13 @@ public class StreamErrorBeforeFirstFrameTest(ITestOutputHelper output) : HubTest
         await mirror.Should().Within(TestTimeouts.Convergence).Emit("an admitted read serves its first snapshot");
 
         var host = GetHost();
-        var access = host.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
-        var collectionName = host.GetWorkspace().DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+        var writer = new AccessContext { ObjectId = "alice", Name = "Alice" };
+        host.ServiceProvider.GetRequiredService<AccessService>().SetContext(writer);
+        if (host.GetWorkspace().DataContext.GetTypeSource(typeof(MyData)) is not { } typeSource)
+            throw new InvalidOperationException("PRECONDITION: the host registers MyData as a data source");
+        var collectionName = typeSource.CollectionName;
         host.Post(new DataChangeRequest().WithUpdates(new MyData("after-first-frame", "later")),
-            o => o.WithAccessContext(access.Context!));
+            o => o.WithAccessContext(writer));
 
         await mirror
             .Where(ci => ci.Value?.Collections.GetValueOrDefault(collectionName) is { } coll

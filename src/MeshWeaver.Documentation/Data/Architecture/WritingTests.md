@@ -414,7 +414,7 @@ A timeout is an error, never a pace: a test that passes only by sitting out a re
 | Deadline | Seam |
 |---|---|
 | A hub's request timeout, deferral budget, startup timeout and BuildupAction bound | `MessageHubConfiguration.WithTimeoutClock(TimeProvider)` (production: `TimeProvider.System`) |
-| `GetMeshNodeOutcome`'s read budget | a `TimeProvider` registered in the mesh's services (absent ⇒ the real clock) |
+| `GetMeshNodeOutcome`'s read budget | a `ReadBudgetClock` registered in the mesh's services — a dedicated seam, never an ambient `TimeProvider` (absent ⇒ the real clock) |
 | A standalone Rx operator | its `IScheduler` parameter + `TestScheduler` (`ReadBudget`, `ReaskOnceSettled`) |
 
 `MeshWeaver.Fixture.ManualTimeProvider` is the clock. **Arm first, then advance**: a timer is relative to the clock's time when it is created, so wait for `clock.WhenArmed(dueIn)` — and for every precondition the deadline must FOLLOW (the request received, the gate opened, the re-probe delivered) — and only then `clock.Advance(dueIn)`. Bound the wait for the outcome, and assert it carries the framework's own message, so a deadline that did not fire fails by name instead of wedging. Putting every bound of a nested ladder on the same clock keeps their ORDER under test: advancing by the inner bound fires the outer one too whenever the outer is not strictly larger.
