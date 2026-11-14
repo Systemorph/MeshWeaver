@@ -72,26 +72,43 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: "The decision can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
+      # WHERE control's record is declared is read from the declaration ONCE, and both the token's
+      # scope and the read below use it — never a repository name written a second time here.
+      - name: Where is control's record declared?
+        id: record
+        run: |
+          set -euo pipefail
+          repo=$(jq -er '.record.repository' .github/control-instance.json)
+          path=$(jq -er '.record.path' .github/control-instance.json)
+          owner=${repo%%/*}
+          name=${repo#*/}
+          [ "$owner" = "$GITHUB_REPOSITORY_OWNER" ] && [ -n "$name" ] && [ "$name" != "$repo" ] \
+            || { echo "::error::.github/control-instance.json record.repository '$repo' is not '<$GITHUB_REPOSITORY_OWNER>/<repository>' — the fleet-reader App is installed on $GITHUB_REPOSITORY_OWNER only"; exit 1; }
+          { echo "owner=$owner"; echo "name=$name"; echo "repo=$repo"; echo "path=$path"; } >> "$GITHUB_OUTPUT"
       # Control's record lives in the estate's private deployments repository; the READ-ONLY
       # fleet-reader App (Contents: read) reads it — minted per run, never a stored PAT
-      # (Doc/Architecture/GitHubAppCredentials). A missing grant fails HERE, naming it.
+      # (Doc/Architecture/GitHubAppCredentials), scoped to exactly the declared repository. A
+      # missing grant fails HERE, naming it.
       - name: Mint a read token for control's record
         id: record-token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.FLEET_READER_APP_ID }}
           private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: Memex
+          owner: ${{ steps.record.outputs.owner }}
+          repositories: ${{ steps.record.outputs.name }}
           permission-contents: read
       - name: Read control's record (its updatePattern names the line control follows)
         env:
           GH_TOKEN: ${{ steps.record-token.outputs.token }}
+          REPO: ${{ steps.record.outputs.repo }}
+          RECORD_PATH: ${{ steps.record.outputs.path }}
         run: |
           set -euo pipefail
-          repo=$(jq -er '.record.repository' .github/control-instance.json)
-          path=$(jq -er '.record.path' .github/control-instance.json)
-          gh api "repos/$repo/contents/$path" -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/control-record.json"
+          repo=$REPO
+          path=$RECORD_PATH
+          gh api "repos/$repo/contents/$path" -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/control-record.json" \
+            || { echo "::error::the fleet-reader token (scoped to $repo, contents: read) could not read $repo:$path — check the App's installation on $repo and the declared path"; exit 1; }
           jq -e '.content.updatePattern | strings' "$RUNNER_TEMP/control-record.json" \
             || { echo "::error::$repo:$path carries no content.updatePattern — which line control follows is declared there"; exit 1; }
       - name: Is control on the newest platform build of ITS line?
