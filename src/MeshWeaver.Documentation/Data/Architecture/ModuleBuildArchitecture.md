@@ -523,29 +523,31 @@ emit, `obj/<cfg>/<tfm>/ref/<Asm>.dll`), not of its method bodies.
 
 | Change to dependency D | Dependents |
 |---|---|
-| internal only — D's reference assembly byte-identical at base and head | **skipped**, reason `public API unchanged (ref asm <hash>)`; D and its own `<D>.Test` compile and test |
-| public API — the reference assembly differs (this includes the optional-constructor-parameter binary break, because the signature is public surface) | rebuilt and tested as before |
-| any non-C# file under D (csproj, resource, content, asset) | rebuilt — the reference assembly does not describe it |
+| internal only: D's public surface is unchanged at base and head | **skipped**, reason `public API unchanged (surface <hash>)`; D and its own `<D>.Test` compile and test |
+| public API: the surface differs (this includes the optional-constructor-parameter binary break, because the signature and its defaults are surface) | rebuilt and tested as before |
+| any non-C# file under D (csproj, resource, content, asset, `.razor`), or an added or deleted `.cs` | rebuilt — the surface does not describe it |
 
-What makes a skip sound, every rule erring toward rebuild: only edits of evaluated `Compile` items are
-eligible (a `.cs` a project embeds as a resource is payload, hashed into the non-C# identity); a
+What makes a skip sound, every rule erring toward rebuild: only edits of existing `.cs` files that no
+`Compile Remove` or resource/content include covers are eligible (`payload_item`), in a project that
+switches on no body-driven (interceptor) generator; a
 `.Test` unit owns its production sibling; a unit
 whose closure holds an `InternalsVisibleTo` friend of D keys on D's FULL assembly (friends are the
 union of the compiled attribute blobs and the declared items, over-approximated); a unit that
 READS a changed file as text (a declared input, a linked include, a census) is never skipped;
-determinism is measured on every probe (head is rebuilt after the base build, and a differing
-reference assembly withdraws every skip); a base that does not build against the head's
-dependencies is an API change; and the caller re-selects on the diff WITHOUT the verdict's files,
+a file that does not parse, or that the comparer cannot classify, is an API change; and the caller
+re-selects on the diff WITHOUT the verdict's files,
 so a unit another changed path reaches stays. Full runs (schedule, platform release, trunk
 publication) never consult a verdict.
 
 **The interface (for the GitHub Actions callers and the build hosts alike):**
 
-* `abi-key.py probe --root R --range A...B [--msbuild-arg …] --out verdict.json` — builds each
-  eligible changed project at head, swaps only that project's changed files to the base, rebuilds
-  it, restores and rebuilds head; the verdict lists per project `eligible`, `unchanged`, `refasm`,
-  `baseRefasm`, `friends`, `files`, `reason`. Two rules decide whether it builds at all; both answer
-  with the same envelope, with `unavailable` set and no projects, so `decide` keeps every unit:
+* `abi-key.py probe --root R --range A...B [--deadline EPOCH] [--cache-dir DIR] --out verdict.json` —
+  compares each eligible changed project's **syntax surface** at base and head (see *The probe reads
+  Roslyn's syntax tree* below). It builds nothing and never touches the working tree. The verdict lists
+  per project `eligible`, `unchanged`, `refasm` (now the head surface hash), `baseRefasm`, `friends`,
+  `files` and `reason`, plus `method: "syntax"` and `cache: {hits, misses}`. Two rules decide whether
+  it runs at all; both answer with the same envelope, with `unavailable` set and no projects, so
+  `decide` keeps every unit:
   * **Short-circuit.** If the range changes an input every project's build imports, the probe
     answers `{"unavailable": "<input> changed — every reference assembly moves; nothing narrowed"}`
     before building anything. Those inputs are every `module-build-key.py` `GLOBAL_INPUTS` basename
@@ -554,10 +556,9 @@ publication) never consult a verdict.
     `<TargetFramework(s)>` line. The caller re-selects every unit on such a path anyway, so the
     builds could narrow nothing. Measured on MeshWeaver.Plugins#5421 (a net11 retarget): the probe
     built anyway, and its job was killed by its own 25-minute limit.
-  * **Deadline.** `--deadline <epoch>` (and `--build-seconds`, the per-build prior, default 70 s,
-    measured; raised to the slowest build seen in the run). When the eligible projects × 3 builds ×
-    that cost exceed the time left, the probe answers `unavailable` without building. A project it
-    reaches with too little time left is reported unprobed, and so kept. The satellite caller derives
+  * **Deadline.** `--deadline <epoch>`. When the comparer's build (90 s, which is 0 on a cache hit)
+    plus one parse per file version would not fit in the time left, the probe answers `unavailable`
+    without starting. (While the probe still built, it took `--build-seconds` too.) The satellite caller derives
     the deadline from its job's start and `timeout-minutes` (MeshWeaver.Plugins
     `scripts/abi-probe-plan.py`, `Hosting/CiProfile` §9), so the probe always answers before the job's
     limit.
@@ -576,6 +577,92 @@ publication) never consult a verdict.
 reference assembly carries it (measured). The probe builds with
 `-p:IncludeSourceRevisionInInformationalVersion=false`; a host comparing keys across commits must
 do the same or pin `InformationalVersion`.
+
+#### The probe reads Roslyn's syntax tree — no builds (2026-11-14)
+
+> *"analyze the Roslyn tree rather than lots of builds"* — owner, 2026-11-14
+
+Until this change the probe built each changed project three times (at head, at base, and at head again
+to check determinism) and compared reference assemblies. A two-project change took 400–460 s of a
+25-minute job. On MeshWeaver.Plugins#5421 the job ran out of time and was killed.
+
+A reference assembly is a function of a project's DECLARATIONS, never its method bodies. So the probe
+now compares those declarations directly. The comparer is `.github/scripts/abi-syntax/`, a small
+console on `Microsoft.CodeAnalysis.CSharp`. It sits beside the script because a satellite fetches
+`.github/scripts` and must receive it too. Stopper `Directory.*` files keep the solution's props away
+from it, and it builds on whatever SDK the lane installed. It parses each changed file, at base and at
+head, into a **skeleton**:
+
+* **kept:** every type and member, private and internal ones included, with their modifiers,
+  attributes, type parameters, constraints, base lists, parameter defaults, enum values and `const`
+  values; preprocessor directives and disabled text, verbatim (so no preprocessor symbol is needed,
+  and an `#if` edit is always a change); `using` aliases, `using static`, `global using`, and any
+  `using` inside a namespace block;
+* **removed:** member bodies (block and expression bodies of methods, constructors, destructors,
+  operators, conversions and accessors), constructor initializers, non-`const` field and property
+  initializers, comments and whitespace, and plain `using N;` directives at the top of the file. A
+  using at that level cannot rebind an existing name: lookup tries every enclosing namespace's
+  members first, and two usings of one scope that offer the same name are an ambiguity error, not a
+  silent rebinding;
+* **marked:** a removed body leaves `{}`, so a body and no body stay distinct (abstract, extern,
+  partial, an auto-accessor `get;`). It leaves `__iterator__` when the body yields, and `__field__`
+  when an accessor uses `field` (a backing field is struct layout);
+* **fail safe** (no surface, so the file counts as changed): a parse error, or top-level statements;
+* **compared token for token** (any edit counts as a change): a file that feeds a source generator,
+  meaning a partial member declared without a body, or a known generator attribute such as
+  `[GeneratedRegex]`, `[LoggerMessage]`, `[JsonSerializable]` or `[GenerateSerializer]`;
+* **struct layout:** a non-record struct with a primary constructor keeps its member bodies, because a
+  captured parameter becomes a private field there. A record struct's positional parameters are
+  properties, so its bodies are stripped like any other.
+
+If every changed file of D has the same skeleton at base and head, D is unchanged. `abi-key.py
+--self-test-syntax` builds the real comparer and runs the cases (body edits of every kind, signatures,
+modifiers, private-to-public, attributes, defaults, const, enum, `#if`, disabled text, layout,
+iterator, partial types, generator input, usings at both scopes, parse errors and top-level statements).
+It also runs the cache, and a negative control: with stripping off, a body edit must read as a change.
+Core runs it in `dotnet-test.yml` (`CI's own shell (executions: MSBuild reading)`).
+
+**The cache** (owner: *"and the Roslyn cache can be saved"*). A surface is keyed by sha256 of the git
+**blob** sha, the comparer's own content hash, and the parse options, and it is stored as
+`<cache-dir>/surfaces/<k2>/<key>.json`. An entry counts as a hit only when it names its full key. A
+miss parses the file and writes the result back. An unreadable, unwritable or unreachable cache only
+means parsing, never a different verdict. The comparer's build is cached the same way, by content hash
+plus SDK plus runner, under `<cache-dir>/tool/`. In CI the satellite passes its `file:` artifact store
+(the share every runner pod mounts), so nothing is parsed twice across runs.
+
+**Replayed against the old probe (measured 2026-11-15).** The replay covered 179 merged
+MeshWeaver.Plugins pull requests. The old build-based probe had printed its verdict in 176 of their
+`Classify the change set` logs, and judged at least one project in 44 of them: 95 project verdicts in
+all. Each was re-run through the syntax probe over the squash merge commit and its parent:
+
+| old verdict | → syntax verdict | projects |
+|---|---|---|
+| unchanged | unchanged | **7 of 7** |
+| changed | changed | 43 |
+| changed | not eligible under the new rules (added/deleted file, `.razor`, a covering include) | 27 |
+| changed | `unavailable` (short-circuit: `scripts/platform-floor.json` in the merged range) | 3 |
+| changed | **unchanged** | 2 (#5353 `Blazor.Views.Test`, #5355 `Memex.Portal.Shared.Test`) |
+| not eligible (base did not build, non-code file) | changed / not eligible / unchanged | 1 / 11 / 1 (#5384) |
+
+Every one of the three disagreements toward "unchanged" is a body-only edit: assertions, and lambdas
+removed or added inside test methods. This also measured something the old probe did not account for.
+**Roslyn's reference assembly carries the compiler's synthesized private nested types** (`<>c`, lambda
+display classes, async state machines), and their fields follow the method bodies. Reproduced on a
+one-class library (SDK 11.0.100): an `async` method whose body went from two lambdas to one moved the
+reference assembly's sha256 (`6fa667bd…` → `2d475ff3…`). Its metadata differed only in the
+`NestedPrivate` types `<>c` (`<>9__0_1` → `<>9__0_0`) and `<>c__DisplayClass0_0`. No dependent can name
+those types, so their bytes are not API. The old probe's `public API changed` on #5353 and #5355 was
+such a false positive. That is inferred from the repro and the diffs: the old run's assemblies were not
+retained. #5384's old probe never compared at all, because its base did not build against the head's
+dependencies. Core: 30 merged pull requests were replayed; no old verdict exists there (core does not
+run the probe on itself). Two plain top-level `using` additions (#5309) were the only `changed` the
+syntax probe gave where the old probe said unchanged; the `using` rule above removed them.
+
+**Cost and cache.** One probe takes at most 1.4 s locally over these ranges, comparer build included
+on a warm NuGet cache. The old probe took 26–461 s over the 13 runs whose timing its logs carry. In a
+cold chronological pass the cache answered 14 of 154 Plugins surfaces and 1 of 78 core ones (only a
+file touched again by the next pull request can hit). A second pass, which is what a re-run or a
+merge-only push of the same head does, answered 154 of 154 and 78 of 78.
 
 **Realms too, not only suites (2026-11-08).** *"we are still building way too many packages"*: a
 satellite's realm selection (compile-check units, Tests-area gate realms, bundle pack set) comes from its
