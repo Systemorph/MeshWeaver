@@ -143,8 +143,12 @@ on it yet. The per-major channels (`latest3`, `latest4`) are a separate change:
 - `control-first` (group `main-cd-control-first`): one control instance. It tags
   `memex-control:<version>` and its line pointers, and announces `self-update-available` for the
   `control` record. Both lines give control their builds.
-- The `ci-failure` / `cd-unhealed` heal ledger and the `fleet-unarmed` alert: one issue each, for
-  both lines.
+- The `ci-failure` / `cd-unhealed` heal ledger: one issue for both lines.
+
+The `fleet-unarmed` alert is keyed per major: one issue per major, opened and closed only by that
+line's own `arm` run (MeshWeaver#8208, [One Promotion Gate](../OnePromotionGate)). The
+`control-always-latest` alarm reads the line control's record follows, never `main` by default
+(MeshWeaver#8197, [Platform And Module Deploy](../PlatformAndModuleDeploy)).
 - The build-host hand-over lives in MeshWeaver.Deploy. It reads the sealed sets from the registry,
   and core hands it the right set by keeping arming within the major.
 
