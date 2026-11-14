@@ -158,6 +158,46 @@ public static class NodeRepoPackageGraph
             StringComparer.Ordinal);
     }
 
+    /// <summary>
+    /// Whether <paramref name="package"/> declares at least one NodeType of its own: a <c>.json</c>
+    /// node under its folder whose content is a <see cref="NodeTypeDefinition"/> (the same <c>$type</c> test
+    /// <see cref="SourceDependencyMap"/> applies to read the compile-input edges).
+    ///
+    /// <para>🚨 A package that declares none has nothing a bake can compile, so no bake ever writes a
+    /// bundle for it (<c>TreeBake.WriteBundles</c> skips a package with no compiled entry). A caller
+    /// deciding whether a sealed bundle "stands" for a package (the combo gate's reuse,
+    /// MeshWeaver#4413) must therefore ask this first: "no seal carries a bundle" is the normal state
+    /// of such a package, not evidence that it changed.</para>
+    /// </summary>
+    /// <param name="package">The package.</param>
+    /// <param name="snapshot">The tree it was discovered in.</param>
+    public static bool DefinesNodeTypes(PackageManifest package, RepoSnapshot snapshot)
+    {
+        var prefix = (package.SourceFolder ?? package.Id) + "/";
+        return snapshot.Files.Any(file =>
+            file.Path.StartsWith(prefix, StringComparison.Ordinal)
+            && file.Path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+            && IsNodeTypeDefinition(file.Content));
+    }
+
+    private static bool IsNodeTypeDefinition(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("content", out var content)
+                && content.ValueKind == JsonValueKind.Object
+                && content.TryGetProperty("$type", out var type)
+                && type.ValueKind == JsonValueKind.String
+                && type.GetString() == nameof(NodeTypeDefinition);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static ImmutableHashSet<string> CollectDependencies(
         PackageManifest package, RepoSnapshot snapshot, ImmutableHashSet<string> packageIds,
         bool sourcesOnly)
