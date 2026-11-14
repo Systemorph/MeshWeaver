@@ -3747,6 +3747,10 @@ def write_verdict_check_run(gh, head: str, name: str, reported: Reported, summar
     `writer` (default `gh`) writes, as `app` — only the App that created a check-run may update it. With
     `create=False` it only converges check-runs already on the head (the legacy GITHUB_TOKEN verdicts, see
     run_verdict) and never adds one."""
+    if app != ACTIONS_APP_SLUG and (writer is None or writer is gh):
+        # #8173 review: an App verdict written through the job-token adapter would land in the oldest Actions suite —
+        # the superseded-suite defect itself — while its provenance filter looked for the App. Refused, never paired.
+        raise ValueError(f"a `{app}` verdict needs that App's own writer (verdict_app_adapter), never the reading adapter")
     writer = gh if writer is None else writer
     # 🚨 Read the head's verdicts AGAIN, immediately before the write, whatever the caller passed (#7653 review): the
     # listing taken before the evaluation can be seconds old, and a newer evaluation may have written meanwhile — an
@@ -3761,6 +3765,8 @@ def write_verdict_check_run(gh, head: str, name: str, reported: Reported, summar
     details = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{gh.repo}/actions/runs/{run_id}" if run_id else ""
     body = verdict_body(name, head, reported, summary, read_at, now, details)
     patch = {k: v for k, v in body.items() if k != "head_sha"}
+    if action == "create" and not create:
+        return f"no {app} verdict check-run on this head to converge"
     if action == "create":
         made = writer.write("POST", "check-runs", body)
         return f"created verdict check-run {(made or {}).get('id')} ({reported.state}): {why}"
@@ -3869,6 +3875,8 @@ def run_verdict(repo: str, number: int, name: str, gh=None, writer=None, app: st
     required name must never disagree."""
     gh = gh if gh is not None else Gh(repo)
     legacy = app != ACTIONS_APP_SLUG
+    if legacy and (writer is None or writer is gh):
+        raise ValueError(f"run_verdict: a `{app}` verdict needs that App's own writer (verdict_app_adapter), never the job token")
 
     def write_all(reported_, summary_, read_at_, now_, existing_=None) -> str:
         done_ = write_verdict_check_run(gh, head, name, reported_, summary_, read_at_, now_, existing_, writer=writer, app=app)
@@ -6278,6 +6286,17 @@ def pending_self_test(HEAD: str) -> int:
     finally:
         if saved_tok is not None:
             os.environ[VERDICT_APP_TOKEN_ENV] = saved_tok
+    # #8173 review: the App/writer pairing is STRUCTURAL — an App verdict through the reading (job-token) adapter is refused.
+    for label, w_ in [("no writer", None), ("the reading adapter itself", "same")]:
+        g = _VerdictGh([ONE, ANSWER])
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                run_verdict("o/r", 7, "Automatic review answered", gh=g, writer=(g if w_ == "same" else None), app=VERDICT_APP_SLUG)
+            paired = True
+        except ValueError:
+            paired = False
+        check(f"NEG app writer: an App verdict with {label} as writer is REFUSED (never lands in an Actions suite)",
+              not paired and g.writes == [], f"writes={g.writes}")
     g = _VerdictGh([ONE, ANSWER], pulls=[{"number": 7, "draft": False, "head": {"sha": HEAD, "repo": {"full_name": "o/r"}}}],
                    runs=[dict(mine(5, T0, "answered", "completed"), conclusion="success")])
     w = _AppWriter(g)
