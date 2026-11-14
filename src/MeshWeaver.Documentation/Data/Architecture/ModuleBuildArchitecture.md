@@ -531,8 +531,10 @@ What makes a skip sound, every rule erring toward rebuild: only edits of existin
 `Compile Remove` or resource/content include covers are eligible (`payload_item`), in a project that
 switches on no body-driven (interceptor) generator; a
 `.Test` unit owns its production sibling; a unit
-whose closure holds an `InternalsVisibleTo` friend of D keys on D's FULL assembly (friends are the
-union of the compiled attribute blobs and the declared items, over-approximated); a unit that
+whose closure holds an `InternalsVisibleTo` friend of D keys on D's FULL assembly (the probe reads
+friends from source alone, the declared items in the project file and every `Directory.Build.*` from its
+own directory up plus `[assembly:]` attributes, with any unreadable name meaning "every dependent keeps";
+the build hosts' manifest adds the compiled attribute blobs; both over-approximate); a unit that
 READS a changed file as text (a declared input, a linked include, a census) is never skipped;
 a file that does not parse, or that the comparer cannot classify, is an API change; and the caller
 re-selects on the diff WITHOUT the verdict's files,
@@ -560,8 +562,10 @@ publication) never consult a verdict.
     plus one parse per file version would not fit in the time left, the probe answers `unavailable`
     without starting. (While the probe still built, it took `--build-seconds` too.) The satellite caller derives
     the deadline from its job's start and `timeout-minutes` (MeshWeaver.Plugins
-    `scripts/abi-probe-plan.py`, `Hosting/CiProfile` §9), so the probe always answers before the job's
-    limit.
+    `scripts/abi-probe-plan.py`, `Hosting/CiProfile` §9) and holds a reserve back from the job's limit.
+    The probe builds no project, so the build probe's head-restore overrun is gone; the only work it
+    starts is the comparer's build and one parse call, and the reserve absorbs either estimate running
+    long.
 * `abi-key.py decide --root R --verdict V --units U.json --reselected ids.json` — per unit
   `skip` (with the reason) or `keep` (with why). Without `--reselected` nothing skips: only the
   caller's re-selection can prove that nothing ELSE in the diff reaches a unit.

@@ -38,7 +38,9 @@ namespace MeshWeaver.Graph.Test;
 /// <para>🚨 <b>No hand-woven gate.</b> The release is an <c>IDisposable</c> disposed by the test,
 /// and every wait is either an assertion helper's bounded await or the registry's own cold
 /// observable. Nothing sleeps, nothing polls, and no <see cref="TimeSpan"/> literal appears — the
-/// windows are <c>TestTimeouts.*</c>.</para>
+/// windows are <c>TestTimeouts.*</c>. And no assertion sits out a window to prove a recycle did NOT
+/// happen: the registry's own <c>WhenDeferredOn</c> says the recycle is parked on the lease, which
+/// is the positive fact that makes the absence certain.</para>
 ///
 /// <para>Drives <see cref="NodeTypeRebindWatcher.Arm"/> against a REAL, hosted
 /// <see cref="IMessageHub"/> (<see cref="HubTestBase"/>) — never a mocked one — exactly as
@@ -185,6 +187,33 @@ public class ARecycleWaitsForTheInstallHoldingTheRootTest(ITestOutputHelper outp
         await leases.WhenReleased(RootPath).Should().Emit("the last holder has gone");
     }
 
+    /// <summary>
+    /// The positive signal the deferral tests below are bounded by: a waiter is counted as
+    /// DEFERRED exactly while it is parked behind a held lease — never when nothing holds the root,
+    /// and no longer once the release has answered it. A count that leaked would make
+    /// <c>WhenDeferredOn</c> answer for a recycle that already ran; one that never rose would make
+    /// every bounded deferral assertion fail.
+    /// </summary>
+    [Fact]
+    public async Task AWaiterIsCountedAsDeferred_OnlyWhileItIsParkedBehindAHeldLease()
+    {
+        var leases = new PackageRootInstallLeases();
+
+        using (leases.WhenReleased(RootPath).Subscribe(_ => { }))
+            leases.DeferredOn(RootPath).Should().Be(0,
+                "nothing holds the root, so the wait is answered at once and nothing parks");
+
+        var lease = leases.Hold(RootPath, Holder);
+        var answered = leases.WhenReleased(RootPath).Replay(1);
+        using var connection = answered.Connect();
+        await leases.WhenDeferredOn(RootPath).Should().Emit("the waiter parked behind the lease");
+        leases.DeferredOn(RootPath).Should().Be(1);
+
+        lease.Dispose();
+        await answered.Should().Within(TestTimeouts.Convergence).Emit("the release answers the waiter");
+        leases.DeferredOn(RootPath).Should().Be(0, "an answered waiter is no longer deferred");
+    }
+
     // ---- The rebind watcher: the recycler #3965 proved can fire against the installing root -----
 
     /// <summary>
@@ -210,10 +239,15 @@ public class ARecycleWaitsForTheInstallHoldingTheRootTest(ITestOutputHelper outp
 
         feed.Publish(Retype(RootPath, RealType));
 
-        await disposed.Should().NotEmit(
-            TestTimeouts.Quick,
+        // 🚨 Bounded by a POSITIVE signal, never a wall-clock window: the registry reports the
+        // rebind PARKED on this root's lease. The watcher's self-DisposeRequest is composed
+        // downstream of that wait, so while it is parked and the lease is held the hub cannot have
+        // been told to go — and a watcher that bypassed the lease never parks, so this fails.
+        await disposed.Should().Within(TestTimeouts.Convergence).NotEmitBefore(
+            leases.WhenDeferredOn(RootPath),
             "an install is writing under this root — recycling it now strands the writes its "
             + "per-node children owe acks for (#3510)");
+        leases.DeferredOn(RootPath).Should().Be(1, "the rebind is parked on the lease");
 
         lease.Dispose();
 
