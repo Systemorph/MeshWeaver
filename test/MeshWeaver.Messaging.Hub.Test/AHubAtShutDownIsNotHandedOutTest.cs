@@ -160,6 +160,7 @@ public class AHubAtShutDownIsNotHandedOutTest(ITestOutputHelper output) : HubTes
     public async Task TheOwnerStillJoinsARetiredHub()
     {
         var host = GetHost();
+        var collection = host.ServiceProvider.GetRequiredService<HostedHubsCollection>();
         var address = new Address("child", "retired-and-joined-" + Guid.NewGuid().AsString());
 
         var first = host.GetHostedHub(address, ParkOnShutDown);
@@ -176,14 +177,32 @@ public class AHubAtShutDownIsNotHandedOutTest(ITestOutputHelper output) : HubTes
             host.Dispose();
             await host.RunLevelChanged.Where(l => l >= MessageHubRunLevel.DisposeHostedHubs).Take(1)
                 .Should().Within(TestTimeouts.Convergence).Emit("the owner reaches its child-disposal phase");
-            await host.DisposalCompleted.Should().NotEmit(TestTimeouts.Quick,
-                "the owner must not finish its teardown while a hub it retired is still tearing down — "
-                + "its container is that hub's parent scope, and closing it would strand the corpse's "
-                + "registrant walk on a disposed LifetimeScope (the R1 straggler class)");
+            // 🚨 POSITIVE PROOF that the join has processed everything EXCEPT the corpse — instead of
+            // sitting out a real-time window hoping the owner would have finished by then if it were
+            // going to. Every other child is Dead and out of the collection, so the only leg of the
+            // owner's join still open is the retired hub's. The join's completion is computed
+            // SYNCHRONOUSLY from its legs (CombineLatest over the children's replaying
+            // DisposalCompleted), so at this point it has either completed — the regression: the
+            // retired hub was not joined — or it is waiting on the corpse.
+            await successor.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+                "the successor has no park, so it runs to Dead in the owner's cascade");
+            successor.RunLevel.Should().Be(MessageHubRunLevel.Dead,
+                "the successor was in the registry, so the owner's cascade disposed it like any child");
+            await Observable.Interval(TestTimeouts.Quick / 100)
+                .StartWith(0L)
+                .Where(_ => collection.Hubs.All(h => ReferenceEquals(h, first)))
+                .Take(1)
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit("every child of the owner except the parked corpse finishes its teardown and leaves the collection");
+            collection.Hubs.Should().ContainSingle(h => ReferenceEquals(h, first),
+                "PRECONDITION: the parked corpse is the ONLY thing the owner's join can still be waiting on");
+
+            await collection.DisposalCompleted.Should().NotEmitBefore(Observable.Return(Unit.Default),
+                "the owner's hosted-hub join must not complete while a hub it retired is still tearing "
+                + "down — its container is that hub's parent scope, and closing it would strand the "
+                + "corpse's registrant walk on a disposed LifetimeScope (the R1 straggler class)");
             host.RunLevel.Should().Be(MessageHubRunLevel.DisposeHostedHubs,
                 "the owner is parked in the join, on the retired child, not somewhere else");
-            successor.IsDisposing.Should().BeTrue(
-                "the successor was in the registry, so the owner's cascade disposed it like any child");
         }
         finally
         {
