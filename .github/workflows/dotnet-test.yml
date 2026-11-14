@@ -3655,6 +3655,12 @@ jobs:
     - name: "The real Razor build extension parses and keys cleanly"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-build-extension-reading.py
+    # The ABI probe's REAL Roslyn comparer (.github/scripts/abi-syntax), built on this runner's SDK: a body edit
+    # keeps the surface; a signature, modifier, attribute, default, const, enum, #if, layout or generator-input edit
+    # moves it; the surface cache answers a warm run; and with stripping OFF a body edit moves it (negative control).
+    - name: "The ABI probe's syntax surface says unchanged only for a body edit — the comparer can say no"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/abi-key.py --self-test-syntax
 
   shared-rules:
     name: "AGENTS.md shared rule blocks"

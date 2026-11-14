@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    abi-syntax — the public-surface SKELETON comparer behind `abi-key.py probe` (Doc/Architecture/ModuleBuildArchitecture,
+    "ABI-keyed rebuild"). It parses each changed C# file at base and at head with Roslyn, strips every member BODY, and
+    says whether what is left (the declarations a reference assembly is built from) moved. No build, no SDK evaluation.
+
+    It lives under .github/scripts/ on purpose: a satellite's change-set job fetches core's `.github/scripts` (sparse)
+    at the resolved build-logic ref, and this project must arrive with the script that drives it. Never in
+    MeshWeaver.slnx; the Directory.* files beside it stop MSBuild's upward walk so the solution's props, analyzers
+    and central package versions never reach it — the build logic must build on whatever SDK a lane installed.
+
+    abi-key.py builds it ONCE per run, keyed by the sha256 of this directory's files and the SDK version, and
+    passes the SDK's own major as the target framework (`-p:AbiSyntaxTfm=net<major>.0`), so no targeting pack is
+    downloaded and SDK 10 (main3) and SDK 11 (main) both build it.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AbiSyntaxTfm Condition="'$(AbiSyntaxTfm)' == ''">net10.0</AbiSyntaxTfm>
+    <TargetFramework>$(AbiSyntaxTfm)</TargetFramework>
+    <RollForward>LatestMajor</RollForward>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>abi-syntax</AssemblyName>
+    <RootNamespace>MeshWeaver.AbiSyntax</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <NuGetAudit>false</NuGetAudit>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The version core's Directory.Packages.props pins on both lines (main and main3). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+  </ItemGroup>
+</Project>
