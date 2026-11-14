@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <ProjectGuid>{99c0d432-37b8-4c2c-92a5-1b0d980b7480}</ProjectGuid>
-    <!-- Runtime Async, the first test project (Doc/Architecture/DotNet11Measured): the runtime, not
+    <!-- Runtime Async, the first test project (Doc/Architecture/AdoptingDotNet11, "Measured on the v4 line"): the runtime, not
          the compiler, generates this assembly's async state machines. Measured before enabling:
          InlineResumptionMechanismTest 5/5 and the whole project 799/799 both ways. src/ stays off. -->
     <Features>$(Features);runtime-async=on</Features>
