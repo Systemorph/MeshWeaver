@@ -544,7 +544,23 @@ publication) never consult a verdict.
 * `abi-key.py probe --root R --range A...B [--msbuild-arg …] --out verdict.json` — builds each
   eligible changed project at head, swaps only that project's changed files to the base, rebuilds
   it, restores and rebuilds head; the verdict lists per project `eligible`, `unchanged`, `refasm`,
-  `baseRefasm`, `friends`, `files`, `reason`.
+  `baseRefasm`, `friends`, `files`, `reason`. Two rules decide whether it builds at all; both answer
+  with the same envelope, with `unavailable` set and no projects, so `decide` keeps every unit:
+  * **Short-circuit.** If the range changes an input every project's build imports, the probe
+    answers `{"unavailable": "<input> changed — every reference assembly moves; nothing narrowed"}`
+    before building anything. Those inputs are every `module-build-key.py` `GLOBAL_INPUTS` basename
+    (`global.json`, `nuget.config`, …), every `Directory.*.props|targets` at any depth (the
+    `directory_imports` rule, widened), `scripts/platform-floor.json`, and an added or removed
+    `<TargetFramework(s)>` line. The caller re-selects every unit on such a path anyway, so the
+    builds could narrow nothing. Measured on MeshWeaver.Plugins#5421 (a net11 retarget): the probe
+    built anyway, and its job was killed by its own 25-minute limit.
+  * **Deadline.** `--deadline <epoch>` (and `--build-seconds`, the per-build prior, default 70 s,
+    measured; raised to the slowest build seen in the run). When the eligible projects × 3 builds ×
+    that cost exceed the time left, the probe answers `unavailable` without building. A project it
+    reaches with too little time left is reported unprobed, and so kept. The satellite caller derives
+    the deadline from its job's start and `timeout-minutes` (MeshWeaver.Plugins
+    `scripts/abi-probe-plan.py`, `Hosting/CiProfile` §9), so the probe always answers before the job's
+    limit.
 * `abi-key.py decide --root R --verdict V --units U.json --reselected ids.json` — per unit
   `skip` (with the reason) or `keep` (with why). Without `--reselected` nothing skips: only the
   caller's re-selection can prove that nothing ELSE in the diff reaches a unit.
