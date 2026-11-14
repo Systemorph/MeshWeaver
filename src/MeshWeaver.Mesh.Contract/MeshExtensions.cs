@@ -1595,10 +1595,21 @@ public static class MeshExtensions
                         });
                     });
             })
-            // ONE result, then completion — so the deadline below can only ever fire BEFORE the
-            // chain produced its node, never race the post-creation leg that owns the reply after it.
+            // ONE result — and the deadline below bounds only the wait FOR it, never the
+            // post-creation leg that owns the reply after it. 🚨 Not the absolute-time Timeout
+            // overload: that one bounds the whole SEQUENCE, i.e. until completion, and Take(1)
+            // completes only once the OnNext below returns. The post-creation leg resolves its
+            // handlers and asks each one's Matches synchronously INSIDE that OnNext, so a parked
+            // Matches kept the sequence open past the deadline: the stalled verdict fired as well
+            // — a second timeout terminal on a create whose post-creation deadline had already
+            // answered it, naming the stale stage 'write' (timeout == error,
+            // Doc/Architecture/TimeoutIsError). The first-element overload is decided by an atomic
+            // race: once the node has arrived, the deadline can no longer fire.
             .Take(1)
-            .Timeout(deadline, createProgress.StalledVerdict<(string mode, MeshNode node)>())
+            .Timeout(
+                Observable.Timer(deadline),
+                _ => Observable.Never<long>(),
+                createProgress.StalledVerdict<(string mode, MeshNode node)>())
             .Subscribe(
                 tuple =>
                 {
