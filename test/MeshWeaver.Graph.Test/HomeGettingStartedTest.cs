@@ -82,7 +82,10 @@ public class HomeGettingStartedTest(ITestOutputHelper output) : MonolithMeshTest
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder).AddMeshNodes(
             Person(Alice), AssignmentNodeFactory.UserRole(Alice, "Admin", Alice),
-            Person(Bob), AssignmentNodeFactory.UserRole(Bob, "Admin", Bob));
+            Person(Bob), AssignmentNodeFactory.UserRole(Bob, "Admin", Bob),
+            // Bob may READ Alice's home, so the owner-only guard — not an access denial — is what
+            // keeps the guide from him.
+            AssignmentNodeFactory.UserRole(Bob, "Viewer", Alice));
 
     private static MeshNode Person(string id) => new(id)
     {
@@ -95,12 +98,12 @@ public class HomeGettingStartedTest(ITestOutputHelper output) : MonolithMeshTest
     private static AccessContext Login(string id) => new() { ObjectId = id, Name = id, Email = $"{id}@meshweaver.io" };
 
     /// <summary>
-    /// The guide area on <paramref name="owner"/>'s home, opened as that owner: emits whether the
-    /// TEMPLATE is there, and the bound style's live value.
+    /// The guide area on <paramref name="owner"/>'s home, opened as <paramref name="viewer"/> (the
+    /// owner by default): emits whether the TEMPLATE is there, and the bound style's live value.
     /// </summary>
-    private (IObservable<bool> Template, IObservable<string> Style) GuideFor(string owner)
+    private (IObservable<bool> Template, IObservable<string> Style) GuideFor(string owner, string? viewer = null)
     {
-        var user = Login(owner);
+        var user = Login(viewer ?? owner);
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var client = GetClient(c => base.ConfigureClient(c)
             .AddLayoutClient()
@@ -147,5 +150,18 @@ public class HomeGettingStartedTest(ITestOutputHelper output) : MonolithMeshTest
         TestUsers.DevLogin(Mesh, Login(Bob));
         var (_, bobStyle) = GuideFor(Bob);
         await bobStyle.FirstAsync(style => style.Length == 0).Timeout(Bound).Await(ct);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AVisitorOfSomeoneElsesHome_GetsNoGuide()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        TestUsers.DevLogin(Mesh, Login(Bob));
+
+        // Bob can read Alice's home, but the start page is personal: the area answers the empty control.
+        var (template, _) = GuideFor(Alice, viewer: Bob);
+        var present = await template.FirstAsync().Timeout(Bound).Await(ct);
+
+        present.Should().BeFalse("only the home's owner gets the guide — a visitor sees no steps and no Hide button");
     }
 }
