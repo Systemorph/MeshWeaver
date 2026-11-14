@@ -1194,20 +1194,28 @@ public static class NodeTypeLayoutAreas
             });
     }
 
+    // A switch EXPRESSION over the closed CodeTreeNode: a leaf or a folder, proven exhaustive by the
+    // compiler — the hard `(CodeTreeFolder)node` cast it replaces threw for any third kind.
     private static NavGroupControl AppendCodeTreeNode(NavGroupControl parent, CodeTreeNode node, object? hubAddress)
-    {
-        if (node is CodeTreeLeaf leaf)
+        => node switch
         {
-            // Inside a NodeType shell, open the file in the shell's own Code area so
-            // the side menu stays. Without a hub address (no shell context), fall back
-            // to the Code node's standalone page.
-            var href = hubAddress != null
-                ? new LayoutAreaReference(CodeArea) { Id = leaf.Node.Path }.ToHref(hubAddress)
-                : new LayoutAreaReference(CodeLayoutAreas.OverviewArea).ToHref(leaf.Node.Path);
-            return parent.WithView(new NavLinkControl(leaf.Node.Name ?? leaf.Node.Id, CustomIcons.CSharp(), href));
-        }
+            CodeTreeLeaf leaf => AppendCodeTreeLeaf(parent, leaf, hubAddress),
+            CodeTreeFolder folder => AppendCodeTreeFolder(parent, folder, hubAddress),
+        };
 
-        var folder = (CodeTreeFolder)node;
+    private static NavGroupControl AppendCodeTreeLeaf(NavGroupControl parent, CodeTreeLeaf leaf, object? hubAddress)
+    {
+        // Inside a NodeType shell, open the file in the shell's own Code area so
+        // the side menu stays. Without a hub address (no shell context), fall back
+        // to the Code node's standalone page.
+        var href = hubAddress != null
+            ? new LayoutAreaReference(CodeArea) { Id = leaf.Node.Path }.ToHref(hubAddress)
+            : new LayoutAreaReference(CodeLayoutAreas.OverviewArea).ToHref(leaf.Node.Path);
+        return parent.WithView(new NavLinkControl(leaf.Node.Name ?? leaf.Node.Id, CustomIcons.CSharp(), href));
+    }
+
+    private static NavGroupControl AppendCodeTreeFolder(NavGroupControl parent, CodeTreeFolder folder, object? hubAddress)
+    {
         var (label, current) = CompressChain(folder);
 
         var group = new NavGroupControl(label)
@@ -1269,7 +1277,12 @@ public static class NodeTypeLayoutAreas
         return tree;
     }
 
-    internal abstract class CodeTreeNode
+    /// <summary>
+    /// One entry of the code tree: exactly a <see cref="CodeTreeLeaf"/> or a <see cref="CodeTreeFolder"/>.
+    /// A C# 15 <c>closed</c> class (implicitly abstract), so a switch over it is exhaustive with no
+    /// default arm. Internal, never serialized, never seen by in-mesh code.
+    /// </summary>
+    internal closed class CodeTreeNode
     {
         public string Name { get; init; } = "";
     }

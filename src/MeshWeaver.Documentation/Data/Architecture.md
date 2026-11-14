@@ -104,6 +104,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The XML Documentation Reader](XmlDocumentationReader) — how doc summaries are read for types and members (compiled NodeTypes included) without a process-wide cache, a lock, or pinning a collectible generation
 - [The Routing Entry Point](RoutingEntryPoint) — every routed message pays an Orleans grain PLACEMENT; the two measured ways it fails and drops live traffic, and the case for a local routing service where a silo is co-hosted
 - [Open Vocabularies Are String Constants](OpenVocabulariesAsStringConstants) — a persisted or module-extended vocabulary is `const string`, never an `enum`; it stays open for anyone to extend with their own constants, and resolution is a durable chain of rule nodes rather than a switch
+- [Closed Hierarchies and Unions](ClosedHierarchies) — a C# 15 `closed` hierarchy or `union` only for an internal type that is never persisted, never read by in-mesh C# and never extended by a module; read it with a switch EXPRESSION, the only form the compiler checks
 - [Observable Hub Pipeline (migration design)](ObservableHubPipeline)
 - [Per-Hub TaskScheduler — Actor Isolation Across the Mesh](OrleansTaskScheduler)
 - [Removing Hand-Woven Concurrency Gates](RemovingHandWovenGates)
