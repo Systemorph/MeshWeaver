@@ -91,7 +91,14 @@ because the host merged every pull request onto the default branch's tip.
   never onto the default branch's tip, and runs the warm NuGet restore from that line's tip.
 - **Each line's channel needs a host.** The channel is declared on MeshWeaver.Deploy
   `.github/build-hosts.json` and on the operations record's `buildHosts` block (through its approval
-  path), and the hand-over moves `latest4` only to a sealed 4.x set.
+  path). MeshWeaver.Deploy `build-host.yml` runs one hand-over leg per major line: each leg takes the
+  newest armed set of its own major (`arm-promoted-set.py armed-state --major`) and moves only that
+  line's channels, so `latest4` gets only sealed 4.x sets and the first armed 4.x set never stops the
+  v3 channels moving.
+- **A declared channel is not yet a running host.** The chart runs a host for `latest`, `stable` and
+  `buildHosts.extraChannels` only, and the record's Helm values (MeshWeaver.Plugins `HelmValues`)
+  render no `extraChannels`. So `latest3` and `latest4` hold their sets on the record with no host of
+  their own until that renderer lists the line channels it should run.
 
 ## 4. Every repository with a v3 tree gets `main3`
 
