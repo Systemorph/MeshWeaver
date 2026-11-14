@@ -1650,10 +1650,52 @@ jobs:
           echo "release version $version (recovered from memex-migration:${SHORT_SHA}'s tag set — bake-only reconcile)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+  # ─────────────── THE PORTAL-AI BASE, NAMED BY THE TREE THAT DESCRIBES IT ───────────────
+  # Every portal-ai and control image is a framework-dependent publish layered on
+  # `memex-portal-ai-base`. That base used to be resolved as `:latest` — a tag built by hand that
+  # does not change when deploy/base-images/portal-ai does. The v4 line moved the Dockerfile to
+  # aspnet:11.0 and nobody rebuilt `:latest`, so run 43592014876 layered a net11.0 host on the
+  # aspnet:10.0 runtime of 2026-09-16 and the control image exited before Main ("You must install
+  # or update .NET to run this application"). The base is now `src-<content hash>` of that
+  # directory: this job builds it the first time any run needs it (~10 min, measured on the hand
+  # runbook) and is one tag listing otherwise, and each delivery line resolves exactly the base its
+  # own tree describes — so rebuilding for one line can never change what another line layers on.
+  # It also refuses a tree whose Dockerfile runtime differs from the platform's TargetFramework.
+  # Manual: Doc/Architecture/PortalAiBaseImage.
+  portal-ai-base:
+    name: "Ensure the portal-ai base this tree describes"
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.base.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - name: Set up QEMU (arm64 emulation for the base's RUN steps)
+        uses: docker/setup-qemu-action@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - name: Build the base if this tree's content tag is absent; print it
+        id: base
+        run: bash .github/scripts/ensure-portal-ai-base.sh --registry "${{ env.ACR }}" --acr-name meshweaver
+
   portal-image:
     name: "Build + push portal-ai image"
     # Gate: a commit whose required check is green, resolved by `gate` (push OR reconcile).
-    needs: gate
+    needs: [gate, portal-ai-base]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     # 🚨 35 minutes: 30 covered what this job did, and the cr mirror moved OUT of it on purpose
@@ -1819,8 +1861,8 @@ jobs:
         # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
         run: bash .github/scripts/acr-login.sh
       # portal-ai app image — the deployment image (aspnet + node + Claude Code/Copilot CLIs),
-      # layered on the base already in ACR. The base (memex-portal-ai-base) changes rarely and is
-      # rebuilt by the release path / runbook §1, NOT on every main merge.
+      # layered on the base THIS tree describes: `portal-ai-base` resolved its content tag (and built
+      # it if this is the first run to need it). Never a moving base tag — see that job.
       # CIRun=true → continuous version 3.0.0-ci.<build> baked in; image tagged <sha> + moving `main`.
       #
       # MULTI-ARCH: we drop `-r linux-x64` and instead set ContainerRuntimeIdentifiers to
@@ -1833,9 +1875,8 @@ jobs:
       # global `-p:RuntimeIdentifiers` here: a global `-p:` propagates to every ProjectReference and makes
       # ~6 referenced libraries fail `NETSDK1083: RuntimeIdentifier 'linux-x64;linux-arm64' is not recognized`.
       # No Docker is needed: pushing the index straight to a remote registry (ContainerRegistry set) is Docker-free.
-      # 🚨 PREREQUISITE: memex-portal-ai-base:latest in ACR must itself be MULTI-ARCH, else the arm64 leg
-      # has no base layer and this step fails. base-image-acr.yml (workflow_dispatch) builds it multi-arch
-      # (buildx → ACR); operators doing the first multi-arch roll run that once (see LocalColimaMac.md).
+      # 🚨 The base must itself be MULTI-ARCH, else the arm64 leg has no base layer and this step fails;
+      # `portal-ai-base` builds it with buildx for both and refuses an index missing either child.
       # 🚨 List-valued `-p:` props are wrapped '"a;b"' — single-quoted DOUBLE-quotes around a REAL `;`, NOT
       # `%3B`. `%3B` is an MSBuild-ESCAPED (literal) semicolon, so `-p:ContainerRuntimeIdentifiers=a%3Bb` is a
       # SINGLE RID value "a;b" that NEVER splits into a list — the SDK then builds ONE image with the bogus RID
@@ -1894,7 +1935,7 @@ jobs:
                  -p:ContainerRegistry=${{ env.ACR }} \
                  -p:ContainerRepository=memex-portal-ai \
                  -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }} \
-                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest \
+                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:${{ needs.portal-ai-base.outputs.tag }} \
                  -p:PortalNextBundle="$RUNNER_TEMP/portal-next.zip" \
                  2>&1 | tee "$LOG"; then
               echo "::endgroup::"
@@ -2306,7 +2347,7 @@ jobs:
   # the next promotion). Folding it into the verdict is a later, separate decision.
   control-image:
     name: "Build + push control image (staging tag)"
-    needs: gate
+    needs: [gate, portal-ai-base]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     # Same measured shape as `portal-image` (build + multi-arch push ~21 min) without its mirror.
@@ -2389,7 +2430,7 @@ jobs:
                  -p:ContainerRegistry=${{ env.ACR }} \
                  -p:ContainerRepository=memex-control \
                  -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }} \
-                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest \
+                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:${{ needs.portal-ai-base.outputs.tag }} \
                  2>&1 | tee "$LOG"; then
               echo "::endgroup::"
               echo "control published on attempt $attempt"
