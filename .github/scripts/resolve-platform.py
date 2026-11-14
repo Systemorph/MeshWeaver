@@ -23,8 +23,11 @@ so a re-run of ONE red shard tests the newest set too (FRESHNESS below).
 
 THE RULE
 --------
-  1. core's `main-cd.yml` runs on `main`, newest first (the public GitHub API, the caller's
-     `GITHUB_TOKEN` — every satellite's token can read core, it is public);
+  1. core's `main-cd.yml` runs on the core delivery LINE this run serves (`main` = v4, `main3` =
+     v3; `served_line`: `--line`, `MW_CORE_LINE`, the `--scripts-ref` the copy was fetched at, else
+     the declared default line WITH a warning), newest first (the public GitHub API, the caller's
+     `GITHUB_TOKEN` — every satellite's token can read core, it is public). Only a freeze may take
+     a set sealed on another line, and it says so;
   2. the newest run whose PLATFORM is SEALED — `Promote: tag the full set`, `Verify every image
      shipped` and `Bake platform content in the shipped image + publish` all succeeded. That trio
      is the whole seal: the run's overall conclusion (a satellite-compat leg, an alert job) does
@@ -201,8 +204,24 @@ from datetime import datetime, timezone
 from typing import Callable, NamedTuple
 
 CORE_REPO = "Systemorph/MeshWeaver"
-CORE_BRANCH = "main"
 CORE_CD_WORKFLOW = "main-cd.yml"
+
+# 🚨 THE DELIVERY LINES (policy `major-lines-run-separately`; core Doc/Architecture/CdDeliveryLines →
+# "The resolver serves ONE line"). Core CD delivers several branches, each sealing its OWN sets
+# (`main` → 4.0.N, `main3` → 3.1.N) from its own copy of main-cd.yml, and every line's runs share
+# ONE run counter. This script used to spell `branch=main` in every listing, so the `main3` copy —
+# the one every v3 dependent fetches — resolved the v4 set 4.0.13205 for v3 code, and a freeze of a
+# `main3` set (`3.1.13192`) matched nothing at all.
+#
+# This is a MIRROR of `.github/delivery-lines.json` (`branch` → `satelliteRef`, and `defaultBranch`),
+# because the script is fetched ALONE (no sibling files) by every lane and satellite. `--self-test`
+# compares the mirror with the JSON whenever the JSON sits beside this script in a core tree, so the
+# two cannot drift silently. The same bytes ship on every line's branch: the LINE is declared by the
+# caller (`served_line`), never written into this file.
+DEFAULT_LINE = "main"
+DELIVERY_LINES: dict[str, str] = {"main": "main", "main3": "main3"}   # line branch → satelliteRef
+LINE_ENV = "MW_CORE_LINE"
+DELIVERY_LINES_FILE = os.path.join("..", "delivery-lines.json")      # relative to this script
 GITHUB_API = "https://api.github.com"
 
 DEFAULT_TESTER_IMAGE = "meshweaver.azurecr.io/mw-plugin-test"
@@ -476,17 +495,75 @@ def github_fetch_with(token: str, sleep=None) -> Fetch:
     return fetch
 
 
-def cd_runs(fetch: Fetch, page: int) -> list[dict]:
+def unknown_line_error(value: str, where: str) -> str:
+    """The red text for a line that is not one of the declared delivery lines."""
+    return (f"`{value}` ({where}) is not a declared core delivery line. The declared lines are "
+            f"{', '.join(f'`{b}`' for b in DELIVERY_LINES)} (.github/delivery-lines.json, mirrored "
+            "as DELIVERY_LINES in this script). A v3 dependent serves `main3`, a v4 dependent "
+            "`main` (policy `major-lines-run-separately`). Refusing to guess which line's sets to "
+            "take.")
+
+
+def served_line(flag: str, env: dict[str, str], scripts_ref: str = "") -> tuple[str, str]:
+    """The core delivery line this run serves, and HOW it was decided — one of, in order:
+
+      1. `--line <branch>`                — the caller declares it;
+      2. `MW_CORE_LINE`                    — the same declaration through the environment;
+      3. `--scripts-ref <ref>`             — the ref this copy was FETCHED at (the lanes' own
+                                             `scripts-ref`), when that ref IS a declared line: a v3
+                                             dependent fetches the `main3` copy, a v4 one `main`;
+      4. none of them                      — the DECLARED default line (`defaultBranch`), said so
+                                             loudly by `main()` (a `::warning`), never silently.
+
+    An explicit value (1 or 2) that is not a declared line is RED by name: it is a declaration this
+    script cannot honour, and falling back would build against a line nobody named. A `scripts-ref`
+    that is not a line (a commit sha, a tag) is not a declaration about the line at all, so it falls
+    through to 4 and the reason says so."""
+    def norm(value: str) -> str:
+        value = (value or "").strip()
+        return value[len("refs/heads/"):] if value.startswith("refs/heads/") else value
+    for value, how in ((norm(flag), "declared by --line"),
+                       (norm(env.get(LINE_ENV, "")), f"declared by {LINE_ENV}")):
+        if value:
+            if value not in DELIVERY_LINES:
+                raise ResolutionError(unknown_line_error(value, how))
+            return value, how
+    ref = norm(scripts_ref)
+    if ref in DELIVERY_LINES:
+        return ref, f"the ref this resolver was fetched at (--scripts-ref {ref})"
+    because = (f"--scripts-ref `{ref}` is not a line branch" if ref
+               else f"neither --line, {LINE_ENV} nor --scripts-ref was given")
+    return DEFAULT_LINE, f"NOT declared ({because}) — the declared default line"
+
+
+def delivery_lines_drift(text: str) -> list[str]:
+    """Where DELIVERY_LINES / DEFAULT_LINE disagree with `.github/delivery-lines.json` (empty = none)."""
+    try:
+        data = json.loads(text)
+        declared = {str(entry["branch"]): str(entry["satelliteRef"]) for entry in data["lines"]}
+        default = str(data["defaultBranch"])
+    except (ValueError, KeyError, TypeError) as error:
+        return [f"delivery-lines.json is not readable as the declaration ({error})"]
+    drift = []
+    if declared != DELIVERY_LINES:
+        drift.append(f"DELIVERY_LINES {DELIVERY_LINES} != delivery-lines.json {declared}")
+    if default != DEFAULT_LINE:
+        drift.append(f"DEFAULT_LINE `{DEFAULT_LINE}` != delivery-lines.json defaultBranch `{default}`")
+    return drift
+
+
+def cd_runs(fetch: Fetch, page: int, line: str) -> list[dict]:
+    """One page of core CD runs on the delivery LINE `line` (a branch declared in DELIVERY_LINES)."""
     data = fetch(f"/repos/{CORE_REPO}/actions/workflows/{CORE_CD_WORKFLOW}/runs"
-                 f"?branch={CORE_BRANCH}&per_page=100&page={page}")
+                 f"?branch={line}&per_page=100&page={page}")
     return list(data.get("workflow_runs") or [])
 
 
-def recent_cd_runs(fetch: Fetch, now: float) -> list[dict]:
-    """A differently-filtered view of recent main-CD runs, independent of the page-1 snapshot."""
+def recent_cd_runs(fetch: Fetch, now: float, line: str) -> list[dict]:
+    """A differently-filtered view of the line's recent CD runs, independent of the page-1 snapshot."""
     since = datetime.fromtimestamp(now - LISTING_MAX_AGE_HOURS * 3600, timezone.utc)
     created = ">=" + since.strftime("%Y-%m-%dT%H:%M:%SZ")
-    query = urllib.parse.urlencode({"branch": CORE_BRANCH, "created": created, "per_page": 100})
+    query = urllib.parse.urlencode({"branch": line, "created": created, "per_page": 100})
     data = fetch(f"/repos/{CORE_REPO}/actions/workflows/{CORE_CD_WORKFLOW}/runs?{query}")
     if not isinstance(data, dict):
         raise ResolutionError("the recent core-CD run listing returned no JSON object")
@@ -510,21 +587,22 @@ def _created(run: dict) -> float | None:
         return None
 
 
-def _newest_main_run(runs: list[dict]) -> int | None:
-    """The highest `run_number` among the `main` rows of one listing page, or None when it has
-    none. A row with no `head_branch` counts as main — the listing is already filtered to
-    `branch=main`, and the self-test fixtures leave the field off."""
-    numbers = [int(r["run_number"]) for r in runs if r.get("head_branch") in (None, CORE_BRANCH)]
+def _newest_main_run(runs: list[dict], line: str) -> int | None:
+    """The highest `run_number` among the LINE's rows of one listing page, or None when it has
+    none. A row with no `head_branch` counts as the line's — the listing is already filtered to
+    `branch=<line>`, and the self-test fixtures leave the field off."""
+    numbers = [int(r["run_number"]) for r in runs if r.get("head_branch") in (None, line)]
     return max(numbers) if numbers else None
 
 
-def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> str | None:
+def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float,
+                  line: str) -> str | None:
     """Why page 1 of the main-cd listing cannot be the newest page, or None when nothing proves it.
 
     Both facts are independent of the page itself: the clock, and a run number this repository's
     own `main` has already passed on. Rows without `created_at` cannot be aged; a page with none
     is judged by the ceiling alone (the live API always sends it — the self-test fixtures don't)."""
-    main_runs = [r for r in runs if r.get("head_branch") in (None, CORE_BRANCH)]
+    main_runs = [r for r in runs if r.get("head_branch") in (None, line)]
     if not main_runs:
         # An EMPTY page is proven stale by a ceiling exactly as a short one is: the caller's own
         # `main` passed on core CD #ceiling, so that run exists and page 1 omits it.
@@ -532,7 +610,7 @@ def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> s
             return (f"it holds no main-cd run at all, but this repository's `main` has already "
                     f"passed on core CD #{passed_ceiling}, which the page does not contain")
         return None
-    newest = _newest_main_run(runs)
+    newest = _newest_main_run(runs, line)
     if passed_ceiling is not None and newest < passed_ceiling:
         return (f"its newest run is main-cd #{newest}, but this repository's `main` has already "
                 f"passed on core CD #{passed_ceiling}, which the page does not contain")
@@ -543,12 +621,12 @@ def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> s
     hours = (now - stamp) / 3600
     if hours > LISTING_MAX_AGE_HOURS:
         return (f"its newest run, main-cd #{int(run['run_number'])}, was created "
-                f"{run.get('created_at')} — {hours:.0f} h ago, while core CD runs on {CORE_BRANCH} at "
+                f"{run.get('created_at')} — {hours:.0f} h ago, while core CD runs on {line} at "
                 f"least hourly (refused beyond {LISTING_MAX_AGE_HOURS} h)")
     return None
 
 
-def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None) -> int | None:
+def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None, line: str) -> int | None:
     """The page's newest main run when it is BELOW a declared ceiling — the ONE staleness this
     helper can prove rather than infer — or None.
 
@@ -560,7 +638,7 @@ def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None) -> int | Non
     positive witness used by `settle_page_one` for a stale-but-young page (#73)."""
     if passed_ceiling is None:
         return None
-    newest = _newest_main_run(runs)
+    newest = _newest_main_run(runs, line)
     if newest is None:
         # An EMPTY page (no main run) under a ceiling is the same proven shortfall, reported as 0:
         # the witnessed run exists and the page holds nothing up to it.
@@ -568,16 +646,17 @@ def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None) -> int | Non
     return newest if newest < passed_ceiling else None
 
 
-def recent_listing_witness(fetch: Fetch, runs: list[dict], now: float) -> tuple[dict | None, str]:
+def recent_listing_witness(fetch: Fetch, runs: list[dict], now: float,
+                           line: str) -> tuple[dict | None, str]:
     """A recent main-CD run omitted by page 1 proves that listing snapshot is stale.
 
     The created filter is an independent API query. Every run newer than the page's newest row
     falls inside the same 12-hour window; run numbers are monotonic within this workflow.
     """
-    recent = recent_cd_runs(fetch, now)
-    newest_listed = _newest_main_run(runs)
+    recent = recent_cd_runs(fetch, now, line)
+    newest_listed = _newest_main_run(runs, line)
     witnesses = [r for r in recent
-                 if r.get("head_branch") in (None, CORE_BRANCH)
+                 if r.get("head_branch") in (None, line)
                  and r.get("run_number") is not None
                  and (newest_listed is None or int(r["run_number"]) > newest_listed)]
     if not witnesses:
@@ -616,7 +695,8 @@ STALE_REREAD_BACKOFF_SECONDS = 20.0   # 20 s, 40 s, 60 s — 2 minutes inside th
 
 def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, *,
                     now: Callable[[], float], sleep: Callable[[float], None],
-                    log: Callable[[str], None]) -> tuple[list[dict], str | None, int, int]:
+                    log: Callable[[str], None],
+                    line: str) -> tuple[list[dict], str | None, int, int]:
     """Page 1, why it still cannot be the newest page (or None), how many times it was RE-READ, and
     how many of those re-reads came back EMPTY.
 
@@ -632,8 +712,8 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
     indistinguishable from "the condition never fired", which is the same ambiguity as the refusal
     this exists to remove."""
     observed_at = now()
-    why_stale = stale_listing(runs, passed_ceiling, observed_at)
-    shortfall = ceiling_shortfall(runs, passed_ceiling)
+    why_stale = stale_listing(runs, passed_ceiling, observed_at, line)
+    shortfall = ceiling_shortfall(runs, passed_ceiling, line)
     witness: dict | None = None
     witness_note = ""
     if shortfall is None:
@@ -641,7 +721,7 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
         # created within the age guard, a distinct query that catches stale-but-young page-1
         # snapshots such as MeshWeaver#73. A failed read is not evidence of freshness.
         try:
-            witness, witness_note = recent_listing_witness(fetch, runs, observed_at)
+            witness, witness_note = recent_listing_witness(fetch, runs, observed_at, line)
         except ResolutionError as error:
             raise ResolutionError("the independent recent core-CD listing could not be read — "
                                   f"page 1 freshness is unverified: {error}") from error
@@ -659,7 +739,7 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
             f"({attempt} of {STALE_REREADS}; MeshWeaver#4750 — three measured pages cleared "
             "within minutes, with no code change)")
         sleep(wait)
-        fresh = cd_runs(fetch, 1)
+        fresh = cd_runs(fetch, 1, line)
         rereads = attempt
         if not fresh:
             # 🚨 An EMPTY re-read says NOTHING new about staleness. Keep the previous page and
@@ -669,9 +749,9 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
                 "the previous page and its refusal stand")
             continue
         runs = fresh
-        newest = _newest_main_run(runs)
-        shortfall = ceiling_shortfall(runs, passed_ceiling)
-        why_stale = stale_listing(runs, passed_ceiling, now())
+        newest = _newest_main_run(runs, line)
+        shortfall = ceiling_shortfall(runs, passed_ceiling, line)
+        why_stale = stale_listing(runs, passed_ceiling, now(), line)
         if shortfall is None and witness is not None:
             if newest is not None and newest >= int(witness["run_number"]):
                 # This positive witness now appears on the re-read. It clears both the
@@ -686,7 +766,7 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
             + ("SETTLED, resolving from it" if why_stale is None else f"still stale ({why_stale})"))
         if why_stale is None:
             return runs, None, rereads, empties
-        if ceiling_shortfall(runs, passed_ceiling) is None:
+        if ceiling_shortfall(runs, passed_ceiling, line) is None:
             # The ceiling cleared and the AGE branch tripped instead. That one has no crisp
             # condition to re-read FOR, so it is refused here rather than burning the budget.
             break
@@ -1416,7 +1496,8 @@ def ceiling_refusal(evidence: CeilingEvidence) -> str:
 
 
 def ceiling_for(fetch: Fetch, repo: str, freeze: str | None,
-                log: Callable[[str], None] = print) -> Ceiling:
+                log: Callable[[str], None] = print,
+                branch: str = DELIVERY_LINES[DEFAULT_LINE]) -> Ceiling:
     """The ceiling for a run that asked to follow its own main, or the red text that says why not.
 
     🚨 A FREEZE OVERRIDES THE CEILING, INCLUDING AN UNREADABLE ONE. `MW_PLATFORM_REF` is an
@@ -1427,7 +1508,7 @@ def ceiling_for(fetch: Fetch, repo: str, freeze: str | None,
     """
     if freeze:
         return Ceiling(None, [f"freeze {freeze} overrides the main ceiling — not consulted"], "")
-    return main_passed_ceiling(fetch, repo, log=log)
+    return main_passed_ceiling(fetch, repo, log=log, branch=branch)
 
 
 # ─────────── A STALE MAIN-RUNS LISTING IS PROVEN, RE-READ, THEN REFUSED (#4433's second listing) ───────────
@@ -1452,21 +1533,21 @@ def ceiling_for(fetch: Fetch, repo: str, freeze: str | None,
 # page 1 is all queued runs) it simply finds no witness and the filtered page is used as served —
 # the pre-guard behaviour, stated in a note. A probe that fails to READ is likewise not evidence of
 # staleness, so it is NOTED and never refused on; refusing there would be refusing without proof.
-def main_listing_witness(fetch: Fetch, repo: str,
-                         listed: list[dict]) -> tuple[dict | None, str]:
+def main_listing_witness(fetch: Fetch, repo: str, listed: list[dict],
+                         branch: str) -> tuple[dict | None, str]:
     """A run PROVING the filtered main listing stale (or None), and one note saying what the probe saw."""
     try:
         data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
-                     f"?branch=main&per_page={MAIN_PAGE_SIZE}&page=1")
+                     f"?branch={branch}&per_page={MAIN_PAGE_SIZE}&page=1")
     except ResolutionError as error:
         return None, (f"staleness probe: the UNFILTERED {SATELLITE_CD_WORKFLOW} listing on {repo} "
-                      f"main could not be read ({error}) — the `status=success` page is used as "
+                      f"{branch} could not be read ({error}) — the `status=success` page is used as "
                       "served, NOT checked against it")
     probe = list(data.get("workflow_runs") or [])
     newest_listed = max((int(r["id"]) for r in listed if r.get("id") is not None), default=None)
     witnesses = [r for r in probe
                  if r.get("id") is not None
-                 and r.get("head_branch") == "main"
+                 and r.get("head_branch") == branch
                  and r.get("status") == "completed"
                  and r.get("conclusion") == "success"
                  and str(r.get("event") or "") in MAIN_EVENTS_THAT_VOUCH
@@ -1493,7 +1574,8 @@ def main_listing_staleness(witness: dict, listed: list[dict]) -> str:
             "that satisfies every filter of the query cannot be missing from a fresh page 1 of it")
 
 
-def main_listing_refusal(repo: str, why: str, rereads: int) -> str:
+def main_listing_refusal(repo: str, why: str, rereads: int,
+                         branch: str = DELIVERY_LINES[DEFAULT_LINE]) -> str:
     """The red text for a filtered main listing still provably stale after the bounded re-reads.
 
     🚨 IT BEGINS WITH THE #4433 SENTENCE PREFIX, BYTE FOR BYTE (`GitHub served a STALE run listing
@@ -1502,7 +1584,7 @@ def main_listing_refusal(repo: str, why: str, rereads: int) -> str:
     the run is re-run in full, instead of 17 cascade reds being classified as unproven."""
     seconds = sum(STALE_REREAD_BACKOFF_SECONDS * n for n in range(1, rereads + 1))
     return (f"GitHub served a STALE run listing (MeshWeaver#4433): page 1 of {SATELLITE_CD_WORKFLOW} "
-            f"runs on {repo} main (`status=success`) cannot be the newest — {why}. Resolving the "
+            f"runs on {repo} {branch} (`status=success`) cannot be the newest — {why}. Resolving the "
             "ceiling from it would hold this run on a set `main` has long since passed beyond, "
             "SILENTLY (measured 2026-09-23: MeshWeaver.Plugins PR #2307 took set 9081 while main had "
             "passed on 9218, and its build failed CS0246 on a core type newer than 9081). "
@@ -1514,8 +1596,13 @@ def main_listing_refusal(repo: str, why: str, rereads: int) -> str:
 def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED,
                         log: Callable[[str], None] = print,
                         now: Callable[[], float] = time.time,
-                        sleep: Callable[[float], None] = time.sleep) -> Ceiling:
+                        sleep: Callable[[float], None] = time.sleep,
+                        branch: str = DELIVERY_LINES[DEFAULT_LINE]) -> Ceiling:
     """The highest core-CD run number this repo's main has PASSED on, one note per run examined.
+
+    `branch` — the CALLING repository's branch that vouches (its `main` by default). `main()` passes
+    the served line's declared `satelliteRef` (`main3` for the v3 line), or `--passed-on-branch`, so
+    the ceiling is read from the dependent branch that builds against the SAME line it resolves.
 
     `Ceiling.number is None` means it could not be established from the newest `limit` successful
     main runs — which is a RED verdict for the caller, never a licence to take the newest sealed
@@ -1564,10 +1651,10 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             # "not an exhaustion condition" note rather than being reported as main's state.
             try:
                 data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
-                             f"?branch=main&status=success&per_page={MAIN_PAGE_SIZE}&page={page}")
+                             f"?branch={branch}&status=success&per_page={MAIN_PAGE_SIZE}&page={page}")
             except ResolutionError as error:
                 if page == 1:
-                    notes.append(f"the run listing for {repo} main could not be read: {error}")
+                    notes.append(f"the run listing for {repo} {branch} could not be read: {error}")
                     return Ceiling(None, notes, (
                         f"❌ WHICH SET {repo}'s `main` HAS PASSED COULD NOT BE READ — the run LISTING "
                         f"itself did not answer.\n"
@@ -1585,7 +1672,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                         f"this repository.\n"
                         f"    TO PROCEED WITHOUT EITHER: set the repository VARIABLE MW_PLATFORM_REF "
                         f"to one set (`X.Y.Z-ci.N`)."))
-                notes.append(f"page {page} of the {repo} main listing could not be read ({error}) — "
+                notes.append(f"page {page} of the {repo} {branch} listing could not be read ({error}) — "
                              f"the read stopped there with {len(runs)} vouching run(s) already in hand")
                 break
             if total is None:
@@ -1606,7 +1693,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
         # still the stale one. So the probe runs once; after that the page is settled only when it
         # CONTAINS a run at least as new as the witness, which is the fresh read itself.
         if proven is None:
-            witness, probe_note = main_listing_witness(fetch, repo, listed)
+            witness, probe_note = main_listing_witness(fetch, repo, listed, branch)
             if witness is None:
                 notes.append(probe_note)
                 break
@@ -1622,12 +1709,12 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             witness = proven
         why_stale = main_listing_staleness(witness, listed)
         if rereads >= STALE_REREADS:
-            notes.append(f"the {repo} main listing is still provably stale after {rereads} "
+            notes.append(f"the {repo} {branch} listing is still provably stale after {rereads} "
                          f"re-read(s) — {why_stale}; refusing")
-            return Ceiling(None, notes, main_listing_refusal(repo, why_stale, rereads))
+            return Ceiling(None, notes, main_listing_refusal(repo, why_stale, rereads, branch))
         rereads += 1
         wait = STALE_REREAD_BACKOFF_SECONDS * rereads
-        log(f"  the {repo} main listing is PROVABLY stale — {why_stale}. Re-reading it in "
+        log(f"  the {repo} {branch} listing is PROVABLY stale — {why_stale}. Re-reading it in "
             f"{wait:.0f}s ({rereads} of {STALE_REREADS})")
         notes.append(f"re-read {rereads} of {STALE_REREADS}: the `status=success` page was provably "
                      f"stale — {why_stale}")
@@ -1641,7 +1728,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
     if not exhausted and len(runs) < limit:
         notes.append(
             f"read {len(listed)} run(s) over {MAIN_PAGES_EXAMINED} page(s) of "
-            f"{SATELLITE_CD_WORKFLOW} on {repo} main and found {len(runs)} that vouch "
+            f"{SATELLITE_CD_WORKFLOW} on {repo} {branch} and found {len(runs)} that vouch "
             f"({'/'.join(MAIN_EVENTS_THAT_VOUCH)}) — the listing was NOT exhausted, so this is a "
             "read that stopped early, not evidence that main has passed on nothing. Raise "
             "MAIN_PAGES_EXAMINED or MAIN_PAGE_SIZE if this recurs.")
@@ -1664,7 +1751,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             ambiguous=ambiguous, unparseable=unparseable)
 
     if not runs:
-        notes.append(f"no successful run of {SATELLITE_CD_WORKFLOW} on {repo} main "
+        notes.append(f"no successful run of {SATELLITE_CD_WORKFLOW} on {repo} {branch} "
                      f"({'/'.join(MAIN_EVENTS_THAT_VOUCH)}) in the newest {limit} — nothing to "
                      "read a passed set from")
         return Ceiling(None, notes, ceiling_refusal(evidence()))
@@ -2154,8 +2241,17 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
            sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print,
            now: Callable[[], float] = time.time, migration: str | None = None,
            passed_ceiling: int | None = None, verify_source: bool = False,
-           armed: bool = False, freeze_source: str | None = None) -> Chosen:
-    """`passed_ceiling` — OPTIONAL, and `None` (every caller that does not ask for it) leaves this
+           armed: bool = False, freeze_source: str | None = None,
+           line: str = DEFAULT_LINE) -> Chosen:
+    """`line` — the core delivery LINE (a branch in DELIVERY_LINES) whose sets this run may take.
+    The newest sealed set is chosen from that line's CD runs ONLY (policy
+    `major-lines-run-separately`: v4 must never change what a v3 dependent builds). A FREEZE names
+    one set and is searched on `line` first, then on every other declared line — a `3.1.N` set lives
+    on `main3`, and run numbers are unique across lines, so the match is unambiguous — and a match
+    on another line is TAKEN and said so as a warning. `main()` always passes the line it resolved
+    (`served_line`); the default exists for the self-test fixtures, which model the default line.
+
+    `passed_ceiling` — OPTIONAL, and `None` (every caller that does not ask for it) leaves this
     function on exactly the path it took before the option existed. When given, it is the highest
     core-CD run number the CALLING repository's own `main` has passed on: a sealed set NEWER than
     it is passed over and said so, so a set that regresses that repository reds `main` alone
@@ -2183,20 +2279,34 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
     newer_than_main: str | None = None     # the newest sealed set main has NOT passed, if any
     receipts: dict[tuple[int, int], PublicationSource] = {}   # one log read per bake job, at most
     chosen: Chosen | None = None
-    for page in range(1, MAX_RUN_PAGES + 1):
+    if line not in DELIVERY_LINES:
+        raise ResolutionError(unknown_line_error(line, "choose(line=…)"))
+    # Only a freeze may leave the served line: it names ONE set, wherever it was sealed.
+    scan_lines = [line] + ([other for other in DELIVERY_LINES if other != line] if freeze_kind else [])
+    finished_lines: set[str] = set()
+    searched: list[str] = []
+    freeze_run = int(match_set_name(freeze_value).group(2)) if freeze_kind == "set" else None
+    for scan_line, page in ((ln, pg) for ln in scan_lines for pg in range(1, MAX_RUN_PAGES + 1)):
         if chosen is not None:
             break
-        runs = cd_runs(fetch, page)
+        if scan_line in finished_lines:
+            continue
+        if scan_line not in searched:
+            searched.append(scan_line)
+            log(f"core line {scan_line}: listing {CORE_CD_WORKFLOW} runs on {CORE_REPO} "
+                f"branch {scan_line}" + ("" if scan_line == line else
+                                         f" (the freeze was not found on the served line {line})"))
+        runs = cd_runs(fetch, page, scan_line)
         # 🚨 PAGE 1 IS WHERE "NEWEST" IS DECIDED, so it is the page checked (#4433). A freeze names
         # one set and must keep working in an incident, so it is neither re-read nor refused here.
         why_stale, rereads, empties = None, 0, 0
         if page == 1 and not freeze_kind:
             runs, why_stale, rereads, empties = settle_page_one(
-                fetch, runs, passed_ceiling, now=now, sleep=sleep, log=log)
+                fetch, runs, passed_ceiling, now=now, sleep=sleep, log=log, line=scan_line)
         if why_stale:
             raise ResolutionError(
                 f"GitHub served a STALE run listing (MeshWeaver#4433): page 1 of {CORE_CD_WORKFLOW} "
-                f"runs on {CORE_REPO} {CORE_BRANCH} cannot be the newest — {why_stale}. Resolving "
+                f"runs on {CORE_REPO} {scan_line} cannot be the newest — {why_stale}. Resolving "
                 "from it would take an old set and report it as the newest (measured 2026-09-15: "
                 "page 1 began ~260 runs behind, twice, and a re-read minutes later was correct). "
                 "Re-run this job; the resolver refuses rather than re-reading, because this red is "
@@ -2205,13 +2315,20 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
         if not runs:
             if page == 1 and not freeze_kind:
                 raise ResolutionError(
-                    f"page 1 of {CORE_CD_WORKFLOW} runs on {CORE_REPO} {CORE_BRANCH} returned "
+                    f"page 1 of {CORE_CD_WORKFLOW} runs on {CORE_REPO} {scan_line} returned "
                     "EMPTY and the independent recent-run query found no main-CD witness. "
                     "No platform set was examined; check the GitHub run listing before treating "
                     "this as an absent release.")
-            break
+            finished_lines.add(scan_line)
+            continue
+        # A set freeze names a run NUMBER; the listing is newest first and every line shares one
+        # counter, so a page reaching below it ends this line's search (the next line is tried).
+        if (freeze_run is not None
+                and min(int(r["run_number"]) for r in runs) < freeze_run
+                and all(int(r["run_number"]) != freeze_run for r in runs)):
+            finished_lines.add(scan_line)
         for run in runs:
-            if run.get("head_branch") not in (None, CORE_BRANCH):
+            if run.get("head_branch") not in (None, scan_line):
                 continue
             number = int(run["run_number"])
             sha = str(run["head_sha"])
@@ -2443,6 +2560,13 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                        f"cannot compile here at all. Verify it against {newer_than_main} outside "
                        "this lane and say so in the pull request body.")
                 log(f"  {lag}")
+            if scan_line != line:
+                log(f"::warning title=Freeze on another core line::the freeze `{freeze}` names "
+                    f"{label} = {set_name}, sealed on core line `{scan_line}`, not on the line this "
+                    f"run serves (`{line}`). It is taken because a freeze is an instruction; check "
+                    "that this run really means to build against another line's set "
+                    "(policy `major-lines-run-separately`).")
+                source += f" — sealed on core line {scan_line}"
             chosen = Chosen(sha, number, str(run.get("html_url", "")), set_name, digests,
                             source, lag=lag)
             break
@@ -2458,12 +2582,14 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
     looked_for = ", ".join(f"`{prefix}`" for _, prefix in REQUIRED_JOBS)
     if freeze_kind:
         raise ResolutionError(
-            f"the freeze `{freeze}` matched no {CORE_CD_WORKFLOW} run on {CORE_REPO} {CORE_BRANCH} "
-            f"in the newest {MAX_RUN_PAGES * 100} runs. Check the value, or clear the variable.")
-    detail = "\n".join(f"  - {s}" for s in skipped) or "  (no run on main examined at all)"
+            f"the freeze `{freeze}` matched no {CORE_CD_WORKFLOW} run on {CORE_REPO} on any "
+            f"declared delivery line — searched {', '.join(searched)} (the served line `{line}` "
+            f"first), up to the newest {MAX_RUN_PAGES * 100} runs of each. Check the value, or "
+            "clear the variable.")
+    detail = "\n".join(f"  - {s}" for s in skipped) or f"  (no run on {line} examined at all)"
     raise ResolutionError(
         f"no sealed platform set in the newest {examined} {CORE_CD_WORKFLOW} run(s) on "
-        f"{CORE_REPO} {CORE_BRANCH} whose images are still in the registry. A sealed set is a "
+        f"{CORE_REPO} {line} whose images are still in the registry. A sealed set is a "
         f"run whose jobs {looked_for} all succeeded; if core renamed one of those jobs every run "
         "reads `absent` above and the matching REQUIRED_JOBS prefix must follow it. Skipped:\n" + detail)
 
@@ -3246,6 +3372,181 @@ class _FakeBuildApi:
         self.server.server_close()
 
 
+def self_test_lines() -> tuple[int, list[str]]:
+    """THE DELIVERY LINES (policy `major-lines-run-separately`): two lines, `main` sealing 4.0.N and
+    `main3` sealing 3.1.N, interleaved on ONE run counter. Each rule has its NEGATIVE control, and
+    the last case puts the old hard-coded `branch=main` listing back and shows the line cases FAIL."""
+    import subprocess
+    failures: list[str] = []
+    total = 0
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        nonlocal total
+        total += 1
+        if not ok:
+            failures.append(f"lines: {name} — {detail}")
+
+    def red(fn: Callable[[], object]) -> str:
+        try:
+            fn()
+        except ResolutionError as error:
+            return str(error)
+        return ""
+
+    v4a, v4b, v3a, v3b = "4" * 40, "5" * 40, "3" * 40, "6" * 40
+    props = {sha: PROPS.replace("3.0.0", version)
+             for sha, version in ((v4a, "4.0.0"), (v4b, "4.0.0"), (v3a, "3.1.0"), (v3b, "3.1.0"))}
+    listings = {"main": [_run(13205, v4a, branch="main"), _run(13190, v4b, branch="main")],
+                "main3": [_run(13192, v3a, branch="main3"), _run(13180, v3b, branch="main3")]}
+    every_run = [r for rows in listings.values() for r in rows]
+    jobs = {int(r["id"]): _jobs() for r in every_run}
+
+    def lined_fetch(seen: list[str]) -> Fetch:
+        def fetch(path: str) -> dict:
+            seen.append(path)
+            if "/artifacts?name=promotion-record" in path:
+                return {"total_count": 0, "artifacts": []}
+            if f"/workflows/{CORE_CD_WORKFLOW}/runs?" in path:
+                branch = urllib.parse.parse_qs(path.split("?", 1)[1]).get("branch", [""])[0]
+                if "created=" in path:
+                    return {"workflow_runs": []}
+                page = int(re.search(r"[?&]page=(\d+)", path).group(1))
+                return {"workflow_runs": listings.get(branch, []) if page == 1 else []}
+            if "/jobs" in path:
+                rows = jobs.get(int(re.search(r"/runs/(\d+)/jobs", path).group(1)), [])
+                return {"total_count": len(rows), "jobs": rows}
+            if "/actions/runs/" in path:
+                run_id = int(path.rsplit("/", 1)[1])
+                return next(r for r in every_run if r["id"] == run_id)
+            if "Directory.Build.props" in path:
+                sha = path.rsplit("ref=", 1)[1]
+                return {"content": base64.b64encode(props[sha].encode()).decode()}
+            raise AssertionError(path)
+        return fetch
+
+    def branches(seen: list[str]) -> list[str]:
+        return [urllib.parse.parse_qs(p.split("?", 1)[1]).get("branch", [""])[0]
+                for p in seen if f"/workflows/{CORE_CD_WORKFLOW}/runs?" in p and "created=" not in p]
+
+    def pick(line: str, freeze: str | None = None, seen: list[str] | None = None,
+             logs: list[str] | None = None) -> Chosen:
+        return choose(lined_fetch(seen if seen is not None else []), None, DEFAULT_TESTER_IMAGE,
+                      DEFAULT_PORTAL_IMAGE, freeze=freeze, line=line,
+                      log=(logs if logs is not None else []).append, sleep=lambda _s: None)
+
+    def take(line: str, **kw) -> Chosen:
+        """`pick`, with a RED turned into a Chosen whose set name says RED — so a positive case that
+        goes red is a reported FAILURE of that case, never a crash of the whole self-test."""
+        try:
+            return pick(line, **kw)
+        except ResolutionError as error:
+            return Chosen("", 0, "", f"RED: {str(error)[:160]}", {}, "")
+
+    # ── which line: declared, fetched-at, or the declared default (said so) ──
+    check("--line main3 serves main3", served_line("main3", {})[0] == "main3")
+    check(f"{LINE_ENV}=main3 serves main3", served_line("", {LINE_ENV: "main3"})[0] == "main3")
+    check("--line beats the environment", served_line("main", {LINE_ENV: "main3"})[0] == "main")
+    check("the fetched-at ref names the line (scripts-ref main3)", served_line("", {}, "main3")[0] == "main3")
+    check("refs/heads/main3 is the branch main3", served_line("refs/heads/main3", {})[0] == "main3")
+    undeclared = served_line("", {}, "a" * 40)
+    check("a sha scripts-ref is NOT a line: the default line, and the reason says NOT declared",
+          undeclared[0] == DEFAULT_LINE and undeclared[1].startswith("NOT declared"), undeclared)
+    check("nothing given: the default line, said NOT declared",
+          served_line("", {})[1].startswith("NOT declared"))
+    unknown = red(lambda: served_line("main4", {}))
+    check("an undeclared --line is RED naming every declared line",
+          "main4" in unknown and all(f"`{b}`" in unknown for b in DELIVERY_LINES), unknown)
+    check(f"an undeclared {LINE_ENV} is RED too", "main4" in red(lambda: served_line("", {LINE_ENV: "main4"})))
+    check("choose refuses an undeclared line by name", "main4" in red(lambda: pick("main4")))
+
+    # ── the newest sealed set comes from the served line's runs ONLY ──
+    seen: list[str] = []
+    got = take("main3", seen=seen)
+    check("line main3 takes the newest 3.1 set, not the newer-numbered 4.0 one",
+          got.set_name == "3.1.13192" and got.sha == v3a, got.set_name)
+    check("line main3 lists ONLY branch=main3", set(branches(seen)) == {"main3"}, branches(seen))
+    seen = []
+    got = take("main", seen=seen)
+    check("line main takes the newest 4.0 set", got.set_name == "4.0.13205", got.set_name)
+    check("line main lists ONLY branch=main", set(branches(seen)) == {"main"}, branches(seen))
+
+    # ── a freeze is searched on the served line first, then on every other declared line ──
+    seen, logs = [], []
+    got = take("main", freeze="3.1.13192", seen=seen, logs=logs)
+    check("a v4-line freeze of a main3 set finds it on main3", got.set_name == "3.1.13192", got.set_name)
+    check("…searching the served line first, then main3, and stopping main below the run number",
+          branches(seen) == ["main", "main3"], branches(seen))
+    check("…and WARNS that the set was sealed on another line",
+          any("Freeze on another core line" in entry for entry in logs) and "main3" in got.source, logs)
+    seen, logs = [], []
+    got = take("main3", freeze="3.1.13192", seen=seen, logs=logs)
+    check("a v3-line freeze of a main3 set never lists main", branches(seen) == ["main3"]
+          and not any("another core line" in entry for entry in logs), branches(seen))
+    check("a sha freeze is found on the line that sealed it",
+          take("main", freeze=v3b).set_name == "3.1.13180")
+    missing = red(lambda: pick("main3", freeze="3.1.99999"))
+    check("a freeze matching NO line is RED naming every line searched",
+          "searched main3, main" in missing and "3.1.99999" in missing, missing)
+
+    # ── the ceiling reads the dependent branch of the same line ──
+    ceiling_seen: list[str] = []
+
+    def ceiling_fetch(path: str) -> dict:
+        ceiling_seen.append(path)
+        return {"total_count": 0, "workflow_runs": []}
+    main_passed_ceiling(ceiling_fetch, "Systemorph/Satellite", log=lambda _m: None,
+                        sleep=lambda _s: None, branch="main3")
+    listed = [p for p in ceiling_seen if f"/workflows/{SATELLITE_CD_WORKFLOW}/runs?" in p]
+    check("the ceiling and its staleness probe list the satellite's main3",
+          listed and all("branch=main3&" in p for p in listed), listed)
+    check("the default line's satelliteRef keeps today's ceiling branch",
+          DELIVERY_LINES[DEFAULT_LINE] == "main")
+
+    # ── the mirror cannot drift from .github/delivery-lines.json ──
+    beside = os.path.join(os.path.dirname(os.path.abspath(__file__)), DELIVERY_LINES_FILE)
+    if os.path.isfile(beside):
+        with open(beside, encoding="utf-8") as handle:
+            declared_text = handle.read()
+        drift = delivery_lines_drift(declared_text)
+        check("DELIVERY_LINES / DEFAULT_LINE mirror .github/delivery-lines.json", not drift, drift)
+        mutated = json.loads(declared_text)
+        mutated["lines"].append({"branch": "main2", "satelliteRef": "main2"})
+        check("…and a line added to the JSON alone is reported as drift (negative control)",
+              bool(delivery_lines_drift(json.dumps(mutated))))
+    check("unreadable delivery-lines.json is drift, never 'no drift'", bool(delivery_lines_drift("{")))
+
+    # ── the CLI refuses an undeclared line before it reads anything ──
+    env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN", LINE_ENV)}
+    proc = subprocess.run([sys.executable, os.path.abspath(__file__), "--no-registry", "--line", "main4"],
+                          capture_output=True, text=True, env=env, timeout=60)
+    check("the CLI: --line main4 is RED as an unknown line (no token needed to say so)",
+          proc.returncode == 1 and "Unknown core delivery line" in proc.stdout, proc.stdout[-300:])
+
+    # ── NEGATIVE CONTROL: put the hard-coded `branch=main` back; the line cases must FAIL ──
+    real_cd_runs = globals()["cd_runs"]
+
+    def hard_coded_cd_runs(fetch: Fetch, page: int, line: str) -> list[dict]:
+        data = fetch(f"/repos/{CORE_REPO}/actions/workflows/{CORE_CD_WORKFLOW}/runs"
+                     f"?branch=main&per_page=100&page={page}")
+        return list(data.get("workflow_runs") or [])
+    globals()["cd_runs"] = hard_coded_cd_runs
+    try:
+        mutated_seen: list[str] = []
+        try:
+            outcome = pick("main3", seen=mutated_seen).set_name
+        except ResolutionError as error:
+            outcome = f"RED: {str(error)[:80]}"
+        check("NEGATIVE CONTROL: with `branch=main` hard-coded, line main3 does NOT resolve 3.1.13192 "
+              "(the line case above would fail)", outcome != "3.1.13192", outcome)
+        check("NEGATIVE CONTROL: …and it listed branch=main for a main3 run",
+              "main" in branches(mutated_seen), branches(mutated_seen))
+    finally:
+        globals()["cd_runs"] = real_cd_runs
+    check("the real cd_runs is restored after the negative control",
+          globals()["cd_runs"] is real_cd_runs)
+    return total, failures
+
+
 def self_test_build_hosts() -> tuple[int, list[str]]:
     """`--from-build-hosts` and the cap rules, against a fake build API serving `GET /hosts` in the
     shape the control instance answers (`{aliases:{latest, candidate, previous}, versions:[{version,
@@ -3767,6 +4068,10 @@ def self_test() -> int:
     logs: list[str] = []
     # `--from-build-hosts` and the package caps (Doc/Architecture/DeployTestSwitchLatest §4-§5).
     total, failures = self_test_build_hosts()
+    # The delivery lines (policy `major-lines-run-separately`), with the hard-coded-main control.
+    lines_total, lines_failures = self_test_lines()
+    total += lines_total
+    failures += lines_failures
 
     # ── the SemVer notation (policy `platform-semver-versioning`): both notations, ONE lineage ──
     def _parsed(text: str):
@@ -5975,6 +6280,17 @@ def main() -> int:
                         help="validate every package cap under --root (shape, cap ≥ floor, "
                              "companions, not stale, deployment retained) and exit; reads the build "
                              "API only when a cap is declared.")
+    parser.add_argument("--line", default="", metavar="BRANCH",
+                        help="the core delivery LINE whose sets this run may take (`main3` = v3, "
+                             f"`main` = v4; .github/delivery-lines.json). Also read from {LINE_ENV}. "
+                             "Not a declared line = RED. Omitted: --scripts-ref when it names a line, "
+                             "else the declared default line, with a warning.")
+    parser.add_argument("--scripts-ref", default="", metavar="REF",
+                        help="the core ref this copy was fetched at (the lanes' `scripts-ref`). When "
+                             "it IS a declared line branch it names the line; a sha or tag does not.")
+    parser.add_argument("--passed-on-branch", default="", metavar="BRANCH",
+                        help="with --passed-on-main: the caller's branch whose runs vouch. Default: "
+                             "the served line's declared satelliteRef (`main3` for the v3 line).")
     parser.add_argument("--root", default=".", help="with --check-caps: the repository root")
     parser.add_argument("--build-api", default="",
                         help="with --check-caps: the build API base (vars.MW_BUILD_API)")
@@ -6024,6 +6340,24 @@ def main() -> int:
                   f"is an incident instruction; `latest` ({hosts_latest}) is not taken this run"
                   + ("; the package partitions are derived from the FROZEN set" if hosts_bounds is not None else ""))
 
+    # 🚨 THE LINE IS DECLARED, NEVER GUESSED SILENTLY (policy `major-lines-run-separately`). Every
+    # listing below reads THIS line's CD runs; only a freeze may find its set on another line.
+    try:
+        line, line_how = served_line(arguments.line, dict(os.environ), arguments.scripts_ref)
+    except ResolutionError as error:
+        print(f"::error title=Unknown core delivery line::{error}")
+        return 1
+    print(f"core line: {line} — {line_how}")
+    if line_how.startswith("NOT declared"):
+        print(f"::warning title=Core line not declared::this run resolves sets of the default core "
+              f"line `{line}` because no line was declared ({line_how}). A v3 dependent must pass "
+              f"--line main3 (or set {LINE_ENV}=main3, or pass --scripts-ref main3), "
+              "or it builds against the v4 line (policy `major-lines-run-separately`).")
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as handle:
+            handle.write(f"core delivery line: `{line}` — {line_how}\n\n")
+
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     if not token:
         print("::error title=No GitHub token::GH_TOKEN / GITHUB_TOKEN is unset — the released "
@@ -6060,7 +6394,10 @@ def main() -> int:
         ceiling = int(arguments.passed_ceiling)
         print(f"following main: ceiling core CD #{ceiling} (from the run's baseline)")
     elif arguments.passed_on_main:
-        followed = ceiling_for(fetch, arguments.passed_on_main, arguments.freeze or None)
+        vouching = arguments.passed_on_branch.strip() or DELIVERY_LINES[line]
+        print(f"following {arguments.passed_on_main} {vouching}: the dependent branch of core line {line}")
+        followed = ceiling_for(fetch, arguments.passed_on_main, arguments.freeze or None,
+                               branch=vouching)
         ceiling = followed.number
         for note in followed.notes:
             print(f"  {note}")
@@ -6085,6 +6422,7 @@ def main() -> int:
                                freeze=arguments.freeze or hosts_latest or None,
                                migration=migration or None, passed_ceiling=ceiling,
                                verify_source=arguments.verify_source, armed=arguments.armed,
+                               line=line,
                                freeze_source=(None if arguments.freeze or not hosts_latest else
                                               f"the build hosts' `latest` deployment ({hosts_latest}, "
                                               f"{arguments.from_build_hosts})"))
