@@ -86,11 +86,11 @@ public class AnUploadTimeoutNamesTheStepThatTimedOutTest(ITestOutputHelper outpu
         return bytes;
     }
 
-    private static Task<string> Upload(IMessageHub client, string path, byte[] bytes)
+    private static Task<string> Upload(IMessageHub client, string path, byte[] bytes, CancellationToken cancellationToken)
         => new MeshOperations(client).Upload(path, bytes)
             .Catch<string, Exception>(ex => Observable.Return($"FAULT {ex.GetType().Name}: {ex.Message}"))
             .Take(1)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
 
     /// <summary>Under (inline) and over (staged out of band) one delivery's 1 MiB budget.</summary>
     public static TheoryData<int> Sizes => [4_096, 3 * 1024 * 1024];
@@ -100,7 +100,8 @@ public class AnUploadTimeoutNamesTheStepThatTimedOutTest(ITestOutputHelper outpu
     public async Task TheControl_AnUploadTheOwnerAnswers_IsWritten(int size)
     {
         var bytes = Bytes(size);
-        var answer = await Upload(ShortDeadlineClient(), $"{Target}/content/kept/file-{size}.bin", bytes);
+        var answer = await Upload(ShortDeadlineClient(), $"{Target}/content/kept/file-{size}.bin", bytes,
+            TestContext.Current.CancellationToken);
         Output.WriteLine(answer);
 
         answer.Should().Contain("\"Uploaded\"",
@@ -114,7 +115,8 @@ public class AnUploadTimeoutNamesTheStepThatTimedOutTest(ITestOutputHelper outpu
     [MemberData(nameof(Sizes))]
     public async Task AWriteTheOwnerNeverAnswers_IsNotReportedAsAFailedLookup(int size)
     {
-        var answer = await Upload(ShortDeadlineClient(), $"{Target}/content/{SwallowedFolder}/file-{size}.bin", Bytes(size));
+        var answer = await Upload(ShortDeadlineClient(), $"{Target}/content/{SwallowedFolder}/file-{size}.bin", Bytes(size),
+            TestContext.Current.CancellationToken);
         Output.WriteLine(answer);
 
         answer.Should().StartWith("Error:");
