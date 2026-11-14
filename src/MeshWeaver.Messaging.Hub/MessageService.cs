@@ -344,11 +344,11 @@ public class MessageService : IMessageService
         gates = new(hub.Configuration.InitializationGates);
         deferralTimeout = hub.Configuration.DeferralTimeout ?? DefaultDeferralTimeout;
         if (hub.Configuration.StartupTimeout is not null)
-            startupTimer = new(NotifyStartupFailure, null, hub.Configuration.StartupTimeout.Value, Timeout.InfiniteTimeSpan);
+            startupTimer = hub.Configuration.TimeoutClock.CreateTimer(NotifyStartupFailure, null, hub.Configuration.StartupTimeout.Value, Timeout.InfiniteTimeSpan);
     }
 
 
-    private readonly Timer? startupTimer;
+    private readonly ITimer? startupTimer;
 
 
     void IMessageService.Start()
@@ -2384,7 +2384,7 @@ public class MessageService : IMessageService
             displaced.TimeoutCts.Dispose();
         }
         deferredDeliveries[delivery.Id] = tracker;
-        _ = Task.Delay(deferralTimeout, cts.Token).ContinueWith(t =>
+        _ = Task.Delay(deferralTimeout, hub.Configuration.TimeoutClock, cts.Token).ContinueWith(t =>
         {
             if (t.IsCanceled) return;
             // 🚨 PAIR-EXACT claim, not TryRemove(id). The dictionary is written with the INDEXER, so
