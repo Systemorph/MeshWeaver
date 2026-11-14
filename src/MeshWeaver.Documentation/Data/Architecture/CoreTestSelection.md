@@ -57,8 +57,9 @@ From those jobs' text (comments removed) the walk collects what they consume, tr
   non-workflow file it names by basename (`$ACTION_PATH/../../scripts/ci-fresh-merge.py`). A
   workflow it names without calling it is data (consumed, not walked); a workflow named by basename
   alone is an API name or a message (`actions/workflows/clients.yml/runs`).
-- **A script** is walked for the scripts it loads — a sibling named in its code (`import x`, a path
-  literal, an argv), with docstrings, triple-quoted fixtures and comment lines removed — and for
+- **A script** is walked for the scripts it loads — a sibling named in its code (any import form —
+  every module of `import a, b`, every dotted segment of `import a.b` / `from a.b import c`, the
+  names of `from . import x` — a path literal, an argv), with docstrings, triple-quoted fixtures and comment lines removed — and for
   the data files it names. Never for workflows: a `uses:` inside a script is a fixture.
 - **A data file** (json, allow, list, …) is consumed and not walked.
 - The selector itself is consumed (changing it runs everything) and is not walked — its self-test

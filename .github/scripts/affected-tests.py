@@ -61,7 +61,22 @@ GH_PATH = re.compile(r"\.github/[A-Za-z0-9_./-]*(\*)?")
 PATH_COMBINE = re.compile(r'Path\.Combine\([^;]*?"\.github"((?:\s*,\s*"[^"]*")*)\s*[,)]')
 BARE_GH_LITERAL = re.compile(r'"\.github"')
 USES_WORKFLOW = re.compile(r"uses:\s*['\"]?(?:\./|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/)(\.github/workflows/[A-Za-z0-9_.-]+)")
-PY_IMPORT = re.compile(r"^\s*(?:from\s+([A-Za-z_][A-Za-z0-9_]*)\s+import|import\s+([A-Za-z_][A-Za-z0-9_]*))", re.M)
+# An import statement's head: `from <mod> import <names>` (absolute or relative) or `import <list>`.
+PY_IMPORT = re.compile(r"^[ \t]*(?:from[ \t]+(\.*)([A-Za-z_][A-Za-z0-9_.]*)?[ \t]+import[ \t]+([^\n#;]+)|import[ \t]+([^\n#;]+))", re.M)
+
+def py_import_files(text: str) -> set[str]:
+    """Every sibling `<name>.py` an import statement may load — over-read, never under-read: each
+    module of `import a, b as c` (not just the first), every dotted segment of `import a.b` and
+    `from a.b import c`, and the imported names of a `from` (a submodule of a package, or the
+    sibling names of `from . import x`). A name that is no sibling file simply matches nothing."""
+    out: set[str] = set()
+    for dots, mod, names, plain in PY_IMPORT.findall(text):
+        mods = [mod] if mod else []
+        listed = names or plain
+        mods += [x.split()[0] for x in listed.replace("(", " ").replace(")", " ").split(",") if x.split()]
+        for m in mods:
+            out |= {f"{seg}.py" for seg in m.split(".") if seg}
+    return out
 TOKEN = re.compile(r"[A-Za-z0-9_.-]+")
 
 
@@ -290,7 +305,7 @@ def derive(root: Path) -> Derivation:
                 refs_seen.add(r)
                 if is_dir and (not yaml_code or r in command_refs(text)): dirs.add(f"{r} (named by {origin})")
                 for f in fs: add(f, f"{origin} names {r}")
-            names = set(TOKEN.findall(text)) | {f"{x or y}.py" for x, y in PY_IMPORT.findall(text)}
+            names = set(TOKEN.findall(text)) | py_import_files(text)
             for n in names & by_base.keys():
                 for f in by_base[n]:
                     if not f.startswith(".github/workflows/"): add(f, f"{origin} names {n}")
@@ -450,7 +465,11 @@ def _synth_tree(root: Path, workflow: str = SYNTH_WORKFLOW) -> None:
         ".github/workflows/module-pack.yml": "jobs:\n  x:\n    steps:\n    - run: echo pack\n",
         ".github/actions/fresh/action.yml": "runs:\n  steps:\n  - run: python3 \"$P/../../scripts/fresh-impl.py\"\n",
         ".github/scripts/affected-tests.py": "print('selector')\n",
-        ".github/scripts/lane.py": "import helper_mod\nHERE = 1\nload(HERE / 'loaded-by-path.py')\n",
+        ".github/scripts/lane.py": "import helper_mod\nimport os, second_mod as s2\nHERE = 1\nload(HERE / 'loaded-by-path.py')\n",
+        ".github/scripts/second_mod.py": "from pkg_head.sub_mod import thing\nfrom . import rel_a, rel_b\n",
+        ".github/scripts/pkg_head.py": "p = 1\n",
+        ".github/scripts/sub_mod.py": "q = 1\n",
+        ".github/scripts/rel_b.py": "r = 1\n",
         ".github/scripts/helper_mod.py": "x = 1\n",
         ".github/scripts/loaded-by-path.py": "y = 1\n",
         ".github/scripts/reused.sh": "echo reused\n",
@@ -510,6 +529,10 @@ def self_test(real_root: Path | None) -> int:
         # …and its transitive imports: by `import`, and by a path literal naming the sibling
         ok([".github/scripts/helper_mod.py"], "all", d=d)
         ok([".github/scripts/loaded-by-path.py"], "all", d=d)
+        # …and the import forms beyond `import x`: the SECOND module of a comma list, every dotted
+        # segment of `from a.b import c`, and the names of a relative `from . import a, b`
+        for f_ in ("second_mod", "pkg_head", "sub_mod", "rel_b"):
+            ok([f".github/scripts/{f_}.py"], "all", d=d)
         # a composite action the lane uses, and the script IT reaches by a relative path
         ok([".github/actions/fresh/action.yml"], "all", d=d)
         ok([".github/scripts/fresh-impl.py"], "all", d=d)
