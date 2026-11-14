@@ -209,7 +209,15 @@ applied from both ends.
 ## The alarm (`control-always-latest`)
 
 **Platform half.** The core workflow `.github/workflows/control-always-latest.yml` runs every 30
-minutes and calls `arm-promoted-set.py control-lag`. It finds the newest promoted set whose
+minutes and calls `arm-promoted-set.py control-lag --control-record <record>`. It reads only the
+builds of the ONE delivery line control follows: the `updatePattern` of control's record (located by
+`record` in `.github/control-instance.json`, read with the read-only fleet-reader App) names the
+major, and the declared line whose `Directory.Build.props` carries that major is the branch. Nothing
+is hard-coded, so when the record moves to `4.*` the reading follows `main`. Ancestry means
+something only along one line: a `main3` cherry-pick does not contain its `main` original, so a
+reading over `main`'s builds once called a control running the newest v3 build "behind"
+(MeshWeaver#8197). A pattern naming no single major (`*`), or no declared line of that major, is RED.
+Within that line it finds the newest promoted set whose
 `Deploy control first` job succeeded, and checks whether control's running commit contains that
 set. When it does not, it walks back through the earlier builds given to control until it reaches
 one control contains. The **first build control was given and did not take** starts the clock. The

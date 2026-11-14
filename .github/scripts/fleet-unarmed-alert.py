@@ -1,8 +1,23 @@
 #!/usr/bin/env python3
-"""fleet-unarmed-alert.py — ONE `fleet-unarmed` issue, kept true by every run of main-cd's `arm` job.
+"""fleet-unarmed-alert.py — ONE `fleet-unarmed` issue PER MAJOR, kept true by every run of that line's `arm` job.
 
     python3 .github/scripts/fleet-unarmed-alert.py --reading unarmed.json   # in Actions (env below)
     python3 .github/scripts/fleet-unarmed-alert.py --self-test
+
+PER LINE / MAJOR (MeshWeaver#8208, policy `major-lines-run-separately`)
+-----------------------------------------------------------------------
+Each delivery line arms its own major (`main` 4.x, `main3` 3.x), so "the fleet is unarmed" is a fact
+about ONE major. The reading names its `major` and `line`, and each major has its own issue — its
+own title (`… the 4.x fleet unarmed`) and its own hidden mark (`<!-- fleet-unarmed alert major=4 -->`)
+— which only that major's arm run creates, rewrites or closes. Until this, both lines kept ONE issue:
+v4's cold start opened it and v3's armed fleet closed it on every tick (#8183 … #8208). An issue of
+the former shared shape (the old title and mark) is closed ONCE as superseded by whichever line reads
+it next, pointing at the per-major issue; it is never rewritten or reopened.
+
+COLD START. When no set of the line's major was ever armed, the reading's `armed` says so in words
+(`no 4.x set armed yet`, never the cursor `ci.0`) and `cold_start` is true; its window is complete once
+the run listing passed the line's FIRST set of the major, so the stall is clocked from that set's
+promotion, never from the oldest run of a listing that could not reach a cursor of 0.
 
 WHY (MeshWeaver#6042, policy `one-promotion-gate`)
 ---------------------------------------------------
@@ -62,8 +77,19 @@ from datetime import datetime, timedelta, timezone
 
 API = "https://api.github.com"
 LABEL = "fleet-unarmed"
-TITLE = "fleet-unarmed: the promotion gate has left the fleet unarmed"
-MARK = "<!-- fleet-unarmed alert -->"
+# The former ONE shared issue (both lines in one title) — closed once as superseded, never written again.
+LEGACY_TITLE = "fleet-unarmed: the promotion gate has left the fleet unarmed"
+LEGACY_MARK = "<!-- fleet-unarmed alert -->"
+
+
+def title_for(major: int) -> str:
+    """The issue title of ONE major's alert — distinct per major, so a line never adopts another's."""
+    return f"fleet-unarmed: the promotion gate has left the {major}.x fleet unarmed"
+
+
+def mark_for(major: int) -> str:
+    """The hidden ownership mark of ONE major's alert (never a substring of another major's)."""
+    return f"<!-- fleet-unarmed alert major={major} -->"
 FINGERPRINT = re.compile(r"<!-- fleet-unarmed reading: (\S+) -->")
 BOT_LOGIN = "github-actions[bot]"
 # 🏷️ The alert states its own TYPE and SEVERITY (Doc/Architecture/IssueTaxonomy, policy
@@ -99,6 +125,9 @@ class Decision:
     armed: str
     fingerprint: str
     floor: bool = False     # the run listing never reached the armed cursor: the age is AT LEAST this
+    major: int = 0          # the line's platform major — the alert is ONE issue per major
+    line: str = ""          # the delivery line (branch) whose arm run read this
+    cold_start: bool = False  # no set of `major` was ever armed
 
 
 def parse_threshold(raw: str | None) -> float:
@@ -127,6 +156,14 @@ def check_reading(reading: object) -> None:
         raise Red("the reading carries no `unarmed` list")
     if not str(reading.get("armed") or ""):
         raise Red("the reading names no newest armed set — cannot say what the fleet runs")
+    # `bool` is an int in Python: refuse it explicitly, a `true` major names no line.
+    if type(reading.get("major")) is not int or reading["major"] < 0:
+        raise Red("the reading names no platform `major` — the alert is ONE issue per major, and a reading that "
+                  "names none would write into another line's issue")
+    if not str(reading.get("line") or ""):
+        raise Red("the reading names no delivery `line` — cannot say whose arm run read it")
+    if not isinstance(reading.get("cold_start"), bool):
+        raise Red("the reading does not say whether its line is at the cold start of its major (`cold_start`)")
     if not isinstance(reading.get("window_complete"), bool):
         raise Red("the reading does not say whether its run listing reached the armed cursor (`window_complete`)")
     if not reading["window_complete"]:
@@ -162,19 +199,24 @@ def decide(reading: dict, now: datetime, threshold_hours: float) -> Decision:
     ages = [(now - _when(str(unarmed[-1]["promoted_at"]))).total_seconds() / 3600] if unarmed else []
     if floor:
         ages.append((now - _when(str(reading["window_floor_at"]))).total_seconds() / 3600)
+    line = dict(major=int(reading["major"]), line=str(reading["line"]), cold_start=bool(reading["cold_start"]))
     if not ages:
-        return Decision(False, None, None, [], str(reading["armed"]), fp)
+        return Decision(False, None, None, [], str(reading["armed"]), fp, **line)
     age = max(ages)
     return Decision(age > threshold_hours, age, unarmed[-1] if unarmed else None, unarmed,
-                    str(reading["armed"]), fp, floor)
+                    str(reading["armed"]), fp, floor, **line)
 
 
 def render_body(d: Decision, threshold_hours: float, run_url: str, now: datetime) -> str:
     lines = [
-        f"🚨 The promotion gate has left the fleet unarmed for {'AT LEAST ' if d.floor else ''}"
+        f"🚨 The promotion gate has left the **{d.major}.x** fleet unarmed for {'AT LEAST ' if d.floor else ''}"
         f"**{d.age_hours:.1f} h** (threshold {threshold_hours:g} h, `FLEET_UNARMED_ALERT_HOURS` in main-cd's `arm` job).",
         "",
-        f"- newest ARMED set: **{d.armed}** — what SelfUpdateHostedService rolls the fleet to",
+        f"- line: `{d.line}`, major **{d.major}** — this issue is that line's alone; every other major keeps its own",
+        (f"- newest ARMED {d.major}.x set: **none — {d.armed}** (cold start of major {d.major}: the fleet still runs "
+         f"the previous major's armed set; the age is clocked from the line's FIRST {d.major}.x set)"
+         if d.cold_start else
+         f"- newest ARMED {d.major}.x set: **{d.armed}** — what SelfUpdateHostedService rolls the {d.major}.x fleet to"),
         (f"- promoted but NOT armed: **{len(d.unarmed)}** set(s); the oldest listed, `{d.oldest['v_portal']}`, "
          f"was promoted {d.oldest['promoted_at']}" if d.oldest else
          "- promoted but NOT armed: none listed in the window"),
@@ -199,17 +241,25 @@ def render_body(d: Decision, threshold_hours: float, run_url: str, now: datetime
         "override (main-cd `workflow_dispatch` with `arm_override` + `arm_reason`) exists and stays the "
         "maintainer's call; it is not the remedy this issue suggests.",
         "",
-        "This issue is rewritten on every `arm` run while the fleet stays unarmed and closes itself on the first "
-        "run that finds it armed again (policy `one-promotion-gate`, Doc/Architecture/OnePromotionGate).",
+        f"This issue is rewritten on every `{d.line}` `arm` run while the {d.major}.x fleet stays unarmed and closes "
+        "itself on the first run of that line that finds it armed again (policy `one-promotion-gate`, "
+        "Doc/Architecture/OnePromotionGate; one issue per major, policy `major-lines-run-separately`).",
         "",
-        MARK,
+        mark_for(d.major),
         f"<!-- fleet-unarmed reading: {d.fingerprint} -->",
     ]
     return "\n".join(lines) + "\n"
 
 
-def owns(issue: Issue) -> bool:
-    return (LABEL in issue.labels and issue.title == TITLE and MARK in (issue.body or "")
+def owns(issue: Issue, major: int) -> bool:
+    """This MAJOR's alert: the label, the major's exact title, the major's mark and the Actions bot."""
+    return (LABEL in issue.labels and issue.title == title_for(major) and mark_for(major) in (issue.body or "")
+            and issue.author == BOT_LOGIN and issue.author_type == "Bot")
+
+
+def owns_legacy(issue: Issue) -> bool:
+    """An issue of the former SHARED shape (both lines in one): the old title and mark, by the bot."""
+    return (LABEL in issue.labels and issue.title == LEGACY_TITLE and LEGACY_MARK in (issue.body or "")
             and issue.author == BOT_LOGIN and issue.author_type == "Bot")
 
 
@@ -219,20 +269,24 @@ class Plan:
     target: int | None = None
     duplicates: list = field(default_factory=list)
     comment: bool = False
+    superseded: list = field(default_factory=list)   # open issues of the former shared shape, closed once
 
 
 def plan(d: Decision, issues: list[Issue]) -> Plan:
-    """Pure. What to do with the owned OPEN issues given the decision."""
-    mine = sorted((i for i in issues if i.state == "open" and owns(i)), key=lambda i: i.number)
+    """Pure. What to do with THIS MAJOR's owned OPEN issues given the decision. Another major's issue
+    is never touched; an open issue of the former shared shape is closed as superseded."""
+    mine = sorted((i for i in issues if i.state == "open" and owns(i, d.major)), key=lambda i: i.number)
+    legacy = sorted(i.number for i in issues if i.state == "open" and owns_legacy(i))
     survivor, dups = (mine[0], [i.number for i in mine[1:]]) if mine else (None, [])
     if d.stale:
         if survivor is None:
-            return Plan("create", None, dups)
+            return Plan("create", None, dups, superseded=legacy)
         m = FINGERPRINT.search(survivor.body or "")
-        return Plan("update", survivor.number, dups, comment=(m is None or m.group(1) != d.fingerprint))
+        return Plan("update", survivor.number, dups, comment=(m is None or m.group(1) != d.fingerprint),
+                    superseded=legacy)
     if survivor is not None:
-        return Plan("close", survivor.number, dups)
-    return Plan("none", None, dups)
+        return Plan("close", survivor.number, dups, superseded=legacy)
+    return Plan("none", None, dups, superseded=legacy)
 
 
 # ───────────────────────────────── GitHub (REST only) ─────────────────────────────────────
@@ -291,8 +345,8 @@ class GitHub:
                 break
         return out
 
-    def create(self, body: str) -> int:
-        _, it = self.call("POST", "issues", body={"title": TITLE, "body": body, "labels": [LABEL, *TAXONOMY]})
+    def create(self, title: str, body: str) -> int:
+        _, it = self.call("POST", "issues", body={"title": title, "body": body, "labels": [LABEL, *TAXONOMY]})
         return int(it["number"])  # type: ignore[index]
 
     def issue(self, number: int) -> Issue:
@@ -309,28 +363,44 @@ class GitHub:
         self.call("POST", f"issues/{number}/comments", body={"body": body})
 
 
-def _still_mine(gh, number: int) -> None:
+def _still_mine(gh, number: int, major: int) -> None:
     """Re-prove ownership IMMEDIATELY before a write (the ci-failure-ledger.py rule): the plan was made
     on a listing snapshot, and a label, title or mark changed since must stop the write, RED."""
     now = gh.issue(number)
-    if now.state != "open" or not owns(now):
+    if now.state != "open" or not owns(now, major):
         raise Red(f"#{number} is no longer an open issue this alert owns (state {now.state}; it needs the "
-                  f"`{LABEL}` label, the exact title, the `{MARK}` mark and the Actions bot as author) — "
-                  "a mechanism may only write to an issue it opened; nothing written to it")
+                  f"`{LABEL}` label, the exact title `{title_for(major)}`, the `{mark_for(major)}` mark and the "
+                  "Actions bot as author) — a mechanism may only write to an issue it opened; nothing written to it")
+
+
+def _still_legacy(gh, number: int) -> bool:
+    """Whether a former shared-shape issue is STILL open and still the alert's. Both lines read it, so
+    the other line closing it first is the expected race — False, nothing to do. Open but no longer
+    the alert's (a human changed it) is RED, never written to."""
+    now = gh.issue(number)
+    if now.state != "open":
+        return False
+    if not owns_legacy(now):
+        raise Red(f"#{number} is no longer an issue of the former shared fleet-unarmed shape (title, mark, label "
+                  "or author changed) — nothing written to it")
+    return True
 
 
 def apply(gh, d: Decision, p: Plan, body: str, run_url: str) -> str:
     """Execute the plan; returns one sentence for the log. Every write to an existing issue is
     preceded by a fresh ownership check (`_still_mine`)."""
     for n in p.duplicates:
-        _still_mine(gh, n)
+        _still_mine(gh, n, d.major)
         gh.comment(n, f"Duplicate of #{p.target or '?'} — this alert keeps ONE issue; closing.")
         gh.edit(n, state="closed", state_reason="not_planned")
+    said = _supersede(gh, d, p, body, run_url)
+    if said:
+        return said
     if p.action == "create":
-        n = gh.create(body)
+        n = gh.create(title_for(d.major), body)
         return f"STALE — filed #{n}"
     if p.action == "update":
-        _still_mine(gh, p.target)
+        _still_mine(gh, p.target, d.major)
         gh.edit(p.target, body=body)
         if p.comment:
             oldest = f"oldest `{d.oldest['v_portal']}`" if d.oldest else "none listed in the window"
@@ -338,14 +408,37 @@ def apply(gh, d: Decision, p: Plan, body: str, run_url: str) -> str:
                                  f"{'at least ' if d.floor else ''}{d.age_hours:.1f} h — the body carries the table.")
         return f"STALE — #{p.target} rewritten{' and commented (reading changed)' if p.comment else ' (reading unchanged, no comment)'}"
     if p.action == "close":
-        _still_mine(gh, p.target)
-        gh.comment(p.target, f"✅ Armed again ([run]({run_url})): the fleet runs **{d.armed}**"
+        _still_mine(gh, p.target, d.major)
+        gh.comment(p.target, f"✅ Armed again ([run]({run_url})): the {d.major}.x fleet runs **{d.armed}**"
                              + (f"; {len(d.unarmed)} newer set(s) unarmed for {d.age_hours:.1f} h, inside the bound."
                                 if d.unarmed else "; no promoted set is newer.") + " Closing.")
         gh.edit(p.target, state="closed", state_reason="completed")
         return f"armed — #{p.target} closed"
     return ("not stale — nothing open, nothing to do (" + (f"{len(d.unarmed)} unarmed, oldest {d.age_hours:.1f} h"
             if d.unarmed else "no promoted set newer than the armed one") + ")")
+
+
+def _supersede(gh, d: Decision, p: Plan, body: str, run_url: str) -> str:
+    """Close every open issue of the former SHARED shape ONCE, pointing at this major's own issue
+    (filed first when this reading is stale, so the pointer names a real issue). Returns the log
+    sentence when it filed this major's issue itself (the plan's `create` is then done), else ""."""
+    if not p.superseded:
+        return ""
+    filed = ""
+    target = p.target
+    if p.action == "create":
+        target = gh.create(title_for(d.major), body)
+        filed = f"STALE — filed #{target}"
+    for n in p.superseded:
+        if not _still_legacy(gh, n):
+            continue
+        where = (f"the {d.major}.x line's own alert is #{target}" if d.stale and target else
+                 f"the {d.major}.x fleet reads armed (**{d.armed}**)")
+        gh.comment(n, f"Superseded ([run]({run_url})): the fleet-unarmed alert is now ONE issue PER MAJOR, each "
+                      f"opened and closed only by its own line's `arm` run (MeshWeaver#8208); {where}. This shared "
+                      "issue is closed and never written again.")
+        gh.edit(n, state="closed", state_reason="not_planned")
+    return filed
 
 
 def main(argv: list[str]) -> int:
@@ -384,7 +477,8 @@ def main(argv: list[str]) -> int:
     if d.stale:
         oldest = f"oldest {d.oldest['v_portal']} ({d.oldest['state']})" if d.oldest else "none listed in the window"
         print(f"::warning title=Fleet unarmed for {'at least ' if d.floor else ''}{d.age_hours:.1f} h::"
-              f"{len(d.unarmed)} promoted set(s) newer than the armed {d.armed}; {oldest} — see the `{LABEL}` issue")
+              f"{len(d.unarmed)} promoted {d.major}.x set(s) newer than the armed {d.armed}; {oldest} — see the "
+              f"`{title_for(d.major)}` issue")
     summary = env("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as f:
@@ -403,9 +497,9 @@ class FakeGitHub:
     def open_labelled(self):
         return [i for i in self.issues.values() if i.state == "open" and LABEL in i.labels]
 
-    def create(self, body):
+    def create(self, title, body):
         self.next += 1
-        self.issues[self.next] = Issue(self.next, TITLE, "open", body, (LABEL, *TAXONOMY), BOT_LOGIN, "Bot")
+        self.issues[self.next] = Issue(self.next, title, "open", body, (LABEL, *TAXONOMY), BOT_LOGIN, "Bot")
         return self.next
 
     def edit(self, number, **fields):
@@ -439,9 +533,12 @@ def self_test() -> int:
                 "sentence": sentence, "run_url": f"https://github.com/o/r/actions/runs/{n}",
                 "promoted_at": at(hours_ago)}
 
-    def reading(*sets, armed="3.1.10000", complete=True, floor_hours=0.0):
+    def reading(*sets, armed="3.1.10000", complete=True, floor_hours=0.0, major=3, line="main3", cold=False):
         return {"armed": armed, "unarmed": list(sets), "window_complete": complete,
-                "window_floor_at": at(floor_hours) if not complete else ""}
+                "window_floor_at": at(floor_hours) if not complete else "",
+                "major": major, "line": line, "cold_start": cold}
+
+    TITLE, MARK = title_for(3), mark_for(3)   # the v3 line's alert, which the cases below exercise
 
     def go(gh, r, hours=6.0):
         d = decide(r, now, hours)
@@ -467,6 +564,8 @@ def self_test() -> int:
           and [ln for ln in body.splitlines() if "3.1.10003" in ln and "**waiting**" in ln]
           and not [ln for ln in body.splitlines() if "3.1.10003" in ln and "**refused**" in ln], body)
     check("the issue carries the ownership mark and the newest armed set", MARK in body and "3.1.10000" in body)
+    check("the issue it opens is the 3.x line's own (its title names the major)",
+          next(iter(gh.issues.values())).title == title_for(3) and "3.x" in title_for(3))
     check("the issue it opens states its type and severity (bug, sev:H)",
           all(t in next(iter(gh.issues.values())).labels for t in TAXONOMY))
     num = next(iter(gh.issues))
@@ -517,10 +616,15 @@ def self_test() -> int:
     # 8. it cannot pass silently
     for bad, why in (({"unarmed": []}, "no armed set named"),
                      ({"armed": "3.1.1"}, "no unarmed list"),
+                     ({k: v for k, v in reading().items() if k != "major"}, "no major"),
+                     ({**reading(), "major": True}, "a boolean major"),
+                     ({**reading(), "major": "3"}, "a string major"),
+                     ({**reading(), "line": ""}, "no line"),
+                     ({k: v for k, v in reading().items() if k != "cold_start"}, "no cold_start"),
                      (reading({**refused, "promoted_at": ""}), "a set without promoted_at"),
                      (reading({**refused, "state": "green"}), "an unknown state"),
                      (reading({**refused, "promoted_at": "yesterday"}), "an unreadable promoted_at"),
-                     ({"armed": "3.1.1", "unarmed": []}, "no window_complete"),
+                     ({k: v for k, v in reading().items() if k != "window_complete"}, "no window_complete"),
                      ({**reading(), "window_complete": False, "window_floor_at": ""}, "an incomplete window with no floor")):
         try:
             decide(bad, now, 6.0)
@@ -567,6 +671,71 @@ def self_test() -> int:
         except Red:
             check(f"threshold {raw!r} is RED, never a silent default", True)
     check("threshold '6' reads as 6 h", parse_threshold("6") == 6.0)
+
+    # 11. ONE ISSUE PER MAJOR (MeshWeaver#8208): v4's cold start and v3's armed fleet never share one.
+    def v4(n, state, hours_ago):
+        return {**s(n, state, hours_ago, "upstream 'plugins' has no SEALED publication for identity c004e001"),
+                "v_portal": f"4.0.{n}"}
+    v4_stale = reading(v4(13212, "refused", 1.0), v4(13190, "refused", 7.0), armed="no 4.x set armed yet",
+                       major=4, line="main", cold=True)
+    v3_armed = reading(armed="3.1.13192", major=3, line="main3")
+    gh = FakeGitHub()
+    d4, p4, said4 = go(gh, v4_stale)
+    four = [i for i in gh.issues.values() if i.title == title_for(4)]
+    check("v4 stale OPENS the 4.x issue", p4.action == "create" and len(four) == 1, said4)
+    d3, p3, said3 = go(gh, v3_armed)
+    check("…and the v3 line, ARMED, does NOT close it (it is not the 3.x line's issue)",
+          p3.action == "none" and four[0].number in gh.issues and gh.issues[four[0].number].state == "open", said3)
+    d4, p4, said4 = go(gh, v4_stale)
+    check("…so the next v4 run REWRITES the same 4.x issue — no open/close flap, no second issue",
+          p4.action == "update" and p4.target == four[0].number and len(gh.issues) == 1, said4)
+    d3, p3, said3 = go(gh, reading(s(13199, "refused", 8.0), armed="3.1.13192", major=3, line="main3"))
+    three = [i for i in gh.issues.values() if i.title == title_for(3)]
+    check("a STALE v3 line opens its OWN 3.x issue beside the 4.x one",
+          p3.action == "create" and len(three) == 1 and gh.issues[four[0].number].state == "open", said3)
+    d4, p4, said4 = go(gh, reading(armed="4.0.13230", major=4, line="main"))
+    check("v4 armed closes ONLY the 4.x issue; the 3.x one stays open",
+          p4.action == "close" and gh.issues[four[0].number].state == "closed"
+          and gh.issues[three[0].number].state == "open", said4)
+    check("NEGATIVE CONTROL — the 3.x issue is not owned as the 4.x one (nor the reverse)",
+          not owns(gh.issues[three[0].number], 4) and owns(gh.issues[three[0].number], 3)
+          and not owns(gh.issues[four[0].number], 3))
+    check("each major's mark is not a substring of another's, nor of the former shared mark",
+          mark_for(4) not in mark_for(40) and mark_for(4) not in LEGACY_MARK and LEGACY_MARK not in mark_for(4))
+
+    # 12. COLD START: named plainly, clocked from the line's FIRST set of the major
+    d = decide(v4_stale, now, 6.0)
+    body4 = render_body(d, 6.0, "https://run/1", now)
+    check("cold start: the age is the line's FIRST 4.x set (7.0 h), the window is complete (no floor)",
+          d.stale and not d.floor and 6.9 < (d.age_hours or 0) < 7.1 and d.oldest["v_portal"] == "4.0.13190", str(d))
+    check("cold start: the body names it plainly — no 4.x set armed yet — and never `ci.0`",
+          "no 4.x set armed yet" in body4 and "cold start of major 4" in body4 and "ci.0" not in body4, body4)
+    check("the body names its line and major, and carries the 4.x mark",
+          "line: `main`" in body4 and mark_for(4) in body4 and mark_for(3) not in body4, body4)
+    check("NEGATIVE CONTROL — the same cold reading 5.6 h old is NOT stale at 6 h",
+          decide(reading(v4(13190, "refused", 5.6), armed="no 4.x set armed yet", major=4, line="main", cold=True),
+                 now, 6.0).stale is False)
+    check("an ARMED line's body names its armed set, not a cold start",
+          "cold start" not in render_body(decide(reading(s(1, "refused", 7.0)), now, 6.0), 6.0, "", now))
+
+    # 13. the former SHARED issue is closed ONCE as superseded, pointing at the line's own issue
+    legacy = Issue(8208, LEGACY_TITLE, "open", "old " + LEGACY_MARK, (LABEL, *TAXONOMY), BOT_LOGIN, "Bot")
+    gh = FakeGitHub([legacy])
+    d4, p4, said4 = go(gh, v4_stale)
+    new4 = [i for i in gh.issues.values() if i.title == title_for(4)]
+    check("the shared issue is closed as superseded, and the 4.x issue is filed in its place",
+          gh.issues[8208].state == "closed" and len(new4) == 1 and p4.superseded == [8208], said4)
+    check("…the closing comment points at the 4.x issue by number",
+          any(n == 8208 and f"#{new4[0].number}" in c for n, c in gh.comments), str(gh.comments))
+    gh2 = FakeGitHub([legacy])
+    gh2.tamper = {8208: Issue(8208, LEGACY_TITLE, "closed", "old " + LEGACY_MARK, (LABEL,), BOT_LOGIN, "Bot")}
+    d3, p3, said3 = go(gh2, v3_armed)
+    check("the other line having closed it first is the expected race — skipped, never RED, nothing written",
+          not gh2.comments and gh2.issues[8208].state == "open", said3)
+    human = Issue(9000, LEGACY_TITLE, "open", "a human " + LEGACY_MARK, (LABEL,), "a-maintainer", "User")
+    gh3 = FakeGitHub([human])
+    go(gh3, v3_armed)
+    check("NEGATIVE CONTROL — a shared-titled issue a HUMAN opened is never closed", gh3.issues[9000].state == "open")
 
     print(f"fleet-unarmed-alert self-test: {failures} failure(s)")
     return 1 if failures else 0
