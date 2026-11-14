@@ -629,30 +629,31 @@ which pull requests do not write locks. So:
 | `main` | the only writer of a committed lock | the caller's settle job opens or refreshes the reserved bot settlement PR; normal required checks validate the generated locks before they merge |
 | a developer | nothing | the bare generator writes nothing on a main-owned repo (so the `post-merge` hook commits nothing); `--materialize` gives a local view that must not be committed |
 
-`--materialize` derives the version from the **committed** lock first — same patch when the
+`--materialize` derives the version from the **committed** lock alone — same patch when the
 content hash still matches it, +1 when it moved, `.0` for a new series or a new module. That is
 `derive_release` with its trunk witness already on disk: a main-owned tree's committed lock IS the
-last settled claim it descends from.
+last settled claim it descends from. It reads **no tags**, and that is the point. Every job of one
+run materializes independently and must arrive at the same bytes, and most of them check out with
+no tags at all (`fetch-depth: 1`), so a derivation that read tags would name one bundle two ways
+inside one run.
 
-🚨 **It then reads the checkout's LOCAL tags — never the remote — and never names a number at or
-below a published tag for other content.** The highest `<Module>/vX.Y.Z` of the series reachable
-from `HEAD`, read annotation-first exactly as `derive_release` reads it, decides whenever it sits at
-or above the lock's number: its own number when it released this content, the next one past it when
-it did not. Without that, a package published BEFORE its first committed lock repeated the published
-number: `Benchmarks/v1.2.0` was tagged with no `manifest.lock` in the tree, its content moved
-afterwards, "no lock ⇒ `.0`" named the moved tree 1.2.0 again, and `--settle` — which reads the tag
-and wrote 1.2.1 — refused its own claim (*"settled v1.2.1 but --materialize derives v1.2.0"*), so
-the settlement PR could never go green (MeshWeaver.Plugins#5424). A tag below the lock's number, or
-no tag at all, leaves the lock-only answer unchanged. Self-test: `_self_test_published_before_first_lock`.
+`--settle` derives with the verified remote (both witnesses, as ever) and **asserts** that its
+numbers equal what `--materialize` gives whenever the trunk it derived against is the checkout
+itself — the property that makes a bundle named at pull-request time the bundle `main` publishes.
 
-It stays network-free, and that is the point: every job of one run materializes independently and
-must arrive at the same bytes, which a derivation reading the live remote could not promise. Only
-tags reachable from `HEAD` count, so a tag published for a later trunk commit cannot move the number,
-and a tag that becomes visible to one job and not another can only be the first claim for this very
-content — same number, same answer. `--settle` derives with the verified remote (both witnesses, as
-ever) and **asserts** that its numbers equal what `--materialize` gives whenever the trunk it derived
-against is the checkout itself — the property that makes a bundle named at pull-request time the
-bundle `main` publishes.
+🚨 **One disagreement is accepted, exactly: settled = the materialized number + 1, where a published
+tag reachable from the trunk sits on the materialized number and released OTHER content**
+(`settled_past_published`). The tags are the settle's witness, so where a tag holds the number the
+lock implies, the settle moves one past it and `--materialize` cannot see why. Until that settle
+merges, a bundle named with the taken number is one the publication decision withholds; once it
+merges, the committed lock carries the settled number and both derivations agree again. The
+measured shape: `Benchmarks/v1.2.0` was published before Benchmarks had any committed lock, its
+content moved, `--materialize` named the moved tree 1.2.0, and `--settle` wrote 1.2.1 and then
+refused its own claim (*"settled v1.2.1 but --materialize derives v1.2.0"*), so the settlement PR
+could never go green (MeshWeaver.Plugins#5424). A first-claim tag whose package moved again is the
+same shape (Hosting and Store on the same tree). Anything else — two past, behind, past an
+unpublished number, past a tag for this very content — stays a refusal. Self-test:
+`_self_test_published_before_first_lock`, with a negative control that disables the acceptance.
 
 What the other checks do on a main-owned tree:
 
