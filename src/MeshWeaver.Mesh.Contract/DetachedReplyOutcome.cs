@@ -48,19 +48,35 @@ namespace MeshWeaver.Mesh;
 /// answer (<c>MeshExtensions</c>' upsert read leg records why: an empty read turned into a
 /// <c>null</c> would be read as "the node does not exist" and become a CREATE). "Produced nothing"
 /// has to be its own outcome, and one the caller is told about.</para>
+///
+/// <para><b>A <c>closed</c> hierarchy, so the compiler checks every reader.</b> The three
+/// terminations are three sealed cases — <see cref="Emitted"/>, <see cref="Faulted"/> and
+/// <see cref="CompletedEmpty"/> — of a C# 15 <c>closed</c> record. A <c>switch</c> EXPRESSION that
+/// names all three is exhaustive with no default arm, and one that forgets a case is
+/// <c>CS8509</c>, an error under <c>-warnaserror</c>. The earlier shape, a
+/// <c>(bool HasValue, T? Value, Exception? Error)</c> triple, encoded the third state as "neither
+/// field set", so a reader that tested two of them fell through to whatever came last. The type
+/// is internal, never serialized and invisible to in-mesh code, which is what makes a closed set
+/// legitimate here (see <c>Doc/Architecture/ClosedHierarchies</c>).</para>
 /// </summary>
 /// <typeparam name="T">The source's value type.</typeparam>
-/// <param name="HasValue">True when the source emitted; <see cref="Value"/> is then its first emission.</param>
-/// <param name="Value">The source's first emission, when <paramref name="HasValue"/>.</param>
-/// <param name="Error">The source's fault, when it faulted before emitting.</param>
-internal readonly record struct DetachedReplyOutcome<T>(bool HasValue, T? Value, Exception? Error)
+internal closed record DetachedReplyOutcome<T>
 {
+    /// <summary>The source emitted; <paramref name="Value"/> is its FIRST emission.</summary>
+    /// <param name="Value">The source's first emission (may itself be <c>null</c> when
+    /// <typeparamref name="T"/> admits it — a null value is still an answer).</param>
+    internal sealed record Emitted(T Value) : DetachedReplyOutcome<T>;
+
+    /// <summary>The source faulted before emitting.</summary>
+    /// <param name="Error">The source's fault — the site's to log and report.</param>
+    internal sealed record Faulted(Exception Error) : DetachedReplyOutcome<T>;
+
     /// <summary>
     /// The source produced neither a value nor a fault — it completed empty. The caller MUST be
     /// answered anyway, and the answer is a refusal that says the outcome is unknown, never a
     /// success and never a silence.
     /// </summary>
-    internal bool CompletedEmpty => !HasValue && Error is null;
+    internal sealed record CompletedEmpty : DetachedReplyOutcome<T>;
 }
 
 /// <summary>
@@ -70,7 +86,7 @@ internal readonly record struct DetachedReplyOutcome<T>(bool HasValue, T? Value,
 internal static class DetachedReplyOutcome
 {
     /// <summary>
-    /// <c>value → HasValue</c>, <c>fault → Error</c>, <c>completed empty → CompletedEmpty</c> — one
+    /// <c>value → Emitted</c>, <c>fault → Faulted</c>, <c>completed empty → CompletedEmpty</c> — one
     /// emission for each of the three terminations Rx delivers, so a subscriber cannot fail to
     /// answer a source that TERMINATES. <b>It adds no deadline</b> — every operator it applies is
     /// notification-driven, so none of them can fire while the source is silent — and a source that
@@ -87,7 +103,7 @@ internal static class DetachedReplyOutcome
     /// <para><c>Catch</c> is not swallow-and-continue: it does not resume the sequence, it
     /// converts the fault into the one thing a detached reply can act on — a terminal the caller
     /// is told about. The exception itself is carried through in
-    /// <see cref="DetachedReplyOutcome{T}.Error"/> and is the site's to log and report.</para>
+    /// <see cref="DetachedReplyOutcome{T}.Faulted"/> and is the site's to log and report.</para>
     /// </summary>
     /// <typeparam name="T">The source's value type.</typeparam>
     /// <param name="source">The source the detached reply hangs off.</param>
@@ -95,7 +111,7 @@ internal static class DetachedReplyOutcome
     internal static IObservable<DetachedReplyOutcome<T>> Of<T>(IObservable<T> source)
         => source
             .Take(1)
-            .Select(value => new DetachedReplyOutcome<T>(true, value, null))
-            .Catch((Exception ex) => Observable.Return(new DetachedReplyOutcome<T>(false, default, ex)))
-            .DefaultIfEmpty(new DetachedReplyOutcome<T>(false, default, null));
+            .Select(DetachedReplyOutcome<T> (value) => new DetachedReplyOutcome<T>.Emitted(value))
+            .Catch((Exception ex) => Observable.Return<DetachedReplyOutcome<T>>(new DetachedReplyOutcome<T>.Faulted(ex)))
+            .DefaultIfEmpty(new DetachedReplyOutcome<T>.CompletedEmpty());
 }

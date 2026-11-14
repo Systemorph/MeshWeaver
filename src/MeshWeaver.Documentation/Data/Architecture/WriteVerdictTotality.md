@@ -454,7 +454,9 @@ answer NOBODY when its source **completes empty**, which is a different terminat
 different route. **Every leg now handles all three of Rx's terminations** — the read leg and the
 inner create by their own explicit third arm, the other three by composing through
 `DetachedReplyOutcome.Of`, which converts value / fault / empty into exactly one emission so the
-subscriber cannot fail to answer:
+subscriber cannot fail to answer. The outcome is a `closed` record (`Emitted` / `Faulted` /
+`CompletedEmpty`), and each leg reads it with a switch expression, so a leg that forgets a case
+does not compile ([Closed Hierarchies and Unions](../ClosedHierarchies)):
 
 | leg | trail stage | its source's empty completion |
 |---|---|---|
