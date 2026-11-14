@@ -26,7 +26,9 @@ describes. And the Dockerfile's `ARG DOTNET_VERSION` must equal the platform's `
   portal-ai-base.py tag [--root <repo root>]
         # the content tag for this tree's base (one line, no network)
   portal-ai-base.py check [--root <repo root>]
-        # the PR gate: runtime == target framework, and no workflow layers on a non-content base tag
+        # the PR gate: runtime == target framework, and no workflow names the base by a literal tag
+        # (directly, through a variable, or after a variable holding the repository) except the
+        # documented `latest`/`git-<sha>` writer, base-image-acr.yml
   portal-ai-base.py --self-test
 """
 from __future__ import annotations
@@ -88,24 +90,46 @@ def platform_framework(root: Path) -> str:
     return m[0]
 
 
-def workflow_findings(root: Path) -> list[str]:
-    """Every workflow line that LAYERS an image on the base by anything but its content tag.
+# The ONE workflow allowed to name the base by a literal tag: the hand runbook writes `latest` for
+# Plugins' portal-ai-image.yml (which still layers on it) and `git-<sha>` for traceability. Nothing in
+# this repository may READ either; every core consumer takes the content tag through an expression.
+LITERAL_WRITER = "base-image-acr.yml"
+LITERAL_WRITER_TAGS = re.compile(r"^(latest|git-\$\{?\w+\}?)$")
+# A shell or YAML variable that holds the base REPOSITORY (`BASE="$ACR/memex-portal-ai-base"`,
+# `BASE: …/memex-portal-ai-base`), so `$BASE:latest` is the same reference routed through a name.
+REPO_VAR_RE = re.compile(r"(?:^|[\s;])(?:export\s+)?([A-Za-z_]\w*)\s*[=:]\s*[\"']?[^\s\"']*" + re.escape(BASE_REPOSITORY) + r"[\"']?\s*$")
+VAR_REF_RE = r"\$\{?%s\}?:([^\s\"'\\]+)"
 
-    The consuming position is `ContainerBaseImage=` — the SDK container publish's base. The content
-    tag reaches it only as an expression (a job output the ensure step wrote), so a LITERAL tag
-    there is the defect: `:latest` is exactly the shape that shipped a .NET 10 runtime under a
-    net11.0 app. Lines that WRITE or inspect a tag (the hand runbook keeps `:latest` for consumers
-    outside this repository) are not consumption and are not judged here."""
+
+def _is_expression(tag: str) -> bool:
+    """A tag supplied by an expression (`${{ … }}`, `$VAR`, `${VAR}`) — the content tag's only route."""
+    return tag.startswith("$")
+
+
+def workflow_findings(root: Path) -> list[str]:
+    """Every workflow reference to the base by a LITERAL tag, however it is spelled.
+
+    Judged on every non-comment line, not only at `ContainerBaseImage=`: a literal tag assigned to a
+    variable (`BASE=…/memex-portal-ai-base:latest`, used later as `$BASE`) and a literal tag after a
+    variable holding the repository (`"$BASE:latest"`) are the same moving base the v4 boot crash
+    came from. The content tag reaches a workflow only as an expression (a job or step output), so
+    any literal is a finding — except in the documented writer (LITERAL_WRITER), which may name
+    `latest` and `git-<sha>` because consumers outside this repository still read `latest`."""
     findings = []
     wf = root / WORKFLOWS
     for path in sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []:
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if line.lstrip().startswith("#") or "ContainerBaseImage" not in line:
-                continue
-            for tag in BASE_REF_RE.findall(line):
-                if tag.startswith("${{") or tag.startswith("$"):
-                    continue
-                findings.append(f"{path.relative_to(root).as_posix()}:{n}: layers on `{BASE_REPOSITORY}:{tag}` — a literal tag does not change when deploy/base-images/portal-ai does; resolve the content tag (portal-ai-base.py tag) instead")
+        lines = path.read_text(encoding="utf-8").splitlines()
+        code = [(n, l) for n, l in enumerate(lines, 1) if not l.lstrip().startswith("#")]
+        repo_vars = {m.group(1) for _, l in code for m in [REPO_VAR_RE.search(l)] if m}
+        ref_res = [BASE_REF_RE] + [re.compile(VAR_REF_RE % re.escape(v)) for v in sorted(repo_vars)]
+        for n, line in code:
+            for rx in ref_res:
+                for tag in rx.findall(line):
+                    if _is_expression(tag):
+                        continue
+                    if path.name == LITERAL_WRITER and LITERAL_WRITER_TAGS.match(tag):
+                        continue
+                    findings.append(f"{path.relative_to(root).as_posix()}:{n}: names `{BASE_REPOSITORY}:{tag}` by a literal tag — a literal tag does not change when deploy/base-images/portal-ai does; take the content tag (portal-ai-base.py tag / the portal-ai-base job's output) instead")
     return findings
 
 
@@ -164,9 +188,36 @@ def self_test() -> int:
         p = check(latest)
         expect("a workflow layering on memex-portal-ai-base:latest is RED", any(":latest" in x for x in p))
     with tempfile.TemporaryDirectory() as a:
-        written = _fixture(Path(a), "11.0", "11.0", good_wf + "  # memex-portal-ai-base:latest was the old shape\n"
-                           "          az acr manifest show -r meshweaver -n memex-portal-ai-base:latest\n")
-        expect("a comment or a non-consuming line naming :latest is not a finding", check(written) == [])
+        commented = _fixture(Path(a), "11.0", "11.0", good_wf + "  # memex-portal-ai-base:latest was the old shape\n")
+        expect("a comment naming :latest is not a finding", check(commented) == [])
+
+    with tempfile.TemporaryDirectory() as a:
+        routed = _fixture(Path(a), "11.0", "11.0", good_wf +
+                          "          BASE=$ACR/memex-portal-ai-base:latest\n"
+                          "          dotnet publish -p:ContainerBaseImage=$BASE\n")
+        expect("a literal tag routed through a variable (BASE=…:latest, used as $BASE) is RED",
+               any("memex-portal-ai-base:latest" in x and "cd.yml:2" in x for x in check(routed)))
+    with tempfile.TemporaryDirectory() as a:
+        repo_var = _fixture(Path(a), "11.0", "11.0", good_wf +
+                            "          BASE=\"$ACR/memex-portal-ai-base\"\n"
+                            "          dotnet publish -p:ContainerBaseImage=\"$BASE:latest\"\n")
+        expect("a literal tag after a variable holding the repository ($BASE:latest) is RED",
+               any(":latest" in x and "cd.yml:3" in x for x in check(repo_var)))
+        (Path(a) / WORKFLOWS / "cd.yml").write_text(good_wf + "          BASE=\"$ACR/memex-portal-ai-base\"\n"
+                                                    "          docker pull \"$BASE:$CONTENT_TAG\"\n")
+        expect("the repository variable with an expression tag passes", check(Path(a)) == [])
+    with tempfile.TemporaryDirectory() as a:
+        writer = _fixture(Path(a), "11.0", "11.0", good_wf)
+        (writer / WORKFLOWS / LITERAL_WRITER).write_text(
+            "          BASE=\"$ACR/memex-portal-ai-base\"\n"
+            "          docker buildx build -t \"$BASE:latest\" -t \"$BASE:git-$SHORT_SHA\" -t \"$BASE:$CONTENT_TAG\" --push x\n"
+            "          az acr manifest show -r meshweaver -n memex-portal-ai-base:latest\n")
+        expect("the documented :latest / git-<sha> writer in base-image-acr.yml passes", check(writer) == [])
+        (writer / WORKFLOWS / LITERAL_WRITER).write_text("          docker buildx build -t \"$ACR/memex-portal-ai-base:v4\" x\n")
+        expect("...but any OTHER literal tag in that writer is RED", any(":v4" in x for x in check(writer)))
+        (writer / WORKFLOWS / LITERAL_WRITER).write_text("")
+        (writer / WORKFLOWS / "other.yml").write_text("          az acr manifest show -n memex-portal-ai-base:latest\n")
+        expect("...and :latest outside that writer is RED, even on a non-publishing line", any("other.yml:1" in x for x in check(writer)))
 
     with tempfile.TemporaryDirectory() as a:
         root = Path(a)
@@ -204,7 +255,7 @@ def main(argv: list[str]) -> int:
     for p in problems:
         print(f"::error::{p}")
     if not problems:
-        print(f"OK: {BASE_DIR} runs aspnet:{dockerfile_runtime(root)} = the platform's net{platform_framework(root)}; its content tag is {content_tag(root)}; no workflow layers on a literal base tag")
+        print(f"OK: {BASE_DIR} runs aspnet:{dockerfile_runtime(root)} = the platform's net{platform_framework(root)}; its content tag is {content_tag(root)}; no workflow names the base by a literal tag outside the documented writer")
     return 1 if problems else 0
 
 

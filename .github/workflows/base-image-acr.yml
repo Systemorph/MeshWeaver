@@ -74,10 +74,17 @@ jobs:
       - name: Build + push portal-ai base image (multi-arch) to ACR
         run: |
           set -euo pipefail
+          # The same coherence gate the CD path runs before it builds: the Dockerfile's runtime equals
+          # the platform's TargetFramework, and no workflow names the base by a stray literal tag.
+          python3 .github/scripts/portal-ai-base.py check
+          # Its own assignment, so a failing tag computation FAILS the step under `set -e` — inside
+          # `-t "$BASE:$(…)"` a failed substitution would not, and the build would push an empty tag.
+          CONTENT_TAG="$(python3 .github/scripts/portal-ai-base.py tag)"
+          [ -n "$CONTENT_TAG" ] || { echo "::error::portal-ai-base.py tag printed nothing — refusing to build without the content tag"; exit 1; }
           BASE="$ACR/memex-portal-ai-base"
           SHORT_SHA="$(git rev-parse --short HEAD)"
           docker buildx build --platform linux/amd64,linux/arm64 \
-            -t "$BASE:latest" -t "$BASE:git-$SHORT_SHA" -t "$BASE:$(python3 .github/scripts/portal-ai-base.py tag)" \
+            -t "$BASE:latest" -t "$BASE:git-$SHORT_SHA" -t "$BASE:$CONTENT_TAG" \
             --push deploy/base-images/portal-ai
 
       - name: Verify multi-arch manifest list in ACR
