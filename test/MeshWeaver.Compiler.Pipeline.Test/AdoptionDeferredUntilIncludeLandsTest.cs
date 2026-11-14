@@ -146,17 +146,35 @@ public class AdoptionDeferredUntilIncludeLandsTest(ITestOutputHelper output) : M
         afterSeed.BuildProvenance.Should().NotBe(BuildProvenance.StaleAdopted,
             "a missing include must not be read as the source having MOVED");
 
-        await Mesh.GetMeshNodeStream(TypePath)
+        // 🚨 Ended by a POSITIVE signal, not a window (#6817): the include's arrival re-judges the
+        // standing request, and the owner writes that verdict AFTER anything the deferred judgement
+        // above could have written, because one owner serialises every write to this record. So no
+        // compile and no refusal may appear before the verified verdict. The settled predicate names
+        // the verified state in full, so it can never be satisfied by an emission this forbids. A fixed
+        // NotEmit(Quick) spent 36 s of CI here.
+        var nothingRetriedOrParked = Mesh.GetMeshNodeStream(TypePath)
             .Where(n => n?.Content is NodeTypeDefinition d
                         && (d.CompilationStatus is CompilationStatus.Pending
                                                  or CompilationStatus.Compiling
                             || d.BuildProvenance is BuildProvenance.AdoptionRefused
-                                                   or BuildProvenance.StaleAdopted))
-            .Should()
-            .NotEmit(TestTimeouts.Quick, "the wait is reactive — nothing retries, nothing parks");
+                                                   or BuildProvenance.StaleAdopted
+                            // The one-shot request answered while the include is still absent
+                            // is the deferral spent on an absence.
+                            || (d.RequestedSourceStampAt is null && d.CurrentSourceIncludes is not { Count: 1 })))
+            .Should().Within(TestTimeouts.CrossSilo)
+            .NotEmitBefore(
+                Mesh.GetMeshNodeStream(TypePath).Where(n => n?.Content is NodeTypeDefinition d
+                    && d.RequestedSourceStampAt is null
+                    && d.CurrentSourceIncludes is { Count: 1 }
+                    && d.BuildProvenance == BuildProvenance.AdoptedVerified
+                    && d.CompilationStatus == CompilationStatus.Ok),
+                "the wait is reactive — nothing retries, nothing parks; the include's arrival is what "
+                + "re-judges the request",
+                TestContext.Current.CancellationToken);
 
         // ── 4. The include lands. The declared SOURCE set does not change at all. ──────────
         await MeshService.CreateNode(IncludeNode()).Should().Within(TestTimeouts.Convergence).Emit();
+        await nothingRetriedOrParked;
 
         var judged = await Mesh.GetMeshNodeStream(TypePath).Should().Within(TestTimeouts.CrossSilo)
             .Match(n => n?.Content is NodeTypeDefinition d && d.RequestedSourceStampAt is null,
