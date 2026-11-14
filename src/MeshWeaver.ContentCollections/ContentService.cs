@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,6 +24,10 @@ public class ContentService : IContentService
     // Values are observables, never resolved single values, so late subscribers and concurrent
     // first-callers share exactly one initialization.
     private readonly ConcurrentDictionary<string, IObservable<ContentCollection?>> collections = new();
+
+    // Stores opened for raw file I/O only (OpenStore) — never scanned, never watched. Kept apart
+    // from `collections` so an initialized collection is never displaced by a bare store.
+    private readonly PromiseCache<string, ContentCollection> stores = new();
 
     // Cache for resolved mapped configs
     private readonly ConcurrentDictionary<string, ContentCollectionConfig> resolvedMappedConfigs = new();
@@ -352,7 +357,58 @@ public class ContentService : IContentService
         if (existing != null
             && !string.IsNullOrEmpty(contentCollectionConfig.BasePath)
             && existing.BasePath != contentCollectionConfig.BasePath)
+        {
             this.collections.TryRemove(name, out _);
+            stores.Invalidate(name);
+        }
+    }
+
+    /// <summary>
+    /// 🚨 <b>MeshWeaver#8158 — the collection's STORE, for raw file I/O, without loading the
+    /// collection.</b> <see cref="GetCollection"/> INITIALIZES what it opens: it reads and parses
+    /// every markdown file under the collection root and attaches a change watcher, because the
+    /// hub that owns a collection serves it. A hub that only moves bytes through someone else's
+    /// collection — the out-of-band transfer staging one blob in the destination's
+    /// <c>_staging</c> folder — needs none of that, and paid for all of it: on a client partition's
+    /// content share the scan is a network round-trip per file, unbounded by any deadline, and the
+    /// upload's write was not even posted until it finished. A watcher attached there would also
+    /// re-ingest every later change of that collection on a hub that does not own it.
+    ///
+    /// <para>Opens a bare store once per <paramref name="config"/> name and keeps it until the
+    /// config's base path changes (<see cref="AddConfiguration"/>). It never reuses a collection
+    /// <see cref="GetCollection"/> opened under the same name, because that one may still be
+    /// scanning. A failed open is evicted, so the next caller tries again, and it reaches the caller
+    /// as an error.</para>
+    /// </summary>
+    /// <param name="config">The resolved (never mapped) config of the collection to open.</param>
+    /// <returns>A collection whose file operations work; its markdown stream is never loaded.</returns>
+    internal IObservable<ContentCollection> OpenStore(ContentCollectionConfig config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        // 🚨 Never the entry in `collections`, even when one exists: it may still be SCANNING, and
+        // waiting it out is the stall this method exists to remove. A second, bare instance over
+        // the same store costs one provider and no I/O.
+        return stores.GetOrAdd(config.Name, _ => CreateStore(config)
+            .Replay(1)
+            .AutoConnectOwnedBy(hub, nameof(ContentService)));
+    }
+
+    /// <summary>Provider + collection, with no <see cref="ContentCollection.Initialize"/>.</summary>
+    private IObservable<ContentCollection> CreateStore(ContentCollectionConfig config)
+    {
+        var factory = hub.ServiceProvider.GetKeyedService<IStreamProviderFactory>(config.SourceType);
+        if (factory is null)
+            return Observable.Throw<ContentCollection>(
+                new ArgumentException($"Unknown source type {config.SourceType}"));
+        return factory.Create(config)
+            .Take(1)
+            .Select(provider =>
+            {
+                var collection = new ContentCollection(config, provider, hub);
+                // Dies with the hub, as every collection this service opens does (see CreateCollection).
+                hub.RegisterForDisposal(collection);
+                return collection;
+            });
     }
 
     /// <inheritdoc />
