@@ -55,23 +55,31 @@ public class InjectorExamplesTest(ITestOutputHelper output) : MonolithMeshTestBa
         // queue's 5 s backstop fire (WriteQueueAdvance): timeout == error. The commit's positive
         // signal is the flush reaching the hold.
         var write = Mesh.GetMeshNodeStream(path).Update(n => n with { Name = "committed" }).Take(1).Replay(1);
+        // The connection is disposed in a `finally`: an assertion failing inside the hold must not
+        // leave the write's subscription dangling past the test's own failure.
         IDisposable? writeConnection = null;
-        using (var flush = Storage.HoldWrites(path))
+        try
         {
-            writeConnection = write.Connect();
-            await Storage.HeldWrites(path).Where(n => n.Name == "committed")
-                .Should().Within(TestTimeouts.Convergence).Emit("the owner committed and the commit's flush reached the hold", ct);
-            var stored = await Storage.Inner.Read(path, Mesh.JsonSerializerOptions)
-                .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
-            stored?.Name.Should().Be("stored", "while the flush is held, storage still has the previous state");
-        }
+            using (var flush = Storage.HoldWrites(path))
+            {
+                writeConnection = write.Connect();
+                await Storage.HeldWrites(path).Where(n => n.Name == "committed")
+                    .Should().Within(TestTimeouts.Convergence).Emit("the owner committed and the commit's flush reached the hold", ct);
+                var stored = await Storage.Inner.Read(path, Mesh.JsonSerializerOptions)
+                    .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+                stored?.Name.Should().Be("stored", "while the flush is held, storage still has the previous state");
+            }
 
-        using var _ = writeConnection;
-        await write.Should().Within(TestTimeouts.Convergence).Emit("released, the write is acknowledged", ct);
-        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .SelectMany(_ => Storage.Inner.Read(path, Mesh.JsonSerializerOptions).Take(1))
-            .Where(n => n?.Name == "committed")
-            .Should().Within(TestTimeouts.Convergence).Emit("released, the flush lands", ct);
+            await write.Should().Within(TestTimeouts.Convergence).Emit("released, the write is acknowledged", ct);
+            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .SelectMany(_ => Storage.Inner.Read(path, Mesh.JsonSerializerOptions).Take(1))
+                .Where(n => n?.Name == "committed")
+                .Should().Within(TestTimeouts.Convergence).Emit("released, the flush lands", ct);
+        }
+        finally
+        {
+            writeConnection?.Dispose();
+        }
     }
 
     /// <summary>
