@@ -707,6 +707,8 @@ internal static class NodeTypeCompilationHelpers
                         // a build" (status Pending, coordinates present, usable) — the two causes of
                         // the redundant compiles measured on every memex-sized combo slot.
                         // Each emission is parsed ONCE; the state string is what the warning prints.
+                        // Written on the stream's thread, read on the Timeout's timer thread — hence
+                        // the Volatile pair, so the warning never reports a state older than the last.
                         var lastSeen = "no emission";
                         return ownStream
                             .Select(n => (Node: n, Def: n?.ContentAs<NodeTypeDefinition>(
@@ -715,9 +717,10 @@ internal static class NodeTypeCompilationHelpers
                             {
                                 var usable = e.Def is not null && HasUsableBuild(e.Node!, e.Def, guards);
                                 if (e.Def is { } seen)
-                                    lastSeen = $"status={seen.CompilationStatus?.ToString() ?? "null"} "
+                                    Volatile.Write(ref lastSeen,
+                                        $"status={seen.CompilationStatus?.ToString() ?? "null"} "
                                         + $"coordinates={!string.IsNullOrEmpty(seen.LatestAssemblyPath)} "
-                                        + $"usable={usable} dirty={seen.IsDirty}";
+                                        + $"usable={usable} dirty={seen.IsDirty}");
                                 return e.Def?.CompilationStatus == CompilationStatus.Ok && usable;
                             })
                             .Where(landed => landed)
@@ -730,7 +733,8 @@ internal static class NodeTypeCompilationHelpers
                                     + "assembly(ies) but the node still has no usable build "
                                     + "{Budget}s later — compiling instead, because a stranded type "
                                     + "is worse than a redundant compile. Last state seen: {LastSeen}.",
-                                    hubPath, adopted, AdoptionStampBudget.TotalSeconds, lastSeen);
+                                    hubPath, adopted, AdoptionStampBudget.TotalSeconds,
+                                    Volatile.Read(ref lastSeen));
                                 return Observable.Return(false);
                             });
                     }
