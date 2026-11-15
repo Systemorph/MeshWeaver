@@ -518,9 +518,11 @@ public sealed record ModuleFallback(
 /// </summary>
 public sealed class PendingModuleActivations(string moduleRoot)
 {
-    /// <summary>Constructs from configuration, resolving the writable module root once.</summary>
+    /// <summary>Constructs from configuration, resolving this process's landed-module tree once —
+    /// its own platform line's (<see cref="ModuleRoot.ResolveLine(IConfiguration?)"/>), never another
+    /// major's on the same shared volume.</summary>
     public PendingModuleActivations(IConfiguration? configuration)
-        : this(ModuleRoot.Resolve(configuration)) { }
+        : this(ModuleRoot.ResolveLine(configuration)) { }
 
     /// <summary>The deployment root whose <c>modules/</c> sidecar is read.</summary>
     public string ModuleRootPath { get; } = moduleRoot;
