@@ -159,8 +159,14 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
     /// <summary>The portable ThreadPool's worker loop — on the outermost frames of every worker it runs.</summary>
     internal const string PoolWorkerLoop = "PortableThreadPool+WorkerThread";
 
-    /// <summary>One dump of this process, read through the pinned DAC, and deleted once read.</summary>
-    private T Read<T>(Func<ClrRuntime, T> read)
+    /// <summary>
+    /// One dump of this process, read through the pinned DAC, and deleted once read. Internal so a test can
+    /// read the raw ClrMD frames of the same dump the capture renders (<c>InternalsVisibleTo</c>).
+    /// </summary>
+    /// <typeparam name="T">What the read produces.</typeparam>
+    /// <param name="read">Reads the dump's runtime; it must not keep the runtime past its return.</param>
+    /// <returns>What <paramref name="read"/> produced.</returns>
+    internal T Read<T>(Func<ClrRuntime, T> read)
     {
         // Pinned FIRST, and nothing is dumped without it: see PinDac.
         PinDac();
@@ -215,9 +221,32 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
 
     private static IReadOnlyList<string> Frames(ClrThread thread, int max) =>
         thread.EnumerateStackTrace()
-            .Select(f => f.Method?.Signature ?? f.FrameName ?? f.Kind.ToString())
+            .Select(RenderFrame)
             .Take(max)
             .ToArray();
+
+    /// <summary>
+    /// One frame as the capture prints it: a managed method by its signature, a RUNTIME frame (a
+    /// transition into native code — <c>InlinedCallFrame</c>, a helper frame) by its frame name alone.
+    ///
+    /// <para>🚨 <b>Why a runtime frame never prints the method ClrMD attaches to it.</b> Whether ClrMD can
+    /// name the P/Invoke behind an <c>InlinedCallFrame</c> depends on which CODE VERSION of the calling
+    /// method the thread entered, not on what it waits for: ReadyToRun code leaves the frame without a
+    /// method, and the same method re-jitted at tier 1 records one. Measured in one process with six
+    /// threads looping <c>Thread.Sleep</c>: the first captures read every sleeper as
+    /// <c>InlinedCallFrame</c>, every capture after <c>WaitSubsystem+ThreadWaitInfo.Wait</c> tiered up read
+    /// <c>Interop+Sys.&lt;LowLevelMonitor_TimedWait&gt;g____PInvoke|70_0(IntPtr, Int32)</c> for the very same
+    /// wait, and with <c>DOTNET_TieredCompilation=0</c> every capture read <c>InlinedCallFrame</c>. Printing
+    /// the attached method therefore split workers standing in ONE wait into two <c>[POOLSTALL]</c> shapes
+    /// whenever their calls straddled a tier-up (core #8324's CI run: ×3 and ×1 for four parked sleepers).
+    /// The frame below it — the managed caller — names where the thread is either way.</para>
+    /// </summary>
+    /// <param name="frame">The frame.</param>
+    /// <returns>How the capture prints it.</returns>
+    internal static string RenderFrame(ClrStackFrame frame) =>
+        frame.Kind == ClrStackFrameKind.Runtime
+            ? frame.FrameName ?? frame.Kind.ToString()
+            : frame.Method?.Signature ?? frame.FrameName ?? frame.Kind.ToString();
 
     /// <summary>
     /// The runtime of the dump, read through the pinned DAC. 🚨 On Linux a <see cref="DumpType.Normal"/>
