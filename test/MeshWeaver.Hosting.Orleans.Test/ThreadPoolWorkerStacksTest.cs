@@ -27,6 +27,12 @@ public class ThreadPoolWorkerStacksTest
     private int release;
     private readonly Thread?[] parkedThreads = new Thread?[Held];
 
+    // Per parked slot: who may still interrupt it. The test interrupts ONLY a slot it claimed while the
+    // worker was asleep, and a worker that finds its slot claimed takes that interrupt before it leaves —
+    // so no interrupt is ever left armed on a pooled thread (a later test's blocking call would throw it).
+    private const int SlotEmpty = 0, SlotAsleep = 1, SlotClaimed = 2, SlotLeaving = 3;
+    private readonly int[] slotState = new int[Held];
+
     [Fact]
     public void AStalledPool_TheCaptureNamesTheFrameItsWorkersAreHeldIn()
     {
@@ -63,7 +69,8 @@ public class ThreadPoolWorkerStacksTest
             // Released, and every parked worker seen to LEAVE the leaf, so the negative control
             // (or any later capture) can never find one of these still standing in it.
             for (var i = 0; i < parkedThreads.Length; i++)
-                Volatile.Read(ref parkedThreads[i])?.Interrupt();
+                if (Interlocked.CompareExchange(ref slotState[i], SlotClaimed, SlotAsleep) == SlotAsleep)
+                    Volatile.Read(ref parkedThreads[i])!.Interrupt();
             SpinWait.SpinUntil(() => Volatile.Read(ref left) == Volatile.Read(ref parked), Budget);
         }
     }
@@ -272,26 +279,37 @@ public class ThreadPoolWorkerStacksTest
         failure!.Message.Should().Contain(missing);
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
     /// <summary>
     /// Holds a pool worker in ONE frame until the test interrupts it: a single bounded
     /// <see cref="Thread.Sleep(TimeSpan)"/>. A polling wait (SpinUntil, a sleep loop) moves the worker between
     /// Yield, Sleep and the predicate, so a snapshot caught the parked workers in different frames and
     /// split them into two groups ("2:" / "3:" instead of "4:").
     /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private void HeldInTheParkedLeaf()
     {
-        Volatile.Write(ref parkedThreads[Interlocked.Increment(ref parked) - 1], Thread.CurrentThread);
+        var slot = Interlocked.Increment(ref parked) - 1;
+        Volatile.Write(ref parkedThreads[slot], Thread.CurrentThread);
+        Volatile.Write(ref slotState[slot], SlotAsleep);
+        var interrupted = false;
         try
         {
             Thread.Sleep(Budget);
         }
         catch (ThreadInterruptedException)
         {
-            // The release: the test interrupts each parked worker once it has captured.
+            // The release: the test interrupts each parked worker it claimed once it has captured.
+            interrupted = true;
         }
         finally
         {
+            // Budget expired before the release, but the test claimed this slot: its interrupt has been or
+            // is about to be delivered — take it here rather than return the thread to the pool armed.
+            if (Interlocked.CompareExchange(ref slotState[slot], SlotLeaving, SlotAsleep) == SlotClaimed && !interrupted)
+            {
+                try { Thread.Sleep(Budget); }
+                catch (ThreadInterruptedException) { }
+            }
             Interlocked.Increment(ref left);
         }
     }
