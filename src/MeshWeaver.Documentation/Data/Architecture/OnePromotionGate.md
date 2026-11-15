@@ -206,7 +206,10 @@ a `Roll` `Hosting/InstanceAction`, not here.
 Waiting and refusing are both correct and both silent: a standing red ladder, or a platform-side
 outage, used to freeze fleet updates while every main-cd run stayed green with `nothing to arm`
 (MeshWeaver#6042). `arming_frozen` turns exactly one such case red: control behind past its bound
-with nothing armed (policy `control-first-never-silent`). The other stalls now have their own signal.
+with nothing armed (policy `control-first-never-silent`), and never on a line whose major control's
+record EXCLUDES: that is a declared hold, said as a warning and above this issue's table, never a
+frozen control ([Platform and Module Deploy](../PlatformAndModuleDeploy), *A line held by control's
+declaration is not a frozen control*). The other stalls now have their own signal.
 
 - **What is read.** `arm-promoted-set.py select --unarmed-out` writes every promoted set still NEWER
   than the armed one after this run's selection. Each set carries its own verdict: `waiting`,

@@ -318,6 +318,46 @@ Meanwhile:
 4. **The hand-over says only what a `200` proves.** `Deploy control first` now writes "stored and
    signature-verified … that is not yet a roll". It no longer claims that a `Roll` opened.
 
+### A line held by control's declaration is not a frozen control
+
+Control's record declares the ONE major it follows (`updatePattern`). A delivery line of ANOTHER
+major is never taken by control: its builds are not announced to control (*Each line announces only
+to control's own major*, above), and the control plane refuses them anyway. Control first therefore
+holds every set of that line unarmed, by design, until the owner moves control's record to that
+major.
+
+**What happened (measured 2026-11-15, MeshWeaver#8279).** Core `main` became the v4 line while the
+`control` record kept `updatePattern: 3.*`, deliberately. `arm` on `main` read control's lag against
+the v4 builds `Deploy control first` had tagged, and from `4.0.13212` on reported *"FLEET DELIVERY
+FROZEN ON CONTROL … over the 180 min bound (policy control-always-latest)"* on every run. Every
+main-cd run on `main` went red, and `alert-on-failure` filed a CD-failed issue each hour. Control
+itself was on the newest build of its own line; `control-always-latest`, which already reads control
+per line (MeshWeaver#8197), was green throughout.
+
+**What the arming does now.** The `arm` job reads control's record exactly as the alarm does (the
+location from `record` in `.github/control-instance.json`, the read-only fleet-reader App, scoped to
+that one repository) and passes it to `select --control-record`. When the record's major is not the
+line's major (`control_line_hold`):
+
+- the frozen verdict is not computed: there is no lag of control's to clock on builds control was
+  never going to take;
+- nothing is armed that control does not run, so control first still holds;
+- the hold is LOUD. The job writes `::warning title=Line held by control's declaration::`, naming
+  the record's pattern, the line and its major. Every waiting set's sentence names the hold instead
+  of promising "not yet", and the reading carries it to that major's `fleet-unarmed` issue, which
+  still opens past its threshold and says the line is held above its table.
+
+A record without `updatePattern`, or one whose pattern names no single major, is RED, as is a record
+the job cannot read. When the record's major IS the line's major, nothing changes: a control behind
+its own line past the bound is still `FLEET DELIVERY FROZEN ON CONTROL`. The self-test pins both
+sides. The remedy for a hold is the owner moving control's record, never control's roll and never an
+arm override.
+
+`main3` needs no carry of this today. Its major is the one control's record declares, so on `main3`
+the hold would never be computed and its arming behaves as before. The carry is due before control's
+record moves to `4.*`: from then on `main3` is the held line, and without the carry its `arm` would
+read the same false freeze.
+
 **Can control fix its own identity without a Reconcile? No.** The fix (core #6227) changes the
 pod's ServiceAccount annotation, the `azure.workload.identity/use` label and `AZURE_CLIENT_ID`,
 and renders `SelfUpdate__PortalRepository`. All of these are helm-rendered. Only `hosting-deploy`

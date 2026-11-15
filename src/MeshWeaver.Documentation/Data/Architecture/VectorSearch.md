@@ -85,6 +85,19 @@ values (`{"contact":"Jane Roe"}` matches `roe`) but not a nested one
 (`{"contact":{"name":"Jane Roe"}}` does not), while the Postgres routes read every string value at
 any depth. A word that matches only a deeply nested value is found on Postgres and not in memory.
 
+**How Postgres finds the word: an indexed side table, not a content walk.** Each partition schema
+keeps `search_text(namespace, id, search_text)` — per `mesh_nodes` row, the lower-cased path, name,
+description and node type followed by every content string value at any depth, computed by ONE
+shared function (`public.mw_search_text`) and kept in the writing transaction by AFTER triggers on
+`mesh_nodes`. A word is matched as `search_text LIKE '%' || escaped(lower(word)) || '%'` (`%`, `_`
+and `\` match literally), which a `pg_trgm` GIN index serves. Before, every query walked every row's
+content with `jsonb_path_query`, once per word, so a one-word search over a partition of a few
+thousand large payloads outlived the query fan-in's 15 s bound. Rows that predate the side table are
+filled by a resumable migration phase; until a schema is complete the rows without a side row are
+still matched by the walk, so no answer is ever missing a row. Satellite tables (threads, access,
+activities, annotations, code) keep the walk. The full account — design, budgets, the converging
+query, the plans — is MeshWeaver.Plugins `Hosting/PostgresFreeTextSearch`.
+
 Until 2026-10-18 the hybrid eligibility read `n.embedding IS NOT NULL OR <lexical match>` — so
 **every embedded row was eligible**, and each arm returned its top-K (50) by distance. Under a
 structural filter smaller than K a typed word therefore narrowed nothing: measured on a production
@@ -123,9 +136,15 @@ decides per search, inside one statement (`PostgreSqlSqlGenerator.GenerateVector
    `NearestFallbackMaxDistance`, ranked by distance (lexical tier first, as always).
 3. **Nothing within that limit either** → nothing.
 
-"No row" is decided over every candidate the structural filter, the access predicate and the
-namespace admit — a window flag (`bool_or(_lex) OVER ()`) computed before the `LIMIT`, never from
-the rows that happened to make the top-K. With a content index it spans both arms: a document
+The candidates are a BOUNDED set: every row in scope that contains the typed words (read off the
+indexed side table above), UNION the **nearest N** rows in scope that contain none of them, by the
+HNSW order, with N the search's own top-K (50 unless the query states a limit). The structural
+filter, the access predicate and the namespace apply inside both halves. So rule 2 answers with the
+nearest N rows within the limit, and rule 1 admits a word-less close neighbour only when it is one
+of those N. "No row" is decided over the word hits in scope — a window flag
+(`bool_or(_lex) OVER ()`) computed before the `LIMIT`, never from the rows that happened to make the
+top-K. (Until the side table, the candidates were every row in scope, and each was walked for the
+words.) With a content index it spans both arms: a document
 counts as carrying the words when any of its chunks does, and a document the narrowing answer
 carries keeps the chunk it carried before.
 
@@ -387,7 +406,7 @@ switch on when no candidate carries the words:
 ```sql
 SELECT n.* FROM (
   SELECT r.*, bool_or(r._lex) OVER () AS _any_lex
-  FROM (<candidates: structure + access + namespace, projecting _distance and _lex>) r
+  FROM (<word hits UNION the nearest N non-hits — each with structure + access + namespace, projecting _distance and _lex>) r
   WHERE r._lex OR r._distance <= @nearestFallbackMaxDistance) n
 WHERE n._lex OR n._distance <= 0.5 OR NOT n._any_lex
 ORDER BY <lexical tier>, n._distance ASC NULLS LAST LIMIT @topK
