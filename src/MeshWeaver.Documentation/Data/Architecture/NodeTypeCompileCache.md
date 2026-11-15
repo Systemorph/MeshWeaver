@@ -11,7 +11,7 @@ The node-repo gate (`node-repo-gate.yml`) bakes a repository's NodeTypes before 
 `mw-plugin-test compile` compiles every NodeType against the platform host's `/app` plus the
 modules the repository composes. In MeshWeaver.Plugins that was **123 NodeTypes in 5.6–5.9 minutes
 of a 15-minute gate shard, on every run** — the last long job of every heavy pull request
-([CI profile, November 2026](../CiProfile2026-11), proposal R3).
+([CI profile, November 2026](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/CiProfile2026-11.md), proposal R3; the page lives on the `main` line only).
 
 Related pages: [Sharding the Node-Repo Gate](../NodeRepoGateSharding) (the prepared bake, which
 shares one compile among a run's shards) · [CI Content Bake](../CiContentBake) ·
