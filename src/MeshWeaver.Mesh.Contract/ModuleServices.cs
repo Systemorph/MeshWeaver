@@ -461,7 +461,19 @@ public sealed class ModuleServices : IDisposable
     /// added, the forwarded ones under their <see cref="ModuleServiceRegistration.Key"/> so the root can
     /// ask for exactly one. Built once, on first use.
     /// </summary>
-    public IServiceProvider Scope(IServiceProvider root)
+    public IServiceProvider Scope(IServiceProvider root) => Scope(root, null);
+
+    /// <summary>
+    /// As <see cref="Scope(IServiceProvider)"/>, with the registry that holds this generation passed in
+    /// by a caller that IS that registry. 🚨 The registry's own boot publication runs this from inside the
+    /// registry's singleton factory on a plain MS DI host (<see cref="ModuleContexts.PublishOnce"/>), and
+    /// asking the root for the registry there resolves a singleton that is still under construction:
+    /// Microsoft.Extensions.DependencyInjection 11 refuses that as a circular dependency, where 10
+    /// answered it, so every healthy module was withdrawn at boot (Doc/Architecture/Platform4Net11).
+    /// </summary>
+    /// <param name="root">The mesh's root provider.</param>
+    /// <param name="registry">The registry holding this generation, or null to resolve it from <paramref name="root"/>.</param>
+    internal IServiceProvider Scope(IServiceProvider root, ModuleContexts? registry)
     {
         lock (gate)
         {
@@ -485,7 +497,7 @@ public sealed class ModuleServices : IDisposable
             // a child scope of the root would pin the generation (MeshWeaver.ServiceProvider.ModuleServiceProvider).
             var context = LoadContext;
             var name = ModuleName;
-            var contexts = root.GetService<ModuleContexts>();
+            var contexts = registry ?? root.GetService<ModuleContexts>();
             // A STAGED generation's container sees the other generations of its swap in place of the
             // current ones — it is built (BuildBeforePublish) before the swap commits, and must bind
             // what it will serve with once it has. A released stage answers nothing, so once the commit
@@ -500,7 +512,7 @@ public sealed class ModuleServices : IDisposable
         }
     }
 
-    /// <summary>As <see cref="Scope"/>, or null once this generation's services are disposed (a live
+    /// <summary>As <see cref="Scope(IServiceProvider)"/>, or null once this generation's services are disposed (a live
     /// uninstall, a swap's retirement, a boot withdrawal) — the disposal is an answer here, not a fault.</summary>
     /// <param name="root">The mesh's root provider.</param>
     internal IServiceProvider? TryScope(IServiceProvider root)
@@ -532,17 +544,19 @@ public sealed class ModuleServices : IDisposable
     /// its feature, never the module (#2449). Throws what a constructor throws.</para>
     /// </summary>
     /// <param name="root">The mesh's root provider.</param>
-    internal void BuildBeforePublish(IServiceProvider root)
+    /// <param name="registry">The registry running the build — passed in, never resolved from
+    /// <paramref name="root"/>, because the build runs inside that registry's own singleton factory on a
+    /// plain MS DI host (see <see cref="Scope(IServiceProvider, ModuleContexts)"/>).</param>
+    internal void BuildBeforePublish(IServiceProvider root, ModuleContexts registry)
     {
         var reachable = Registrations
             .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current
                 or ModuleServiceRoute.ModuleOwned or ModuleServiceRoute.Contributed)
             .Select(RootReachesItAs)
             .ToImmutableHashSet();
-        var contexts = root.GetService<ModuleContexts>();
         var stage = Stage;
-        ModuleServiceProvider.BuildRootReachableSingletons(Scope(root), root, (type, key) => reachable.Contains((type, key)),
-            type => contexts is null ? [] : RegistriesSeenFrom(contexts, type, stage));
+        ModuleServiceProvider.BuildRootReachableSingletons(Scope(root, registry), root, (type, key) => reachable.Contains((type, key)),
+            type => RegistriesSeenFrom(registry, type, stage));
     }
 
     /// <summary>

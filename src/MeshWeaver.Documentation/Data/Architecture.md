@@ -104,6 +104,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The XML Documentation Reader](XmlDocumentationReader) — how doc summaries are read for types and members (compiled NodeTypes included) without a process-wide cache, a lock, or pinning a collectible generation
 - [The Routing Entry Point](RoutingEntryPoint) — every routed message pays an Orleans grain PLACEMENT; the two measured ways it fails and drops live traffic, and the case for a local routing service where a silo is co-hosted
 - [Open Vocabularies Are String Constants](OpenVocabulariesAsStringConstants) — a persisted or module-extended vocabulary is `const string`, never an `enum`; it stays open for anyone to extend with their own constants, and resolution is a durable chain of rule nodes rather than a switch
+- [Closed Hierarchies and Unions](ClosedHierarchies) — a C# 15 `closed` hierarchy or `union` only for an internal type that is never persisted, never read by in-mesh C# and never extended by a module; read it with a switch EXPRESSION, the only form the compiler checks
 - [Observable Hub Pipeline (migration design)](ObservableHubPipeline)
 - [Per-Hub TaskScheduler — Actor Isolation Across the Mesh](OrleansTaskScheduler)
 - [Removing Hand-Woven Concurrency Gates](RemovingHandWovenGates)
@@ -478,6 +479,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [Writing Tests](WritingTests)
 - [Negative Controls](NegativeControls) — a pin is only a pin if it fails against the defect
+- [Timeout == Error](TimeoutIsError) — a product timeout terminal that fires during a test fails it unless the test declares the timeout as its subject; the guard is armed on every core test assembly
 - [Fault-Injection Harness](FaultInjectionHarness) — deterministic, releasable faults (silo kill / drain / linger, flush hold, NotFound window, change-feed and first-frame holds, webhook loss) and one isolated regression per production incident, each with its negative control
 - [Reactive Test Assertions](ReactiveTestAssertions)
 - [Test State Isolation](TestStateIsolation)
@@ -529,6 +531,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Release Support Policy](/Doc/Architecture/SupportPolicy)
 - [Released Artifact Retention](ReleasedArtifactRetention) — retain artifacts for at least 30 days, supported releases for their support lifetime, and every artifact still needed by a published set or consumer
 - [Platform Versioning (SemVer)](PlatformVersioning) — continuous builds move from `3.0.0-ci.<run>` to plain `3.<minor>.<run>`, where the patch is the same CD run number, so both notations share one lineage; `3-latest` is a seed pointer and never a record value; the inventory of every producer and parser across core, Plugins and Memex; and the readers → records → minter migration order
+- [Platform 4 on .NET 11](Platform4Net11) — the declared break that moves the platform to `net11.0` and line 4.0: what changed in core, the dependency order the fleet lands in, and the control-first move of instances from `updatePattern: "3.*"` to `"4.*"`.
 - [Major Lines Run Separately](MajorLinesRunSeparately) — a new major launches as its own line: `main` for v4, `main3` for v3, each with its own build-server channel (`latest4`, `latest3`), images, SDK and resolution, so a major bump never reaches a dependent on the previous one.
 - [Self-Update Target Selection](SelfUpdateTargetSelection) — candidates are ranked by the CD run number, not the version string; a mislabelled line outranked every sealed set for ever, and an install on a withdrawn tag could never see anything newer
 - [The Self-Update Registry Credential](SelfUpdateRegistryCredential) — which plugin-registry key may be presented to a container registry: a DECLARED pairing, never host equality or name resemblance; an absent declaration refuses
@@ -549,6 +552,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [A Set That Contradicts Itself](SelfContradictingSet) — two CD runs of one pair left a 9985 tester and floor next to a 9984 portal; the gates that keep a set's halves on one build
 - [Release Availability Gates](ReleaseGates) — one predicate for package availability; on a platform roll its refusals are advisories (the platform rolls independently of packages), never a hold
 - [Deploying Across Platform Versions](DeployingAcrossPlatformVersions) — the ladder: platform and plugins roll separately; a seal gates a roll only behind a declared break
+- [Adopting .NET 11](AdoptingDotNet11) — what .NET 11 / C# 15 offers the v4 line, checked against the official pages: where unions, Runtime Async, zstd, circuit pause and native OpenTelemetry apply here, what our policies forbid, the verification each needs, the order, and every .NET 11 breaking change that touches our code; plus what was measured on v4 before adopting anything (the thread-pool census fix, the runtime compiler still on C# 14, ZIP CRC32 refusals, net10 vs net11 hot-path benchmarks, and the Runtime Async decision)
 - [Adding a Data Sync Needs a Global Admin](DataSyncApproval) — a sync is a standing grant, not a one-off action: it keeps moving data indefinitely under an identity nobody re-examines, so the review at creation is the only one there will be. The trigger list, what is explicitly NOT covered, why a credential request instead of a proposal is the anti-pattern, and the one finding that blocks rather than being filed
 - [Policy Not Prose](PolicyNotProse) — never hard-code a decision's date or author into source, a comment, an XML doc comment or doc prose; a policy is a record with a value and an in-force date and everything else cites its id. The register, what counts as evidence rather than a policy marker (and so stays), the review finding, and why it is forward-only with no backward migration
 - [Issue Taxonomy and the Release Readiness Gate](IssueTaxonomy) — four axes on every issue, and the one that is a gate: `sev:B` and `sev:H` must both be zero to cut a release; why only bugs carry a severity, why a zero is only trustworthy when its query's coverage is, and why the ledger stays in GitHub rather than being mirrored
@@ -585,6 +589,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Review Findings Answered](ReviewFindingsAnswered) — a pull request reads red until the automatic review has landed and each thread it opened has a person's reply; the reviewer's two logins, the quota refusal posted as a review, and the maintainer-only waiver
 - [Staged Pull Request Pipeline](StagedPullRequestPipeline) — the expensive suites on a fresh merge with the current main beside the review, then arming only when the review is answered and every required check is green (policy `suites-parallel-with-review`): event-driven advance, three loud releases, and the measurements
 - [Fresh Merge Under Test](FreshMergeUnderTest) — every suite job tests the head merged onto the base's CURRENT tip, computed in the job and reported, never the push-time `refs/pull/N/merge` (policy `suites-test-fresh-merge`)
+- [Core Test Selection](CoreTestSelection) — which .NET test projects a core pull request owes: the ProjectReference closure, and for `.github/**` a split derived from the tree (lane-consumed → all, read by a test → that test, otherwise none — the shell jobs cover it); unknown fails safe
 - [Carving Projects Out Of Core](CarvingProjectsOutOfCore) — what a SOURCE move costs and what it does not
 - [Core Carries No GUI Technology](CoreCarriesNoGuiTechnology) — no Blazor, Razor, FluentUI, Radzen, Monaco wrapper or browser automation in the platform repository; the GUI pins and Playwright suites live in MeshWeaver.Plugins, and the proposal for the build tooling that still names a GUI
 - [Red-Log Watching & Ticketing](LogWatchTriage) — every `fail:`/`crit:` becomes exactly one triaged issue
@@ -630,6 +635,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Operating from the portal, not the cluster](OperatingFromThePortal)
 - [Operator Credentials Travel by Name](/Hosting/OperatorCredentialsByName) — the operator's only environment is a ConfigMap, so a step is handed a Key Vault object's NAME and reads the value with the identity it already runs as; why every database action failed at step 1 (Memex#132), why the CSI class built for it was consumed by nobody, and the one contract the Postgres steps now share with hosting-kv-ensure on both executors
 - [The Payment Provider Contract](PaymentProviderContract)
+- [Portal-AI Base Image](PortalAiBaseImage) — the base under every portal-ai and control image is named by its content and built by CD when absent, so a TFM move can never leave a .NET 11 host on a .NET 10 runtime (the first v4 control image did)
 - [Secrets: Write-Only Entry, Split Identities](SecretsWriteOnlyEntry) — nobody touches Key Vault by hand: a write-only GUI per owning app, ONE governed writer identity that can list/set/delete but never read a value, a reader identity (the pods) that can only `get`, the write-time fingerprint tag, and the CI guard against new hand-run vault commands
 - [Pre-Boot Service Substitution](PreBootServiceSubstitution)
 - [Project Templates](ProjectTemplates)

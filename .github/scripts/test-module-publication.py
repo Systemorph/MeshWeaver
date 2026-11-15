@@ -480,7 +480,7 @@ def main() -> int:  # noqa: C901
         shelf = "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"
         (src / shelf).parent.mkdir(parents=True, exist_ok=True)
         (src / shelf).write_text('<Project Sdk="Microsoft.NET.Sdk">\n'
-                                 '  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>\n'
+                                 '  <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>\n'
                                  '  <ItemGroup><Compile Include="../Acme.Other/Lib/*.cs" /></ItemGroup>\n'
                                  '</Project>\n')
         (src / "src/Acme.Other/Lib").mkdir(parents=True, exist_ok=True)

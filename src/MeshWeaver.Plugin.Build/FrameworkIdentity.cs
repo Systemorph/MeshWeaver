@@ -96,7 +96,7 @@ public static class FrameworkIdentity
             packagesRoot,
             IdentityAssembly.ToLowerInvariant(),
             frameworkVersion,
-            "lib", "net10.0", IdentityAssembly + ".dll");
+            "lib", "net11.0", IdentityAssembly + ".dll");
 
         return File.Exists(candidate) ? ReadIdentity(candidate) : null;
     }

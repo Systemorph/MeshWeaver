@@ -25,7 +25,7 @@ The repos under `meshweaver.azurecr.io`:
 | `memex-migration` | The DB-migration image | A few tags; keep the live one + `latest` |
 | `memex-portal-next` | **Retired** (policy `portal-next-in-platform-image`) — `/next` ships inside `memex-portal-ai` now | No overlay or record names it any more (Systemorph/Memex#726, `check-no-pins.py` rule 7 keeps it so). Ready to delete — [Retiring `memex-portal-next`](#retiring-memex-portal-next) |
 | `mw-plugin-test` | Plugin-CI test image (also published to GHCR) | Keep the newest; not deployment-critical |
-| `memex-portal-ai-base` | The custom runtime **base** image every portal build layers on | **Never delete `latest`** — it breaks every future build |
+| `memex-portal-ai-base` | The custom runtime **base** image every portal build layers on, one `src-<hash>` tag per base-directory content ([Portal-AI Base Image](../PortalAiBaseImage)) | **Never delete a `src-*` tag a delivery line's tree still names**, nor `latest` (still read outside this repository); a deleted `src-*` tag is rebuilt by the next CD run that needs it |
 
 > 🚨 `memex-portal-ai`, `memex-migration` and `mw-plugin-test` form the
 > **three-image set** that `.github/scripts/check-image-set.sh` asserts is complete for a given commit, and

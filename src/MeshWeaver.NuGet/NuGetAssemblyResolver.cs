@@ -39,7 +39,7 @@ namespace MeshWeaver.NuGet;
 /// </summary>
 public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
 {
-    private static readonly NuGetFramework DefaultFramework = NuGetFramework.Parse("net10.0");
+    private static readonly NuGetFramework DefaultFramework = NuGetFramework.Parse("net11.0");
 
     /// <summary>
     /// The wall-clock budget of ONE resolution — every feed call, download and extraction it makes.
@@ -113,7 +113,7 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     // off nuget.org, where the stale 3.0.0-preview1 ships analyzers/ only (no lib/<tfm>) —
     // the generator never loads and scope nodes compile but generate nothing (PensionFund
     // renders empty; NuGetAssemblyResolverTest fails the lib/ assertion). Passing the
-    // assembly dir as root makes NuGet walk UP the tree to find it: in tests bin/.../net10.0
+    // assembly dir as root makes NuGet walk UP the tree to find it: in tests bin/.../net11.0
     // → repo root nuget.config; in the published container the app dir, where the csproj
     // ships nuget.config NEXT TO the baked dist/packages feed. CWD is whatever launched the
     // process and can't be relied on; the assembly location can.
@@ -169,7 +169,7 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     /// cancels its leaf. A failure is logged once, whether or not anyone is still subscribed.
     /// </summary>
     /// <param name="requested">The package references to resolve.</param>
-    /// <param name="targetFramework">The target framework to resolve assets for; defaults to <c>net10.0</c> when <c>null</c>.</param>
+    /// <param name="targetFramework">The target framework to resolve assets for; defaults to <c>net11.0</c> when <c>null</c>.</param>
     /// <returns>Emits one <c>ResolvedPackageSet</c> and completes, or fails naming the packages.</returns>
     public IObservable<ResolvedPackageSet> Resolve(
         IReadOnlyCollection<NuGetPackageReference> requested,
@@ -190,7 +190,7 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     /// caller's wait, never the shared resolution.
     /// </summary>
     /// <param name="requested">The package references to resolve.</param>
-    /// <param name="targetFramework">The target framework to resolve assets for; defaults to <c>net10.0</c> when <c>null</c>.</param>
+    /// <param name="targetFramework">The target framework to resolve assets for; defaults to <c>net11.0</c> when <c>null</c>.</param>
     /// <param name="ct">Token used to cancel this caller's wait for the resolution.</param>
     /// <returns>A <c>ResolvedPackageSet</c> describing the resolved assemblies, probing directories and versions.</returns>
     public Task<ResolvedPackageSet> ResolveAsync(

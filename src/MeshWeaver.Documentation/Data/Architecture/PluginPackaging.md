@@ -169,7 +169,7 @@ MeshWeaver.Plugin.<Name>.<Version>.nupkg
 └── meshweaver/content/**             the plugin's node files, verbatim
 ```
 
-**Assemblies are deliberately not under `lib/net10.0/`.** There, NuGet would surface every unit as a
+**Assemblies are deliberately not under `lib/net11.0/`.** There, NuGet would surface every unit as a
 compile-time reference of any consumer — colliding the duplicate type names that separate units
 legitimately declare, and unifying CLR identity the runtime keeps apart. They are payload for the
 assembly store, not a reference set.
@@ -231,7 +231,7 @@ identity, stated directly) is required; without one the packer exits 2 rather th
 whose consumers can never tell a rebuild from a no-op:**
 
 ```
-dotnet run --project src/MeshWeaver.Plugin.Build -- module-pack ./bin/Release/net10.0 \
+dotnet run --project src/MeshWeaver.Plugin.Build -- module-pack ./bin/Release/net11.0 \
     --module-name MeshWeaver.Social --plugin SocialMedia --package-version 1.2.0 \
     --min-mesh-version 3.0.0 --graph-dll /app/MeshWeaver.Compiler.dll \
     --out ./artifacts/bundles

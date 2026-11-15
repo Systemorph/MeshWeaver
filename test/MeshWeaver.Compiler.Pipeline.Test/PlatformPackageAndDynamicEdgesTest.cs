@@ -244,9 +244,9 @@ public class PlatformPackageAndDynamicEdgesTest
     public void APackageAssembly_IsAPackageEdgeNamedByItsPackageId_AndAnUnusedOneIsNone()
     {
         var root = Path.Combine(Path.GetTempPath(), "mw-depedges-pkg-" + Guid.NewGuid().ToString("N"));
-        var used = Emit(Path.Combine(root, "acme.widgets", "1.2.0", "lib", "net10.0"), "Acme.Widgets",
+        var used = Emit(Path.Combine(root, "acme.widgets", "1.2.0", "lib", "net11.0"), "Acme.Widgets",
             "namespace Acme.Widgets; public sealed class Widget { public int Size => 1; }");
-        var unused = Emit(Path.Combine(root, "acme.gadgets", "2.0.0", "lib", "net10.0"), "Acme.Gadgets",
+        var unused = Emit(Path.Combine(root, "acme.gadgets", "2.0.0", "lib", "net11.0"), "Acme.Gadgets",
             "namespace Acme.Gadgets; public sealed class Gadget { }");
         try
         {
@@ -774,7 +774,7 @@ public class PlatformPackageAndDynamicEdgesTest
         DynamicBindingExtraction.SplitAssemblyQualifiedName(name).Should().Be((type, assembly));
 
     [Theory]
-    [InlineData("/home/u/.nuget/packages/acme.widgets/1.2.0/lib/net10.0/Acme.Widgets.dll", "acme.widgets")]
+    [InlineData("/home/u/.nuget/packages/acme.widgets/1.2.0/lib/net11.0/Acme.Widgets.dll", "acme.widgets")]
     [InlineData("/shelf/Acme.Flat.dll", "Acme.Flat")]
     public void PackageIdOf_ReadsTheGlobalPackagesLayout(string path, string id) =>
         DependencyReferenceClasses.PackageIdOf(path).Should().Be(id);

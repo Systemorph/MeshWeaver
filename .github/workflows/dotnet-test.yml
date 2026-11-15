@@ -258,7 +258,7 @@ env:
   # The Playwright the shards' headless browser comes from, and the one whose `install-deps
   # --dry-run` the font set is checked against. Keep it in step with
   # deploy/base-images/portal-ai/Dockerfile.
-  PLAYWRIGHT_VERSION: 1.62.1
+  PLAYWRIGHT_VERSION: 1.65.0
 
 jobs:
   # 🚨 No `jlumbroso/free-disk-space` in any job — do not re-add it. Removed 2026-08-09 after
@@ -489,9 +489,12 @@ jobs:
     # ── Tests only for changed functionality (the fleet rule, applied to core 2026-09-13) ──────
     # Every run used to execute every test project — 5 shards, ~21 of a run's 31 job-minutes —
     # whatever the change touched. On a PULL REQUEST the diff against the base is mapped to the
-    # ProjectReference graph and only the test projects that reach a changed project run; a
-    # change outside src/ and test/ (a workflow, a props file, an allow list, tools/…) still runs
-    # everything, and docs/markdown-only changes run none. merge_group, push, schedule and
+    # ProjectReference graph and only the test projects that reach a changed project run. A
+    # `.github/**` file runs everything only when THIS lane consumes it (derived from this file's
+    # non-shell jobs and what they call), runs just the test projects that read it otherwise, and
+    # nothing when no .NET test reads it — the `workflow-shell*` jobs cover it
+    # (Doc/Architecture/CoreTestSelection). Any other change outside src/ and test/ (a props file,
+    # an allow list, tools/…) still runs everything; docs/markdown-only changes run none. merge_group, push, schedule and
     # dispatch always run the full suite — the merge queue is the coupling check. The verdict is
     # printed here and asserted downstream: every shard obeys the SAME selection through
     # shard-assign.sh, and the collector accepts "no evidence" ONLY for mode=none.
@@ -642,7 +645,7 @@ jobs:
   # or `cancelled` holds (stage 0 red), `skipped` passes. The green-tree reuse path is passed in too:
   # nothing is spent there, so it is not held.
   stage-gate:
-    needs: [precheck, pr-body, shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, workflow-shell, workflow-shell-executions, cross-repo-pair]
+    needs: [precheck, pr-body, shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, workflow-shell, workflow-shell-executions, workflow-shell-executions-publish, workflow-shell-executions-msbuild, cross-repo-pair]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/node-repo-stage-gate.yml
     permissions:
@@ -658,6 +661,8 @@ jobs:
         package-pin-removal=${{ needs.package-pin-removal.result }} interface-addition=${{ needs.interface-addition.result }}
         i18n-mirror-sync=${{ needs.i18n-mirror-sync.result }} workflow-shell=${{ needs.workflow-shell.result }}
         workflow-shell-executions=${{ needs.workflow-shell-executions.result }}
+        workflow-shell-executions-publish=${{ needs.workflow-shell-executions-publish.result }}
+        workflow-shell-executions-msbuild=${{ needs.workflow-shell-executions-msbuild.result }}
         cross-repo-pair=${{ needs.cross-repo-pair.result }} pr-body=${{ needs.pr-body.result }}
 
   # ── WHO RUNS THE BUILD AND THE SUITES: a standing build host, or Actions ─────────────────────
@@ -680,9 +685,12 @@ jobs:
     # No `main-sha`: precheck's main is the green-tree PROBE's and may be hours old by the time a held
     # run is released (see precheck's output). Empty, the host resolves the tip once as the suites
     # start — exactly what `build` does on the Actions route (policy suites-test-fresh-merge).
+    # 🧵 The LINE picks the build-host channel (policy major-lines-run-separately): a pull request onto main
+    # runs on the v4 host, onto main3 on latest3 — declared in .github/delivery-lines.json `buildHostChannel`.
     with:
       change-mode: ${{ needs.precheck.outputs.tests-mode }}
       scripts-ref: ${{ github.sha }}
+      line-channels: true
     secrets:
       build-webhook-secret: ${{ secrets.BUILD_WEBHOOK_SECRET }}
 
@@ -704,8 +712,10 @@ jobs:
     with:
       executor: host
       api-url: ${{ needs.admission.outputs.api-url }}
-      # The stage's CHECK name (build/<stage>): build-follow.py refuses a bare `build` as the aggregate check.
-      stage: build/${{ matrix.stage }}
+      # The stage's CHECK name (build/<stage> on latest, build-<channel>/<stage> off it): build-follow.py
+      # refuses a bare `build` as the aggregate check.
+      stage: ${{ needs.admission.outputs.channel == 'latest' && 'build' || format('build-{0}', needs.admission.outputs.channel) }}/${{ matrix.stage }}
+      channel: ${{ needs.admission.outputs.channel || 'latest' }}
       sha: ${{ github.event.pull_request.head.sha || github.sha }}
       scripts-ref: ${{ github.sha }}
 
@@ -740,11 +750,12 @@ jobs:
         API_URL: ${{ needs.admission.outputs.api-url }}
         SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         SHARD: ${{ matrix.shard }}
+        CHANNEL: ${{ needs.admission.outputs.channel || 'latest' }}
       run: |
         set -euo pipefail
         python3 .github/scripts/host-shard-results.py --self-test > /dev/null
         python3 .github/scripts/host-shard-results.py --api-url "$API_URL" --sha "$SHA" --shard "$SHARD" \
-          --channel latest --out "$GITHUB_WORKSPACE/results"
+          --channel "$CHANNEL" --out "$GITHUB_WORKSPACE/results"
     - name: "Upload artifact: shard test results (from the host)"
       uses: actions/upload-artifact@v7
       with:
@@ -786,11 +797,12 @@ jobs:
       env:
         API_URL: ${{ needs.admission.outputs.api-url }}
         SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        CHANNEL: ${{ needs.admission.outputs.channel || 'latest' }}
       run: |
         set -euo pipefail
         python3 .github/scripts/host-build-outputs.py --self-test > /dev/null
         python3 .github/scripts/host-build-outputs.py fetch --api-url "$API_URL" --sha "$SHA" \
-          --channel latest --out "$RUNNER_TEMP/host-build"
+          --channel "$CHANNEL" --out "$RUNNER_TEMP/host-build"
     # 🔀 The consumers merge the head onto this main-sha (policy suites-test-fresh-merge); a fresh merge
     # is a pure function of (main, head), so this one proves theirs is the tree the host compiled.
     - name: Merge the head onto the main the host build compiled
@@ -871,7 +883,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 10.0.x
+        dotnet-version: 11.0.x
     # The NuGet shelf (Memex ci-runners, mounted at /nuget-shelf on the self-hosted sets; absent on
     # ubuntu-latest, where both steps say so and do nothing): immutable per-version zips, the mesh's
     # own FileSystemNuGetPackageCache protocol, extracted into THIS runner's packages folder before
@@ -1146,7 +1158,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 10.0.x
+        dotnet-version: 11.0.x
     - name: "Download artifact: this shard's build output"
       uses: actions/download-artifact@v8
       with:
@@ -1437,7 +1449,7 @@ jobs:
           name=$(basename "$csproj" .csproj)
           label="$name"
           [ "$parts" -gt 1 ] && label="$name (part $part/$parts)"
-          dir=$(dirname "$csproj")/bin/Release/net10.0
+          dir=$(dirname "$csproj")/bin/Release/net11.0
           # Helper projects (TestDomain, Hub.Fixture, AI.Test.FakeCli) ship no
           # xunit.v3 host — nothing to run. Recorded so the log shows they were
           # consciously skipped, not lost.
@@ -1671,7 +1683,7 @@ jobs:
         # dump was produced by — the matching DAC is what makes SOS work at all.
         while read -r sigproj; do
           [ -z "$sigproj" ] && continue
-          bindir=$(find test -type d -path "*/$sigproj/bin/Release/net10.0" | head -1)
+          bindir=$(find test -type d -path "*/$sigproj/bin/Release/net11.0" | head -1)
           [ -z "$bindir" ] && continue
           echo "Collecting symbols for signal-killed $sigproj from $bindir"
           mkdir -p "collected-logs/symbols-$sigproj"
@@ -2021,7 +2033,7 @@ jobs:
         main-sha: ${{ needs.build.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 10.0.x
+        dotnet-version: 11.0.x
     - name: "Download artifact: build output (shard 0)"
       uses: actions/download-artifact@v8
       with:
@@ -2229,7 +2241,7 @@ jobs:
         main-sha: ${{ needs.build.outputs.main-sha || needs.host-build-outputs.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 10.0.x
+        dotnet-version: 11.0.x
     - name: "Download artifact: build output (shard 0)"
       uses: actions/download-artifact@v8
       with:
@@ -2353,8 +2365,10 @@ jobs:
     # — so there is no condition under which this may decline to run and still render a tick:
     #   * no `needs:`, so nothing upstream can skip it (not even the green-tree reuse path — this
     #     gate is minutes, and the reuse optimisation exists for a 70-runner-minute suite);
-    #   * it runs as TWO jobs, this one and `workflow-shell-executions` below, because one job of
-    #     ~130 guards in series outgrew its 10-minute cap (see that job's header);
+    #   * it runs as FOUR jobs — this one, `workflow-shell-executions`, and its two longest
+    #     harnesses split out as `workflow-shell-executions-publish` / `-msbuild` — because one job
+    #     of ~130 guards in series outgrew its 10-minute cap and then sat on stage 0's critical
+    #     path (see those jobs' headers);
     #   * no input-shaped `if:`, because GitHub renders a skipped job with the same tick as a
     #     passed one;
     #   * no path filter, which is that same defect from the other side (an unrelated PR would
@@ -2710,6 +2724,17 @@ jobs:
     - name: "Every moving image label is declared, and retention reads it as protected"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/release-channels.py check .
+
+    # The portal-ai BASE (Doc/Architecture/PortalAiBaseImage): CD layers every framework-dependent
+    # portal/control image on the base named by the content of deploy/base-images/portal-ai, and the
+    # Dockerfile's runtime must equal the platform's TargetFramework. The first v4 CD run layered a
+    # net11.0 host on a stale aspnet:10.0 `:latest` and the control image exited before Main.
+    - name: "The portal-ai base is named by its content and held to the target framework (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/portal-ai-base.py --self-test
+    - name: "The base runtime equals the platform's TargetFramework, and no workflow layers on a literal base tag"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/portal-ai-base.py check
 
     # The DELIVERY LINES (policy `major-lines-run-separately`): main-cd.yml derives its line once and
     # refuses an undeclared one (`derive`, driven here against fabricated events), and never spells a
@@ -3339,7 +3364,8 @@ jobs:
   # a red with no verdict, on main, from a gate whose every step was green up to the cut. Nothing
   # in it was stuck: it is independent guards in series, so the cure is two jobs, not a higher cap.
   # This half holds the harnesses that EXECUTE a lane's or a script's real code against fixtures
-  # (the costliest, the publish-bake overlap harness, is ~2.5 min of real publications).
+  # (its two costliest — the publish-bake overlap harness and the real MSBuild reading — now run
+  # as `workflow-shell-executions-publish` and `-msbuild` below, in parallel with this job).
   # Same posture as the first half: no `needs:`, no input-shaped `if:`, no path filter, no
   # `continue-on-error`, the same tool assertion and the same one prerequisite line (#4784) —
   # `check-guard-step-masking.py` holds this job to it too. Both halves gate stage 2 and Consolidate.
@@ -3406,19 +3432,7 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-platform-canary.py
 
-    # The WRITER side of the same window (#3461). `prebuilt-bundles/<identity>/<source>/` has
-    # several publishers — core CD's `plugins-bake`, the satellite's own `publish-bake`, and (four
-    # times in one measured day, more often than the cross-lane case) two concurrent runs of ONE of
-    # them. Interleaved, publish-bake-bundles.sh used to seal a sentinel over bytes from two bakes:
-    # one seal, one generation, self-consistent to every consumer and WRONG, surfacing only as
-    # `dependency record mismatch — built against mvid:…` on a portal that renders nothing. This
-    # runs the REAL script twice, interleaved, against a stub share, and reads the verdict off the
-    # BYTES rather than off the script's own log.
-    - name: "Execute publish-bake-bundles.sh with two publishers on one prefix"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/test-publish-bake-overlap.py
-
-    # The READER side of the same lane, and a log-quality gate rather than a byte one (#3583).
+    # The READER side of the publish-bake lane, and a log-quality gate rather than a byte one (#3583).
     # `check-release-availability.sh` is the step that held MeshWeaver.Reinsurance 23 times in 24
     # hours. Every refusal exits 1 and must keep doing so — that is not what this asserts. It
     # asserts the three outcomes are TOLD APART in the log, because they want three different
@@ -3460,20 +3474,6 @@ jobs:
     - name: "The module-pack lane keys the extension SDK the caller's checkout resolves"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-pack-extension-sdk.py
-    # The MSBuild reading behind the extension/shelf key and scope REFUSES what it cannot model, and a
-    # rule written against fixtures alone once refused the one real extension. This positive control
-    # runs both scripts over an extension laid in this tree for the run (shaped like MeshWeaver.Plugins'
-    # Razor extension, referencing the real contract), with negative controls.
-    # The conservative sweep's ONE path parser (paths_in), held by a table of every spelling class:
-    # spaces, separators after a property, `\`, `..`, quotes, `;`-lists, globs, trailing separators,
-    # and the negatives (nonexistent, outside, root, output, .git, unresolved).
-    - name: "The MSBuild sweep's path parser resolves every spelling in its table"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/msbuild-evaluate.py --self-test
-    - name: "The real Razor build extension parses and keys cleanly"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/test-build-extension-reading.py
-
     # The gate and publish-bake lanes compose every external module into /ext/modules/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
     # that LOADS and then 404s every static asset it ships (`meshweaver/moduleassets/`), announced
@@ -3598,6 +3598,79 @@ jobs:
     - name: "Execute the two Azure-direct publication readers against a share with a generation"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-publication-pointer-readers.py
+
+  # ── CI's own shell, the two longest EXECUTIONS, each in its own job ───────────────────────────
+  # Split out of `workflow-shell-executions` for the critical path, not for a cap: that job sat in
+  # `stage-gate`'s needs at 479 s (main run 43636407276), the slowest stage-0 input by 3.5 minutes,
+  # with two harnesses alone at 181 s (publish-bake overlap) and 154 s (the real Razor build
+  # extension). Every step is an independent harness that reads only the checkout and the venv the
+  # tool assertion builds, so each job repeats exactly that setup and nothing else. Same posture as
+  # the other halves: no `needs:`, no input-shaped `if:`, no path filter, no `continue-on-error`, the
+  # same one prerequisite line (#4784, held by check-guard-step-masking.py); each gates stage 2 and
+  # Consolidate on its own verdict.
+  # publish-bake-bundles.sh, two interleaved publishers against a stub share (~3 min of real publications).
+  workflow-shell-executions-publish:
+    name: "CI's own shell (executions: publish-bake overlap)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+
+    - name: Assert the tools this gate needs
+      uses: ./.github/actions/workflow-shell-tools
+
+    - name: The workspace and the tools are present — the ONE prerequisite every guard shares
+      id: ready
+      run: echo "ok=true" >> "$GITHUB_OUTPUT"
+
+    # The WRITER side of the compose window above (#3461). `prebuilt-bundles/<identity>/<source>/` has
+    # several publishers — core CD's `plugins-bake`, the satellite's own `publish-bake`, and (four
+    # times in one measured day, more often than the cross-lane case) two concurrent runs of ONE of
+    # them. Interleaved, publish-bake-bundles.sh used to seal a sentinel over bytes from two bakes:
+    # one seal, one generation, self-consistent to every consumer and WRONG, surfacing only as
+    # `dependency record mismatch — built against mvid:…` on a portal that renders nothing. This
+    # runs the REAL script twice, interleaved, against a stub share, and reads the verdict off the
+    # BYTES rather than off the script's own log.
+    - name: "Execute publish-bake-bundles.sh with two publishers on one prefix"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-publish-bake-overlap.py
+
+  # The real `dotnet msbuild` evaluation behind the extension/shelf key and scope (~2.5 min).
+  workflow-shell-executions-msbuild:
+    name: "CI's own shell (executions: MSBuild reading)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+
+    - name: Assert the tools this gate needs
+      uses: ./.github/actions/workflow-shell-tools
+
+    - name: The workspace and the tools are present — the ONE prerequisite every guard shares
+      id: ready
+      run: echo "ok=true" >> "$GITHUB_OUTPUT"
+
+    # The MSBuild reading behind the extension/shelf key and scope REFUSES what it cannot model, and a
+    # rule written against fixtures alone once refused the one real extension. This positive control
+    # runs both scripts over an extension laid in this tree for the run (shaped like MeshWeaver.Plugins'
+    # Razor extension, referencing the real contract), with negative controls.
+    # The conservative sweep's ONE path parser (paths_in), held by a table of every spelling class:
+    # spaces, separators after a property, `\`, `..`, quotes, `;`-lists, globs, trailing separators,
+    # and the negatives (nonexistent, outside, root, output, .git, unresolved).
+    - name: "The MSBuild sweep's path parser resolves every spelling in its table"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/msbuild-evaluate.py --self-test
+    - name: "The real Razor build extension parses and keys cleanly"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-build-extension-reading.py
+    # The ABI probe's REAL Roslyn comparer (.github/scripts/abi-syntax), built on this runner's SDK: a body edit
+    # keeps the surface; a signature, modifier, attribute, default, const, enum, #if, layout or generator-input edit
+    # moves it; the surface cache answers a warm run; and with stripping OFF a body edit moves it (negative control).
+    - name: "The ABI probe's syntax surface says unchanged only for a body edit — the comparer can say no"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/abi-key.py --self-test-syntax
 
   shared-rules:
     name: "AGENTS.md shared rule blocks"
@@ -4497,7 +4570,7 @@ jobs:
     # side (their push and daily runs). Nothing on the deploy side refuses a roll onto an unverified
     # core + plugin combination: arming (`one-promotion-gate`) judges platform evidence only, and the
     # combo verdict is ADVISORY (`platform-rolls-independently-of-packages`, ComboGateWiring).
-    needs: [precheck, stage-gate, admission, host-follow, host-results, host-build-outputs, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, workflow-shell-executions, shared-rules, pr-body, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
+    needs: [precheck, stage-gate, admission, host-follow, host-results, host-build-outputs, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, workflow-shell-executions, workflow-shell-executions-publish, workflow-shell-executions-msbuild, shared-rules, pr-body, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -4909,7 +4982,22 @@ jobs:
       # already failed this job — without it this verdict would be skipped instead of naming the half.
       if: always() && needs.workflow-shell-executions.result != 'success'
       run: |
-        echo "::error::The 'CI's own shell (executions)' gate concluded '${{ needs.workflow-shell-executions.result }}' — see that job. It EXECUTES the lanes' and scripts' real code against fixtures — main-cd's decision steps, the publish-bake overlap harness, the module publication and pack lanes, the compile-check reference set, the seal and carry-forward scripts — none of which any other check on this PR runs."
+        echo "::error::The 'CI's own shell (executions)' gate concluded '${{ needs.workflow-shell-executions.result }}' — see that job. It EXECUTES the lanes' and scripts' real code against fixtures — main-cd's decision steps, the module publication and pack lanes, the compile-check reference set, the seal and carry-forward scripts — none of which any other check on this PR runs."
+        exit 1
+
+    # The two longest executions, split out for the critical path — each its own verdict.
+    - name: Fail if CI's own shell gate failed (publish-bake overlap)
+      # `!= 'success'`: skipped or cancelled is no verdict, and no verdict never reads as passed.
+      if: always() && needs.workflow-shell-executions-publish.result != 'success'
+      run: |
+        echo "::error::The 'CI's own shell (executions: publish-bake overlap)' gate concluded '${{ needs.workflow-shell-executions-publish.result }}' — see that job. It runs the REAL publish-bake-bundles.sh twice, interleaved, against a stub share and reads the verdict off the bytes; no other check on this PR runs it."
+        exit 1
+
+    - name: Fail if CI's own shell gate failed (MSBuild reading)
+      # `!= 'success'`: skipped or cancelled is no verdict, and no verdict never reads as passed.
+      if: always() && needs.workflow-shell-executions-msbuild.result != 'success'
+      run: |
+        echo "::error::The 'CI's own shell (executions: MSBuild reading)' gate concluded '${{ needs.workflow-shell-executions-msbuild.result }}' — see that job. It runs the real MSBuild evaluation behind the extension/shelf key and scope (msbuild-evaluate.py, test-build-extension-reading.py) over a Razor-shaped extension, with negative controls."
         exit 1
 
     # `!= 'success'` rather than `== 'failure'`, for the same reason as the gate above: a job

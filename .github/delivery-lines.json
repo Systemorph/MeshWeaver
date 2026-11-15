@@ -19,12 +19,22 @@
     "  branch      — the branch of this repository that IS the line.",
     "  pluginsRef   — the MeshWeaver.Plugins branch the line's image sets are built against (the",
     "                 portal HOST lives there). `vars.MW_PLUGINS_REF` still overrides it per run.",
+    "  BOOTSTRAP (the first 4.0 set): the main line's pluginsRef names MeshWeaver.Plugins' v4 branch",
+    "                 feat/net11-v4, because Plugins main is still the v3 line (net10) until that",
+    "                 branch merges. Flip it back to main in the change that follows that merge;",
+    "                 main3's entry is untouched throughout. Never vars.MW_PLUGINS_REF for this: it",
+    "                 overrides EVERY line, main3 included.",
     "  satelliteRef — the branch of each satellite `satellite-compat` compiles against the line's set.",
-    "                 A satellite has a v3 branch only if it must keep shipping v3, so it is `main`",
-    "                 for every line until a satellite cuts one (design §4).",
+    "                 Every satellite `satellite-compat` lists has cut a protected `main3`, so the v3",
+    "                 line compiles each satellite's `main3` and the default line its `main` (design §4).",
     "  label        — the line's FLOATING image label: the newest PROMOTED set of the line. Declared",
     "                 in .github/release-channels.json with this line; `release-channels.py check`",
     "                 holds the two files to each other.",
+    "  buildHostChannel — the standing build host channel a run of this line is queued on",
+    "                 (build-executor.py, with LINES_FILE): a pull request takes its BASE line's, a trunk",
+    "                 run its branch's. main = v4 → `latest4` (SDK 11), main3 = v3 → `latest3` (SDK 10).",
+    "                 A pull request onto an undeclared line is RED there, by name. The channel must also",
+    "                 be declared on MeshWeaver.Deploy .github/build-hosts.json and the operations record.",
     "  movesLatest  — whether this line moves the line-less `latest` labels (the tester's",
     "                 MW_TEST_IMAGE). EXACTLY ONE line does: two lines interleave run numbers, so a",
     "                 forward-only check alone would hand `latest` back and forth between majors.",
@@ -42,16 +52,18 @@
   "lines": [
     {
       "branch": "main",
-      "pluginsRef": "main",
+      "pluginsRef": "feat/net11-v4",
       "satelliteRef": "main",
       "label": "main",
+      "buildHostChannel": "latest4",
       "movesLatest": true
     },
     {
       "branch": "main3",
       "pluginsRef": "main3",
-      "satelliteRef": "main",
+      "satelliteRef": "main3",
       "label": "main3",
+      "buildHostChannel": "latest3",
       "movesLatest": false
     }
   ]

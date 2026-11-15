@@ -96,7 +96,7 @@ SUITE_DECL = re.compile(r"\bclass\s+\w*Tests\b")
 CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
@@ -105,7 +105,7 @@ CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
   </PropertyGroup>
   <ItemGroup>
     <!-- 🚨 The shared framework, so the Microsoft.Extensions.* assemblies resolve at the version
-         the MeshWeaver assemblies were BUILT against (10.0.0). Without it the only copies in the
+         the MeshWeaver assemblies were BUILT against (11.0.0). Without it the only copies in the
          ref set are whatever happens to sit in some project's bin — the memex CLI shipped 9.0.0 —
          and the load fails at RUN time with "Could not load file or assembly
          'Microsoft.Extensions.DependencyInjection.Abstractions, Version=10.0.0.0'".
@@ -146,12 +146,12 @@ CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
          already calls before compiling anything, REFUSES a reference set with no System.Reactive.dll
          rather than guessing. Do not reintroduce a literal "for the case the refs dir has none" —
          that case exits first, and a pin is a second place to forget the platform moved. -->
-    <!-- 10.0.0, matching the net10.0 framework assemblies. Pinned at 9.0.0 these win as "primary"
+    <!-- 11.0.0, matching the net11.0 framework assemblies. Pinned at 9.0.0 these win as "primary"
          and every test that touches MeshWeaver.Data/Graph/Mesh dies at RUN time with
          "Could not load file or assembly ... Abstractions, Version=10.0.0.0" — after compiling
          perfectly, which makes it read like a broken test rather than a broken harness. -->
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0" />
   </ItemGroup>
 {analyzers}
 </Project>
@@ -322,7 +322,7 @@ def sibling_plugin_refs(refs: dict) -> tuple[dict, int]:
     for base in candidates:
         dlls = []
         for cfg in ("Debug", "Release"):
-            dlls += glob.glob(str(base / "src" / "*" / "bin" / cfg / "net10.0" / "*.dll"))
+            dlls += glob.glob(str(base / "src" / "*" / "bin" / cfg / "net11.0" / "*.dll"))
         if not dlls:
             continue
         def is_own(path) -> bool:

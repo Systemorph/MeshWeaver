@@ -105,7 +105,7 @@ public class EmbeddedResourceTest : IDisposable
     private const string Library = """
         <Project Sdk="Microsoft.NET.Sdk">
           <PropertyGroup>
-            <TargetFramework>net10.0</TargetFramework>
+            <TargetFramework>net11.0</TargetFramework>
             <RootNamespace>Probe.Root.Ns</RootNamespace>
             <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
           </PropertyGroup>
@@ -217,7 +217,7 @@ public class EmbeddedResourceTest : IDisposable
         var project = Write("ProjNameDiffers/ProjNameDiffers.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <AssemblyName>DifferentAsmName</AssemblyName>
                 <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
               </PropertyGroup>
@@ -240,7 +240,7 @@ public class EmbeddedResourceTest : IDisposable
         var project = Write("Bare/Bare.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <RootNamespace></RootNamespace>
                 <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
               </PropertyGroup>
@@ -446,7 +446,7 @@ public class EmbeddedResourceTest : IDisposable
     {
         var project = Write("Def/Def.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
             </Project>
             """);
         Write("Def/T.cs", "namespace P; internal static class T { }");
@@ -551,7 +551,7 @@ public class EmbeddedResourceTest : IDisposable
         var project = Write("Own/Own.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <GenerateDocumentationFile>true</GenerateDocumentationFile>
               </PropertyGroup>
               <ItemGroup>
@@ -704,7 +704,7 @@ public class EmbeddedResourceTest : IDisposable
                 $"the reference `dotnet build` failed in {projectDirectory} (exit {process.ExitCode}). "
                 + "This test compares against the SDK's answer, so it cannot pass without one.\n" + output);
 
-        var assembly = Path.Combine(projectDirectory, "bin", "Release", "net10.0", $"{assemblyName}.dll");
+        var assembly = Path.Combine(projectDirectory, "bin", "Release", "net11.0", $"{assemblyName}.dll");
         return File.Exists(assembly)
             ? assembly
             : throw new InvalidOperationException($"the reference build produced no {assembly}.\n{output}");

@@ -1996,11 +1996,11 @@ public static class ProjectFile
 
     /// <summary>
     /// The preprocessor symbols the SDK defines beyond <c>DefineConstants</c>: the configuration
-    /// symbol and the target-framework ladder (<c>NET</c>, <c>NET10_0</c>, <c>NET10_0_OR_GREATER</c>
+    /// symbol and the target-framework ladder (<c>NET</c>, <c>NET11_0</c>, <c>NET11_0_OR_GREATER</c>
     /// and every earlier rung). A project guarding code with <c>#if NET8_0_OR_GREATER</c> compiles
     /// to something different without them, which is the silent-difference failure again.
     /// </summary>
-    /// <param name="targetFramework">e.g. <c>net10.0</c>.</param>
+    /// <param name="targetFramework">e.g. <c>net11.0</c>.</param>
     /// <returns>The symbols to add.</returns>
     public static ImmutableArray<string> FrameworkSymbols(string targetFramework)
     {

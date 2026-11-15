@@ -454,7 +454,9 @@ answer NOBODY when its source **completes empty**, which is a different terminat
 different route. **Every leg now handles all three of Rx's terminations** — the read leg and the
 inner create by their own explicit third arm, the other three by composing through
 `DetachedReplyOutcome.Of`, which converts value / fault / empty into exactly one emission so the
-subscriber cannot fail to answer:
+subscriber cannot fail to answer. The outcome is a `closed` record (`Emitted` / `Faulted` /
+`CompletedEmpty`), and each leg reads it with a switch expression, so a leg that forgets a case
+does not compile ([Closed Hierarchies and Unions](../ClosedHierarchies)):
 
 | leg | trail stage | its source's empty completion |
 |---|---|---|
@@ -473,6 +475,9 @@ a completion*. From a source that has produced nothing, none of them can fire. T
 **clock**-driven operator is `Timeout`, which is why it — and only it — can terminate a silent
 source; it is separately present where the source can starve:
 `InnerCreateVerdictBound` on the inner create, `NodeOpForwardTimeout` inside the no-op probe.
+`InnerCreateVerdictBound` is timed on the mesh's `CreateVerdictClock` — the real clock unless a
+mesh registers one — so a test pins the "outcome is unknown" refusal by advancing a virtual
+scheduler by exactly the production bound rather than waiting it out (`CreateTimeoutOutcomeTest`).
 Compose `Of` **around** that bound and both properties hold — the timeout supplies liveness, `Of`
 turns whichever termination arrives into an answer. Totality and liveness are different properties;
 this section is about the first.

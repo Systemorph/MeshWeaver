@@ -141,19 +141,26 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
             .Should().Within(TestTimeouts.Convergence)
             .Match(c => c is SplitterControl { Areas.Count: 2 }, "the index answers and the page re-shapes", cancellationToken: ct);
 
-        // Negative control: the old pattern — wait on the key read from the first frame — no longer
-        // reaches the header. The area belongs to a tree the page has left.
-        await stream.GetControlStream(headerKey!)
-            .Where(c => c is StackControl s && IsHeader(s))
-            .Should().NotEmit(TestTimeouts.Quick,
-                "the first frame's child area is not where the page lives after the re-shape", ct);
-
         // The helper: the same question asked of the page's CURRENT tree finds the header in the
         // splitter's page pane.
-        var tree = await stream.TreeSnapshots(MeshNodeLayoutAreas.OverviewArea)
+        var pageInItsNewPane = stream.TreeSnapshots(MeshNodeLayoutAreas.OverviewArea)
+            .Where(t => t.OfType<SplitterControl>().Any() && t.OfType<StackControl>().Any(IsHeader));
+
+        // Negative control: the old pattern — wait on the key read from the first frame — no longer
+        // reaches the header. The area belongs to a tree the page has left. 🚨 Bounded by a POSITIVE
+        // signal rather than a wall-clock window: the stale key is subscribed FIRST (its current
+        // value replays at once), and the verdict is owed by the moment the live walk has found the
+        // header in its new pane — i.e. the page has demonstrably finished re-rendering into the
+        // splitter. A stale area still carrying the header emits before that and fails here.
+        await stream.GetControlStream(headerKey!)
+            .Where(c => c is StackControl s && IsHeader(s))
             .Should().Within(TestTimeouts.Convergence)
-            .Match(t => t.OfType<SplitterControl>().Any() && t.OfType<StackControl>().Any(IsHeader),
-                "the live walk follows the page into the splitter's page pane", cancellationToken: ct);
+            .NotEmitBefore(pageInItsNewPane,
+                "the first frame's child area is not where the page lives after the re-shape", ct);
+
+        var tree = await pageInItsNewPane
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(_ => true, "the live walk follows the page into the splitter's page pane", cancellationToken: ct);
         Assert.Single(tree!.OfType<StackControl>(), IsHeader);
     }
 

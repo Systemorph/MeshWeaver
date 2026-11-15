@@ -561,7 +561,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
             return null;
         try
         {
-            services.BuildBeforePublish(Root);
+            services.BuildBeforePublish(Root, this);
             return null;
         }
         catch (Exception exception)

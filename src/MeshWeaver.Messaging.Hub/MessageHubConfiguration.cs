@@ -930,6 +930,35 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithRequestTimeout(TimeSpan timeout) => this with { RequestTimeout = timeout };
 
     /// <summary>
+    /// The clock this hub's OWN framework deadlines run on: the <see cref="RequestTimeout"/> of
+    /// every <c>Observe</c> it issues, the per-message deferral budget
+    /// (<see cref="WithDeferralTimeout"/>), the <see cref="WithStartupTimeout">startup
+    /// timeout</see> and the bound on its BuildupActions (<see cref="NestedInitializationBudget"/>). <see cref="TimeProvider.System"/> unless set — every production hub runs on
+    /// the real clock.
+    /// </summary>
+    internal TimeProvider TimeoutClock { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// Runs this hub's own framework deadlines (request, deferral, startup and BuildupAction
+    /// timeouts) on <paramref name="clock"/> instead of the real clock.
+    ///
+    /// <para>🚨 This exists so a test whose SUBJECT is one of those deadlines firing — the text of
+    /// the request-timeout message, the gate a deferral report names — can make it fire by
+    /// advancing a virtual clock, instead of sitting out the deadline in real time. A test that
+    /// passes only by waiting out a real-time window spends that window on every run, and the
+    /// window is sized for the slowest runner. It changes WHEN a deadline fires, never what fires:
+    /// the deadline, the report it produces and every caller-visible terminal are the same
+    /// code.</para>
+    /// </summary>
+    /// <param name="clock">The clock; never null.</param>
+    /// <returns>Updated configuration.</returns>
+    public MessageHubConfiguration WithTimeoutClock(TimeProvider clock)
+    {
+        ArgumentNullException.ThrowIfNull(clock);
+        return this with { TimeoutClock = clock };
+    }
+
+    /// <summary>
     /// How long a delivery may sit parked behind this hub's initialization gates before it is
     /// failed back to its sender instead of hanging — <see cref="MessageService"/>'s per-message
     /// deferral budget. Unset means the framework default (30 s), which is what every production

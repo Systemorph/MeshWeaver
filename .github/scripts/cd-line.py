@@ -406,9 +406,12 @@ def self_test() -> int:
 
     # The fabricated events the brief names, one per entry shape.
     m = derive(doc, "workflow_run", "main", "main", run_event="push", run_head_branch="main")
-    expect("workflow_run for a push to main → line main, Plugins main, label main, moves latest",
-           m == {"line": "main", "label": "main", "plugins_ref": "main", "satellite_ref": "main",
-                 "moves_latest": "true", "default_line": "true"}, str(m))
+    # The Plugins and satellite refs are the DECLARED ones (the first 4.0 set builds main against a
+    # Plugins branch other than main for one bootstrap commit), so the case compares to the file, not a literal.
+    declared_main = by_branch(doc)["main"]
+    expect("workflow_run for a push to main → line main, its declared Plugins/satellite refs, label main, moves latest",
+           m == {"line": "main", "label": "main", "plugins_ref": declared_main["pluginsRef"],
+                 "satellite_ref": declared_main["satelliteRef"], "moves_latest": "true", "default_line": "true"}, str(m))
     expect("workflow_run for main3 → REFUSED (main's file must never deliver main3)",
            "DEFAULT branch" in refused(derive, doc, "workflow_run", "main", "main", run_event="push",
                                        run_head_branch="main3"))
@@ -419,8 +422,8 @@ def self_test() -> int:
     expect("schedule → line main", s["line"] == "main" and s["default_line"] == "true", str(s))
     expect("schedule on a non-default ref → REFUSED", bool(refused(derive, doc, "schedule", "main3", "main")))
     p3 = derive(doc, "push", "main3", "main")
-    expect("push main3 → line main3, Plugins main3, label main3, does NOT move latest",
-           p3 == {"line": "main3", "label": "main3", "plugins_ref": "main3", "satellite_ref": "main",
+    expect("push main3 → line main3, Plugins main3, satellites main3, label main3, does NOT move latest",
+           p3 == {"line": "main3", "label": "main3", "plugins_ref": "main3", "satellite_ref": "main3",
                   "moves_latest": "false", "default_line": "false"}, str(p3))
     expect("push main → REFUSED (the default line delivers after the tests, on workflow_run)",
            "workflow_run" in refused(derive, doc, "push", "main", "main"))

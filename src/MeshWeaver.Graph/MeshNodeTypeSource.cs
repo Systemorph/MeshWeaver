@@ -1120,8 +1120,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // back (the initial-load echo that rewrote every FS file on activation and
         // persisted content-narrowing losses). Set BEFORE the collection is returned
         // so the stamp is in place when the workspace emits it to the sampler.
-        if (_ownNodeCache != null)
-            _ownNodeCache.PersistedSnapshot = ownNode;
+        _ownNodeCache?.PersistedSnapshot = ownNode;
 
         // 🚨 LEAVE BOTH CLOCKS ALONE on load — never touch Hub.Version, never re-stamp the node.
         // Hub.Version is already strictly monotonic on its own (++ per message in
