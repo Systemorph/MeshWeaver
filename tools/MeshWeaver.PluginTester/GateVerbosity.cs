@@ -49,7 +49,10 @@ internal static class GateVerbosity
             if (eq >= 0)
             {
                 var named = entry[(eq + 1)..].Trim();
-                if (!Enum.TryParse(named, ignoreCase: true, out level) || !Enum.IsDefined(level))
+                // By NAME only: Enum.TryParse also takes "2", which would read a typo as Information.
+                if (!Array.Exists(Enum.GetNames<LogLevel>(),
+                        n => string.Equals(n, named, StringComparison.OrdinalIgnoreCase))
+                    || !Enum.TryParse(named, ignoreCase: true, out level))
                     throw new ArgumentException(
                         $"MW_LOG_CATEGORIES entry '{entry}' names level '{named}', which is not a "
                         + $"LogLevel ({string.Join(", ", Enum.GetNames<LogLevel>())}).");
