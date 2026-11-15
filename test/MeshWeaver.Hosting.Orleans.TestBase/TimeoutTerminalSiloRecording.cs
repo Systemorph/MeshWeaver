@@ -36,6 +36,8 @@ public sealed class TimeoutTerminalSiloRecording : ISiloConfigurator
     /// <param name="cluster">The test cluster.</param>
     internal static IEnumerable<TimeoutTerminalRecorder> OfSilos(TestCluster cluster) =>
         cluster.Silos
+            // In-process silos only: an out-of-process silo's recorder is in another process and is
+            // KNOWN-UNCOVERED here. Every Orleans test in this tree deploys in-process silos today.
             .OfType<InProcessSiloHandle>()
             .Select(silo => silo.SiloHost.Services.GetService<TimeoutTerminalRecorder>())
             .OfType<TimeoutTerminalRecorder>();
