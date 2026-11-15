@@ -40,9 +40,11 @@ namespace MeshWeaver.Graph.Test;
 /// measured:</b> with <c>LayoutAreaHost.ScheduleRenderSubscribe</c> calling the one-argument
 /// <c>SubscribeThroughPool</c> again, the report names the area's <c>BuildInitialization</c> leg —
 /// <c>Defer&lt;EntityStoreAndUpdates&gt;</c>, the production line's shape — and this test fails. The
-/// view's own query is NOT named in that run: here the Layout pool's cancel tears the render down before
-/// the Query pool is cancelled, so the last assertion guards the order and was not red without the
-/// fix. In production that Query leg was caught mid-teardown, its <c>Switch</c> already disposed.</para>
+/// view's own query was NOT named in that run. The registry cancels its pools in no contracted order
+/// (it enumerates a concurrent dictionary), so without the fix whether that leg is caught depends on
+/// which pool goes first; in production it was caught mid-teardown, its <c>Switch</c> already disposed.
+/// With the fix the render, and the query under it, is released before ANY pool is cancelled, so the
+/// last assertion does not depend on that order — but it was not red in the measured negative run.</para>
 /// </summary>
 public class LayoutRenderReleasedBeforeThePoolCancelTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
