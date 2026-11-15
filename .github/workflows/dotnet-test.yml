@@ -1642,8 +1642,14 @@ jobs:
             if [ "$pspec" = "$entry" ]; then np=1; unit="$nm"; else
               np="${pspec##*/}"; unit="$nm (part ${pspec%%/*}/${np})"
             fi
-            # Whole-project weight from the table; a part carries 1/np of it.
+            # A part's own measured row when the table has one, else 1/np of the project's total —
+            # the same weight shard-assign.sh scheduled it at.
+            pw=""
+            [ "$np" -gt 1 ] && pw=$(awk -v u="$nm#$pspec" '$2 == u { print $1; exit }' /tmp/weight-table.txt)
             tw=$(awk -v n="$nm" '$2 == n { print $1; exit }' /tmp/weight-table.txt)
+            if [ -n "${pw:-}" ] && [ "$pw" -gt 0 ]; then
+              tw=$pw; np=1
+            fi
             if [ -n "${tw:-}" ] && [ "$np" -gt 0 ] && [ "$tw" -gt 0 ]; then
               expect=$(( tw / np ))
               [ "$expect" -lt 1 ] && expect=1
@@ -1660,8 +1666,8 @@ jobs:
           done < test/measured-weights.tsv
           {
             echo
-            echo "> ⚠️ = re-measure this entry in \`.github/scripts/shard-assign.sh\` (drift ≥25% and >30 s)."
-            echo "> Table weights are wall-clock seconds for the WHOLE project; a split unit shows its share."
+            echo "> ⚠️ = drift ≥25% and >30 s: regenerate the table with \`python3 .github/scripts/shard-weights.py refresh\` (it writes \`.github/scripts/shard-weights.txt\`)."
+            echo "> A split unit shows its own measured part weight, or its share of the project's total when the part has no row."
           } >> "$GITHUB_STEP_SUMMARY"
         fi
         exit 0
@@ -2663,6 +2669,16 @@ jobs:
     - name: "The mw-core-tests runner reds every shard it cannot vouch for (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 deploy/core-tests/core-tests.py --self-test
+
+    # The shard weight table (.github/scripts/shard-weights.txt) is GENERATED from measurement by
+    # shard-weights.py and balanced by shard-assign.sh. Every test project, and every part of a split
+    # one, must land on exactly one shard under both selections — a dropped unit would read green
+    # having run nothing, a duplicated one would run twice. The self-test proves both checks can fail.
+    - name: "Every test project runs on exactly one shard; the weight table's tools can fail (self-test + check)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: |
+        python3 .github/scripts/shard-weights.py --self-test
+        python3 .github/scripts/shard-weights.py check-assignment
 
     # The upstream SOURCE a node-repo bake stages (stage-sealed-upstream.sh, fetched by
     # node-repo-publish-bake.yml at its scripts ref) must be what the sealed publication's bytes

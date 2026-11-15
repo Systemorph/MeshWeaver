@@ -1,0 +1,105 @@
+name: Shard weights stay measured
+
+# The core test shards are balanced by `.github/scripts/shard-assign.sh` (greedy LPT) over the weight
+# table `.github/scripts/shard-weights.txt`, which `.github/scripts/shard-weights.py refresh` GENERATES
+# from the newest green runs' per-unit markers. A stale table is INVISIBLE: the LPT loop balances the
+# numbers, not the clock, so it keeps printing eight even loads while one runner carries the long pole
+# (Doc/Architecture/CiProfile2026-11, section 4: printed 389-396 s on every shard while the shards ran
+# 4.8-9.6 min). This lane re-measures once a week and goes RED, naming every drifted unit, when the
+# committed table no longer matches the clock (>= 25 % AND > 30 s). The fix is one command:
+#   python3 .github/scripts/shard-weights.py refresh      # then commit .github/scripts/shard-weights.txt
+#
+# Deliberately NOT a pull-request check: a green shard must never go red because a project got slower.
+# Its state lives in ONE standing issue (the sentinel pattern of issue-taxonomy.yml), opened or updated
+# when a run did not pass and closed when one passes again. Its only input is the run's own
+# GITHUB_TOKEN (actions: read on this public repository), so there is nothing to preflight.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"   # Mondays, after the weekend's runs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shard-weights
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: The shard weight table matches the measured runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Self-test the tools
+        run: python3 .github/scripts/shard-weights.py --self-test
+      - name: Every test project runs on exactly one shard
+        run: python3 .github/scripts/shard-weights.py check-assignment
+      - name: The committed weights match the newest green runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/shard-weights.py check-current --repo "${{ github.repository }}" --runs 40
+
+  report:
+    name: Publish the standing state
+    needs: [check]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: shard-weights-report
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            scripts
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RESULT_CHECK: ${{ needs.check.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LABEL: shard-weights-sentinel
+        run: |
+          set -euo pipefail
+          LOOKUP=$(python3 .github/scripts/sentinel-issue.py find --repo "$REPO" --label "$LABEL" \
+                     --ensure-label --color "fbca04" \
+                     --description "The ONE standing issue shard-weights.yml updates in place — do not remove")
+          NUM=$(printf '%s' "$LOOKUP" | jq -r '.number // empty')
+          ISSUE_STATE=$(printf '%s' "$LOOKUP" | jq -r '.state // empty')
+          if [ "$RESULT_CHECK" = "success" ]; then
+            if [ -n "$NUM" ] && [ "$ISSUE_STATE" = "open" ]; then
+              gh api "repos/$REPO/issues/$NUM/comments" --silent \
+                -f body="The shard weight table matches the measured runs again as of $RUN_URL — closing. It reopens on the next run that does not pass."
+              gh api -X PATCH "repos/$REPO/issues/$NUM" -f state=closed --silent
+              echo "closed #$NUM"
+            else
+              echo "Passed, and no tracking issue open. Nothing to do."
+            fi
+            exit 0
+          fi
+          TITLE="Shard weights: the committed table no longer matches the measured runs (check=${RESULT_CHECK})"
+          BODY=$(printf '**State: not passing** — last run %s ([run](%s)).\n\nThe run log names every unit whose measured weight drifted from `.github/scripts/shard-weights.txt` (>= 25 %% and > 30 s), a dropped or duplicated shard assignment, or why the run could not measure. A stale table puts the long pole on one shard while the printed loads still look even (Doc/Architecture/CiProfile2026-11, section 4).\n\nThe fix: `python3 .github/scripts/shard-weights.py refresh`, review the diff, commit the table (split a project whose unit passes the headroom line first — the SPLIT RULE in `.github/scripts/shard-assign.sh`).\n\n---\nMaintained automatically by `.github/workflows/shard-weights.yml`; closed automatically when a run passes again.\n' \
+            "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$RUN_URL")
+          if [ -n "$NUM" ]; then
+            gh api -X PATCH "repos/$REPO/issues/$NUM" -f title="$TITLE" -f body="$BODY" -f state=open --silent
+            echo "updated #$NUM (was $ISSUE_STATE)"
+          else
+            NEW=$(gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$BODY" -f "labels[]=$LABEL" --jq '.number')
+            echo "opened #$NEW"
+            python3 .github/scripts/sentinel-issue.py await-visible --repo "$REPO" --label "$LABEL" --number "$NEW"
+            NUM="$NEW"
+          fi
+          # 🏷️ The sentinel states its own type and severity: a stale table costs minutes per run, it
+          # breaks nothing, so a chore at sev:L.
+          python3 scripts/check-issue-taxonomy.py stamp --repo "$REPO" --number "$NUM" --label chore --label sev:L

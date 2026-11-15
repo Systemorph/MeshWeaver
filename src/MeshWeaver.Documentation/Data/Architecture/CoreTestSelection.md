@@ -19,6 +19,9 @@ one-line `reason`. Every shard obeys that verdict through `shard-assign.sh`, and
 results` accepts a run with no `.trx` only when the mode was `none`. A merge group, a push to a
 delivery line, a schedule and a dispatch always run the full suite.
 
+How the owed projects are then spread over the eight shards is
+[Core Test Shard Weights](../CoreTestShardWeights).
+
 ## The rules
 
 | A changed path | What it owes |
