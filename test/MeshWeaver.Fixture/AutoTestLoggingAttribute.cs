@@ -73,6 +73,8 @@ public class AutoTestLoggingAttribute : BeforeAfterTestAttribute
 
         TestContext.Current.KeyValueStorage[StartStampPrefix + test.UniqueID] = Stopwatch.GetTimestamp();
         TestTraceLog.AppendPhase(className, "TEST_START", extra: methodUnderTest.Name);
+
+        (TestContext.Current.TestClassInstance as TestBase)?.BeginTimeoutTerminalWindow();
     }
 
     /// <summary>
@@ -107,6 +109,13 @@ public class AutoTestLoggingAttribute : BeforeAfterTestAttribute
             "TEST_END",
             ElapsedMs(test),
             $"{methodUnderTest.Name} outcome={OutcomeOf(state)}{FailureDetail(state)}");
+
+        // 🚨 Timeout == error (TimeoutTerminalGuard.cs). Thrown from After, xUnit reports it as
+        // this test's failure — after the markers above, so the trace still brackets the test.
+        var timeoutVerdict = (TestContext.Current.TestClassInstance as TestBase)
+            ?.EndTimeoutTerminalWindow(methodUnderTest);
+        if (timeoutVerdict is not null)
+            throw new UndeclaredTimeoutTerminalException(timeoutVerdict);
     }
 
     private static long? ElapsedMs(IXunitTest test)

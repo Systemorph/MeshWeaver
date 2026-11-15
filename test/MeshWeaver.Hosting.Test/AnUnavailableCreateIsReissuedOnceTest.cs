@@ -102,7 +102,7 @@ public class AnUnavailableCreateIsReissuedOnceTest(ITestOutputHelper output) : M
         var sentinelPath = NewPath();
         var none = ledger.Outcomes.Where(o => string.Equals(o.Write.Path, path, StringComparison.OrdinalIgnoreCase))
             .Should().Within(TestTimeouts.CrossSilo)
-            .NotEmitBefore(ledger.Outcomes.Where(o => o.Write.Path == sentinelPath), because, ct);
+            .NotEmitBefore(ledger.Outcomes.Where(o => string.Equals(o.Write.Path, sentinelPath, StringComparison.OrdinalIgnoreCase)), because, ct);
         evidence();
         await ledger.Record(
                 new PendingWrite(NodeAt(sentinelPath), Writer, new AccessContext { ObjectId = Writer },
