@@ -41,13 +41,19 @@ Related pages: [Staged Pull Request Pipeline](../StagedPullRequestPipeline) ·
   with *re-run failed jobs*. GitHub then lists attempt 1's successful jobs again under attempt 2. The
   copies have a new `created_at`, but they carry the ORIGINAL `started_at` and `completed_at`, so
   `started_at < created_at`. A naive sum counts them twice: before the fix it read 8,852 runner-minutes
-  a day for Plugins PRs, against 6,974 after it. Every number below excludes the copies. The same
+  a day for all Plugins PR runs, against 6,974 after it (`main` 6,232 + `main3` 704 + 38 for 4 runs
+  against the feature base `feat/net11-v4`). Every number below excludes the copies. The same
   trap makes `run_started_at` useless as "when attempt 2 began" (it can precede attempt 2's first
   job by about 9 minutes), so the hold is measured from job timestamps.
+- **Counts that do not add up exactly.** A run's ✔ / ✘ / cancelled can sum to one less than its
+  run count when that run was still in progress at listing time (conclusion `null`): one push to
+  `main` in Plugins, one core PR run and one core push. "Plugins PR runs" (384) also includes the 4
+  runs against `feat/net11-v4`, which section 1 does not list. Path medians use the runs whose final
+  attempt has executed jobs, so a path's *n* can be one below the ✔ count (core: 85 of 86).
 
 ## 1. Headline numbers
 
-| Repository · workflow · event | Runs | ✔ / ✘ / cancelled | To required-green, median / p90 | Runner-min / day | On failed + cancelled runs |
+| Repository · workflow · event | Runs | ✔ / ✘ / cancelled | To required-green, median / p90 | Runner-min / day | Runner-min on failed + cancelled runs (window total, 3.25 d) |
 |---|---|---|---|---|---|
 | **Plugins** · CI · PR → `main`, heavy (gate ran) | 69 of 357 | (all ✔) | **54.2 / 90.6 min** | — | — |
 | **Plugins** · CI · PR → `main`, light | 101 of 357 | (all ✔) | 19.5 / 38.0 min | — | — |
