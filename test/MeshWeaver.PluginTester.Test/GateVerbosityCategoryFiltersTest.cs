@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -22,6 +20,8 @@ public class GateVerbosityCategoryFiltersTest
             new[] { ("bake-seed", LogLevel.Information) },
             GateVerbosity.CategoryFilters("bake-seed", LogLevel.Warning));
 
+    /// <summary>An entry's own <c>=Level</c> is honoured case-insensitively, and whitespace and
+    /// empty entries are ignored.</summary>
     [Fact]
     public void ANamedLevel_IsHonoured_AndEntriesAreTrimmed()
         => Assert.Equal(
@@ -42,6 +42,7 @@ public class GateVerbosityCategoryFiltersTest
             new[] { ("A", LogLevel.Trace), ("B", LogLevel.Trace) },
             GateVerbosity.CategoryFilters("A,B=Warning", LogLevel.Trace));
 
+    /// <summary>An unset or empty variable adds no filter.</summary>
     [Fact]
     public void UnsetOrEmpty_AddsNothing()
     {
@@ -49,12 +50,15 @@ public class GateVerbosityCategoryFiltersTest
         Assert.Empty(GateVerbosity.CategoryFilters(" , ", LogLevel.Warning));
     }
 
-    /// <summary>A typo'd level is refused by name rather than silently read as Information.</summary>
-    [Fact]
-    public void AnUnknownLevel_IsRefused()
+    /// <summary>A typo'd level is refused by name rather than silently read as Information — and
+    /// so is a NUMERIC one, which <c>Enum.TryParse</c> alone would accept.</summary>
+    [Theory]
+    [InlineData("bake-seed=Verbose")]
+    [InlineData("bake-seed=2")]
+    public void AnUnknownOrNumericLevel_IsRefused(string raw)
     {
         var ex = Assert.Throws<ArgumentException>(
-            () => GateVerbosity.CategoryFilters("bake-seed=Verbose", LogLevel.Warning));
-        Assert.Contains("bake-seed=Verbose", ex.Message);
+            () => GateVerbosity.CategoryFilters(raw, LogLevel.Warning));
+        Assert.Contains(raw, ex.Message);
     }
 }
