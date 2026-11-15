@@ -68,7 +68,9 @@ public class ModuleTreePerPlatformLineTest : IDisposable
         // stamped by the same Directory.Build.props expression ($(_VersionNumeric).0) — the message
         // hub every process loads — and pin that this tree (a line past the shared root) resolves
         // its own tree, so a drift below it fails here instead of reproducing the mixed-major roll.
-        ModuleRoot.RunningMajor.Should().Be(typeof(MeshWeaver.Messaging.IMessageHub).Assembly.GetName().Version!.Major,
+        int? hubMajor = typeof(MeshWeaver.Messaging.IMessageHub).Assembly.GetName().Version?.Major;
+        hubMajor.Should().NotBeNull("the message hub's assembly version is pinned by the same build expression");
+        ModuleRoot.RunningMajor.Should().Be(hubMajor,
             "PluginCatalog must carry the same line major as the rest of core");
         (ModuleRoot.RunningMajor > ModuleRoot.LastSharedRootMajor).Should().BeTrue(
             "this source tree is a platform line past the shared root, so its replicas must resolve lines/<major>/modules/");
