@@ -770,8 +770,10 @@ public static class TreeBake
                     moduleAssemblyPaths: host.ModuleAssemblyPaths,
                     generatorLedger: generatorLedger,
                     ct: lifetime.Token);
-                if (reused is null && cacheKey is not null)
-                    cache!.Store(cacheKey, compiled);
+                // Reached only when the compile RETURNED: a failed compile throws (CompilationException
+                // and friends) into the catch below, so only successful compiles are ever stored.
+                if (reused is null && cacheKey is not null && cache is not null)
+                    cache.Store(cacheKey, compiled);
 
                 // 🚨 The RAW resolved set, not the post-filter compile set — the mesh-driven bake
                 // writes `NodeTypeDefinition.CompiledSources`, which DiscoverSourceVersionSnapshot

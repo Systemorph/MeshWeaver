@@ -99,10 +99,16 @@ public class BakeCompileCacheTest(ITestOutputHelper output)
                 File.WriteAllBytes(dll, [1, 2, 3]);
 
             var again = Bake(repo, Path.Combine(root, "b2"), v1, cache);
-            Assert.Equal((0, 2, 2), (again.Hits, again.Misses, again.Damaged));
+            Assert.Equal((0, 2, 2, 2), (again.Hits, again.Misses, again.Damaged, again.Stored));
             // Recompiled, so NOT the cached bytes: a fresh emit records its own PDB path, which is
             // also why byte equality elsewhere in this class proves a REUSE and not a recompile.
             Assert.NotEqual(DllsIn(Path.Combine(root, "b1")), DllsIn(Path.Combine(root, "b2")));
+
+            // …and the damaged entries were REPLACED by that recompile, so the next bake reuses again
+            // instead of missing on the broken entries until they are pruned.
+            var repaired = Bake(repo, Path.Combine(root, "b3"), v1, cache);
+            Assert.Equal((2, 0, 0), (repaired.Hits, repaired.Misses, repaired.Damaged));
+            Assert.Equal(DllsIn(Path.Combine(root, "b2")), DllsIn(Path.Combine(root, "b3")));
         }
         finally
         {
@@ -317,7 +323,8 @@ public class BakeCompileCacheTest(ITestOutputHelper output)
     private static void Write(string root, string relative, string content)
     {
         var full = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
-        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)
+            ?? throw new ArgumentException($"'{full}' has no parent directory", nameof(relative)));
         File.WriteAllText(full, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 

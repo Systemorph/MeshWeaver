@@ -213,18 +213,18 @@ internal sealed class CompileCache
             }
             var entry = JsonSerializer.Deserialize<Entry>(File.ReadAllBytes(manifestPath), Json);
             if (entry is null || entry.Key != key || entry.Version != Version)
-                return Refuse();
+                return Refuse(entryDirectory);
             Directory.CreateDirectory(outputDirectory);
             var dllPath = Path.Combine(outputDirectory, entry.DllName);
             var dll = ReadStored(Path.Combine(entryDirectory, entry.DllName));
             if (Convert.ToHexStringLower(SHA256.HashData(dll)) != entry.DllSha256)
-                return Refuse();
+                return Refuse(entryDirectory);
             string? pdbPath = null;
             if (entry.PdbName is { } pdbName)
             {
                 var pdb = ReadStored(Path.Combine(entryDirectory, pdbName));
                 if (Convert.ToHexStringLower(SHA256.HashData(pdb)) != entry.PdbSha256)
-                    return Refuse();
+                    return Refuse(entryDirectory);
                 pdbPath = Path.Combine(outputDirectory, pdbName);
                 File.WriteAllBytes(pdbPath, pdb);
             }
@@ -272,12 +272,15 @@ internal sealed class CompileCache
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
                                        or BadImageFormatException or NotSupportedException or InvalidDataException)
         {
-            return Refuse();
+            return Refuse(entryDirectory);
         }
     }
 
-    private NodeSetCompiler.CompiledNode? Refuse()
+    /// <summary>A damaged entry is a miss — and is REMOVED, so the compile that follows can store a
+    /// good one in its place instead of every later run missing on it until it is pruned.</summary>
+    private NodeSetCompiler.CompiledNode? Refuse(string entryDirectory)
     {
+        TryDelete(entryDirectory);
         Interlocked.Increment(ref damaged);
         Interlocked.Increment(ref misses);
         return null;
@@ -310,7 +313,7 @@ internal sealed class CompileCache
                 pdbName, pdbSha, [.. compiled.Warnings], compiled.DependencyEdges);
             // entry.json LAST: a reader treats an entry without it as absent.
             File.WriteAllBytes(Path.Combine(staging, "entry.json"), JsonSerializer.SerializeToUtf8Bytes(entry, Json));
-            Directory.CreateDirectory(Path.GetDirectoryName(entryDirectory)!);
+            Directory.CreateDirectory(ShardDirectory(key));
             Directory.Move(staging, entryDirectory);
             Interlocked.Increment(ref stored);
         }
@@ -380,7 +383,9 @@ internal sealed class CompileCache
         return memory.ToArray();
     }
 
-    private string EntryDirectory(string key) => Path.Combine(root, "entries", key[..2], key);
+    private string ShardDirectory(string key) => Path.Combine(root, "entries", key[..2]);
+
+    private string EntryDirectory(string key) => Path.Combine(ShardDirectory(key), key);
 
     private static void Touch(string path)
     {
@@ -392,7 +397,11 @@ internal sealed class CompileCache
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            // Every caller passes a file UNDER the cache root, so a parent always exists; a path
+            // without one is a caller defect and is refused by name rather than assumed away.
+            var parent = Path.GetDirectoryName(path)
+                ?? throw new ArgumentException($"'{path}' has no parent directory", nameof(path));
+            Directory.CreateDirectory(parent);
             var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllBytes(temp, bytes);
             File.Move(temp, path, overwrite: true);

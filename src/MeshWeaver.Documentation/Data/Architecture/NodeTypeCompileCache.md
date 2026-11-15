@@ -75,7 +75,8 @@ different hash: an over-inclusion costs a recompile, never a wrong reuse.
   entry a miss.
 
 Only successful compiles are stored. An entry carries its full key and the sha256 of its files, and
-a missing, damaged or partly written entry is a miss — the type compiles. A type with
+a missing, damaged or partly written entry is a miss — the type compiles, and a damaged entry
+is deleted so that compile stores a good one in its place. A type with
 `#r "nuget:…"` references is never cached (its resolution is network state). Stored files are gzip'd.
 Entries unused for 3 days are pruned, at most once a day per cache.
 
@@ -123,6 +124,12 @@ public change to the module misses for every dependent (the negative control); a
 is a miss that recompiles.
 
 ## What this does not establish
+
+- **A share writer is trusted.** An entry is checked against the sha256 in its own `entry.json`,
+  which catches damage, not forgery: a job that can write `/ci-artifacts` can plant an entry for
+  any key. That is the trust boundary the share already has — the same job can overwrite the run
+  artifacts, prepared bakes and gate logs the lanes read from it, and the ABI probe's
+  `cache/abi-syntax` that narrows test selection. The cache adds no writer the share did not have.
 
 - **The CI hit rate.** It depends on how often the platform set or a composed module changes its
   public surface between two gated heads; that was not measured. A change to the platform's public
