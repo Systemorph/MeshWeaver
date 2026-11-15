@@ -389,6 +389,15 @@ public sealed class DockerImageGate(
         ["pull", "--platform", platform, imageRef];
 
     /// <summary>
+    /// The verifier's environment variables the GATE container receives, by name only. Today the
+    /// tester's per-category log switch, so the combo lane can raise the adoption categories
+    /// (<c>bake-seed</c>, the compile watcher) without turning the whole run chatty: the gate
+    /// recompiling types the bake already compiled was measured on every memex-sized slot
+    /// (MeshWeaver#4413), and the lines that say why are below the gate's default Warning level.
+    /// </summary>
+    internal static readonly ImmutableArray<string> ForwardedEnvironment = ["MW_LOG_CATEGORIES"];
+
+    /// <summary>
     /// The <c>docker run</c> argv — the node-repo gate lane's container-mode contract (MeshWeaver#3022):
     /// <c>--rm --init --platform … -v host:/host:ro -v root:/work --entrypoint dotnet PORTAL
     /// /host/mw-plugin-test.dll /work --app /app --report /work/…</c>. The PORTAL image's own
@@ -428,6 +437,9 @@ public sealed class DockerImageGate(
             ? new[] { "-v", $"{modules.Root}:{ModulesMount}:ro" }
             : [],
         .. fullSeed is null ? [] : new[] { "-v", $"{fullSeed}:{SeedMount}:ro" },
+        // Name-only `-e`: docker copies the variable from the verifier's environment when it is set
+        // and sets nothing when it is not, so an unset variable changes nothing in the container.
+        .. ForwardedEnvironment.SelectMany(name => new[] { "-e", name }),
         "--entrypoint", "dotnet",
         imageRef,
         $"{HostMount}/mw-plugin-test.dll",
