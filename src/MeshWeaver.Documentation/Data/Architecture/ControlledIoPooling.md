@@ -955,6 +955,22 @@ MeshWeaver.Plugins by `SearchScopeReleasedBeforeThePoolCancelTest` (MeshWeaver.M
 and `NotificationFeedReleasedBeforeThePoolCancelTest` (MeshWeaver.Blazor.Portal.Test), each with an
 unowned control read the report must still name and a measured negative control.
 
+**A layout area's render legs are the same ordering bug, owned by the area host.** With the readers
+above owned, the stops still named a `LayoutAreaHost` family on BOTH pools at one stop: on `Layout`, the
+area's init render (`Defer<EntityStoreAndUpdates>`, subscribed by `BuildInitialization`) and a nested
+`RenderArea` leg; on `Query`, a `MeshQuery` fan-in opened at the same instant as that init render (both
+321.0 s old) — the query the area's view generator subscribed under its render. The host disposes every
+render subscription, but the host is disposed with its hub, and every hub outlives
+`IoPoolSiloTeardown`. So `LayoutAreaHost` now subscribes its renders through
+`IPooledSubscribeScheduler.SubscribeThroughPool(source, ownedUntilDrainBy)`, which hands each
+subscription to `IoPoolRegistry.OwnUntilDrain` (the release line reads `LayoutAreaHost×N`); a render that
+terminates, or that its area or host disposes first, forgets its registration. The one-argument overload
+is unchanged for every other caller. Pinned by `LayoutRenderReleasedBeforeThePoolCancelTest`
+(MeshWeaver.Graph.Test): a live area whose view is a standing mesh query, the registry disposed while the
+area is subscribed, plus an unowned control query the report must name. **Negative control, measured:**
+with the one-argument overload restored in `LayoutAreaHost`, the report names the init render's
+`Defer<EntityStoreAndUpdates>` leg and the test fails.
+
 **A one-shot read is not a mesh-lifetime reader — and the line now says which way it is stuck.**
 `EaGraphAuth.AddedAccountIds` (MeshWeaver.Plugins) kept appearing after the readers above were owned:
 `Query(...).Where(Initial).Take(1).Select(...).Finally(scope.Dispose)`, still attached 180–6,675 s after
