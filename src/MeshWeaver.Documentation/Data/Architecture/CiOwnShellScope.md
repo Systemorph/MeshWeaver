@@ -61,8 +61,21 @@ The change set is the merge commit GitHub checks out (`refs/pull/N/merge`) diffe
 parent, the base it merged onto. That is the pull request's own change set, and a move on `main`
 since the branch point does not count.
 
+Suffixes match case-insensitively, the fail-safe direction: a `.Yml` file is input. The literal
+derivation reads `.claude/` like the other inert tops.
+
 The decision is printed, written to the run summary and, on a skip, raised as a notice. The skip is
 a decision recorded in the run, never an absence.
+
+File names are pull-request controlled, so the classifier prints `reason` as a single line that is
+safe everywhere it lands:
+
+- `%`, CR and LF are escaped the way GitHub's command parser requires (`%25`, `%0D`, `%0A`), and `:`
+  becomes `%3A`. No name can add a `$GITHUB_OUTPUT` key or start a second `::` command.
+- Each name sits in a code span with its backticks replaced, so the run summary shows it as text,
+  never as Markdown.
+
+The self-test asserts this on hostile names.
 
 ## How a skip is kept from reading as a pass
 

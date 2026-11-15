@@ -2374,6 +2374,10 @@ jobs:
         else
           python3 .github/scripts/workflow-shell-scope.py --all | tee /tmp/scope.txt
         fi
+        # `reason` names PR-controlled file names. The classifier prints it as ONE line with `%`, CR,
+        # LF and `:` escaped the way GitHub's command parser requires and each name in a backtick-free
+        # code span, so it cannot add an output key, start a second `::` command or inject Markdown
+        # below (its self-test asserts this on a hostile name).
         run=$(grep '^run=' /tmp/scope.txt | cut -d= -f2-)
         reason=$(grep '^reason=' /tmp/scope.txt | cut -d= -f2-)
         case "$run" in (true|false) ;; (*) echo "::error::the scope classifier printed no run=true|false verdict"; exit 1;; esac
