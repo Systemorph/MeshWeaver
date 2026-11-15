@@ -378,18 +378,59 @@ public static class PrebuiltBundleRetentionLease
         ArgumentNullException.ThrowIfNull(hub);
         var access = hub.ServiceProvider.GetService<AccessService>();
         var options = hub.JsonSerializerOptions;
-        return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
-            .Update(current => Read(current, options) is { } held && IsHeldBy(held, claim, generation)
-                ? current with { Content = held with { Claim = claim | StampedFlag, Replica = replica, TakenAt = now } }
-                : current)
-            .Take(1)
-            .Select(stamped =>
-            {
-                var lease = Read(stamped, options);
-                return new PrebuiltBundleRetentionLeaseVerdict(
-                    lease is not null && lease.Claim == (claim | StampedFlag) && lease.Generation == generation, lease);
-            }));
+        var stream = hub.GetWorkspace().GetMeshNodeStream(LeasePath);
+        return access.RunAsSystem(() => StampOnceSeen(
+            stream.Select(node => Read(node, options)),
+            () => stream
+                .Update(current => Read(current, options) is { } held && IsHeldBy(held, claim, generation)
+                    ? current with { Content = held with { Claim = claim | StampedFlag, Replica = replica, TakenAt = now } }
+                    : current)
+                .Take(1)
+                .Select(stamped => Read(stamped, options)),
+            claim,
+            generation));
     }
+
+    /// <summary>
+    /// The verdict of the holder's stamp, decided only on a lease that is NOT older than the take it
+    /// stamps (#7382). Pure composition. COLD.
+    ///
+    /// <para>🚨 <b>A snapshot from before the take is no verdict.</b> The stamp is a fold, and a fold
+    /// reads this hub's mirror of the lease. The claim it stamps was COMMITTED by the owner (its ack
+    /// is what <see cref="Claim"/> returned), but the mirror learns of that commit only from the
+    /// owner's echo. The write queue usually hides the gap by handing the claim's own result to the
+    /// next write as its base, and it deliberately does NOT do that after a re-attempt (a claim the
+    /// owner first refused as a conflict, then took): the stamp then read the mirror as it stood,
+    /// one write behind, found the PREVIOUS lease there, wrote nothing and reported "not held". The
+    /// replica that had just won the lease skipped its pass and left its unstamped claim standing, so
+    /// nobody swept until the hold ran out. Measured on CI (#8316): a take one second past a dead
+    /// pass's hold, on the replica whose mirror had trailed the dead pass's stamp, settled
+    /// <c>Held = false</c> with no fault. A lease of an OLDER generation is a snapshot from before the
+    /// take, exactly as the fence reads it (<see cref="Lost"/>), so the stamp waits past it; a lease
+    /// of this generation or a newer one, or an unreadable one, is folded on and decides.</para>
+    ///
+    /// <para>A lease stream that ends before carrying such a state still stamps, on whatever the write
+    /// path then reads (and a fault propagates): this composition only refuses to decide early, it
+    /// never invents a verdict. A claim the owner lost before it persisted leaves only older states,
+    /// so the wait lasts until another take; <see cref="RunLeased"/> bounds it by the pass deadline.</para>
+    /// </summary>
+    /// <param name="live">The lease as this hub's live stream carries it; <c>null</c> when unreadable.</param>
+    /// <param name="stamp">The stamping fold, returning the lease as it settled.</param>
+    /// <param name="claim">The claim the take settled.</param>
+    /// <param name="generation">The generation the take settled.</param>
+    internal static IObservable<PrebuiltBundleRetentionLeaseVerdict> StampOnceSeen(
+        IObservable<PrebuiltBundleRetentionLeaseState?> live,
+        Func<IObservable<PrebuiltBundleRetentionLeaseState?>> stamp,
+        long claim,
+        long generation)
+        => live
+            .Where(lease => lease is null || lease.Generation >= generation)
+            .Take(1)
+            .Select(_ => Unit.Default)
+            .DefaultIfEmpty(Unit.Default)
+            .SelectMany(_ => stamp())
+            .Select(lease => new PrebuiltBundleRetentionLeaseVerdict(
+                lease is not null && lease.Claim == (claim | StampedFlag) && lease.Generation == generation, lease));
 
     /// <summary>
     /// The lease a take of <paramref name="claim"/> writes over <paramref name="lease"/>: the claim and the
@@ -505,6 +546,12 @@ public static class PrebuiltBundleRetentionLease
             // lease spends from that budget, it never earns a fresh one.
             var passEnd = now + PassDeadline(hold);
             return Take(hub, now, hold, nonce, replica)
+                // The take spends from the same half-hold: its stamp waits for the echo of its own
+                // claim (StampOnceSeen), which a claim the owner lost before it persisted never sends.
+                .Timeout(PassDeadline(hold), Observable.Throw<PrebuiltBundleRetentionLeaseVerdict>(new OperationCanceledException(
+                    $"taking the prebuilt-bundle retention lease outlasted half its hold ({PassDeadline(hold)}), "
+                    + "so the pass did not start — its sweep could have overlapped the next holder's; "
+                    + "the lease is left to lapse and the next pass re-plans")))
                 .SelectMany(verdict =>
                 {
                     if (!verdict.Held)
