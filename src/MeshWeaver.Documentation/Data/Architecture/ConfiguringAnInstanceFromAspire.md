@@ -225,6 +225,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithHttpPort(port)` | `HttpPort` | `config.memex_portal.ASPNETCORE_HTTP_PORTS` | `ASPNETCORE_HTTP_PORTS` |
 | `WithResources(requestsCpu, requestsMemory, limitsCpu, limitsMemory)` | `Resources.Requests.Cpu`, `Resources.Requests.Memory`, `Resources.Limits.Cpu`, `Resources.Limits.Memory` | `resources` | — |
 | `WithAutoscaling(enabled, minReplicas, maxReplicas, cpuTarget, memoryTarget)` | `Autoscaling.Enabled`, `Autoscaling.MinReplicas`, `Autoscaling.MaxReplicas`, `Autoscaling.CpuTarget`, `Autoscaling.MemoryTarget` | `keda` | — |
+| `WithPortalNodeSelector(label, value)` | `PortalNodeSelector` | `portal.nodeSelector` (the portal pod spec's `nodeSelector`; empty renders no selector. A cluster concern with no Aspire equivalent) | — |
 | `WithVolume(name, mountPath, size, claimName, storageClass, accessMode, create)` | `Volumes[].Name`, `Volumes[].MountPath`, `Volumes[].Size`, `Volumes[].ClaimName`, `Volumes[].StorageClass`, `Volumes[].AccessMode`, `Volumes[].Create` | `persistence`, `extraVolumes`, `extraVolumeMounts` (Aspire: a named Docker volume at the mount path) | — |
 | `WithReadOnlyVolume(name, mountPath, claimName)` | `Volumes[].Name`, `Volumes[].MountPath`, `Volumes[].ClaimName`, `Volumes[].ReadOnly` | `persistence.<name>.readOnly` (Aspire: a read-only Docker mount) | — |
 | `ClearVolumes()` | `Volumes` | `persistence` | — |
@@ -338,6 +339,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `HttpPort` | HTTP port | HTTP-Port |
 | `DeploymentContent` | `Resources` | Resources (RAM / CPU) | Ressourcen (RAM / CPU) |
 | `DeploymentContent` | `Autoscaling` | Autoscaling | Automatische Skalierung |
+| `DeploymentContent` | `PortalNodeSelector` | Portal node selector (node labels the portal pods must land on) | Node-Selector des Portals (Node-Labels, auf denen die Portal-Pods laufen müssen) |
 | `DeploymentContent` | `Volumes` | Volumes | Volumes |
 | `DeploymentContent` | `Ingress` | Ingress | Ingress |
 | `DeploymentContent` | `PortalNext` | React front end at /next | React-Oberfläche unter /next |

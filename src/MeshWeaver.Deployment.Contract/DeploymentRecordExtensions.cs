@@ -410,6 +410,14 @@ public static class DeploymentRecordExtensions
         };
     }
 
+    /// <summary>
+    /// Requires the portal pods to land on nodes carrying <paramref name="label"/> =
+    /// <paramref name="value"/> (<see cref="DeploymentContent.PortalNodeSelector"/>). Calling it
+    /// again with the same label replaces that label's value; other labels stay.
+    /// </summary>
+    public static DeploymentContent WithPortalNodeSelector(this DeploymentContent d, string label, string value) =>
+        d with { PortalNodeSelector = (d.PortalNodeSelector ?? ImmutableSortedDictionary<string, string>.Empty).SetItem(label, value) };
+
     /// <summary>Horizontal autoscaling bounds and targets.</summary>
     public static DeploymentContent WithAutoscaling(
         this DeploymentContent d, bool enabled = true, int? minReplicas = null, int? maxReplicas = null,
