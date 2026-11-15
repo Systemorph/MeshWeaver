@@ -548,10 +548,15 @@ public static class PrebuiltBundleRetentionLease
             return Take(hub, now, hold, nonce, replica)
                 // The take spends from the same half-hold: its stamp waits for the echo of its own
                 // claim (StampOnceSeen), which a claim the owner lost before it persisted never sends.
-                .Timeout(PassDeadline(hold), Observable.Throw<PrebuiltBundleRetentionLeaseVerdict>(new OperationCanceledException(
-                    $"taking the prebuilt-bundle retention lease outlasted half its hold ({PassDeadline(hold)}), "
-                    + "so the pass did not start — its sweep could have overlapped the next holder's; "
-                    + "the lease is left to lapse and the next pass re-plans")))
+                // 🚨 A TimeoutException, never an OperationCanceledException: the hosted service reports an
+                // OCE as the pool's teardown, at Information (PassLedger.ReportTerminal), so a take whose
+                // echo never came would end the pass with nothing on record at the level that ships. As a
+                // fault it is recorded on the pass status and logged at Warning as a pass that collected
+                // nothing, which is what happened.
+                .Timeout(PassDeadline(hold), Observable.Throw<PrebuiltBundleRetentionLeaseVerdict>(new TimeoutException(
+                    $"taking the prebuilt-bundle retention lease outlasted half its hold ({PassDeadline(hold)}): the "
+                    + "claim's echo never reached this replica, so its stamp could not decide and the pass did not "
+                    + "start; the lease is left to lapse and the next pass re-plans")))
                 .SelectMany(verdict =>
                 {
                     if (!verdict.Held)
