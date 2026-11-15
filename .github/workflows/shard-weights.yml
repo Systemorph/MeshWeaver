@@ -28,7 +28,13 @@ concurrency:
 
 jobs:
   check:
-    name: The shard weight table matches the measured runs
+    name: The shard weight table matches the measured runs (${{ matrix.line }})
+    # Each delivery line keeps its own table, measured from its own runs (pushes to it, pull requests into it).
+    # A scheduled workflow runs on the default branch only, so this lane checks every line from here.
+    strategy:
+      fail-fast: false
+      matrix:
+        line: [main, main3]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -36,6 +42,8 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.line }}
       - name: Self-test the tools
         run: python3 .github/scripts/shard-weights.py --self-test
       - name: Every test project runs on exactly one shard
@@ -43,7 +51,7 @@ jobs:
       - name: The committed weights match the newest green runs
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/shard-weights.py check-current --repo "${{ github.repository }}" --runs 40
+        run: python3 .github/scripts/shard-weights.py check-current --repo "${{ github.repository }}" --runs 40 --line "${{ matrix.line }}"
 
   report:
     name: Publish the standing state

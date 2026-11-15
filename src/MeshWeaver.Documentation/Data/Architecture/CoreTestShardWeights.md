@@ -55,19 +55,29 @@ in the table. The next refresh keeps the count and measures the new parts once t
 
 ## The first refresh (2026-11-15)
 
-25 green runs, 24 units. Against those measurements the old assignment's heaviest shard was 634 s;
-the new assignment's predicted heaviest is 467 s, a spread of 30 s across the eight shards. That is
-an estimated **−2.5 to −2.8 min** off the test stage of every core PR that runs the full suite.
-`MeshWeaver.Hosting.Test` grew to 702 s, so its two parts (351 s each) passed the 288 s headroom
-line; it runs in three parts again.
+26 green `main` runs (pushes to `main` and pull requests into it), 24 units. Against those
+measurements the old assignment's heaviest shard was 537 s and its lightest 192 s, the same shape
+as the 4.8–9.6 min shard medians in the profile. The new assignment's predicted heaviest is 334 s,
+with a spread of 16 s across the eight shards. That is an estimated **−3 min** off the test stage of
+every core PR that runs the full suite.
+
+`MeshWeaver.Hosting.Test` measured 276 + 326 s in its two parts on run `43742571208`, past the 288 s
+headroom line, so it runs in three parts again. Its new parts have no measurement yet, so its total
+is the one carried from the first, unfiltered reading (702 s), which overstates it.
+
+**Each delivery line keeps its own table.** The same suites run markedly slower on `main3` (v3)
+than on `main` (v4): `Messaging.Hub.Test` part 1/3 measured 361 s on `main3` and 111 s on `main`,
+and `Hosting.Orleans.Test` 291 s against 96 s. A table measured over both lines is wrong for each, so
+`refresh` and `check-current` take `--line` (default `main`). A pull-request run whose pull request
+has merged carries no `pull_requests` entry, so its base is read from the pull request of its head
+branch.
 
 ## What it does not see
 
-- **Per-part headroom.** The headroom guard still divides a project's total by its parts. Three
-  measured parts are past 288 s on their own (`Graph.Test` 2/4 at 360 s, `Messaging.Hub.Test` 1/3
-  at 361 s, `Hosting.Test` 1/2 at 387 s before the re-split). Raising the guard to per-part weights
-  would force those splits; it was left for a separate decision.
+- **Per-part headroom.** The headroom guard still divides a project's total by its parts. On `main`,
+  `Graph.Test` part 2/4 measured 323 s on its own, past 288 s. Holding the guard to per-part weights
+  would force that split. That is left for a separate decision.
 - **Max of three is noisy.** One slow runner raises a unit until three newer observations replace
-  it. `Hosting.Orleans.Test` read 84 s on one run and 278 s on another.
-- **New parts are unmeasured.** A re-split project is scheduled at total ÷ N until a refresh after
-  its first runs.
+  it.
+- **New parts are unmeasured.** A re-split project is scheduled at its carried total ÷ N until a
+  refresh after its first runs.

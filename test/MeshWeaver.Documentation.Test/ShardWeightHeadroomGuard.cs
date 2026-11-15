@@ -143,8 +143,12 @@ public class ShardWeightHeadroomGuard
         var scheduled = ScheduledProjectNames(root).ToArray();
         scheduled.Length.Should().BeGreaterThanOrEqualTo(10,
             "the scheduler's project discovery must actually have found the test projects");
+        var parsedTable = ReadWeights(table).ToArray();
+        parsedTable.Length.Should().BeGreaterThanOrEqualTo(10,
+            $"{WeightsPath} must actually have been parsed — an empty or comments-only table would schedule every "
+            + "project at DEFAULT_WEIGHT and let this guard pass having measured nothing");
         var totalSeconds = ScheduledTotalSeconds(
-            scheduled, ReadWeights(table), ReadIntSetting(script, @"\nDEFAULT_WEIGHT=(\d+)", "DEFAULT_WEIGHT"));
+            scheduled, parsedTable, ReadIntSetting(script, @"\nDEFAULT_WEIGHT=(\d+)", "DEFAULT_WEIGHT"));
         var idealLoad = (double)totalSeconds / shards;
         var left = jobCapSeconds - browserWorstCase - PreambleSeconds;
         var testBudget = left * MaxBudgetFraction;

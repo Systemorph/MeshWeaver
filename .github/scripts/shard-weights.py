@@ -128,7 +128,7 @@ def unit_weights(totals: dict[str, int], parts: dict[str, int], partw: dict[str,
 
 
 def render_table(measured: dict[str, int], current_parts: dict[str, int], runs: list[str],
-                 now: str, carried: dict[str, int]) -> str:
+                 now: str, carried: dict[str, int], line: str = "main") -> str:
     """The committed file. A project keeps its declared parts count (splitting is a decision, see
     shard-assign.sh's SPLIT RULE); parts measured under a DIFFERENT count are dropped, so a re-split
     project falls back to total ÷ N until it has been measured under the new count."""
@@ -159,7 +159,7 @@ def render_table(measured: dict[str, int], current_parts: dict[str, int], runs: 
         "# A unit's weight is the MAX of its newest three exit=0 observations. Change a project's parts",
         "# count by hand (the SPLIT RULE in shard-assign.sh), then refresh once the new parts have run.",
         f"# measured-at: {now}",
-        f"# source-runs: {' '.join(runs) if runs else '(none)'}",
+        f"# source-runs ({line or 'every line'}): {' '.join(runs) if runs else '(none)'}",
     ]
     for name in sorted(totals, key=lambda k: (-totals[k], k)):
         n = current_parts.get(name, 1)
@@ -180,11 +180,41 @@ def gh(path: str) -> str:
     return p.stdout
 
 
-def measure(repo: str, runs: int) -> tuple[dict[str, int], list[str]]:
-    listing = json.loads(gh(f"repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs?status=success&per_page={min(runs, 100)}"))
+def on_line(run: dict, line: str, base_of_branch=lambda branch: None) -> bool:
+    """A run of this delivery line: a push to it, or a pull request into it. A pull-request run's
+    `pull_requests` is EMPTY once its pull request has merged or closed (most of the window), so the base
+    is then asked of `base_of_branch(head_branch)` (the pull request for that head branch)."""
+    if not line:
+        return True
+    if run.get("event") != "pull_request":
+        return run.get("head_branch") == line
+    bases = [(p.get("base") or {}).get("ref") for p in run.get("pull_requests") or []]
+    if not bases:
+        bases = [base_of_branch(run.get("head_branch") or "")]
+    return line in bases
+
+
+def measure(repo: str, runs: int, line: str = "") -> tuple[dict[str, int], list[str]]:
+    owner = repo.split("/")[0]
+    bases: dict[str, str | None] = {}
+
+    def base_of_branch(branch: str) -> str | None:
+        """The base of the newest pull request whose head is this branch (one REST call per branch)."""
+        if branch and branch not in bases:
+            prs = json.loads(gh(f"repos/{repo}/pulls?head={owner}:{branch}&state=all&per_page=1"))
+            bases[branch] = (prs[0].get("base") or {}).get("ref") if prs else None
+        return bases.get(branch)
+
+    candidates: list[dict] = []
+    for page in range(1, 6):
+        listing = json.loads(gh(f"repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs?status=success&per_page=100&page={page}"))
+        batch = listing.get("workflow_runs", [])
+        candidates += [r for r in batch if on_line(r, line, base_of_branch)]
+        if len(candidates) >= runs or len(batch) < 100:
+            break
     observations: list[tuple[str, int, int]] = []
     used: list[str] = []
-    for run in listing.get("workflow_runs", [])[:runs]:
+    for run in candidates[:runs]:
         jobs = json.loads(gh(f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100"))
         shard_jobs = [j for j in jobs.get("jobs", []) if SHARD_JOB.match(j["name"]) and j.get("conclusion") == "success"]
         got = False
@@ -252,15 +282,24 @@ def check_assignment(root: str, script: str, table: str, total: int) -> list[str
     return problems
 
 
-def predicted_loads(root: str, table: str, total: int) -> list[int]:
+def default_weight(script: str = ASSIGN) -> int:
+    """shard-assign.sh's DEFAULT_WEIGHT — the weight it gives an unlisted project. Read, never restated."""
+    m = re.search(r"^DEFAULT_WEIGHT=(\d+)$", open(script, encoding="utf-8").read(), re.M)
+    if not m:
+        raise SystemExit(f"shard-weights: DEFAULT_WEIGHT not found in {script}")
+    return int(m.group(1))
+
+
+def predicted_loads(root: str, table: str, total: int, script: str = ASSIGN) -> list[int]:
     totals, parts, partw = read_table(table)
     weights = unit_weights(totals, parts, partw)
+    dflt = default_weight(script)
     units = []
     for p in discovered_projects(root):
         name = os.path.splitext(os.path.basename(p))[0]
         n = parts.get(name, 1)
         for u in ([name] if n <= 1 else [f"{name}#{i}/{n}" for i in range(1, n + 1)]):
-            units.append((weights.get(u, 10), u))
+            units.append((weights.get(u, dflt), u))
     loads = [0] * total
     for w, _ in sorted(units, key=lambda x: (-x[0], x[1])):
         loads[loads.index(min(loads))] += w
@@ -327,6 +366,14 @@ def self_test() -> int:
     expect(agg == {"A.Test": 40, "C.Test": 60},
            f"the weight is the max of the newest three GREEN observations ({agg})")
 
+    expect(on_line({"event": "push", "head_branch": "main"}, "main")
+           and on_line({"event": "pull_request", "head_branch": "feat/x", "pull_requests": [{"base": {"ref": "main"}}]}, "main")
+           and not on_line({"event": "pull_request", "head_branch": "feat/x", "pull_requests": [{"base": {"ref": "main3"}}]}, "main")
+           and not on_line({"event": "push", "head_branch": "main3"}, "main")
+           and on_line({"event": "push", "head_branch": "main3"}, "")
+           and on_line({"event": "pull_request", "head_branch": "fix/y", "pull_requests": []}, "main", lambda b: "main")
+           and not on_line({"event": "pull_request", "head_branch": "fix/y", "pull_requests": []}, "main", lambda b: "main3"),
+           "a run belongs to a line by its push branch or its pull request's base; another line's runs are not measured")
     with tempfile.TemporaryDirectory() as t:
         txt = render_table({"A.Test": 40, "B.Test#1/2": 100, "B.Test#2/2": 150, "C.Test#1/3": 70},
                            {"B.Test": 2, "C.Test": 2}, ["1", "2"], "2026-11-15T00:00:00Z", {"C.Test": 200})
@@ -360,7 +407,7 @@ def self_test() -> int:
         units, err = run_assign(repo, script, 0, 3, {"TEST_SELECTION": "all", "SHARD_WEIGHTS_FILE": tbl})
         expect(units == ["test/B.Test/B.Test.csproj#2/3"] and "200" in err,
                f"a measured heavy part takes a shard of its own, at its measured weight ({units}, {err.strip()})")
-        loads = predicted_loads(repo, tbl, 3)
+        loads = predicted_loads(repo, tbl, 3, script)
         expect(loads == [200, 90, 90], f"the predicted loads use the per-part weights ({loads})")
 
         # Negative controls: a script that drops a unit and one that duplicates one must both fail.
@@ -392,6 +439,8 @@ def main(argv: list[str]) -> int:
         s = sub.add_parser(name)
         s.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "Systemorph/MeshWeaver"))
         s.add_argument("--runs", type=int, default=DEFAULT_RUNS)
+        s.add_argument("--line", default="main",
+                       help="the delivery line whose runs are measured (pushes to it, pull requests into it); '' for every run")
         if name == "refresh":
             s.add_argument("--out", default=TABLE)
     s = sub.add_parser("check-assignment")
@@ -411,7 +460,7 @@ def main(argv: list[str]) -> int:
         print("shard-weights: every test project (every part) is assigned exactly once, under both selections")
         return 0
 
-    measured, runs = measure(a.repo, a.runs)
+    measured, runs = measure(a.repo, a.runs, a.line)
     if not measured:
         print(f"::error::shard-weights: read {a.runs} runs and measured NOTHING — refusing to treat that as current")
         return 1
@@ -419,7 +468,7 @@ def main(argv: list[str]) -> int:
         totals, parts, _ = read_table(a.out) if os.path.exists(a.out) else ({}, {}, {})
         now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with open(a.out, "w", encoding="utf-8") as fh:
-            fh.write(render_table(measured, parts, runs, now, totals))
+            fh.write(render_table(measured, parts, runs, now, totals, a.line))
         print(f"shard-weights: wrote {a.out} from {len(measured)} units over {len(runs)} runs")
         return 0
     problems = drift(TABLE, measured, scheduled_units(ROOT, TABLE))
