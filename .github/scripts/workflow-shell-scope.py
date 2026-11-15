@@ -59,7 +59,7 @@ NAMED_INPUTS = (
 # Where a self-test's literal path may be spelled: the CI's own code. A literal in a FIXTURE names a
 # file that does not exist and so matches nothing; only literals naming an existing path count.
 LITERAL_HOMES = (".github/scripts", ".github/actions", "scripts", "deploy/core-tests")
-LITERAL = re.compile(r"(?<![A-Za-z0-9_.\-/])((?:src|test|samples|docs)/[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)")
+LITERAL = re.compile(r"(?<![A-Za-z0-9_.\-/])((?:src|test|samples|docs|\.claude)/[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)")
 
 
 def named_inputs(root: Path) -> set[str]:
@@ -91,12 +91,27 @@ def owes(path: str, named: set[str]) -> str | None:
     """None when `path` is inert for CI's own shell; otherwise why it is input."""
     if not path.startswith(INERT_TOPS):
         return "outside src/, test/, samples/, docs/ and .claude/ — CI input or unknown"
-    if path.endswith(INPUT_SUFFIXES):
+    # Case-insensitive: the fail-safe direction — a `.Yml` or `.CSPROJ` is input, never inert.
+    if path.lower().endswith(INPUT_SUFFIXES):
         return "an MSBuild, solution, script or workflow-shaped file — the self-tests evaluate or scan it"
     for n in named:
         if path == n or (n.endswith("/") and path.startswith(n)):
-            return f"named by a self-test ({n})"
+            return f"named by a self-test ({show(n)})"
     return None
+
+
+def show(path: str) -> str:
+    """A changed path as LITERAL, single-line text, safe in every place the reason lands.
+
+    File names are pull-request controlled, and the reason is written into `$GITHUB_OUTPUT`
+    (one `key=value` per line), into a `::notice::` workflow command and into the Markdown run
+    summary. So: `%`, CR and LF are escaped the way GitHub's command parser requires (`%25`, `%0D`,
+    `%0A` — no line break can start a second command or a second output key), `:` becomes `%3A` (no
+    `::` sequence survives), and the result is a Markdown code span with every backtick replaced, so
+    the summary renders the name as text, never as markup."""
+    esc = (path.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+               .replace(":", "%3A").replace("`", "'"))
+    return f"`{esc}`"
 
 
 def classify(changed: list[str], named: set[str]) -> tuple[bool, str]:
@@ -104,7 +119,7 @@ def classify(changed: list[str], named: set[str]) -> tuple[bool, str]:
         return True, "the change set is empty or could not be read — UNKNOWN runs CI's own shell"
     owing = [(p, why) for p in changed if (why := owes(p, named))]
     if owing:
-        shown = "; ".join(f"{p} ({why})" for p, why in owing[:3])
+        shown = "; ".join(f"{show(p)} ({why})" for p, why in owing[:3])
         more = f" and {len(owing) - 3} more" if len(owing) > 3 else ""
         return True, f"{len(owing)} of {len(changed)} changed path(s) are CI's own shell's input: {shown}{more}"
     return False, (f"all {len(changed)} changed path(s) are product source or prose no self-test reads — "
@@ -157,6 +172,41 @@ def self_test(root: Path) -> int:
     case("a doc page alone does not", classify(["src/MeshWeaver.Documentation/Data/Architecture/X.md"], named)[0], False)
     case("a sample node alone does not", classify(["samples/Graph/Data/X.json"], named)[0], False)
     case("a near-miss of a named file does not", classify(["src/A/Named.cs.bak"], named)[0], False)
+    # Suffixes match case-insensitively — the fail-safe direction.
+    case("a .Yml under src runs them", classify(["src/A/x.Yml"], named)[0], True)
+    case("a .CSPROJ under src runs them", classify(["src/A/A.CSPROJ"], named)[0], True)
+
+    # A HOSTILE file name must not inject a workflow command, an output key or Markdown: the reason
+    # lands in $GITHUB_OUTPUT, in `::notice ...::$reason` and in the run summary.
+    hostile = [".github/x%0A::error::owned\n::add-mask::secret\r`run=false`.md",
+               "docs/y\nrun=false\n::stop-commands::tok.yml"]
+    run, reason = classify(hostile, named)
+    case("a hostile .github path still runs them", run, True)
+    notice = f"::notice title=CI's own shell::{reason}"
+    for label, bad in (("an unescaped LF", "\n"), ("an unescaped CR", "\r"), ("a `::` sequence", "::")):
+        if bad in reason:
+            failures.append(f"hostile path: the reason carries {label}: {reason!r}")
+    if notice.count("::") != 2 or "\n" in notice:
+        failures.append(f"hostile path: the notice line is not ONE command: {notice!r}")
+    if "%250A" not in reason or "%0A" not in reason or "%0D" not in reason:
+        failures.append(f"hostile path: %, LF and CR were not escaped the way GitHub requires: {reason!r}")
+    for p in hostile:
+        if show(p).count("`") != 2:
+            failures.append(f"hostile path: a backtick survived inside its code span: {show(p)!r}")
+    out_lines = "\n".join([f"run={'true' if run else 'false'}", f"reason={reason}", "changed=2"]).split("\n")
+    if [l.split("=", 1)[0] for l in out_lines] != ["run", "reason", "changed"]:
+        failures.append(f"hostile path: $GITHUB_OUTPUT would carry extra keys: {out_lines!r}")
+
+    # The literal derivation reads `.claude/` like the other inert tops (a file a script names there).
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        (t / ".claude/skills/x").mkdir(parents=True); (t / ".claude/skills/x/SKILL.md").write_text("x\n")
+        (t / ".github/scripts").mkdir(parents=True)
+        (t / ".github/scripts/reader.py").write_text("open('.claude/skills/x/SKILL.md')\n")
+        got = named_inputs(t)
+        if ".claude/skills/x/SKILL.md" not in got:
+            failures.append(f"a .claude/ file a script names literally was not derived as input: {sorted(got)}")
+        case("a .claude/ file a script names runs them", classify([".claude/skills/x/SKILL.md"], got)[0], True)
 
     # End to end through git: a throwaway repository with a pull-request-shaped merge commit.
     with tempfile.TemporaryDirectory() as tmp:
