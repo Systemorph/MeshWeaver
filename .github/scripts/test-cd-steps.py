@@ -1863,6 +1863,15 @@ def separation_problems(workflow_text: str) -> list[str]:
         sparse = str((checkout.get("with") or {}).get("sparse-checkout", ""))
         if sparse and ".github/control-instance.json" not in sparse:
             problems.append("`arm`'s sparse checkout omits `.github/control-instance.json` — `select` cannot name control and refuses every arming")
+        # MeshWeaver#8279: `select` tells a line HELD by control's declared updatePattern from a frozen
+        # control only with control's record; without it every run refuses (and, before, a held v4
+        # line read as FROZEN and turned CD red every hour).
+        arm_runs = [str(s.get("run", "")) for s in arm.get("steps") or []]
+        select_run = next((r for r in arm_runs if "arm-promoted-set.py select" in r), "")
+        if "--control-record" not in select_run:
+            problems.append("`arm` runs `select` without --control-record — a line held by control's declared updatePattern would read as a frozen control")
+        if not any("control-record.json" in r and "gh api" in r for r in arm_runs):
+            problems.append("`arm` never reads control's record into control-record.json — `select --control-record` has nothing to read")
     # `arm-promoted-set.py` (its self-test AND its line lookup) reads `.github/delivery-lines.json`;
     # a sparse checkout without it refused every CD run on main3 (13233..13266) before arming.
     for job_name in ("arm", "control-first"):
@@ -2223,6 +2232,10 @@ def main() -> int:
         case(f"...and the guard catches `{job_name}` checking out no delivery lines",
              no_lines != workflow_text and any(f"`{job_name}`'s sparse checkout omits `.github/delivery-lines.json`" in p for p in separation_problems(no_lines)),
              f"the mutation passed (or could not apply) with a `{job_name}` whose self-test cannot read delivery-lines.json")
+    no_record = workflow_text.replace('            --control-record "$RUNNER_TEMP/control-record.json" \\\n', "", 1)
+    case("...and the guard catches an arm whose `select` reads no control record (MeshWeaver#8279)",
+         no_record != workflow_text and any("without --control-record" in p for p in separation_problems(no_record)),
+         "the mutation passed (or could not apply) with a `select` that cannot tell a declared hold from a frozen control")
     alarm = (root / ".github/workflows/control-always-latest.yml").read_text()
     alarm_checkout = alarm.split("\n  platform:", 1)[-1].split("steps:", 1)[-1].split("- name:", 1)[0]
     case("the control-always-latest alarm checks out the control declaration it reads",

@@ -725,6 +725,12 @@ def judge(rec: dict, ladder: str | None, control: dict) -> tuple[str, str]:
     if contains is None:
         return "waiting", f"could not establish whether control's {commit[:9]} contains {rec['core_sha'][:9]}"
     if not contains:
+        if control.get("line_hold"):
+            # The line is HELD by control's own declaration (`control_line_hold`): control will not
+            # take this build at all, so "not yet" would be a false promise. Still a wait (control
+            # first holds), but one that names the declaration that ends it.
+            return "waiting", (f"control runs {commit[:9]}, which does not contain {rec['core_sha'][:9]} — "
+                               + str(control["line_hold"]))
         return "waiting", (f"control runs {commit[:9]}, which does not contain {rec['core_sha'][:9]} yet — "
                            "control first: the fleet is offered a build only after control runs it; "
                            + describe_self_update(control))
@@ -853,6 +859,37 @@ def line_of_major(majors: dict[str, int | None], major: int) -> str:
         raise ValueError(f"a declared line's major could not be read (lines read: {seen}) — refusing to pick "
                          f"control's line from a partial reading")
     return hits[0]
+
+
+def control_line_hold(control_pattern: str, major: int | None, branch: str) -> str | None:
+    """Policy `major-lines-run-separately`: the sentence saying this delivery line is HELD by control's
+    own declaration, or None when control's record admits the line's major. Pure.
+
+    🚨 WHY (MeshWeaver#8279): core `main` delivers 4.x while control's record declares
+    `updatePattern: 3.*`, deliberately: control moves to a new major only when its record says so.
+    Control therefore never runs a 4.x build, control-first holds every 4.x set, and the arming read
+    that as `control-always-latest` lag: `FLEET DELIVERY FROZEN ON CONTROL` on every run, a red CD
+    and a CD-failed issue each hour. A line whose major control's record EXCLUDES is not a control
+    that failed to take a build. It is a declared hold, and its remedy is a declaration (control's
+    record moving to that major), never control's roll. So the frozen verdict is not computed for
+    it; control's own line is still judged by `control-lag` against that line's builds.
+
+    The hold is LOUD, never a pass: `select` prints it as a ::warning:: and in every waiting set's
+    sentence, and the fleet-unarmed reading carries it into that major's alert issue. It arms
+    NOTHING: control first still decides, and control runs no build of an excluded major.
+    `major` None (a caller that names no line) holds nothing. A pattern naming no single major is a
+    ValueError (`pattern_major`), never guessed into a hold or a pass."""
+    if major is None:
+        return None
+    control_major = pattern_major(control_pattern)
+    if control_major == major:
+        return None
+    return (f"LINE HELD BY DECLARATION: control's record declares updatePattern `{control_pattern}` (major "
+            f"{control_major}), and line `{branch}` delivers major {major}. Control takes no {major}.x build until "
+            f"its record declares that major, so control first holds every {major}.x set unarmed (policy "
+            f"major-lines-run-separately). This is NOT a frozen control: control-always-latest judges control "
+            f"against its own line's {control_major}.x builds. The remedy is the owner moving control's record to "
+            f"{major}.x, never control's roll and never an arm override")
 
 
 def _cd_line():
@@ -1002,7 +1039,7 @@ def given_builds(records: list[dict], jobs_of: Callable[[dict], list[dict] | Non
 
 
 def arming_frozen(chosen: dict | None, override: str, given: list[dict], control: dict, now: float,
-                  bound_minutes: int) -> str | None:
+                  bound_minutes: int, hold: str | None = None) -> str | None:
     """🚨 Policy `control-first-never-silent`: the sentence that turns the arm job RED, or None. Pure.
 
     Control-first makes the whole fleet wait for ONE instance. Until this rule the arming said
@@ -1022,8 +1059,12 @@ def arming_frozen(chosen: dict | None, override: str, given: list[dict], control
     behind-and-unhealthy). What never freezes is a reading with NO clock behind it: an unreadable
     control, a control that RUNS the newest build but answered one non-200, or no build given at all
     (this run's own `Deploy control first` may still be running). `control-always-latest` alarms on
-    those on its own schedule; turning one 503 into a red CD run would make the red mean nothing."""
-    if chosen is not None or override or not given:
+    those on its own schedule; turning one 503 into a red CD run would make the red mean nothing.
+
+    A line HELD by control's declaration (`hold`, from `control_line_hold`) is never frozen either:
+    control was never going to take its builds, so its lag on them measures no failure of control's
+    (MeshWeaver#8279). The caller says the hold as a ::warning::; it is never dropped."""
+    if chosen is not None or override or not given or hold:
         return None
     if not control.get("commit") or (control.get("contains") or {}).get(given[0]["core_sha"]) is not False:
         return None
@@ -1325,6 +1366,36 @@ def self_test() -> int:
           arming_frozen(None, "", given, {"commit": "", "contains": {}, "why": "timeout"}, now=t0 + 10 * 3600,
                         bound_minutes=180) is None
           and arming_frozen(None, "", given, ctl(a, b, c, healthy=False), now=t0 + 10 * 3600, bound_minutes=180) is None)
+    # ── a line HELD by control's declaration is not a frozen control (MeshWeaver#8279) ──
+    held = control_line_hold("3.*", 4, "main")
+    check("control_line_hold: a line whose major control's record EXCLUDES is HELD, naming the pattern, the line and its major",
+          held is not None and "HELD BY DECLARATION" in held and "`3.*`" in held and "`main`" in held
+          and "major 4" in held and "never control's roll" in held, str(held))
+    check("control_line_hold: the line control's record admits is NOT held (`3.*` × 3, `4.*` × 4, `3.1.*` × 3)",
+          control_line_hold("3.*", 3, "main3") is None and control_line_hold("4.*", 4, "main") is None
+          and control_line_hold("3.1.*", 3, "main3") is None)
+    check("control_line_hold: a caller that names no major holds nothing",
+          control_line_hold("3.*", None, "main") is None)
+    check("control_line_hold: a pattern naming no single major is REFUSED, never read as a hold or a pass",
+          _raises(lambda: control_line_hold("*", 4, "main")) and _raises(lambda: control_line_hold("", 4, "main")))
+    check("arming_frozen: a line HELD by control's declaration is never FROZEN, however long control has been behind it",
+          arming_frozen(None, "", given, frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180, hold=held) is None)
+    check("NEGATIVE CONTROL — the same lag on a line control's pattern ADMITS is still FROZEN (hold None)",
+          (arming_frozen(None, "", given, frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180,
+                         hold=control_line_hold("3.*", 3, "main3")) or "").startswith("FLEET DELIVERY FROZEN ON CONTROL"))
+    held_ctl = {**ctl(), "line_hold": held}
+    st, text = judge(c, "success", held_ctl)
+    check("judge: a green-ladder set on a HELD line WAITS and names the declaration (no 'not yet' promise)",
+          st == "waiting" and "HELD BY DECLARATION" in text and " yet " not in text, f"{st}: {text}")
+    st, text = judge(c, "success", ctl())
+    check("NEGATIVE CONTROL — the same set on an admitted line keeps the ordinary 'not yet' wait",
+          st == "waiting" and "HELD" not in text and " yet " in text, f"{st}: {text}")
+    chosen, lines = select(records, ok, held_ctl, armed_max=9458)
+    check("select: a HELD line arms NOTHING control does not run (control first still holds)",
+          chosen is None and any("HELD BY DECLARATION" in ln for ln in lines), str(lines))
+    ua = unarmed_sets(records, ok, held_ctl, 9458)
+    check("unarmed_sets: every examined set of a HELD line carries the hold into the fleet-unarmed reading",
+          ua and all(s["state"] == "waiting" and "HELD BY DECLARATION" in s["sentence"] for s in ua), str(ua))
     job = lambda ok_, at: [{"name": "Deploy control first: memex-control:<version>",
                             "conclusion": "success" if ok_ else "failure", "completed_at": at}]
     jm = {9461: job(True, "2026-10-07T19:02:20Z"), 9460: job(False, "x"), 9459: None}
@@ -1846,8 +1917,9 @@ def main() -> int:
     # 🚨 control-lag reads the line CONTROL follows, never `main` by default (MeshWeaver#8197): control
     # ran the main3 cherry-pick of a commit built on main before the split and read "behind" it.
     ap.add_argument("--control-record", type=Path, default=None,
-                    help="control-lag: control's Hosting/Deployment record (JSON); its `updatePattern` names the "
-                         "major, and the declared line of that major is the one control is compared with")
+                    help="control-lag/select: control's Hosting/Deployment record (JSON); its `updatePattern` names "
+                         "the major. control-lag compares control with the declared line of that major; select "
+                         "reports a line of ANOTHER major as held by that declaration, never as a frozen control")
     ap.add_argument("--delivery-lines", type=Path, default=Path(".github/delivery-lines.json"),
                     help="control-lag: the declared delivery lines (.github/delivery-lines.json)")
     ap.add_argument("--armed-max", type=int, default=0,
@@ -1990,6 +2062,21 @@ def main() -> int:
         print(f"control-always-latest (platform): {state} — {text}")
         return 0
     branch = a.branch or "main"
+    # 🚨 Is this line HELD by control's own declaration (MeshWeaver#8279)? Read off control's record,
+    # the same one `control-lag` reads. Required: a selection that cannot tell a declared hold from a
+    # frozen control would turn CD red on a deliberate decision (or, read the other way, pass silently).
+    if a.control_record is None:
+        print("::error::select needs --control-record (control's Hosting/Deployment record): whether control's "
+              "declared updatePattern admits this line's major decides between a declared hold and a frozen control")
+        return 1
+    try:
+        control_pattern = record_update_pattern(json.loads(a.control_record.read_text()))
+        hold = control_line_hold(control_pattern, a.major, branch)
+    except (OSError, ValueError) as e:
+        print(f"::error::control's declared line cannot be read off its record: {e}")
+        return 1
+    print(f"control's record declares updatePattern {control_pattern!r}; line {branch}, major "
+          f"{a.major if a.major is not None else 'unnamed'}: {'HELD by that declaration' if hold else 'admitted'}")
     try:
         above = 0 if a.override else (a.armed_max - 1 if a.resume else a.armed_max)
         # The alert's reading must reach the armed cursor, so it pages on (bounded) past the
@@ -2008,6 +2095,8 @@ def main() -> int:
     print(f"control {ci['url']}: running {control.get('commit') or 'UNKNOWN'}; "
           f"/health {'200' if control.get('healthy') else 'NOT 200'}{' — ' + control['why'] if control.get('why') else ''}; "
           f"{describe_self_update(control)}")
+    if hold:
+        control["line_hold"] = hold
     try:
         rec, lines = select(records, ladders, control, a.armed_max, a.override, a.resume)
     except ValueError as e:
@@ -2031,10 +2120,14 @@ def main() -> int:
 
     # Only when nothing was selected: the walk then reads jobs and compares beyond the ten sets
     # `select` judged, back to the first build control contains — the clock's true start.
-    given = [] if rec is not None or a.override else given_builds(records, jobs_of, contains_of)
-    frozen = arming_frozen(rec, a.override, given, control, time.time(), int(ci["platformLagBoundMinutes"]))
+    # A HELD line reads no lag walk: control was never going to take its builds (MeshWeaver#8279).
+    given = [] if rec is not None or a.override or hold else given_builds(records, jobs_of, contains_of)
+    frozen = arming_frozen(rec, a.override, given, control, time.time(), int(ci["platformLagBoundMinutes"]),
+                           hold=hold)
     if frozen:
         lines.append(frozen)
+    if hold and rec is None:
+        lines.append(hold)
     for line in lines:
         print(line)
     write_outputs(rec, lines)
@@ -2056,8 +2149,13 @@ def main() -> int:
             # then a FLOOR, and the alert clocks the stall from `window_floor_at` at least.
             "window_complete": bool(coverage.get("reached")) or a.override != "",
             "window_floor_at": coverage.get("floor_at", ""),
+            # The line is HELD by control's declaration (MeshWeaver#8279): the alert says so above its
+            # table, so a held major's issue names the declaration that ends the hold. "" = not held.
+            "control_hold": hold or "",
             "unarmed": unarmed_sets(records, ladders, control, cursor)}, indent=1))
     print(f"ARM {rec['v_portal']} ({rec['key']})" if rec else "nothing to arm")
+    if hold and rec is None:
+        print(f"::warning title=Line held by control's declaration::{hold}")
     if frozen:
         print(f"::error title=Fleet delivery frozen on control::{frozen}")
         return 1
