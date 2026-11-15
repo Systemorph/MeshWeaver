@@ -360,13 +360,30 @@ public static class ThreadPoolStall
     /// <returns>Whether the worker was parked waiting for work.</returns>
     internal static bool IsIdleWorker(IReadOnlyList<string> frames)
     {
+        // The pool's wait into native code sits on top as runtime transition frames (InlinedCallFrame):
+        // the capture prints those by frame name, never by the P/Invoke ClrMD may attach to them.
         var i = 0;
+        while (i < frames.Count && IsRuntimeFrame(frames[i]))
+            i++;
+        var semaphore = i;
         while (i < frames.Count && frames[i].StartsWith("System.Threading.LowLevelLifoSemaphore", StringComparison.Ordinal))
             i++;
-        return i > 0
+        return i > semaphore
             && i < frames.Count
             && frames[i].StartsWith("System.Threading.PortableThreadPool+WorkerThread.", StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Whether a captured frame is a RUNTIME frame — a transition into native code such as
+    /// <c>InlinedCallFrame</c> — rather than a managed method. The capture prints a managed method by its
+    /// signature, which always carries a parameter list, and a runtime frame by its frame name alone (see
+    /// <c>BlockedThreadStacks.RenderFrame</c>), so a frame without a parameter list is a runtime frame. A
+    /// thread whose innermost frame is one has left managed code: it is IN its native call.
+    /// </summary>
+    /// <param name="frame">One captured frame, with or without its leading <c>at </c>.</param>
+    /// <returns>Whether it is a runtime frame.</returns>
+    public static bool IsRuntimeFrame(string frame) =>
+        !frame.Contains('(', StringComparison.Ordinal);
 
     private static bool IsMonitorFrame(string frame) =>
         frame.StartsWith("System.Threading.Monitor.", StringComparison.Ordinal);
