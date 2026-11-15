@@ -62,6 +62,20 @@ public sealed class TimeoutTerminalRecorder : ITimeoutTerminalObserver
 }
 
 /// <summary>
+/// Something a test holds — a cluster fixture, a cluster host — that owns containers OTHER than the
+/// test's own, each with its own <see cref="TimeoutTerminalRecorder"/>: an Orleans test cluster's
+/// silos and client host build their own containers, so a terminal that fires on a silo never
+/// reaches the test container's recorder. <c>TestBase</c> finds every instance field of the test
+/// that holds one and folds its recorders into the test's window, so the guard sees those
+/// terminals too instead of silently under-reporting there.
+/// </summary>
+public interface ITimeoutTerminalSource
+{
+    /// <summary>The recorders of the containers this source owns, as they exist now.</summary>
+    IEnumerable<TimeoutTerminalRecorder> TimeoutTerminalRecorders { get; }
+}
+
+/// <summary>
 /// Decides whether the terminals that fired during one test are a failure.
 /// </summary>
 public static class TimeoutTerminalVerdict

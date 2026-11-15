@@ -638,6 +638,8 @@ public class WideDeleteUnboundedFanOutTest(ITestOutputHelper output)
     protected override int FanOutConcurrency => int.MaxValue;
 
     [Fact]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.DeleteStage,
+        "this negative control asserts that, unbounded, a leaf's own commit watchdog fires on its siblings' backlog")]
     public async Task AWideDelete_Unbounded_FailsALeafOnItsOwnSiblingsBacklog()
     {
         var rootPath = await SeedWideTree("wide-unbounded");

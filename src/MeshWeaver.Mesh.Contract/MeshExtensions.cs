@@ -4290,6 +4290,9 @@ public static class MeshExtensions
         // only the lookup path was short-lived; the SNAPSHOT still has to be taken where the stage
         // opens, and it is.
         var ioPools = hub.ServiceProvider.GetService<IoPoolRegistry>();
+        // Resolved while this hub is alive (#5064): a delete stage's timeout surfaces in the
+        // pipeline's error sink, several stages deep (timeout == error, Doc/Architecture/TimeoutIsError).
+        var reportDeleteStageTimeout = hub.ServiceProvider.TimeoutTerminalReporter();
         // The delete-validator chain, resolved while this hub is alive (#5064), for the record
         // satellites the pre-flight validates in-process rather than at their own hubs.
         var deletionValidators = DeletionValidators(hub);
@@ -5285,6 +5288,10 @@ public static class MeshExtensions
                         return;
                     }
                     var stage = ex.Data[DeleteStageDataKey] as string ?? "unattributed";
+                    // A stage's own deadline decided this delete's verdict: a timeout terminal.
+                    if (ex is TimeoutException && ex.Data.Contains(DeleteStageDataKey))
+                        reportDeleteStageTimeout(new TimeoutTerminal(
+                            TimeoutTerminalKinds.DeleteStage, path, ex.Message));
                     var unanswered = ex.Data[DeleteUnansweredDataKey] as IReadOnlyList<string>
                         ?? Array.Empty<string>();
                     // "Node not found" pulled from the inner DeliveryFailureException —
