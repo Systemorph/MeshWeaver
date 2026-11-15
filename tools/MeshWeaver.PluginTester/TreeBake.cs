@@ -121,6 +121,15 @@ public static class TreeBake
         /// are the same at every value; <c>1</c> is the serial bake (see <see cref="BakeSchedule"/>).
         /// </summary>
         public int MaxParallel { get; init; } = Math.Max(1, Environment.ProcessorCount);
+
+        /// <summary>
+        /// The CROSS-RUN compile cache's directory (<see cref="CompileCache"/>,
+        /// <c>Doc/Architecture/NodeTypeCompileCache</c>), or null for none — every NodeType
+        /// compiles, exactly as before. With it, a compile whose inputs and reference SURFACES an
+        /// earlier bake already compiled reuses those bytes; the bundles, the records and the log
+        /// are the same either way, plus one line counting what was reused.
+        /// </summary>
+        public string? CompileCacheDirectory { get; init; }
     }
 
     /// <summary>One NodeType's outcome.</summary>
@@ -663,6 +672,17 @@ public static class TreeBake
             () => ReferenceGapAttribution.Create(references, host.AppDirectory),
             LazyThreadSafetyMode.ExecutionAndPublication);
 
+        // The cross-run compile cache, keyed once per bake over the reference set's surfaces. A
+        // cache that cannot be opened is SAID and compiles everything — never a different verdict.
+        CompileCache? cache = null;
+        if (options.CompileCacheDirectory is { Length: > 0 } cacheDirectory)
+        {
+            cache = CompileCache.Open(cacheDirectory, references, host.ModuleAssemblyPaths, out var cacheProblem);
+            options.Output.WriteLine(cache is null
+                ? $"bake: compile cache '{cacheDirectory}' NOT used — {cacheProblem}; every NodeType compiles"
+                : $"bake: compile cache '{cacheDirectory}' — reference surfaces {cache.ReferenceKey[..16]}");
+        }
+
         var compilable = treeNodes
             .Where(t => t.Node.Content is NodeTypeDefinition)
             .OrderBy(t => t.Node.Path, StringComparer.Ordinal)
@@ -711,17 +731,37 @@ public static class TreeBake
 
             try
             {
-                var compiled = NodeSetCompiler.CompileWithGeneratorLedger(
+                // 🚨 A directory of its OWN per compile attempt. The sanitized name is not
+                // unique — `Ctrl/A_B` and `Ctrl/A/B` both sanitize to `Ctrl_A_B`, and a
+                // case-only pair collides on a case-insensitive file system — and the bundle
+                // entry reads its bytes back from this path later, so a shared directory hands
+                // one type the other's DLL, and two parallel compiles overwrite each other.
+                var compileDirectory = Path.Combine(workDirectory, Guid.NewGuid().ToString("N"),
+                    CodeConventions.SanitizeNodeName(candidate.Node.Path));
+                // The cross-run cache: the same inputs the compile below resolves first, keyed
+                // before anything compiles. A NuGet-bearing type is never cached (its resolution
+                // is network state), and a miss falls through to the unchanged compile.
+                string? cacheKey = null;
+                NodeSetCompiler.CompiledNode? reused = null;
+                if (cache is not null)
+                {
+                    var inputs = NodeSetCompiler.ResolveInputs(
+                        nodeSet, candidate.Node, definition.Sources, definition.Tests,
+                        definition.Configuration, definition.ContentCollections, options.Logger);
+                    if (inputs.NuGetReferences.Length > 0)
+                        cache.CountUncacheable();
+                    else
+                    {
+                        var digest = NodeSetCompiler.GeneratedInputDigestOf(inputs, []);
+                        cacheKey = cache.KeyOf(inputs, digest);
+                        reused = cache.TryRead(cacheKey, inputs, digest, idOf, toolchainId, compileDirectory);
+                    }
+                }
+                var compiled = reused ?? NodeSetCompiler.CompileWithGeneratorLedger(
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
-                    // 🚨 A directory of its OWN per compile attempt. The sanitized name is not
-                    // unique — `Ctrl/A_B` and `Ctrl/A/B` both sanitize to `Ctrl_A_B`, and a
-                    // case-only pair collides on a case-insensitive file system — and the bundle
-                    // entry reads its bytes back from this path later, so a shared directory hands
-                    // one type the other's DLL, and two parallel compiles overwrite each other.
-                    Path.Combine(workDirectory, Guid.NewGuid().ToString("N"),
-                        CodeConventions.SanitizeNodeName(candidate.Node.Path)),
+                    compileDirectory,
                     // The ONE Task bridge in the bake, at a console build step — never on a hub
                     // scheduler. NuGet restore is genuine network IO with no reactive surface;
                     // the runtime bridges it through the IoPool for the same reason.
@@ -730,6 +770,8 @@ public static class TreeBake
                     moduleAssemblyPaths: host.ModuleAssemblyPaths,
                     generatorLedger: generatorLedger,
                     ct: lifetime.Token);
+                if (reused is null && cacheKey is not null)
+                    cache!.Store(cacheKey, compiled);
 
                 // 🚨 The RAW resolved set, not the post-filter compile set — the mesh-driven bake
                 // writes `NodeTypeDefinition.CompiledSources`, which DiscoverSourceVersionSnapshot
@@ -841,7 +883,7 @@ public static class TreeBake
             // directory lazily — so it is entered too, and an unsubscription during it cannot
             // delete that directory under a bundle being written.
             .Select(settled => lifetime.Run(() => Fold(
-                options, packages, snapshot, host, settled, wall.Elapsed)));
+                options, packages, snapshot, host, settled, wall.Elapsed, cache)));
     }
 
     /// <summary>One attempted compile: its verdict, its bundle entry when it produced bytes, and
@@ -860,7 +902,8 @@ public static class TreeBake
         RepoSnapshot snapshot,
         BakeHost host,
         ImmutableArray<Cascade.NodeResult<ImmutableArray<TypeOutcome>>> settled,
-        TimeSpan wall)
+        TimeSpan wall,
+        CompileCache? cache = null)
     {
         var frameworkIdentity = host.FrameworkIdentity;
         var results = ImmutableArray.CreateBuilder<TypeResult>();
@@ -892,6 +935,17 @@ public static class TreeBake
         options.Output.WriteLine(
             $"bake: compiled {results.Count} NodeType(s) in {wall.TotalSeconds:F1} s wall "
             + $"({work.TotalSeconds:F1} s of compile work, max-parallel={options.MaxParallel})");
+        if (cache is not null)
+        {
+            var pruned = cache.Prune(DateTimeOffset.UtcNow);
+            // The denominator is printed with the count: "0 reused" over 0 cacheable compiles and
+            // over 123 are two different sentences.
+            options.Output.WriteLine(
+                $"bake: compile cache: {cache.Hits} of {cache.Hits + cache.Misses} cacheable NodeType "
+                + $"compile(s) reused, {cache.Misses} compiled ({cache.Damaged} damaged entr(ies) ignored), "
+                + $"{cache.Stored} stored, {cache.Uncacheable} not cacheable (NuGet references)"
+                + (pruned is { } removed ? $", {removed} unused entr(ies) pruned" : string.Empty));
+        }
 
         var bundles = WriteBundles(
             options, packages, snapshot, frameworkIdentity, entriesByPackage, host.Surface);

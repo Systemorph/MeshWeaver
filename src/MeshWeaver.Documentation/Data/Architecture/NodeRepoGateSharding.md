@@ -305,6 +305,10 @@ instead of one per shard — for the runs above, 3 × 9 min and 3 × 28-33 min o
 with wall-clock roughly unchanged, because the shards now wait for the one compile instead of each
 running it; that prediction is not a measurement until a run on this lane reports it.
 
+The prepared bake shares ONE compile among the shards of one run. Reuse ACROSS runs is the
+[NodeType Compile Cache](../NodeTypeCompileCache), keyed per NodeType on its inputs and on the
+public surface of every reference.
+
 ## The pin moves with the lane
 
 `--shard` is a flag on `mw-plugin-test`, which ships in the **tester image**. A caller that sets
