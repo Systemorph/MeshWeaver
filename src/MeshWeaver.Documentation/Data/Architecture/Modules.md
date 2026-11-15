@@ -113,50 +113,6 @@ container builds) and fed to `MeshBuilder.InstallAssemblies` as one list:
    > that cannot be read now costs exactly that one module, reported by name, instead of collapsing
    > the whole answer to the empty list.
 
-### 🚨 One module tree per platform line
-
-A deployment's replicas share one volume, and while it rolls from one platform major to the next,
-replicas of BOTH majors run on it at once (policy `major-lines-run-separately`,
-[Major Lines Run Separately](../MajorLinesRunSeparately)). A store-delivered module built against
-one major's libraries does not load on the other — a view pack built against the old major's UI
-library links types the new major no longer ships — yet the activation record names ONE head per
-module name. With one shared tree, the new-major replica booted the old major's heads, its
-`required_modules` and `view_packs` probes stayed red and the roll never converged; and the
-old-major replicas, still updating under their own policy, kept landing old-major generations into
-the same records, so the new major could not even keep a head it had landed. Image-shipped
-modules were never affected: the image's own copy wins on an identity mismatch
-([Module Adoption Policy](../ModuleAdoptionPolicy)).
-
-So the landed-module tree is resolved PER LINE by `ModuleRoot.ResolveLine`:
-
-| Running core major | Landed-module tree (`Modules:Root` = `<root>`) |
-|---|---|
-| ≤ `ModuleRoot.LastSharedRootMajor` (3), or unknown | `<root>/modules/` — the shared root itself, unchanged |
-| 4 and later | `<root>/lines/<major>/modules/` |
-
-- **Everything under `modules/` moves together**: the generations, `activation.d/` (entry files,
-  landing records, tombstones, verdicts, markers such as `.pending-restart`, `.unloadable`,
-  `.tier-refused`), the legacy aggregate `activation.json`, and the module sets (`sets/`). A
-  new-line replica therefore never reads, adopts, overwrites or proposes from an old-line record,
-  and its modules GC sweeps only its own tree.
-- **Migration: a flat entry belongs to the shared-root line, always.** Every flat record on a
-  volume was written by an image that predates the split, and every image of major 3 and below
-  keeps reading and writing the flat tree. A major-4 replica never adopts one; it lands its own
-  generations from the registry (or runs the image's copy) into its own tree. Deciding by an
-  entry's recorded framework or floor was rejected: a v3 replica can land a bundle whose floor or
-  identity names v4 (and an early v4 image wrote flat records before the split), so the field
-  would hand the new line a record the old line still owns.
-- **No change on the old line is needed.** A shared-root image's sweep walks `<root>/modules/`
-  only, which `lines/` is not under, and its readers never look outside it — so the split lands on
-  the new major alone, and the old major's replicas run exactly as before until they are replaced.
-- **The major is the running CORE's assembly major** (`ModuleRoot.RunningMajor`, pinned to
-  `<major>.<minor>.0.0` for a whole line), never a configured line or update pattern: what decides
-  whether module bytes load is the binary the process runs, and the configuration every replica
-  reads can already name the next line while an old-major replica is still up.
-- **Only the module tree moves.** What belongs to the INSTANCE — the setup manifest, the boot
-  progress — stays under `ModuleRoot.Resolve` (`<root>` itself). An unconfigured root is the image's
-  own directory, which no other image sees, and is not split.
-
 The union dedupes by module name (a store install of an already-baseline module contributes
 nothing). 🚨 **Superseded in progress — see [Live Module Update](../LiveModuleUpdate)** (policy
 `module-live-update-default`): every module the image does not bind now loads into its OWN
@@ -219,6 +175,55 @@ fallback HTML). Only when nothing loads is the module incompatible, as before; a
 pointers. This is rule R1 of the [Module Adoption Policy](../ModuleAdoptionPolicy): *an
 installation runs the newest generation of every module that loads, and keeps the one it has until
 a newer one does.*
+
+### 🚨 One module tree per platform line
+
+A deployment's replicas share one volume, and while it rolls from one platform major to the next,
+replicas of BOTH majors run on it at once (policy `major-lines-run-separately`,
+[Major Lines Run Separately](../MajorLinesRunSeparately)). A store-delivered module built against
+one major's libraries does not load on the other — a view pack built against the old major's UI
+library links types the new major no longer ships — yet the activation record names ONE head per
+module name. With one shared tree, the new-major replica booted the old major's heads, its
+`required_modules` and `view_packs` probes stayed red and the roll never converged; and the
+old-major replicas, still updating under their own policy, kept landing old-major generations into
+the same records, so the new major could not even keep a head it had landed. Image-shipped
+modules were never affected: the image's own copy wins on an identity mismatch
+([Module Adoption Policy](../ModuleAdoptionPolicy)).
+
+So the landed-module tree is resolved PER LINE by `ModuleRoot.ResolveLine`:
+
+| Running core major | Landed-module tree (`Modules:Root` = `<root>`) |
+|---|---|
+| ≤ `ModuleRoot.LastSharedRootMajor` (3), or unknown | `<root>/modules/` — the shared root itself, unchanged |
+| 4 and later | `<root>/lines/<major>/modules/` |
+
+- **Everything under `modules/` moves together**: the generations, `activation.d/` (entry files,
+  landing records, tombstones, verdicts, markers such as `.pending-restart`, `.unloadable`,
+  `.tier-refused`), the legacy aggregate `activation.json`, and the module sets (`sets/`). A
+  new-line replica therefore never reads, adopts, overwrites or proposes from an old-line record,
+  and its modules GC sweeps only its own tree.
+- **Migration: a flat entry belongs to the shared-root line, always.** Every flat record on a
+  volume was written by an image that predates the split, and every image of major 3 and below
+  keeps reading and writing the flat tree. A major-4 replica never adopts one; it lands its own
+  generations from the registry (or runs the image's copy) into its own tree. Deciding by an
+  entry's recorded framework or floor was rejected: a v3 replica can land a bundle whose floor or
+  identity names v4 (and an early v4 image wrote flat records before the split), so the field
+  would hand the new line a record the old line still owns.
+- **No change on the old line is needed.** A shared-root image's sweep walks `<root>/modules/`
+  only, which `lines/` is not under, and its readers never look outside it — so the split lands on
+  the new major alone, and the old major's replicas run exactly as before until they are replaced.
+- **The major is the running CORE's assembly major** (`ModuleRoot.RunningMajor`, pinned to
+  `<major>.<minor>.0.0` for a whole line), never a configured line or update pattern: what decides
+  whether module bytes load is the binary the process runs, and the configuration every replica
+  reads can already name the next line while an old-major replica is still up.
+- **Only the module tree moves.** What belongs to the INSTANCE — the setup manifest, the boot
+  progress — stays under `ModuleRoot.Resolve` (`<root>` itself). An unconfigured root is the image's
+  own directory, which no other image sees, and is not split.
+- **The old flat tree outlives its line.** Once the last shared-root replica is gone, nothing sweeps
+  `<root>/modules/` any more: every later major's GC walks only `lines/<major>/modules/`. Its
+  generations and records stay on the volume, inert (no reader of a newer line looks at them), until
+  they are retired deliberately: a `StoragePrune` of the deployment's data claim, after the roll
+  that replaced the last shared-root replica has converged.
 
 ### 🚨 "Keeps loading across ordinary platform updates" is a promise the PLATFORM owes (#2370)
 

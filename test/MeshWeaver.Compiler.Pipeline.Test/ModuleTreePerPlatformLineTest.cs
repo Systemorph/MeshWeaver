@@ -63,6 +63,15 @@ public class ModuleTreePerPlatformLineTest : IDisposable
             .Build();
 
         ModuleRoot.RunningMajor.Should().NotBeNull("the core's assembly version is pinned to <major>.<minor>.0.0 on every build");
+        // The split routes on this one number, so a versioning drift in PluginCatalog alone would
+        // silently send every replica back to the shared root. Pin it against another core assembly
+        // stamped by the same Directory.Build.props expression ($(_VersionNumeric).0) — the message
+        // hub every process loads — and pin that this tree (a line past the shared root) resolves
+        // its own tree, so a drift below it fails here instead of reproducing the mixed-major roll.
+        ModuleRoot.RunningMajor.Should().Be(typeof(MeshWeaver.Messaging.IMessageHub).Assembly.GetName().Version!.Major,
+            "PluginCatalog must carry the same line major as the rest of core");
+        (ModuleRoot.RunningMajor > ModuleRoot.LastSharedRootMajor).Should().BeTrue(
+            "this source tree is a platform line past the shared root, so its replicas must resolve lines/<major>/modules/");
         ModuleRoot.ResolveLine(configuration).Should().Be(ModuleRoot.ForLine(root, ModuleRoot.RunningMajor));
         ModuleRoot.Resolve(configuration).Should().Be(root,
             "the instance-level root (setup manifest, boot progress) never moves with the line");
