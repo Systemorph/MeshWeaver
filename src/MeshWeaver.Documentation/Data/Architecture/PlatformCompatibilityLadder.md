@@ -93,10 +93,21 @@ pin, an identity gate or a rebuild-everything fallback.
 fail step there, so a red ladder blocks the merge (skipped or cancelled is not a pass; the one
 exemption is the already-green-tree reuse path, as for every gate on that check).
 
-- **Plugin side:** the newest COMPLETED `main-cd` run on `main` whose `promote` job succeeded and that still holds
+- **Plugin side:** the newest COMPLETED `main-cd` run on the run's delivery line (below) whose `promote` job succeeded and that still holds
   `published-module-set` — **every module bundle the sealed `plugins` publication carries**, plus that
   publication's own `modules/_index` — `.github/scripts/fetch-deployed-plugin-set.sh`. Those are the
   bytes the fleet self-rolled to. No such run ⇒ **red**, never "nothing to check".
+- **The plugin set is the LINE's** (policy `major-lines-run-separately`, [Major Lines Run
+  Separately](../MajorLinesRunSeparately)). Every core delivery line (`main` = v4, `main3` = v3)
+  publishes its own `published-module-set` from its own `main-cd` runs, and all of them share one
+  artifact listing. The script reads the run's line from `MW_CORE_LINE`, else the pull request's base
+  (`GITHUB_BASE_REF`), else the pushed ref, and links only that line's newest promoted set. A branch
+  `.github/delivery-lines.json` does not declare (a stacked pull request's feature base) reads the
+  declared default line, with a warning naming the branch. Before this, the script read `main`
+  unconditionally: once `main` published 4.0 modules, every `main3` pull request linked v4 bytes
+  against its 3.1 platform and went red (`references MeshWeaver.Mesh.Contract 4.0.0.0 (this platform
+  carries 3.1.0.0)`) on a change that touched no module surface. Pinned by the self-test's two-line
+  cases, with a measured negative control (the `main` literal restored, the `main3` case fails).
 - **Coverage is proven, not assumed** (MeshWeaver#7409). Until then the input was a fixed list of four
   modules (`MeshWeaver.AI`, `.Markdown.Collaboration`, `.Maps`, `.Payments.Stripe`), so a change that
   broke Mail, Teams, Mcp, an AI provider or any other published module passed the ladder green having
