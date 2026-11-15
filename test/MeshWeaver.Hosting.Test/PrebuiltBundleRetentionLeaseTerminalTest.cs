@@ -402,4 +402,137 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
         released.Replica.Should().Be("replica-previous");
         released.HolderReplica.Should().BeNull();
     }
+
+    /// <summary>The stamp's lease transitions, from the same pure functions the lease writes.</summary>
+    private static class StampScenario
+    {
+        public static readonly DateTimeOffset At = new(2300, 1, 1, 1, 0, 1, TimeSpan.Zero);
+        public static readonly long Claim = PrebuiltBundleRetentionLease.ClaimFor(At + HoldSpan, 3);
+
+        /// <summary>A dead pass's lease, stamped, one generation before the take: its hold has ended at <see cref="At"/>.</summary>
+        public static readonly PrebuiltBundleRetentionLeaseState DeadPass = new(
+            PrebuiltBundleRetentionLease.ClaimFor(At.AddSeconds(-1), 1) | PrebuiltBundleRetentionLease.StampedFlag,
+            "silo-0", At.AddHours(-1))
+        { Generation = 9 };
+
+        /// <summary>The take of <see cref="Claim"/> over <see cref="DeadPass"/>, as the owner committed it.</summary>
+        public static readonly PrebuiltBundleRetentionLeaseState Taken = PrebuiltBundleRetentionLease.Taken(DeadPass, Claim);
+
+        /// <summary>
+        /// The stamping fold over the mirror AS IT STANDS — what <c>stream.Update</c> folds on when no queued
+        /// predecessor hands it a base (after a claim the owner first refused as a conflict, then took).
+        /// </summary>
+        public static IObservable<PrebuiltBundleRetentionLeaseState?> FoldOnMirror(
+            BehaviorSubject<PrebuiltBundleRetentionLeaseState?> mirror, Action onStamp)
+            => Observable.Defer(() =>
+            {
+                onStamp();
+                var current = mirror.Value;
+                return Observable.Return(current is not null && PrebuiltBundleRetentionLease.IsHeldBy(current, Claim, Taken.Generation)
+                    ? current with { Claim = Claim | PrebuiltBundleRetentionLease.StampedFlag, Replica = "silo-1", TakenAt = At }
+                    : current);
+            });
+    }
+
+    /// <summary>
+    /// 🚨 #7382, measured on CI (#8316): the take of a lease whose dead holder's hold had ended COMMITTED,
+    /// and the take still reported "not held". The stamp folded on this hub's mirror one write behind the
+    /// claim — the dead pass's lease — wrote nothing and decided on it. The replica that won skipped its
+    /// pass and left its unstamped claim standing for a whole hold. The stamp must wait past a lease of an
+    /// older generation (a snapshot from before its take) and decide on the take's own echo.
+    /// </summary>
+    [Fact]
+    public void AStampWhoseMirrorTrailsItsClaim_WaitsForTheClaim_AndHolds()
+    {
+        var mirror = new BehaviorSubject<PrebuiltBundleRetentionLeaseState?>(StampScenario.DeadPass);
+        var stamps = 0;
+        var outcome = new Outcome<PrebuiltBundleRetentionLeaseVerdict>();
+        outcome.Observe(PrebuiltBundleRetentionLease.StampOnceSeen(
+            mirror, () => StampScenario.FoldOnMirror(mirror, () => stamps++), StampScenario.Claim, StampScenario.Taken.Generation));
+
+        var stampsBeforeTheEcho = stamps;
+
+        mirror.OnNext(StampScenario.Taken);
+
+        outcome.Values.Should().ContainSingle().Which.Held.Should().BeTrue(
+            "the owner committed this claim — the replica that took the lease holds it and sweeps");
+        outcome.Values[0].Lease.Should().BeOfType<PrebuiltBundleRetentionLeaseState>()
+            .Which.HolderReplica.Should().Be("silo-1");
+        outcome.Completed.Should().BeTrue();
+        stampsBeforeTheEcho.Should().Be(0, "a lease one generation older than the take is a snapshot from before it — no verdict");
+        stamps.Should().Be(1);
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL for the wait: a lease of the take's own generation carrying ANOTHER claim (the owner
+    /// lost this take and granted the same generation again) is decided at once, and is not held.
+    /// </summary>
+    [Fact]
+    public void AStampThatFindsAnotherClaimInItsGeneration_IsNotHeld_WithoutWaiting()
+    {
+        var other = PrebuiltBundleRetentionLease.Taken(
+            StampScenario.DeadPass, PrebuiltBundleRetentionLease.ClaimFor(StampScenario.At + HoldSpan, 4));
+        var mirror = new BehaviorSubject<PrebuiltBundleRetentionLeaseState?>(other);
+        var stamps = 0;
+        var outcome = new Outcome<PrebuiltBundleRetentionLeaseVerdict>();
+        outcome.Observe(PrebuiltBundleRetentionLease.StampOnceSeen(
+            mirror, () => StampScenario.FoldOnMirror(mirror, () => stamps++), StampScenario.Claim, StampScenario.Taken.Generation));
+
+        stamps.Should().Be(1, "a lease of the take's own generation is not a snapshot from before it");
+        outcome.Values.Should().ContainSingle().Which.Held.Should().BeFalse("another pass holds the lease");
+        outcome.Values[0].Lease.Should().BeOfType<PrebuiltBundleRetentionLeaseState>()
+            .Which.Holder.Should().Be(4);
+    }
+
+    /// <summary>NEGATIVE CONTROL: a NEWER generation (another replica took after a loss) decides at once, and is not held.</summary>
+    [Fact]
+    public void AStampThatFindsANewerGeneration_IsNotHeld_WithoutWaiting()
+    {
+        var newer = PrebuiltBundleRetentionLease.Taken(
+            StampScenario.Taken, PrebuiltBundleRetentionLease.ClaimFor(StampScenario.At + HoldSpan + HoldSpan, 6));
+        var mirror = new BehaviorSubject<PrebuiltBundleRetentionLeaseState?>(newer);
+        var outcome = new Outcome<PrebuiltBundleRetentionLeaseVerdict>();
+        outcome.Observe(PrebuiltBundleRetentionLease.StampOnceSeen(
+            mirror, () => StampScenario.FoldOnMirror(mirror, () => { }), StampScenario.Claim, StampScenario.Taken.Generation));
+
+        outcome.Values.Should().ContainSingle().Which.Held.Should().BeFalse();
+        outcome.Values[0].Lease.Should().BeOfType<PrebuiltBundleRetentionLeaseState>()
+            .Which.Generation.Should().Be(StampScenario.Taken.Generation + 1);
+    }
+
+    /// <summary>An unreadable lease is decided at once and never held: nobody sweeps on a lease it cannot read.</summary>
+    [Fact]
+    public void AStampOnAnUnreadableLease_IsNotHeld_WithoutWaiting()
+    {
+        var mirror = new BehaviorSubject<PrebuiltBundleRetentionLeaseState?>(null);
+        var outcome = new Outcome<PrebuiltBundleRetentionLeaseVerdict>();
+        outcome.Observe(PrebuiltBundleRetentionLease.StampOnceSeen(
+            mirror, () => StampScenario.FoldOnMirror(mirror, () => { }), StampScenario.Claim, StampScenario.Taken.Generation));
+
+        outcome.Values.Should().ContainSingle().Which.Held.Should().BeFalse();
+        outcome.Values[0].Lease.Should().BeNull();
+    }
+
+    /// <summary>
+    /// A lease stream that ends before carrying the take still stamps, on what the write path reads: the
+    /// wait refuses to decide early, it never invents a verdict or swallows the attempt.
+    /// </summary>
+    [Fact]
+    public void AStampWhoseLeaseStreamEndsFirst_StillStamps_AndDecidesOnWhatItReads()
+    {
+        var mirror = new BehaviorSubject<PrebuiltBundleRetentionLeaseState?>(StampScenario.DeadPass);
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var stamps = 0;
+        var outcome = new Outcome<PrebuiltBundleRetentionLeaseVerdict>();
+        outcome.Observe(PrebuiltBundleRetentionLease.StampOnceSeen(
+            live, () => StampScenario.FoldOnMirror(mirror, () => stamps++), StampScenario.Claim, StampScenario.Taken.Generation));
+
+        live.OnNext(StampScenario.DeadPass);
+        stamps.Should().Be(0);
+        live.OnCompleted();
+
+        stamps.Should().Be(1);
+        outcome.Values.Should().ContainSingle().Which.Held.Should().BeFalse("what it read does not carry the claim");
+        outcome.Completed.Should().BeTrue();
+    }
 }
