@@ -264,6 +264,35 @@ class FetchDeployedPluginSetTest(unittest.TestCase):
         self.assertIn("deployed plugin set: main-cd run 102 on line main", proc.stdout)
         self.assertIn("'feat/stacked' is not a declared core delivery line", proc.stdout + proc.stderr)
 
+    def test_mw_core_line_wins_over_the_pull_request_base(self):
+        proc, _, _ = run_fetch(self._two_lines(),
+                               extra_env={"MW_CORE_LINE": "main3", "GITHUB_BASE_REF": "main"})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("deployed plugin set: main-cd run 101 on line main3", proc.stdout)
+
+    def test_no_line_requested_reads_the_default_line_and_says_so(self):
+        proc, _, _ = run_fetch(self._two_lines())
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("deployed plugin set: main-cd run 102 on line main", proc.stdout)
+        self.assertIn("no delivery line requested", proc.stdout + proc.stderr)
+
+    def test_a_malformed_delivery_lines_file_is_red_never_a_default(self):
+        # The script reads ../delivery-lines.json beside itself, so run a COPY of the scripts
+        # directory next to a broken file.
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = Path(tmp) / "scripts"
+            scripts.mkdir()
+            for name in ("fetch-deployed-plugin-set.sh", "github-api-get.py", "check-ladder-coverage.py"):
+                (scripts / name).write_bytes((HERE / name).read_bytes())
+            (Path(tmp) / "delivery-lines.json").write_text('{"defaultBranch": "main", "lines": null}')
+            proc = subprocess.run(["bash", str(scripts / "fetch-deployed-plugin-set.sh"),
+                                   str(Path(tmp) / "out"), REPO],
+                                  env={"PATH": os.environ["PATH"], "GITHUB_BASE_REF": "main3"},
+                                  capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+        self.assertIn("has no well-formed 'lines' array", proc.stderr)
+        self.assertNotIn("is not a declared core delivery line", proc.stdout + proc.stderr)
+
     def test_404_on_a_candidate_skips_it_and_the_next_one_is_chosen(self):
         proc, bundles, _ = run_fetch(routes_for(101, 102, overrides={
             f"/repos/{REPO}/actions/runs/102": not_found()}))
