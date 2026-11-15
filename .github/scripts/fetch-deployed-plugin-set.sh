@@ -31,6 +31,27 @@ full_set="published-module-set"
 legacy_modules=(MeshWeaver.AI MeshWeaver.Markdown.Collaboration MeshWeaver.Maps MeshWeaver.Payments.Stripe)
 coverage_check="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-ladder-coverage.py"
 
+# 🚨 THE LINE (policy `major-lines-run-separately`). Core CD delivers several branches (`main` = v4,
+# `main3` = v3), each publishing its OWN set from its own main-cd runs, and every line's runs share
+# one artifact listing. This used to read `head_branch == "main"` only, so once `main` published a
+# v4 set every `main3` pull request linked v4 module bytes against its 3.1 platform and went RED
+# (`references MeshWeaver.Mesh.Contract 4.0.0.0 (this platform carries 3.1.0.0)`) over a change that
+# touched no module surface. The line is the branch the build under test is cut for: `MW_CORE_LINE`,
+# else the pull request's base, else the pushed ref. Only a branch `.github/delivery-lines.json`
+# declares is a line; anything else (a stacked pull request's feature base) reads the declared
+# default line and SAYS so.
+lines_file="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/delivery-lines.json"
+[ -f "$lines_file" ] || { echo "::error::$lines_file is missing — the delivery lines cannot be read, so which line's plugin set to link is unknown; no verdict." >&2; exit 1; }
+default_line=$(jq -r '.defaultBranch // empty' "$lines_file")
+[ -n "$default_line" ] || { echo "::error::$lines_file declares no defaultBranch — no verdict." >&2; exit 1; }
+requested_line="${MW_CORE_LINE:-${GITHUB_BASE_REF:-${GITHUB_REF_NAME:-}}}"
+if [ -n "$requested_line" ] && jq -e --arg b "$requested_line" 'any(.lines[]; .branch == $b)' "$lines_file" >/dev/null; then
+  line="$requested_line"
+else
+  line="$default_line"
+  echo "::warning::'${requested_line:-<none>}' is not a declared core delivery line (.github/delivery-lines.json), so this ladder links the DEFAULT line's plugin set ('$line')."
+fi
+
 mkdir -p "$out"
 # 🚨 EVERY lookup goes through github-api-get.py, never `gh api … || continue` (2026-10-27). That
 # shape read a rate limit, a 5xx or a dropped connection as "this run is not a candidate", skipped
@@ -86,7 +107,7 @@ stop_unless_absent() {
 # core pull request's ladder went red over a set that existed. The question is "the newest unexpired
 # bundle set from a promoted main-cd run on main", so it is asked of the artifact listing itself, newest
 # first; retention (not a run count) is the only horizon.
-# main_runs_of <artifact-name> — the run ids (newest first) on main that hold an unexpired artifact of
+# main_runs_of <artifact-name> — the run ids (newest first) on THE LINE ($line) that hold an unexpired artifact of
 # that name. A 404 for the listing is an empty answer; anything else that is not an answer stops RED.
 main_runs_of() {
   local listing rc=0
@@ -95,7 +116,7 @@ main_runs_of() {
     [ "$rc" -ne 4 ] || return 0
     stop_unless_absent "$rc" "listing the $1 artifacts on $repo"
   fi
-  jq -r '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main") | .workflow_run.id] | unique_by(.) | reverse | .[]' <<<"$listing"
+  jq -r --arg line "$line" '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == $line) | .workflow_run.id] | unique_by(.) | reverse | .[]' <<<"$listing"
 }
 
 runs=$(main_runs_of "$full_set")
@@ -129,7 +150,7 @@ for run in $runs; do
   if [ "$promoted" = "success" ]; then chosen="$run"; chosen_arts="$arts"; chosen_sha=$(jq -r '.head_sha' <<<"$run_json"); break; fi
 done
 
-[ -n "$chosen" ] || { echo "::error::no COMPLETED main-cd run on main that still holds an unexpired $full_set artifact (or, before the first one exists, all four legacy module-bundle-* artifacts) also PROMOTED its set — the deployed plugin set is not available, so no compatibility verdict can be given. A green main-cd run re-publishes it (published-modules reads the sealed plugins publication); do NOT waive this check."; exit 1; }
+[ -n "$chosen" ] || { echo "::error::no COMPLETED main-cd run on line '$line' that still holds an unexpired $full_set artifact (or, before the first one exists, all four legacy module-bundle-* artifacts) also PROMOTED its set — the deployed plugin set is not available, so no compatibility verdict can be given. A green main-cd run re-publishes it (published-modules reads the sealed plugins publication); do NOT waive this check."; exit 1; }
 
 if [ "$shape" = "full" ]; then
   download_artifact "$full_set" "$out"
@@ -141,10 +162,10 @@ else
   done
   n=$(find "$out" -name '*.module.nupkg' | wc -l | tr -d ' ')
   [ "$n" -eq "${#legacy_modules[@]}" ] || { echo "::error::expected ${#legacy_modules[@]} module bundles from run $chosen, found $n"; exit 1; }
-  echo "::warning::LADDER COVERAGE NOT MEASURED: no promoted main-cd run on main holds a $full_set yet, so this ladder links only the ${#legacy_modules[@]} legacy per-module bundles (${legacy_modules[*]}) — NOT every module the sealed plugins publication carries (#7409). The next promoted main-cd run hands on the whole publication."
+  echo "::warning::LADDER COVERAGE NOT MEASURED: no promoted main-cd run on line '$line' holds a $full_set yet, so this ladder links only the ${#legacy_modules[@]} legacy per-module bundles (${legacy_modules[*]}) — NOT every module the sealed plugins publication carries (#7409). The next promoted main-cd run hands on the whole publication."
 fi
 sha="$chosen_sha"
-echo "deployed plugin set: main-cd run $chosen (platform commit $sha, $shape set) — $(find "$out" -name '*.module.nupkg' -exec basename {} \; | sort | tr '\n' ' ')"
+echo "deployed plugin set: main-cd run $chosen on line $line (platform commit $sha, $shape set) — $(find "$out" -name '*.module.nupkg' -exec basename {} \; | sort | tr '\n' ' ')"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  { echo "run=$chosen"; echo "sha=$sha"; echo "shape=$shape"; } >> "$GITHUB_OUTPUT"
+  { echo "run=$chosen"; echo "sha=$sha"; echo "shape=$shape"; echo "line=$line"; } >> "$GITHUB_OUTPUT"
 fi
