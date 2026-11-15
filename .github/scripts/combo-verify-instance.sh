@@ -38,6 +38,9 @@
 #                   `verify:combo`). No key and no token is stored anywhere (#3848).
 #   ACR             e.g. meshweaver.azurecr.io
 #   SOURCES         space-separated name=url pairs for --source
+#   INSTANCE_IMAGE_REPOSITORY  optional: the image name the installation's deployment record
+#                   declares (`imageRepository` without its registry host); used only when the
+#                   instance's roll target names no repository (#4413)
 #   GITHUB_TOKEN    read access to the module repositories
 #   GATE_TIMEOUT    seconds; comfortably under the job's timeout-minutes so the TOOL's budget
 #                   fires first and says what did not complete
@@ -142,12 +145,23 @@ note "candidate=$CANDIDATE (currently on $CURRENT)"
 # memex-control, whose version tag exists before memex-portal-ai's is armed — and for builds that
 # never arm it. Pulling memex-portal-ai:<selected> for control failed "not found" on every run whose
 # candidate was not armed yet (runs 41020010827, 41017110305), so the slot was red having verified
-# nothing. The instance names the repository on the same answer; an image from before it did is
-# read as the poller's own default, which is what that image lists.
+# nothing. The instance names the repository on the same answer.
+#
+# 🚨 AN IMAGE FROM BEFORE IT DID IS READ FROM THE INSTALLATION'S RECORD, NOT A DEFAULT (#4413). The
+# fallback used to be memex-portal-ai for everyone — right for a portal, wrong for every control
+# instance, which runs memex-control (the image that carries the fleet-control NodeTypes). Measured
+# 2026-11-15: a control instance still on a pre-#4413 image was verified against the PORTAL image on
+# every run, read RED ("NodeType(s) not registered: Hosting/Deployment" for its Deployments space),
+# and kept this lane red on a verdict about an image it does not run. The roster now carries the
+# record's `imageRepository` name (derive-combo-instances.py → INSTANCE_IMAGE_REPOSITORY); only a
+# record that names none still falls back, and says so.
 REPO=$(jq -r '.repository // ""' <"$roll")
-if [ -z "$REPO" ]; then
+if [ -z "$REPO" ] && [ -n "${INSTANCE_IMAGE_REPOSITORY:-}" ]; then
+  REPO=$INSTANCE_IMAGE_REPOSITORY
+  note "the roll target names no repository (the instance runs an image from before #4413 added it) — using the image its deployment record declares, $REPO."
+elif [ -z "$REPO" ]; then
   REPO=memex-portal-ai
-  note "the roll target names no repository (the instance runs an image from before #4413 added it) — assuming the poller's default, $REPO."
+  note "the roll target names no repository and the deployment record declares no image — assuming the poller's default, $REPO."
 fi
 [[ "$REPO" =~ ^[a-z0-9]+([._/-][a-z0-9]+)*$ ]] \
   || fail "the roll target names a repository that is not a registry path, so no image can be pulled for it — nothing was verified."
