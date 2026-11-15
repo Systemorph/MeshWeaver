@@ -44,12 +44,21 @@ lines_file="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/delivery-lines.json
 [ -f "$lines_file" ] || { echo "::error::$lines_file is missing — the delivery lines cannot be read, so which line's plugin set to link is unknown; no verdict." >&2; exit 1; }
 default_line=$(jq -r '.defaultBranch // empty' "$lines_file")
 [ -n "$default_line" ] || { echo "::error::$lines_file declares no defaultBranch — no verdict." >&2; exit 1; }
+# The declared lines, schema-checked like defaultBranch: a missing or malformed `lines` is RED, never
+# read as "this branch is not a line" (which would quietly fall back to the default line).
+declared_lines=$(jq -r 'if (.lines | type) == "array" and (.lines | length) > 0 and all(.lines[]; (.branch | type) == "string")
+                         then .lines[].branch else error("lines") end' "$lines_file" 2>/dev/null) \
+  || { echo "::error::$lines_file has no well-formed 'lines' array (each entry a 'branch' string) — no verdict." >&2; exit 1; }
+# MW_CORE_LINE is the same override resolve-platform.py honours: a caller that knows its line says so.
 requested_line="${MW_CORE_LINE:-${GITHUB_BASE_REF:-${GITHUB_REF_NAME:-}}}"
-if [ -n "$requested_line" ] && jq -e --arg b "$requested_line" 'any(.lines[]; .branch == $b)' "$lines_file" >/dev/null; then
+if [ -z "$requested_line" ]; then
+  line="$default_line"
+  echo "::warning::no delivery line requested (MW_CORE_LINE, GITHUB_BASE_REF and GITHUB_REF_NAME are all empty), so this ladder links the DEFAULT line's plugin set ('$line')."
+elif grep -qxF -- "$requested_line" <<<"$declared_lines"; then
   line="$requested_line"
 else
   line="$default_line"
-  echo "::warning::'${requested_line:-<none>}' is not a declared core delivery line (.github/delivery-lines.json), so this ladder links the DEFAULT line's plugin set ('$line')."
+  echo "::warning::'$requested_line' is not a declared core delivery line (.github/delivery-lines.json), so this ladder links the DEFAULT line's plugin set ('$line')."
 fi
 
 mkdir -p "$out"
