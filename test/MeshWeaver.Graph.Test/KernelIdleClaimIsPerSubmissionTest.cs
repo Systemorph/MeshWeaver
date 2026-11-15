@@ -24,11 +24,12 @@ namespace MeshWeaver.Graph.Test;
 /// reply wait timed out found that status and released its claim at once, so the next idle tick
 /// disposed the host and its executor while that block was still running — and it never settled.
 ///
-/// <para>Real mesh, the real Roslyn kernel, an injected idle clock (<see cref="KernelHubOptions.TimeProvider"/>)
-/// stepped by the test, and a one-millisecond request budget on the Activity hubs so every reply wait
-/// has timed out by the time a script is running. The long block parks on a gate the test releases
-/// (a DI singleton the script resolves), so the idle window is crossed deterministically while it
-/// runs. Both tests fail on the Activity-status settlement: the block never returns.</para>
+/// <para>Real mesh, the real Roslyn kernel, and an injected idle clock
+/// (<see cref="KernelHubOptions.TimeProvider"/>) stepped by the test. The long block parks on a gate
+/// the test releases (a DI singleton the script resolves), so the idle window is crossed
+/// deterministically while it runs. The host's wait for each block's answer has no silence bound
+/// (it ends on the block's reply or settlement), so no request deadline is involved: the claim is
+/// what is under test. Both tests fail on an Activity-status release: the block never returns.</para>
 /// </summary>
 public class KernelIdleClaimIsPerSubmissionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -43,10 +44,7 @@ public class KernelIdleClaimIsPerSubmissionTest(ITestOutputHelper output) : Mono
         => base.ConfigureMesh(builder)
             .ConfigureServices(services => services
                 .AddSingleton(new KernelHubOptions { TimeProvider = clock })
-                .AddSingleton(gate))
-            .ConfigureDefaultNodeHub(c => c.Address.ToString().Contains("/_Activity/", StringComparison.Ordinal)
-                ? c.WithRequestTimeout(TimeSpan.FromMilliseconds(1))
-                : c);
+                .AddSingleton(gate));
 
     private const string Gated = """
         using System.Reactive.Linq;
@@ -119,7 +117,7 @@ public class KernelIdleClaimIsPerSubmissionTest(ITestOutputHelper output) : Mono
     private async Task CrossTheIdleWindowWhileGated(CancellationToken ct)
     {
         await gate.Where(s => s == "started").FirstAsync().Timeout(Bound).Await(ct);
-        // The gated block is executing and its reply wait (1 ms budget) has long timed out.
+        // The gated block is executing; its host's claim is all that keeps the host alive.
         clock.Advance(Window);
         clock.Advance(Window);
         gate.OnNext("released");

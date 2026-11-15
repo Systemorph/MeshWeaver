@@ -72,35 +72,54 @@ public class KernelIdleDisconnectWhileRunningTest(ITestOutputHelper output) : Hu
     }
 
     /// <summary>
-    /// The container's wait for the executor's reply is bounded by <c>RequestTimeout</c>; a quiet
-    /// script outlives it. That timeout must not release the claim — otherwise the NEXT idle tick
-    /// disposes the hub and its executor mid-run, the pump stops, and the Activity stays Running for
-    /// ever. The claim now lasts until the run settles.
+    /// The container's wait for the executor's answer has no silence bound: a quiet script computes
+    /// for as long as it likes, and the claim must last until the run SETTLES — otherwise the next
+    /// idle tick disposes the hub and its executor mid-run, the pump stops, and the Activity stays
+    /// Running for ever. The settlement usually arrives before the reply (it is signalled right after
+    /// the reply is posted) and carries the same response.
     /// </summary>
     [Fact]
-    public async Task AReplyWaitThatTimesOut_KeepsTheClaimUntilTheRunSettles()
+    public async Task AnUnansweredRun_KeepsTheClaimUntilItSettles()
     {
         var (kernel, executor, idle, clock) = await ArrangeAsync();
-        var settled = new Subject<Unit>();
+        var settled = new Subject<SubmitCodeResponse?>();
+        SubmitCodeResponse? answered = null;
         idle.Track(claim =>
             {
                 claim.Bind(executor);
-                // The reply wait crosses its budget first …
-                return KernelContainer.ReplyOrSettlement(
-                    Observable.Throw<object>(new TimeoutException("the reply budget elapsed while the script ran")),
-                    () => settled);
+                // No reply yet: the script is still running.
+                return KernelContainer.ReplyOrSettlement(Observable.Never<SubmitCodeResponse>(), settled, "s1");
             })
-            .Subscribe(_ => { }, _ => { });
+            .Subscribe(r => answered = r, _ => { });
 
-        // … then the idle window.
         clock.Advance(Window);
-        Assert.False(kernel.IsDisposing, "the run is still executing after its reply wait timed out, so its hub stays");
+        Assert.False(kernel.IsDisposing, "the run is still executing, so its hub stays");
         Assert.Equal(1, idle.InFlight);
 
-        settled.OnNext(Unit.Default);
+        settled.OnNext(new SubmitCodeResponse("s1", true) { ActivitySettled = true });
         Assert.Equal(0, idle.InFlight);
+        Assert.True(answered is { Success: true }, "the settlement carries the executor's own answer to the caller");
         clock.Advance(Window);
         Assert.True(kernel.IsDisposing, "once the run settled, the finished hub is reclaimed one window later");
+    }
+
+    /// <summary>
+    /// An executor torn down without answering settles the submission with no response: the caller is
+    /// still answered — a failure nobody settled, so the dispatcher reconciles the Activity — instead of
+    /// waiting for a reply that cannot come.
+    /// </summary>
+    [Fact]
+    public void ATornDownExecutor_IsAnsweredAsAFailedRunNobodySettled()
+    {
+        SubmitCodeResponse? answered = null;
+        using var _ = KernelContainer.ReplyOrSettlement(
+                Observable.Never<SubmitCodeResponse>(), Observable.Return<SubmitCodeResponse?>(null), "s2")
+            .Subscribe(r => answered = r);
+
+        Assert.NotNull(answered);
+        Assert.Equal("s2", answered!.SubmissionId);
+        Assert.False(answered.Success);
+        Assert.False(answered.ActivitySettled, "nobody settled the Activity, so the caller must");
     }
 
     [Fact]
