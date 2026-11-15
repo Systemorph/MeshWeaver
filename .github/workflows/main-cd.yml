@@ -2595,6 +2595,7 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/control-instance.json
+            .github/delivery-lines.json
           sparse-checkout-cone-mode: false
       - name: "The decision can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
@@ -3416,6 +3417,7 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/control-instance.json
+            .github/delivery-lines.json
           sparse-checkout-cone-mode: false
       - name: "The selection can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
