@@ -246,7 +246,11 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
             .Timeout(TestTimeouts.Convergence).Await(ct);
         dead.Held.Should().BeTrue("PRECONDITION: nobody holds the lease at a fresh epoch");
 
-        await Sees(hubB, lease => lease.Holder == DeadPass && lease.Replica == "silo-0", ct);
+        // B must see A's STAMPED claim. `Holder == DeadPass && Replica == "silo-0"` also matches A's claim
+        // BEFORE its stamp reached B's mirror whenever the previous holder was stamped by silo-0 too (the
+        // holder ignores the stamped flag, and a take leaves the previous Replica): measured on CI after
+        // AGenerationWithoutItsClaim, whose holder silo-0 stamped. B then decided on a mirror one write behind.
+        await Sees(hubB, lease => lease.Claim == dead.Lease!.Claim, ct);
         var within = await PrebuiltBundleRetentionLease.Take(hubB, now + Hold / 2, Hold, 2, "silo-1")
             .Timeout(TestTimeouts.Convergence).Await(ct);
         within.Held.Should().BeFalse("the dead pass's hold has not lapsed");
