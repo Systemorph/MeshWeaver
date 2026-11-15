@@ -70,7 +70,7 @@ public class ThreadPoolWorkerStacksTest
             // (or any later capture) can never find one of these still standing in it.
             for (var i = 0; i < parkedThreads.Length; i++)
                 if (Interlocked.CompareExchange(ref slotState[i], SlotClaimed, SlotAsleep) == SlotAsleep)
-                    Volatile.Read(ref parkedThreads[i])!.Interrupt();
+                    Volatile.Read(ref parkedThreads[i])?.Interrupt();
             SpinWait.SpinUntil(() => Volatile.Read(ref left) == Volatile.Read(ref parked), Budget);
         }
     }
