@@ -87,9 +87,12 @@ def promoted():
     return ok({"jobs": [{"name": "Promote: the set", "conclusion": "success"}]})
 
 
-def listing(*run_ids):
+def listing(*run_ids, branches=None):
+    """`branches` maps a run id to the branch (core delivery line) it ran on; `main` otherwise."""
+    branches = branches or {}
     return ok({"artifacts": [
-        {"expired": False, "workflow_run": {"id": rid, "head_branch": "main"}} for rid in run_ids]})
+        {"expired": False, "workflow_run": {"id": rid, "head_branch": branches.get(rid, "main")}}
+        for rid in run_ids]})
 
 
 def routes_for(*run_ids, overrides=None, full=True, publication=None, delivered=None):
@@ -148,7 +151,7 @@ class FakeGitHub:
         self.server.server_close()
 
 
-def run_fetch(routes, budget_seconds=20, with_fake=None):
+def run_fetch(routes, budget_seconds=20, with_fake=None, extra_env=None):
     """`routes` carry the downloads too (routes_for's `publication` is the index the full set
     carries, `delivered` the bundles its download really yields; they differ only to prove the
     ladder refuses a missing module). `with_fake` receives the fake server after the run."""
@@ -169,6 +172,7 @@ def run_fetch(routes, budget_seconds=20, with_fake=None):
                 "GITHUB_API_DEADLINE": str(int(time.time()) + budget_seconds),
                 "NO_PROXY": "*",
                 "TMPDIR": tmp,
+                **(extra_env or {}),
             }
             proc = subprocess.run(["bash", str(SCRIPT), str(Path(tmp) / "out"), REPO], env=env,
                                   capture_output=True, text=True, timeout=120)
@@ -225,6 +229,69 @@ class FetchDeployedPluginSetTest(unittest.TestCase):
         self.assertIn("deployed plugin set: main-cd run 101", proc.stdout)
         self.assertEqual(bundles, sorted(PUBLICATION))
         self.assertNotIn("LADDER COVERAGE NOT MEASURED", proc.stdout + proc.stderr)
+
+    def _two_lines(self):
+        # 101 ran on `main3` (the v3 line), 102 — newer — on `main` (the v4 line); both promoted.
+        routes = routes_for(101, 102)
+        branches = {101: "main3", 102: "main"}
+        routes[f"/repos/{REPO}/actions/artifacts"] = listing(101, 102, branches=branches)
+        routes[f"/repos/{REPO}/actions/artifacts?name={FULL_SET}"] = listing(101, 102, branches=branches)
+        return routes
+
+    def test_a_main3_pull_request_links_the_main3_set_never_the_newer_main_one(self):
+        # The defect: `head_branch == "main"` linked the v4 set against every main3 pull request.
+        proc, bundles, _ = run_fetch(self._two_lines(), extra_env={"GITHUB_BASE_REF": "main3"})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("deployed plugin set: main-cd run 101 on line main3", proc.stdout)
+        self.assertEqual(bundles, sorted(PUBLICATION))
+
+    def test_a_main_pull_request_links_the_main_set(self):
+        # Negative control for the test above: the same listing, the other line.
+        proc, _, _ = run_fetch(self._two_lines(), extra_env={"GITHUB_BASE_REF": "main"})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("deployed plugin set: main-cd run 102 on line main", proc.stdout)
+        self.assertNotIn("not a declared core delivery line", proc.stdout + proc.stderr)
+
+    def test_a_push_to_main3_links_the_main3_set(self):
+        proc, _, _ = run_fetch(self._two_lines(), extra_env={"GITHUB_REF_NAME": "main3"})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("deployed plugin set: main-cd run 101 on line main3", proc.stdout)
+
+    def test_an_undeclared_base_reads_the_default_line_and_says_so(self):
+        # A stacked pull request's base is a feature branch, not a line.
+        proc, _, _ = run_fetch(self._two_lines(), extra_env={"GITHUB_BASE_REF": "feat/stacked"})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("deployed plugin set: main-cd run 102 on line main", proc.stdout)
+        self.assertIn("'feat/stacked' is not a declared core delivery line", proc.stdout + proc.stderr)
+
+    def test_mw_core_line_wins_over_the_pull_request_base(self):
+        proc, _, _ = run_fetch(self._two_lines(),
+                               extra_env={"MW_CORE_LINE": "main3", "GITHUB_BASE_REF": "main"})
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("deployed plugin set: main-cd run 101 on line main3", proc.stdout)
+
+    def test_no_line_requested_reads_the_default_line_and_says_so(self):
+        proc, _, _ = run_fetch(self._two_lines())
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("deployed plugin set: main-cd run 102 on line main", proc.stdout)
+        self.assertIn("no delivery line requested", proc.stdout + proc.stderr)
+
+    def test_a_malformed_delivery_lines_file_is_red_never_a_default(self):
+        # The script reads ../delivery-lines.json beside itself, so run a COPY of the scripts
+        # directory next to a broken file.
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = Path(tmp) / "scripts"
+            scripts.mkdir()
+            for name in ("fetch-deployed-plugin-set.sh", "github-api-get.py", "check-ladder-coverage.py"):
+                (scripts / name).write_bytes((HERE / name).read_bytes())
+            (Path(tmp) / "delivery-lines.json").write_text('{"defaultBranch": "main", "lines": null}')
+            proc = subprocess.run(["bash", str(scripts / "fetch-deployed-plugin-set.sh"),
+                                   str(Path(tmp) / "out"), REPO],
+                                  env={"PATH": os.environ["PATH"], "GITHUB_BASE_REF": "main3"},
+                                  capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+        self.assertIn("has no well-formed 'lines' array", proc.stderr)
+        self.assertNotIn("is not a declared core delivery line", proc.stdout + proc.stderr)
 
     def test_404_on_a_candidate_skips_it_and_the_next_one_is_chosen(self):
         proc, bundles, _ = run_fetch(routes_for(101, 102, overrides={
