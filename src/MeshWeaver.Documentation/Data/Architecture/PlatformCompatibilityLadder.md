@@ -114,6 +114,17 @@ exemption is the already-green-tree reuse path, as for every gate on that check)
   while the unfiltered listing named a recent promoted run whose four artifacts were present.
 - **Platform side:** this pull request's core build (the tester's bin — the canonical content
   surface) plus the runner's shared frameworks.
+- **The platform side carries what the build RESOLVED, not what `Directory.Packages.props` pins.**
+  A central `PackageVersion` is inert for a package no core project references directly
+  (`CentralPackageTransitivePinningEnabled` is unset), so the closure carries whatever version the
+  referencing package asks for. On the v4 line `Microsoft.Extensions.AI.Abstractions` was pinned at
+  11.0.0 but arrived only through `ModelContextProtocol.Core`, which asks for 10.11.0: the tester's
+  bin carried `10.11.0.0`, the line's AI, Acp and Codex modules reference `11.0.0.0`, and every core
+  pull request into `main` was red (`references Microsoft.Extensions.AI.Abstractions 11.0.0.0 (this
+  platform carries 10.11.0.0)`). The image rung stayed green because the portal host lifts the
+  package itself. The red was correct, and the fix is a versionless direct reference in the project
+  that brings the package in (`MeshWeaver.Hosting`), so the closure carries the pin. To check a
+  closure, read the resolved version in the tester's `mw-plugin-test.deps.json`.
 - **Measurement:** `mw-plugin-test platform-link`, i.e. `ModulePlatformLink.Check` with
   `ModuleLinkOptions.WithMembers` — the ONE probe the boot, landing and roll gates use, with its member
   half switched on. `--judge-from` scopes it to what a core pull request can move: a reference into an
