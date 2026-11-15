@@ -104,6 +104,30 @@ public record PostOptions(Address Sender)
     internal Address Target { get; init; } = null!;
 
     /// <summary>
+    /// Whether the awaiting hub bounds its wait for the reply by <c>RequestTimeout</c> of silence
+    /// (<c>hub.Observe</c>). True for every request unless <see cref="WithoutSilenceBound"/> says
+    /// otherwise. Local to the awaiting hub: it is not carried on the delivery.
+    /// </summary>
+    internal bool IsSilenceBounded { get; init; } = true;
+
+    /// <summary>
+    /// Returns a copy of these options whose awaited reply carries NO silence bound: the wait ends
+    /// with the reply, a delivery failure, or the awaiting hub's disposal, never with a
+    /// <c>RequestTimeout</c>.
+    ///
+    /// <para>🚨 Only for a reply that is the END of a computation of unbounded length, such as a
+    /// user's script run, where a timeout would not be a verdict on anything: the computation is
+    /// still running, and the caller would only hand the wait over to something else. Such a wait
+    /// used to be bounded anyway and to treat its own <c>TimeoutException</c> as "not yet", which is
+    /// a timeout terminal firing under a healthy run (Doc/Architecture/TimeoutIsError). Whatever the
+    /// caller wants to say while the computation runs — that the reply is overdue — is a NOTICE on
+    /// its own timer (<c>MessageHubExtensions.RequestBudgetElapsed</c>), not a terminal. Every other
+    /// request keeps its bound.</para>
+    /// </summary>
+    /// <returns>A new <see cref="PostOptions"/> whose reply wait has no silence bound.</returns>
+    public PostOptions WithoutSilenceBound() => this with { IsSilenceBounded = false };
+
+    /// <summary>
     /// Arbitrary key/value metadata to attach to the outgoing message. Backed by an immutable
     /// dictionary; assigning copies the supplied values.
     /// </summary>

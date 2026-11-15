@@ -69,13 +69,17 @@ public class KernelScriptLaneRefusesInsteadOfQueuingTest(ITestOutputHelper outpu
 }
 
 /// <summary>
-/// The kernel's reply is the END of a run, and every wait for it is bounded by its hub's
-/// <c>RequestTimeout</c> of silence. A healthy cell computing past that budget is still running: no
-/// hop may turn its own deadline into a verdict on the run. Two hops waited: the dispatcher
-/// (<c>CodeNodeType</c>, on the Code hub) and the kernel container (on the Activity hub), which used
-/// to convert its own timeout into <c>Success=false</c>. Each derived class shortens the budget on a
-/// different set of hubs so each hop is pinned on its own; both fail without the fix — the run reads
-/// Failed while its script is still executing.
+/// The kernel's reply is the END of a run. A healthy cell computing past its hubs'
+/// <c>RequestTimeout</c> is still running: no hop may turn a deadline into a verdict on the run. Two
+/// hops wait: the dispatcher (<c>CodeNodeType</c>, on the Code hub) and the kernel container (on the
+/// Activity hub), which used to convert its own timeout into <c>Success=false</c>. Each derived class
+/// shortens the budget on a different set of hubs so each hop is pinned on its own; both failed
+/// without the first fix — the run read Failed while its script was still executing.
+///
+/// <para>🚨 Timeout == error (Doc/Architecture/TimeoutIsError): both waits used to be bounded
+/// anyway and to swallow their own <c>RequestTimeout</c> as "not yet" — a timeout terminal firing
+/// under a run that SUCCEEDS. They now carry no silence bound (<c>PostOptions.WithoutSilenceBound</c>),
+/// so with the guard armed this test also fails if either hop's request deadline fires.</para>
 /// </summary>
 public abstract class LongCellOutlivesTheRequestBudgetTestBase(ITestOutputHelper output) : CSharpCellRunTestBase(output)
 {
