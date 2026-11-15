@@ -32,4 +32,24 @@ public interface IPooledSubscribeScheduler
     /// cancel+joins. Emissions flow through unchanged; ordering is preserved.
     /// </summary>
     IObservable<T> SubscribeThroughPool<T>(IObservable<T> source);
+
+    /// <summary>
+    /// <see cref="SubscribeThroughPool{T}(IObservable{T})"/>, with each subscription also OWNED UNTIL THE
+    /// POOL DRAIN: the mesh's pool registry disposes it before it cancels the pool it runs on, and
+    /// disposing (or terminating) the subscription earlier forgets it.
+    ///
+    /// <para><b>Who needs this (#7992).</b> A caller whose subscriptions have an owner that disposes them,
+    /// but whose owner can outlive a silo's stop. A layout area's render subscriptions belong to its
+    /// <c>LayoutAreaHost</c>, which is disposed with its hub — and on a silo every hub lives on past
+    /// <c>IoPoolSiloTeardown</c> until the host stops. Without this the cancel found every live area's
+    /// render legs still attached and reported them as unowned.</para>
+    ///
+    /// <para>The default implementation has no registry to own anything with and behaves exactly as the
+    /// one-argument overload.</para>
+    /// </summary>
+    /// <param name="source">The observable whose subscribe runs on the pool.</param>
+    /// <param name="ownedUntilDrainBy">Who owns the subscriptions, for the release's log line.</param>
+    /// <returns>The pooled observable; each of its subscriptions is released before the pool's cancel.</returns>
+    IObservable<T> SubscribeThroughPool<T>(IObservable<T> source, string ownedUntilDrainBy)
+        => SubscribeThroughPool(source);
 }
