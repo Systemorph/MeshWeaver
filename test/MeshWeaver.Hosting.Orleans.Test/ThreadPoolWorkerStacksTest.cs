@@ -292,25 +292,26 @@ public class ThreadPoolWorkerStacksTest
         {
             reader.Start();
             var stacks = new BlockedThreadStacks();
-            (string Raw, string Rendered)? innermost = null;
+            var raw = "";
+            var rendered = "";
             // Ready means IN the native call: the dump's innermost frame for the thread is a runtime frame.
-            SpinWait.SpinUntil(() =>
+            SpinWait.SpinUntil(() => stacks.Read(runtime =>
                 {
-                    innermost = stacks.Read(runtime =>
-                        runtime.Threads.FirstOrDefault(t => t.ManagedThreadId == reader.ManagedThreadId)?.EnumerateStackTrace()
-                            .FirstOrDefault() is { Kind: Microsoft.Diagnostics.Runtime.ClrStackFrameKind.Runtime } frame
-                            ? ((string Raw, string Rendered)?)(frame.Method?.Signature ?? frame.FrameName ?? "", BlockedThreadStacks.RenderFrame(frame))
-                            : null);
-                    return innermost is not null;
-                }, Budget)
+                    if (runtime.Threads.FirstOrDefault(t => t.ManagedThreadId == reader.ManagedThreadId)?.EnumerateStackTrace()
+                            .FirstOrDefault() is not { Kind: Microsoft.Diagnostics.Runtime.ClrStackFrameKind.Runtime } frame)
+                        return false;
+                    raw = frame.Method?.Signature ?? frame.FrameName ?? "";
+                    rendered = BlockedThreadStacks.RenderFrame(frame);
+                    return true;
+                }), Budget)
                 .Should().BeTrue("the reader thread must be captured inside its native read");
 
-            innermost!.Value.Raw.Should().Contain(nameof(Libc.read) + "(",
+            raw.Should().Contain(nameof(Libc.read) + "(",
                 "negative control: ClrMD attaches the P/Invoke to this frame, so the old rendering printed the method");
-            innermost.Value.Rendered.Should().Be("InlinedCallFrame",
+            rendered.Should().Be("InlinedCallFrame",
                 "the capture prints a runtime frame by its kind, whichever code version the thread entered");
-            ThreadPoolStall.IsRuntimeFrame(innermost.Value.Rendered).Should().BeTrue("the line recognises it as a runtime frame");
-            ThreadPoolStall.IsRuntimeFrame(innermost.Value.Raw).Should().BeFalse(
+            ThreadPoolStall.IsRuntimeFrame(rendered).Should().BeTrue("the line recognises it as a runtime frame");
+            ThreadPoolStall.IsRuntimeFrame(raw).Should().BeFalse(
                 "negative control: the method ClrMD attaches reads as a managed frame, which is what split the group");
         }
         finally
