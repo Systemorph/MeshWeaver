@@ -416,6 +416,44 @@ public static class NodeSetCompiler
     }
 
     /// <summary>
+    /// A <see cref="CompiledNode"/> for bytes that an EARLIER compile of the same inputs emitted —
+    /// the bake's cross-run compile cache (<c>Doc/Architecture/NodeTypeCompileCache</c>). Only the
+    /// parts that depend on the bytes alone are taken from the cache; the dependency record is
+    /// recomputed HERE, against the CURRENT environment's resolver and toolchain, exactly as
+    /// <see cref="CompileWithGeneratorLedger"/> computes it after an emit. So a reused build and a
+    /// fresh one of the same bytes carry the same record, whichever builds of their references
+    /// the two runs had in hand.
+    /// </summary>
+    /// <param name="inputs">The resolved inputs of THIS run (<see cref="ResolveInputs"/>).</param>
+    /// <param name="dllPath">The cached assembly, already copied into this compile's directory.</param>
+    /// <param name="pdbPath">Its symbols, or null.</param>
+    /// <param name="dependencyIdOf">The current environment's surface-id resolver.</param>
+    /// <param name="toolchainId">The current toolchain id.</param>
+    /// <param name="generatedInputDigest">The inputs' digest (<see cref="GeneratedInputDigestOf"/>).</param>
+    internal static CompiledNode FromEmitted(
+        CompileInputs inputs,
+        string dllPath,
+        string? pdbPath,
+        Func<string, string?> dependencyIdOf,
+        string toolchainId,
+        string generatedInputDigest)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        ArgumentNullException.ThrowIfNull(dependencyIdOf);
+        return new CompiledNode(
+            inputs.NodePath,
+            dllPath,
+            pdbPath,
+            inputs,
+            CompiledDependencies.Compute(
+                ReferencedAssemblyNames(dllPath), dependencyIdOf, toolchainId, generatedInputDigest));
+    }
+
+    /// <summary>The emitted assembly's MVID ("N"), read from its metadata — the same reading the
+    /// dependency edges are stamped with on a fresh compile.</summary>
+    internal static string EmittedMvidOf(string dllPath) => MvidOfFile(dllPath);
+
+    /// <summary>
     /// The stage-1 CONTENT KEY digest of a resolved compile (#1707 slice 4): the generated text
     /// plus everything else that decides the bytes given that text. Shared by this bake and the
     /// runtime's <c>MeshNodeCompilationService</c> — the two paths differ only in where the nodes
