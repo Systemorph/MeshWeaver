@@ -119,6 +119,7 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
 
     rows: list[dict[str, str]] = []
     excluded: list[tuple[str, str, str]] = []
+    images = record_images(scans)
     hosts: dict[str, tuple[str, str]] = {}
     names: dict[str, str] = {}
     for instance in sorted(instances, key=lambda i: (i.id, i.gh_repo)):
@@ -195,7 +196,11 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
                 "the wrong `Admin/UpdatePolicy`.")
             continue
         hosts[host_key] = (instance.label, instance.host)
-        rows.append({"name": instance.id, "baseUrl": f"https://{instance.host}"})
+        row = {"name": instance.id, "baseUrl": f"https://{instance.host}"}
+        image = images.get((instance.gh_repo, instance.id))
+        if image:
+            row["imageRepository"] = image
+        rows.append(row)
 
     if not rows and not blockers:
         blockers.append(
@@ -207,6 +212,29 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
             f".github/acr-retention/{lock.ROSTER_PATH} — and the second would mean the fleet has "
             "no portals.")
     return rows, excluded, blockers
+
+
+def record_images(scans) -> dict[tuple[str, str], str]:
+    """(deployments repository, installation id) → the portal image NAME its record declares.
+
+    🚨 WHICH IMAGE AN INSTALLATION RUNS IS ON ITS RECORD, NOT A DEFAULT (MeshWeaver#4413). The verify
+    job asks the instance for its roll target, and since #4413 the answer names the repository. An
+    instance on an image from before that answers WITHOUT one, and the job then assumed
+    `memex-portal-ai` — which is wrong for every control instance: those run `memex-control`, the
+    image that carries the fleet-control NodeTypes (`Hosting/Deployment` among them). Measured
+    2026-11-15 on a client estate's control instance (still on a pre-#4413 image, rolling only
+    through an approval gate): every verification since 2026-11-14 read RED with
+    "NodeType(s) not registered: Hosting/Deployment" for its `Deployments` space — a verdict about
+    the portal image, which that instance does not run, so the lane stayed red on a false reading.
+    The record's `imageRepository` names the image; the registry host is dropped because the verify
+    job pulls from the fleet's registry, where an estate's mirror has the same name. Pure."""
+    images: dict[tuple[str, str], str] = {}
+    for scan in scans:
+        for image, where in getattr(scan, "record_images", []):
+            ident = where.rsplit("/", 1)[-1]
+            if ident.endswith(".json"):
+                images[(scan.gh_repo, ident[: -len(".json")])] = image
+    return images
 
 
 def derive_sources(scans) -> tuple[str, list[str]]:
@@ -541,6 +569,9 @@ def resolve_slot(rows: list[dict[str, str]], sources: str, slot: str,
             handle.write(f"BASE_URL={row['baseUrl']}\n")
             handle.write(f"SOURCES={sources}\n")
             handle.write(f"INSTANCE_PRIVATE={'true' if private else 'false'}\n")
+            # The image the installation's record declares (#4413) — empty when it declares none;
+            # the verify script uses it only when the instance's roll target names no repository.
+            handle.write(f"INSTANCE_IMAGE_REPOSITORY={row.get('imageRepository', '')}\n")
     return 0
 
 
@@ -772,6 +803,32 @@ def self_test() -> int:
     check(blockers == [] and sorted(r["name"] for r in rows) == ["globex-test", "memex"],
           "two repositories declaring different names derive both, with no blocker — even from "
           "overlays in same-named directories")
+
+    # 🚨 THE IMAGE COMES FROM THE INSTALLATION'S OWN RECORD (#4413): a control instance whose record
+    # names `<estate acr>/memex-control` carries `memex-control`; a record in ANOTHER repository with
+    # the same id does not leak onto it; an installation whose record names nothing carries no key.
+    image_scan = _scan("Systemorph/Umbrella.Memex", [
+        ("globex-control", "control.globex.example.com",
+         "deployments/aks/control/values.control.yaml"),
+        ("globex-test", "globex.example.com", "deployments/aks/memex/values.memex.yaml")])
+    image_scan.record_images = [("memex-control", "mesh/Deployments/globex-control.json")]
+    other_scan = _scan("Systemorph/Memex", [
+        ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")])
+    other_scan.record_images = [("memex-portal-ai", "mesh/Deployments/globex-test.json")]
+    rows, _, blockers = derive([image_scan, other_scan], {})
+    by_name = {r["name"]: r for r in rows}
+    check(blockers == []
+          and by_name["globex-control"].get("imageRepository") == "memex-control"
+          and "imageRepository" not in by_name["globex-test"]
+          and "imageRepository" not in by_name["memex"],
+          "each row carries the image its OWN record declares, joined on repository AND id, and no "
+          "key where the record declares none")
+    check([lock.extract_record_image_name(json.dumps({"content": {"imageRepository": value}}))
+           for value in ("meshweaver.azurecr.io/memex-portal-ai", "acr.example.io/memex-control",
+                         "memex-control", "", "Not A Repo", "localhost:5000/team/portal")]
+          == ["memex-portal-ai", "memex-control", "memex-control", None, None, "team/portal"],
+          "the record's image NAME drops any registry host, keeps a bare name, and refuses a blank "
+          "or malformed value")
 
     # Two ids, one host: the second would be verified with the first's credentials.
     rows, _, blockers = derive([_scan("Systemorph/Memex", [
