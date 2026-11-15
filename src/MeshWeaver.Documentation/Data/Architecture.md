@@ -606,6 +606,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [What a Synthetic Probe May Assert](SyntheticProbeTargets) — a probe naming one deployment's installed content is broken by construction; the platform floor, the negative control that tells "absent" from "down", and reading the target's own declaration
 - [Why a GC-Bound Pod Stays in Rotation](WhyAGcBoundPodStaysInRotation) — the GC's hard limit sits below the container limit, so a portal short of memory is defended rather than restarted
 - [Runner Pools and Dispatch Queues](RunnerPoolsAndDispatchQueues) — two runner pools sharing all capacity; priority from the control instance's CI queue (express > trunk > gate > pr), dispatched in tier order with express headroom, re-orderable through MCP, failing open
+- [CI Profile, November 2026](CiProfile2026-11) — measured wall-clock, runner-minutes and queue wait of core and MeshWeaver.Plugins CI over 3.25 days, and the ranked proposals (shell self-tests off the core critical path, combo verifier, gate NodeType recompile, the dispatch hold)
 - [Self-hosted CI runners on AKS](SelfHostedRunners) — ARC beside the portals on one pool; three brakes, a negative priority class, and the reserve arithmetic that decides the cap
 - [Candidate Release Protocol](CandidateReleaseProtocol)
 - [Chart Drift — what a deploy actually does](ChartDriftSemantics)
