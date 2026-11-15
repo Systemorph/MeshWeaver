@@ -400,6 +400,18 @@ to change):
   the past. The claim and the replica stamp are two writes, and the pass sweeps only when the lease
   the STAMP settled still carries its claim: a claimant that paused across its own hold's end and
   finds another replica's claim there skips.
+- **The stamp decides only on a lease at least as new as its own take (#7382).** The stamp is a fold
+  over this hub's mirror of the lease, and the mirror learns of the take only from the owner's echo.
+  The write queue normally hands the take's own result to the stamp as its base. It does not do that
+  after a re-attempt: when the owner first refused the take as a conflict (the claimant's mirror was
+  one write behind) and then took it. The stamp then folded on the PREVIOUS lease, wrote nothing and
+  reported "not held". The replica that had won skipped its pass and left its unstamped claim standing,
+  so nothing swept until the hold ran out. Measured on CI: a take one second past a dead pass's hold
+  committed and still settled `Held = false`, with no fault. A lease of an older generation is a
+  snapshot from before the take, as the fence reads it, so the stamp now waits past it
+  (`PrebuiltBundleRetentionLease.StampOnceSeen`). A lease of the take's generation or a newer one, or an
+  unreadable one, decides at once. A claim the owner lost before it persisted leaves only older states,
+  so `RunLeased` bounds the take by the same half-hold the pass runs under.
 - **The lease is bounded both ways.** The hold is most of the interval, and never less than an hour.
   A pass runs for at most half its hold: past that it is unsubscribed, and the pool leaf stops at its
   next step boundary, with the other half of the hold to reach it. The removal itself is one of
@@ -510,7 +522,7 @@ replica that had released 24 minutes earlier.
 | Pinned by | What it fails on |
 |---|---|
 | `PrebuiltBundleRetentionLeaseAcrossSilosTest` (`MeshWeaver.Hosting.Orleans.Test`) | two silos passing at one instant where both sweep or neither is told who does; a finished pass that keeps the lease; a dead pass's lease that never lapses, or one released by a token that no longer holds it; a lease shape the owner's merge can tear, or a lapsed value it omits from the base; a hold dated from when the pass was queued rather than started; a claimant that sweeps although its stamp found another replica's claim; a holder that keeps sweeping after the lease it held was reloaded lapsed and taken by another replica |
-| `PrebuiltBundleRetentionLeaseTerminalTest` (`MeshWeaver.Hosting.Test`) | a release per result instead of once at the terminal; an empty pass that never releases; a release fault that replaces a successful sweep's result or a faulted pass's own fault; a cancelled pass that releases |
+| `PrebuiltBundleRetentionLeaseTerminalTest` (`MeshWeaver.Hosting.Test`) | a release per result instead of once at the terminal; an empty pass that never releases; a release fault that replaces a successful sweep's result or a faulted pass's own fault; a cancelled pass that releases; a stamp that decides "not held" on a mirror still carrying the lease from before its own take |
 
 ## Rolling it out
 
