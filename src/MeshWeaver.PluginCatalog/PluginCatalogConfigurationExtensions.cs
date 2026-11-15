@@ -254,9 +254,12 @@ public static class PluginCatalogConfigurationExtensions
                             sp.GetService<ILogger<BootProgress>>());
                 })
                 .AddSingleton<BundleOfferingMemo>()
+                // 🚨 …and the resolved module root of THIS platform line (ModuleRoot.ResolveLine): two
+                // majors share the volume during a roll, and each must land into, read and sweep
+                // only its own tree.
                 .AddSingleton(sp => new ModuleLandingService(
                     sp.GetService<ILogger<ModuleLandingService>>(),
-                    ModuleRoot.Resolve(sp.GetService<IConfiguration>()))
+                    ModuleRoot.ResolveLine(sp.GetService<IConfiguration>()))
                 {
                     // 🚨 MeshWeaver#4963 — reads of the activation record run HERE, never on the
                     // service's cap-1 landing lane, so a bundle-index request no longer waits out
@@ -300,7 +303,7 @@ public static class PluginCatalogConfigurationExtensions
                     sp.GetRequiredService<Mesh.Threading.IoPoolRegistry>(),
                     sp.GetService<ILogger<ModuleLiveActivation>>()))
                 .AddSingleton(sp => new PendingModuleActivations(
-                    ModuleRoot.Resolve(sp.GetService<IConfiguration>()))
+                    ModuleRoot.ResolveLine(sp.GetService<IConfiguration>()))
                 {
                     // 🚨 MeshWeaver#4655 — the pool every reading of the volume is TAKEN on, so no
                     // probe thread ever walks it. Without this line the reader falls back to the
