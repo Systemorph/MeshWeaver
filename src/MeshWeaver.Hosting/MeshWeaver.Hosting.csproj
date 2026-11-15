@@ -36,6 +36,16 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
     <!-- HttpMeshStorageAdapter speaks MCP-HTTP to a remote MeshWeaver portal. -->
     <PackageReference Include="ModelContextProtocol.Core" />
+    <!-- 🚨 DIRECT on purpose: ModelContextProtocol.Core depends on an OLDER
+         Microsoft.Extensions.AI.Abstractions than the central pin, and a central pin is INERT for a
+         transitive package (CentralPackageTransitivePinningEnabled is unset). Without this line the
+         platform closure carried the older assembly version while the line's modules reference the
+         pinned one; .NET binds a reference only to an equal or higher version, so the
+         platform-compatibility ladder correctly refused every deployed AI module
+         (Doc/Architecture/PlatformCompatibilityLadder, measured on the v4 line: modules at 11.0.0.0,
+         platform at 10.11.0.0). This versionless reference lifts the closure to the central pin;
+         remove it only together with that pin. -->
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <PackageReference Include="System.Reactive" />
   </ItemGroup>
   <ItemGroup>
