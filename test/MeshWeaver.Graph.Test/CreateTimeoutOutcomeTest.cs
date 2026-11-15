@@ -36,6 +36,8 @@ public class CreateTimeoutOutcomeTest(ITestOutputHelper output) : MonolithMeshTe
             .AddSingleton(new CreateVerdictClock(clock)));
 
     [Fact]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.CreateVerdict,
+        "the inner create's verdict bound, fired on the virtual CreateVerdictClock, answering 'outcome unknown' is the behaviour under test")]
     public async Task CreateTimeout_DoesNotClaimAnAlreadyPersistedNodeWasNotApplied()
     {
         var path = $"{TestPartition}/held-create-outcome";

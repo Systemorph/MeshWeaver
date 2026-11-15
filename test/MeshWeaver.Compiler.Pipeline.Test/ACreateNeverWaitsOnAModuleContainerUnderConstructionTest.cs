@@ -180,6 +180,8 @@ public sealed class ACreateNeverWaitsOnAModuleContainerUnderConstructionTest : M
     }
 
     [Fact(Timeout = 120_000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.CreatePostCreation,
+        "the post-creation deadline naming the parked module handler is the behaviour under test")]
     public async Task WhileAModuleHandlerIsParked_AnUnrelatedCreate_IsAnsweredNamingTheModulesHandler()
     {
         var ct = TestContext.Current.CancellationToken;
