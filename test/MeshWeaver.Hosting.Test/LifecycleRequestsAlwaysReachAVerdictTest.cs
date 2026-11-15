@@ -10,6 +10,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -59,6 +60,8 @@ public class LifecycleRequestsAlwaysReachAVerdictTest(ITestOutputHelper output) 
             .AddSingleton(new MeshOperationOptions { Timeout = Budget }));
 
     [Fact(Timeout = 60000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.LifecycleStalled,
+        "the create's verdict deadline answering a validator that never answers is the behaviour under test")]
     public async Task ACreateWhoseValidatorNeverAnswers_IsAnsweredUnavailable_NamingTheStage()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -107,6 +110,8 @@ public class LifecycleRequestsAlwaysReachAVerdictTest(ITestOutputHelper output) 
     /// position among the handlers that apply to the node.
     /// </summary>
     [Fact(Timeout = 60000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.CreatePostCreation,
+        "the post-creation deadline answering a handler that never completes is the behaviour under test")]
     public async Task ACreateWhosePostCreationHandlerNeverCompletes_IsAnswered_NamingTheHandler()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -148,6 +153,8 @@ public class LifecycleRequestsAlwaysReachAVerdictTest(ITestOutputHelper output) 
     }
 
     [Fact(Timeout = 60000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.LifecycleStalled,
+        "the copy's and its target create's verdict deadlines answering a stalled validator are the behaviour under test")]
     public async Task ACopyWhoseTargetCreateStalls_IsAnswered_NamingTheTarget()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -170,6 +177,8 @@ public class LifecycleRequestsAlwaysReachAVerdictTest(ITestOutputHelper output) 
     }
 
     [Fact(Timeout = 60000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.LifecycleStalled,
+        "the move's, its copy's and the target create's verdict deadlines answering a stalled validator are the behaviour under test")]
     public async Task AMoveWhoseCopyLegStalls_IsAnsweredUnavailable_AndTheSourceStays()
     {
         var ct = TestContext.Current.CancellationToken;

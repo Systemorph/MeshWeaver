@@ -7,6 +7,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -50,6 +51,8 @@ public class PostCreationVerdictIsSaidOnceTest : MonolithMeshTestBase
             .AddSingleton(new MeshOperationOptions { Timeout = Budget }));
 
     [Fact(Timeout = 90000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.CreatePostCreation,
+        "the post-creation deadline racing the leg that finishes is the behaviour under test")]
     public async Task ALegFinishingWhileTheVerdictIsBeingSaid_CannotAnswerOk_AndTheVerdictNamesTheStep()
     {
         var ct = TestContext.Current.CancellationToken;

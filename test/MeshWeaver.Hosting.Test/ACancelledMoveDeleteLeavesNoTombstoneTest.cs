@@ -63,6 +63,8 @@ public class ACancelledMoveDeleteLeavesNoTombstoneTest(ITestOutputHelper output)
             .ConfigureServices(services => services.AddSingleton(new MeshOperationOptions { Timeout = Budget }));
 
     [Fact(Timeout = 60_000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.LifecycleStalled,
+        "the move's own deadline ending its held delete leg is the behaviour under test")]
     public async Task AMoveWhoseDeleteLegTimesOutHeld_LeavesTheSurvivingSourceReadable()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -109,6 +111,8 @@ public class ACancelledMoveDeleteLeavesNoTombstoneTest(ITestOutputHelper output)
     /// which a disposed batch never delivers.
     /// </summary>
     [Fact(Timeout = 60_000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.LifecycleStalled,
+        "the move's own deadline cancelling its delete leg is the behaviour under test")]
     public async Task ALateDeleteThenARecreate_LeavesTheReplacementReadable()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -162,6 +166,8 @@ public class ACancelledMoveDeleteLeavesNoTombstoneTest(ITestOutputHelper output)
     /// leg's retirement moved behind the probe: the source's hub was never retired).
     /// </summary>
     [Fact(Timeout = 60_000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.LifecycleStalled,
+        "the move's own deadline firing while its existence probe is held is the behaviour under test")]
     public async Task AProbeOutlastingTheDeadline_StillRetiresWhatTheBatchRemoved()
     {
         var ct = TestContext.Current.CancellationToken;
