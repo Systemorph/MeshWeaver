@@ -1490,6 +1490,34 @@ public sealed record InlineEnvOverride
     /// <summary>What retires it — an issue reference, so the entry has an end rather than a history.</summary>
     [Description("What retires it (issue reference)")]
     public string? RetiredBy { get; init; }
+
+    /// <summary>
+    /// The record's DECLARATION that this retired entry is to be removed although its shadowed source
+    /// carries a DIFFERENT value — a deliberate value change, not a de-duplication. Without it, a
+    /// retired entry whose <see cref="AgreesWithShadowed"/> is <c>false</c> refuses the Reconcile by
+    /// name, because removing it changes what the portal reads.
+    ///
+    /// <para>🚨 A declaration on the row, never a flag on an action: the Reconcile reads it from the
+    /// record, and the Hosting plugin acts on it only together with <see cref="RetiredBy"/>, a
+    /// non-blank <see cref="Reason"/>, a recorded <see cref="Value"/>, <see cref="Shadows"/> naming the
+    /// chart's ConfigMap and <see cref="ShadowedValue"/> stating what that ConfigMap carries. A
+    /// credential (<see cref="IsSecret"/>) is never removed this way: the plan shows both values.
+    /// The removal is its own destructive plan step, so it needs an approval, and the operator
+    /// re-measures both values in the cluster before it writes (<c>Doc/Architecture/ChartDriftSemantics</c>
+    /// → "Removing an entry despite a difference").</para>
+    /// </summary>
+    [Description("Remove it although the shadowed source carries a different value")]
+    public bool RemoveDespiteDifference { get; init; }
+
+    /// <summary>
+    /// The value the shadowed source (<see cref="Shadows"/>) carries for this key — what the pod reads
+    /// once the inline entry is gone. DECLARED rather than derived, because the chart renders many
+    /// ConfigMap keys through its own templates, so no record renderer can recompute every one. Required
+    /// by <see cref="RemoveDespiteDifference"/>; the operator refuses when the live source no longer
+    /// carries exactly this value, and reads it back after the removal. Never a credential's value.
+    /// </summary>
+    [Description("The value the shadowed source carries (never a credential)")]
+    public string? ShadowedValue { get; init; }
 }
 
 /// <summary>

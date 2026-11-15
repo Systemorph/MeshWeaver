@@ -242,9 +242,15 @@ def behaviour(doc: dict) -> None:
         code, log, out = run_resolve(resolve["run"], cwd, Path(t))
         check("a caller without global.json keys what the runner resolves",
               code == 0 and out.get("version") == NEWEST, f"exit={code} version={out.get('version')}")
-        (ws / "repo" / "global.json").write_text(json.dumps({"sdk": {"version": "9.0.100"}}), encoding="utf-8")
+        # The rule is EXACTNESS, not a major: the v4 line runs SDK 11 (core #8135), so an exact 11.0.x is
+        # keyed like an exact 10.0.x, and a prerelease (not an exact X.Y.Z) is still refused.
+        (ws / "repo" / "global.json").write_text(json.dumps({"sdk": {"version": "11.0.100"}}), encoding="utf-8")
         code, log, out = run_resolve(resolve["run"], cwd, Path(t))
-        check("a non-10.0 SDK is refused, not keyed", code != 0 and "version" not in out, f"exit={code}")
+        check("an exact SDK of another major (11.0.100) is keyed",
+              code == 0 and out.get("version") == "11.0.100", f"exit={code} version={out.get('version')}")
+        (ws / "repo" / "global.json").write_text(json.dumps({"sdk": {"version": "11.0.100-rc.2.26504.105"}}), encoding="utf-8")
+        code, log, out = run_resolve(resolve["run"], cwd, Path(t))
+        check("a prerelease SDK (not an exact X.Y.Z) is refused, not keyed", code != 0 and "version" not in out, f"exit={code}")
 
 
 def main() -> int:

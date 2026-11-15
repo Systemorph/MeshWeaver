@@ -63,10 +63,17 @@ public class RecycleNodeWaitsForTheInstallHoldingTheRootTest(ITestOutputHelper o
         var recycled = RequestHub.RecycleNode(path).Replay(1);
         using var connection = recycled.Connect();
 
-        await recycled.Should().NotEmit(
-            TestTimeouts.Quick,
+        // 🚨 Bounded by a POSITIVE signal, never a wall-clock window: the registry reports the
+        // recycle PARKED on this root's lease. The DisposeRequest is composed downstream of that
+        // wait, so while the waiter is parked and the lease is held it cannot have been posted —
+        // and a recycle that bypassed the gate never parks, so the signal never arrives and this
+        // fails (or the bypassing recycle answers first and this fails on the emission).
+        await recycled.Should().Within(TestTimeouts.Convergence).NotEmitBefore(
+            leases.WhenDeferredOn(path),
             "an install is writing under this root — recycling it now would strand that install's "
             + "writes, which is #3510's whole measured harm");
+        leases.DeferredOn(path).Should().Be(1,
+            "exactly this recycle is parked on the lease, and nothing has answered it");
 
         lease.Dispose();
 

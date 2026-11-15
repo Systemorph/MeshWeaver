@@ -290,6 +290,50 @@ effect. Disagreeing means somebody is already reading a setting no pod uses.
 > the pod on the inline value — so a plan that reads "add these to the chart and the drift clears"
 > leaves the cluster exactly where it was.
 
+### Removing an entry despite a difference
+
+`Reconcile`'s retirement removes an inline entry only when its value **equals** the ConfigMap twin: a
+retired entry recorded `agreesWithShadowed: false` refuses the whole Reconcile by name, and the
+operator re-measures the equality in the cluster before it writes. That is right for a duplicate and
+wrong for the one case where the difference **is** the change — a legacy value that the record has
+already replaced in the ConfigMap, such as a plugin source still pointing at a repository's old name.
+That case used to end in a break-glass `kubectl set env deploy/… KEY-`.
+
+The record now declares it on the row, and the same Reconcile carries it out:
+
+| field on `inlineEnv[]` | what it says |
+|---|---|
+| `retiredBy` | what ends the entry (an issue reference) — required, as for every retirement |
+| `removeDespiteDifference: true` | the removal is intended although the values differ |
+| `reason` | why — required, non-blank |
+| `value` | the inline value the removal takes off the pod — required |
+| `shadows: memex-portal-config` | the chart's ConfigMap — no other source is accepted |
+| `shadowedValue` | the value that ConfigMap carries, which the pod reads afterwards — required |
+
+What the Hosting plugin and the operator then hold it to:
+
+- **Declared.** Only a row carrying both `retiredBy` and `removeDespiteDifference` is removed this way.
+  An unmarked differing row still refuses the Reconcile, and no key outside the record's `inlineEnv`
+  list can reach the step, because the plan is built from that list alone.
+- **Planned.** The removal is its own **destructive** step, one per row, and its command names the
+  key, the inline value it removes and the ConfigMap value that then applies
+  (`hosting-inline-env-retire … --remove-despite-difference KEY=memex-portal-config --expect-inline <value>
+  --expect-shadow <value>`); the step's name states the `kubectl set env … KEY-` it is equivalent to. A
+  credential row, a value that is not a plain token, or a row whose ConfigMap twin is not stated is
+  refused at plan time, by name.
+- **Dry-runnable and approved.** A `dryRun: true` Reconcile renders the plan and changes nothing; the
+  step is not on the record-change lane's list, so a real run waits for an approval.
+- **Re-measured.** Immediately before the write the operator checks that the pod falls through to the
+  ConfigMap (a Secret, or no source at all, is refused — removing the entry would then drop or hide the
+  value), that the live inline value is exactly `--expect-inline` and that the ConfigMap carries exactly
+  `--expect-shadow`. Any mismatch means the record no longer describes the cluster, and nothing is written.
+- **Read back.** After the rollout, `--verify-reads` confirms that no container carries the entry, that
+  the pod template falls through to the ConfigMap holding the declared value, and that every pod of the
+  settled Deployment was started without the entry, so each one reads the ConfigMap value. Under a
+  rollout handed to the control plane the pods are still rolling at that point; the step then proves the
+  template and the ConfigMap and names the pods still to be replaced, and the closing re-audit records
+  the rest.
+
 ## The probes are inert, and the chart is authoritative
 
 `DIFFERS livenessProbe` / `readinessProbe` on the control instance — live carries `initialDelaySeconds` 60 and

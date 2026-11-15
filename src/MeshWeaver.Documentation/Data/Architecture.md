@@ -479,6 +479,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [Writing Tests](WritingTests)
 - [Negative Controls](NegativeControls) — a pin is only a pin if it fails against the defect
+- [Timeout == Error](TimeoutIsError) — a product timeout terminal that fires during a test fails it unless the test declares the timeout as its subject; the guard is armed on every core test assembly
 - [Fault-Injection Harness](FaultInjectionHarness) — deterministic, releasable faults (silo kill / drain / linger, flush hold, NotFound window, change-feed and first-frame holds, webhook loss) and one isolated regression per production incident, each with its negative control
 - [Reactive Test Assertions](ReactiveTestAssertions)
 - [Test State Isolation](TestStateIsolation)
@@ -551,7 +552,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [A Set That Contradicts Itself](SelfContradictingSet) — two CD runs of one pair left a 9985 tester and floor next to a 9984 portal; the gates that keep a set's halves on one build
 - [Release Availability Gates](ReleaseGates) — one predicate for package availability; on a platform roll its refusals are advisories (the platform rolls independently of packages), never a hold
 - [Deploying Across Platform Versions](DeployingAcrossPlatformVersions) — the ladder: platform and plugins roll separately; a seal gates a roll only behind a declared break
-- [Adopting .NET 11](AdoptingDotNet11) — what .NET 11 / C# 15 offers the v4 line, checked against the official pages: where unions, Runtime Async, zstd, circuit pause and native OpenTelemetry apply here, what our policies forbid, the verification each needs, the order, and every .NET 11 breaking change that touches our code
+- [Adopting .NET 11](AdoptingDotNet11) — what .NET 11 / C# 15 offers the v4 line, checked against the official pages: where unions, Runtime Async, zstd, circuit pause and native OpenTelemetry apply here, what our policies forbid, the verification each needs, the order, and every .NET 11 breaking change that touches our code; plus what was measured on v4 before adopting anything (the thread-pool census fix, the runtime compiler still on C# 14, ZIP CRC32 refusals, net10 vs net11 hot-path benchmarks, and the Runtime Async decision)
 - [Adding a Data Sync Needs a Global Admin](DataSyncApproval) — a sync is a standing grant, not a one-off action: it keeps moving data indefinitely under an identity nobody re-examines, so the review at creation is the only one there will be. The trigger list, what is explicitly NOT covered, why a credential request instead of a proposal is the anti-pattern, and the one finding that blocks rather than being filed
 - [Policy Not Prose](PolicyNotProse) — never hard-code a decision's date or author into source, a comment, an XML doc comment or doc prose; a policy is a record with a value and an in-force date and everything else cites its id. The register, what counts as evidence rather than a policy marker (and so stays), the review finding, and why it is forward-only with no backward migration
 - [Issue Taxonomy and the Release Readiness Gate](IssueTaxonomy) — four axes on every issue, and the one that is a gate: `sev:B` and `sev:H` must both be zero to cut a release; why only bugs carry a severity, why a zero is only trustworthy when its query's coverage is, and why the ledger stays in GitHub rather than being mirrored
@@ -588,6 +589,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Review Findings Answered](ReviewFindingsAnswered) — a pull request reads red until the automatic review has landed and each thread it opened has a person's reply; the reviewer's two logins, the quota refusal posted as a review, and the maintainer-only waiver
 - [Staged Pull Request Pipeline](StagedPullRequestPipeline) — the expensive suites on a fresh merge with the current main beside the review, then arming only when the review is answered and every required check is green (policy `suites-parallel-with-review`): event-driven advance, three loud releases, and the measurements
 - [Fresh Merge Under Test](FreshMergeUnderTest) — every suite job tests the head merged onto the base's CURRENT tip, computed in the job and reported, never the push-time `refs/pull/N/merge` (policy `suites-test-fresh-merge`)
+- [Core Test Selection](CoreTestSelection) — which .NET test projects a core pull request owes: the ProjectReference closure, and for `.github/**` a split derived from the tree (lane-consumed → all, read by a test → that test, otherwise none — the shell jobs cover it); unknown fails safe
 - [Carving Projects Out Of Core](CarvingProjectsOutOfCore) — what a SOURCE move costs and what it does not
 - [Core Carries No GUI Technology](CoreCarriesNoGuiTechnology) — no Blazor, Razor, FluentUI, Radzen, Monaco wrapper or browser automation in the platform repository; the GUI pins and Playwright suites live in MeshWeaver.Plugins, and the proposal for the build tooling that still names a GUI
 - [Red-Log Watching & Ticketing](LogWatchTriage) — every `fail:`/`crit:` becomes exactly one triaged issue
@@ -633,6 +635,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Operating from the portal, not the cluster](OperatingFromThePortal)
 - [Operator Credentials Travel by Name](/Hosting/OperatorCredentialsByName) — the operator's only environment is a ConfigMap, so a step is handed a Key Vault object's NAME and reads the value with the identity it already runs as; why every database action failed at step 1 (Memex#132), why the CSI class built for it was consumed by nobody, and the one contract the Postgres steps now share with hosting-kv-ensure on both executors
 - [The Payment Provider Contract](PaymentProviderContract)
+- [Portal-AI Base Image](PortalAiBaseImage) — the base under every portal-ai and control image is named by its content and built by CD when absent, so a TFM move can never leave a .NET 11 host on a .NET 10 runtime (the first v4 control image did)
 - [Secrets: Write-Only Entry, Split Identities](SecretsWriteOnlyEntry) — nobody touches Key Vault by hand: a write-only GUI per owning app, ONE governed writer identity that can list/set/delete but never read a value, a reader identity (the pods) that can only `get`, the write-time fingerprint tag, and the CI guard against new hand-run vault commands
 - [Pre-Boot Service Substitution](PreBootServiceSubstitution)
 - [Project Templates](ProjectTemplates)

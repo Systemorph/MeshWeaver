@@ -114,6 +114,8 @@ public static class UserActivityLayoutAreas
             .WithView(CatalogArea, CatalogAreaView)
             .WithView(ComposerArea, ComposerAreaView)
             .WithView(HomeCardsArea, HomeCardsAreaView)
+            // The getting-started guide below the message box (policy home-getting-started-guide).
+            .WithView(HomeGettingStarted.AreaName, HomeGettingStarted.View)
             // The type sections below the Apps band, and the owner's page to arrange them
             // (policy home-is-composer-apps-types).
             .WithView(HomeTypeSections.AreaName, HomeTypeSections.SectionsView)
@@ -302,7 +304,9 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// The default home page shown until the owner authors their own <see cref="User.Body"/> — and
     /// nothing else: a heading welcoming the owner by first name, the message box (start a thread right
-    /// away), then the <b>Apps</b> grid, then the <b>type sections</b> (policy <c>home-is-composer-apps-types</c>).
+    /// away), the <b>Getting started</b> guide until the owner hides it (<see cref="HomeGettingStarted"/>,
+    /// policy <c>home-getting-started-guide</c>), then the <b>Apps</b> grid, then the <b>type sections</b>
+    /// (policy <c>home-is-composer-apps-types</c>).
     /// No contributed cards, no content list, no footer note. The regions that are no longer on it
     /// (<c>area/HomeCards</c>, <c>area/Threads</c>) stay registered, so an authored body embedding them
     /// keeps working. This is the single source of truth for "the default", shared by the render path
@@ -316,6 +320,8 @@ public static class UserActivityLayoutAreas
         # {{LocalizationCatalog.Get("home.welcomeBack", locale, EscapeMarkdownText(FirstName(ownerName)))}}
 
         @@("area/Composer")
+
+        @@("area/GettingStarted")
 
         @@("area/Catalog")
         """;

@@ -121,17 +121,26 @@ public class CrossGenerationManifestExchangeTest(ITestOutputHelper output)
                 .Should().Within(TestTimeouts.CrossSilo)
                 .Emit("the previous generation receives — and cannot decode — the direct manifest request", ct);
 
-            // The rejection is logged BEFORE the error response is sent, so a single read here would
-            // be false by construction (it is false from startup). Re-read over the SAME bound the
-            // clean case waits for the opposite answer: only silence across that whole window shows
-            // the clean case's wait would really fail, rather than a later refresh or fallback
-            // publishing the manifest after a premature sample.
-            await Observable.Interval(TimeSpan.FromMilliseconds(100))
-                .StartWith(0L)
-                .Where(_ => cluster.CurrentKnowsPrevious())
-                .Should().NotEmit(TestTimeouts.CrossSilo,
-                    "with no protocol in common the current generation cannot learn the previous one's hosted types — "
-                    + "the failure the clean case would report if Orleans ever dropped the legacy path", ct);
+            // Completion anchor: the rejection above is logged BEFORE the error response is sent, so it
+            // proves only that the request ARRIVED. What proves the current generation's refresh round
+            // has FINISHED is that round's own verdict: ClusterManifestProvider.UpdateManifest awaits
+            // every direct fetch, logs "Error retrieving silo manifest for silo {SiloAddress}" for each
+            // one that failed, and publishes only when some fetch SUCCEEDED. With content-addressed
+            // retrieval off (the production setting) the direct fetch is the round's only path — no
+            // hash cache, no peer repair — and the previous silo is the only missing member, so once
+            // that warning names it the round has concluded with nothing to publish. Every later round
+            // (Orleans retries on its own interval) takes the same path and meets the same undecodable
+            // alias, so one read after the verdict answers what the clean case's wait would answer —
+            // without sitting out a real-time window (this was a full CrossSilo NotEmit: 216 s on CI).
+            var previousAddress = cluster.PreviousAddress.ToString();
+            await cluster.ManifestFetchFailuresOnCurrent
+                .Where(line => line.Contains(previousAddress, StringComparison.Ordinal))
+                .Should().Within(TestTimeouts.CrossSilo)
+                .Emit("the current generation's manifest refresh round concludes with a failed fetch from the previous generation", ct);
+
+            cluster.CurrentKnowsPrevious().Should().BeFalse(
+                "with no protocol in common the current generation cannot learn the previous one's hosted types — "
+                + "the failure the clean case would report if Orleans ever dropped the legacy path");
         }
         finally
         {
@@ -152,11 +161,18 @@ public class CrossGenerationManifestExchangeTest(ITestOutputHelper output)
     /// </summary>
     private sealed class GenerationSkewCluster : IDisposable
     {
-        private readonly RejectionCapture capture = new();
+        private readonly LogCapture capture = new("Orleans.Runtime.Messaging.Connection", LogLevel.Error);
+        private readonly LogCapture manifestFetchFailures = new("Orleans.Runtime.Metadata.ClusterManifestProvider", LogLevel.Warning);
         private OrleansTestClusterHost host = null!;
 
         public IReadOnlyCollection<string> RejectedOnPrevious => capture.Lines;
         public IObservable<string> RejectionsOnPrevious => capture.Stream;
+
+        /// <summary>The current generation's <c>ClusterManifestProvider</c> warnings — logged at the end of a
+        /// refresh round for each silo whose manifest it failed to fetch.</summary>
+        public IObservable<string> ManifestFetchFailuresOnCurrent => manifestFetchFailures.Stream;
+
+        public SiloAddress PreviousAddress => AddressOf(Services(current: false));
 
         public static async Task<GenerationSkewCluster> Deploy(Skew skew, ITestOutputHelper output)
         {
@@ -174,6 +190,7 @@ public class CrossGenerationManifestExchangeTest(ITestOutputHelper output)
                             {
                                 if (siloName == PrimarySiloName)
                                 {
+                                    services.AddSingleton<ILoggerProvider>(cluster.manifestFetchFailures);
                                     if (skew.ForceOrleansDefaultOnCurrent)
                                         services.PostConfigure<ClusterManifestOptions>(o => o.EnableContentAddressedRetrieval = true);
                                     return;
@@ -267,10 +284,12 @@ public class CrossGenerationManifestExchangeTest(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// Captures <c>Orleans.Runtime.Messaging.Connection</c> errors on the previous-generation silo — the
-    /// incident's log site. An instance owned by its cluster, never static.
+    /// Captures one log category at or above a level on the silo it is registered with — the
+    /// <c>Orleans.Runtime.Messaging.Connection</c> errors on the previous generation (the incident's log
+    /// site) and the <c>ClusterManifestProvider</c> fetch-failure warnings on the current one. An instance
+    /// owned by its cluster, never static.
     /// </summary>
-    private sealed class RejectionCapture : ILoggerProvider
+    private sealed class LogCapture(string category, LogLevel minimum) : ILoggerProvider
     {
         private readonly ConcurrentQueue<string> lines = new();
         private readonly System.Reactive.Subjects.ReplaySubject<string> stream = new();
@@ -279,7 +298,7 @@ public class CrossGenerationManifestExchangeTest(ITestOutputHelper output)
         public IObservable<string> Stream => stream.AsObservable();
 
         public ILogger CreateLogger(string categoryName) =>
-            categoryName == "Orleans.Runtime.Messaging.Connection" ? new Logger(this) : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+            categoryName == category ? new Logger(this, minimum) : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
 
         public void Dispose() { }
 
@@ -289,14 +308,14 @@ public class CrossGenerationManifestExchangeTest(ITestOutputHelper output)
             stream.OnNext(line);
         }
 
-        private sealed class Logger(RejectionCapture owner) : ILogger
+        private sealed class Logger(LogCapture owner, LogLevel minimum) : ILogger
         {
             public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= minimum;
 
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
             {
-                if (logLevel >= LogLevel.Error)
+                if (logLevel >= minimum)
                     owner.Add($"{formatter(state, exception)} | {exception?.GetType().Name}: {exception?.Message}");
             }
         }

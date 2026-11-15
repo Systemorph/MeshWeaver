@@ -4,6 +4,13 @@ name: Rebuild portal-ai base image (ACR, multi-arch)
 #
 #   memex-portal-ai-base = aspnet + node26 + @anthropic-ai/claude-code + @github/copilot
 #
+# 🚨 SINCE the v4 boot crash (CD run 43592014876) main-cd does NOT layer on `:latest` any more: its
+# `portal-ai-base` job resolves the base by CONTENT TAG (`src-<hash of deploy/base-images/portal-ai>`,
+# .github/scripts/portal-ai-base.py) and builds it when absent, so a Dockerfile change needs no hand
+# dispatch. This runbook remains for refreshing the bundled CLIs (it rewrites the content tag too) and
+# for `:latest`, which consumers outside this repository may still read. The paragraphs below
+# describe the pre-content-tag arrangement.
+#
 # Why a dedicated workflow_dispatch (and NOT part of main-cd): the base changes rarely (it is the
 # slow apt + npm layer), so main-cd does NOT rebuild it per merge — main-cd layers the published
 # portal app ON TOP of whatever `memex-portal-ai-base:latest` already sits in ACR. That tag MUST be
@@ -67,10 +74,17 @@ jobs:
       - name: Build + push portal-ai base image (multi-arch) to ACR
         run: |
           set -euo pipefail
+          # The same coherence gate the CD path runs before it builds: the Dockerfile's runtime equals
+          # the platform's TargetFramework, and no workflow names the base by a stray literal tag.
+          python3 .github/scripts/portal-ai-base.py check
+          # Its own assignment, so a failing tag computation FAILS the step under `set -e` — inside
+          # `-t "$BASE:$(…)"` a failed substitution would not, and the build would push an empty tag.
+          CONTENT_TAG="$(python3 .github/scripts/portal-ai-base.py tag)"
+          [ -n "$CONTENT_TAG" ] || { echo "::error::portal-ai-base.py tag printed nothing — refusing to build without the content tag"; exit 1; }
           BASE="$ACR/memex-portal-ai-base"
           SHORT_SHA="$(git rev-parse --short HEAD)"
           docker buildx build --platform linux/amd64,linux/arm64 \
-            -t "$BASE:latest" -t "$BASE:git-$SHORT_SHA" \
+            -t "$BASE:latest" -t "$BASE:git-$SHORT_SHA" -t "$BASE:$CONTENT_TAG" \
             --push deploy/base-images/portal-ai
 
       - name: Verify multi-arch manifest list in ACR

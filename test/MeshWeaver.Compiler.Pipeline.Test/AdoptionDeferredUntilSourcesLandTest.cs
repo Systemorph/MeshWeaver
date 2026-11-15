@@ -149,18 +149,30 @@ public class AdoptionDeferredUntilSourcesLandTest(ITestOutputHelper output) : Mo
 
         // …and nothing re-drives it while the sources are still missing: a standing request must
         // not become a poll.
-        await Mesh.GetMeshNodeStream(TypePath)
+        // 🚨 Ended by a POSITIVE signal, not a window (#6817): the sources' arrival re-judges the
+        // standing request, and the owner writes that verdict AFTER anything the deferred judgement
+        // above could have written, because one owner serialises every write to this record. So no
+        // compile and no refusal may appear before the verified verdict. The settled predicate names
+        // the verified state in full, so it can never be satisfied by an emission this forbids. A fixed
+        // NotEmit(Quick) spent 36 s of CI here.
+        var nothingRetriedOrParked = Mesh.GetMeshNodeStream(TypePath)
             .Where(n => n?.Content is NodeTypeDefinition d
                         && (d.CompilationStatus is CompilationStatus.Pending
                                                  or CompilationStatus.Compiling
                             || d.BuildProvenance == BuildProvenance.AdoptionRefused))
-            .Should()
-            .NotEmit(TestTimeouts.Quick,
+            .Should().Within(TestTimeouts.CrossSilo)
+            .NotEmitBefore(
+                Mesh.GetMeshNodeStream(TypePath).Where(n => n?.Content is NodeTypeDefinition d
+                    && d.RequestedSourceStampAt is null
+                    && d.BuildProvenance == BuildProvenance.AdoptedVerified
+                    && d.CompilationStatus == CompilationStatus.Ok),
                 "the wait is REACTIVE — the type sits on the adopted build until the sources "
-                + "arrive; nothing retries, nothing polls, nothing parks");
+                + "arrive; nothing retries, nothing polls, nothing parks",
+                TestContext.Current.CancellationToken);
 
         // ── 4. The sources land. The STANDING request converges, with nothing driven by hand. ─
         await MeshService.CreateNode(SourceNode()).Should().Within(TestTimeouts.Convergence).Emit();
+        await nothingRetriedOrParked;
 
         var judged = await Mesh.GetMeshNodeStream(TypePath).Should().Within(TestTimeouts.CrossSilo)
             .Match(n => n?.Content is NodeTypeDefinition d

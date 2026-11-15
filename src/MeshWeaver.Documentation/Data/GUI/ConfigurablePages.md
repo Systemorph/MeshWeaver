@@ -17,7 +17,7 @@ page *is* the layout, and it can embed any live region with the `@@` operator.
 ## Default vs. your own
 
 By default `Body` is empty, so the page shows the **default template** — on the home page that is the
-message box, then your Apps, then your Spaces (`@@("area/Composer")` and `@@("area/Catalog")`). The moment you write anything into `Body`, your markdown replaces the template
+message box, the Getting started guide (until you hide it), then your Apps, then your Spaces (`@@("area/Composer")`, `@@("area/GettingStarted")` and `@@("area/Catalog")`). The moment you write anything into `Body`, your markdown replaces the template
 **verbatim**. Two ways to author it:
 
 - **Ask the assistant.** Use the chat on your home page: *"put my open threads at the top and drop

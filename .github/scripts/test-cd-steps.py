@@ -1863,6 +1863,23 @@ def separation_problems(workflow_text: str) -> list[str]:
         sparse = str((checkout.get("with") or {}).get("sparse-checkout", ""))
         if sparse and ".github/control-instance.json" not in sparse:
             problems.append("`arm`'s sparse checkout omits `.github/control-instance.json` — `select` cannot name control and refuses every arming")
+        # MeshWeaver#8279: `select` tells a line HELD by control's declared updatePattern from a frozen
+        # control only with control's record; without it every run refuses (and, before, a held v4
+        # line read as FROZEN and turned CD red every hour).
+        arm_runs = [str(s.get("run", "")) for s in arm.get("steps") or []]
+        select_run = next((r for r in arm_runs if "arm-promoted-set.py select" in r), "")
+        if "--control-record" not in select_run:
+            problems.append("`arm` runs `select` without --control-record — a line held by control's declared updatePattern would read as a frozen control")
+        if not any("control-record.json" in r and "gh api" in r for r in arm_runs):
+            problems.append("`arm` never reads control's record into control-record.json — `select --control-record` has nothing to read")
+    # `arm-promoted-set.py` (its self-test AND its line lookup) reads `.github/delivery-lines.json`;
+    # a sparse checkout without it refused every CD run on main3 (13233..13266) before arming.
+    for job_name in ("arm", "control-first"):
+        job = jobs.get(job_name) or {}
+        checkout = next((s for s in job.get("steps") or [] if str(s.get("uses", "")).startswith("actions/checkout")), {})
+        sparse = str((checkout.get("with") or {}).get("sparse-checkout", ""))
+        if sparse and ".github/delivery-lines.json" not in sparse:
+            problems.append(f"`{job_name}`'s sparse checkout omits `.github/delivery-lines.json` — arm-promoted-set.py cannot read the delivery lines and refuses")
     cf = jobs.get("control-first")
     if cf is None:
         problems.append("`control-first` is missing — control is no longer deployed first")
@@ -1887,6 +1904,16 @@ def separation_problems(workflow_text: str) -> list[str]:
                      and "secrets.CONTROL_WEBHOOK_SECRET" in json.dumps(st.get("env") or {}) for st in hand):
             problems.append("`control-first`'s handover is not signed to the control plane's inbox "
                             "(vars.CONTROL_WEBHOOK_URL + secrets.CONTROL_WEBHOOK_SECRET)")
+        # 8. ...but ONLY a build of control's own major (policy `major-lines-run-separately`): the v4
+        #    line announced 4.0.13212 to a control on 3.* and the approved roll stuck it (2026-11-14).
+        #    A `control-line` step decides, and the handover is conditioned on its verdict.
+        if not any("arm-promoted-set.py control-line" in str(st.get("run", "")) and st.get("id") == "control_line"
+                   for st in steps):
+            problems.append("`control-first` has no `control_line` step running `arm-promoted-set.py control-line` — "
+                            "every line would announce its build to control whatever major control runs")
+        if hand and not all("steps.control_line.outputs.line_announce == 'true'" in str(st.get("if", "")) for st in hand):
+            problems.append("`control-first`'s handover is not conditioned on `steps.control_line.outputs.line_announce == 'true'` "
+                            "— a build of another major would be announced to control")
     for name in ("published-modules", "platform-ladder-compat"):
         job = jobs.get(name)
         if job is None:
@@ -2189,15 +2216,38 @@ def main() -> int:
          "the mutation passed (or could not apply) with an arm that no longer waits for the ladder")
     no_decl = workflow_text.replace(
         "          sparse-checkout: |\n            .github/scripts\n            .github/control-instance.json\n"
+        "            .github/delivery-lines.json\n"
         "          sparse-checkout-cone-mode: false\n      - name: \"The selection can say no (self-test)\"",
-        "          sparse-checkout: .github/scripts\n      - name: \"The selection can say no (self-test)\"", 1)
+        "          sparse-checkout: |\n            .github/scripts\n            .github/delivery-lines.json\n"
+        "          sparse-checkout-cone-mode: false\n      - name: \"The selection can say no (self-test)\"", 1)
     case("...and the guard catches the arm checking out no control declaration",
          no_decl != workflow_text and any("control-instance.json" in p for p in separation_problems(no_decl)),
          "the mutation passed (or could not apply) with an arm that cannot read which instance is control")
+    for step_name, job_name in (("The selection can say no (self-test)", "arm"), ("The decision can say no (self-test)", "control-first")):
+        no_lines = workflow_text.replace(
+            "            .github/control-instance.json\n            .github/delivery-lines.json\n"
+            f"          sparse-checkout-cone-mode: false\n      - name: \"{step_name}\"",
+            "            .github/control-instance.json\n"
+            f"          sparse-checkout-cone-mode: false\n      - name: \"{step_name}\"", 1)
+        case(f"...and the guard catches `{job_name}` checking out no delivery lines",
+             no_lines != workflow_text and any(f"`{job_name}`'s sparse checkout omits `.github/delivery-lines.json`" in p for p in separation_problems(no_lines)),
+             f"the mutation passed (or could not apply) with a `{job_name}` whose self-test cannot read delivery-lines.json")
+    no_record = workflow_text.replace('            --control-record "$RUNNER_TEMP/control-record.json" \\\n', "", 1)
+    case("...and the guard catches an arm whose `select` reads no control record (MeshWeaver#8279)",
+         no_record != workflow_text and any("without --control-record" in p for p in separation_problems(no_record)),
+         "the mutation passed (or could not apply) with a `select` that cannot tell a declared hold from a frozen control")
     alarm = (root / ".github/workflows/control-always-latest.yml").read_text()
+    alarm_checkout = alarm.split("\n  platform:", 1)[-1].split("steps:", 1)[-1].split("- name:", 1)[0]
     case("the control-always-latest alarm checks out the control declaration it reads",
-         ".github/control-instance.json" in alarm.split("steps:", 1)[1].split("- name:", 1)[0],
+         ".github/control-instance.json" in alarm_checkout,
          "control-always-latest.yml's checkout omits .github/control-instance.json — every tick would refuse")
+    # MeshWeaver#8197: control-lag derives control's LINE from its record and the declared lines.
+    case("the control-always-latest alarm checks out the declared delivery lines it derives control's line from",
+         ".github/delivery-lines.json" in alarm_checkout,
+         "control-always-latest.yml's checkout omits .github/delivery-lines.json — control-lag would refuse")
+    case("the control-always-latest alarm reads control per LINE (--control-record), never `main` by default",
+         re.search(r"arm-promoted-set\.py control-lag[^\n]*--control-record", alarm) is not None,
+         "control-always-latest.yml runs control-lag without --control-record")
     # 🚨 The one-producer gate in `portal-image` READS the published module set out of this workflow
     # (check-platform-reference-set.sh). #6143 removed the job it read and CD published nothing for
     # ~30 runs — so the reader is executed here against the real workflow, and against a mutation.
@@ -2233,6 +2283,16 @@ def main() -> int:
     case("...and the guard catches control-first TAGGING control without handing it the build (the 2026-10-06 outage)",
          undelivered != workflow_text and any("never hands the build" in p for p in separation_problems(undelivered)),
          "the mutation passed (or could not apply) with no handover step in control-first")
+    cross_line = workflow_text.replace(
+        "if: steps.control_tags.outputs.announce == 'true' && steps.control_line.outputs.line_announce == 'true'",
+        "if: steps.control_tags.outputs.announce == 'true'", 1)
+    case("...and the guard catches a handover NOT conditioned on control's line (the 2026-11-14 v4-to-v3 announcement)",
+         cross_line != workflow_text and any("line_announce" in p for p in separation_problems(cross_line)),
+         "the mutation passed (or could not apply) with an unconditioned handover")
+    no_line_step = workflow_text.replace("arm-promoted-set.py control-line", "arm-promoted-set.py control-REMOVED", 1)
+    case("...and the guard catches control-first with no control_line decision at all",
+         no_line_step != workflow_text and any("no `control_line` step" in p for p in separation_problems(no_line_step)),
+         "the mutation passed (or could not apply) with no control-line step")
     case("...and the shipped control-first hands the build over (no handover problem on main-cd.yml)",
          not any("hands the build" in p or "handover" in p for p in separation_problems(workflow_text)),
          str(separation_problems(workflow_text)))

@@ -140,4 +140,26 @@ public record User : AccessObject
     /// Edits go to this one field (the assistant writes here too) — there is no per-segment override.
     /// </summary>
     public string? Body { get; init; }
+
+    /// <summary>
+    /// Whether the owner hid the <b>Getting started</b> guide on their default home page
+    /// (<c>@@("area/GettingStarted")</c>). A preference of the VIEWER about their OWN home, stored
+    /// here beside <see cref="PresentationMode"/> for the same reason: it must survive navigation,
+    /// a reconnect and a second device, and browser storage is never the source of truth for it.
+    /// Written only by the guide's Hide button through <c>GetMeshNodeStream(userPath).Update</c>.
+    /// Default <c>false</c> — everyone sees the guide until they hide it. It has no effect on a home
+    /// whose owner authored their own <see cref="Body"/>: that page shows only what it embeds.
+    /// See <c>Doc/Architecture/AppsHome</c> → "Getting started".
+    /// </summary>
+    public bool HideGettingStarted { get; init; }
+
+    /// <summary>
+    /// The path of the newest release-notes page (<c>Doc/ReleaseNotes/&lt;version&gt;</c>) this user
+    /// has opened from the header's ✨ What's New entry — the "last seen release". The header shows a
+    /// dot while the newest release-notes page differs from this value, and opening it writes the
+    /// newest path here through <c>GetMeshNodeStream(userPath).Update</c>. Null (the default) means
+    /// the user has opened none, so the dot shows for the newest release. Per user, durable, never
+    /// browser storage. See <c>Doc/GUI/WhatsNewHeader</c>.
+    /// </summary>
+    public string? LastSeenReleaseNotes { get; init; }
 }

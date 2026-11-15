@@ -87,6 +87,15 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
         run: az acr login --name meshweaver
+      # The base THIS tree describes, by content tag (built if absent) — never a moving base tag:
+      # `:latest` once carried an aspnet:10.0 runtime under a net11.0 host (main-cd's portal-ai-base job).
+      - name: Set up QEMU (arm64 emulation for the base's RUN steps)
+        uses: docker/setup-qemu-action@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Ensure the portal-ai base this tree describes
+        id: base
+        run: bash .github/scripts/ensure-portal-ai-base.sh --registry "${{ env.ACR }}" --acr-name meshweaver
       - name: Restore workloads
         run: dotnet workload restore
       # Multi-arch publish (identical to the green `images` job), but: Version is BAKED to the edge
@@ -111,7 +120,7 @@ jobs:
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-portal-ai
           -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3Bedge"
-          -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
+          -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:${{ steps.base.outputs.tag }}
           -p:PortalNextBundle="$RUNNER_TEMP/portal-next.zip"
       # 🚂 The bundle must BE in the published bytes of every architecture (main-cd asserts the same
       # before `promote`). MSBuild ignores a property nothing consumes, so a renamed or dropped

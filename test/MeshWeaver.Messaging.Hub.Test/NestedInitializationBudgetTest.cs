@@ -1,6 +1,7 @@
 using System;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -56,20 +57,50 @@ public class NestedInitializationBudgetTest(ITestOutputHelper output) : HubTestB
     /// that wait on their <c>sync/</c> sub-hubs — with the data layer removed so the test measures
     /// the BOUNDS and nothing else.
     /// </summary>
-    private static IObservable<Unit> WaitsForTheHostedChild(IMessageHub hub) =>
+    private IObservable<Unit> WaitsForTheHostedChild(IMessageHub hub) =>
         Observable.Defer(() =>
         {
-            var child = hub.GetHostedHub(ChildAddress, c => c.WithInitialization(HangsForever));
+            var child = hub.GetHostedHub(ChildAddress,
+                c => c.WithInitialization(HangsForever).WithTimeoutClock(clock));
+            childCreated.OnNext(child);
             return child.RunLevelChanged
                 .Where(level => level >= MessageHubRunLevel.Started)
                 .Take(1)
                 .Select(_ => Unit.Default);
         });
 
+    /// <summary>
+    /// The clock the host's and the child's initialization bounds run on
+    /// (<see cref="MessageHubConfiguration.WithTimeoutClock"/>). VIRTUAL: the child's bound is
+    /// expired by advancing it once the child exists and its bound is armed, instead of the test
+    /// sitting the bound out in real time (21 s per test on CI). Every bound of BOTH hubs is on it,
+    /// so the ladder's ORDER still decides which one fires: advancing by the child's bound fires the
+    /// host's too whenever the host's is not strictly larger, which is the regression.
+    /// </summary>
+    private readonly ManualTimeProvider clock = new();
+
+    /// <summary>The hosted child, once the host's BuildupAction has created it.</summary>
+    private readonly System.Reactive.Subjects.ReplaySubject<IMessageHub> childCreated = new(1);
+
+    /// <summary>
+    /// Expires the child's BuildupAction bound — the hang under test reaching its deadline — and
+    /// nothing else: every bound strictly larger than it stays armed.
+    /// </summary>
+    private async Task ExpireTheChildsInitializationBound()
+    {
+        var child = await childCreated.Should().Within(TestTimeouts.Convergence)
+            .Emit("the host's BuildupAction creates the child it waits on");
+        var bound = child.Configuration.NestedInitializationBudget;
+        await clock.WhenArmed(bound).Should().Within(TestTimeouts.Convergence)
+            .Emit("the child's BuildupAction bound must be armed before it is expired");
+        clock.Advance(bound);
+    }
+
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => configuration
             .WithStartupTimeout(HostBudget)
+            .WithTimeoutClock(clock)
             .WithTypes(typeof(ProbeRequest), typeof(ProbeResponse))
             .WithHandler<ProbeRequest>((hub, request) =>
             {
@@ -117,6 +148,7 @@ public class NestedInitializationBudgetTest(ITestOutputHelper output) : HubTestB
             + "collapsed onto the rung enclosing it");
 
         var host = GetHost();
+        await ExpireTheChildsInitializationBound();
         // Settle the host first: the hosted hub is created BY the host's BuildupAction, so reading
         // the registry before the host answers reads it before there is anything to read — which is
         // a fact about the clock, not about the ladder.
@@ -168,6 +200,7 @@ public class NestedInitializationBudgetTest(ITestOutputHelper output) : HubTestB
     {
         var host = GetHost();
         var client = GetClient();
+        await ExpireTheChildsInitializationBound();
 
         // The host ANSWERS — which is only possible if its own bound never fired, i.e. the level
         // below gave up first and let the host's wait complete. A positive signal, not a silence.
