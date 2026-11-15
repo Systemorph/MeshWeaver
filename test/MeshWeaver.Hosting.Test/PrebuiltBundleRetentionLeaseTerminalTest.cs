@@ -456,7 +456,8 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
 
         outcome.Values.Should().ContainSingle().Which.Held.Should().BeTrue(
             "the owner committed this claim — the replica that took the lease holds it and sweeps");
-        outcome.Values[0].Lease!.HolderReplica.Should().Be("silo-1");
+        outcome.Values[0].Lease.Should().BeOfType<PrebuiltBundleRetentionLeaseState>()
+            .Which.HolderReplica.Should().Be("silo-1");
         outcome.Completed.Should().BeTrue();
         stampsBeforeTheEcho.Should().Be(0, "a lease one generation older than the take is a snapshot from before it — no verdict");
         stamps.Should().Be(1);
@@ -479,7 +480,8 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
 
         stamps.Should().Be(1, "a lease of the take's own generation is not a snapshot from before it");
         outcome.Values.Should().ContainSingle().Which.Held.Should().BeFalse("another pass holds the lease");
-        outcome.Values[0].Lease!.Holder.Should().Be(4);
+        outcome.Values[0].Lease.Should().BeOfType<PrebuiltBundleRetentionLeaseState>()
+            .Which.Holder.Should().Be(4);
     }
 
     /// <summary>NEGATIVE CONTROL: a NEWER generation (another replica took after a loss) decides at once, and is not held.</summary>
@@ -494,7 +496,8 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
             mirror, () => StampScenario.FoldOnMirror(mirror, () => { }), StampScenario.Claim, StampScenario.Taken.Generation));
 
         outcome.Values.Should().ContainSingle().Which.Held.Should().BeFalse();
-        outcome.Values[0].Lease!.Generation.Should().Be(StampScenario.Taken.Generation + 1);
+        outcome.Values[0].Lease.Should().BeOfType<PrebuiltBundleRetentionLeaseState>()
+            .Which.Generation.Should().Be(StampScenario.Taken.Generation + 1);
     }
 
     /// <summary>An unreadable lease is decided at once and never held: nobody sweeps on a lease it cannot read.</summary>
