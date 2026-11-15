@@ -128,6 +128,39 @@ public class ThreadPoolStallTest
         ThreadPoolStall.Describe(Stalled(), [Stack(busy)], null).Should().Contain("every worker was busy");
     }
 
+    /// <summary>
+    /// The capture prints the pool's native wait as its runtime frames (<c>InlinedCallFrame</c>), never as the
+    /// P/Invoke ClrMD attaches only to JIT-compiled code (core #8324) — so an idle worker's stack starts with
+    /// them. It is still idle. Control: runtime frames on top of a busy worker do not make it idle.
+    /// </summary>
+    [Fact]
+    public void AnIdleWorkerUnderRuntimeTransitionFrames_IsStillCountedIdle()
+    {
+        string[] idle =
+        [
+            "InlinedCallFrame",
+            "InlinedCallFrame",
+            "System.Threading.LowLevelLifoSemaphore.WaitNative(Microsoft.Win32.SafeHandles.SafeWaitHandle, Int32)",
+            "System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32)",
+            "System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()",
+        ];
+        string[] busyInNative =
+        [
+            "InlinedCallFrame",
+            "Some.Handler.ReadsASocket()",
+            "System.Threading.ThreadPoolWorkQueue.Dispatch()",
+            "System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()",
+        ];
+        string[] onlyRuntimeFrames = ["InlinedCallFrame", "System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()"];
+
+        ThreadPoolStall.IsIdleWorker(idle).Should().BeTrue("the pool's semaphore wait under its own loop is idle, whatever transition frames sit on top");
+        ThreadPoolStall.IsIdleWorker(busyInNative).Should().BeFalse("a work item in a native call holds the worker");
+        ThreadPoolStall.IsIdleWorker(onlyRuntimeFrames).Should().BeFalse("no semaphore frame, so not the pool's own wait");
+        ThreadPoolStall.IsRuntimeFrame("InlinedCallFrame").Should().BeTrue();
+        ThreadPoolStall.IsRuntimeFrame("at InlinedCallFrame").Should().BeTrue();
+        ThreadPoolStall.IsRuntimeFrame("System.Threading.Thread.Sleep(Int32)").Should().BeFalse("a managed method carries its parameter list");
+    }
+
     /// <summary>The census, when one was taken, is the line's last section.</summary>
     [Fact]
     public void TheQueueCensus_IsAppendedAsTheLastSection()
