@@ -46,6 +46,11 @@
 #                   fires first and says what did not complete
 #   PLATFORM        docker platform to verify, e.g. linux/amd64
 #   WORK_ROOT       materialisation root
+#   COMBO_VERIFIER  the built verifier's entry assembly (mw-combo-verify.dll). The workflow builds it
+#                   ONCE per run in its `build-verifier` job and every slot downloads it (saving R2 of
+#                   Doc/Architecture/CiProfile2026-11: seven slots each built it for ~2.2 min). For a
+#                   local run: `dotnet publish tools/MeshWeaver.ComboVerifier -c Release -o <dir>` and
+#                   point this at <dir>/mw-combo-verify.dll.
 set -euo pipefail
 
 PRIVATE=true
@@ -99,6 +104,12 @@ unauthorized_hint="The instance did not accept this run's identity. On $where BO
 out_dir=${GITHUB_WORKSPACE:-$PWD}
 tag=${ARTIFACT_TAG:-$INSTANCE_NAME}
 summary=${GITHUB_STEP_SUMMARY:-/dev/null}
+
+# The verifier is an INPUT of this script, built once per run (see COMBO_VERIFIER above). Asserted
+# before the first instance call, so a missing build is a red naming it — never a slot that has
+# already asked the instance and then cannot answer.
+: "${COMBO_VERIFIER:?COMBO_VERIFIER is not set — the path of the verifier the run built once (mw-combo-verify.dll); the build-verifier job of the workflow publishes it and each slot downloads it}"
+[ -f "$COMBO_VERIFIER" ] || fail "COMBO_VERIFIER names no file ($COMBO_VERIFIER) — the run's build-verifier artifact did not reach this slot, so there is no verifier to run."
 
 # ── 1. Which candidate would THIS instance roll to? ───────────────────────────────────────────
 # Asked OF THE INSTANCE rather than derived here, because "the newest tag" is not the question the
@@ -205,13 +216,118 @@ fi
 bundle_sources=$(jq -r '[.modules[].package | select(. != null) | (.sourceName // "") | ascii_downcase
   | select(length > 0)] | unique | .[]' <"$combo")
 
-# ── 3. Verify ─────────────────────────────────────────────────────────────────────────────────
+# ── 4. LAND it — defined here, called once by whichever phase produced the verdict ────────────
+# 🚨 The ONE landing, shared by the up-front decision (2b) and the full run (3): a verdict decided
+# before the gate is landed exactly like one the gate produced, so the instance's own gate acts on
+# it the same way. Body kept at column 0 so check-combo-verify.py reads its instance call as it
+# reads the others (a fresh token minted before it, and sent with it).
+land_verdict() {
+# POST /api/plugins/combo-verification takes the ComboVerification the tool wrote (serialized with
+# the very options the endpoint reads it with) and records it through
+# UpdatePolicyNodeType.RecordVerification — upsert by candidateTag, newest first, capped — so the
+# merge rule exists ONCE, in the portal, and this script no longer re-implements it over a raw mesh
+# patch with a global admin's token. 🚨 The route answers 200 only AFTER Admin/UpdatePolicy carries
+# this exact verdict, so a 200 here IS the landing. The policy mode (including None) is preserved.
+landed=$out_dir/combo-landed-$tag.json
+mint_token
+land_code=$(curl -sS -o "$landed" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
+  -X POST "$BASE_URL/api/plugins/combo-verification" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data-binary "@$verdict") || land_code=000
+[ "$land_code" != "401" ] \
+  || fail "POST $where/api/plugins/combo-verification -> HTTP 401: the $KIND verdict for $CANDIDATE was NOT landed. $unauthorized_hint"
+[ "$land_code" = "200" ] \
+  || fail "POST $where/api/plugins/combo-verification -> HTTP $land_code: the $KIND verdict for $CANDIDATE was NOT landed: $(body_of 400 "$landed")"
+jq -e '.recorded == true' >/dev/null <"$landed" \
+  || fail "the instance answered 200 but did not confirm the verdict was recorded: $(body_of 400 "$landed")"
+note "landed: $(body_of 200 "$landed")"
+
+{
+  # shellcheck disable=SC2016  # the backticks are MARKDOWN for the step summary, not a subshell
+  printf '### %s — `%s` → **%s**\n\n' "$shown" "$CANDIDATE" "$KIND"
+  jq -r '"- modules: \(.modules | length), passed: \([.modules[] | select(.outcome == "Passed")] | length), failed: \([.modules[] | select(.outcome == "Failed")] | length)"' <"$verdict"
+  if [ "$PRIVATE" = false ]; then
+    jq -r '.modules[] | select(.outcome != "Passed") | "  - `\(.moduleId)` \(.outcome): \(.failures | join("; "))"' <"$verdict"
+    jq -r '.caveats[]? | "  - caveat: \(.)"' <"$verdict"
+  else
+    jq -r '"- caveats: \(.caveats // [] | length). Module ids, failures and caveat text are withheld for a private roster row; the full verdict is landed on the instance."' <"$verdict"
+  fi
+} >>"$summary"
+
+# 🚨 Exit AFTER landing, and Green is the ONLY pass. A Red says this candidate cannot serve the
+# modules this instance runs — delivery promoted something a live instance must refuse. A
+# NotVerifiable says nothing was checked at all, which is the one outcome a gate must never paint
+# green: it is "the gate never ran" wearing the colour of "the gate passed".
+[ "$KIND" = "Green" ] \
+  || fail "verdict is $KIND for $CANDIDATE. It IS landed on $where, so the instance's own gate will act on it; this run is red because a candidate a live instance cannot take has not been delivered."
+note "GREEN"
+}
+
+# ── 2b. DECIDE BEFORE PAYING (saving R2 of Doc/Architecture/CiProfile2026-11) ────────────────
+# A combo that does not assemble into a gate-runnable root — a module whose ref moved past its
+# install record, a fetch that failed, an incomplete combo — is NotVerifiable whatever the candidate
+# is, and the verifier decided exactly that only AFTER this script had pulled two images, composed
+# the gate host and fetched the sealed modules (~4 of a slot's ~10 minutes, measured 2026-11-15 on
+# the slots that ended "the combo did not assemble"). Assembling needs only the combo and git, so it
+# runs FIRST: `--assemble-only` materialises into the work root and either decides (exit 1, verdict
+# written, every reason named) or hands over to the full run, which reuses the same materialised
+# root (`--assembled`) instead of fetching it twice.
+#
+# 🚨 It can decide NotVerifiable and nothing else — never Green, never Red. Only a gate run says
+# anything about the candidate; the up-front path is the same fold the one-shot run applied when it
+# skipped the gate (InstanceComboVerifier.DecideBeforeGate), asserted below rather than trusted.
+# 🚨 A RETIRED package dooms nothing: it is folded out of the verdict, so an instance carrying
+# retired packages beside live ones still reaches the gate.
 verdict=$out_dir/combo-verdict-$tag.json
 src_args=()
 # The source list is deployment-record data. Split its validated space-delimited pairs without
 # pathname expansion, so a URL containing shell glob characters stays one literal argument.
 IFS=' ' read -r -a source_pairs <<<"$SOURCES"
 for s in "${source_pairs[@]}"; do src_args+=(--source "$s"); done
+PORTAL_IMAGE="$ACR/$REPO:$CANDIDATE"
+TESTER_IMAGE="$ACR/mw-plugin-test:$CANDIDATE"
+assembly_args=("$combo" "$PORTAL_IMAGE"
+  --tag "$CANDIDATE"
+  --verdict "$verdict"
+  --work-root "$WORK_ROOT/$tag"
+  --platform "$PLATFORM"
+  "${src_args[@]}")
+rm -f "$verdict"
+mkdir -p "$WORK_ROOT"
+set +e
+if [ "$PRIVATE" = false ]; then
+  dotnet "$COMBO_VERIFIER" --assemble-only "${assembly_args[@]}"
+else
+  # A private row's assembly names every module it materialises — withheld, like the verifier's.
+  dotnet "$COMBO_VERIFIER" --assemble-only "${assembly_args[@]}" >"$WORK_ROOT/assemble-$tag.log" 2>&1
+fi
+assemble_exit=$?
+set -e
+case "$assemble_exit" in
+  0)
+    [ ! -f "$verdict" ] \
+      || fail "the up-front assembly exited 0 (only the gate can answer) yet wrote a verdict file — the two phases disagree, so nothing is landed."
+    note "the combo assembles into a gate-runnable root — only the gate can answer; composing it."
+    ;;
+  1)
+    [ -f "$verdict" ] \
+      || fail "the up-front assembly exited 1 and wrote no verdict file — nothing was decided, so there is nothing to land."
+    KIND=$(jq -r '.verdict' <"$verdict")
+    [ "$KIND" = "NotVerifiable" ] \
+      || fail "the up-front assembly decided '$KIND' for $CANDIDATE without running the gate. Only NotVerifiable can be decided before the gate — nothing is landed."
+    if [ "$PRIVATE" = true ]; then
+      note "assembly output withheld (private roster row): $(awk 'END { print NR + 0 }' "$WORK_ROOT/assemble-$tag.log") line(s)"
+    fi
+    note "verdict=$KIND for $CANDIDATE, DECIDED BEFORE THE GATE: the combo does not assemble into a root the gate can run over (the module entries name each reason), so no candidate image was pulled."
+    land_verdict
+    exit 1  # land_verdict exits on its own; this line is unreachable unless it stops doing so
+    ;;
+  *)
+    fail "the up-front assembly could not run (exit $assemble_exit) — nothing was verified and nothing is landed. Its output is above (or in its withheld log for a private row)."
+    ;;
+esac
+
+# ── 3. Verify ─────────────────────────────────────────────────────────────────────────────────
 
 # 🚨 THE GATE HOST — the candidate PORTAL's /app with the candidate set's tester CLI beside it,
 # started by the portal image's own `dotnet`: the host every node-repo lane runs since #3022
@@ -223,8 +339,6 @@ for s in "${source_pairs[@]}"; do src_args+=(--source "$s"); done
 # `mw-plugin-test:<version>` is written by the SAME CD run as the portal's `<version>`, in promote's
 # phase A — before phase C writes the portal tag a roll-target can name — so it exists whenever the
 # candidate does (Doc/Architecture/ImageTagContract). Every docker call is pinned to $PLATFORM.
-PORTAL_IMAGE="$ACR/$REPO:$CANDIDATE"
-TESTER_IMAGE="$ACR/mw-plugin-test:$CANDIDATE"
 host_root="$WORK_ROOT/host-$tag"
 rm -rf "$host_root"
 mkdir -p "$host_root"
@@ -350,8 +464,8 @@ note "sealed NodeType bundles: fetched from $sealed_sources of $(printf '%s\n' "
 
 # 🚨 A private row's verifier output names every module it materialises, so it goes to a file that
 # is never uploaded and only its line count is printed. The verdict below carries the counts.
-verifier_cmd=(dotnet run --project tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj
-  -c Release --no-build --
+# `--assembled`: the root phase 2b materialised, reused rather than fetched a second time.
+verifier_cmd=(dotnet "$COMBO_VERIFIER" --assembled
   "$combo" "$PORTAL_IMAGE"
   --host "$host_root/host"
   --tag "$CANDIDATE"
@@ -384,43 +498,4 @@ TESTER_MISSING_EXIT=3
 KIND=$(jq -r '.verdict' <"$verdict")
 note "verdict=$KIND for $CANDIDATE (tool exit $verify_exit)"
 
-# ── 4. LAND it — through the instance's own recording route, as the run's own identity. ──────
-# POST /api/plugins/combo-verification takes the ComboVerification the tool wrote (serialized with
-# the very options the endpoint reads it with) and records it through
-# UpdatePolicyNodeType.RecordVerification — upsert by candidateTag, newest first, capped — so the
-# merge rule exists ONCE, in the portal, and this script no longer re-implements it over a raw mesh
-# patch with a global admin's token. 🚨 The route answers 200 only AFTER Admin/UpdatePolicy carries
-# this exact verdict, so a 200 here IS the landing. The policy mode (including None) is preserved.
-landed=$out_dir/combo-landed-$tag.json
-mint_token
-land_code=$(curl -sS -o "$landed" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
-  -X POST "$BASE_URL/api/plugins/combo-verification" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  --data-binary "@$verdict") || land_code=000
-[ "$land_code" != "401" ] \
-  || fail "POST $where/api/plugins/combo-verification -> HTTP 401: the $KIND verdict for $CANDIDATE was NOT landed. $unauthorized_hint"
-[ "$land_code" = "200" ] \
-  || fail "POST $where/api/plugins/combo-verification -> HTTP $land_code: the $KIND verdict for $CANDIDATE was NOT landed: $(body_of 400 "$landed")"
-jq -e '.recorded == true' >/dev/null <"$landed" \
-  || fail "the instance answered 200 but did not confirm the verdict was recorded: $(body_of 400 "$landed")"
-note "landed: $(body_of 200 "$landed")"
-
-{
-  # shellcheck disable=SC2016  # the backticks are MARKDOWN for the step summary, not a subshell
-  printf '### %s — `%s` → **%s**\n\n' "$shown" "$CANDIDATE" "$KIND"
-  jq -r '"- modules: \(.modules | length), passed: \([.modules[] | select(.outcome == "Passed")] | length), failed: \([.modules[] | select(.outcome == "Failed")] | length)"' <"$verdict"
-  if [ "$PRIVATE" = false ]; then
-    jq -r '.modules[] | select(.outcome != "Passed") | "  - `\(.moduleId)` \(.outcome): \(.failures | join("; "))"' <"$verdict"
-    jq -r '.caveats[]? | "  - caveat: \(.)"' <"$verdict"
-  else
-    jq -r '"- caveats: \(.caveats // [] | length). Module ids, failures and caveat text are withheld for a private roster row; the full verdict is landed on the instance."' <"$verdict"
-  fi
-} >>"$summary"
-
-# 🚨 Exit AFTER landing, and Green is the ONLY pass. A Red says this candidate cannot serve the
-# modules this instance runs — delivery promoted something a live instance must refuse. A
-# NotVerifiable says nothing was checked at all, which is the one outcome a gate must never paint
-# green: it is "the gate never ran" wearing the colour of "the gate passed".
-[ "$KIND" = "Green" ] \
-  || fail "verdict is $KIND for $CANDIDATE. It IS landed on $where, so the instance's own gate will act on it; this run is red because a candidate a live instance cannot take has not been delivered."
-note "GREEN"
+land_verdict

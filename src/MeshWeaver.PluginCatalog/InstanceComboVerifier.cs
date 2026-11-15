@@ -72,43 +72,91 @@ public sealed class InstanceComboVerifier
     /// <param name="candidateTag">The candidate TAG the verdict is keyed by; derived from
     /// <paramref name="imageRef"/> when omitted.</param>
     public IObservable<ComboVerificationRun> Verify(
-        InstanceCombo combo, string imageRef, string workRoot, string? candidateTag = null)
-    {
-        var tag = string.IsNullOrWhiteSpace(candidateTag) ? TagOf(imageRef) : candidateTag!;
-        return assembler.Assemble(combo, workRoot)
-            .SelectMany(assembly =>
+        InstanceCombo combo, string imageRef, string workRoot, string? candidateTag = null) =>
+        assembler.Assemble(combo, workRoot)
+            .SelectMany(assembly => VerifyAssembled(assembly, imageRef, workRoot, candidateTag));
+
+    /// <summary>
+    /// Verifies <paramref name="imageRef"/> over a combo that is ALREADY materialised in
+    /// <paramref name="workRoot"/> — the second half of <see cref="Verify"/>, for a caller that
+    /// assembled first to decide the verdict before it paid for anything the gate needs (the
+    /// candidate images, the composed host, the sealed modules; MeshWeaver#4413, saving R2 of
+    /// <c>Doc/Architecture/CiProfile2026-11</c>). Cold — subscribe to run.
+    ///
+    /// <para>Runs the gate ONLY when <see cref="DecideBeforeGate"/> leaves the question open, so the
+    /// verdict is the one <see cref="Verify"/> would have produced over the same assembly.</para>
+    /// </summary>
+    /// <param name="assembly">The assembly manifest the materialisation in
+    /// <paramref name="workRoot"/> wrote.</param>
+    /// <param name="imageRef">The candidate image reference (<c>registry/repo:tag</c>).</param>
+    /// <param name="workRoot">The directory the combo was materialised into.</param>
+    /// <param name="candidateTag">The candidate TAG the verdict is keyed by; derived from
+    /// <paramref name="imageRef"/> when omitted.</param>
+    public IObservable<ComboVerificationRun> VerifyAssembled(
+        ComboAssemblyReport assembly, string imageRef, string workRoot, string? candidateTag = null) =>
+        // Cold, like Verify: nothing is decided and no gate is started until Subscribe.
+        Observable.Defer(() =>
+        {
+            var tag = string.IsNullOrWhiteSpace(candidateTag) ? TagOf(imageRef) : candidateTag;
+            if (DecideBeforeGate(assembly, imageRef, tag) is { } decided)
             {
-                var undiscoverable = assembly.Success
-                    ? assembly.Modules
-                        .Where(m => m.Status == ModuleAssemblyStatus.Materialized && !m.DeclaresRoot)
-                        .Select(m => m.ModuleId).ToImmutableList()
-                    : ImmutableList<string>.Empty;
-                if (!assembly.Success || undiscoverable.Count > 0)
+                logger?.LogWarning(
+                    "[ComboVerify] not running the gate for {Tag}: the combo does not assemble into a "
+                    + "gate-runnable root ({Verdict}).", tag, decided.Verdict.Verdict);
+                return Observable.Return(decided);
+            }
+            return runGate(imageRef, workRoot)
+                // An unexpected OnError from the orchestration is evidence of nothing about the
+                // candidate — fold it as an orchestration error (NotVerifiable), never a crash.
+                .Catch((Exception ex) => Observable.Return(new CandidateGateRun
                 {
-                    logger?.LogWarning(
-                        "[ComboVerify] not running the gate for {Tag}: assembly {State}, "
-                        + "{Undiscoverable} module(s) without a discoverable root.",
-                        tag, assembly.Success ? "green" : "not green", undiscoverable.Count);
-                    return Observable.Return(new ComboVerificationRun
-                    {
-                        Assembly = assembly,
-                        Verdict = Fold(tag, imageRef, assembly, gate: null, undiscoverable),
-                    });
-                }
-                return runGate(imageRef, workRoot)
-                    // An unexpected OnError from the orchestration is evidence of nothing about the
-                    // candidate — fold it as an orchestration error (NotVerifiable), never a crash.
-                    .Catch((Exception ex) => Observable.Return(new CandidateGateRun
-                    {
-                        Error = $"the gate orchestration faulted: {ex.Message}",
-                    }))
-                    .Select(gate => new ComboVerificationRun
-                    {
-                        Assembly = assembly,
-                        Gate = gate,
-                        Verdict = Fold(tag, imageRef, assembly, gate, undiscoverable),
-                    });
-            });
+                    Error = $"the gate orchestration faulted: {ex.Message}",
+                }))
+                .Select(gate => new ComboVerificationRun
+                {
+                    Assembly = assembly,
+                    Gate = gate,
+                    Verdict = Fold(tag, imageRef, assembly, gate, ImmutableList<string>.Empty),
+                });
+        });
+
+    /// <summary>
+    /// 🚨 THE UP-FRONT CLASSIFIER — the verdict that is already decided by the assembly alone,
+    /// before any gate input exists. Returns the <see cref="ComboVerdictKind.NotVerifiable"/> run
+    /// when the combo did not assemble into a root the gate can run over (a whole-run refusal, a
+    /// module refused or failed to materialise, a materialised module without an
+    /// <c>index.json</c> root, or nothing but retired modules); returns <c>null</c> when the gate
+    /// must run, because only the gate can answer.
+    ///
+    /// <para>Pure: the same fold <see cref="Verify"/> always applied when it skipped the gate, so
+    /// deciding it EARLIER changes no verdict. It can never yield <see cref="ComboVerdictKind.Green"/>
+    /// or <see cref="ComboVerdictKind.Red"/> — a doomed question is NotVerifiable, and nothing that
+    /// did not run the gate may say the candidate passed or failed.</para>
+    ///
+    /// <para>🚨 A RETIRED module dooms nothing: it is reported and folded out
+    /// (<see cref="ComboVerification.RetiredModules"/>), so an instance that carries retired packages
+    /// beside materialised ones still reaches the gate. Measured 2026-11-14 (job 132432200108): the
+    /// slot that carried six retired packages read NotVerifiable because its GATE RUN exceeded the
+    /// budget, not because of them.</para>
+    /// </summary>
+    /// <param name="assembly">The assembly manifest.</param>
+    /// <param name="imageRef">The candidate image reference the verdict names.</param>
+    /// <param name="candidateTag">The candidate TAG the verdict is keyed by.</param>
+    public static ComboVerificationRun? DecideBeforeGate(
+        ComboAssemblyReport assembly, string imageRef, string candidateTag)
+    {
+        var undiscoverable = assembly.Success
+            ? assembly.Modules
+                .Where(m => m.Status == ModuleAssemblyStatus.Materialized && !m.DeclaresRoot)
+                .Select(m => m.ModuleId).ToImmutableList()
+            : ImmutableList<string>.Empty;
+        if (assembly.Success && undiscoverable.Count == 0)
+            return null;
+        return new ComboVerificationRun
+        {
+            Assembly = assembly,
+            Verdict = Fold(candidateTag, imageRef, assembly, gate: null, undiscoverable),
+        };
     }
 
     /// <summary>The tag of an image reference: what follows the last <c>:</c> after the last

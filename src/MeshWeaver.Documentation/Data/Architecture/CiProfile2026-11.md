@@ -257,8 +257,12 @@ run `43706214929`:
   `workflow_run` failures alone cost 1,131 min (69 min each).
 - **Combo verification:** 5,300 of 5,632 runner-minutes were on failed runs. 89 slot jobs ran past
   30 min (max 39.4). One read (`132432200108`): a 25-minute `GATE_TIMEOUT`, then the verdict
-  `NotVerifiable`, because the instance carries retired packages that can never be re-materialised. The
-  same slot fails the same way run after run (slot 4 first-failed in 48 runs, slot 1 in 15).
+  `NotVerifiable`. The same slot fails the same way run after run (slot 4 first-failed in 48 runs,
+  slot 1 in 15). *Correction, measured while implementing R2:* that slot's six retired packages did
+  not cause the verdict. A retired package is reported and folded out of the verdict. The caveat
+  that decided it was "the gate run exceeded what the bake left of the run's 00:25:00 budget": the
+  candidate did not complete inside the gate. See
+  [Combo Gate Wiring](../ComboGateWiring) for what R2 changed and what it could not.
 - **Re-runs:** genuine re-runs (attempt 3 or later) were 24 Plugins PR runs and 1 core run. Attempt 2
   is the dispatcher, not a person.
 - **The 45-minute cap:** no CI job neared it. Only `Shadow trunk — follow the host's modules stage`
