@@ -429,6 +429,33 @@ def extract_record_pins(text: str, registry: str) -> tuple[list[tuple[str, str]]
     return [(path, tag.strip())], []
 
 
+# The image NAME a record's portal runs, whatever registry holds it (MeshWeaver#4413).
+_IMAGE_NAME = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$")
+
+
+def extract_record_image_name(text: str) -> str | None:
+    """The repository NAME of a record's `imageRepository`, with its registry host dropped.
+
+    `meshweaver.azurecr.io/memex-control` and `<estate acr>/memex-control` both answer
+    `memex-control`: the name says WHICH image (the control image carries the fleet-control types,
+    the portal image does not); the registry only says where a copy of it lives. None when the record
+    names no repository, or names one that is not a plain registry path. Pure."""
+    try:
+        doc = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    content = doc.get("content", doc) if isinstance(doc, dict) else None
+    if not isinstance(content, dict):
+        return None
+    repository = content.get("imageRepository")
+    if not isinstance(repository, str):
+        return None
+    host, _, path = repository.strip().partition("/")
+    # A first segment with a dot or a port is a registry host; without one the value is a bare name.
+    name = path if ("." in host or ":" in host) and path else repository.strip()
+    return name if _IMAGE_NAME.match(name) else None
+
+
 # ── A CLIENT'S DEPLOYMENT RECORD NEVER REACHES THE PUBLIC LOG (Plugins#4364) ─────────────────────
 #
 # 🚨 THIS REPOSITORY'S ACTIONS LOGS ARE PUBLIC, AND THIS LANE READS THE FLEET'S DEPLOYMENT RECORDS.
@@ -950,6 +977,13 @@ class OverlayScan:
     # AXIS 3 can leave it out of the installation's running PORTAL set — the overlay half of the
     # same rule `record_portals` states for the record.
     overlay_operators: list[tuple[str, str]] = field(default_factory=list)
+    # (image NAME, record path) — the portal image a `Hosting/Deployment` record names through
+    # `imageRepository`, in ANY registry, with the registry host dropped (`memex-control`, never
+    # `<acr>/memex-control`). Combo verification reads it to pick the image an installation actually
+    # runs when the installation itself does not say (MeshWeaver#4413); unlike `record_portals` it is
+    # not scoped to the registry this lane locks, because a client estate mirrors the fleet's images
+    # into its own registry under the same names.
+    record_images: list[tuple[str, str]] = field(default_factory=list)
     # (record path, is the fleet's own, identifiers) — one per `Hosting/Deployment`-shaped record,
     # classified at the door it is read through (`record_identity`). A record that is NOT the
     # fleet's has every identifier withheld from the public log (Plugins#4364).
@@ -1024,6 +1058,9 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
             pins = pins + record_pins
             floating = floating + record_floating
             scan.record_portals.extend((repo, path) for repo, _ in record_pins + record_floating)
+            image = extract_record_image_name(text)
+            if image:
+                scan.record_images.append((image, path))
             sources, source_error = extract_record_sources(text)
             if source_error:
                 scan.source_errors.append((path, source_error))
@@ -1069,6 +1106,9 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
             pins = pins + record_pins
             floating = floating + record_floating
             scan.record_portals.extend((repo, rel) for repo, _ in record_pins + record_floating)
+            image = extract_record_image_name(text)
+            if image:
+                scan.record_images.append((image, rel))
             sources, source_error = extract_record_sources(text)
             if source_error:
                 scan.source_errors.append((rel, source_error))
