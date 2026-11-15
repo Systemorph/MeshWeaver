@@ -128,6 +128,7 @@ class Decision:
     major: int = 0          # the line's platform major — the alert is ONE issue per major
     line: str = ""          # the delivery line (branch) whose arm run read this
     cold_start: bool = False  # no set of `major` was ever armed
+    control_hold: str = ""  # the line is HELD by control's declared updatePattern (MeshWeaver#8279); "" = not held
 
 
 def parse_threshold(raw: str | None) -> float:
@@ -164,6 +165,9 @@ def check_reading(reading: object) -> None:
         raise Red("the reading names no delivery `line` — cannot say whose arm run read it")
     if not isinstance(reading.get("cold_start"), bool):
         raise Red("the reading does not say whether its line is at the cold start of its major (`cold_start`)")
+    if not isinstance(reading.get("control_hold", ""), str):
+        raise Red("the reading's `control_hold` is not a sentence — whether control's declaration holds this line "
+                  "cannot be read off it")
     if not isinstance(reading.get("window_complete"), bool):
         raise Red("the reading does not say whether its run listing reached the armed cursor (`window_complete`)")
     if not reading["window_complete"]:
@@ -194,12 +198,14 @@ def decide(reading: dict, now: datetime, threshold_hours: float) -> Decision:
     check_reading(reading)
     unarmed = sorted(reading["unarmed"], key=lambda s: int(s["run_number"]), reverse=True)
     floor = not reading["window_complete"]
+    hold = str(reading.get("control_hold") or "")
     fp = (",".join(f"{s['run_number']}:{s['state'].replace(' ', '-')}" for s in unarmed) or "none") \
-        + (":floor" if floor else "")
+        + (":floor" if floor else "") + (":held" if hold else "")
     ages = [(now - _when(str(unarmed[-1]["promoted_at"]))).total_seconds() / 3600] if unarmed else []
     if floor:
         ages.append((now - _when(str(reading["window_floor_at"]))).total_seconds() / 3600)
-    line = dict(major=int(reading["major"]), line=str(reading["line"]), cold_start=bool(reading["cold_start"]))
+    line = dict(major=int(reading["major"]), line=str(reading["line"]), cold_start=bool(reading["cold_start"]),
+                control_hold=hold)
     if not ages:
         return Decision(False, None, None, [], str(reading["armed"]), fp, **line)
     age = max(ages)
@@ -213,6 +219,7 @@ def render_body(d: Decision, threshold_hours: float, run_url: str, now: datetime
         f"**{d.age_hours:.1f} h** (threshold {threshold_hours:g} h, `FLEET_UNARMED_ALERT_HOURS` in main-cd's `arm` job).",
         "",
         f"- line: `{d.line}`, major **{d.major}** — this issue is that line's alone; every other major keeps its own",
+        *([f"- ⏸️ {d.control_hold.replace(chr(10), ' ')}"] if d.control_hold else []),
         (f"- newest ARMED {d.major}.x set: **none — {d.armed}** (cold start of major {d.major}: the fleet still runs "
          f"the previous major's armed set; the age is clocked from the line's FIRST {d.major}.x set)"
          if d.cold_start else
@@ -237,7 +244,8 @@ def render_body(d: Decision, threshold_hours: float, run_url: str, now: datetime
         "Read it by state: **refused** — the set's compatibility ladder is red, missing or ambiguous; fix "
         "compatibility (or declare an epoch bump), a newer green set then arms past it. **waiting** — the ladder "
         "is still running, or control has not taken the set; a control behind past its bound is the open "
-        "`control-lag` issue. **not examined** — older than the ten newest sets `select` judges. The incident "
+        "`control-lag` issue, and a line HELD by control's declared updatePattern says so above the table (its "
+        "remedy is that declaration, never control's roll). **not examined** — older than the ten newest sets `select` judges. The incident "
         "override (main-cd `workflow_dispatch` with `arm_override` + `arm_reason`) exists and stays the "
         "maintainer's call; it is not the remedy this issue suggests.",
         "",
@@ -631,6 +639,23 @@ def self_test() -> int:
             check(f"a malformed reading ({why}) is RED", False)
         except Red:
             check(f"a malformed reading ({why}) is RED, never a pass", True)
+
+    try:
+        decide({**reading(), "control_hold": True}, now, 6.0)
+        check("a malformed reading (a non-string control_hold) is RED", False)
+    except Red:
+        check("a malformed reading (a non-string control_hold) is RED, never a pass", True)
+
+    # 8b. a line HELD by control's declaration (MeshWeaver#8279) says so in the issue, and stays an alert
+    hold = ("LINE HELD BY DECLARATION: control's record declares updatePattern `3.*` (major 3), and line `main` "
+            "delivers major 4.")
+    d = decide({**reading(refused, major=4, line="main", cold=True), "control_hold": hold}, now, 6.0)
+    body = render_body(d, 6.0, "https://run/1", now)
+    check("a HELD line is still STALE (the hold is loud, never a silent pass) and its body names the hold",
+          d.stale and "LINE HELD BY DECLARATION" in body and "`3.*`" in body and ":held" in d.fingerprint, body)
+    d = decide(reading(refused), now, 6.0)
+    check("NEGATIVE CONTROL — an unheld reading (no control_hold) names no hold",
+          "HELD BY DECLARATION" not in render_body(d, 6.0, "https://run/1", now) and ":held" not in d.fingerprint)
 
     # 9. an INCOMPLETE window (the run listing never reached the armed cursor) is never read as armed
     #    (Copilot on MeshWeaver#6367: 40 runs are not 40 promotions)
