@@ -479,6 +479,30 @@ public record DeploymentContent
     [Description("Autoscaling")]
     public Autoscaling? Autoscaling { get; init; }
 
+    /// <summary>
+    /// The node labels the PORTAL pods must land on — the pod spec's <c>nodeSelector</c>, rendered
+    /// by the chart from <c>portal.nodeSelector</c>. Null or empty → no selector, and the scheduler
+    /// places the portal on any schedulable node, which is what every record that does not state it
+    /// gets.
+    ///
+    /// <para>Nullable on purpose: the writer omits nulls, so a record that does not state a selector
+    /// serialises exactly as it did before this field existed. An empty map would be written as
+    /// <c>{}</c> into every portal's <c>Deployment__Record</c>, change every rendered ConfigMap, and
+    /// roll every instance for nothing.</para>
+    ///
+    /// <para>Why the record owns it: a selector set on the live Deployment by hand survives
+    /// <c>helm upgrade</c> only until the next render that leaves it out, and the chart-drift audit
+    /// reports it as live-only on every pass (Systemorph/Memex#148). Declaring it here makes it a
+    /// value the record renders, so the audit compares it like any other field.</para>
+    ///
+    /// <para>The labels must exist on at least one node pool the instance's portal may use; the
+    /// record does not check that, because node pools are infrastructure and not part of the
+    /// record. A selector no node satisfies leaves the new pods Pending during a roll while the
+    /// old ones keep serving.</para>
+    /// </summary>
+    [Description("Portal node selector (node labels the portal pods must land on)")]
+    public ImmutableSortedDictionary<string, string>? PortalNodeSelector { get; init; }
+
     /// <summary>The persistent volumes the portal mounts.</summary>
     [Description("Volumes")]
     public ImmutableList<VolumeClaim> Volumes { get; init; } = ImmutableList<VolumeClaim>.Empty;
