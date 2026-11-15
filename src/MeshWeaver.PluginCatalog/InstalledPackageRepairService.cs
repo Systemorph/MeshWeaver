@@ -280,7 +280,7 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
         if (hub.ServiceProvider.GetService<IConfiguration>() is not { } configuration)
             return;
 
-        var moduleRoot = ModuleRoot.Resolve(configuration);
+        var moduleRoot = ModuleRoot.ResolveLine(configuration);
         var activation = ModuleActivationSidecar.Read(moduleRoot);
         var landed = activation.Entries
             .ToDictionary(entry => entry.Name, StringComparer.OrdinalIgnoreCase);

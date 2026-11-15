@@ -265,12 +265,20 @@ static int RunCompile(string[] args)
     string? compileRepoName = null;
     var compileModules = new List<string>();
     var compileMaxParallel = Math.Max(1, Environment.ProcessorCount);
+    string? compileCache = null;
     for (var i = 0; i < args.Length; i++)
     {
         switch (args[i])
         {
             case "--output" when i + 1 < args.Length:
                 outputDirectory = args[++i];
+                break;
+            // The CROSS-RUN compile cache (Doc/Architecture/NodeTypeCompileCache): a directory that
+            // outlives this run. Keyed on each compile's inputs and the reference set's SURFACES, so
+            // unchanged content against unchanged APIs compiles nothing. Created if absent; one that
+            // cannot be used is printed and every NodeType compiles — never a different verdict.
+            case "--compile-cache" when i + 1 < args.Length:
+                compileCache = args[++i];
                 break;
             // How many NodeTypes compile at once (default: one per core). The output does not
             // depend on it — 1 is the serial bake, kept for measurement and comparison.
@@ -412,7 +420,8 @@ static int RunCompile(string[] args)
                 compileRepoName = args[++i];
                 break;
             case "--output" or "--source-sha" or "--allow" or "--module" or "--app"
-                or "--shared-frameworks" or "--warning-baseline" or "--dynamic-baseline" or "--repo-name":
+                or "--shared-frameworks" or "--warning-baseline" or "--dynamic-baseline" or "--repo-name"
+                or "--compile-cache":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value.");
                 return 2;
             case "--help" or "-h":
@@ -463,6 +472,7 @@ static int RunCompile(string[] args)
         ModuleAssemblyPaths = TesterModules.ResolvedPaths(compileModules),
         Warnings = compileWarnings,
         MaxParallel = compileMaxParallel,
+        CompileCacheDirectory = compileCache,
     });
     if (bake.FatalError is not null)
         Console.Error.WriteLine($"compile: FATAL — {bake.FatalError}");
@@ -536,7 +546,10 @@ static string CompileUsage() =>
     "usage: mw-compiler compile <checkout-root> --output <dir> [--allow <file>] "
     + "[--warning-baseline <file>] [--dynamic-baseline <file>] [--repo-name <owner/repo>] "
     + "[--source-sha <sha>] [--module <dll>]... [--app <dir> --shared-frameworks <dir>] "
-    + "[--max-parallel <n>]\n"
+    + "[--max-parallel <n>] [--compile-cache <dir>]\n"
+    + "  --compile-cache reuses NodeType compiles across runs: an entry is keyed on the compile's "
+    + "inputs and on the PUBLIC SURFACE of every reference, so unchanged content against unchanged "
+    + "APIs compiles nothing, and any surface change recompiles.\n"
     + "  --max-parallel caps how many NodeTypes compile at once (default: one per core); each "
     + "type still waits for the types it is ordered after, and the output is identical at every "
     + "value — 1 is the serial bake.\n"
