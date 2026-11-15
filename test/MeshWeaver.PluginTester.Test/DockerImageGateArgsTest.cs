@@ -93,6 +93,20 @@ public class DockerImageGateArgsTest
     }
 
     /// <summary>
+    /// MeshWeaver#4413 — the tester's per-category log switch reaches the gate container, by NAME
+    /// only (docker copies it when the verifier has it and sets nothing when it does not), and as a
+    /// DOCKER flag: an <c>-e</c> past the image would be handed to the tester as an argument.
+    /// </summary>
+    [Fact]
+    public void RunArgs_ForwardTheLogCategorySwitch_ByNameBeforeTheImage()
+    {
+        var args = DockerImageGate.RunArgs(Image, Root, Host, DockerImageGate.FleetPlatform);
+        var image = Array.IndexOf(args, Image);
+        AssertAdjacent(args[..image], "-e", "MW_LOG_CATEGORIES");
+        Assert.DoesNotContain(args, a => a.StartsWith("MW_LOG_CATEGORIES=", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// 🚨 #3848, measured on run 38688576426: <c>--entrypoint /app/mw-plugin-test</c> inside the
     /// candidate PORTAL image — which ships no tester — exited 127 (<c>[FATAL tini (7)] exec
     /// /app/mw-plugin-test failed: No such file or directory</c>) on every slot, and each run was
