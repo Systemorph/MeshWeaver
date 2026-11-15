@@ -936,7 +936,8 @@ public static class PluginGateRunner
             // is ~100k lines. But a message-flow hang reproduces ONLY in bulk (see the /debug
             // skill), and this tool IS the bulk shape, so the trace has to be reachable without
             // editing the tool. MW_LOG_LEVEL=Trace turns the whole run into the trace the skill
-            // greps; MW_LOG_CATEGORIES narrows it to the categories that carry MESSAGE_FLOW.
+            // greps; MW_LOG_CATEGORIES raises only the categories it names, at the default level
+            // too (GateVerbosity.CategoryFilters).
             var minLevel = GateVerbosity.MinLevel;
             services.AddLogging(logging =>
             {
@@ -999,9 +1000,9 @@ public static class PluginGateRunner
                 if (GateVerbosity.Verbose)
                     foreach (var category in RecycleAttributionCategories)
                         logging.AddFilter(category, LogLevel.Information);
-                foreach (var category in (Environment.GetEnvironmentVariable("MW_LOG_CATEGORIES") ?? "")
-                         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                    logging.AddFilter(category, minLevel);
+                foreach (var (category, level) in GateVerbosity.CategoryFilters(
+                             Environment.GetEnvironmentVariable("MW_LOG_CATEGORIES"), minLevel))
+                    logging.AddFilter(category, level);
             });
             services.AddOptions();
 

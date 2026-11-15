@@ -360,6 +360,11 @@ jobs:
           # declares a compiled module, so an empty value is a red naming it, never a gate run
           # without the modules.
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          # The gate recompiles types the bake already compiled on every memex-sized slot (#4413);
+          # the adoption lines that say why are below the gate's default Warning level. The
+          # verifier forwards this to the gate container (DockerImageGate.ForwardedEnvironment) and
+          # the tester raises only these categories (GateVerbosity.CategoryFilters).
+          MW_LOG_CATEGORIES: "bake-seed=Debug,MeshWeaver.Graph.CompileWatcher=Debug"
         run: |
           set -euo pipefail
           : "${INSTANCE_NAME:?the slot step resolved no installation name}"

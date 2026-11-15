@@ -701,13 +701,30 @@ internal static class NodeTypeCompilationHelpers
                         // that reported an adoption it never wrote back was believed — and the
                         // type sat at Pending for ever (#2818's regression, third phase: a dirty
                         // type with the previous build's coordinates, re-triggered unforced).
+                        // MeshWeaver#4413 — WHAT the node looked like when the confirmation gave up,
+                        // so the warning separates "the stamp never landed" (status Ok never seen,
+                        // no coordinates) from "nothing was written over a node that already names
+                        // a build" (status Pending, coordinates present, usable) — the two causes of
+                        // the redundant compiles measured on every memex-sized combo slot.
+                        // Each emission is parsed ONCE; the state string is what the warning prints.
+                        // Written on the stream's thread, read on the Timeout's timer thread — hence
+                        // the Volatile pair, so the warning never reports a state older than the last.
+                        var lastSeen = "no emission";
                         return ownStream
-                            .Where(n => n?.ContentAs<NodeTypeDefinition>(
-                                            hub.JsonSerializerOptions, logger) is { } adoptedDef
-                                        && adoptedDef.CompilationStatus == CompilationStatus.Ok
-                                        && HasUsableBuild(n, adoptedDef, guards))
+                            .Select(n => (Node: n, Def: n?.ContentAs<NodeTypeDefinition>(
+                                hub.JsonSerializerOptions, logger)))
+                            .Select(e =>
+                            {
+                                var usable = e.Def is not null && HasUsableBuild(e.Node!, e.Def, guards);
+                                if (e.Def is { } seen)
+                                    Volatile.Write(ref lastSeen,
+                                        $"status={seen.CompilationStatus?.ToString() ?? "null"} "
+                                        + $"coordinates={!string.IsNullOrEmpty(seen.LatestAssemblyPath)} "
+                                        + $"usable={usable} dirty={seen.IsDirty}");
+                                return e.Def?.CompilationStatus == CompilationStatus.Ok && usable;
+                            })
+                            .Where(landed => landed)
                             .Take(1)
-                            .Select(_ => true)
                             .Timeout(AdoptionStampBudget)
                             .Catch<bool, Exception>(_ =>
                             {
@@ -715,8 +732,9 @@ internal static class NodeTypeCompilationHelpers
                                     "Compile watcher: {HubPath} reported {Adopted} adopted "
                                     + "assembly(ies) but the node still has no usable build "
                                     + "{Budget}s later — compiling instead, because a stranded type "
-                                    + "is worse than a redundant compile.",
-                                    hubPath, adopted, AdoptionStampBudget.TotalSeconds);
+                                    + "is worse than a redundant compile. Last state seen: {LastSeen}.",
+                                    hubPath, adopted, AdoptionStampBudget.TotalSeconds,
+                                    Volatile.Read(ref lastSeen));
                                 return Observable.Return(false);
                             });
                     }
