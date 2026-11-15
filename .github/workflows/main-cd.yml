@@ -3503,8 +3503,48 @@ jobs:
             -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
           [ -n "$MAJOR" ] && [ -n "$DELIVERY_LINE" ] || { echo "::error::gate produced no line/major — refusing to read a cursor across lines"; exit 1; }
           python3 .github/scripts/arm-promoted-set.py armed-state --major "$MAJOR" --manifests "$RUNNER_TEMP/portal-manifests.json"
+      # 🚨 IS THIS LINE HELD BY CONTROL'S OWN DECLARATION? (MeshWeaver#8279, policy
+      # `major-lines-run-separately`.) Control's record declares the ONE major it follows
+      # (`updatePattern`). A line of another major — `main` on 4.x while control is on `3.*` — is
+      # never taken by control, so control first holds every one of its sets; `select` reports that as
+      # a declared hold (a ::warning:: and the fleet-unarmed issue), never as a frozen control. The
+      # record is read exactly as control-always-latest reads it: WHERE from
+      # `.github/control-instance.json`, with the READ-ONLY fleet-reader App (preflight asserts both
+      # secrets), scoped to that one repository. A record that cannot be read is RED here, by name.
+      - name: Where is control's record declared?
+        id: record
+        run: |
+          set -euo pipefail
+          repo=$(jq -er '.record.repository' .github/control-instance.json)
+          path=$(jq -er '.record.path' .github/control-instance.json)
+          owner=${repo%%/*}
+          name=${repo#*/}
+          [ "$owner" = "$GITHUB_REPOSITORY_OWNER" ] && [ -n "$name" ] && [ "$name" != "$repo" ] \
+            || { echo "::error::.github/control-instance.json record.repository '$repo' is not '<$GITHUB_REPOSITORY_OWNER>/<repository>' — the fleet-reader App is installed on $GITHUB_REPOSITORY_OWNER only"; exit 1; }
+          { echo "owner=$owner"; echo "name=$name"; echo "repo=$repo"; echo "path=$path"; } >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for control's record
+        id: record-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.record.outputs.owner }}
+          repositories: ${{ steps.record.outputs.name }}
+          permission-contents: read
+      - name: Read control's record (its updatePattern names the line control follows)
+        env:
+          GH_TOKEN: ${{ steps.record-token.outputs.token }}
+          REPO: ${{ steps.record.outputs.repo }}
+          RECORD_PATH: ${{ steps.record.outputs.path }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/contents/$RECORD_PATH" -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/control-record.json" \
+            || { echo "::error::the fleet-reader token (scoped to $REPO, contents: read) could not read $REPO:$RECORD_PATH — check the App's installation on $REPO and the declared path"; exit 1; }
+          jq -e '.content.updatePattern | strings' "$RUNNER_TEMP/control-record.json" \
+            || { echo "::error::$REPO:$RECORD_PATH carries no content.updatePattern — which line control follows is declared there"; exit 1; }
       # The platform verdict reads only this repository (promotion records, each run's ladder job,
-      # compare for ancestry — the workflow's own token) and control's PUBLIC /api/version + /health.
+      # compare for ancestry — the workflow's own token) and control's PUBLIC /api/version + /health,
+      # plus control's record read above (only to tell a declared hold from a frozen control).
       # No MeshWeaver.Plugins credential: nothing of Plugins is read (policy `platform-module-deploy-separate`).
       - name: Which promoted set may the fleet roll to?
         id: select
@@ -3518,6 +3558,7 @@ jobs:
           # --unarmed-out: every promoted set still newer than the armed one after this selection,
           # with its verdict — the reading the fleet-unarmed alert (last step) clocks a stall from.
           python3 .github/scripts/arm-promoted-set.py select --branch "$DELIVERY_LINE" --major "$MAJOR" --armed-max "$ARMED_MAX" \
+            --control-record "$RUNNER_TEMP/control-record.json" \
             --armed-version "$ARMED_VERSION" --unarmed-out "$RUNNER_TEMP/unarmed.json" \
             ${OVERRIDE:+--override "$OVERRIDE"} ${RESUME:+--resume "$RESUME"}
       - name: ACR login
