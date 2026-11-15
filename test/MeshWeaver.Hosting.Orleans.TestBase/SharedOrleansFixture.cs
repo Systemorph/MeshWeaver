@@ -38,9 +38,14 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// how the AI rig lives in MeshWeaver.Plugins while the ~51 Orleans tests that never touch an
 /// agent keep using this one unchanged (#2276).</para>
 /// </summary>
-public class SharedOrleansFixture : IAsyncLifetime
+public class SharedOrleansFixture : IAsyncLifetime, MeshWeaver.Fixture.ITimeoutTerminalSource
 {
     private OrleansTestClusterHost host = null!;
+
+    /// <summary>The timeout-terminal recorders of this cluster's silos and client host — the test's
+    /// window folds them in (timeout == error, Doc/Architecture/TimeoutIsError).</summary>
+    public IEnumerable<MeshWeaver.Fixture.TimeoutTerminalRecorder> TimeoutTerminalRecorders =>
+        host?.TimeoutTerminalRecorders ?? [];
 
     public TestCluster Cluster => host.Cluster;
     public IMessageHub ClientMesh => host.ClientServices.GetRequiredService<IMessageHub>();

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -109,23 +110,49 @@ public class TestBase : ServiceSetup, IAsyncLifetime
 
 
 
-    /// <summary>
-    /// Logs the test-class dispose marker, unregisters this test, and disposes the file output helper.
-    /// </summary>
-    /// <returns>A completed <see cref="ValueTask"/>.</returns>
-    private TimeoutTerminalRecorder? timeoutTerminalWindow;
-    private int timeoutTerminalWatermark;
+    private System.Collections.Immutable.ImmutableList<(TimeoutTerminalRecorder Recorder, int Watermark)> timeoutTerminalWindow =
+        System.Collections.Immutable.ImmutableList<(TimeoutTerminalRecorder, int)>.Empty;
+    private bool timeoutTerminalWindowOpen;
 
     /// <summary>
     /// Opens this test's timeout-terminal window. Read off <see cref="ServiceSetup.ServiceProvider"/>
     /// rather than the instance registered in the constructor: a shared-mesh test class serves every
     /// test from the FIRST instance's container, so that container's recorder is the one the mesh
     /// reports to, and the watermark keeps an earlier test's terminals out of this one's verdict.
+    /// Every <see cref="ITimeoutTerminalSource"/> the test holds in an instance field (an Orleans
+    /// cluster fixture: its silos and client host each have a container of their own) adds its
+    /// recorders, each with its own watermark.
     /// </summary>
     internal void BeginTimeoutTerminalWindow()
     {
-        timeoutTerminalWindow = ServiceProvider?.GetService<TimeoutTerminalRecorder>();
-        timeoutTerminalWatermark = timeoutTerminalWindow?.Fired.Count ?? 0;
+        var recorders = new List<TimeoutTerminalRecorder>();
+        if (ServiceProvider?.GetService<TimeoutTerminalRecorder>() is { } own)
+            recorders.Add(own);
+        recorders.AddRange(HeldTimeoutTerminalSources().SelectMany(source => source.TimeoutTerminalRecorders));
+        timeoutTerminalWindow = recorders
+            .Distinct()
+            .Select(recorder => (recorder, recorder.Fired.Count))
+            .ToImmutableList();
+        timeoutTerminalWindowOpen = true;
+    }
+
+    /// <summary>The <see cref="ITimeoutTerminalSource"/>s held in this test's instance fields, base classes included.</summary>
+    private IEnumerable<ITimeoutTerminalSource> HeldTimeoutTerminalSources()
+    {
+        for (var type = GetType(); type is not null && type != typeof(object); type = type.BaseType)
+        {
+            foreach (var field in type.GetFields(System.Reflection.BindingFlags.Instance
+                                                 | System.Reflection.BindingFlags.Public
+                                                 | System.Reflection.BindingFlags.NonPublic
+                                                 | System.Reflection.BindingFlags.DeclaredOnly))
+            {
+                if (!typeof(ITimeoutTerminalSource).IsAssignableFrom(field.FieldType)
+                    && !field.FieldType.IsAssignableFrom(typeof(ITimeoutTerminalSource)))
+                    continue;
+                if (field.GetValue(this) is ITimeoutTerminalSource source)
+                    yield return source;
+            }
+        }
     }
 
     /// <summary>
@@ -136,12 +163,14 @@ public class TestBase : ServiceSetup, IAsyncLifetime
     /// <param name="method">The test method.</param>
     internal string? EndTimeoutTerminalWindow(System.Reflection.MethodInfo method)
     {
-        var recorder = timeoutTerminalWindow;
-        timeoutTerminalWindow = null;
+        var window = timeoutTerminalWindow;
+        var open = timeoutTerminalWindowOpen;
+        timeoutTerminalWindow = System.Collections.Immutable.ImmutableList<(TimeoutTerminalRecorder, int)>.Empty;
+        timeoutTerminalWindowOpen = false;
         var declared = TimeoutTerminalVerdict.DeclaredKinds(method);
-        var fired = recorder is null
-            ? []
-            : recorder.Fired.Skip(timeoutTerminalWatermark).ToList();
+        var fired = window
+            .SelectMany(entry => entry.Recorder.Fired.Skip(entry.Watermark))
+            .ToList();
         var testName = $"{method.DeclaringType?.Name}.{method.Name}";
         foreach (var terminal in fired)
         {
@@ -150,11 +179,15 @@ public class TestBase : ServiceSetup, IAsyncLifetime
             TestTraceLog.AppendPhase(method.DeclaringType?.Name ?? "UnknownTest", "TIMEOUT_TERMINAL",
                 extra: $"{method.Name} kind={terminal.Kind} {declaredMark} origin={terminal.Origin}");
         }
-        if (recorder is null || !TimeoutTerminalVerdict.IsArmed(method))
+        if (!open || window.IsEmpty || !TimeoutTerminalVerdict.IsArmed(method))
             return null;
         return TimeoutTerminalVerdict.Evaluate(testName, fired, declared);
     }
 
+    /// <summary>
+    /// Logs the test-class dispose marker, unregisters this test, and disposes the file output helper.
+    /// </summary>
+    /// <returns>A completed <see cref="ValueTask"/>.</returns>
     public virtual ValueTask DisposeAsync()
     {
         // Log test end with class info

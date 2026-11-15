@@ -48,13 +48,18 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <para>Death detection is fast and the held-stream heartbeat short (<see cref="Heartbeat"/>), so a
 /// hand-off completes well inside a test budget; both are production mechanisms at test cadence.</para>
 /// </summary>
-public class FaultInjectionCluster : IAsyncLifetime
+public class FaultInjectionCluster : IAsyncLifetime, MeshWeaver.Fixture.ITimeoutTerminalSource
 {
     /// <summary>The held sync stream's heartbeat cadence in this cluster.</summary>
     public static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(1);
 
     private readonly OrleansTestBackingStore _backingStore = new();
     private OrleansTestClusterHost? _host;
+
+    /// <summary>The timeout-terminal recorders of this cluster's silos and client host — the test's
+    /// window folds them in (timeout == error, Doc/Architecture/TimeoutIsError).</summary>
+    public IEnumerable<MeshWeaver.Fixture.TimeoutTerminalRecorder> TimeoutTerminalRecorders =>
+        _host?.TimeoutTerminalRecorders ?? [];
     private ImmutableList<SiloHandle> _silos = ImmutableList<SiloHandle>.Empty;
 
     /// <summary>How many silos the cluster starts with. Two unless a derived fixture says otherwise.</summary>

@@ -49,17 +49,25 @@ public class InjectorExamplesTest(ITestOutputHelper output) : MonolithMeshTestBa
         var path = $"{TestPartition}/{id}";
         await NodeFactory.CreateNode(Page(id, "stored")).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
 
+        // The writer's acknowledgement waits for the durable flush, which is what this test holds — so
+        // the write is subscribed here and its ack read only after the release. Awaiting the ack while
+        // the flush was held sat out the owner's 10 s flush-ack bound (FlushAck) and let the write
+        // queue's 5 s backstop fire (WriteQueueAdvance): timeout == error. The commit's positive
+        // signal is the flush reaching the hold.
+        var write = Mesh.GetMeshNodeStream(path).Update(n => n with { Name = "committed" }).Take(1).Replay(1);
+        IDisposable? writeConnection = null;
         using (var flush = Storage.HoldWrites(path))
         {
-            await Mesh.GetMeshNodeStream(path).Update(n => n with { Name = "committed" })
-                .Should().Within(TestTimeouts.Convergence).Emit("the owner commits in memory", ct);
+            writeConnection = write.Connect();
             await Storage.HeldWrites(path).Where(n => n.Name == "committed")
-                .Should().Within(TestTimeouts.Convergence).Emit("the commit's flush reached the hold", ct);
+                .Should().Within(TestTimeouts.Convergence).Emit("the owner committed and the commit's flush reached the hold", ct);
             var stored = await Storage.Inner.Read(path, Mesh.JsonSerializerOptions)
                 .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
             stored?.Name.Should().Be("stored", "while the flush is held, storage still has the previous state");
         }
 
+        using var _ = writeConnection;
+        await write.Should().Within(TestTimeouts.Convergence).Emit("released, the write is acknowledged", ct);
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => Storage.Inner.Read(path, Mesh.JsonSerializerOptions).Take(1))
             .Where(n => n?.Name == "committed")
