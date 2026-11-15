@@ -52,6 +52,20 @@ public static class TimeoutTerminalKinds
     /// <c>MeshOperationOptions.Timeout</c>, so the create answered "outcome unknown".
     /// </summary>
     public const string CreatePostCreation = nameof(CreatePostCreation);
+
+    /// <summary>
+    /// A delete stage (pre-flight, validators, children, cascade, commit …) did not finish within
+    /// its <c>MeshOperationOptions</c> budget, and its stage-tagged <c>TimeoutException</c>
+    /// became the delete's verdict (<c>MeshExtensions.DeleteStageTimeout</c>).
+    /// </summary>
+    public const string DeleteStage = nameof(DeleteStage);
+
+    /// <summary>
+    /// A permission check did not reach a verdict within
+    /// <c>MeshOperationOptions.PermissionEstablishmentBudget</c> and was answered Undetermined
+    /// (<c>NodeTypeAccessRuleGate</c>, <c>RlsNodeValidator</c>).
+    /// </summary>
+    public const string PermissionEstablishment = nameof(PermissionEstablishment);
 }
 
 /// <summary>

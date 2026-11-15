@@ -28,6 +28,8 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// and that deployment ships no logs to Log Analytics, so there was nothing else to read
 /// (MeshWeaver#2896, open for weeks as "write verdict unconfirmed" for exactly this reason).</para>
 /// </summary>
+[ExpectsTimeoutTerminal(TimeoutTerminalKinds.RequestTimeout,
+    "the timeout message is the subject: every test fires the hub's RequestTimeout on its virtual clock")]
 public class TimeoutMessageNamesTheCallersOwnStateTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private record NeverAnswered : IRequest<NeverAnswer>;

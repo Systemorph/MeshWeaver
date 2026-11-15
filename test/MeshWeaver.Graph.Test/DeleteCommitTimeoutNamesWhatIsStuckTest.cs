@@ -79,6 +79,8 @@ public class DeleteCommitTimeoutNamesWhatIsStuckTest(ITestOutputHelper output)
         }));
 
     [Fact]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.DeleteStage,
+        "the commit stage's no-progress watchdog firing on a stalled store, and the paths its verdict names, are what this test asserts")]
     public async Task ACommitThatStalls_NamesThePathsTheDrainStillOwes()
     {
         var rootPath = $"{TestPartition}/{RootId}";

@@ -223,6 +223,8 @@ public class DeleteCommitQueuedBehindAMovingLaneTest(ITestOutputHelper output)
     /// counted - the unrelated lane kept the watchdog alive for up to four budgets.
     /// </summary>
     [Fact(Timeout = 120000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.DeleteStage,
+        "this test asserts that a leaf hung in its lane still times out on its own watchdog, not credited by another lane's progress")]
     public async Task ALeafAdmittedAndHungInItsLane_IsNotCreditedByAnUnrelatedLaneThatAdvances()
     {
         var registry = Mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>();

@@ -127,22 +127,40 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     /// <summary>A stream that stops before its reply ends in a TimeoutException after the hub's
-    /// silence bound — it never hangs, and the parts that did arrive were delivered first.</summary>
+    /// silence bound — it never hangs, and the parts that did arrive were delivered first. The bound
+    /// is the subject, so it runs on the client's virtual timeout clock: armed after the last part,
+    /// then fired.</summary>
     [Fact]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.RequestTimeout,
+        "the silence bound ending a stream that stopped before its reply is the behaviour under test")]
     public async Task A_stream_that_goes_silent_before_its_reply_times_out()
     {
+        var bound = TimeSpan.FromSeconds(2);
+        var clock = new ManualTimeProvider();
         var client = GetClient(c => ConfigureClient(c)
             .WithPostingIdentity(PostingIdentity.System)
-            .WithRequestTimeout(TimeSpan.FromSeconds(2)));
-
-        var seen = await client.ObserveStreamed(new CountRequest(2, GoSilent: true), o => o.WithTarget(CreateHostAddress()))
+            .WithRequestTimeout(bound)
+            .WithTimeoutClock(clock));
+        var seen = new System.Reactive.Subjects.ReplaySubject<System.Reactive.Notification<IMessageDelivery>>();
+        using var subscription = client
+            .ObserveStreamed(new CountRequest(2, GoSilent: true), o => o.WithTarget(CreateHostAddress()))
             .Materialize()
-            .ToList()
-            .Should().Within(15.Seconds()).Emit();
+            .Subscribe(seen);
 
-        seen.Where(n => n.Kind == System.Reactive.NotificationKind.OnNext).Should().HaveCount(2);
-        seen.Last().Kind.Should().Be(System.Reactive.NotificationKind.OnError);
-        seen.Last().Exception.Should().BeOfType<TimeoutException>();
+        // Both parts have arrived — each re-armed the silence bound — before the bound is fired.
+        await seen.Where(n => n.Kind == System.Reactive.NotificationKind.OnNext).Skip(1)
+            .Should().Within(10.Seconds()).Emit("both parts the handler sent arrive first");
+        await clock.WhenArmed(bound).Should().Within(10.Seconds())
+            .Emit("the silence bound is armed on the client's timeout clock");
+        clock.Advance(bound);
+
+        var end = await seen.Where(n => n.Kind != System.Reactive.NotificationKind.OnNext)
+            .Should().Within(10.Seconds()).Emit("the silence bound ends the stream");
+        end.Kind.Should().Be(System.Reactive.NotificationKind.OnError);
+        end.Exception.Should().BeOfType<TimeoutException>();
+        var parts = await seen.Where(n => n.Kind == System.Reactive.NotificationKind.OnNext).Count()
+            .Should().Within(10.Seconds()).Emit("the materialized stream completes after its error");
+        parts.Should().Be(2, "the parts that did arrive were delivered before the timeout");
     }
 
     /// <summary>

@@ -44,6 +44,9 @@ public class AnUploadTimeoutNamesTheStepThatTimedOutTest(ITestOutputHelper outpu
     /// <summary>Shorter than any lookup bound, so only the write leg can be the one that times out.</summary>
     private static readonly TimeSpan ClientRequestTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>Completed when the owner has swallowed a write delivery — the write leg is now silent.</summary>
+    private readonly System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit> _writeSwallowed = new();
+
     private readonly string _contentRoot = Path.Combine(
         AppContext.BaseDirectory, "Files", "UploadTimeout", Guid.NewGuid().ToString("N"));
 
@@ -62,7 +65,7 @@ public class AnUploadTimeoutNamesTheStepThatTimedOutTest(ITestOutputHelper outpu
                         .AddDeliveryPipeline(p => p.AddPipeline((delivery, ct, next) =>
                             delivery.Message is SaveContentFileRequest { FilePath: var file }
                             && file.StartsWith(SwallowedFolder + "/", StringComparison.Ordinal)
-                                ? Observable.Return(delivery.Processed())
+                                ? Swallow(delivery)
                                 : next.Invoke(delivery, ct)))
                         .AddContentCollection(_ => new ContentCollectionConfig
                         {
@@ -76,8 +79,17 @@ public class AnUploadTimeoutNamesTheStepThatTimedOutTest(ITestOutputHelper outpu
                 new MeshNode(Target) { Name = "Upload Timeout Target", NodeType = NodeType });
     }
 
-    private IMessageHub ShortDeadlineClient()
-        => GetClient(c => ConfigureClient(c).WithRequestTimeout(ClientRequestTimeout));
+    private IObservable<IMessageDelivery> Swallow(IMessageDelivery delivery)
+    {
+        _writeSwallowed.OnNext(System.Reactive.Unit.Default);
+        _writeSwallowed.OnCompleted();
+        return Observable.Return(delivery.Processed());
+    }
+
+    private IMessageHub ShortDeadlineClient(TimeProvider? clock = null)
+        => GetClient(c => clock is null
+            ? ConfigureClient(c).WithRequestTimeout(ClientRequestTimeout)
+            : ConfigureClient(c).WithRequestTimeout(ClientRequestTimeout).WithTimeoutClock(clock));
 
     private static byte[] Bytes(int length)
     {
@@ -111,12 +123,25 @@ public class AnUploadTimeoutNamesTheStepThatTimedOutTest(ITestOutputHelper outpu
             .Should().Equal(bytes);
     }
 
+    /// <summary>
+    /// The write leg's timeout is the subject, so it runs on the client's virtual timeout clock: the
+    /// owner swallows the write, the client's deadline for it is armed, and the test fires it.
+    /// </summary>
     [Theory(Timeout = 120_000)]
     [MemberData(nameof(Sizes))]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.RequestTimeout,
+        "the client's deadline on a write the owner never answers is the behaviour under test")]
     public async Task AWriteTheOwnerNeverAnswers_IsNotReportedAsAFailedLookup(int size)
     {
-        var answer = await Upload(ShortDeadlineClient(), $"{Target}/content/{SwallowedFolder}/file-{size}.bin", Bytes(size),
+        var clock = new ManualTimeProvider();
+        var pending = Upload(ShortDeadlineClient(clock), $"{Target}/content/{SwallowedFolder}/file-{size}.bin", Bytes(size),
             TestContext.Current.CancellationToken);
+        await _writeSwallowed.Should().Within(TestTimeouts.Convergence)
+            .Emit("the lookup answers and the write delivery reaches the owner, which swallows it");
+        await clock.WhenArmed(ClientRequestTimeout).Should().Within(TestTimeouts.Convergence)
+            .Emit("the client's deadline for the write is armed on its timeout clock");
+        clock.Advance(ClientRequestTimeout);
+        var answer = await pending;
         Output.WriteLine(answer);
 
         answer.Should().StartWith("Error:");

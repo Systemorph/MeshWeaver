@@ -149,6 +149,8 @@ public class PictureUploadWithASilentPermissionFoldTest(ITestOutputHelper output
                     : PermissionEvaluator.GetEffectivePermissions(hub, nodePath, userId)));
 
     [Fact(Timeout = 120_000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.PermissionEstablishment,
+        "this test asserts that a silent permission fold is ended by the establishment budget and answered Undetermined")]
     public async Task ASilentFold_IsAnsweredUndetermined_AndNothingIsStored()
     {
         var outcome = await UploadBuiltAsSubscribedAsHub(SilentUser)

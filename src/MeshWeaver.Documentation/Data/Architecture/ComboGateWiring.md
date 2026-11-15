@@ -121,9 +121,19 @@ per instance it does exactly the three steps
    `memex-control`, whose version tag exists before `memex-portal-ai`'s is armed, and also exists
    for builds that never arm it. The lander used to pull `memex-portal-ai:<selected>` for every
    instance, so the control slot failed `not found` whenever its candidate was not armed yet (#4413).
-   It now pulls `<acr>/<repository>:<selected>`. An instance on an image from before the field
-   names no repository, and the lander falls back to the poller's default (`memex-portal-ai`),
-   which is what that image lists.
+   It now pulls `<acr>/<repository>:<selected>`.
+
+   **An instance on an image from before the field names no repository, and then the image comes
+   from its deployment record.** The roster carries each installation's record `imageRepository`
+   with the registry host dropped (`derive-combo-instances.py` → `INSTANCE_IMAGE_REPOSITORY`), and
+   the lander uses it when the roll target is silent. Only a record that declares no image falls
+   back to `memex-portal-ai`, and the slot says so. The fallback used to be `memex-portal-ai` for
+   every instance. That is wrong for a control instance, which runs `memex-control`, the image that
+   carries the fleet-control NodeTypes. A client estate's control instance still on a pre-#4413
+   image, and rolling only through an approval gate, was verified against the portal image on every
+   run. Each run read Red with `NodeType(s) not registered: Hosting/Deployment` for its
+   `Deployments` space, and the lane stayed red on a verdict about an image that instance does not
+   run.
 2. **Ask the instance what it runs** — `GET /api/plugins/combo`, added by #3544 beside its two
    `mwi_`-gated siblings. Its body is an `InstanceCombo` serialized with
    `InstanceComboAssembler.Json`, i.e. it **is** `combo.json`, byte-for-byte what `mw-combo-verify`
