@@ -701,7 +701,20 @@ internal static class NodeTypeCompilationHelpers
                         // that reported an adoption it never wrote back was believed — and the
                         // type sat at Pending for ever (#2818's regression, third phase: a dirty
                         // type with the previous build's coordinates, re-triggered unforced).
+                        // MeshWeaver#4413 — WHAT the node looked like when the confirmation gave up,
+                        // so the warning separates "the stamp never landed" (status Ok never seen,
+                        // no coordinates) from "nothing was written over a node that already names
+                        // a build" (status Pending, coordinates present, usable) — the two causes of
+                        // the redundant compiles measured on every memex-sized combo slot.
+                        (CompilationStatus? Status, bool Coordinates, bool Usable, bool Dirty)? lastSeen = null;
                         return ownStream
+                            .Do(n =>
+                            {
+                                if (n?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger) is { } seen)
+                                    lastSeen = (seen.CompilationStatus,
+                                        !string.IsNullOrEmpty(seen.LatestAssemblyPath),
+                                        HasUsableBuild(n, seen, guards), seen.IsDirty);
+                            })
                             .Where(n => n?.ContentAs<NodeTypeDefinition>(
                                             hub.JsonSerializerOptions, logger) is { } adoptedDef
                                         && adoptedDef.CompilationStatus == CompilationStatus.Ok
@@ -711,12 +724,16 @@ internal static class NodeTypeCompilationHelpers
                             .Timeout(AdoptionStampBudget)
                             .Catch<bool, Exception>(_ =>
                             {
+                                var seen = lastSeen;
                                 logger?.LogWarning(
                                     "Compile watcher: {HubPath} reported {Adopted} adopted "
                                     + "assembly(ies) but the node still has no usable build "
                                     + "{Budget}s later — compiling instead, because a stranded type "
-                                    + "is worse than a redundant compile.",
-                                    hubPath, adopted, AdoptionStampBudget.TotalSeconds);
+                                    + "is worse than a redundant compile. Last state seen: "
+                                    + "status={Status} coordinates={Coordinates} usable={Usable} dirty={Dirty}.",
+                                    hubPath, adopted, AdoptionStampBudget.TotalSeconds,
+                                    seen is { } s ? s.Status?.ToString() ?? "null" : "no emission",
+                                    seen?.Coordinates, seen?.Usable, seen?.Dirty);
                                 return Observable.Return(false);
                             });
                     }

@@ -1163,6 +1163,39 @@ Also not established: whether the producing repository's own seeded gate shows t
 smaller scale. The 5 s stamp budget is not the fix. Raising it would hide the unanswered reads, and
 the reads would still cost every type its adoption.
 
+## Open: the gate compiles the large package a second time (#4413)
+
+Large combos (about 81 modules) sometimes end `NotVerifiable` because the gate runs out of
+`GATE_TIMEOUT`. The clock covers the bake and the gate together. What fills it, read from the
+slot logs of runs 43730201284 and 43722437356 (NotVerifiable) and 43725330495 (Green):
+
+- **Bake:** 408 s to 827 s for the same 165 NodeTypes. 15 packages reuse their sealed bundles;
+  30 are rebuilt because the instance runs older package commits than the newest seal.
+- **Gate, every package except `Hosting`:** about 3 minutes.
+- **Gate, `Hosting`:** the rest. All 64 Hosting NodeTypes log
+  `reported 1 adopted assembly(ies) but the node still has no usable build 5s later — compiling
+  instead`. The gate then compiles every one of them again, although the bake compiled them, and
+  each type's tests wait for its own compile.
+
+This happens on the Green memex run too: there the bake was fast enough to leave room for it.
+Packages installed before `Hosting`, under less load, are adopted without a second compile.
+
+What is NOT yet known is why the node has no usable build after the adoption reports success. The
+seeder's write already completes on the owning hub's verdict (#2661), so "the write had not landed
+yet" is not the answer. The leading candidate is a definite ordering: the install-time adoption
+stamps the type `Ok`; the release request then finds the source versions not yet stamped (source
+reads time out under the 999-file install) and flips the type `Pending`; the watcher's on-demand
+adoption then finds the same bytes already recorded, returns `AlreadyServed` and writes nothing; and
+the watcher, which requires status `Ok`, compiles.
+
+To decide it, the lane sets `MW_LOG_CATEGORIES=bake-seed=Debug,MeshWeaver.Graph.CompileWatcher=Debug`
+on the verify step. The verifier forwards that variable to the gate container by name
+(`DockerImageGate.ForwardedEnvironment`), and the tester raises only the categories it names,
+even at its default Warning level (`GateVerbosity.CategoryFilters`). The compile watcher's
+warning also names the last state it saw (`status`, `coordinates`, `usable`, `dirty`). Both
+tester-side halves ship in the candidate image, so they appear from the first candidate built
+after this change.
+
 ## Known boundary: the combo moves
 
 A verdict names the `ComboReadAt` of the snapshot it verified. An instance whose modules sync forward
