@@ -1578,8 +1578,14 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     private IObservable<T> ScheduleRenderSubscribe<T>(IObservable<T> source)
     {
+        // 🚨 OWNED UNTIL THE POOL DRAIN (#7992). This host disposes every render subscription — but the
+        // host lives as long as its hub, and on a silo every hub outlives IoPoolSiloTeardown's cancel of
+        // the pools. So each live area's render legs (and the queries its generator opened under them)
+        // were still attached at every silo stop and reported as unowned leaks. The registry now releases
+        // them before it cancels the pool; disposing them here first (an area cleared, the host disposed)
+        // forgets them, exactly as before.
         return renderSubscribeScheduler is { } scheduler
-            ? scheduler.SubscribeThroughPool(source)
+            ? scheduler.SubscribeThroughPool(source, nameof(LayoutAreaHost))
             : source.SubscribeOn(TaskPoolScheduler.Default);
     }
 
