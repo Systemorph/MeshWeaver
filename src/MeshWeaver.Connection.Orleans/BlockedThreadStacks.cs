@@ -43,6 +43,18 @@ namespace MeshWeaver.Connection.Orleans;
 /// that failed for exactly that reason — a thread other than this process vanished mid-dump — is taken
 /// again: the next enumeration no longer lists the thread that exited. Any other failure is reported as
 /// before, and when every attempt fails the error names each attempt's reason.</para>
+///
+/// <para>🚨 <b>"Written" is read off the FILE, never off the call.</b> The runtime reports a dump writer that
+/// died on a SIGNAL as a success: on Unix it waits for <c>createdump</c> and answers
+/// <c>!WIFEXITED(status) || WEXITSTATUS(status) == 0</c> (<c>PROCCreateCrashDump</c>, coreclr's
+/// <c>pal/src/thread/process.cpp</c>), so a <c>createdump</c> killed mid-dump makes
+/// <see cref="DiagnosticsClient.WriteDump(DumpType, string, bool)"/> return normally over no file, or over a
+/// file it stopped writing part-way. Measured on a CI shard (core #8355): <c>createdump</c> printed
+/// <c>Gathering state for process …</c> and nothing after it — not even the <c>Target process is alive</c>
+/// line every one of its own exits prints — the call returned, and ClrMD then threw
+/// <c>FileNotFoundException</c> for the dump that was never written. So after every write the file is
+/// checked against its OWN headers (<see cref="EnsureWritten"/>): a missing or truncated dump is a named
+/// failure of the capture, and nothing is ever read from it.</para>
 /// </summary>
 internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>? writeDump = null)
 {
@@ -174,6 +186,7 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
         try
         {
             WriteDump(path);
+            EnsureWritten(path);
             using var target = DataTarget.LoadDump(path);
             if (target.ClrVersions.Length == 0)
                 throw new InvalidOperationException($"the dump of process {Environment.ProcessId} carries no CLR runtime");
@@ -217,6 +230,142 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
                         new AggregateException(failures));
             }
         }
+    }
+
+    /// <summary>
+    /// Throws, naming what is wrong, unless <paramref name="path"/> holds a WHOLE dump: the file exists and is
+    /// at least as long as its own headers say it is (see the class remarks — the runtime reports a dump writer
+    /// that died on a signal as a success). A format this check does not parse is held to existing.
+    /// </summary>
+    /// <param name="path">Where the dump was written.</param>
+    internal static void EnsureWritten(string path)
+    {
+        var file = new FileInfo(path);
+        if (!file.Exists)
+            throw new InvalidOperationException(
+                $"the runtime reported the dump of process {Environment.ProcessId} as written, but there is no file at "
+                + $"'{path}': its dump writer (createdump) ended before writing it — a writer killed by a signal is reported "
+                + "as a success by the runtime — so no stacks were read");
+        long? described;
+        try
+        {
+            described = DescribedLength(path);
+        }
+        catch (EndOfStreamException)
+        {
+            throw new InvalidOperationException(
+                $"the dump at '{path}' is {file.Length} bytes and ends inside its own headers: its dump writer (createdump) "
+                + "stopped writing it part-way — a writer killed by a signal is reported as a success by the runtime — so "
+                + "no stacks were read");
+        }
+        if (described is { } length && file.Length < length)
+            throw new InvalidOperationException(
+                $"the dump at '{path}' is {file.Length} bytes but its own headers describe {length}: its dump writer "
+                + "(createdump) stopped writing it part-way — a writer killed by a signal is reported as a success by the "
+                + "runtime — so no stacks were read");
+    }
+
+    /// <summary>
+    /// How long the dump at <paramref name="path"/> says it is: the furthest byte its headers place data at.
+    /// Read for the two formats the runtime's dump writer produces on Unix — a 64-bit little-endian ELF core
+    /// (Linux) and a 64-bit Mach-O core (macOS); <c>null</c> for any other format.
+    /// </summary>
+    /// <param name="path">The dump.</param>
+    /// <returns>The length the headers describe, or <c>null</c> when the format is not one read here.</returns>
+    /// <exception cref="EndOfStreamException">The file ends inside its own headers.</exception>
+    internal static long? DescribedLength(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+        using var reader = new BinaryReader(stream);
+        if (stream.Length < 4)
+            throw new EndOfStreamException();
+        var magic = reader.ReadUInt32();
+        return magic switch
+        {
+            ElfMagic => ElfLength(stream, reader),
+            MachO64Magic => MachOLength(stream, reader),
+            _ => null,
+        };
+    }
+
+    /// <summary><c>\x7FELF</c>, read little-endian.</summary>
+    private const uint ElfMagic = 0x464C457F;
+
+    /// <summary><c>MH_MAGIC_64</c> of a little-endian 64-bit Mach-O file.</summary>
+    private const uint MachO64Magic = 0xFEEDFACF;
+
+    private static long? ElfLength(FileStream stream, BinaryReader reader)
+    {
+        // e_ident[EI_CLASS] = ELFCLASS64, e_ident[EI_DATA] = ELFDATA2LSB: the only shape read here.
+        if (reader.ReadByte() != 2 || reader.ReadByte() != 1)
+            return null;
+        stream.Position = 0x20;
+        var phoff = reader.ReadInt64();
+        var shoff = reader.ReadInt64();
+        stream.Position = 0x36;
+        var phentsize = reader.ReadUInt16();
+        long phnum = reader.ReadUInt16();
+        var shentsize = reader.ReadUInt16();
+        long shnum = reader.ReadUInt16();
+        var end = phoff + phnum * phentsize;
+        if (shoff != 0)
+        {
+            end = Math.Max(end, shoff + Math.Max(shnum, 1) * shentsize);
+            // PN_XNUM: more program headers than e_phnum holds — the real count is section 0's sh_info.
+            if (phnum == 0xFFFF)
+            {
+                Seek(stream, shoff + 0x2C);
+                phnum = reader.ReadUInt32();
+                end = Math.Max(end, phoff + phnum * phentsize);
+            }
+        }
+        for (long i = 0; i < phnum; i++)
+        {
+            Seek(stream, phoff + i * phentsize + 0x08);
+            var offset = reader.ReadInt64();
+            stream.Position += 0x10;
+            var fileSize = reader.ReadInt64();
+            end = Math.Max(end, offset + fileSize);
+        }
+        return end;
+    }
+
+    private static long? MachOLength(FileStream stream, BinaryReader reader)
+    {
+        const uint segment64 = 0x19, note = 0x31;
+        stream.Position = 16;
+        var commands = reader.ReadUInt32();
+        var commandBytes = reader.ReadUInt32();
+        long end = 32 + commandBytes;
+        long at = 32;
+        for (var i = 0; i < commands; i++)
+        {
+            Seek(stream, at);
+            var command = reader.ReadUInt32();
+            var size = reader.ReadUInt32();
+            if (size < 8)
+                return end;
+            if (command == segment64)
+            {
+                Seek(stream, at + 40);
+                end = Math.Max(end, reader.ReadInt64() + reader.ReadInt64());
+            }
+            else if (command == note)
+            {
+                Seek(stream, at + 24);
+                end = Math.Max(end, reader.ReadInt64() + reader.ReadInt64());
+            }
+            at += size;
+        }
+        return end;
+    }
+
+    /// <summary>Positions the stream at <paramref name="offset"/>, or reports the file as ending inside its headers.</summary>
+    private static void Seek(FileStream stream, long offset)
+    {
+        if (offset < 0 || offset >= stream.Length)
+            throw new EndOfStreamException();
+        stream.Position = offset;
     }
 
     private static IReadOnlyList<string> Frames(ClrThread thread, int max) =>
