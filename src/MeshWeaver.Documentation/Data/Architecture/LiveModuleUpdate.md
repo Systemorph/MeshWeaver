@@ -220,6 +220,38 @@ waits for an approval, so does the module. Whether the control plane should then
 Restart in its place is the control plane's decision (it sees the Roll it opened), not this
 instance's.
 
+### A process's OWN pending modules are a reason to act, whatever the shared marker says
+
+`ConsiderRestart` used to enter the module half only when the activation record's `PendingRestart`
+marker was set. That marker is ONE deployment-wide boolean, raised by a landing and cleared by the
+NEXT boot — any boot, on any replica, including a boot that did not load the module the marker was
+raised for. The boot that DEFERS a landed module (its bytes are on the volume but the mesh's proposed
+module set does not name it yet, [Module Set Convergence](../ModuleSetConvergence)) clears the marker
+all the same, and the proposal that later names the module raises nothing, because nothing new landed.
+
+Measured on the control instance, 2026-11-16, platform 4.0.13440 (per replica, from the `Sample`
+action's `/health` bodies): the first v4 replica booted at 22:01:57Z with the MCP and chat modules
+landed but not proposed, so it loaded 15 modules where its two siblings, booted at 22:06:31Z and
+22:10:48Z after the proposal, loaded 19. Its own self-update check fired on that proposal
+(`trigger ModuleSetProposed`), read the cleared marker, and answered *no newer release* — while its
+`pending_module_activation` read *a restart activates them: … MeshWeaver.Mcp*. `POST /mcp` answered
+404 on that replica and 401 (mapped, authentication required) on the other two, so one request in
+three failed for the replica's whole life.
+
+The module half now also runs when `PendingModuleActivations` — the per-PROCESS comparison of what the
+mesh's set would load against what this process loaded, the reading `pending_module_activation`
+renders — names a pending module. The live activation reads the same report: a module this process
+never held answers `NotHeld`, and the restart follows, paced by the same `MinRollInterval` floor.
+Nothing is restarted for a module that is deferred, declined, held or unloadable here, because the
+report does not count those as pending. A host without the per-process reader keeps the marker as its
+only signal. `ModuleUpdatesGoLiveTest.AModuleThisProcessNeverLoaded_WithTheMarkerConsumedByAnotherBoot_IsActivatedByOneRestart`
+(`Memex.Portal.Shared.Test` in MeshWeaver.Plugins) lands a module after boot, proposes the set naming
+it and clears the marker: before the fix the check restarts nothing; with it, exactly one restart.
+
+The endpoints themselves were never the defect: a module this process holds in its own load context
+maps its routes through `ModuleEndpointDataSource`, which re-maps on every live swap, and a module
+the process does not hold can only arrive with a restart. What was missing was the restart.
+
 ### One landing, one recycle wave (MeshWeaver#6729)
 
 **A landing recycles each owner address ONCE.** `ModuleLiveActivation` hands every pending module of a
