@@ -230,11 +230,15 @@ module set does not name it yet, [Module Set Convergence](../ModuleSetConvergenc
 all the same, and the proposal that later names the module raises nothing, because nothing new landed.
 
 Measured on the control instance, 2026-11-16, platform 4.0.13440 (per replica, from the `Sample`
-action's `/health` bodies): the first v4 replica booted at 22:01:57Z with the MCP and chat modules
-landed but not proposed, so it loaded 15 modules where its two siblings, booted at 22:06:31Z and
-22:10:48Z after the proposal, loaded 19. Its own self-update check fired on that proposal
-(`trigger ModuleSetProposed`), read the cleared marker, and answered *no newer release* — while its
-`pending_module_activation` read *a restart activates them: … MeshWeaver.Mcp*. `POST /mcp` answered
+action's `/health` bodies): the first v4 replica booted at 22:01:57Z before the set naming its landed
+modules was proposed. Its `pending_module_activation` named six landed-but-unloaded modules
+(MeshWeaver.AI.AppleIntelligence, MeshWeaver.Azure.Blob, MeshWeaver.Blazor.Chat, MeshWeaver.Courses,
+MeshWeaver.Graph.Views, MeshWeaver.Mcp), of which MCP and chat are the two the deployment declares
+REQUIRED; its `module_forwarders` counted root forwarders over 15 modules where its two siblings,
+booted at 22:06:31Z and 22:10:48Z after the proposal, counted 19 (that count covers only modules
+that register root services, so it is not a count of every module loaded). Its own self-update check fired on that proposal
+(`trigger ModuleSetProposed`), read the cleared marker, and answered *no newer release* — while that same
+`pending_module_activation` line promised *a restart activates them*. `POST /mcp` answered
 404 on that replica and 401 (mapped, authentication required) on the other two, so one request in
 three failed for the replica's whole life.
 
