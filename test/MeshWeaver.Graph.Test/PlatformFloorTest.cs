@@ -155,6 +155,9 @@ public class PlatformFloorTest
     [InlineData("4.0.13296", "3.1.0-ci.13396")]
     [InlineData("4.0.1", "3.1.99999")]
     [InlineData("5.0.100", "4.0.200")]
+    // A major beyond int is still a higher line — never an unparsed value read as the legacy line 3,
+    // which would have compared run 1 against 99999 and called the floor satisfied.
+    [InlineData("9999999999.0.1", "3.1.99999")]
     public void AFloorOnAHigherLine_IsHeld_WhateverTheRunNumbersSay(string floor, string running)
     {
         var verdict = PlatformFloor.Evaluate(floor, running);

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 
@@ -26,7 +26,9 @@ namespace MeshWeaver.PluginCatalog;
 /// one line never moves, displaces or garbage-collects another line's head.</para>
 ///
 /// <para>The services of other lines are created on first use and owned here, so their lifetime is
-/// the mesh's. Each line's head and fallback keep every rule the single shelf had: the highest version
+/// the mesh's. Creating one and disposing the set share one short synchronous critical section (no
+/// await inside it, and a constructor that does no IO), so a shelf created while the set is being
+/// disposed is either seen and disposed by <see cref="Dispose"/> or refused — never leaked. Each line's head and fallback keep every rule the single shelf had: the highest version
 /// of THAT line is its head.</para>
 /// </summary>
 public sealed class ModuleShelfLines : IDisposable
@@ -34,7 +36,8 @@ public sealed class ModuleShelfLines : IDisposable
     private readonly ModuleLandingService own;
     private readonly string? configuredRoot;
     private readonly Func<string, ModuleLandingService> create;
-    private readonly ConcurrentDictionary<int, Lazy<ModuleLandingService>> others = new();
+    private readonly object gate = new();
+    private ImmutableDictionary<int, ModuleLandingService> others = ImmutableDictionary<int, ModuleLandingService>.Empty;
     private bool disposed;
 
     /// <summary>Creates the shelves.</summary>
@@ -70,11 +73,18 @@ public sealed class ModuleShelfLines : IDisposable
     {
         if (line is not { } l || OwnLine is not { } mine || BundleLine.LineOf(l) == mine)
             return own;
-        ObjectDisposedException.ThrowIf(disposed, this);
         var normalized = BundleLine.LineOf(l);
-        return others.GetOrAdd(normalized, n => new Lazy<ModuleLandingService>(
-            () => create(TreeFor(configuredRoot, own.BaseDirectory, OwnLine, n)),
-            LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        lock (gate)
+        {
+            // Checked INSIDE the section Dispose takes: a check outside it raced Dispose's drain, and a
+            // shelf created in that window was never disposed.
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (others.TryGetValue(normalized, out var existing))
+                return existing;
+            var created = create(TreeFor(configuredRoot, own.BaseDirectory, OwnLine, normalized));
+            others = others.Add(normalized, created);
+            return created;
+        }
     }
 
     /// <summary>The shelf an upload belongs on: the line it states (<see cref="BundleLine.StatedLine"/>),
@@ -97,7 +107,10 @@ public sealed class ModuleShelfLines : IDisposable
     /// <item>The own line: <paramref name="ownTree"/>, this process's own tree.</item>
     /// <item>With a configured (shared) root: <see cref="ModuleRoot.ForLine"/> — the tree a process of
     /// that line lands into on the same volume, so a replica of that line boots exactly what this
-    /// registry shelved for it.</item>
+    /// registry shelved for it. When that tree IS <paramref name="ownTree"/> this process's own tree is
+    /// not the one <see cref="ModuleRoot.ForLine"/> gives its own line under that root (a mis-wired
+    /// landing service), and two lines would share one shelf — refused with
+    /// <see cref="InvalidOperationException"/>, never relocated to a path no replica of that line reads.</item>
     /// <item>Without one: <c>&lt;own tree&gt;/lines/&lt;line&gt;</c> — beside the own tree, never the own
     /// tree itself (an unconfigured root is the image directory for every major, and the shelves of two
     /// lines must never share a path).</item>
@@ -115,8 +128,15 @@ public sealed class ModuleShelfLines : IDisposable
         if (!string.IsNullOrWhiteSpace(configuredRoot))
         {
             var shared = ModuleRoot.ForLine(configuredRoot.Trim(), BundleLine.LineOf(line));
-            if (!SamePath(shared, ownTree))
-                return shared;
+            if (SamePath(shared, ownTree))
+                throw new InvalidOperationException(
+                    $"The configured module root {configuredRoot.Trim()} puts line "
+                    + BundleLine.LineOf(line).ToString(CultureInfo.InvariantCulture)
+                    + $"'s shelf at {shared}, which is this process's own tree (line "
+                    + (ownLine?.ToString(CultureInfo.InvariantCulture) ?? "unknown")
+                    + "): two lines would share one shelf. This process's landing service is not rooted where "
+                    + "ModuleRoot.ForLine puts its own line under that root.");
+            return shared;
         }
         return Path.Combine(ownTree, ModuleRoot.LinesDirectoryName,
             BundleLine.LineOf(line).ToString(CultureInfo.InvariantCulture));
@@ -130,10 +150,16 @@ public sealed class ModuleShelfLines : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        if (disposed)
-            return;
-        disposed = true;
-        foreach (var shelf in others.Values.Where(l => l.IsValueCreated))
-            shelf.Value.Dispose();
+        ImmutableDictionary<int, ModuleLandingService> drained;
+        lock (gate)
+        {
+            if (disposed)
+                return;
+            disposed = true;
+            drained = others;
+            others = ImmutableDictionary<int, ModuleLandingService>.Empty;
+        }
+        foreach (var shelf in drained.Values)
+            shelf.Dispose();
     }
 }

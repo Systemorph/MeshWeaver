@@ -158,12 +158,16 @@ public static class PlatformFloor
     /// <param name="major">A platform major.</param>
     public static int LineOf(int major) => major <= LegacyLine ? LegacyLine : major;
 
-    /// <summary>The line of a numeric version core (<c>4.0.0</c> → 4, <c>3.1.0</c> → 3). Pure.</summary>
-    private static int LineOfCore(string core)
+    /// <summary>The line of a numeric version core (<c>4.0.0</c> → 4, <c>3.1.0</c> → 3). Pure.
+    /// Only called on a core <see cref="PlatformReleaseOrder.TrySplit"/> accepted, so every part already
+    /// parsed as a non-negative <see cref="long"/>; the major is read as one too, so a major beyond
+    /// <see cref="int"/> is its own (higher) line rather than an unparsed value read as the legacy line.</summary>
+    private static long LineOfCore(string core)
     {
         var dot = core.IndexOf('.');
-        return LineOf(int.TryParse(dot < 0 ? core : core[..dot], System.Globalization.NumberStyles.None,
-            System.Globalization.CultureInfo.InvariantCulture, out var major) ? major : 0);
+        var major = long.Parse(dot < 0 ? core : core[..dot], System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture);
+        return major <= LegacyLine ? LegacyLine : major;
     }
 
     /// <summary>
