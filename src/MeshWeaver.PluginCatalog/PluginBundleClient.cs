@@ -96,6 +96,13 @@ public sealed class PluginBundleClient
     // module build (policy major-lines-run-separately, MeshWeaver.Plugins#5550).
     private readonly int? _runningLine;
 
+    // `&line=<n>` for every registry request this client makes, or nothing when the line is unknown
+    // (policy major-lines-run-separately, MeshWeaver.Plugins#5550). Same wire name as the package
+    // listing's (PlatformLine.WireName).
+    private string LineParameter => _runningLine is { } line
+        ? $"&{PlatformLine.WireName}={line.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+        : "";
+
     /// <summary>
     /// How long any stage of a transfer may go SILENT before it is refused — the response start
     /// and the body alike. Defaults to <see cref="TransferStallBudget"/>; a test sets it low so a
@@ -303,7 +310,11 @@ public sealed class PluginBundleClient
         // in exactly the case it is right.
         var url = $"{_registryUrl}{RoutePrefix}/index.json"
                   + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
-                  + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
+                  + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}"
+                  // 🚨 …and its platform LINE (MeshWeaver.Plugins#5550): the registry keeps one shelf per
+                  // line and answers with this line's heads and fallbacks only. The split below stays
+                  // as defence in depth, for a registry that predates the parameter and ignores it.
+                  + LineParameter;
         using var request = Request(token, HttpMethod.Get, url);
         // 🚨 Bounded at every stage like the bundle itself (#4528). The index is small, but the
         // stall that took the fleet's reconcile down was THIS request — the registry accepting the
@@ -1297,7 +1308,9 @@ public sealed class PluginBundleClient
             var url = $"{_registryUrl}{RoutePrefix}/{Uri.EscapeDataString(pluginId)}"
                       + $"/{Uri.EscapeDataString(version)}"
                       + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
-                      + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
+                      + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}"
+                      // The line too: the registry resolves the version from THIS line's shelf.
+                      + LineParameter;
             using var request = Request(token, HttpMethod.Get, url);
             var receipt = await Receive(request, $"Bundle for {pluginId}@{version}", ct)
                 .ConfigureAwait(false);

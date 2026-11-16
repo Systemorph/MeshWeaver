@@ -64,13 +64,15 @@ public static class BundleLine
     /// The line THIS process runs: the major of a test-registered
     /// <see cref="RunningPlatformVersionOverride"/> when one is registered (the catalog's floor test
     /// seam — production registers none), else <see cref="RunningMajor"/>, the core's own
-    /// assembly major. Null only when neither names one, and then nothing is filtered.
+    /// assembly major. Null when neither names one, and then nothing is filtered — including a registered
+    /// override whose version does not parse: a mistyped seam must not silently fall back to the host's
+    /// real line and filter by a line the test never asked for.
     /// </summary>
     /// <param name="services">The calling hub's service provider.</param>
     public static int? RunningLine(IServiceProvider? services)
     {
         var major = services?.GetService(typeof(RunningPlatformVersionOverride)) is RunningPlatformVersionOverride pinned
-            ? PrebuiltAdoptionPolicy.MajorOf(pinned.Version) ?? RunningMajor
+            ? PrebuiltAdoptionPolicy.MajorOf(pinned.Version)
             : RunningMajor;
         return major is { } m ? LineOf(m) : null;
     }
@@ -84,18 +86,67 @@ public static class BundleLine
     public static BundleLineReading Read(PluginBundleClient.BundleRef bundle, string? indexFrameworkMvid)
     {
         ArgumentNullException.ThrowIfNull(bundle);
-        var own = bundle.FrameworkMvid?.Trim();
+        return Read(bundle.FrameworkMvid, bundle.MinMeshVersion, indexFrameworkMvid);
+    }
+
+    /// <summary>
+    /// 🚨 THE derivation, on what a build STATES about its platform — the bundle-index entry's
+    /// fields, an upload's manifest, a landed generation's activation entry alike (see the type doc
+    /// for the order). One rule for the consumer that picks from an index and for the registry that
+    /// shelves an upload, so the two can never disagree about which line a build belongs to. Pure.
+    /// </summary>
+    /// <param name="frameworkMvid">The framework identity the bytes were built against, as their
+    /// producer recorded it.</param>
+    /// <param name="minMeshVersion">The build's declared platform floor.</param>
+    /// <param name="fallbackIdentity">The identity whose line applies when the build states neither —
+    /// the registry's own line for an index entry, the shelf tree's line for a landed generation.</param>
+    public static BundleLineReading Read(string? frameworkMvid, string? minMeshVersion, string? fallbackIdentity)
+    {
+        var own = frameworkMvid?.Trim();
         if (PlatformCompatibility.TryParseKey(own, out var keyMajor, out _))
             return new(LineOf(keyMajor), $"its framework identity {own}", Stated: true);
-        if (PrebuiltAdoptionPolicy.MajorOf(bundle.MinMeshVersion) is { } floorMajor)
-            return new(LineOf(floorMajor), $"its declared platform floor {bundle.MinMeshVersion!.Trim()}", Stated: true);
-        var registry = indexFrameworkMvid?.Trim();
+        var floor = minMeshVersion?.Trim();
+        if (PrebuiltAdoptionPolicy.MajorOf(floor) is { } floorMajor)
+            return new(LineOf(floorMajor), $"its declared platform floor {floor}", Stated: true);
+        var registry = fallbackIdentity?.Trim();
         if (PlatformCompatibility.TryParseKey(registry, out var registryMajor, out _))
             return new(LineOf(registryMajor),
                 $"the registry's own line {registry} (the entry states no identity and no floor)", Stated: false);
         return new(LegacyLine,
             "nothing — no identity, no floor, no registry line — so the legacy shared line "
             + LegacyLine.ToString(CultureInfo.InvariantCulture), Stated: false);
+    }
+
+    /// <summary>
+    /// The line a build STATES (its framework identity, else its declared floor), or null when it
+    /// states neither — the registry's shelf routes an upload by this, and its index keeps an entry
+    /// that states nothing in the tree it was found in. Pure.
+    /// </summary>
+    /// <param name="frameworkMvid">The framework identity the bytes were built against.</param>
+    /// <param name="minMeshVersion">The build's declared platform floor.</param>
+    public static int? StatedLine(string? frameworkMvid, string? minMeshVersion) =>
+        Read(frameworkMvid, minMeshVersion, fallbackIdentity: null) is { Stated: true } reading
+            ? reading.Line
+            : null;
+
+    /// <summary>
+    /// 🚨 The line a REGISTRY CALLER is on, as its request says (policy
+    /// <c>major-lines-run-separately</c>, MeshWeaver.Plugins#5550): the <c>line</c> it states
+    /// (<see cref="PlatformLine.WireName"/>, a major), else the line of the framework identity it asks
+    /// in (<c>identity=c003e005</c> → 3) — which every client since #3768 sends, so a caller that
+    /// predates the <c>line</c> parameter is still served its own line — else null, and the registry
+    /// serves its own line. Pure.
+    /// </summary>
+    /// <param name="statedLine">The request's <c>line</c> value.</param>
+    /// <param name="identity">The request's <c>identity</c> value.</param>
+    public static int? CallerLine(string? statedLine, string? identity)
+    {
+        if (PlatformLine.Normalize(statedLine) is { } line
+            && int.TryParse(line, NumberStyles.None, CultureInfo.InvariantCulture, out var major))
+            return LineOf(major);
+        return PlatformCompatibility.TryParseKey(identity?.Trim(), out var keyMajor, out _)
+            ? LineOf(keyMajor)
+            : null;
     }
 
     /// <summary>
