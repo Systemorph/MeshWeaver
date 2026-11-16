@@ -128,6 +128,81 @@ The registry lists what MeshWeaver.Plugins `main` holds. Once `main` is v4, a v3
 offered v3 packages: the registry serves `main3` to instances whose record says `updatePattern: "3.*"`,
 and `main` to `4.*`.
 
+**The package listing is served per line.** Every consumer states its line on each listing request
+(`PlatformLine`, the `line` query parameter), and the registry answers from the ref its record declares
+for that line (`lineRefs`).
+
+**The module bundle index is read per line, by the consumer.** Before the registry kept one shelf per
+line (below), the bundle index (`/api/plugins/bundles/index.json`) was not chosen by line: it listed every
+module generation the registry's shelf held, newest version first, whatever line built it. A v3 registry shelved the v4 AI
+build (4.0.1) as AI's head next to the v3 one, so every v3 consumer that took the first entry was
+offered 4.0.1 and refused it at landing, and never got a newer v3 AI (MeshWeaver.Plugins#5550). The
+floor hold did not stop it: two published builds are ordered by run number, the run counter is shared
+across lines, and so a `4.0.13296` floor reads as met on `3.1.13396`.
+
+So the client splits the index by line before anything picks from it (`BundleLine`, in
+`PluginBundleClient`'s index read). Every pick of a package's bundle works from that split index: module
+landing, NodeType adoption, shipped builds and the held-NodeType retry. Module version numbers say
+nothing about the line (v3 AI is 1.52.0, v4 AI is 4.0.1), so the line of a module entry is read from what
+the entry states about its platform. The first of these that names a major decides:
+
+1. The entry's own `frameworkMvid`, when it is a compatibility key (`c004e001` → 4). This is a fact
+   about the bytes, recorded by their producer.
+2. The major of its declared floor (`minMeshVersion`, `4.0.13296` → 4).
+3. The registry's own line, which is the index-level compatibility key. This covers an entry that states
+   neither, such as the registry's own install record or a generation shelved before producers stated
+   anything.
+4. Otherwise, the legacy shared line (3). Every producer that states nothing predates the split.
+
+Every major up to 3 counts as one line. An entry with no module is a NodeType bundle the registry
+assembles itself. Its line is the index-level identity, which the NodeType gate already compares, so it
+is not filtered again.
+
+A package offered only as builds of another line lands nothing. Its landing verdict says so, naming each
+withheld build, its line and the evidence (`SkipNoBundle — the registry advertises AI only as build(s)
+for another platform line — AI 4.0.1 (line 4, by its framework identity c004e001) …`). Each index read
+logs the withheld builds once.
+
+**The registry keeps one shelf per line, and serves each caller its own.** Core carries the shelf and the client half; the registry routes in MeshWeaver.Plugins wire them (MeshWeaver.Plugins#5550). Reading the index per line protects the consumer, but not the shelf itself.
+The shelf kept one head per module, the highest version, plus one retained previous generation. The v4
+AI build 4.0.1 became the head, the v3 build survived only as the fallback, and the next v4 publish
+(4.0.2) would have pushed the last v3 build off entirely. So:
+
+- **Each line has its own shelf.** The registry's own line is its own landing service, unchanged. Every
+  other line gets a landing service of its own (`ModuleShelfLines`), rooted at the tree a process of that
+  line lands into on the same volume: `<root>/lines/<major>/` beside a v3 root, or the root itself for
+  line 3 on a v4 registry (`ModuleRoot.ForLine`). Without a configured root, the other line's tree is
+  `<own tree>/lines/<major>/`.
+- **An upload is shelved by the line it states.** The publish route reads the upload's framework identity,
+  then its declared floor, with the same rules `BundleLine` applies to an index entry
+  (`BundleLine.StatedLine`). An upload that states neither is the registry's own line, as every upload
+  was before. The highest version of a line is that line's head; a v4 publish never moves the v3 head, and
+  the other way round.
+- **The index and the bundle route answer per caller line.** Both take a `line` query parameter, the same
+  wire name as the package listing (`PlatformLine.WireName`), and every client now sends it. A caller that
+  predates the parameter is read by the line of the framework identity it already sends (`identity=c003e005`
+  → 3, `BundleLine.CallerLine`). A caller stating neither gets the registry's own line, as before. The
+  answer lists only that line's heads and fallbacks. On a tree that still holds builds of another line,
+  shelved before the split, those entries are left out of the answer, so the line's retained fallback is
+  served instead.
+- **The client keeps splitting the index.** That stays as defence in depth, for a registry that predates
+  the parameter and ignores it.
+
+**A floor on another line is never met.** `PlatformFloor` compares the line before the run number. A
+floor on a higher line holds whatever the run numbers say (`4.0.13296` on `3.1.13396` is held). A floor
+on a lower line is advisory, never satisfied, and the bundle rule above keeps that line's bytes away.
+
+What this does not do yet: the modules GC sweeps only the process's own tree, so generations on another
+line's shelf are collected by a process of that line on the same volume, and accumulate on a registry
+that no process of that line shares.
+
+**Dependency floors are judged per line too.** Install records (`Plugins/*`) are shared by the whole
+mesh, but the landed module tree is per line (`ModuleRoot.ResolveLine`). The module-set proposal
+(`ModuleDependencyFloor.Unmet`) therefore judges only records of its own line: a record whose
+`minMeshVersion` names another line describes a build this tree does not load. Before this rule, a v3
+Chat record requiring `AI@^1.51.0`, judged against the v4 tree's AI 4.0.1, refused every v4 proposal. A
+record that states no floor is still judged.
+
 ## 5. Order of work
 
 Each step is its own pull request and lands before the next begins:

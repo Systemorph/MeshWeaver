@@ -797,6 +797,20 @@ first-in-process script-reference build, on the Compile pool) on the strength of
   taken again (at most three dumps); the thread that exited is no longer listed by the next one. Any
   other failure is the capture's answer at once, and when every dump is voided the error names each
   attempt's reason. Pinned by `BlockedThreadStacksThreadExitTest`.
+  "Written" is read off the FILE, never off the call: the runtime reports a dump writer that died on a
+  SIGNAL as a success (coreclr's `PROCCreateCrashDump` answers `!WIFEXITED(status) ||
+  WEXITSTATUS(status) == 0`), so a `createdump` killed mid-dump makes `WriteDump` return normally over
+  no file, or over a file cut short. On a CI shard (core #8355) `createdump` printed `Gathering state for
+  process …` and nothing after it — not the `Target process is alive` line every one of its own exits
+  prints — and the capture then failed as ClrMD's `FileNotFoundException`. After every write the file
+  is therefore checked against its own headers (the ELF core's program headers on Linux, read through
+  section 0 when there are more than `e_phnum` holds; the Mach-O core's segments on macOS): a missing
+  or truncated dump is a named failure of the capture and nothing is read from it. WHAT killed the
+  writer on that shard is not known — the runtime discards the signal. Pinned by `DumpWriterDeathTest`
+  through the writer seam (no file; a real dump cut short). Never inject the death by killing the real
+  `createdump` of the test host: on Linux a ptrace tracer killed mid-dump leaves the SIGSTOP of its
+  `PTRACE_ATTACH` to be delivered on detach, so the whole dumped process stops until a SIGCONT — on a CI
+  shard that froze the shared xunit host for 7 min 50 s and timed out every test in it (core #8356).
   A thread id names a thread, not a leaf: a leaf that returned between the expiry's
   snapshot and the dump has handed its thread back. So each leaf carries its own ticket, which is
   rechecked after the dump. A leaf whose ticket is gone is reported as having returned before its

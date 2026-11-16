@@ -580,11 +580,16 @@ public static class ModuleActivationSidecar
     /// module), so <paramref name="cancellationToken"/> (the pool's) is checked before each. A cancel
     /// surfaces as <see cref="OperationCanceledException"/>; it is never reported through
     /// <paramref name="onCorrupt"/> and never drops a module as unreadable.
+    /// <para>With a <paramref name="memo"/>, a module whose record directory lists the same files as
+    /// at the memo's last read is answered from it instead of re-reading every record
+    /// (<see cref="ModuleLogMemo"/>) — what keeps a registry publish from walking every record of
+    /// every module on the volume.</para>
     /// </summary>
     internal static ModuleActivationList ReadFor(
-        string baseDirectory, Action<string>? onCorrupt, Func<string?> platform, CancellationToken cancellationToken)
+        string baseDirectory, Action<string>? onCorrupt, Func<string?> platform, CancellationToken cancellationToken,
+        ModuleLogMemo? memo = null)
         => ApplyLandingRecords(baseDirectory, ReadStoredActivation(baseDirectory, onCorrupt, cancellationToken),
-            onCorrupt, platform, cancellationToken);
+            onCorrupt, platform, cancellationToken, memo);
 
     /// <summary>The platform this process runs: the live framework identity — the same key a
     /// producer records beside its bytes. Resolved only when a verdict is actually consulted.</summary>
@@ -709,7 +714,7 @@ public static class ModuleActivationSidecar
     /// checking <paramref name="cancellationToken"/> before each module's record log it reads.</summary>
     internal static ModuleActivationList ApplyLandingRecords(
         string baseDirectory, StoredActivation stored, Action<string>? onCorrupt, Func<string?> platform,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, ModuleLogMemo? memo = null)
     {
         var byName = stored.List.Entries.ToImmutableDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
         var order = stored.List.Entries.Select(e => e.Name).ToImmutableList();
@@ -762,7 +767,11 @@ public static class ModuleActivationSidecar
             // The record faults are not reported as they are read: they are named IN the drop's
             // line. Reported as read, one refused open of one record was two Error lines (the
             // record line and "Module … is NOT loaded from this read"), filed as two incidents.
-            var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt: null, cancellationToken);
+            var log = memo is null
+                ? ReadModuleLog(baseDirectory, moduleName, onCorrupt: null, cancellationToken)
+                : memo.Read(baseDirectory, moduleName,
+                    () => ReadModuleLog(baseDirectory, moduleName, onCorrupt: null, cancellationToken),
+                    cancellationToken);
             if (!log.Whole)
             {
                 Drop(moduleName, $"{log.Faults} of its records could not be read: "
@@ -1419,13 +1428,18 @@ public static class ModuleActivationSidecar
 
     /// <summary>Reads <see cref="ModuleHeadState"/> for one module.</summary>
     internal static ModuleHeadState ReadModuleHead(
-        string baseDirectory, string moduleName, Action<string>? onCorrupt, Func<string?> platform)
+        string baseDirectory, string moduleName, Action<string>? onCorrupt, Func<string?> platform,
+        ModuleLogMemo? memo = null)
     {
         var storedActivation = ReadStoredActivation(baseDirectory, onCorrupt);
         var stored = storedActivation.For(moduleName);
         var name = stored?.Name ?? moduleName;
         var storedAt = storedActivation.WrittenAtOf(name);
-        var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt, CancellationToken.None);
+        var log = memo is null
+            ? ReadModuleLog(baseDirectory, moduleName, onCorrupt, CancellationToken.None)
+            : memo.Read(baseDirectory, moduleName,
+                () => ReadModuleLog(baseDirectory, moduleName, onCorrupt, CancellationToken.None),
+                CancellationToken.None);
         var present = GenerationPresence(baseDirectory);
         return new ModuleHeadState(stored, storedAt, storedActivation.Hides(name) is not null, log,
             log.Whole

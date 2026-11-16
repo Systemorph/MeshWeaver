@@ -268,6 +268,15 @@ public static class PluginCatalogConfigurationExtensions
                         ?.Get(Mesh.Threading.IoPoolNames.FileSystem)
                         ?? Mesh.Threading.IoPool.Unbounded,
                 })
+                // 🚨 The registry's shelf, one per platform LINE (policy major-lines-run-separately,
+                // MeshWeaver.Plugins#5550): this process's own line is the landing service above, and
+                // every other line a publish stocks gets a landing service of its own, rooted at that
+                // line's tree — so a publish of one line never moves another line's head.
+                .AddSingleton(sp => new ModuleShelfLines(
+                    sp.GetRequiredService<ModuleLandingService>(),
+                    sp.GetService<IConfiguration>()?[ModuleRoot.ConfigKey],
+                    BundleLine.RunningLine(sp),
+                    loggerFactory: sp.GetService<ILoggerFactory>()))
                 // 🚨 MeshWeaver#6067 follow-up — what the GitSync import consults before it writes a
                 // package's sources: the module generation this process LOADED per package, so a
                 // package whose `requires` floor the loaded dependency does not meet is declined
