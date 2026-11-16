@@ -217,6 +217,27 @@ public class AModuleBundleIsPickedFromItsOwnPlatformLine_OnLine4Test(ITestOutput
 /// mesh-wide, the landed tree is per line: a line-3 Chat record (floor 3.1.12509, requires
 /// <c>AI@^1.51.0</c>) judged against the line-4 tree's AI 4.0.1 refused every line-4 proposal.
 /// </summary>
+/// <summary>
+/// 🚨 The line split routes on <see cref="BundleLine.RunningMajor"/>, read off MeshWeaver.PluginCatalog's own
+/// AssemblyVersion. Every core assembly is pinned to <c>$(_VersionNumeric).0</c> by the root
+/// Directory.Build.props, so a drift in this one assembly would silently misread the line. Pin it against
+/// another core assembly stamped by the same expression — the message hub every process loads — and pin
+/// that this source tree is the line it says.
+/// </summary>
+public class TheRunningLineIsReadOffAPinnedCoreAssemblyTest
+{
+    [Fact]
+    public void RunningMajor_IsTheCoresPinnedMajor()
+    {
+        BundleLine.RunningMajor.Should().NotBeNull("the core's assembly version is pinned to <major>.<minor>.0.0 on every build");
+        int? hubMajor = typeof(MeshWeaver.Messaging.IMessageHub).Assembly.GetName().Version?.Major;
+        hubMajor.Should().NotBeNull("the message hub's assembly version is pinned by the same build expression");
+        BundleLine.RunningMajor.Should().Be(hubMajor, "PluginCatalog must carry the same line major as the rest of core");
+        (BundleLine.RunningMajor is { } major && BundleLine.LineOf(major) == BundleLine.LegacyLine).Should().BeTrue(
+            "this source tree is the v3 line, so its processes read line 3");
+    }
+}
+
 public class ADependencyFloorIsJudgedOnItsOwnPlatformLineTest
 {
     private static ModuleActivationList AiLanded(string version) => new()
