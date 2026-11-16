@@ -106,6 +106,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -1113,10 +1114,13 @@ def publish(a: argparse.Namespace) -> int:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/octet-stream",
         })
+        started = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
                 body = resp.read(4096).decode("utf-8", "replace")
-                print(f"     registry answered {resp.status}: {body}")
+                # The time each answer took is printed, so a slow registry is read off the log per
+                # bundle instead of being inferred from when the runner happened to receive a burst.
+                print(f"     registry answered {resp.status} in {time.monotonic() - started:.1f} s: {body}")
         except urllib.error.HTTPError as exc:
             body = exc.read(4096).decode("utf-8", "replace")
             failed.append(f"registry refused `{item['module']}@{item['version']}` (HTTP "
@@ -2483,6 +2487,28 @@ jobs:
     check("lane-key: a different matrix is a different lane (the fingerprint discriminates)",
           lane_key("catalog", '[{"module": "A"}]') != lane_key("catalog", '[{"module": "B"}]'))
 
+    print("== output reaches a pipe line by line (a publication's log must be readable while it runs)")
+    # A child runs main() with stdout a PIPE, as under Actions, prints its line, and then stays alive
+    # until we close its stdin. Block-buffered, the line would arrive only at exit, so the read below
+    # would find nothing while the child is still running.
+    import select
+    child_code = ("import importlib.util, sys\n"
+                  "spec = importlib.util.spec_from_file_location('mp', sys.argv[1])\n"
+                  "mp = importlib.util.module_from_spec(spec); spec.loader.exec_module(mp)\n"
+                  "sys.argv = ['module-publication.py', 'lane-key', '--lane-id', 'catalog', '--modules', '[]']\n"
+                  "mp.main()\n"
+                  "sys.stdin.read()\n")
+    child = subprocess.Popen([sys.executable, "-c", child_code, str(Path(__file__).resolve())],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        ready, _, _ = select.select([child.stdout], [], [], 20)
+        first = child.stdout.readline().decode("utf-8", "replace").strip() if ready else ""
+        check("a printed line reaches a piped stdout before the process ends", first.startswith("catalog-"),
+              f"read {first!r} while the child was still running")
+    finally:
+        child.stdin.close()
+        child.wait(timeout=20)
+
     print()
     if failures:
         print(f"::error::{len(failures)} self-test case(s) FAILED: " + "; ".join(failures))
@@ -2492,6 +2518,11 @@ jobs:
 
 
 def main() -> int:
+    # 🚨 One line out, one line in the log, AS IT HAPPENS. Under Actions stdout is a pipe, so Python
+    # block-buffers it: a publication printed nothing for minutes and then 8 KB at once, so the log's
+    # timestamps were flush times, not answer times, and a publication cut at its job cap left no
+    # line at all saying which bundle it was waiting on (MeshWeaver.Plugins run 43872138021).
+    sys.stdout.reconfigure(line_buffering=True)
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", nargs="?",
                    choices=("verdict", "check-caller", "check-callers", "publish", "lane-key", "partition",
