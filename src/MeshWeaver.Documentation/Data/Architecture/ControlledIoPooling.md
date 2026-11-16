@@ -811,6 +811,16 @@ first-in-process script-reference build, on the Compile pool) on the strength of
   `createdump` of the test host: on Linux a ptrace tracer killed mid-dump leaves the SIGSTOP of its
   `PTRACE_ATTACH` to be delivered on detach, so the whole dumped process stops until a SIGCONT — on a CI
   shard that froze the shared xunit host for 7 min 50 s and timed out every test in it (core #8356).
+  To NAME the signal on the next red, two instruments exist, both evidence only. The real-dump tests
+  build their reader with `logDumpGeneration: true`, so the runtime runs `createdump --diag`, whose step
+  lines are flushed to stdout one by one and survive its death; the last line printed is where it died.
+  Production readers keep it off (it prints about a thousand lines per dump). And a shard whose host
+  exited non-zero prints the runner's kernel log for `createdump`, OOM and segfault lines
+  (`Evidence: kernel log of a failed shard` in `dotnet-test.yml`), which names an OOM kill or a crash.
+  Measured meanwhile, in a Linux container: the dump's size is dominated by the process's in-memory
+  assembly images (300 assemblies loaded from bytes give 193 MB; a bare process 10 MB), `createdump`'s
+  own anonymous memory is about the dump's size (523 MB for 540 MB), a Triage dump is no smaller, and
+  under a cgroup memory cap the OOM killer took the HOST, not the writer.
   A thread id names a thread, not a leaf: a leaf that returned between the expiry's
   snapshot and the dump has handed its thread back. So each leaf carries its own ticket, which is
   rechecked after the dump. A leaf whose ticket is gone is reported as having returned before its
