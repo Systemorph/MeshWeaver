@@ -653,20 +653,6 @@ on:
         required: false
         type: boolean
         default: true
-      compile-cache:
-        description: >-
-          Reuse NodeType compiles ACROSS RUNS (Doc/Architecture/NodeTypeCompileCache). When the run's
-          artifact store is a FILE store (`file:/…`, the share every runner pod mounts), the bake is
-          handed `--compile-cache <store>/cache/nodetype-compile/<identity>`: a compile whose inputs
-          and reference SURFACES an earlier bake already compiled reuses those bytes, so a gate over
-          unchanged content compiles nothing (MeshWeaver.Plugins measured 123 NodeTypes, 5.6–5.9 min
-          of every gate, recompiled on every run because the modules it composes get a fresh MVID
-          each run — CI profile 2026-11, R3). The bundles, records and verdict are the same either
-          way; a store that is not a file store, or a pinned tester that predates the flag, compiles
-          everything and SAYS so. False turns it off.
-        required: false
-        type: boolean
-        default: true
       runner:
         description: >-
           The `runs-on` label for the gate SHARDS (`gate`) and nothing else — `plan` and `verify`
@@ -2614,9 +2600,6 @@ jobs:
           SHARD: ${{ needs.plan.outputs.shards != '1' && format('{0}/{1}', matrix.shard, needs.plan.outputs.shards) || '' }}
           # Empty unless upstream-seed fetched a publication — then the tester consumes it.
           SEED_DIR: ${{ steps.seed.outputs.dir }}
-          # The cross-run compile cache lives on the run's FILE artifact store (see the input).
-          COMPILE_CACHE: ${{ inputs.compile-cache }}
-          ARTIFACT_STORE: ${{ needs.plan.outputs.artifact-store }}
           # The sealed set the volume served (volume mode only; empty in container mode). It is the
           # platform's release version, and in volume mode the tester learns it from here alone.
           VOLUME_SET: ${{ steps.platform-source.outputs.set }}
@@ -2838,38 +2821,10 @@ jobs:
             esac
           fi
           if [ "$ADOPTED" != true ]; then
-          # ── THE CROSS-RUN COMPILE CACHE (Doc/Architecture/NodeTypeCompileCache) ──
-          # Keyed on each compile's inputs and the reference set's PUBLIC SURFACES, never on a
-          # build identity — so it hits across runs that rebuilt the composed modules, and misses
-          # for every type when any reference's surface changed. It decides no verdict: a type it
-          # cannot serve compiles. So it is used when it can be, and when it cannot the log says
-          # which of the three reasons applies.
-          CACHE_ARGS=()
-          if [ "${COMPILE_CACHE:-true}" != "true" ]; then
-            echo "compile cache: OFF (compile-cache: false) — every NodeType compiles"
-          elif [ "${ARTIFACT_STORE#file:}" = "${ARTIFACT_STORE:-}" ] || [ ! -d "${ARTIFACT_STORE#file:}" ]; then
-            echo "::notice title=Compile cache not used::the run's artifact store ('${ARTIFACT_STORE:-<none>}') is not a mounted file store, so there is no shared directory to reuse compiles from — every NodeType compiles"
-          else
-            # Capture, then match (the --shard probe below explains why never `| grep -q`).
-            compile_help="$(run_tester compile --help 2>&1)" || compile_help=""
-            case "$compile_help" in
-              *--compile-cache*)
-                CACHE_DIR="${ARTIFACT_STORE#file:}/cache/nodetype-compile/${TARGET_IDENTITY}"
-                mkdir -p "$CACHE_DIR"
-                if [ "$MODE" = volume ]; then
-                  CACHE_ARGS=(--compile-cache "$CACHE_DIR")
-                else
-                  TESTER_MOUNTS+=(-v "$CACHE_DIR:/compile-cache")
-                  CACHE_ARGS=(--compile-cache /compile-cache)
-                fi
-                echo "compile cache: $CACHE_DIR" ;;
-              *) echo "::notice title=Compile cache not used::the pinned tester does not accept --compile-cache — every NodeType compiles until the pin reaches a platform build carrying it" ;;
-            esac
-          fi
           # shellcheck disable=SC2086  # MODULE_ARGS is a flag list; word-splitting is the point
           run_tester compile "$P_REPO" \
             --app "$P_APP" --shared-frameworks "$P_SHARED" \
-            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" "${DYN_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA" "${CACHE_ARGS[@]}"
+            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" "${DYN_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA"
           fi
           [ -s "$OWN_BAKE/framework-mvid.txt" ] || { echo "::error::compile ran but wrote no bake identity — the bake stage regressed (or the image predates the compile verb; pin ≥ 77bc5f1)"; exit 1; }
           baked="$(tr -d '[:space:]' < "$OWN_BAKE/framework-mvid.txt")"
