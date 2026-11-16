@@ -2598,6 +2598,11 @@ jobs:
           PREPARED_DIR: ${{ (env.GATE_ROLE == 'shard' && env.BAKE_RESULT == 'success') && format('{0}/prepared-bake', runner.temp) || '' }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
           MODE: ${{ steps.platform-source.outputs.mode }}
+          # 🚨 Through env, never `${{ }}` inside `run:`. A run script holding an expression is
+          # compiled as ONE expression and GitHub caps that at 21,000 characters; past it the whole
+          # workflow, and every caller of this lane, is refused as invalid with no job and no
+          # message. Doc/Architecture/WorkflowExpressionLimit.
+          CAPTURE_COREDUMPS: ${{ inputs.capture-coredumps }}
           DOTNET: ${{ steps.dotnet.outputs.dotnet }}
           RUNNER_SHARED_FRAMEWORKS: ${{ steps.dotnet.outputs.shared }}
           PLATFORM_REF: ${{ steps.images.outputs.platform }}
@@ -2738,7 +2743,7 @@ jobs:
           EXT_V=()
           [ -n "${EXT_MODULES_DIR:-}" ] && EXT_V=(-v "$EXT_MODULES_DIR:/ext")
           DUMP_ARGS=()
-          if [ "${{ inputs.capture-coredumps }}" = "true" ]; then
+          if [ "${CAPTURE_COREDUMPS:-false}" = "true" ]; then
             mkdir -p "${RUNNER_TEMP:-/tmp}/coredumps"
             chmod 0777 "${RUNNER_TEMP:-/tmp}/coredumps"
             if [ "$MODE" = volume ]; then

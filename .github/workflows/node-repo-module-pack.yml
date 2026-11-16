@@ -3530,6 +3530,8 @@ jobs:
         id: build
         env:
           IMAGE: ${{ inputs.platform-image }}
+          # Through env, never `${{ }}` inside `run:` (Doc/Architecture/WorkflowExpressionLimit).
+          LANE_KEY: ${{ needs.select.outputs.lane }}
           DIGEST: ${{ inputs.platform-image-digest }}
           TESTER_IMAGE: ${{ inputs.tester-image }}
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
@@ -3647,7 +3649,7 @@ jobs:
                     # call's artifact (Plugins#1077) or a torn download — not that the build skipped
                     # the module. Still never rebuild locally: that would paper over which artifact
                     # arrived.
-                    echo "::error::the global workspace build produced no $MODULE.dll under $packdir — yet build-workspace asserted every selected entry's assembly before uploading. So the workspace this job downloaded is not the one this call built (a sibling call's artifact, or a torn download); the lane key is ${{ needs.select.outputs.lane }}. Local builds are discontinued: fix which artifact arrives, never rebuild here."
+                    echo "::error::the global workspace build produced no $MODULE.dll under $packdir — yet build-workspace asserted every selected entry's assembly before uploading. So the workspace this job downloaded is not the one this call built (a sibling call's artifact, or a torn download); the lane key is ${LANE_KEY}. Local builds are discontinued: fix which artifact arrives, never rebuild here."
                     exit 1
                   fi
                   closure_file="$ws/$MODULE.closure.txt"
