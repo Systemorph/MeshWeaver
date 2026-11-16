@@ -82,6 +82,13 @@ Entries unused for 3 days are pruned, at most once a day per cache.
 
 ## Where it runs
 
+**Not wired into the gate at the moment.** The gate step that handed the tester `--compile-cache` was
+withdrawn the hour it landed: from its merge on, every satellite's `ci.yml` (which calls
+`node-repo-gate.yml@<line>` cross-repo) failed at workflow-file validation and started no job, while core's
+own call (`./.github/workflows/node-repo-gate.yml`) kept running. The tester flag and the cache below are
+unchanged; the gate wiring comes back once the validation error is identified. What follows describes that
+wiring as it was.
+
 `node-repo-gate.yml` (input `compile-cache`, default `true`) passes
 `--compile-cache <store>/cache/nodetype-compile/<framework identity>` when the run's artifact store is
 a file store (`file:/ci-artifacts`, the share every runner pod mounts) and the pinned tester accepts
