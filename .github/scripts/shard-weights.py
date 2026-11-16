@@ -29,7 +29,8 @@ Modes:
       Re-measures (as `refresh` does, without writing) and fails when a unit's measured weight
       drifted from the committed table by >= 25 % AND > 30 s, when a measured unit has no row in
       the table, or when the window measured nothing at all. A scheduled unit the window did not
-      observe (a selection skipped it) is not compared; the run prints how many units it compared. Run by the weekly `Shard weights stay measured` workflow — never by a pull
+      observe (a selection skipped it) is not compared; the run prints how many units it
+      compared. Run by the weekly `Shard weights stay measured` workflow — never by a pull
       request, because a green shard must not go red over a project that merely got slower.
 
   --self-test
