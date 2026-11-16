@@ -806,8 +806,11 @@ first-in-process script-reference build, on the Compile pool) on the strength of
   is therefore checked against its own headers (the ELF core's program headers on Linux, read through
   section 0 when there are more than `e_phnum` holds; the Mach-O core's segments on macOS): a missing
   or truncated dump is a named failure of the capture and nothing is read from it. WHAT killed the
-  writer on that shard is not known — the runtime discards the signal. Pinned by `DumpWriterDeathTest`,
-  which SIGKILLs the real `createdump` child mid-dump.
+  writer on that shard is not known — the runtime discards the signal. Pinned by `DumpWriterDeathTest`
+  through the writer seam (no file; a real dump cut short). Never inject the death by killing the real
+  `createdump` of the test host: on Linux a ptrace tracer killed mid-dump leaves the SIGSTOP of its
+  `PTRACE_ATTACH` to be delivered on detach, so the whole dumped process stops until a SIGCONT — on a CI
+  shard that froze the shared xunit host for 7 min 50 s and timed out every test in it (core #8356).
   A thread id names a thread, not a leaf: a leaf that returned between the expiry's
   snapshot and the dump has handed its thread back. So each leaf carries its own ticket, which is
   rechecked after the dump. A leaf whose ticket is gone is reported as having returned before its
