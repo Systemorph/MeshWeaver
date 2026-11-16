@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -133,6 +134,31 @@ public class ARegistryShelvesEachPlatformLineSeparatelyTest : IDisposable
         ModuleShelfLines.TreeFor(null, root, 4, 3).Should().Be(Path.Combine(root, "lines", "3"));
     }
 
+    /// <summary>
+    /// A configured root that puts another line's shelf ON this process's own tree is refused, never
+    /// relocated: a line-4 process whose own tree is the shared root itself (not <c>lines/4</c>) would
+    /// otherwise shelve line 3 somewhere no line-3 replica reads.
+    /// </summary>
+    [Fact]
+    public void AnotherLinesShelfOnTheOwnTree_IsRefused()
+    {
+        var shared = Path.Combine(root, "shared");
+        Action act = () => ModuleShelfLines.TreeFor(shared, shared, 4, 3);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*two lines would share one shelf*");
+    }
+
+    /// <summary>Once the shelves are disposed, asking for another line's shelf is refused — the check
+    /// and the creation sit in the same section Dispose drains under, so nothing is created after it.</summary>
+    [Fact]
+    public void AfterDispose_AnotherLinesShelf_IsRefused()
+    {
+        lines.For(4).Should().NotBeSameAs(own, "line 4 has a shelf of its own");
+        lines.Dispose();
+        Action act = () => lines.For(4);
+        act.Should().Throw<ObjectDisposedException>();
+        lines.For(3).Should().BeSameAs(own, "the own line is this process's own service, which this set does not own");
+    }
+
     /// <summary>The line a registry CALLER is on: the stated <c>line</c>, else the line of the identity
     /// it asks in (what a caller predating the parameter sends), else unknown.</summary>
     [Theory]
@@ -147,6 +173,25 @@ public class ARegistryShelvesEachPlatformLineSeparatelyTest : IDisposable
     [InlineData(null, null, null)]
     public void TheCallerLine_IsTheStatedLineThenTheIdentity(string? line, string? identity, int? expected)
         => BundleLine.CallerLine(line, identity).Should().Be(expected);
+
+    /// <summary>
+    /// The running line with NO test seam — what production reads — is the line of the platform version
+    /// this build was made for. It is read off the core assembly's AssemblyVersion, which the build pins
+    /// to <c>&lt;major&gt;.&lt;minor&gt;.0.0</c> of that platform version (Directory.Build.props,
+    /// <c>AssemblyVersion</c> from <c>_VersionNumeric</c>); the informational version carries the same
+    /// platform version, so a drift between the two pins would surface here.
+    /// </summary>
+    [Fact]
+    public void TheUnseamedRunningLine_IsTheLineOfTheBuildsPlatformVersion()
+    {
+        var informational = typeof(BundleLine).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        var buildMajor = MeshWeaver.Hosting.PrebuiltAdoptionPolicy.MajorOf(informational);
+        buildMajor.Should().NotBeNull($"the core assembly states its platform version ({informational ?? "none"})");
+
+        BundleLine.RunningLine(null).Should().Be(buildMajor is { } major ? BundleLine.LineOf(major) : null,
+            "every client splits the index on this line, so it must be the line of the platform it runs");
+    }
 
     /// <summary>The floor's line rule and the bundle's line rule share one legacy line.</summary>
     [Fact]
