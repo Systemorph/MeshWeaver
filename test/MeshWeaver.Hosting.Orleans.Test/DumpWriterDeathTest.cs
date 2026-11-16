@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using MeshWeaver.Connection.Orleans;
 using Xunit;
@@ -11,67 +10,19 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <c>PROCCreateCrashDump</c>: <c>!WIFEXITED(status) || WEXITSTATUS(status) == 0</c>), so
 /// <see cref="BlockedThreadStacks"/> must read "written" off the file, never off the call. Core #8355's CI
 /// shard: <c>createdump</c> printed <c>Gathering state …</c> and nothing after it, <c>WriteDump</c> returned,
-/// and the capture failed as a <see cref="FileNotFoundException"/> deep inside ClrMD. These tests inject the
-/// fault for real — the dump writer is killed mid-dump — and require a named failure instead.
+/// and the capture failed as a <see cref="FileNotFoundException"/> deep inside ClrMD.
+///
+/// <para>🚨 <b>The writer is never killed in THIS process.</b> A first version SIGKILLed the real
+/// <c>createdump</c> mid-dump. On Linux that leaves the dumped process STOPPED: createdump's
+/// <c>PTRACE_ATTACH</c> stops each thread with a SIGSTOP, and when the tracer dies its tracees are detached
+/// and that SIGSTOP is delivered — a group stop of the whole process, until a SIGCONT. Here the dumped
+/// process is the shared xunit host, so every test in it froze for 7 min 50 s until the CI wall-clock cap's
+/// SIGTERM/SIGCONT (core #8356, shard 1). The outcomes the runtime can hand back — no file, a file cut short
+/// — are injected through the writer seam instead, over a real dump where one is needed.</para>
 /// </summary>
 public class DumpWriterDeathTest
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(20);
-
-    /// <summary>
-    /// Fault injection: an outside process SIGKILLs this process's <c>createdump</c> child while it gathers
-    /// state. The runtime's call returns normally (the precondition, pinned here so a runtime that starts
-    /// reporting the death is noticed), and the capture fails NAMING the missing dump — not with ClrMD's
-    /// <see cref="FileNotFoundException"/>, which is what it threw before.
-    /// </summary>
-    [Fact]
-    public void ADumpWriterKilledMidDump_IsReportedAsWritten_AndTheCaptureNamesTheMissingDump()
-    {
-        Assert.SkipWhen(OperatingSystem.IsWindows(), "the dump writer is a createdump child process on Unix only");
-        var killedTheWriter = false;
-        Exception? writeFailure = null;
-        string? dumpPath = null;
-        var stacks = new BlockedThreadStacks(writeDump: path =>
-        {
-            dumpPath = path;
-            // Outside this process on purpose: createdump stops every thread of THIS process while it works.
-            // Matched by the dump path on its command line (the runtime passes it as `--name <path>`), so the
-            // killer can only ever hit THIS dump's writer — never one another test of this process started. The
-            // `[c]` keeps the pattern from matching the killer's own command line, which is also our child. It
-            // polls every 5 ms: far inside createdump's state-gathering window (about a second, measured), without
-            // forking pkill back-to-back for that whole window.
-            var killer = Process.Start(new ProcessStartInfo("/bin/sh")
-            {
-                ArgumentList = { "-c", $"while ! pkill -KILL -P {Environment.ProcessId} -f '[c]reatedump .*{path}'; do sleep 0.005; done" },
-            }) ?? throw new InvalidOperationException("the killer shell did not start");
-            try
-            {
-                BlockedThreadStacks.WriteDumpOfThisProcess(path);
-            }
-            catch (Exception ex)
-            {
-                writeFailure = ex;
-            }
-            finally
-            {
-                killedTheWriter = killer.WaitForExit(Budget) && killer.ExitCode == 0;
-                if (!killer.HasExited)
-                    killer.Kill();
-                killer.Dispose();
-            }
-        });
-
-        var failure = Record.Exception(() => stacks.CaptureThreadPoolWorkers());
-
-        killedTheWriter.Should().BeTrue("the fault is injected only if createdump was killed while it ran");
-        writeFailure.Should().BeNull("the runtime reports a dump writer killed by a signal as a success");
-        failure.Should().BeOfType<InvalidOperationException>(
-            "a dump that was never written is a named failure of the capture, never a FileNotFoundException from ClrMD; it was: {0}",
-            failure?.ToString() ?? "no exception");
-        failure!.Message.Should().Contain(dumpPath ?? "(the writer never ran)", "the failure names the dump that is missing");
-        failure.Message.Should().Contain("signal", "the failure says why a 'written' dump can be absent");
-        File.Exists(dumpPath).Should().BeFalse("no dump file is left behind");
-    }
 
     /// <summary>
     /// A writer killed while WRITING leaves a file shorter than its own headers describe. The negative control
