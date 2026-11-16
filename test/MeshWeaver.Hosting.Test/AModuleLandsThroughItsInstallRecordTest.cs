@@ -910,7 +910,10 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         public void Serve(string plugin, string version, string module, byte[] bytes)
         {
             bundle = bytes;
-            index = "{\"bundles\":[{\"plugin\":\"" + plugin + "\",\"version\":\"" + version
+            // The index states the registry's own line (its identity), as every registry does: an entry
+            // stating no line of its own is read on the registry's line (BundleLine).
+            index = "{\"frameworkMvid\":\"" + PrebuiltAssemblySeeder.LiveFrameworkMvid
+                + "\",\"bundles\":[{\"plugin\":\"" + plugin + "\",\"version\":\"" + version
                 + "\",\"url\":\"" + Url + PluginBundleClient.RoutePrefix + "/" + plugin
                 + ".zip\",\"module\":\"" + module + "\"}]}";
         }
