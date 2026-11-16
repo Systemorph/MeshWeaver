@@ -91,6 +91,48 @@ The registry lists what MeshWeaver.Plugins `main` holds. Once `main` is v4, a v3
 offered v3 packages: the registry serves `main3` to instances whose record says `updatePattern: "3.*"`,
 and `main` to `4.*`.
 
+**The package listing is served per line.** Every consumer states its line on each listing request
+(`PlatformLine`, the `line` query parameter), and the registry answers from the ref its record declares
+for that line (`lineRefs`).
+
+**The module bundle index is read per line, by the consumer.** The bundle index
+(`/api/plugins/bundles/index.json`) is not chosen by line: it lists every module generation the
+registry's shelf holds, newest version first, whatever line built it. A v3 registry shelved the v4 AI
+build (4.0.1) as AI's head next to the v3 one, so every v3 consumer that took the first entry was
+offered 4.0.1 and refused it at landing, and never got a newer v3 AI (MeshWeaver.Plugins#5550). The
+floor hold did not stop it: two published builds are ordered by run number, the run counter is shared
+across lines, and so a `4.0.13296` floor reads as met on `3.1.13396`.
+
+So the client splits the index by line before anything picks from it (`BundleLine`, in
+`PluginBundleClient`'s index read). Every pick of a package's bundle works from that split index: module
+landing, NodeType adoption, shipped builds and the held-NodeType retry. Module version numbers say
+nothing about the line (v3 AI is 1.52.0, v4 AI is 4.0.1), so the line of a module entry is read from what
+the entry states about its platform. The first of these that names a major decides:
+
+1. The entry's own `frameworkMvid`, when it is a compatibility key (`c004e001` → 4). This is a fact
+   about the bytes, recorded by their producer.
+2. The major of its declared floor (`minMeshVersion`, `4.0.13296` → 4).
+3. The registry's own line, which is the index-level compatibility key. This covers an entry that states
+   neither, such as the registry's own install record or a generation shelved before producers stated
+   anything.
+4. Otherwise, the legacy shared line (3). Every producer that states nothing predates the split.
+
+Every major up to 3 counts as one line. An entry with no module is a NodeType bundle the registry
+assembles itself. Its line is the index-level identity, which the NodeType gate already compares, so it
+is not filtered again.
+
+A package offered only as builds of another line lands nothing. Its landing verdict says so, naming each
+withheld build, its line and the evidence (`SkipNoBundle — the registry advertises AI only as build(s)
+for another platform line — AI 4.0.1 (line 4, by its framework identity c004e001) …`). Each index read
+logs the withheld builds once.
+
+**Dependency floors are judged per line too.** Install records (`Plugins/*`) are shared by the whole
+mesh, but the landed module tree is per line (a v4 image lands under `lines/4/`). The module-set proposal
+(`ModuleDependencyFloor.Unmet`) therefore judges only records of its own line: a record whose
+`minMeshVersion` names another line describes a build this tree does not load. Before this rule, a v3
+Chat record requiring `AI@^1.51.0`, judged against the v4 tree's AI 4.0.1, refused every v4 proposal. A
+record that states no floor is still judged.
+
 ## 5. Order of work
 
 Each step is its own pull request and lands before the next begins:
