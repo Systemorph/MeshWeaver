@@ -79,11 +79,14 @@ def self_test() -> int:
         found, _ = violations(Path(tmp))
         if found:
             failures.append(f"the same script reading env must pass, got {found}")
+        _, files = violations(Path(tmp) / "nothing-here")
+        if files != 0:
+            failures.append(f"a root with no workflows must count 0 files (main refuses it), got {files}")
     if failures:
         for f in failures:
             print(f"SELF-TEST FAILED: {f}", file=sys.stderr)
         return 1
-    print("check-workflow-expression-length.py self-test: both cases pass (long+expression found, long+env passes)")
+    print("check-workflow-expression-length.py self-test: all cases pass (long+expression found, long+env passes, empty root counts 0)")
     return 0
 
 
@@ -97,6 +100,9 @@ def main() -> int:
     if not a.root:
         ap.error("--root or --self-test")
     found, files = violations(a.root)
+    if files == 0:
+        print(f"::error::no workflow file under {a.root / '.github' / 'workflows'} — a check over nothing is not a pass")
+        return 1
     for v in found:
         print(f"::error::{v}")
     if found:
