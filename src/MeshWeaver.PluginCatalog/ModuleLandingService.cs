@@ -609,6 +609,16 @@ public sealed class ModuleLandingService : IDisposable
     /// <summary>Null in production — see the internal constructor.</summary>
     private readonly Action<string>? beforeRecording;
 
+    /// <summary>
+    /// Every module's record log, remembered while its record directory lists the same files
+    /// (<see cref="ModuleLogMemo"/>). Each publish derives the activation of EVERY module twice — the
+    /// link probe's surface and the proposal — and without this both re-read every record of every
+    /// module on the share. Owned by this instance, so it lives exactly as long as the mesh.
+    /// </summary>
+    internal ModuleLogMemo LogMemo => logMemo;
+
+    private readonly ModuleLogMemo logMemo = new();
+
     /// <summary>Null in production — see the internal constructor.</summary>
     private readonly Action<string>? beforeProjecting;
 
@@ -819,7 +829,7 @@ public sealed class ModuleLandingService : IDisposable
     /// </summary>
     public IObservable<ModuleActivationList> GetActivation()
         => ReadPool.InvokeBlocking(ct => ModuleActivationSidecar.ReadFor(baseDirectory,
-            msg => logger?.LogError("{Message}", msg), platform, ct));
+            msg => logger?.LogError("{Message}", msg), platform, ct, logMemo));
 
     /// <summary>
     /// <see cref="GetActivation"/>, read WHOLE or not at all: a read that reported a corrupt or
@@ -837,7 +847,7 @@ public sealed class ModuleLandingService : IDisposable
             {
                 faults = faults.Add(msg);
                 logger?.LogError("{Message}", msg);
-            }, platform, ct);
+            }, platform, ct, logMemo);
             if (!faults.IsEmpty)
                 throw new InvalidOperationException(
                     $"the activation record could not be read whole ({faults.Count} fault(s): "
@@ -983,7 +993,7 @@ public sealed class ModuleLandingService : IDisposable
             // served read starts a fresh one.
             var served = new ServedActivation(
                 ModuleActivationSidecar.ReadFor(baseDirectory,
-                    msg => logger?.LogError("{Message}", msg), platform, cancellationToken),
+                    msg => logger?.LogError("{Message}", msg), platform, cancellationToken, logMemo),
                 ServedActivationClock.GetUtcNow(),
                 refresh.Generation);
             BeforeServedPublish?.Invoke(refresh.Generation);
@@ -1056,7 +1066,7 @@ public sealed class ModuleLandingService : IDisposable
                 {
                     faults = faults.Add(msg);
                     logger?.LogError("{Message}", msg);
-                }, platform, ct);
+                }, platform, ct, logMemo);
             if (!faults.IsEmpty)
                 throw new InvalidOperationException(
                     $"Not proposing a module set: the activation record could not be read whole "
@@ -1264,7 +1274,7 @@ public sealed class ModuleLandingService : IDisposable
                 {
                     faults = faults.Add(msg);
                     logger?.LogError("{Message}", msg);
-                }, platform);
+                }, platform, logMemo);
                 // 🚨 A FAULT, never a refusal (#7974 review, round 5): an activation record that could
                 // not be read now (a listing or read failure on the volume) may read whole on the next
                 // pass, and a refusal would make the reload a terminal Failed. Only an OBSERVED
@@ -1413,7 +1423,7 @@ public sealed class ModuleLandingService : IDisposable
         // generation (#3649) is taken from the same read, so the two cannot disagree about which
         // generation this module currently has.
         var landedBefore = ModuleActivationSidecar.ReadFor(baseDirectory,
-            msg => logger?.LogWarning("{Message}", msg), platform);
+            msg => logger?.LogWarning("{Message}", msg), platform, CancellationToken.None, logMemo);
         var surface = PlatformSurface(landedBefore);
         var linkVerdict = LinkVerdict();
         var held = linkVerdict.MayLoad ? null : linkVerdict.Report();
@@ -1705,7 +1715,7 @@ public sealed class ModuleLandingService : IDisposable
         // module as installed, an unreadable head record an older generation as the head.
         ModuleActivationSidecar.ModuleHeadState ReadWhole()
         {
-            var read = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, OnCorrupt, platform);
+            var read = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, OnCorrupt, platform, logMemo);
             return read.Whole
                 ? read
                 : throw new InvalidOperationException(
@@ -2067,13 +2077,13 @@ public sealed class ModuleLandingService : IDisposable
         // Nothing is uninstalled over a PARTIAL read: the tombstone orders against what was read,
         // and an older image's entry has to be preserved whole before it is overwritten.
         var state = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name,
-            msg => logger?.LogError("{Message}", msg), platform);
+            msg => logger?.LogError("{Message}", msg), platform, logMemo);
         if (!state.Whole)
             throw new InvalidOperationException(
                 $"Module '{name}': its activation records could not be read whole, so nothing is "
                 + "uninstalled now; repeat the uninstall once they read whole.");
         var list = ModuleActivationSidecar.ReadFor(baseDirectory,
-            msg => logger?.LogError("{Message}", msg), platform, cancellationToken);
+            msg => logger?.LogError("{Message}", msg), platform, cancellationToken, logMemo);
         var existing = list.Entries.FirstOrDefault(e =>
             string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase));
         cancellationToken.ThrowIfCancellationRequested();
