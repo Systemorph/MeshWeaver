@@ -143,4 +143,36 @@ public class PlatformFloorTest
     [InlineData(null, null)]
     public void TheRunningVersion_IsStrippedOfBuildMetadata(string? reported, string? expected)
         => Assert.Equal(expected, PlatformBuildInfo.StripBuildMetadata(reported));
+
+    /// <summary>
+    /// 🚨 <b>MeshWeaver.Plugins#5550 — a floor on another LINE is never met.</b> The run counter is
+    /// shared across platform lines, so a <c>4.0.13296</c> floor read as satisfied on <c>3.1.13396</c>
+    /// (13296 &lt; 13396), and a line-3 registry treated line-4 builds as installable. The line is
+    /// compared first: a higher line HOLDS, whatever the run numbers say.
+    /// </summary>
+    [Theory]
+    [InlineData("4.0.13296", "3.1.13396")]
+    [InlineData("4.0.13296", "3.1.0-ci.13396")]
+    [InlineData("4.0.1", "3.1.99999")]
+    [InlineData("5.0.100", "4.0.200")]
+    public void AFloorOnAHigherLine_IsHeld_WhateverTheRunNumbersSay(string floor, string running)
+    {
+        var verdict = PlatformFloor.Evaluate(floor, running);
+
+        Assert.Equal(PlatformFloorKind.Held, verdict.Kind);
+        Assert.Contains("another line", verdict.Reason);
+    }
+
+    /// <summary>A floor on a LOWER line is not "satisfied" either — run numbers order nothing between
+    /// lines — but it is not held: it proceeds as advisory, and the bundle-level line rule is what keeps
+    /// another line's bytes off the process. Same-line floors keep their run-number order (control).</summary>
+    [Theory]
+    [InlineData("3.1.13396", "4.0.13296", PlatformFloorKind.Advisory)]
+    [InlineData("3.1.0-ci.13396", "4.0.0-ci.13296", PlatformFloorKind.Advisory)]
+    [InlineData("4.0.13296", "4.0.13396", PlatformFloorKind.Satisfied)]
+    [InlineData("4.0.13396", "4.0.13296", PlatformFloorKind.Held)]
+    [InlineData("3.1.13296", "3.1.13396", PlatformFloorKind.Satisfied)]
+    [InlineData("2.0.0", "3.1.13396", PlatformFloorKind.Satisfied)]
+    public void TheLineIsComparedFirst_ThenTheRunNumber(string floor, string running, string kind)
+        => Assert.Equal(kind, PlatformFloor.Evaluate(floor, running).Kind);
 }
