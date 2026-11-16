@@ -109,6 +109,12 @@ SUBJECTS: dict[str, dict[str, tuple[str, ...]]] = {
             "Assert the tools this gate needs",
             READINESS_STEP,
         ),
+        # The whole-tree guards, never path-selected (Doc/Architecture/CiOwnShellScope) — the same line.
+        "workflow-shell-tree": (
+            "uses:actions/checkout",
+            "Assert the tools this gate needs",
+            READINESS_STEP,
+        ),
     },
 }
 
@@ -273,6 +279,7 @@ _SHELL_OK = (
     "jobs:\n"
     + _shell_job("workflow-shell")
     + _shell_job("workflow-shell-executions")
+    + _shell_job("workflow-shell-tree")
 )
 
 _GATED = "${{ !cancelled() && steps.ready.outputs.ok == 'true' }}"
@@ -367,7 +374,7 @@ def self_test() -> int:
         # longer checked at all (review on #7875).
         (root / ".github" / "workflows" / "dotnet-test.yml").write_text(
             "on: {push: {}}\njobs:\n" + _shell_job("workflow-shell", guard_if="")
-            + _shell_job("workflow-shell-executions"),
+            + _shell_job("workflow-shell-executions") + _shell_job("workflow-shell-tree"),
             encoding="utf-8")
         violations, _, _ = check_tree(root)
         fired = bool(violations)
@@ -383,11 +390,27 @@ def self_test() -> int:
             _PREFIX + guarded, encoding="utf-8")
         (root / ".github" / "workflows" / "dotnet-test.yml").write_text(
             "on: {push: {}}\njobs:\n" + _shell_job("workflow-shell")
-            + _shell_job("workflow-shell-executions", guard_if=""),
+            + _shell_job("workflow-shell-executions", guard_if="") + _shell_job("workflow-shell-tree"),
             encoding="utf-8")
         violations, _, _ = check_tree(root)
         fired = bool(violations)
         print(f"self-test {'ok' if fired else 'FAIL':4} {'executions-half-checked-too':30} expected=fire "
+              f"got={'fire' if fired else 'silent'}")
+        failures += 0 if fired else 1
+
+    # …and the whole-tree guard job on its own: correct shell halves must not vouch for it.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".github" / "workflows").mkdir(parents=True)
+        (root / ".github" / "workflows" / "node-repo-validate.yml").write_text(
+            _PREFIX + guarded, encoding="utf-8")
+        (root / ".github" / "workflows" / "dotnet-test.yml").write_text(
+            "on: {push: {}}\njobs:\n" + _shell_job("workflow-shell")
+            + _shell_job("workflow-shell-executions") + _shell_job("workflow-shell-tree", guard_if=""),
+            encoding="utf-8")
+        violations, _, _ = check_tree(root)
+        fired = bool(violations)
+        print(f"self-test {'ok' if fired else 'FAIL':4} {'tree-job-checked-too':30} expected=fire "
               f"got={'fire' if fired else 'silent'}")
         failures += 0 if fired else 1
 
