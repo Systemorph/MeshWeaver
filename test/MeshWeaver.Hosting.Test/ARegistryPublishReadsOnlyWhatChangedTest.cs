@@ -68,8 +68,9 @@ public class ARegistryPublishReadsOnlyWhatChangedTest : IDisposable
         var proposed = await landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence)
             .Await(TestContext.Current.CancellationToken);
 
-        proposed.Should().NotBeNull("the publish moved Acme.M0's head, so a new set is proposed");
-        proposed!.Generations.Keys.Should().HaveCount(Modules,
+        // The publish moved Acme.M0's head, so a new set is proposed.
+        Assert.NotNull(proposed);
+        proposed.Generations.Keys.Should().HaveCount(Modules,
             "every module is still read whole: the scrambled records were never re-opened");
         (landing.LogMemo.VolumeReads - before).Should().Be(1,
             "the publish read one module's records off the volume, the one it landed");
@@ -105,6 +106,29 @@ public class ARegistryPublishReadsOnlyWhatChangedTest : IDisposable
             .Await(TestContext.Current.CancellationToken);
         await proposal.Should().ThrowAsync<InvalidOperationException>(
             "a record whose length or write time moved is re-read, and an unreadable record refuses the proposal");
+    }
+
+    /// <summary>
+    /// The invariant the memo rests on: a record file is written ONCE. Every writer into a record
+    /// directory (landing, uninstall, verdict, older-image snapshot) goes through <c>WriteOnce</c>, which
+    /// skips an existing name and publishes by a no-replace rename. So writing a record whose name is
+    /// already on the volume must leave the file's bytes untouched, even when they differ.
+    /// </summary>
+    [Fact]
+    public void ARecordName_IsNeverRewritten_TheMemosInvariant()
+    {
+        var record = new ModuleLandingRecord
+        {
+            Name = Name(7), Source = ModuleActivationSources.Store, PackagePath = "Plugins/" + Name(7),
+            Directory = Name(7) + "@0123456789abcdef", Version = "1.0.0", FrameworkMvid = Platform,
+        };
+        ModuleActivationSidecar.WriteLanding(root, record).Should().BeTrue("the premise: the first write publishes");
+        var file = RecordFiles(Name(7)).Single();
+        File.WriteAllText(file, "{ different bytes under the same name }");
+
+        ModuleActivationSidecar.WriteLanding(root, record).Should().BeFalse("an existing name is never written again");
+        File.ReadAllText(file).Should().Be("{ different bytes under the same name }",
+            "the second write of a name must not replace what the name holds");
     }
 
     // ───────────────────────────────────────────────────────────────────────── harness
