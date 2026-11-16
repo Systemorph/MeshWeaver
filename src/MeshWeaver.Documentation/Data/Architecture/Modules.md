@@ -430,6 +430,41 @@ reports **unresolvable** (re-install), not pending (wait for a restart).
 > record layout, the GC consequence and the rejected alternatives are in
 > [Module Set Convergence](/Doc/Architecture/ModuleSetConvergence).
 
+#### 🚨 A DEFERRED required module is never "a restart activates it"
+
+Boot loads the mesh's proposed set, so a module that LANDED (enabled record, bytes on the volume)
+but that no proposed set names is **deferred**: it runs on no replica, and a restart does not change
+that — only a landing wave that proposes a set naming it does. `required_modules` used to classify
+off the activation record alone, so it called such a module *"landed on the volume, not yet loaded
+in this process — a restart activates it"*.
+
+**Measured on a v4 control instance:** `MeshWeaver.Blazor.Chat` and `MeshWeaver.Mcp` were landed
+in the line's own tree (`lines/4/modules/`) and named with that sentence; the deployment was
+restarted and the new pods named them with the same sentence. The chat views and the instance's MCP
+endpoint stayed absent. `pending_module_activation` — which does project onto the set and listed
+both as `Deferred` — was `Healthy`, because it degrades only on *pending* and *unresolvable*, and
+`/health` prints only non-Healthy entries, so the one line that knew was never shown.
+
+What changed:
+
+- **One deferral rule.** `ModuleActivationBoot.IsDeferredBy(entry, set)` is the predicate boot's
+  projection (`ProjectOntoMeshSet`) applies, and `RequiredModuleStatus.Classify` applies the same
+  one. The set reaches the classifier on the activation record it already reads —
+  `ModuleActivationList.MeshModuleSet`, a `[JsonIgnore]` property `PendingModuleActivations` fills
+  from the set it read beside the record — the same route `TierRefusals` takes, so no host signature
+  changes.
+- **The reason says what is true:** *"landed on the volume, but NOT in the mesh's module set N (…)
+  — boot DEFERS it, so a restart does NOT activate it"*, and where to look when no wave proposes:
+  the `[ModuleSet] NOT proposing` and `[DefaultInstall] module phase` log lines name the refusal
+  (an unmet dependency floor, a package the pass could not clear, an unreadable record).
+- The state stays `ExpectedLater` (Degraded): under `required-modules-readiness-only` only the
+  image's own lost packs and an incompatible present module stall a roll.
+
+**What a deferred module needs** is a proposal, never a restart: a landing wave (an install, a
+reload, the auto-update reconcile, the default install) that completes and whose checked proposal
+is accepted. A proposal that is refused leaves every module landed after the last accepted set
+deferred until the cause is removed — read the refusal before restarting anything.
+
 ### 🚨 GC is OFF the readiness path (#2684)
 
 Where the pass runs is as load-bearing as what it deletes. It used to run synchronously in the
