@@ -277,8 +277,7 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
         using var reader = new BinaryReader(stream);
-        if (stream.Length < 4)
-            throw new EndOfStreamException();
+        Seek(stream, 0, 4);
         var magic = reader.ReadUInt32();
         return magic switch
         {
@@ -297,12 +296,13 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
     private static long? ElfLength(FileStream stream, BinaryReader reader)
     {
         // e_ident[EI_CLASS] = ELFCLASS64, e_ident[EI_DATA] = ELFDATA2LSB: the only shape read here.
+        Seek(stream, 4, 2);
         if (reader.ReadByte() != 2 || reader.ReadByte() != 1)
             return null;
-        stream.Position = 0x20;
+        Seek(stream, 0x20, 16);
         var phoff = reader.ReadInt64();
         var shoff = reader.ReadInt64();
-        stream.Position = 0x36;
+        Seek(stream, 0x36, 8);
         var phentsize = reader.ReadUInt16();
         long phnum = reader.ReadUInt16();
         var shentsize = reader.ReadUInt16();
@@ -310,20 +310,27 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
         var end = phoff + phnum * phentsize;
         if (shoff != 0)
         {
+            // Both counts have an extended form that lives in section 0: e_shnum == 0 means the real
+            // section count is its sh_size, e_phnum == PN_XNUM means the real program-header count is its
+            // sh_info. (createdump writes exactly one section header, and only in the PN_XNUM case.)
+            if (shnum == 0)
+            {
+                Seek(stream, shoff + 0x20, 8);
+                shnum = reader.ReadInt64();
+            }
             end = Math.Max(end, shoff + Math.Max(shnum, 1) * shentsize);
-            // PN_XNUM: more program headers than e_phnum holds — the real count is section 0's sh_info.
             if (phnum == 0xFFFF)
             {
-                Seek(stream, shoff + 0x2C);
+                Seek(stream, shoff + 0x2C, 4);
                 phnum = reader.ReadUInt32();
                 end = Math.Max(end, phoff + phnum * phentsize);
             }
         }
         for (long i = 0; i < phnum; i++)
         {
-            Seek(stream, phoff + i * phentsize + 0x08);
+            Seek(stream, phoff + i * phentsize + 0x08, 8);
             var offset = reader.ReadInt64();
-            stream.Position += 0x10;
+            Seek(stream, phoff + i * phentsize + 0x20, 8);
             var fileSize = reader.ReadInt64();
             end = Math.Max(end, offset + fileSize);
         }
@@ -333,26 +340,26 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
     private static long? MachOLength(FileStream stream, BinaryReader reader)
     {
         const uint segment64 = 0x19, note = 0x31;
-        stream.Position = 16;
+        Seek(stream, 16, 8);
         var commands = reader.ReadUInt32();
         var commandBytes = reader.ReadUInt32();
         long end = 32 + commandBytes;
         long at = 32;
         for (var i = 0; i < commands; i++)
         {
-            Seek(stream, at);
+            Seek(stream, at, 8);
             var command = reader.ReadUInt32();
             var size = reader.ReadUInt32();
             if (size < 8)
                 return end;
             if (command == segment64)
             {
-                Seek(stream, at + 40);
+                Seek(stream, at + 40, 16);
                 end = Math.Max(end, reader.ReadInt64() + reader.ReadInt64());
             }
             else if (command == note)
             {
-                Seek(stream, at + 24);
+                Seek(stream, at + 24, 16);
                 end = Math.Max(end, reader.ReadInt64() + reader.ReadInt64());
             }
             at += size;
@@ -360,10 +367,14 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
         return end;
     }
 
-    /// <summary>Positions the stream at <paramref name="offset"/>, or reports the file as ending inside its headers.</summary>
-    private static void Seek(FileStream stream, long offset)
+    /// <summary>
+    /// Positions the stream at <paramref name="offset"/> for a read of <paramref name="length"/> bytes, or
+    /// reports the file as ending inside its headers — every header read goes through here, so a read past
+    /// the end takes the one named path.
+    /// </summary>
+    private static void Seek(FileStream stream, long offset, int length)
     {
-        if (offset < 0 || offset >= stream.Length)
+        if (offset < 0 || offset > stream.Length - length)
             throw new EndOfStreamException();
         stream.Position = offset;
     }
