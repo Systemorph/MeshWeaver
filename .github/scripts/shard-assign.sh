@@ -31,8 +31,8 @@
 # with `[CI] <name> exit=0 elapsed=<s>s`): the MAX of each unit's newest three green
 # observations, so the table is sized for the bad case. The file records the runs it read
 # and when. `shard-weights.py check-current` re-measures and reds on drift (weekly, in
-# shard-weights.yml); `check-assignment` proves every project runs exactly once (CI's own
-# shell, every PR). The history below is why the table stopped being hand-edited.
+# shard-weights.yml); `check-assignment` proves every project runs exactly once (CI's own shell's
+# whole-tree guards, every PR). The history below is why the table stopped being hand-edited.
 #
 # The 2026-10-23 re-measure (the previous table was from 2026-10-08). The table had
 # drifted the usual way. It reported loads of ~454 s on every shard, while shard 4

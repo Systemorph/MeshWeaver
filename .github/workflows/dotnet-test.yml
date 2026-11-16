@@ -2430,6 +2430,16 @@ jobs:
     - name: "No manual Key Vault secret command outside the governed verbs"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-manual-keyvault.py --root .
+    # The shard weight table (.github/scripts/shard-weights.txt) is GENERATED from measurement by
+    # shard-weights.py and balanced by shard-assign.sh. Every test project, and every part of a split one,
+    # must land on exactly one shard under both selections: a dropped unit would read green having run
+    # nothing, a duplicated one would run twice. A WHOLE-TREE guard, never path-selected: a new test project
+    # anywhere changes the assignment. The self-test proves both checks can fail.
+    - name: "Every test project runs on exactly one shard; the weight table's tools can fail (self-test + check)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: |
+        python3 .github/scripts/shard-weights.py --self-test
+        python3 .github/scripts/shard-weights.py check-assignment
 
     # Two source files importing to ONE node path (`X.md` + `X.json`, `X.md` + `X/index.json`,
     # case-folded) are silently last-writer-wins at import. Every node repo's validate lane fetches
@@ -2760,16 +2770,6 @@ jobs:
     - name: "The mw-core-tests runner reds every shard it cannot vouch for (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 deploy/core-tests/core-tests.py --self-test
-
-    # The shard weight table (.github/scripts/shard-weights.txt) is GENERATED from measurement by
-    # shard-weights.py and balanced by shard-assign.sh. Every test project, and every part of a split
-    # one, must land on exactly one shard under both selections — a dropped unit would read green
-    # having run nothing, a duplicated one would run twice. The self-test proves both checks can fail.
-    - name: "Every test project runs on exactly one shard; the weight table's tools can fail (self-test + check)"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: |
-        python3 .github/scripts/shard-weights.py --self-test
-        python3 .github/scripts/shard-weights.py check-assignment
 
     # The upstream SOURCE a node-repo bake stages (stage-sealed-upstream.sh, fetched by
     # node-repo-publish-bake.yml at its scripts ref) must be what the sealed publication's bytes
