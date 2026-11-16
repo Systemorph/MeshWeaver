@@ -1808,13 +1808,35 @@ jobs:
     - name: "Evidence: kernel log of a failed shard (createdump / OOM / segfault)"
       if: always()
       timeout-minutes: 1
+      # The trigger is the SAME marker the verdict step "Fail on non-zero project exit" gates on — the
+      # run step writes one `[CI] <project> exit=<rc> …` line per project, crashes and signals included
+      # (KernelLogEvidenceStepGuard pins the two greps to each other). A missing marker file is said
+      # aloud and the kernel log printed anyway; an unreadable kernel log is said aloud, never shown as
+      # an empty match.
       run: |
-        if ! grep -qE 'exit=[1-9]' test/test-results.log 2>/dev/null; then
+        if [ ! -f test/test-results.log ]; then
+          echo "no test/test-results.log — cannot tell whether a test host failed; printing the kernel log anyway"
+        elif ! grep -qE 'exit=[1-9]' test/test-results.log; then
           echo "every test host exited 0 — no kernel log needed"
           exit 0
+        else
+          echo "a test host exited non-zero"
         fi
-        echo "a test host exited non-zero; the runner's kernel log lines for createdump, OOM and segfaults (last 80):"
-        sudo -n dmesg -T 2>&1 | grep -iE 'createdump|oom|segfault|killed process' | tail -n 80 || true
+        # The redirect is the runner user writing its own /tmp file; only dmesg needs root.
+        if ! { sudo -n dmesg -T; } > /tmp/kernel-log.txt 2>&1; then
+          echo "the kernel log could NOT be read (sudo -n dmesg failed):"
+          head -c 400 /tmp/kernel-log.txt
+          exit 0
+        fi
+        # grep finding nothing is an answer, not a failure: it must not end the step under -e/pipefail.
+        { grep -iE 'createdump|out of memory|oom-kill|invoked oom-killer|oom_reaper|segfault|killed process' /tmp/kernel-log.txt || true; } \
+          | tail -n 80 > /tmp/kernel-log-hits.txt
+        if [ -s /tmp/kernel-log-hits.txt ]; then
+          echo "the runner's kernel log lines for createdump, OOM kills and segfaults (last 80):"
+          cat /tmp/kernel-log-hits.txt
+        else
+          echo "the kernel log was read and holds NO createdump, OOM-kill or segfault line ($(wc -l < /tmp/kernel-log.txt) lines read)"
+        fi
         exit 0
     # ── Per-shard surfacing: publish THIS shard's results as soon as it
     #    finishes, so you don't wait for the slowest sibling + the collector to
