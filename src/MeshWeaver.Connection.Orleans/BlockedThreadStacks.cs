@@ -55,8 +55,17 @@ namespace MeshWeaver.Connection.Orleans;
 /// <c>FileNotFoundException</c> for the dump that was never written. So after every write the file is
 /// checked against its OWN headers (<see cref="EnsureWritten"/>): a missing or truncated dump is a named
 /// failure of the capture, and nothing is ever read from it.</para>
+///
+/// <para><b>Naming how the writer died.</b> The runtime discards the signal that killed its dump writer, so a
+/// reader built with <c>logDumpGeneration: true</c> asks the runtime to run <c>createdump --diag</c>: its
+/// diagnostic lines go to the process's stdout and are flushed line by line, so they survive the writer's
+/// death and the last step it reached is in the log beside the named failure. Off by default — a production capture stays quiet; the
+/// real-dump tests turn it on, since that is where a dead writer has been seen (core #8355, #8358).</para>
 /// </summary>
-internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>? writeDump = null)
+/// <param name="dacPath">The DAC to pin; by default the one beside this process's runtime.</param>
+/// <param name="writeDump">Writes the dump to the given path; by default the runtime's own dump writer.</param>
+/// <param name="logDumpGeneration">Whether the runtime's dump writer logs each step it takes (<c>createdump --diag</c>).</param>
+internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>? writeDump = null, bool logDumpGeneration = false)
 {
     /// <summary>
     /// How many dumps one capture may take when each earlier one failed because a thread exited during
@@ -74,12 +83,13 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
         + @"|ptrace\(PTRACE_GETREGSET, (?<tid>\d+), NT_\w+\) FAILED [^\r\n]*\(3\)",
         RegexOptions.CultureInvariant);
 
-    private readonly Action<string> dumpWriter = writeDump ?? WriteDumpOfThisProcess;
+    private readonly Action<string> dumpWriter = writeDump ?? (path => WriteDumpOfThisProcess(path, logDumpGeneration));
 
     /// <summary>Asks the runtime, over its diagnostic port, to write a Normal minidump of this process.</summary>
     /// <param name="path">Where the dump is written.</param>
-    internal static void WriteDumpOfThisProcess(string path) =>
-        new DiagnosticsClient(Environment.ProcessId).WriteDump(DumpType.Normal, path, logDumpGeneration: false);
+    /// <param name="logDumpGeneration">Whether the dump writer logs each step it takes (<c>createdump --diag</c>).</param>
+    internal static void WriteDumpOfThisProcess(string path, bool logDumpGeneration = false) =>
+        new DiagnosticsClient(Environment.ProcessId).WriteDump(DumpType.Normal, path, logDumpGeneration);
 
     /// <summary>
     /// Whether <paramref name="failure"/> is the dump writer reporting that a thread OTHER than this
