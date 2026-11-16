@@ -27,8 +27,10 @@ Modes:
 
   check-current [--runs N] [--repo O/R]
       Re-measures (as `refresh` does, without writing) and fails when a unit's measured weight
-      drifted from the committed table by >= 25 % AND > 30 s, or when a scheduled unit has no
-      measured row. Run by the weekly `Shard weights stay measured` workflow — never by a pull
+      drifted from the committed table by >= 25 % AND > 30 s, when a measured unit has no row in
+      the table, or when the window measured nothing at all. A scheduled unit the window did not
+      observe (a selection skipped it) is not compared; the run prints how many units it
+      compared. Run by the weekly `Shard weights stay measured` workflow — never by a pull
       request, because a green shard must not go red over a project that merely got slower.
 
   --self-test
@@ -101,16 +103,21 @@ def read_table(path: str) -> tuple[dict[str, int], dict[str, int], dict[str, int
     parts: dict[str, int] = {}
     partw: dict[str, int] = {}
     with open(path, encoding="utf-8") as fh:
-        for line in fh:
+        for lineno, line in enumerate(fh, 1):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             f = line.split()
-            if "#" in f[1]:
-                partw[f[1]] = int(f[0])
-            else:
-                totals[f[1]] = int(f[0])
-                parts[f[1]] = int(f[2]) if len(f) >= 3 else 1
+            try:
+                if len(f) < 2:
+                    raise ValueError("expected '<seconds> <project>[#k/n] [parts]'")
+                if "#" in f[1]:
+                    partw[f[1]] = int(f[0])
+                else:
+                    totals[f[1]] = int(f[0])
+                    parts[f[1]] = int(f[2]) if len(f) >= 3 else 1
+            except ValueError as e:
+                raise SystemExit(f"shard-weights: {path}:{lineno}: malformed row {line!r}: {e}")
     return totals, parts, partw
 
 
