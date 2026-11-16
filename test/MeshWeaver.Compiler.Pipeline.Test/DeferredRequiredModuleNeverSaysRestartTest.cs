@@ -64,10 +64,10 @@ public class DeferredRequiredModuleNeverSaysRestartTest : IDisposable
         LandGeneration(Deferred, "0000000000000002");
 
         // Control 1: the BOOT defers it — the state the instance was in.
-        var deferredByBoot = new List<string>();
+        var deferredByBoot = ImmutableList<string>.Empty;
         var onSet = ModuleActivationBoot.ProjectOntoMeshSet(
             ModuleActivationSidecar.Read(root), ModuleSetStore.Read(root).Proposed,
-            (module, _) => deferredByBoot.Add(module),
+            (module, _) => deferredByBoot = deferredByBoot.Add(module),
             entry => ModuleActivationBoot.LandedModuleDllExists(root, entry));
         Assert.Equal([Deferred], deferredByBoot);
         Assert.DoesNotContain(onSet.Entries, e => e.Name == Deferred);
@@ -145,11 +145,11 @@ public class DeferredRequiredModuleNeverSaysRestartTest : IDisposable
     public void ALegacyFixedFolderEntry_PassesThroughAProposedSet()
     {
         var legacy = new ModuleActivationEntry { Name = "Acme.Legacy", Directory = null };
-        var deferred = new List<string>();
+        var deferred = ImmutableList<string>.Empty;
 
         var projected = ModuleActivationBoot.ProjectOntoMeshSet(
             new ModuleActivationList { Entries = [legacy] }, SetNaming(Landed),
-            (module, _) => deferred.Add(module));
+            (module, _) => deferred = deferred.Add(module));
 
         Assert.Empty(deferred);
         Assert.Same(legacy, Assert.Single(projected.Entries));
@@ -169,11 +169,11 @@ public class DeferredRequiredModuleNeverSaysRestartTest : IDisposable
             Name = "Acme.Uninstalled", Directory = "Acme.Uninstalled@0000000000000003", Enabled = false,
         };
         var blankName = new ModuleActivationEntry { Name = " ", Directory = "x@0000000000000004" };
-        var deferred = new List<string>();
+        var deferred = ImmutableList<string>.Empty;
 
         var projected = ModuleActivationBoot.ProjectOntoMeshSet(
             new ModuleActivationList { Entries = [disabled, blankName] }, SetNaming(Landed),
-            (module, _) => deferred.Add(module));
+            (module, _) => deferred = deferred.Add(module));
 
         Assert.Empty(deferred);
         Assert.Equal([disabled, blankName], projected.Entries);
@@ -197,10 +197,10 @@ public class DeferredRequiredModuleNeverSaysRestartTest : IDisposable
             new() { Name = "Acme.Uninstalled", Directory = "Acme.Uninstalled@0000000000000003", Enabled = false },
             new() { Name = "", Directory = "x@0000000000000004" },
         ];
-        var deferred = new List<string>();
+        var deferred = ImmutableList<string>.Empty;
 
         var projected = ModuleActivationBoot.ProjectOntoMeshSet(
-            new ModuleActivationList { Entries = [.. entries] }, set, (module, _) => deferred.Add(module));
+            new ModuleActivationList { Entries = [.. entries] }, set, (module, _) => deferred = deferred.Add(module));
 
         Assert.Equal([Deferred], deferred);
         Assert.Equal(
