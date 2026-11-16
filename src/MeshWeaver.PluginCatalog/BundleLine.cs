@@ -58,13 +58,15 @@ public static class BundleLine
     /// The line THIS process runs: the major of a test-registered
     /// <see cref="RunningPlatformVersionOverride"/> when one is registered (the catalog's floor test
     /// seam — production registers none), else <see cref="ModuleRoot.RunningMajor"/>, the core's own
-    /// assembly major. Null only when neither names one, and then nothing is filtered.
+    /// assembly major. Null when neither names one, and then nothing is filtered — including a registered
+    /// override whose version does not parse: a mistyped seam must not silently fall back to the host's
+    /// real line and filter by a line the test never asked for.
     /// </summary>
     /// <param name="services">The calling hub's service provider.</param>
     public static int? RunningLine(IServiceProvider? services)
     {
         var major = services?.GetService(typeof(RunningPlatformVersionOverride)) is RunningPlatformVersionOverride pinned
-            ? PrebuiltAdoptionPolicy.MajorOf(pinned.Version) ?? ModuleRoot.RunningMajor
+            ? PrebuiltAdoptionPolicy.MajorOf(pinned.Version)
             : ModuleRoot.RunningMajor;
         return major is { } m ? LineOf(m) : null;
     }
@@ -97,8 +99,9 @@ public static class BundleLine
         var own = frameworkMvid?.Trim();
         if (PlatformCompatibility.TryParseKey(own, out var keyMajor, out _))
             return new(LineOf(keyMajor), $"its framework identity {own}", Stated: true);
-        if (PrebuiltAdoptionPolicy.MajorOf(minMeshVersion) is { } floorMajor)
-            return new(LineOf(floorMajor), $"its declared platform floor {minMeshVersion!.Trim()}", Stated: true);
+        var floor = minMeshVersion?.Trim();
+        if (PrebuiltAdoptionPolicy.MajorOf(floor) is { } floorMajor)
+            return new(LineOf(floorMajor), $"its declared platform floor {floor}", Stated: true);
         var registry = fallbackIdentity?.Trim();
         if (PlatformCompatibility.TryParseKey(registry, out var registryMajor, out _))
             return new(LineOf(registryMajor),

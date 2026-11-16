@@ -407,6 +407,51 @@ old shape refused 401 on the same request.
 The general lesson: **a credential with an expiry is a source, never a value.** Anything that
 outlives one request reads it per request.
 
+## The publish route: every upload re-read every module's records
+
+`POST /api/plugins/bundles/{plugin}` is the other registry route with a cost that grows with the
+volume. The Plugins publication POSTs its bundles one after another, and on 2026-11-15 a 42-bundle
+publication to the public registry took 16.5 minutes. The next one was cancelled at the job's
+20-minute cap with no output at all.
+
+**What the log showed, and what it did not.** The lines arrived in bursts of about 8 KB, three
+bundles each, every 50–90 s. That was Python block-buffering stdout into a pipe, not the registry:
+the timestamps were flush times. Spread over the run, every publish took **~23 s**, whatever the
+bundle's size (2 files or 69). A cost that does not depend on the upload is not the upload.
+
+**Where it went.** The route runs `ModuleLandingService.ShelveModule` and then `ProposeModuleSet`.
+Each one derives the activation of **every** module (`ModuleActivationSidecar.ReadFor`). ShelveModule
+needs it for the link probe's platform surface, and the proposal needs it for the set. A derivation
+lists each module's record directory four times and opens every landing record and every platform
+verdict file. Measured under strace on a local volume of 40 modules × 5 landings, one publish of one
+module made **1,403 opens and 1,981 stats**. That is two opens per record file on the volume. On
+the registry's Azure Files share one small-file read costs ~14 ms (687 set records in 9–10 s, see
+*Since this page was written*), which accounts for the ~23 s. Records accumulate with every
+landing, and the modules GC retires them only at boot, so the cost **grows** with every
+publication the running registry takes.
+
+**The remedy: read only what changed.** Every record file is written once (a no-replace rename)
+and is only ever removed. So a module's record directory listing (each file's name, length and
+write time) determines every byte its log is derived from. `ModuleLogMemo`, owned by the landing
+service, keeps each module's log while the listing stays the same. The listing is taken before and
+after a read, and a log is kept only when the two agree and the read was whole. A record landed by
+another replica, retired by the GC, or re-created under the same name changes the listing, so it is
+read. On the same 40 × 5 volume one publish now opens **6 landing records and 11 verdicts instead
+of 407 and 412**. `ARegistryPublishReadsOnlyWhatChangedTest` (`test/MeshWeaver.Hosting.Test`)
+pins this. After the volume has been read once, it rewrites every other module's records with
+bytes that keep their listing. A publish that re-opens them finds records that do not match their
+names, and the proposal refuses. Its two controls show that a record from another replica, and a
+corrupt record whose listing moved, are still seen.
+
+**What is still per publish, and still on the share.** The memo removes the part that grows with
+records. These reads are still per module per publish: the stored entry files (three reads, one of
+them `ReadModuleHead` reading every entry to answer for one module), the `.unloadable` markers, the
+generation-presence stats and the platform surface's directory listings. They grow with the number
+of *modules*, not with uptime. They were not measured on the share, so how much of the ~23 s they
+leave is an open question for the next publication's log. `module-publication.py` now prints each
+answer's own time (`registry answered 200 in N s`), line-buffered, so that log can be read while
+the publication runs.
+
 ## Related
 
 - [CQRS and Content Access](../CqrsAndContentAccess) — what `Query` is and is not for
