@@ -52,7 +52,7 @@ public class ThreadPoolWorkerStacksTest
             // exact signal is the capture itself: a worker whose innermost captured frame is a runtime
             // transition frame has left managed code for its native wait. A capture that catches one still
             // on its way is not the subject — the next one is read instead.
-            var reader = new ThreadPoolWorkerStacks();
+            var reader = LoggingReader();
             var held = Array.Empty<string>();
             SpinWait.SpinUntil(() =>
                 {
@@ -128,7 +128,7 @@ public class ThreadPoolWorkerStacksTest
                                      && Monitor.LockContentionCount - contentionBefore >= Held, Budget)
                 .Should().BeTrue("the reproduction needs {0} pool workers contending for the gate", Held);
 
-            var stacks = new ThreadPoolWorkerStacks().CaptureStacks();
+            var stacks = LoggingReader().CaptureStacks();
 
             var waiters = stacks.Workers
                 .Where(stack => stack.Contains(OuterFrame, StringComparison.Ordinal))
@@ -144,7 +144,7 @@ public class ThreadPoolWorkerStacksTest
                 "the holder is a dedicated thread, so only the non-worker half of the capture can show it");
 
             // The workers-only path keeps its old per-stack cap: the outer-frame change widens only the stall capture.
-            new ThreadPoolWorkerStacks().CaptureWorkerStacks()
+            LoggingReader().CaptureWorkerStacks()
                 .Should().OnlyContain(stack => stack.Split(Environment.NewLine).Length <= BlockedThreadStacks.MaxFrames,
                     "CaptureThreadPoolWorkers still renders at most {0} frames per stack", BlockedThreadStacks.MaxFrames);
 
@@ -353,7 +353,7 @@ public class ThreadPoolWorkerStacksTest
     [Fact]
     public void AnUnheldPool_TheCaptureDoesNotFindTheParkedLeaf()
     {
-        var stacks = new ThreadPoolWorkerStacks().CaptureWorkerStacks();
+        var stacks = LoggingReader().CaptureWorkerStacks();
 
         stacks.Should().NotContain(stack => stack.Contains(nameof(HeldInTheParkedLeaf), StringComparison.Ordinal));
     }
@@ -405,6 +405,14 @@ public class ThreadPoolWorkerStacksTest
             Interlocked.Increment(ref left);
         }
     }
+
+    /// <summary>
+    /// The production reader with the dump writer's step log on (<c>createdump --diag</c>): a capture in
+    /// this test host has seen its writer die silently on CI (core #8355, #8358), and the log names the last
+    /// step it reached. Production readers keep it off.
+    /// </summary>
+    private static ThreadPoolWorkerStacks LoggingReader() =>
+        new() { Stacks = new BlockedThreadStacks(logDumpGeneration: true) };
 
     /// <summary>Whether a captured stack's innermost frame is a runtime transition frame — the thread is in native code.</summary>
     private static bool InItsNativeWait(string stack) =>
