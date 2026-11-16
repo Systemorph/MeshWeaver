@@ -609,6 +609,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Why a GC-Bound Pod Stays in Rotation](WhyAGcBoundPodStaysInRotation) — the GC's hard limit sits below the container limit, so a portal short of memory is defended rather than restarted
 - [Runner Pools and Dispatch Queues](RunnerPoolsAndDispatchQueues) — two runner pools sharing all capacity; priority from the control instance's CI queue (express > trunk > gate > pr), dispatched in tier order with express headroom, re-orderable through MCP, failing open
 - [CI Profile, November 2026](CiProfile2026-11) — measured wall-clock, runner-minutes and queue wait of core and MeshWeaver.Plugins CI over 3.25 days, and the ranked proposals (shell self-tests off the core critical path, combo verifier, gate NodeType recompile, the dispatch hold)
+- [The Clients Workflow Verdict](ClientsVerdict) — how core reports the path-filtered `Clients` workflow into the required check without a 3-minute wait per run: clients.yml's own trigger applied to the change set, a zero believed early only when that proves no run is coming, the old wait whenever it cannot
 - [Self-hosted CI runners on AKS](SelfHostedRunners) — ARC beside the portals on one pool; three brakes, a negative priority class, and the reserve arithmetic that decides the cap
 - [Candidate Release Protocol](CandidateReleaseProtocol)
 - [Chart Drift — what a deploy actually does](ChartDriftSemantics)
