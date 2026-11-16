@@ -1789,6 +1789,23 @@ jobs:
     - name: "Gate: no content degraded to an untyped JsonElement"
       if: always()
       run: bash .github/scripts/check-untyped-content.sh collected-logs
+    # ── Evidence only, never a verdict: the runner's kernel log for a shard whose host exited
+    #    non-zero. The runtime reports a createdump that died on a SIGNAL as a successful dump
+    #    (coreclr PROCCreateCrashDump: `!WIFEXITED(status) || WEXITSTATUS(status) == 0`), so the
+    #    stack capture can only say "no file"; the kernel says which signal and why (an OOM kill,
+    #    a segfault). This step always exits 0 and runs before the verdict steps below, so it can
+    #    neither fail the shard nor mask its verdict. Doc/Architecture/ControlledIoPooling.
+    - name: "Evidence: kernel log of a failed shard (createdump / OOM / segfault)"
+      if: always()
+      timeout-minutes: 1
+      run: |
+        if ! grep -qE 'exit=[1-9]' test/test-results.log 2>/dev/null; then
+          echo "every test host exited 0 — no kernel log needed"
+          exit 0
+        fi
+        echo "a test host exited non-zero; the runner's kernel log lines for createdump, OOM and segfaults (last 80):"
+        sudo -n dmesg -T 2>&1 | grep -iE 'createdump|oom|segfault|killed process' | tail -n 80 || true
+        exit 0
     # ── Per-shard surfacing: publish THIS shard's results as soon as it
     #    finishes, so you don't wait for the slowest sibling + the collector to
     #    see shard 0's outcome. The collect-results job re-consolidates all
