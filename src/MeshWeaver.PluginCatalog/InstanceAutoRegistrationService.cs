@@ -1561,7 +1561,7 @@ public sealed class InstanceAutoRegistrationService(
             try
             {
                 ModuleActivationSidecar.SyncTierRefusals(
-                    ModuleRoot.Resolve(hub.ServiceProvider.GetService<IConfiguration>()), tierRefused);
+                    ModuleRoot.ResolveLine(hub.ServiceProvider.GetService<IConfiguration>()), tierRefused);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

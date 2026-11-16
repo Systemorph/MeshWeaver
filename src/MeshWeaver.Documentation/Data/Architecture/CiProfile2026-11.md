@@ -254,11 +254,17 @@ run `43706214929`:
 - **Core CD:** 108 failed runs. The first failing job was `Compatibility input: the published module
   set` in 31, `Resolve the target commit` in 27, `Arm the fleet` in 23 and `CD delivered` in 17.
   The 31 compatibility-input failures come **after** every image has been built: the
-  `workflow_run` failures alone cost 1,131 min (69 min each).
+  `workflow_run` failures alone cost 1,131 min (69 min each). **Follow-up:** those image builds
+  were not wasted. In the runs read, the platform set was promoted, baked, verified and deployed
+  to control first; only the arming evidence was red. See R8 below.
 - **Combo verification:** 5,300 of 5,632 runner-minutes were on failed runs. 89 slot jobs ran past
   30 min (max 39.4). One read (`132432200108`): a 25-minute `GATE_TIMEOUT`, then the verdict
-  `NotVerifiable`, because the instance carries retired packages that can never be re-materialised. The
-  same slot fails the same way run after run (slot 4 first-failed in 48 runs, slot 1 in 15).
+  `NotVerifiable`. The same slot fails the same way run after run (slot 4 first-failed in 48 runs,
+  slot 1 in 15). *Correction, measured while implementing R2:* that slot's six retired packages did
+  not cause the verdict. A retired package is reported and folded out of the verdict. The caveat
+  that decided it was "the gate run exceeded what the bake left of the run's 00:25:00 budget": the
+  candidate did not complete inside the gate. See
+  [Combo Gate Wiring](../ComboGateWiring) for what R2 changed and what it could not.
 - **Re-runs:** genuine re-runs (attempt 3 or later) were 24 Plugins PR runs and 1 core run. Attempt 2
   is the dispatcher, not a person.
 - **The 45-minute cap:** no CI job neared it. Only `Shadow trunk — follow the host's modules stage`
@@ -295,21 +301,22 @@ implemented here.
 
 | # | Change | Evidence | Runner-min / day | PR wall |
 |---|---|---|---|---|
-| **R1** | **Core: take the `CI's own shell` family off `stage-gate`, and run it only when its inputs change.** Let `stage-gate` need the cheap body and policy gates only. The four shell jobs still run in parallel, red the run and cancel the heavy legs on a red, which keeps stage 0's fail-fast purpose. Then path-select them in `precheck` on what they actually test (`.github/**`, `scripts/**`, the composite actions, the canonical scripts satellites fetch). | Section 3 core: `stage-gate` at 5.7 of 18.5 min. 2,835 min of shell jobs in 273 runs. E.g. run `43742571208` | up to **~870** (depends on the share of PRs that touch CI inputs; not measured) | **−5.2 min** (18.4 → ~13.2), every core PR |
+| **R1** | **Core: take the `CI's own shell` family off `stage-gate`, and run it only when its inputs change.** (Implemented: [CI's Own Shell Scope](../CiOwnShellScope).) Let `stage-gate` need the cheap body and policy gates only. The four shell jobs still run in parallel, red the run and cancel the heavy legs on a red, which keeps stage 0's fail-fast purpose. Then path-select them in `precheck` on what they actually test (`.github/**`, `scripts/**`, the composite actions, the canonical scripts satellites fetch). | Section 3 core: `stage-gate` at 5.7 of 18.5 min. 2,835 min of shell jobs in 273 runs. E.g. run `43742571208` | up to **~870** (depends on the share of PRs that touch CI inputs; not measured) | **−5.2 min** (18.4 → ~13.2), every core PR |
 | **R2** | **Combo verification: decide `NotVerifiable` before the 25-minute wait, and build the verifier once per run.** A verdict that depends only on (candidate, the instance's installed set) can be cached and re-used until either changes. A retired package is known before any gate starts. | Section 6: 5,300 of 5,632 runner-min on failed runs, 89 slot jobs > 30 min, log `132432200108`. Verifier built 7× per run (2.2 min each) | **~1,000–1,400** | none (not on a PR path) |
 | **R3** | **Plugins gate: stop recompiling 123 NodeTypes per run.** Key the bake's compile cache on the composed modules' public API (the ABI key the module lane already computes), not their MVID. Or reuse the NodeType assemblies `Compile Code nodes + the in-mesh lane` / `compile-check` produced in the same run against the same reference set. | Section 3: `bake: compiled 123 NodeType(s) in 336.8 s` (`132901787289`), `122 … 351.9 s` (`132900718420`). The gate shard is the last long job of every heavy PR | **~320** (5.7 min × 185 shard runs), more if compile-check shares it | **−5 min** on heavy PRs (54 → ~49) |
 | **R4** | **Plugins dispatch: admit a PR run in place when the `ci` queue has capacity, and hold (red, then re-run) only when it does not.** A trunk run already waits in place for `MeshWeaver/admission`. Alternatively, enqueue at the run's FIRST job so the wait overlaps stage 0 instead of starting after it. | Section 2: hold median 4.0 / p90 22.1 min (n=257). Heavy runs: stage 0 done 10.7 → admission 17.9 (p90 50.7). Sample annotation: 27 of 30 `HELD FOR DISPATCH (queue ci)` | ≈ 0 | **−4 to −7 min** median, about −20 min at p90, every Plugins PR |
 | **R5** | **Core: rebalance the 8 test shards** by measured project weight (`measured-weights.tsv` is already written per shard). Move `Hosting.Test`'s halves and `Graph.Test` apart from the 9-minute shards 1, 2 and 4. | Section 4: shard medians 4.8–9.6 min, mean 7.1 | 0 | **−2.3 min**, every core PR |
 | **R6** | **Plugins stage 0: one job instead of six for the shell-only checks** (classify's selectors, select scope, select compile-check units, settle locks). Each repeats set-up, checkout and `git-full-history.sh`. | Section 5: `git-full-history.sh` 1,333 min over 6 jobs per run, setup 0.25 min per job | **~400–650** | −0.5 to −1 min (less fan-in before admission) |
 | **R7** | **Plugins `portal-hosts`: give the unit builds the module lane's content-addressed compile cache** (unchanged project, same reference set → reuse its output). The 13–14 small networks and the big network each rebuild shared projects today. | Section 5: about 790 runner-min/day of unit and network builds; 3,670/day for the whole family | **~300–400** | −3 to −5 min on light PRs, where portal-hosts is the path; ≈ 0 on heavy PRs |
-| **R8** | **Core CD: fail before the images.** Run `Compatibility input: the published module set` and the target-commit decision before the six image builds, not after them. | Section 6: 31 runs first-failed at compatibility input after the images were built. `workflow_run` failures 69 min each | **~300–450** | none (CD) |
+| **R8** | ~~**Core CD: fail before the images.**~~ **Refuted, not implemented.** The target-commit decision (`gate`) already runs before every image job. The compatibility input must not gate the images: the platform set is delivered (promoted, deployed to control first) even when the module publication is absent, and the modules' lanes need that set to seal the missing publication. Reasoning and run evidence: [Platform and Module Deploy → Why the compatibility input reads after the images](../PlatformAndModuleDeploy#why-the-compatibility-input-reads-after-the-images). | Section 6: 31 runs first-failed at compatibility input after the images were built. `workflow_run` failures 69 min each | 0 (the image minutes are the platform delivery, not waste) | none (CD) |
 | **R9** | **Plugins `RN app + web clients`: path-select the Playwright web E2E** (11 min of a 15.1 min job, 4.5 min on 11-07) to client changes. | Section 5: 107 runs, 1,086 min | **~250–330** | none (off the required path) |
 | **R10** | **Core `Clients workflow verdict`: read the Clients check once at `Consolidate` time instead of polling for 3 minutes in every run.** (Implemented differently in [#8321](https://github.com/Systemorph/MeshWeaver/pull/8321): [The Clients Workflow Verdict](../ClientsVerdict) — the job proves from clients.yml's own trigger that no Clients run is coming, instead of moving the wait into `Consolidate`.) | Section 5: 3.1 min × 273 runs | **~250** | 0 |
 | **R11** | **Build host: install a net11 SDK on the Mac host (and pin the host's SDK to the repository's `global.json` line)** before any v4 routing or parity read. | Section 7: every v4 host build since 12:00Z fails with `NETSDK1045` | 0 today (host builds are shadow) | unblocks #4478 |
 
 **Ranked by PR wall-clock:** R1 (core, −5.2), R3 (Plugins heavy, −5), R4 (Plugins, −4 to −7 median
 and −20 at p90), R7 (Plugins light, −3 to −5), R5 (core, −2.3).
-**Ranked by runner-minutes:** R2 (~1,200), R1 (≤ 870), R6 (~500), R8 (~400), R7 (~350), R3 (~320).
+**Ranked by runner-minutes:** R2 (~1,200), R1 (≤ 870), R6 (~500), R7 (~350), R3 (~320). R8 (~400) was
+refuted: see its row.
 
 Together, R3 and R4 take a heavy Plugins PR from about 54 to about 43 minutes. R1 and R5 take a
 core PR from 18.4 to about 11 minutes.

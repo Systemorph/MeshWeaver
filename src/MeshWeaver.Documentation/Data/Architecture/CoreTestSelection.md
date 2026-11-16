@@ -87,8 +87,13 @@ Every way the derivation can lose its footing forces the full suite for `.github
   directory mentioned in an `echo`/`::error` message, `name:` or `description:` is prose);
 - the shell jobs are not guaranteed to run: the `pull_request` trigger carries a `paths`,
   `paths-ignore` or `branches-ignore` filter, a `workflow-shell*` job carries a job-level `if:` or
-  `needs:`, or no such job exists. A `.github/**` file is let through only because those jobs run
-  on **every** pull request, so this is checked on every run, not assumed.
+  `needs:` other than the one sanctioned scope decision, or no such job exists. A `.github/**` file
+  is let through only because those jobs run on **every** pull request that changes one, so this is
+  checked on every run, not assumed. The sanctioned decision is exactly
+  `needs: [workflow-shell-scope]` plus `if: ${{ needs.workflow-shell-scope.outputs.run == 'true' }}`,
+  accepted only while the scope job itself is unconditional and its classifier — loaded from
+  `.github/scripts/workflow-shell-scope.py` and probed on `.github/**` paths — owes the shell jobs on
+  every `.github/**` file ([CI's Own Shell Scope](../CiOwnShellScope)).
 
 A rename is listed under both paths (`git diff --no-renames`), so a file moved out of the lane
 still forces.
