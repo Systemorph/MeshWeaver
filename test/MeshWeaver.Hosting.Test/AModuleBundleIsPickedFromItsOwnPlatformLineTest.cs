@@ -105,14 +105,22 @@ public abstract class AModuleBundleIsPickedFromItsOwnPlatformLineTest(ITestOutpu
 
         public int Downloads => Volatile.Read(ref downloads);
 
+        private string? indexQuery;
+
+        /// <summary>The query string of the last index request — the line the client stated.</summary>
+        public string? IndexQuery => Volatile.Read(ref indexQuery);
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            if (request.RequestUri!.AbsolutePath.EndsWith("/index.json", StringComparison.Ordinal))
+            if (request.RequestUri is { } uri && uri.AbsolutePath.EndsWith("/index.json", StringComparison.Ordinal))
+            {
+                Volatile.Write(ref indexQuery, uri.Query);
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(IndexJson, Encoding.UTF8,
                         new System.Net.Http.Headers.MediaTypeHeaderValue("application/json")),
                 });
+            }
             Interlocked.Increment(ref downloads);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         }
@@ -140,7 +148,10 @@ public class AModuleBundleIsPickedFromItsOwnPlatformLine_OnLine3Test(ITestOutput
             "the line-4 head (floor 4.0.13296, identity c004e001) is another line's build; the newest "
             + "build of THIS line is 1.52.0");
         plan.Lands.Should().BeTrue("AI was never landed here, so the line-3 build lands");
-        plan.Bundle!.Version.Should().Be(Line3Version, "the bundle that lands is the one that was planned");
+        plan.Bundle.Should().NotBeNull("a landing plan carries the bundle it lands");
+        plan.Bundle?.Version.Should().Be(Line3Version, "the bundle that lands is the one that was planned");
+        Registry.IndexQuery.Should().Contain("line=3",
+            "the client states its line, so a registry with one shelf per line answers with this line's builds only");
     }
 
     [Fact(Timeout = 300_000)]
@@ -153,8 +164,10 @@ public class AModuleBundleIsPickedFromItsOwnPlatformLine_OnLine3Test(ITestOutput
 
         plan.Lands.Should().BeFalse("a build of another line is never landed");
         plan.Decided.ServedVersion.Should().BeNull("nothing of this line is served");
-        plan.Decided.Verdict!.Action.Should().Be(ModuleUpdateAction.SkipNoBundle);
-        plan.Decided.Verdict.Reason.Should().Contain("another platform line")
+        var verdict = plan.Decided.Verdict;
+        verdict.Should().NotBeNull("a plan that lands nothing says why");
+        verdict?.Action.Should().Be(ModuleUpdateAction.SkipNoBundle);
+        verdict?.Reason.Should().Contain("another platform line")
             .And.Contain("AI 4.0.1 (line 4")
             .And.Contain("this process runs line 3",
                 "the landing log must name the line as the reason, not 'lists no bundle'");
@@ -170,7 +183,8 @@ public class AModuleBundleIsPickedFromItsOwnPlatformLine_OnLine3Test(ITestOutput
     public void NegativeControl_TheUnsplitPickTakesTheLine4Head()
     {
         var index = System.Text.Json.JsonSerializer.Deserialize<PluginBundleClient.BundleIndex>(BothLines,
-            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))
+            ?? throw new InvalidOperationException("the test index must deserialize");
 
         var unsplit = BundleLine.Split(index, runningLine: null).Kept
             .First(b => b.Plugin == Plugin && b.Module != null);
@@ -196,6 +210,7 @@ public class AModuleBundleIsPickedFromItsOwnPlatformLine_OnLine4Test(ITestOutput
 
         plan.Decided.ServedVersion.Should().Be(Line4Version);
         plan.Lands.Should().BeTrue();
+        Registry.IndexQuery.Should().Contain("line=4", "the client states its line");
     }
 
     [Fact(Timeout = 300_000)]
@@ -208,7 +223,8 @@ public class AModuleBundleIsPickedFromItsOwnPlatformLine_OnLine4Test(ITestOutput
         var plan = await Plan(ct);
 
         plan.Lands.Should().BeFalse("a line-3 build is never landed on line 4, newer or not");
-        plan.Decided.Verdict!.Reason.Should().Contain("this process runs line 4");
+        plan.Decided.Verdict.Should().NotBeNull("a plan that lands nothing says why");
+        plan.Decided.Verdict?.Reason.Should().Contain("this process runs line 4");
     }
 }
 
