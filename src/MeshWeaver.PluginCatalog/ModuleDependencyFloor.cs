@@ -56,16 +56,41 @@ public static class ModuleDependencyFloor
     /// Every requirement of <paramref name="installed"/> that the set <paramref name="landed"/>
     /// describes does NOT meet: the dependency's module has a landed, enabled entry here whose
     /// version is outside the declared range. Pure; ordered by dependent, then dependency.
+    /// Judges the records of this process's own line, <see cref="BundleLine.RunningMajor"/>; a
+    /// registered <c>RunningPlatformVersionOverride</c> (a test seam) is NOT consulted here, so a test
+    /// that pins another line calls <see cref="UnmetOnLine"/> with that line.
     /// </summary>
     /// <param name="installed">The install records (each package's id, module and requirements).</param>
     /// <param name="landed">The activation list the set is derived from.</param>
     public static ImmutableList<UnmetDependencyFloor> Unmet(
         IReadOnlyList<PackageManifest> installed, ModuleActivationList landed)
+        => UnmetOnLine(installed, landed, BundleLine.RunningLine(null));
+
+    /// <summary>
+    /// <see cref="Unmet"/> for the module tree of platform line <paramref name="line"/>.
+    ///
+    /// <para>🚨 <b>Only the records of THIS line are judged</b> (policy
+    /// <c>major-lines-run-separately</c>). Install records are mesh-wide — every replica of a
+    /// deployment reads the same <c>Plugins/*</c> nodes, during a roll from one major to the next
+    /// replicas of both lines run against them — while the landed set is per line (a line-4 image
+    /// lands under <c>lines/4/</c> of the shared root; this line keeps the root's own tree).
+    /// A record whose declared platform floor (<see cref="PackageManifest.MinMeshVersion"/>) names
+    /// another line describes a build this tree does not load, so its requirements say nothing about
+    /// this set: a line-3 Chat record requiring <c>AI@^1.51.0</c>, judged against the line-4 tree's
+    /// AI 4.0.1, refused every line-4 proposal while nothing in that set was inconsistent. A record
+    /// that states no floor is judged — absence of a line is no evidence of another one.</para>
+    /// </summary>
+    /// <param name="installed">The install records.</param>
+    /// <param name="landed">The activation list of the tree the set is derived from.</param>
+    /// <param name="line">That tree's platform line (<see cref="BundleLine.RunningLine"/>); null judges every record.</param>
+    public static ImmutableList<UnmetDependencyFloor> UnmetOnLine(
+        IReadOnlyList<PackageManifest> installed, ModuleActivationList landed, int? line)
     {
         ArgumentNullException.ThrowIfNull(installed);
         ArgumentNullException.ThrowIfNull(landed);
         var unmet = ImmutableList.CreateBuilder<UnmetDependencyFloor>();
-        foreach (var dependent in installed.Where(p => !string.IsNullOrWhiteSpace(p.Id))
+        foreach (var dependent in installed.Where(p => !string.IsNullOrWhiteSpace(p.Id)
+                         && OnLine(p, line))
                      .OrderBy(p => p.Id, StringComparer.OrdinalIgnoreCase))
         {
             foreach (var requirement in dependent.Requires)
@@ -84,6 +109,13 @@ public static class ModuleDependencyFloor
         }
         return unmet.ToImmutable();
     }
+
+    /// <summary>Whether <paramref name="record"/> belongs to platform line <paramref name="line"/>: its
+    /// declared floor's line equals it, or it declares no floor, or the line is unknown. Pure.</summary>
+    private static bool OnLine(PackageManifest record, int? line) =>
+        line is not { } l
+        || MeshWeaver.Hosting.PrebuiltAdoptionPolicy.MajorOf(record.MinMeshVersion) is not { } major
+        || BundleLine.LineOf(major) == l;
 
     /// <summary>
     /// The landed, enabled, versioned activation entry of <paramref name="dependencyId"/>'s module:
