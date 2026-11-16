@@ -155,6 +155,48 @@ in-process.
 live instance's modules do not survive) and a `NotVerifiable` fails it too — that outcome means *nothing was checked*, which is
 "the gate never ran" wearing the colour of "the gate passed".
 
+### The verdict the assembly decides is decided first, and the verifier is built once
+
+Saving R2 of the [CI profile](../CiProfile2026-11) changed two things about how a slot spends its
+time. Neither changes a verdict.
+
+- **Decided before paying.** Step 3 used to pull the candidate's portal and tester images, compose
+  the gate host and fetch the sealed module set, and only then let `mw-combo-verify` assemble the
+  combo. When the assembly fails (a module whose ref moved past its install record, a fetch that
+  failed, an incomplete combo, a module without an `index.json` root, or nothing but retired
+  modules), the verdict is `NotVerifiable` whatever the candidate is. The images and modules were
+  never used. On the slots measured on 2026-11-15 that ended "the combo did not assemble", that
+  was about 4 of their 10 minutes. The lander now runs `mw-combo-verify --assemble-only` first. It
+  needs only the combo and git. It either decides (exit 1, verdict written, each reason on its
+  module entry, plus a caveat saying it was decided before the gate) or hands over (exit 0, no
+  verdict). The full run then passes `--assembled` and reuses the manifest (`combo-assembly.json`)
+  and the materialised root instead of fetching every module twice. A manifest that is missing,
+  unreadable or about another combo read is a broken instrument (exit 3), never a verdict.
+  The classifier is `InstanceComboVerifier.DecideBeforeGate`. It is the same fold the one-shot run
+  applied when it skipped the gate, so deciding earlier changes no verdict. **It can only say
+  `NotVerifiable`.** The lander refuses an up-front Green or Red without landing anything, and
+  `check-combo-verify.py` runs the lander's up-front block with a stand-in verifier over every exit
+  code it can see. That includes the negative control: a combo that assembles still reaches the
+  gate.
+- **A retired package dooms nothing.** It is folded out of the verdict
+  (see *Retired, not verifiable* below), so an instance that carries retired
+  packages beside live ones still reaches the gate. The NotVerifiable slots that ran for 25 minutes
+  (for example job 132432200108) were **gate runs that exceeded the budget**: the candidate itself
+  did not complete inside the gate. No precondition read up front predicts that, so those slots
+  still pay the gate. Only fixing what hangs makes them cheaper.
+- **Built once per run.** Each of the seven slots used to run `dotnet build` on
+  `tools/MeshWeaver.ComboVerifier` (1.5–2.8 min each). The `build-verifier` job now publishes it
+  once, the slots download the `combo-verifier` artifact and run `dotnet $COMBO_VERIFIER`, and the
+  `verdict` job names a failed build as its own red instead of as a matrix that did not expand.
+
+What this does **not** save: re-verifying a candidate the instance already holds a verdict for.
+One slot verified the same candidate in three or four consecutive runs, read Red each time, and
+spent about 10 minutes on each. Reusing that verdict is sound only when its whole input is
+unchanged: the candidate, the combo, the sealed publications for the candidate's identity (which
+a satellite can republish) and the verifier itself. The publications are only known after the
+module fetch, and the instance offers no read of its landed verdicts to this run's identity, so
+the reuse is not built.
+
 ### Why it is its own workflow, and why an instance's verify job is red until that instance is provisioned
 
 The lane holds **no credential for any instance** (#3848). Each verify job reaches its instance as
