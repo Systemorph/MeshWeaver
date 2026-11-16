@@ -2491,7 +2491,7 @@ jobs:
     # A child runs main() with stdout a PIPE, as under Actions, prints its line, and then stays alive
     # until we close its stdin. Block-buffered, the line would arrive only at exit, so the read below
     # would find nothing while the child is still running.
-    import select
+    import threading
     child_code = ("import importlib.util, sys\n"
                   "spec = importlib.util.spec_from_file_location('mp', sys.argv[1])\n"
                   "mp = importlib.util.module_from_spec(spec); spec.loader.exec_module(mp)\n"
@@ -2500,9 +2500,15 @@ jobs:
                   "sys.stdin.read()\n")
     child = subprocess.Popen([sys.executable, "-c", child_code, str(Path(__file__).resolve())],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    # A reader thread rather than select(): select() takes only sockets on Windows, a thread reads a
+    # pipe everywhere. Joined with a bound, so a line that never arrives reads as "" instead of hanging.
+    lines: list[str] = []
+    reader = threading.Thread(
+        target=lambda: lines.append(child.stdout.readline().decode("utf-8", "replace").strip()), daemon=True)
     try:
-        ready, _, _ = select.select([child.stdout], [], [], 20)
-        first = child.stdout.readline().decode("utf-8", "replace").strip() if ready else ""
+        reader.start()
+        reader.join(20)
+        first = lines[0] if lines else ""
         check("a printed line reaches a piped stdout before the process ends", first.startswith("catalog-"),
               f"read {first!r} while the child was still running")
     finally:
