@@ -48,6 +48,10 @@ PROJECT = re.compile(r"^(src|test)/([^/]+)/")
 LANE_WORKFLOW = ".github/workflows/dotnet-test.yml"
 SELF = ".github/scripts/affected-tests.py"
 SHELL_JOB_PREFIX = "workflow-shell"
+# The scope job and the one condition a shell job may carry (Doc/Architecture/CiOwnShellScope).
+SHELL_SCOPE_JOB = "workflow-shell-scope"
+SHELL_SCOPE_IF = "${{ needs.workflow-shell-scope.outputs.run == 'true' }}"
+SHELL_SCOPE_SCRIPT = ".github/scripts/workflow-shell-scope.py"
 # Jobs the derivation must find, or it does not trust its own parse.
 REQUIRED_LANE_JOBS = ("build", "test")
 # Basenames too generic to attribute by name alone; reached through their directory instead.
@@ -219,9 +223,40 @@ def shell_coverage_gap(text: str, jobs: dict[str, str], shell: list[str]) -> str
         return f"{LANE_WORKFLOW}'s triggers carry a path/branch filter — the shell jobs might not run"
     if not shell:
         return f"{LANE_WORKFLOW} has no `{SHELL_JOB_PREFIX}*` job"
+    # 🔀 The ONE sanctioned condition (Doc/Architecture/CiOwnShellScope): a shell job may need the
+    # scope job and run on its recorded `run == 'true'`, because that classifier treats every
+    # `.github/**` file as input — asserted below off its OWN code, never assumed. Any other
+    # job-level if:/needs:, or a scope job that is itself conditional, breaks the coverage.
+    scoped = 0
     for j in shell:
-        if re.search(r"^    (if|needs)\s*:", jobs[j], re.M):
-            return f"shell job `{j}` carries a job-level if:/needs: — it might not run"
+        conds = re.findall(r"^    (if|needs)\s*:\s*(.*?)\s*$", jobs[j], re.M)
+        if not conds:
+            continue
+        if j == SHELL_SCOPE_JOB:
+            return f"the scope job `{j}` carries a job-level if:/needs: — it might not run"
+        if sorted(conds) != sorted([("if", SHELL_SCOPE_IF), ("needs", f"[{SHELL_SCOPE_JOB}]")]):
+            return f"shell job `{j}` carries a job-level if:/needs: other than the scope decision — it might not run"
+        scoped += 1
+    if scoped:
+        if SHELL_SCOPE_JOB not in jobs:
+            return f"shell jobs need `{SHELL_SCOPE_JOB}`, which does not exist"
+        return scope_covers_github()
+    return None
+
+def scope_covers_github() -> str | None:
+    """None when the scope classifier (SHELL_SCOPE_SCRIPT, beside this file) owes CI's own shell on
+    every `.github/**` path; otherwise why that could not be shown (UNKNOWN fails safe)."""
+    import importlib.util
+    path = Path(__file__).resolve().parent / Path(SHELL_SCOPE_SCRIPT).name
+    try:
+        spec = importlib.util.spec_from_file_location("workflow_shell_scope", path)
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        probes = [".github/scripts/x.py", ".github/workflows/x.yml", ".github/actions/a/action.yml", ".github/x.json", ".github/x.txt"]
+        bad = [p for p in probes if mod.owes(p, set()) is None]
+    except Exception as e:
+        return f"the scope classifier {SHELL_SCOPE_SCRIPT} could not be loaded ({e}) — the shell jobs might not run"
+    if bad:
+        return f"the scope classifier {SHELL_SCOPE_SCRIPT} calls {bad[0]} inert — the shell jobs might not run on a .github change"
     return None
 
 def derive(root: Path) -> Derivation:
@@ -582,6 +617,19 @@ def self_test(real_root: Path | None) -> int:
     variant(SYNTH_WORKFLOW.replace("  workflow-shell:\n    runs-on", "  workflow-shell:\n    if: github.event_name == 'push'\n    runs-on"), "shell job if:")
     variant(SYNTH_WORKFLOW.replace("  workflow-shell-executions-a:\n    runs-on", "  workflow-shell-executions-a:\n    needs: [build]\n    runs-on"), "shell job needs:")
     variant(SYNTH_WORKFLOW.replace("workflow-shell", "static-shell"), "no shell job")
+    # The scope decision (Doc/Architecture/CiOwnShellScope): the sanctioned needs+if keeps the
+    # coverage; a different condition, a missing scope job or a conditional scope job breaks it.
+    scope_job = "  workflow-shell-scope:\n    runs-on: ubuntu-latest\n    steps:\n    - run: python3 .github/scripts/workflow-shell-scope.py\n"
+    gated = (SYNTH_WORKFLOW.replace("  workflow-shell-executions-a:\n    runs-on",
+                                    f"  workflow-shell-executions-a:\n    needs: [{SHELL_SCOPE_JOB}]\n    if: {SHELL_SCOPE_IF}\n    runs-on") + scope_job)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp); _synth_tree(root, gated)
+        dv = derive(root); assert dv.error is None, dv.error
+        assert dv.shell_cover is None, f"the sanctioned scope condition read as a coverage gap: {dv.shell_cover}"
+        ok([".github/scripts/shell-only.py"], "none", d=dv)
+    variant(gated.replace(f"if: {SHELL_SCOPE_IF}", "if: ${{ needs.workflow-shell-scope.outputs.run != 'false' }}"), "scope: a different if:")
+    variant(gated.replace(scope_job, ""), "scope: job missing")
+    variant(gated.replace("  workflow-shell-scope:\n    runs-on", "  workflow-shell-scope:\n    if: github.event_name == 'push'\n    runs-on"), "scope job if:")
     # a lane COMMAND that names a whole directory reads files the derivation cannot enumerate
     variant(SYNTH_WORKFLOW.replace("    - run: python3 .github/scripts/lane.py\n",
                                    "    - run: python3 .github/scripts/lane.py\n    - run: for f in .github/scripts/*; do sh \"$f\"; done\n"), "glob over a dir")

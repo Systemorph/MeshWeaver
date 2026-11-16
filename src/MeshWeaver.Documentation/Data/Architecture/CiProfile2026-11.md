@@ -257,8 +257,12 @@ run `43706214929`:
   `workflow_run` failures alone cost 1,131 min (69 min each).
 - **Combo verification:** 5,300 of 5,632 runner-minutes were on failed runs. 89 slot jobs ran past
   30 min (max 39.4). One read (`132432200108`): a 25-minute `GATE_TIMEOUT`, then the verdict
-  `NotVerifiable`, because the instance carries retired packages that can never be re-materialised. The
-  same slot fails the same way run after run (slot 4 first-failed in 48 runs, slot 1 in 15).
+  `NotVerifiable`. The same slot fails the same way run after run (slot 4 first-failed in 48 runs,
+  slot 1 in 15). *Correction, measured while implementing R2:* that slot's six retired packages did
+  not cause the verdict. A retired package is reported and folded out of the verdict. The caveat
+  that decided it was "the gate run exceeded what the bake left of the run's 00:25:00 budget": the
+  candidate did not complete inside the gate. See
+  [Combo Gate Wiring](../ComboGateWiring) for what R2 changed and what it could not.
 - **Re-runs:** genuine re-runs (attempt 3 or later) were 24 Plugins PR runs and 1 core run. Attempt 2
   is the dispatcher, not a person.
 - **The 45-minute cap:** no CI job neared it. Only `Shadow trunk — follow the host's modules stage`
@@ -295,7 +299,7 @@ implemented here.
 
 | # | Change | Evidence | Runner-min / day | PR wall |
 |---|---|---|---|---|
-| **R1** | **Core: take the `CI's own shell` family off `stage-gate`, and run it only when its inputs change.** Let `stage-gate` need the cheap body and policy gates only. The four shell jobs still run in parallel, red the run and cancel the heavy legs on a red, which keeps stage 0's fail-fast purpose. Then path-select them in `precheck` on what they actually test (`.github/**`, `scripts/**`, the composite actions, the canonical scripts satellites fetch). | Section 3 core: `stage-gate` at 5.7 of 18.5 min. 2,835 min of shell jobs in 273 runs. E.g. run `43742571208` | up to **~870** (depends on the share of PRs that touch CI inputs; not measured) | **−5.2 min** (18.4 → ~13.2), every core PR |
+| **R1** | **Core: take the `CI's own shell` family off `stage-gate`, and run it only when its inputs change.** (Implemented: [CI's Own Shell Scope](../CiOwnShellScope).) Let `stage-gate` need the cheap body and policy gates only. The four shell jobs still run in parallel, red the run and cancel the heavy legs on a red, which keeps stage 0's fail-fast purpose. Then path-select them in `precheck` on what they actually test (`.github/**`, `scripts/**`, the composite actions, the canonical scripts satellites fetch). | Section 3 core: `stage-gate` at 5.7 of 18.5 min. 2,835 min of shell jobs in 273 runs. E.g. run `43742571208` | up to **~870** (depends on the share of PRs that touch CI inputs; not measured) | **−5.2 min** (18.4 → ~13.2), every core PR |
 | **R2** | **Combo verification: decide `NotVerifiable` before the 25-minute wait, and build the verifier once per run.** A verdict that depends only on (candidate, the instance's installed set) can be cached and re-used until either changes. A retired package is known before any gate starts. | Section 6: 5,300 of 5,632 runner-min on failed runs, 89 slot jobs > 30 min, log `132432200108`. Verifier built 7× per run (2.2 min each) | **~1,000–1,400** | none (not on a PR path) |
 | **R3** | **Plugins gate: stop recompiling 123 NodeTypes per run.** Key the bake's compile cache on the composed modules' public API (the ABI key the module lane already computes), not their MVID. Or reuse the NodeType assemblies `Compile Code nodes + the in-mesh lane` / `compile-check` produced in the same run against the same reference set. | Section 3: `bake: compiled 123 NodeType(s) in 336.8 s` (`132901787289`), `122 … 351.9 s` (`132900718420`). The gate shard is the last long job of every heavy PR | **~320** (5.7 min × 185 shard runs), more if compile-check shares it | **−5 min** on heavy PRs (54 → ~49) |
 | **R4** | **Plugins dispatch: admit a PR run in place when the `ci` queue has capacity, and hold (red, then re-run) only when it does not.** A trunk run already waits in place for `MeshWeaver/admission`. Alternatively, enqueue at the run's FIRST job so the wait overlaps stage 0 instead of starting after it. | Section 2: hold median 4.0 / p90 22.1 min (n=257). Heavy runs: stage 0 done 10.7 → admission 17.9 (p90 50.7). Sample annotation: 27 of 30 `HELD FOR DISPATCH (queue ci)` | ≈ 0 | **−4 to −7 min** median, about −20 min at p90, every Plugins PR |

@@ -120,6 +120,12 @@ SUBJECTS: dict[str, dict[str, tuple[str, ...]]] = {
             "Assert the tools this gate needs",
             READINESS_STEP,
         ),
+        # The whole-tree guards, never path-selected (Doc/Architecture/CiOwnShellScope) — the same line.
+        "workflow-shell-tree": (
+            "uses:actions/checkout",
+            "Assert the tools this gate needs",
+            READINESS_STEP,
+        ),
     },
 }
 
