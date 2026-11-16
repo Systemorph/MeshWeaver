@@ -56,6 +56,9 @@ public static class ModuleDependencyFloor
     /// Every requirement of <paramref name="installed"/> that the set <paramref name="landed"/>
     /// describes does NOT meet: the dependency's module has a landed, enabled entry here whose
     /// version is outside the declared range. Pure; ordered by dependent, then dependency.
+    /// Judges the records of this process's own line, <see cref="BundleLine.RunningMajor"/>; a
+    /// registered <c>RunningPlatformVersionOverride</c> (a test seam) is NOT consulted here, so a test
+    /// that pins another line calls <see cref="UnmetOnLine"/> with that line.
     /// </summary>
     /// <param name="installed">The install records (each package's id, module and requirements).</param>
     /// <param name="landed">The activation list the set is derived from.</param>
