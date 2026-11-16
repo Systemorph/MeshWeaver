@@ -2882,12 +2882,27 @@ public static class ModuleActivationBoot
         var projected = ImmutableList.CreateBuilder<ModuleActivationEntry>();
         foreach (var entry in landed.Entries)
         {
+            // 🚨 An entry with NO GENERATION is the legacy fixed folder `modules/<name>/`, and a set
+            // has nothing to say about it: `ModuleSetStore.GenerationsOf` excludes it BY DESIGN
+            // (there is no `<name>@<id>` to pin), so asking whether the set names it would defer —
+            // i.e. silently DISABLE — every such module on every deployment that still has one.
+            // It passes through for the same reason a disabled entry does: this projection chooses
+            // between generations, and where there are none to choose between it must not choose.
+            // FIRST, before the set is asked anything, so no entry the set cannot name reaches the
+            // lookup below.
+            if (PassesThroughMeshSet(entry))
+            {
+                projected.Add(entry);
+                continue;
+            }
+
             // 🚨 Not a skip we can be quiet about: the module IS installed and its bytes ARE on
             // disk. What is missing is the wave's completion, and until that lands, activating it
-            // here would put this replica on a set no other replica has. ONE predicate
-            // (IsDeferredBy), shared with RequiredModuleStatus, so the probe and the boot cannot
-            // disagree about which entries a restart activates.
-            if (IsDeferredBy(entry, meshSet))
+            // here would put this replica on a set no other replica has. The SAME rule as
+            // IsDeferredBy (pass-through first, then "the set does not name it"), which
+            // RequiredModuleStatus shares, so the probe and the boot cannot disagree about which
+            // entries a restart activates.
+            if (!meshSet.Generations.TryGetValue(entry.Name, out var generation))
             {
                 onDeferred?.Invoke(entry.Name,
                     $"it landed after module set {meshSet.Sequence} ('{meshSet.Id}') was proposed, so "
@@ -2897,22 +2912,6 @@ public static class ModuleActivationBoot
                 continue;
             }
 
-            // 🚨 An entry with NO GENERATION is the legacy fixed folder `modules/<name>/`, and a set
-            // has nothing to say about it: `ModuleSetStore.GenerationsOf` excludes it BY DESIGN
-            // (there is no `<name>@<id>` to pin), so asking whether the set names it would defer —
-            // i.e. silently DISABLE — every such module on every deployment that still has one.
-            // It passes through for the same reason a disabled entry does: this projection chooses
-            // between generations, and where there are none to choose between it must not choose.
-            if (!entry.Enabled
-                || string.IsNullOrWhiteSpace(entry.Name)
-                || string.IsNullOrWhiteSpace(entry.Directory))
-            {
-                projected.Add(entry);
-                continue;
-            }
-
-            // Not deferred and not passed through above, so the set names this module.
-            var generation = meshSet.Generations[entry.Name];
             if (string.Equals(entry.Directory, generation, StringComparison.Ordinal))
             {
                 projected.Add(entry);
@@ -2954,7 +2953,9 @@ public static class ModuleActivationBoot
 
     /// <summary>
     /// 🚨 THE deferral rule of <see cref="ProjectOntoMeshSet"/>, as one predicate: an enabled entry
-    /// that names a generation, read beside a proposed module set that does NOT name its module.
+    /// that names a generation (a non-blank <see cref="ModuleActivationEntry.Directory"/> — the
+    /// filter <see cref="ModuleSetStore.GenerationsOf"/> applies, so a legacy fixed-folder entry
+    /// never qualifies), read beside a proposed module set that does NOT name its module.
     /// Boot does not load such an entry, and a restart does not change that — only a landing wave
     /// that proposes a set naming the module does (#3395).
     ///
@@ -2968,10 +2969,20 @@ public static class ModuleActivationBoot
     /// <returns>True when boot defers <paramref name="entry"/>.</returns>
     internal static bool IsDeferredBy(ModuleActivationEntry entry, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] ModuleSet? meshSet) =>
         meshSet is not null
-        && entry.Enabled
-        && !string.IsNullOrWhiteSpace(entry.Name)
-        && !string.IsNullOrWhiteSpace(entry.Directory)
+        && !PassesThroughMeshSet(entry)
         && !meshSet.Generations.ContainsKey(entry.Name);
+
+    /// <summary>
+    /// Whether <see cref="ProjectOntoMeshSet"/> passes <paramref name="entry"/> through untouched
+    /// because there is no generation to choose: a disabled entry, an unnamed one, or the legacy
+    /// fixed folder <c>modules/&lt;name&gt;/</c> (no <see cref="ModuleActivationEntry.Directory"/>).
+    /// The complement of the filter <see cref="ModuleSetStore.GenerationsOf"/> applies, so "names a
+    /// generation" means the same thing to the set that is proposed and to the projection onto it.
+    /// </summary>
+    private static bool PassesThroughMeshSet(ModuleActivationEntry entry) =>
+        !entry.Enabled
+        || string.IsNullOrWhiteSpace(entry.Name)
+        || string.IsNullOrWhiteSpace(entry.Directory);
 
     /// <summary>
     /// The pre-#3648 shape, kept as a real overload so a host or module compiled against the

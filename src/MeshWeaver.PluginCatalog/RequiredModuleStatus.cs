@@ -305,13 +305,13 @@ public static class RequiredModuleStatus
             // MCP module were landed in the line's tree and named here as "a restart activates
             // it"; the deployment was restarted and the new pods said the same thing, because
             // what they were waiting for was a module set naming them, which no restart proposes.
-            if (ModuleActivationBoot.IsDeferredBy(record, activation?.MeshModuleSet))
+            var meshSet = activation?.MeshModuleSet;
+            if (ModuleActivationBoot.IsDeferredBy(record, meshSet))
             {
-                var set = activation!.MeshModuleSet!;
                 return $"store-delivered and landed on the volume, but NOT in the mesh's module set "
-                    + $"{set.Sequence} ('{set.Id}', proposed "
-                    + set.ProposedAtUtc.ToString("u", System.Globalization.CultureInfo.InvariantCulture)
-                    + (string.IsNullOrWhiteSpace(set.ProposedBy) ? string.Empty : $" by {set.ProposedBy}")
+                    + $"{meshSet.Sequence} ('{meshSet.Id}', proposed "
+                    + meshSet.ProposedAtUtc.ToString("u", System.Globalization.CultureInfo.InvariantCulture)
+                    + (string.IsNullOrWhiteSpace(meshSet.ProposedBy) ? string.Empty : $" by {meshSet.ProposedBy}")
                     + ") — boot DEFERS it, so a restart does NOT activate it. It loads at the first "
                     + "restart after a landing wave proposes a module set naming it. If none does, "
                     + "the proposal is being refused or withheld: the '[ModuleSet] NOT proposing' and "

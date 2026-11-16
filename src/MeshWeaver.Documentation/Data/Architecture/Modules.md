@@ -449,7 +449,10 @@ What changed:
 
 - **One deferral rule.** `ModuleActivationBoot.IsDeferredBy(entry, set)` is the predicate boot's
   projection (`ProjectOntoMeshSet`) applies, and `RequiredModuleStatus.Classify` applies the same
-  one. The set reaches the classifier on the activation record it already reads —
+  one. It asks the set only about an enabled, named entry that names a generation (a
+  `Directory`); a disabled entry and a legacy fixed folder `modules/<name>/` pass through first,
+  untouched, exactly as `ModuleSetStore.GenerationsOf` leaves them out of every set. The set
+  reaches the classifier on the activation record it already reads —
   `ModuleActivationList.MeshModuleSet`, a `[JsonIgnore]` property `PendingModuleActivations` fills
   from the set it read beside the record — the same route `TierRefusals` takes, so no host signature
   changes.

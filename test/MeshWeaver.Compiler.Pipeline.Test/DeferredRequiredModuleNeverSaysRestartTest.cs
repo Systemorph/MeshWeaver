@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -61,8 +59,8 @@ public class DeferredRequiredModuleNeverSaysRestartTest : IDisposable
     public void ALandedModuleTheSetDoesNotName_IsNotPromisedARestart()
     {
         LandGeneration(Landed, "0000000000000001");
-        var set = ModuleSetStore.Propose(root, ModuleActivationSidecar.Read(root), proposedBy: "replica-a");
-        Assert.NotNull(set);
+        var proposed = ModuleSetStore.Propose(root, ModuleActivationSidecar.Read(root), proposedBy: "replica-a");
+        var setId = Assert.IsType<ModuleSet>(proposed).Id;
         LandGeneration(Deferred, "0000000000000002");
 
         // Control 1: the BOOT defers it — the state the instance was in.
@@ -86,7 +84,7 @@ public class DeferredRequiredModuleNeverSaysRestartTest : IDisposable
         Assert.DoesNotContain(RestartPromise, verdict.Reason);
         Assert.Contains("NOT in the mesh's module set", verdict.Reason);
         Assert.Contains("a restart does NOT activate it", verdict.Reason);
-        Assert.Contains(set!.Id, verdict.Reason);
+        Assert.Contains(setId, verdict.Reason);
         Assert.Contains("replica-a", verdict.Reason);
     }
 
@@ -137,7 +135,88 @@ public class DeferredRequiredModuleNeverSaysRestartTest : IDisposable
         Assert.DoesNotContain(nameof(ModuleActivationList.MeshModuleSet), json, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// A legacy fixed-folder entry (<c>modules/&lt;name&gt;/</c> — no
+    /// <see cref="ModuleActivationEntry.Directory"/>, so no generation to pin) passes through a
+    /// proposed set UNCHANGED and is never deferred: <see cref="ModuleSetStore.GenerationsOf"/>
+    /// excludes it by design, so "the set does not name it" says nothing about it.
+    /// </summary>
+    [Fact]
+    public void ALegacyFixedFolderEntry_PassesThroughAProposedSet()
+    {
+        var legacy = new ModuleActivationEntry { Name = "Acme.Legacy", Directory = null };
+        var deferred = new List<string>();
+
+        var projected = ModuleActivationBoot.ProjectOntoMeshSet(
+            new ModuleActivationList { Entries = [legacy] }, SetNaming(Landed),
+            (module, _) => deferred.Add(module));
+
+        Assert.Empty(deferred);
+        Assert.Same(legacy, Assert.Single(projected.Entries));
+        Assert.False(ModuleActivationBoot.IsDeferredBy(legacy, SetNaming(Landed)));
+    }
+
+    /// <summary>
+    /// An entry the set does not name and that is NOT an enabled, named generation — disabled, or
+    /// with a blank name — never reaches the set lookup: it passes through unchanged, exactly as
+    /// before the deferral rule became a shared predicate. Boot must never throw on it.
+    /// </summary>
+    [Fact]
+    public void AnEntryTheSetCannotName_PassesThroughAndNeverThrows()
+    {
+        var disabled = new ModuleActivationEntry
+        {
+            Name = "Acme.Uninstalled", Directory = "Acme.Uninstalled@0000000000000003", Enabled = false,
+        };
+        var blankName = new ModuleActivationEntry { Name = " ", Directory = "x@0000000000000004" };
+        var deferred = new List<string>();
+
+        var projected = ModuleActivationBoot.ProjectOntoMeshSet(
+            new ModuleActivationList { Entries = [disabled, blankName] }, SetNaming(Landed),
+            (module, _) => deferred.Add(module));
+
+        Assert.Empty(deferred);
+        Assert.Equal([disabled, blankName], projected.Entries);
+    }
+
+    /// <summary>
+    /// 🚨 The probe and the boot share ONE rule: across every entry shape the projection meets,
+    /// <see cref="ModuleActivationBoot.IsDeferredBy"/> is true for EXACTLY the entries the
+    /// projection defers, and every other entry stays in the projected list.
+    /// </summary>
+    [Fact]
+    public void IsDeferredBy_AgreesWithTheProjection_ForEveryEntryShape()
+    {
+        var set = SetNaming(Landed);
+        ModuleActivationEntry[] entries =
+        [
+            new() { Name = Landed, Directory = Landed + "@0000000000000009" },
+            new() { Name = Deferred, Directory = Deferred + "@0000000000000002" },
+            new() { Name = "Acme.Legacy", Directory = null },
+            new() { Name = "Acme.Blank", Directory = "  " },
+            new() { Name = "Acme.Uninstalled", Directory = "Acme.Uninstalled@0000000000000003", Enabled = false },
+            new() { Name = "", Directory = "x@0000000000000004" },
+        ];
+        var deferred = new List<string>();
+
+        var projected = ModuleActivationBoot.ProjectOntoMeshSet(
+            new ModuleActivationList { Entries = [.. entries] }, set, (module, _) => deferred.Add(module));
+
+        Assert.Equal([Deferred], deferred);
+        Assert.Equal(
+            entries.Where(e => ModuleActivationBoot.IsDeferredBy(e, set)).Select(e => e.Name),
+            deferred);
+        Assert.Equal(entries.Length - deferred.Count, projected.Entries.Count);
+    }
+
     // ───────────────────────────────────────────────────────────────────────── harness
+
+    /// <summary>A proposed set naming exactly <paramref name="module"/>.</summary>
+    private static ModuleSet SetNaming(string module) =>
+        new(1, "set-1",
+            ImmutableSortedDictionary.CreateRange(StringComparer.OrdinalIgnoreCase,
+                [KeyValuePair.Create(module, module + "@0000000000000001")]),
+            DateTime.UtcNow);
 
     /// <summary>The probe exactly as the host's required-modules check asks it: the reader's own
     /// memoised inputs, nothing loaded, the module store-delivered (not in the image's list).</summary>
