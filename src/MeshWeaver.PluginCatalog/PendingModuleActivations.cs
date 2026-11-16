@@ -1000,6 +1000,13 @@ public sealed class PendingModuleActivations(string moduleRoot)
                 setNotes.Add(fault);
             }, setNotes.Add, token)
             : ModuleSetIndex.Empty;
+        // 🚨 The record travels WITH the set it was read beside (ModuleActivationList.MeshModuleSet):
+        // the required-modules probe classifies off this record alone, and an enabled, landed,
+        // not-loaded entry is "a restart activates it" only when the set names it. Without the set
+        // the probe promised a restart that boot — which projects onto the set and DEFERS every
+        // entry it does not name — then refused to honour.
+        if (activation is not null && sets.Proposed is { } proposedSet)
+            activation = activation with { MeshModuleSet = proposedSet };
         // One existence probe per landed DLL for the life of this snapshot: the three projection
         // passes below ask about the same entries, and the answer cannot change while the
         // fingerprint stands (a landing renames into activation.d, which moves it).

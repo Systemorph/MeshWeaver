@@ -428,6 +428,25 @@ public sealed record ModuleActivationList
     /// <summary>The plan-tier refusal recorded for <paramref name="moduleName"/>, or null.</summary>
     public Mesh.Security.PlanTierRefusal? TierRefusalFor(string? moduleName) =>
         TierRefusals.FirstOrDefault(r => r.IsForModule(moduleName));
+
+    /// <summary>
+    /// 🚨 The mesh's module set this record was read beside (<see cref="ModuleSetIndex.Proposed"/>,
+    /// #3395) — the set boot projects these entries onto before it loads anything
+    /// (<see cref="ModuleActivationBoot.ProjectOntoMeshSet"/>). Null when no set has been proposed,
+    /// or when the reader of this record did not read the set. Never persisted
+    /// (<see cref="JsonIgnoreAttribute"/>): the set lives in its own records under <c>sets/</c>.
+    ///
+    /// <para><b>Why it rides here.</b> An entry that is enabled, landed and not loaded is "a restart
+    /// activates it" ONLY if the set names it; an entry the set does not name is DEFERRED by boot,
+    /// and a restart changes nothing. <c>RequiredModuleStatus.Classify</c> reads this record and
+    /// not the set, so without the set beside it the required-modules probe promised a restart
+    /// that boot then refused to honour — on a v4 control instance, across a restart, for the
+    /// chat view pack and the MCP module. Carried the same way as <see cref="TierRefusals"/>, so
+    /// the verdict reaches every host's probe with no new parameter on a host compiled against the
+    /// previous platform.</para>
+    /// </summary>
+    [JsonIgnore]
+    public ModuleSet? MeshModuleSet { get; init; }
 }
 
 /// <summary>
@@ -2849,6 +2868,21 @@ public static class ModuleActivationBoot
         var projected = ImmutableList.CreateBuilder<ModuleActivationEntry>();
         foreach (var entry in landed.Entries)
         {
+            // 🚨 Not a skip we can be quiet about: the module IS installed and its bytes ARE on
+            // disk. What is missing is the wave's completion, and until that lands, activating it
+            // here would put this replica on a set no other replica has. ONE predicate
+            // (IsDeferredBy), shared with RequiredModuleStatus, so the probe and the boot cannot
+            // disagree about which entries a restart activates.
+            if (IsDeferredBy(entry, meshSet))
+            {
+                onDeferred?.Invoke(entry.Name,
+                    $"it landed after module set {meshSet.Sequence} ('{meshSet.Id}') was proposed, so "
+                    + "the landing wave that brought it has not completed — it activates on the first "
+                    + "restart after the wave proposes its set. Running it here would put this replica "
+                    + "on a module set no other replica has (#3395).");
+                continue;
+            }
+
             // 🚨 An entry with NO GENERATION is the legacy fixed folder `modules/<name>/`, and a set
             // has nothing to say about it: `ModuleSetStore.GenerationsOf` excludes it BY DESIGN
             // (there is no `<name>@<id>` to pin), so asking whether the set names it would defer —
@@ -2863,57 +2897,67 @@ public static class ModuleActivationBoot
                 continue;
             }
 
-            if (meshSet.Generations.TryGetValue(entry.Name, out var generation))
+            // Not deferred and not passed through above, so the set names this module.
+            var generation = meshSet.Generations[entry.Name];
+            if (string.Equals(entry.Directory, generation, StringComparison.Ordinal))
             {
-                if (string.Equals(entry.Directory, generation, StringComparison.Ordinal))
-                {
-                    projected.Add(entry);
-                    continue;
-                }
-
-                // 🚨 #3649 — the fallback pointer travels WITH the entry onto the set's generation,
-                // and is dropped only when it names that very generation (the common mid-wave
-                // shape: the entry moved to D with PreviousDirectory = the set's G, so G is the
-                // head now and needs no fallback to itself). Where it names an OLDER generation
-                // than the set's — a landing that carried its fallback forward because the
-                // displaced generation was measured unloadable — that older one is exactly what
-                // boot must fall back to if the set's generation does not load here either.
-                var previous = string.Equals(entry.PreviousDirectory, generation, StringComparison.Ordinal)
-                    ? entry with
-                    {
-                        PreviousDirectory = null, PreviousVersion = null,
-                        PreviousFrameworkMvid = null, PreviousSourceCommit = null,
-                    }
-                    : entry;
-                var onSet = previous with { Directory = generation };
-                if (landedDllExists is null || landedDllExists(onSet))
-                {
-                    projected.Add(onSet);
-                    continue;
-                }
-
-                onSetGenerationMissing?.Invoke(entry.Name,
-                    $"the mesh's module set {meshSet.Sequence} ('{meshSet.Id}') pins generation "
-                    + $"'{generation}', whose bytes are NOT on the volume — running '{entry.Directory}' "
-                    + "instead, which may differ from what other replicas run until the next landing "
-                    + "wave proposes a set whose bytes exist. A module that is simply ABSENT is the "
-                    + "worse half of #3395: it is what turns a healthy NodeType into a failed one.");
                 projected.Add(entry);
                 continue;
             }
 
-            // 🚨 Not a skip we can be quiet about: the module IS installed and its bytes ARE on
-            // disk. What is missing is the wave's completion, and until that lands, activating it
-            // here would put this replica on a set no other replica has.
-            onDeferred?.Invoke(entry.Name,
-                $"it landed after module set {meshSet.Sequence} ('{meshSet.Id}') was proposed, so "
-                + "the landing wave that brought it has not completed — it activates on the first "
-                + "restart after the wave proposes its set. Running it here would put this replica "
-                + "on a module set no other replica has (#3395).");
+            // 🚨 #3649 — the fallback pointer travels WITH the entry onto the set's generation,
+            // and is dropped only when it names that very generation (the common mid-wave
+            // shape: the entry moved to D with PreviousDirectory = the set's G, so G is the
+            // head now and needs no fallback to itself). Where it names an OLDER generation
+            // than the set's — a landing that carried its fallback forward because the
+            // displaced generation was measured unloadable — that older one is exactly what
+            // boot must fall back to if the set's generation does not load here either.
+            var previous = string.Equals(entry.PreviousDirectory, generation, StringComparison.Ordinal)
+                ? entry with
+                {
+                    PreviousDirectory = null, PreviousVersion = null,
+                    PreviousFrameworkMvid = null, PreviousSourceCommit = null,
+                }
+                : entry;
+            var onSet = previous with { Directory = generation };
+            if (landedDllExists is null || landedDllExists(onSet))
+            {
+                projected.Add(onSet);
+                continue;
+            }
+
+            onSetGenerationMissing?.Invoke(entry.Name,
+                $"the mesh's module set {meshSet.Sequence} ('{meshSet.Id}') pins generation "
+                + $"'{generation}', whose bytes are NOT on the volume — running '{entry.Directory}' "
+                + "instead, which may differ from what other replicas run until the next landing "
+                + "wave proposes a set whose bytes exist. A module that is simply ABSENT is the "
+                + "worse half of #3395: it is what turns a healthy NodeType into a failed one.");
+            projected.Add(entry);
         }
 
         return landed with { Entries = projected.ToImmutable() };
     }
+
+    /// <summary>
+    /// 🚨 THE deferral rule of <see cref="ProjectOntoMeshSet"/>, as one predicate: an enabled entry
+    /// that names a generation, read beside a proposed module set that does NOT name its module.
+    /// Boot does not load such an entry, and a restart does not change that — only a landing wave
+    /// that proposes a set naming the module does (#3395).
+    ///
+    /// <para>Shared with <c>RequiredModuleStatus.Classify</c> on purpose: the required-modules
+    /// probe used to apply its own, weaker rule ("enabled, landed, not loaded ⇒ a restart activates
+    /// it") and so promised a restart that boot then refused to honour.</para>
+    /// </summary>
+    /// <param name="entry">The activation entry.</param>
+    /// <param name="meshSet">The mesh's proposed module set, or null when none was proposed — in
+    /// which case boot defers nothing.</param>
+    /// <returns>True when boot defers <paramref name="entry"/>.</returns>
+    internal static bool IsDeferredBy(ModuleActivationEntry entry, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] ModuleSet? meshSet) =>
+        meshSet is not null
+        && entry.Enabled
+        && !string.IsNullOrWhiteSpace(entry.Name)
+        && !string.IsNullOrWhiteSpace(entry.Directory)
+        && !meshSet.Generations.ContainsKey(entry.Name);
 
     /// <summary>
     /// The pre-#3648 shape, kept as a real overload so a host or module compiled against the

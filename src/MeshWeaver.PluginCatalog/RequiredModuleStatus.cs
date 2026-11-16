@@ -298,6 +298,26 @@ public static class RequiredModuleStatus
                 return "store-delivered and recorded as installed, but its landed assembly is "
                     + "ABSENT — the landing did not complete, and no restart will fix it. "
                     + "Re-install the package.";
+            // 🚨 BEFORE "a restart activates it", which is false here: boot loads the mesh's
+            // module set (#3395) and DEFERS every landed entry the set does not name — the same
+            // predicate ModuleActivationBoot.ProjectOntoMeshSet applies, so this sentence and the
+            // boot cannot disagree. Measured on a v4 control instance: the chat view pack and the
+            // MCP module were landed in the line's tree and named here as "a restart activates
+            // it"; the deployment was restarted and the new pods said the same thing, because
+            // what they were waiting for was a module set naming them, which no restart proposes.
+            if (ModuleActivationBoot.IsDeferredBy(record, activation?.MeshModuleSet))
+            {
+                var set = activation!.MeshModuleSet!;
+                return $"store-delivered and landed on the volume, but NOT in the mesh's module set "
+                    + $"{set.Sequence} ('{set.Id}', proposed "
+                    + set.ProposedAtUtc.ToString("u", System.Globalization.CultureInfo.InvariantCulture)
+                    + (string.IsNullOrWhiteSpace(set.ProposedBy) ? string.Empty : $" by {set.ProposedBy}")
+                    + ") — boot DEFERS it, so a restart does NOT activate it. It loads at the first "
+                    + "restart after a landing wave proposes a module set naming it. If none does, "
+                    + "the proposal is being refused or withheld: the '[ModuleSet] NOT proposing' and "
+                    + "'[DefaultInstall] module phase' log lines name the cause (an unmet dependency "
+                    + "floor, a package the pass could not clear, an unreadable activation record).";
+            }
             // 🚨 #3648 — a floor above the running platform is no longer "HELD above this
             // platform"; boot loads the entry (the link probe decides), so a restart DOES activate
             // it. The claim still rides the sentence so an operator reading /health sees what the
