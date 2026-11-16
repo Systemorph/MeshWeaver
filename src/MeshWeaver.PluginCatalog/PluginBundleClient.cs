@@ -91,6 +91,11 @@ public sealed class PluginBundleClient
     // package does not download the same bytes again only to learn it ships no NodeTypes.
     private readonly BundleOfferingMemo? _offerings;
 
+    // The platform LINE this process runs (BundleLine.RunningLine) — image policy, resolved once. Every
+    // index this client reads is split by it, so no consumer of the index can pick another line's
+    // module build (policy major-lines-run-separately, MeshWeaver.Plugins#5550).
+    private readonly int? _runningLine;
+
     /// <summary>
     /// How long any stage of a transfer may go SILENT before it is refused — the response start
     /// and the body alike. Defaults to <see cref="TransferStallBudget"/>; a test sets it low so a
@@ -164,6 +169,7 @@ public sealed class PluginBundleClient
         _closedTypeSet = hub.ServiceProvider.IsClosedTypeSet();
         _bootProgress = hub.ServiceProvider.GetService<BootProgress>();
         _offerings = hub.ServiceProvider.GetService<BundleOfferingMemo>();
+        _runningLine = BundleLine.RunningLine(hub.ServiceProvider);
     }
 
     /// <summary>What the registry advertises: the framework its assemblies were built against, and
@@ -191,6 +197,16 @@ public sealed class PluginBundleClient
         /// public record's constructor signature and is a binary break across the fleet.
         /// </summary>
         public string? ArtifactRegistry { get; init; }
+
+        /// <summary>
+        /// 🚨 The MODULE entries the registry advertised that were built for ANOTHER platform line,
+        /// and are therefore not in <see cref="Bundles"/> (<see cref="BundleLine"/>, policy
+        /// <c>major-lines-run-separately</c>). Set by the client when it reads the index — never by
+        /// the registry — so a package whose only builds are another line's is reported as exactly
+        /// that, rather than as "not advertised". Empty for an index nobody split.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public IReadOnlyList<ForeignLineBundle> ForeignLine { get; init; } = [];
     }
 
     /// <summary>One servable bundle.</summary>
@@ -307,7 +323,24 @@ public sealed class PluginBundleClient
             throw new RegistryResponseException(receipt.Status,
                 $"Bundle index fetch failed ({(int)receipt.Status}): {json}");
 
-        var index = JsonSerializer.Deserialize<BundleIndex>(json, Json) ?? new BundleIndex(null, []);
+        var served = JsonSerializer.Deserialize<BundleIndex>(json, Json) ?? new BundleIndex(null, []);
+        // 🚨 Split by platform LINE before anything picks from it (BundleLine, MeshWeaver.Plugins#5550):
+        // the registry lists every generation its shelf holds, newest version first, whatever line it
+        // was built for, and every consumer of this index takes a package's FIRST entry.
+        var split = BundleLine.Split(served, _runningLine);
+        var index = served with { Bundles = split.Kept, ForeignLine = split.Foreign };
+        if (!split.Foreign.IsEmpty)
+            _logger?.LogInformation(
+                "Bundle index from {Registry}: {Count} module bundle(s) were built for another platform line "
+                + "and are not offered to this process (line {Line}, policy major-lines-run-separately): {Foreign}",
+                _registryUrl, split.Foreign.Length, _runningLine,
+                string.Join("; ", split.Foreign.Select(f => f.Describe())));
+        if (split.Inferred > 0)
+            _logger?.LogInformation(
+                "Bundle index from {Registry}: {Count} module bundle(s) state neither a framework identity nor a "
+                + "platform floor; they are read as line {Line} from the registry's own line (or as the legacy "
+                + "shared line when the registry states none)",
+                _registryUrl, split.Inferred, _runningLine);
         // The index's own measurement — one line per pass per registry, so the next "the registry
         // is slow" question is answered by the log rather than by a month-old comment.
         _logger?.LogInformation(
@@ -390,6 +423,13 @@ public sealed class PluginBundleClient
                 var bundle = index.Bundles?.FirstOrDefault(b =>
                     string.Equals(b.Plugin, pluginId, StringComparison.OrdinalIgnoreCase));
 
+                if (bundle is null
+                    && BundleLine.OnlyForeign(index.ForeignLine, pluginId, _runningLine) is { } foreignOnly)
+                {
+                    _logger?.LogWarning("Bundle for {Plugin}: {Reason}", pluginId, foreignOnly);
+                    return Miss(pluginId, BundleAdoptionKind.NotAdvertised, foreignOnly);
+                }
+
                 if (bundle is null)
                 {
                     // 🚨 THE MISS THAT WAS COMPLETELY SILENT (#1782 gap 4). This branch returned 0
@@ -464,8 +504,10 @@ public sealed class PluginBundleClient
                 if (bundle is null)
                 {
                     _logger?.LogInformation(
-                        "Shipped builds of {Plugin}: {Registry} does not advertise it on {Identity}/{Architecture}",
-                        pluginId, _registryUrl, PrebuiltAssemblySeeder.LiveFrameworkMvid, ReleaseArchitecture.Live);
+                        "Shipped builds of {Plugin}: {Registry} does not advertise it on {Identity}/{Architecture}{Foreign}",
+                        pluginId, _registryUrl, PrebuiltAssemblySeeder.LiveFrameworkMvid, ReleaseArchitecture.Live,
+                        BundleLine.OnlyForeign(index.ForeignLine, pluginId, _runningLine) is { } foreignOnly
+                            ? " — " + foreignOnly : "");
                     return Observable.Return<IReadOnlyList<ShippedBuild>>([]);
                 }
                 var origin = $"{_registryUrl} {pluginId}@{bundle.Version}";
@@ -738,6 +780,13 @@ public sealed class PluginBundleClient
                             // above the running platform is held — the landed generation keeps
                             // running and the bundle lands once the platform rolls to it.
                             floorHold: PackagePlatformFloorGate.HoldFor(_hub));
+
+                        // 🚨 The registry serves this package only as another line's build
+                        // (MeshWeaver.Plugins#5550): say THAT, never "lists no bundle" — the landing
+                        // log and the reload request node must name the line as the reason.
+                        if (bundle is null
+                            && BundleLine.OnlyForeign(index.ForeignLine, pluginId, _runningLine) is { } foreignOnly)
+                            verdict = new ModuleUpdateVerdict(ModuleUpdateAction.SkipNoBundle, foreignOnly);
 
                         var decided = new ModuleAdoptOutcome
                         {
