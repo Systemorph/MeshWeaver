@@ -1910,6 +1910,58 @@ jobs:
     outputs:
       verdict: ${{ steps.gate.outputs.verdict }}
     steps:
+    # CI profile R10 (Doc/Architecture/ClientsVerdict): this job used to spend 3.1 min of EVERY run
+    # waiting out the 180 s zero-runs grace period below, on change sets that could never start a
+    # Clients run. The two steps before the gate PROVE that instead of waiting for it: they apply
+    # clients.yml's own trigger (read at the commit under test) to the change set. Only a proven
+    # `applicable=false` shortens the grace period; `true` and `unknown` keep it, so every failure of
+    # this proof degrades to the old wait — never to a pass.
+    - uses: actions/checkout@v7
+      with:
+        sparse-checkout: .github
+        persist-credentials: false
+    - name: "Self-test the Clients applicability rule"
+      run: python3 .github/scripts/clients-applicability.py --self-test
+    - name: "Can this change set start a Clients run?"
+      id: scope
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EVENT: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PUSH_BEFORE: ${{ github.event.before }}
+        REF_NAME: ${{ github.ref_name }}
+      run: |
+        set -uo pipefail
+        files="$RUNNER_TEMP/clients-scope.tsv"
+        : > "$files"
+        extra=()
+        listed=0
+        # Each listing failure is reported and leaves the file list EMPTY, which the script answers
+        # `unknown` — the full grace period, exactly as before this step existed.
+        if [ "$EVENT" = "pull_request" ]; then
+          if expected=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.changed_files' 2>"$RUNNER_TEMP/clients-scope.err") \
+             && gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files?per_page=100" \
+                  --jq '.[] | [.filename, (.previous_filename // "")] | @tsv' > "$files" 2>>"$RUNNER_TEMP/clients-scope.err"; then
+            extra=(--expected "$expected")
+            listed=1
+          fi
+        elif [ "$EVENT" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+          # The compare API lists at most 300 files; a listing that reaches the cap proves nothing.
+          if gh api "repos/${{ github.repository }}/compare/${PUSH_BEFORE}...${{ github.sha }}" \
+               --jq '.files[] | [.filename, (.previous_filename // "")] | @tsv' > "$files" 2>"$RUNNER_TEMP/clients-scope.err"; then
+            extra=(--truncated-at 300)
+            listed=1
+          fi
+        else
+          listed=2
+        fi
+        if [ "$listed" = "0" ]; then
+          : > "$files"
+          echo "Could not list the change set ($(tr '\n' ' ' < "$RUNNER_TEMP/clients-scope.err" | cut -c1-400)) — keeping the full grace period."
+        fi
+        python3 .github/scripts/clients-applicability.py \
+          --workflow .github/workflows/clients.yml --event "$EVENT" --ref-name "$REF_NAME" \
+          --files "$files" "${extra[@]}"
     - name: "Resolve the Clients workflow's conclusion for this commit"
       id: gate
       env:
@@ -1917,15 +1969,35 @@ jobs:
         # On a pull_request run, github.sha is the merge commit — the Clients workflow runs on
         # the PR's HEAD, so that is the sha its runs are keyed by.
         HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        APPLICABLE: ${{ steps.scope.outputs.applicable }}
+        APPLICABLE_REASON: ${{ steps.scope.outputs.reason }}
       run: |
         set -uo pipefail
         api="repos/${{ github.repository }}/actions/workflows/clients.yml/runs?head_sha=${HEAD_SHA}&per_page=100"
         # 🚨 "Zero runs" is only meaningful once GitHub has had time to CREATE the run. Both
         # workflows fire on the same event, so an immediate zero would be a race, and reading
         # it as "the path filter did not match" would silently re-open the very hole this gate
-        # closes. So a zero is only believed after this grace period of consecutive zeros.
+        # closes. So a zero is only believed after this grace period of consecutive zeros —
+        # UNLESS the step above PROVED that clients.yml's own trigger matches nothing in this
+        # change set (`applicable=false`). Then the grace shrinks to 30 s counted from THIS
+        # workflow run's creation, not from this job's start: GitHub creates every workflow run
+        # of one event together (measured over the last 12 Clients runs: created within 1 s of
+        # this workflow's run), so by then a run GitHub started despite the proof — a diff it
+        # could not compute runs the workflow anyway — is listed, and is gated on below. A
+        # failed read is still retried and still never a zero; if this run's creation time
+        # cannot be read, the full grace period applies.
         ZERO_GRACE_SECONDS=180
         started=$(date +%s)
+        if [ "$APPLICABLE" = "false" ]; then
+          if created=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.created_at' 2>"$RUNNER_TEMP/clients-gate.err") \
+             && createdEpoch=$(date -d "$created" +%s 2>>"$RUNNER_TEMP/clients-gate.err"); then
+            ZERO_GRACE_SECONDS=30
+            started=$createdEpoch
+          else
+            echo "Could not read this run's creation time ($(tr '\n' ' ' < "$RUNNER_TEMP/clients-gate.err" | cut -c1-400)) — keeping the full grace period."
+          fi
+        fi
+        echo "Clients applicability: ${APPLICABLE:-unset} — ${APPLICABLE_REASON:-no reason recorded} (zero-runs grace: ${ZERO_GRACE_SECONDS}s)"
         # 🚨 A FAILED QUERY IS NOT A ZERO. An auth error, a rate limit or a network blip must never
         # collapse into "no runs exist" — that would make this gate pass on no evidence, which is
         # precisely the trapdoor it was written to close (and the reason `gh api ... || echo
@@ -1947,7 +2019,10 @@ jobs:
           total=$(echo "$json" | jq -r '.total_count // 0')
           if [ "$total" = "0" ] && [ $(( $(date +%s) - started )) -lt "$ZERO_GRACE_SECONDS" ]; then
             echo "No Clients run for ${HEAD_SHA} yet — within the ${ZERO_GRACE_SECONDS}s creation grace period, waiting."
-            sleep 20
+            # Sleep to the end of the grace period (plus a second), never more than one poll interval.
+            wait=$(( ZERO_GRACE_SECONDS - ( $(date +%s) - started ) + 1 ))
+            if [ "$wait" -gt 20 ]; then wait=20; fi
+            sleep "$wait"
             continue
           fi
           if [ "$total" = "0" ]; then
@@ -1957,6 +2032,8 @@ jobs:
               echo "### ➖ Clients: not applicable"
               echo
               echo "No \`Clients\` run for \`${HEAD_SHA}\` — this PR changes none of the paths that workflow watches."
+              echo
+              echo "Applicability: \`${APPLICABLE:-unset}\` — ${APPLICABLE_REASON:-no reason recorded} (zero-runs grace ${ZERO_GRACE_SECONDS}s)."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
