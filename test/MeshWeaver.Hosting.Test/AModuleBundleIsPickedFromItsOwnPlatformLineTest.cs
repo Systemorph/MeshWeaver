@@ -105,14 +105,22 @@ public abstract class AModuleBundleIsPickedFromItsOwnPlatformLineTest(ITestOutpu
 
         public int Downloads => Volatile.Read(ref downloads);
 
+        private string? indexQuery;
+
+        /// <summary>The query string of the last index request — the line the client stated.</summary>
+        public string? IndexQuery => Volatile.Read(ref indexQuery);
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (request.RequestUri is { } uri && uri.AbsolutePath.EndsWith("/index.json", StringComparison.Ordinal))
+            {
+                Volatile.Write(ref indexQuery, uri.Query);
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(IndexJson, Encoding.UTF8,
                         new System.Net.Http.Headers.MediaTypeHeaderValue("application/json")),
                 });
+            }
             Interlocked.Increment(ref downloads);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         }
@@ -142,6 +150,8 @@ public class AModuleBundleIsPickedFromItsOwnPlatformLine_OnLine3Test(ITestOutput
         plan.Lands.Should().BeTrue("AI was never landed here, so the line-3 build lands");
         plan.Bundle.Should().NotBeNull("a landing plan carries the bundle it lands");
         plan.Bundle?.Version.Should().Be(Line3Version, "the bundle that lands is the one that was planned");
+        Registry.IndexQuery.Should().Contain("line=3",
+            "the client states its line, so a registry with one shelf per line answers with this line's builds only");
     }
 
     [Fact(Timeout = 300_000)]
@@ -200,6 +210,7 @@ public class AModuleBundleIsPickedFromItsOwnPlatformLine_OnLine4Test(ITestOutput
 
         plan.Decided.ServedVersion.Should().Be(Line4Version);
         plan.Lands.Should().BeTrue();
+        Registry.IndexQuery.Should().Contain("line=4", "the client states its line");
     }
 
     [Fact(Timeout = 300_000)]

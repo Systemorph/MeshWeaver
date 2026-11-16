@@ -107,6 +107,23 @@ public static class PlatformFloor
             return Advisory("a source build (-dev, or the retired -ci.0) is not a publication, and is not "
                             + "ordered against a published build");
 
+        // 🚨 LINE FIRST (policy major-lines-run-separately, MeshWeaver.Plugins#5550). The run counter
+        // is shared across platform lines, so a run number orders two builds of ONE line and nothing
+        // else: a 4.0.13296 floor read as met on 3.1.13396 because 13296 < 13396. A floor on a HIGHER
+        // line is never met — the build was made for a platform this one is not. A floor on a LOWER
+        // line is not met either, only unordered: it proceeds as advisory, never as "satisfied", and
+        // the bundle-level line rule (BundleLine) is what keeps another line's bytes off this process.
+        var floorLine = LineOfCore(floorCore);
+        var runningLine = LineOfCore(runningCore);
+        if (floorLine != runningLine)
+            return floorLine > runningLine
+                ? new(PlatformFloorKind.Held, floor, running,
+                    $"needs platform ≥ {floor}, which is platform line {floorLine}; running {running} "
+                    + $"is line {runningLine}, and a floor on another line is never met here — held "
+                    + "(run numbers are shared across lines and order nothing between them)")
+                : Advisory($"the floor names platform line {floorLine} and this is line {runningLine}; "
+                           + "run numbers are shared across lines and order nothing between them");
+
         int comparison;
         if (floorOrdinal is { } f && runningOrdinal is { } r)
             comparison = f.CompareTo(r);
@@ -127,6 +144,30 @@ public static class PlatformFloor
             ? new(PlatformFloorKind.Held, floor, running,
                 $"needs platform ≥ {floor}, running {running} — held until the platform rolls to it")
             : new(PlatformFloorKind.Satisfied, floor, running, null);
+    }
+
+    /// <summary>
+    /// The last platform major whose builds share ONE line: every major at or below it is that line
+    /// (the same value as <c>BundleLine.LegacyLine</c> and <c>ModuleRoot.LastSharedRootMajor</c> in
+    /// MeshWeaver.PluginCatalog, which a test holds equal).
+    /// </summary>
+    public const int LegacyLine = 3;
+
+    /// <summary>The line a platform major belongs to: <see cref="LegacyLine"/> for every major at or
+    /// below it, the major itself after it. Pure.</summary>
+    /// <param name="major">A platform major.</param>
+    public static int LineOf(int major) => major <= LegacyLine ? LegacyLine : major;
+
+    /// <summary>The line of a numeric version core (<c>4.0.0</c> → 4, <c>3.1.0</c> → 3). Pure.
+    /// Only called on a core <see cref="PlatformReleaseOrder.TrySplit"/> accepted, so every part already
+    /// parsed as a non-negative <see cref="long"/>; the major is read as one too, so a major beyond
+    /// <see cref="int"/> is its own (higher) line rather than an unparsed value read as the legacy line.</summary>
+    private static long LineOfCore(string core)
+    {
+        var dot = core.IndexOf('.');
+        var major = long.Parse(dot < 0 ? core : core[..dot], System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture);
+        return major <= LegacyLine ? LegacyLine : major;
     }
 
     /// <summary>
