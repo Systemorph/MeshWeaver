@@ -79,6 +79,42 @@ On the module side, two things still guard what an instance runs:
 - **Ceilings.** Policy `platform-backwards-compatibility` lets a declared break set a ceiling on
   the affected modules.
 
+### Why the compatibility input reads after the images
+
+In `main-cd.yml`, `published-modules` runs after `promote`, so a run whose sealed `plugins`
+publication is missing has already built every image when it goes red. The CI profile counted 31
+such runs and proposed reading the publication first and stopping before the images (proposal R8
+in [CI Profile, November 2026](../CiProfile2026-11)). That proposal was measured and refuted. The
+workflow keeps its order, for these reasons:
+
+1. **The publish decision already comes first.** `gate` (resolve the target commit, decide whether
+   to publish) needs only `line`. Every image job needs `gate` and runs only on
+   `publish == 'true'`. A run with nothing to publish builds no image. For example, reconcile run
+   `43757848237` skipped all six image jobs and ended after about six minutes.
+2. **The images are the platform delivery, not wasted work.** In the three failing `workflow_run`
+   runs read over REST (`43714234066`, `43700790045`, `43693523389`, all failing with *upstream
+   'plugins' has no SEALED publication … for identity c004e001*), `promote`, `publish-bake`,
+   `verify-images`, `delivery-verdict`, `control-promote` and `control-first` all succeeded. Only
+   `published-modules` and the ladder were red, so `arm` armed no set from those runs. That is the
+   ladder in policy `platform-backwards-compatibility`: a missing module publication withholds the
+   fleet's arming and nothing else.
+3. **Gating the images on the publication would deadlock a declared break.** The identity is
+   `c<major>e<epoch>`. After a major or epoch bump the publication for the new identity does not
+   exist yet, and the modules' lanes seal it by building against the platform set this workflow
+   promotes. If no set were built until the publication existed, neither side could move. Control
+   first would stop too, since `control-first` deploys every accepted platform build.
+4. **The guard forbids it.** `PlatformDeliveryNeverWaitsOnPluginsGuard` treats `published-modules`
+   as module-side and fails on any platform job (`portal-image`, `promote`, `publish-bake`,
+   `control-first`, …) that reaches it through its needs.
+
+The input does depend on this run's images, but only for its identity. The step runs the
+promoted tester image's `--print-framework-identity`, which reads `MeshWeaver.Compiler.dll`. The
+same `c<major>e<epoch>` could be derived from `Directory.Build.props` and
+`src/MeshWeaver.Compiler/platform-compatibility.json`, so the read could start in parallel with
+the images. That is not done. It saves no runner minutes, because the images are built either way.
+It would surface the red about fifteen minutes earlier, and it would add a second derivation of
+the identity that could drift from the shipped one.
+
 ## Control first, in practice
 
 - `control-first` (`main-cd.yml`) tags `memex-control:<version>` and moves the line pointers. It
