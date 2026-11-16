@@ -52,7 +52,9 @@ change set:
   300-file cap proves nothing;
 * a renamed file is matched under both its old and its new name;
 * only plain `paths:` globs and literal `branches:` are evaluated. A negation, `paths-ignore`, a
-  branch pattern or any other event (`merge_group`, `workflow_dispatch`) gives `unknown`.
+  branch pattern or any other event (`merge_group`, `workflow_dispatch`) gives `unknown`;
+* a file or a pushed branch that matches the filter only when case is ignored gives `unknown`,
+  never `false`. Whichever way GitHub compares case, a `false` stays proven.
 
 The answer is `applicable=true`, `false` or `unknown`, with a reason, printed in the log and in the
 job summary.

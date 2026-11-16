@@ -113,6 +113,10 @@ def decide(workflow: Path, event: str, ref_name: str, rows: list[list[str]],
             if not ref_name:
                 return "unknown", "no branch name given for a push event"
             if ref_name not in branches:
+                # A `false` must be PROVEN. A name that matches only when case is ignored is
+                # undecided here, whichever way GitHub compares case.
+                if ref_name.casefold() in {b.casefold() for b in branches}:
+                    return "unknown", f"'{ref_name}' matches {workflow.name}'s push `branches:` only when case is ignored"
                 return "false", f"{workflow.name} does not trigger on a push to '{ref_name}'"
     paths = trigger.get("paths")
     if paths is None:
@@ -129,6 +133,8 @@ def decide(workflow: Path, event: str, ref_name: str, rows: list[list[str]],
     if truncated_at is not None and len(rows) >= truncated_at:
         return "unknown", f"the listing reached its {truncated_at}-file cap and may be truncated"
     regexes = [(p, glob_to_regex(p)) for p in paths]
+    folded = [(p, re.compile(rx.pattern, re.IGNORECASE)) for p, rx in regexes]
+    case_only = None
     for row in rows:
         for name in row:
             if not name:
@@ -136,6 +142,12 @@ def decide(workflow: Path, event: str, ref_name: str, rows: list[list[str]],
             for p, rx in regexes:
                 if rx.match(name):
                     return "true", f"'{name}' matches {workflow.name}'s path filter '{p}'"
+            if case_only is None:
+                case_only = next(((name, p) for p, rx in folded if rx.match(name)), None)
+    if case_only is not None:
+        # A `false` must be PROVEN: a file that matches only when case is ignored leaves the
+        # answer undecided, whichever way GitHub compares case.
+        return "unknown", f"'{case_only[0]}' matches {workflow.name}'s path filter '{case_only[1]}' only when case is ignored"
     return "false", f"none of the {len(rows)} changed file(s) matches {workflow.name}'s {event} path filter"
 
 
@@ -182,6 +194,8 @@ def self_test() -> int:
     check("real: short listing", decide(real, "pull_request", "", [["src/A.cs"]], 2, None), "unknown")
     check("real: capped listing", decide(real, "push", "main", [["src/A.cs"]] * 300, None, 300), "unknown")
     check("real: push without a ref", decide(real, "push", "", [["src/A.cs"]], None, 300), "unknown")
+    check("real: path matches only ignoring case", decide(real, "pull_request", "", [["Clients/python/x.py"]], 1, None), "unknown")
+    check("real: branch matches only ignoring case", decide(real, "push", "Main", [["clients/python/x.py"]], None, 300), "unknown")
     check("absent workflow", decide(real.with_name("nope.yml"), "pull_request", "", [["src/A.cs"]], 1, None), "unknown")
 
     with tempfile.TemporaryDirectory() as tmp:
