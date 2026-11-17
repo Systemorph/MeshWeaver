@@ -950,7 +950,7 @@ included, carried that second `##[error]`.
 
 The per-manifest listing (`PROTECTED`, `LOCK`/`WOULD LOCK` and `RELEASE CANDIDATE` lines) now goes to
 the job log only. The summary keeps the section counts, every problem line (`UNPROTECTABLE`,
-`FLOATING`, `UNREADABLE`) and one line saying how many listing lines are in the log. The writer
+`FLOATING`, `UNREADABLE`) and one line giving the entry counts of the listing (protected, to lock, release candidates) and saying it is in the job log. The writer
 also has a budget of 768 KiB. A line that would cross it is not written, and the cut is marked
 once, so a report that grows again loses its tail instead of the whole summary. ARM 43 renders the
 real `report()` at fleet scale and checks four things: the summary stays under the budget, the log
