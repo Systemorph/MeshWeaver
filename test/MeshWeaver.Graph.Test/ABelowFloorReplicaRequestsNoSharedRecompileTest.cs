@@ -227,12 +227,11 @@ public class ABelowFloorReplicaRequestsNoSharedRecompileTest(ITestOutputHelper o
 
     private static UnhandledMessageNack NackOf(MeshNode verdict, MeshNode typeNode)
     {
-        verdict.HubConfiguration.Should().NotBeNull("an Unavailable record serves a diagnosis");
-        var nack = verdict.HubConfiguration!(
-                new MessageHubConfiguration(null, new Address("probe", typeNode.Id)))
-            .Get<UnhandledMessageNack>();
-        nack.Should().NotBeNull("the diagnosis overlay Nacks typed requests");
-        return nack!;
+        var configure = verdict.HubConfiguration
+            ?? throw new InvalidOperationException("an Unavailable record serves a diagnosis — no hub configuration was bound");
+        return configure(new MessageHubConfiguration(null, new Address("probe", typeNode.Id)))
+                .Get<UnhandledMessageNack>()
+            ?? throw new InvalidOperationException("the diagnosis overlay Nacks typed requests — no NACK was set");
     }
 
     /// <summary>NEGATIVE CONTROL — the identical bytes bind for a type whose floor is met.</summary>
