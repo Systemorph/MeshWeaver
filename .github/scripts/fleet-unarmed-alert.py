@@ -129,6 +129,9 @@ class Decision:
     line: str = ""          # the delivery line (branch) whose arm run read this
     cold_start: bool = False  # no set of `major` was ever armed
     control_hold: str = ""  # the line is HELD by control's declared updatePattern (MeshWeaver#8279); "" = not held
+    # the line DECLARES no first instance (policy `line-no-first-instance`) — the sentence it arms under;
+    # "" = the line has one (control, or its declared instance)
+    no_first_instance: str = ""
 
 
 def parse_threshold(raw: str | None) -> float:
@@ -168,6 +171,12 @@ def check_reading(reading: object) -> None:
     if not isinstance(reading.get("control_hold", ""), str):
         raise Red("the reading's `control_hold` is not a sentence — whether control's declaration holds this line "
                   "cannot be read off it")
+    if not isinstance(reading.get("no_first_instance", ""), str):
+        raise Red("the reading's `no_first_instance` is not a sentence — whether the line declares no first instance "
+                  "cannot be read off it")
+    if reading.get("no_first_instance") and reading.get("control_hold"):
+        raise Red("the reading says the line declares NO first instance AND that a first instance's record holds it — "
+                  "two contradicting readings of one declaration")
     if not isinstance(reading.get("window_complete"), bool):
         raise Red("the reading does not say whether its run listing reached the armed cursor (`window_complete`)")
     if not reading["window_complete"]:
@@ -199,13 +208,14 @@ def decide(reading: dict, now: datetime, threshold_hours: float) -> Decision:
     unarmed = sorted(reading["unarmed"], key=lambda s: int(s["run_number"]), reverse=True)
     floor = not reading["window_complete"]
     hold = str(reading.get("control_hold") or "")
+    nofi = str(reading.get("no_first_instance") or "")
     fp = (",".join(f"{s['run_number']}:{s['state'].replace(' ', '-')}" for s in unarmed) or "none") \
-        + (":floor" if floor else "") + (":held" if hold else "")
+        + (":floor" if floor else "") + (":held" if hold else "") + (":no-first-instance" if nofi else "")
     ages = [(now - _when(str(unarmed[-1]["promoted_at"]))).total_seconds() / 3600] if unarmed else []
     if floor:
         ages.append((now - _when(str(reading["window_floor_at"]))).total_seconds() / 3600)
     line = dict(major=int(reading["major"]), line=str(reading["line"]), cold_start=bool(reading["cold_start"]),
-                control_hold=hold)
+                control_hold=hold, no_first_instance=nofi)
     if not ages:
         return Decision(False, None, None, [], str(reading["armed"]), fp, **line)
     age = max(ages)
@@ -220,6 +230,8 @@ def render_body(d: Decision, threshold_hours: float, run_url: str, now: datetime
         "",
         f"- line: `{d.line}`, major **{d.major}** — this issue is that line's alone; every other major keeps its own",
         *([f"- ⏸️ {d.control_hold.replace(chr(10), ' ')}"] if d.control_hold else []),
+        *([f"- 🚫 {d.no_first_instance.replace(chr(10), ' ')} — so no set here waits on an instance: a stall on "
+           "this line is its ladder's, or the arming's own"] if d.no_first_instance else []),
         (f"- newest ARMED {d.major}.x set: **none — {d.armed}** (cold start of major {d.major}: the fleet still runs "
          f"the previous major's armed set; the age is clocked from the line's FIRST {d.major}.x set)"
          if d.cold_start else
@@ -244,7 +256,7 @@ def render_body(d: Decision, threshold_hours: float, run_url: str, now: datetime
         "Read it by state: **refused** — the set's compatibility ladder is red, missing or ambiguous; fix "
         "compatibility (or declare an epoch bump), a newer green set then arms past it. **waiting** — the ladder "
         "is still running, or the line's first instance (control, unless the line declares its own — policy "
-        "`line-first-instance`) has not taken the set; past its bound that is a red `arm` naming the instance, and "
+        "`line-first-instance`; a line that DECLARES none waits on no instance, policy `line-no-first-instance`) has not taken the set; past its bound that is a red `arm` naming the instance, and "
         "a line HELD by a declaration says so above the table (its remedy is that declaration, never a roll). **not examined** — older than the ten newest sets `select` judges. The incident "
         "override (main-cd `workflow_dispatch` with `arm_override` + `arm_reason`) exists and stays the "
         "maintainer's call; it is not the remedy this issue suggests.",
@@ -656,6 +668,25 @@ def self_test() -> int:
     d = decide(reading(refused), now, 6.0)
     check("NEGATIVE CONTROL — an unheld reading (no control_hold) names no hold",
           "HELD BY DECLARATION" not in render_body(d, 6.0, "https://run/1", now) and ":held" not in d.fingerprint)
+
+    # 8c. a line that DECLARES no first instance (policy `line-no-first-instance`) says so in the issue
+    nofi = ("NO FIRST INSTANCE, DECLARED: line `main3` declares firstInstance \"none\" in .github/delivery-lines.json "
+            "(its remaining instances update themselves) — this set arms on the platform evidence alone")
+    d = decide({**reading(refused, major=3, line="main3"), "no_first_instance": nofi}, now, 6.0)
+    body = render_body(d, 6.0, "https://run/1", now)
+    check("a line that DECLARES no first instance is still judged (stale stays stale) and its body names the declaration",
+          d.stale and "NO FIRST INSTANCE, DECLARED" in body and "waits on an instance" in body
+          and ":no-first-instance" in d.fingerprint, body)
+    check("NEGATIVE CONTROL — a reading without `no_first_instance` names no declared absence",
+          "NO FIRST INSTANCE" not in render_body(decide(reading(refused), now, 6.0), 6.0, "https://run/1", now))
+    for bad, why in (({**reading(), "no_first_instance": True}, "a non-string no_first_instance"),
+                     ({**reading(), "no_first_instance": nofi, "control_hold": "LINE HELD BY DECLARATION: x"},
+                      "no first instance AND a first instance's hold")):
+        try:
+            decide(bad, now, 6.0)
+            check(f"a malformed reading ({why}) is RED", False)
+        except Red:
+            check(f"a malformed reading ({why}) is RED, never a pass", True)
 
     # 9. an INCOMPLETE window (the run listing never reached the armed cursor) is never read as armed
     #    (Copilot on MeshWeaver#6367: 40 runs are not 40 promotions)
