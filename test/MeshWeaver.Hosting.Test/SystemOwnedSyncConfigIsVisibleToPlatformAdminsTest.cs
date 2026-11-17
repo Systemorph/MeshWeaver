@@ -217,9 +217,9 @@ public class SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest(ITestOutputHelpe
         var predicate = Assert.Single(forAdmin, p => p.NodeType == GitHubSyncService.ConfigNodeType);
         var stored = await NodeFactory.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{configPath}").ForViewer(WellKnownUsers.System))
             .Select(change => change.Items.FirstOrDefault(n => string.Equals(n.Path, configPath, StringComparison.OrdinalIgnoreCase)))
-            .Where(n => n is not null).Take(1)
+            .OfType<MeshNode>().Take(1)
             .Should().Within(Budget).Emit(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(predicate.Matches(stored!, "Space", Mesh.JsonSerializerOptions), "the predicate matches the config");
+        Assert.True(predicate.Matches(stored, "Space", Mesh.JsonSerializerOptions), "the predicate matches the config");
         await IsVisibleTo(configPath, PlatformAdmin).Should().Within(Budget).Match(seen => seen,
             "where the predicate matches, the rule admits the admin", cancellationToken: TestContext.Current.CancellationToken);
 

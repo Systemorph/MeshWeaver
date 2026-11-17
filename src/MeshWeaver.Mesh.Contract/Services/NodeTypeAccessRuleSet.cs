@@ -235,6 +235,7 @@ public sealed class NodeTypeAccessRuleSet
         foreach (var nodeType in rules.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
             IReadOnlyList<RuleReadPredicate>? declared = null;
+            string? governedType = null;
             Governing(nodeType, (_, rule) =>
             {
                 var operations = rule.SupportedOperations;
@@ -242,11 +243,14 @@ public sealed class NodeTypeAccessRuleSet
                     return false;
                 // Copied out INSIDE the lease: predicates are plain data.
                 declared = rule is INodeTypeReadPredicates p ? [.. p.ReadPredicates] : null;
+                governedType = rule.NodeType;
                 return true;
             });
             if (declared is null)
                 continue;
-            result.AddRange(declared.Where(p => string.Equals(p.NodeType, nodeType, StringComparison.OrdinalIgnoreCase)));
+            // ORDINAL, as ResolvedReadPredicate.Matches and the SQL clause compare: a predicate whose
+            // type differs from the rule's own only in case could never match a row, so it is not kept.
+            result.AddRange(declared.Where(p => string.Equals(p.NodeType, governedType, StringComparison.Ordinal)));
         }
         return result.ToImmutable();
     }
