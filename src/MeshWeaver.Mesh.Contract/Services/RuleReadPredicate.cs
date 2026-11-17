@@ -11,7 +11,7 @@ namespace MeshWeaver.Mesh.Services;
 /// <summary>
 /// WHO a <see cref="RuleReadPredicate"/> opens rows to. An OPEN vocabulary of string constants
 /// (policy <c>open-vocabulary-string-constants</c>): a value no resolver knows opens NOTHING — it is
-/// never read as a default subject — and is logged by name (<see cref="RuleReadPredicates.Resolve"/>).
+/// never read as a default subject — and is logged by name (<see cref="RuleReadPredicates.Resolve(IMessageHub, string?)"/>).
 /// </summary>
 public static class RuleReadSubject
 {
@@ -23,6 +23,33 @@ public static class RuleReadSubject
     /// (<see cref="RuleReadPredicate.CallerField"/>) — e.g. a feedback record's <c>submittedBy</c>.
     /// </summary>
     public const string ContentFieldIsCaller = "ContentFieldIsCaller";
+
+    /// <summary>
+    /// The real user who holds <see cref="RuleReadPredicate.HeldPermission"/> on the row's OWN path, by the
+    /// permission fold — e.g. a sync config readable to whoever holds Read on it, which an
+    /// <see cref="INodeTypeExclusiveRead"/> rule must declare to keep its ordinary readers listing it.
+    /// Applied by the store (the SQL fold over the row's path); never bound for a consumer that does not
+    /// declare it supported (<see cref="RuleReadPredicates.BindSupporting"/>).
+    /// </summary>
+    public const string PermissionOnPath = "PermissionOnPath";
+
+    /// <summary>
+    /// The real user who holds <see cref="RuleReadPredicate.HeldPermission"/> on the row's PARTITION ROOT
+    /// (the path's first segment), by the permission fold — e.g. a storage binding, readable to whoever
+    /// administers (holds Update on) its partition. As <see cref="PermissionOnPath"/>, opt-in per consumer.
+    /// </summary>
+    public const string PermissionOnPartitionRoot = "PermissionOnPartitionRoot";
+
+    /// <summary>
+    /// The subjects every predicate consumer applies: a consumer that does not name the subjects it
+    /// supports is bound only these (<see cref="RuleReadPredicates.Resolve(IMessageHub, string?)"/>).
+    /// </summary>
+    public static readonly ImmutableHashSet<string> Baseline =
+        ImmutableHashSet.Create(StringComparer.Ordinal, GlobalAdmin, ContentFieldIsCaller);
+
+    /// <summary>Every subject this assembly defines — what a consumer that applies all of them declares.</summary>
+    public static readonly ImmutableHashSet<string> All =
+        Baseline.Union([PermissionOnPath, PermissionOnPartitionRoot]);
 }
 
 /// <summary>
@@ -74,6 +101,12 @@ public sealed record RuleReadPredicate
     /// </summary>
     public string? CallerField { get; init; }
 
+    /// <summary>
+    /// For <see cref="RuleReadSubject.PermissionOnPath"/> and <see cref="RuleReadSubject.PermissionOnPartitionRoot"/>:
+    /// the ONE permission (a single flag) the caller must hold. A missing or combined value opens nothing.
+    /// </summary>
+    public Permission? HeldPermission { get; init; }
+
     /// <summary>The partition a fan-out must read for this predicate: <see cref="PathPrefix"/>'s first
     /// segment, or null when there is no prefix.</summary>
     public string? OpenedPartition => string.IsNullOrEmpty(PathPrefix)
@@ -105,13 +138,51 @@ public sealed record ResolvedReadPredicate(
         : PathPrefix.Split('/', 2)[0] is { Length: > 0 } first ? first : null;
 
     /// <summary>
-    /// Whether <paramref name="node"/> matches — the same test the SQL clause makes. Pure.
+    /// The single permission <see cref="CallerId"/> must hold, by the permission fold, on the row's path
+    /// (or its partition root when <see cref="HeldOnPartitionRoot"/>) — or null when the predicate
+    /// carries no permission term. Set only for a consumer that declared the subject supported.
+    /// </summary>
+    public Permission? HeldPermission { get; init; }
+
+    /// <summary>Whether <see cref="HeldPermission"/> is tested on the row's partition root (its path's first
+    /// segment) rather than on the row's own path.</summary>
+    public bool HeldOnPartitionRoot { get; init; }
+
+    /// <summary>
+    /// Whether <paramref name="node"/> matches — the same test the SQL clause makes. Pure. A predicate
+    /// with a <see cref="HeldPermission"/> term never matches here: that term needs the permission fold,
+    /// which the overload taking <c>holdsPermission</c> is handed.
     /// </summary>
     /// <param name="node">The row.</param>
     /// <param name="partitionRootType">The node type of the row's partition root, or null when it does
     /// not exist (only consulted when <see cref="ExcludedPartitionRootTypes"/> is non-empty).</param>
     /// <param name="options">Serializer options for a typed content object.</param>
     public bool Matches(MeshNode node, string? partitionRootType, JsonSerializerOptions options)
+        => Matches(node, partitionRootType, options, holdsPermission: null);
+
+    /// <summary>
+    /// As <see cref="Matches(MeshNode, string?, JsonSerializerOptions)"/>, with the permission fold for a
+    /// <see cref="HeldPermission"/> term: <paramref name="holdsPermission"/> answers whether
+    /// <see cref="CallerId"/> holds the permission on the given path. Null fails such a term CLOSED.
+    /// </summary>
+    /// <param name="node">The row.</param>
+    /// <param name="partitionRootType">See the other overload.</param>
+    /// <param name="options">Serializer options for a typed content object.</param>
+    /// <param name="holdsPermission">(path, permission) → whether the caller holds it there.</param>
+    public bool Matches(MeshNode node, string? partitionRootType, JsonSerializerOptions options,
+        Func<string, Permission, bool>? holdsPermission)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        if (HeldPermission is { } held)
+        {
+            var target = HeldOnPartitionRoot ? (node.Path ?? "").Trim('/').Split('/', 2)[0] : node.Path ?? "";
+            if (holdsPermission is null || string.IsNullOrEmpty(target) || !holdsPermission(target, held))
+                return false;
+        }
+        return MatchesWithoutPermission(node, partitionRootType, options);
+    }
+
+    private bool MatchesWithoutPermission(MeshNode node, string? partitionRootType, JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(node);
         if (!string.Equals(node.NodeType, NodeType, StringComparison.Ordinal))
@@ -214,16 +285,35 @@ public static class RuleReadPredicates
     }
 
     /// <summary>
-    /// The caller's <see cref="RuleReadScope"/>: <see cref="Resolve"/>'s predicates and
+    /// The caller's <see cref="RuleReadScope"/>: <see cref="Resolve(IMessageHub, string?)"/>'s predicates and
     /// <see cref="ExclusiveNodeTypes"/>. Emits exactly once.
     /// </summary>
     /// <param name="hub">The mesh hub.</param>
     /// <param name="userId">The reader.</param>
     public static IObservable<RuleReadScope> ResolveScope(IMessageHub hub, string? userId)
+        => ResolveScopeSupporting(hub, userId, RuleReadSubject.Baseline);
+
+    /// <summary>
+    /// As <see cref="ResolveScope(IMessageHub, string?)"/>, for a consumer that applies the subjects in
+    /// <paramref name="supportedSubjects"/> — a store whose row filter can evaluate
+    /// <see cref="RuleReadSubject.PermissionOnPath"/> / <see cref="RuleReadSubject.PermissionOnPartitionRoot"/>
+    /// names them here. A predicate whose subject the consumer does not support opens NOTHING for it.
+    ///
+    /// <para>🚨 Why opt-in: a resolved predicate a consumer cannot fully apply would be applied WITHOUT the
+    /// term it does not know, i.e. to every caller. The core rules and the store that filters by them
+    /// version independently, so an older store must see such a predicate as absent (fail closed), never as
+    /// its node-type term alone.</para>
+    /// </summary>
+    /// <param name="hub">The mesh hub.</param>
+    /// <param name="userId">The reader.</param>
+    /// <param name="supportedSubjects">The <see cref="RuleReadSubject"/> values the consumer applies.</param>
+    public static IObservable<RuleReadScope> ResolveScopeSupporting(
+        IMessageHub hub, string? userId, IReadOnlySet<string> supportedSubjects)
     {
         ArgumentNullException.ThrowIfNull(hub);
         var exclusive = ExclusiveNodeTypes(hub);
-        return Resolve(hub, userId).Select(predicates => new RuleReadScope(predicates, exclusive));
+        return ResolveSupporting(hub, userId, supportedSubjects)
+            .Select(predicates => new RuleReadScope(predicates, exclusive));
     }
 
     /// <summary>
@@ -236,15 +326,27 @@ public static class RuleReadPredicates
     /// <param name="hub">The mesh hub (its services carry the rule set).</param>
     /// <param name="userId">The reader.</param>
     public static IObservable<ImmutableArray<ResolvedReadPredicate>> Resolve(IMessageHub hub, string? userId)
+        => ResolveSupporting(hub, userId, RuleReadSubject.Baseline);
+
+    /// <summary>
+    /// As <see cref="Resolve(IMessageHub, string?)"/>, binding only the subjects the consumer applies
+    /// (<see cref="ResolveScopeSupporting"/>).
+    /// </summary>
+    /// <param name="hub">The mesh hub (its services carry the rule set).</param>
+    /// <param name="userId">The reader.</param>
+    /// <param name="supportedSubjects">The <see cref="RuleReadSubject"/> values the consumer applies.</param>
+    public static IObservable<ImmutableArray<ResolvedReadPredicate>> ResolveSupporting(
+        IMessageHub hub, string? userId, IReadOnlySet<string> supportedSubjects)
     {
         ArgumentNullException.ThrowIfNull(hub);
+        ArgumentNullException.ThrowIfNull(supportedSubjects);
         var declared = hub.ServiceProvider.GetService<NodeTypeAccessRuleSet>()?.ReadPredicates()
                        ?? ImmutableArray<RuleReadPredicate>.Empty;
         if (declared.IsEmpty || userId is not { Length: > 0 } caller || !IsRealUser(caller))
             return Observable.Return(ImmutableArray<ResolvedReadPredicate>.Empty);
         var needsAdmin = declared.Any(p => p.Subject == RuleReadSubject.GlobalAdmin);
         return (needsAdmin ? hub.IsGlobalAdmin(caller).Take(1).DefaultIfEmpty(false) : Observable.Return(false))
-            .Select(isAdmin => Bind(declared, caller, isAdmin, hub));
+            .Select(isAdmin => BindSupporting(declared, caller, isAdmin, supportedSubjects, hub));
     }
 
     /// <summary>
@@ -257,10 +359,32 @@ public static class RuleReadPredicates
     /// <param name="hub">For logging an unknown subject; optional.</param>
     public static ImmutableArray<ResolvedReadPredicate> Bind(
         IEnumerable<RuleReadPredicate> declared, string caller, bool isGlobalAdmin, IMessageHub? hub = null)
+        => BindSupporting(declared, caller, isGlobalAdmin, RuleReadSubject.Baseline, hub);
+
+    /// <summary>
+    /// As <see cref="Bind"/>, binding only the subjects in <paramref name="supportedSubjects"/>; a predicate
+    /// whose subject the consumer does not apply opens nothing (see <see cref="ResolveScopeSupporting"/>).
+    /// A <see cref="RuleReadSubject.PermissionOnPath"/> / <see cref="RuleReadSubject.PermissionOnPartitionRoot"/>
+    /// predicate is bound with its <see cref="RuleReadPredicate.HeldPermission"/>, which must be ONE flag.
+    /// </summary>
+    /// <param name="declared">The declared predicates.</param>
+    /// <param name="caller">A real user id.</param>
+    /// <param name="isGlobalAdmin">Whether the caller is a global admin.</param>
+    /// <param name="supportedSubjects">The <see cref="RuleReadSubject"/> values the consumer applies.</param>
+    /// <param name="hub">For logging an unknown subject; optional.</param>
+    public static ImmutableArray<ResolvedReadPredicate> BindSupporting(
+        IEnumerable<RuleReadPredicate> declared, string caller, bool isGlobalAdmin,
+        IReadOnlySet<string> supportedSubjects, IMessageHub? hub = null)
     {
+        ArgumentNullException.ThrowIfNull(supportedSubjects);
         var builder = ImmutableArray.CreateBuilder<ResolvedReadPredicate>();
         foreach (var p in declared)
         {
+            // A subject this assembly KNOWS but the consumer does not apply is skipped silently: that is
+            // the expected state of an older store. A subject NOBODY knows is not skipped here — it falls
+            // through to the switch's default, which logs it by name (and opens nothing).
+            if (RuleReadSubject.All.Contains(p.Subject) && !supportedSubjects.Contains(p.Subject))
+                continue;
             switch (p.Subject)
             {
                 case RuleReadSubject.GlobalAdmin:
@@ -269,6 +393,14 @@ public static class RuleReadPredicates
                     break;
                 case RuleReadSubject.ContentFieldIsCaller when !string.IsNullOrEmpty(p.CallerField):
                     builder.Add(new(p.NodeType, p.PathPrefix, p.ExcludedPartitionRootTypes, p.CallerField, caller));
+                    break;
+                case RuleReadSubject.PermissionOnPath or RuleReadSubject.PermissionOnPartitionRoot
+                    when p.HeldPermission is { } held && IsSingleFlag(held):
+                    builder.Add(new(p.NodeType, p.PathPrefix, p.ExcludedPartitionRootTypes, null, caller)
+                    {
+                        HeldPermission = held,
+                        HeldOnPartitionRoot = p.Subject == RuleReadSubject.PermissionOnPartitionRoot,
+                    });
                     break;
                 default:
                     hub?.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(RuleReadPredicates))
@@ -280,6 +412,9 @@ public static class RuleReadPredicates
         }
         return builder.ToImmutable();
     }
+
+    private static bool IsSingleFlag(Permission permission)
+        => permission != Permission.None && System.Numerics.BitOperations.IsPow2((uint)permission);
 
     private static bool IsRealUser(string? userId) =>
         userId is { Length: > 0 }

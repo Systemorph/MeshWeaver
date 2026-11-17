@@ -257,6 +257,18 @@ A rule now DECLARES the rows it opens as data, by also implementing `INodeTypeRe
 
 🚨 **A rule that NARROWS the fold declares itself exclusive.** Every rule REPLACES the fold on a point read, but most only widen it or delegate to it, so "fold OR predicates" in a listing never shows more than a point read admits. A rule that refuses a caller who HOLDS a Read grant — a session feed readable by its owner alone, a global admin included — would be bypassed by that OR: anyone with Read on the partition would list every row the rule refuses them on `get`. Such a rule also implements the marker `INodeTypeExclusiveRead`. `NodeTypeAccessRuleSet.ExclusiveReadNodeTypes()` names every type whose GOVERNING Read rule is exclusive (and, failing closed, every type whose rule cannot be produced and therefore denies a point read), and `RuleReadPredicates.ResolveScope(hub, userId)` hands a store-filtering executor a `RuleReadScope`: the caller's predicates plus the exclusive types. The Postgres row filter becomes `((partition gate AND fold AND n.node_type NOT IN (exclusive)) OR predicates)`, so an exclusive type is listed ONLY through its rule's predicates. The exclusive types are caller-independent and are applied even when the caller's predicates could not be resolved — that fallback lists the exclusive type to nobody, never to every grant holder. An exclusive rule without predicates is listed to nobody but System. Declared today by `SessionEventAccessRule` (MeshWeaver.Plugins, `Hosting/SessionEvent`: the feed's `owner`, below `Hosting/SessionEvents/`).
 
+The exclusive rules today:
+
+| Rule | Why it narrows | What still lists its rows |
+|---|---|---|
+| `SessionEventAccessRule` (MeshWeaver.Plugins, `Hosting/SessionEvent`) | the feed's owner alone | `ContentFieldIsCaller` on `owner`, below `Hosting/SessionEvents/` |
+| `StorageBindingAccessRule` (`StorageBinding`) | Read needs Update on the partition ROOT, so a Viewer is refused a binding (it names vault secrets, endpoints, identity client ids) | `PermissionOnPartitionRoot` with `Update` |
+| `SystemOnlyAccessRule` (the four step-up types under `Auth/`) | System alone | nothing: System reads unfiltered |
+| `VUserAccessRule` (`VUser`) | portal hub principals alone | nothing: a hub principal is never bound a predicate |
+| `GitHubSyncConfigAccessRule` (`GitHubSyncConfig`) | refuses Anonymous, which a public Space projects Read to | `GlobalAdmin`, and `PermissionOnPath` with `Read` (bound for real users only) |
+
+🚨 **A permission subject is OPT-IN per store.** `PermissionOnPath` and `PermissionOnPartitionRoot` carry a `HeldPermission` the store must evaluate itself (on Postgres, the same per-subject closest-scope fold over `user_effective_permissions`, for that permission, on the row's path or on its partition root). A store that applied such a predicate without that term would apply its node-type term alone, to every caller. The core rules and the store version independently, so a store names the subjects it applies — `RuleReadPredicates.ResolveScopeSupporting(hub, userId, subjects)` — and a predicate whose subject it does not name opens nothing for it; `ResolveScope(hub, userId)` binds `RuleReadSubject.Baseline` only. On an older store an exclusive type with only permission predicates is therefore listed to nobody but System (and, for `GitHubSyncConfig`, to global admins): fail closed. `ResolvedReadPredicate.Matches` fails a permission term closed unless it is handed the fold. Pinned by `NarrowingRulesAreExclusiveTest`, and in MeshWeaver.Plugins by `NarrowingRulesPgTests`.
+
 **Coverage stays honest.** A partition a predicate opens is read for the predicate's rows only, so the partial-read assessment (`coverage.partial`) reports it as read IN PART unless the caller also holds a full grant there. A predicate without a `PathPrefix` opens no partition by itself: it applies in the partitions a query reads anyway (a pinned query, or a fan-out over partitions the caller's grants reach).
 
 **Which rules declare predicates.** The legs that fit the shape:
@@ -265,7 +277,8 @@ A rule now DECLARES the rows it opens as data, by also implementing `INodeTypeRe
 |---|---|
 | `FeedbackSubmissionAccessRule` (MeshWeaver.Plugins) | `Feedback/Feedback` below `Feedback/_Submissions/`: `GlobalAdmin`, and `ContentFieldIsCaller` on `submittedBy` |
 | `ThreadAccessRule` for `Thread` and `ThreadMessage` (MeshWeaver.Plugins) | `GlobalAdmin`, partition root not `User`/`VUser` |
-| `GitHubSyncConfigAccessRule` | `GitHubSyncConfig`: `GlobalAdmin` |
+| `GitHubSyncConfigAccessRule` | `GitHubSyncConfig`: `GlobalAdmin`; `PermissionOnPath` (`Read`) |
+| `StorageBindingAccessRule` | `StorageBinding`: `PermissionOnPartitionRoot` (`Update`) |
 
 The Read legs left out, and why:
 
@@ -273,7 +286,7 @@ The Read legs left out, and why:
 - `SpaceAccessRule` decides on whether the Space's `_GitSync` is one-way, a fact on another node.
 - `DeploymentMaintainerAccessRule` reads a nested content field.
 - `BabysitterPageAccessRule` and `DispatchSwitchAccessRule` each open one fixed node that is reached by path.
-- `VUserAccessRule` serves hub principals.
+- `VUserAccessRule` serves hub principals (it is exclusive, so no grant lists a VUser either).
 - The satellite rules (`SatelliteAccessRule` and the types that use it) decide on the main node's grants, which SQL already evaluates through `main_node`.
 
 Not yet covered: the SCOPED semantic search route (a free-text query pinned to one partition and ranked by embedding, `PostgreSqlMeshQuery` → `VectorSearchAsync`) still lists only what grants reach; the cross-partition semantic fan-out applies the predicates.

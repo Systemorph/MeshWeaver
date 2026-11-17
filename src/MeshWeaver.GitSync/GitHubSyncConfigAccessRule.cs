@@ -44,19 +44,36 @@ namespace MeshWeaver.GitSync;
 /// Consulted through <see cref="NodeTypeAccessRuleGate"/> by all three seams (RLS read filter,
 /// delivery gate, delete pre-flight), so they cannot answer differently (#3061).</para>
 /// </summary>
-public sealed class GitHubSyncConfigAccessRule(IMessageHub hub) : INodeTypeAccessRule, INodeTypeReadPredicates
+public sealed class GitHubSyncConfigAccessRule(IMessageHub hub)
+    : INodeTypeAccessRule, INodeTypeReadPredicates, INodeTypeExclusiveRead
 {
     /// <inheritdoc />
     public string NodeType => GitHubSyncService.ConfigNodeType;
 
     /// <summary>
-    /// The rows the platform-admin leg of <see cref="HasAccess"/> opens to Read, as data a QUERY applies
-    /// (Doc/Architecture/AccessControl → "Rule read predicates"): every sync config, for a global admin.
-    /// No path prefix, so it opens no partition to a fan-out by itself; it applies in the partitions a
-    /// query reads.
+    /// The rows <see cref="HasAccess"/> opens to Read, as data a QUERY applies
+    /// (Doc/Architecture/AccessControl → "Rule read predicates"): every sync config, for a global admin;
+    /// and a config the caller holds Read on, by the fold — the ordinary leg.
+    ///
+    /// <para>🚨 The rule NARROWS the fold for an ANONYMOUS caller (a public Space projects Read to
+    /// <c>Anonymous</c>, and this rule refuses it), so it is <see cref="INodeTypeExclusiveRead"/>: a grant
+    /// alone never lists a config, and the ordinary leg comes back as the
+    /// <see cref="RuleReadSubject.PermissionOnPath"/> predicate, which is bound for real users only. A store
+    /// that does not support that subject lists configs to global admins alone (fail closed).</para>
+    ///
+    /// <para>No path prefix, so neither opens a partition to a fan-out by itself; they apply in the
+    /// partitions a query reads.</para>
     /// </summary>
     public IReadOnlyList<RuleReadPredicate> ReadPredicates =>
-        [new() { NodeType = GitHubSyncService.ConfigNodeType, Subject = RuleReadSubject.GlobalAdmin }];
+    [
+        new() { NodeType = GitHubSyncService.ConfigNodeType, Subject = RuleReadSubject.GlobalAdmin },
+        new()
+        {
+            NodeType = GitHubSyncService.ConfigNodeType,
+            Subject = RuleReadSubject.PermissionOnPath,
+            HeldPermission = Permission.Read,
+        },
+    ];
 
     /// <summary>
     /// Read and Delete only. Create and Update deliberately stay on the standard check: this rule

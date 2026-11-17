@@ -90,9 +90,13 @@ public static class StepUpNodeTypes
     /// a fresh authentication; a user who could create, edit or delete one — or a marker — could
     /// forge or replay it. The seal covers the receipt even past this rule; the rule keeps the
     /// markers (which carry no seal) honest.
+    ///
+    /// <para>It NARROWS the fold (a Read grant on <c>Auth</c> admits nobody), so it is
+    /// <see cref="INodeTypeExclusiveRead"/> with no predicate: a listing returns these rows to System alone,
+    /// as a point read does (Doc/Architecture/AccessControl → "Rule read predicates").</para>
     /// </summary>
     /// <param name="nodeType">The governed node type.</param>
-    internal sealed class SystemOnlyAccessRule(string nodeType) : INodeTypeAccessRule
+    internal sealed class SystemOnlyAccessRule(string nodeType) : INodeTypeAccessRule, INodeTypeExclusiveRead
     {
         /// <inheritdoc />
         public string NodeType => nodeType;
