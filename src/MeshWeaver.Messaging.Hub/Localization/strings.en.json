@@ -855,6 +855,8 @@
   "ui.closedTypeSetSummary": "Node type “{0}” is not part of this portal’s closed type set.",
   "ui.closedTypeSetIntro": "This portal serves only the node types its image registers, so this item’s page couldn’t be built. This is not a **compilation** error in the source.",
   "ui.closedTypeSetGuidance": "A type definition stored in the database is never compiled or loaded on this portal, and a recycle cannot change that. Open the item on a portal that serves this type, or ship the type in this portal’s image.",
+  "ui.belowPackageFloorIntro": "This item’s type was not loaded on this instance: its package declares a floor this instance does not meet — a newer platform, or a newer version of a package it depends on. This is a floor refusal, not a timeout and not a **compilation** error in the source.",
+  "ui.belowPackageFloorGuidance": "No compile on this instance can meet that floor, so **Recompile will not help**, and neither will a Recycle. The line above names the floor and what this instance runs. To resolve it, upgrade this instance to a platform (and packages) that meet the floor, or have it sync the package from the branch of its own platform line, whose sources declare a floor this instance meets. Once it does, the page recovers on its own.",
   "ui.compileTypesReady": "{0} of {1} types compiled",
   "ui.compileNowCompiling": "Now compiling: {0}",
   "ui.compileQueued": "{0} more queued",
