@@ -335,7 +335,13 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 .ObserveOn(TaskPoolScheduler.Default)
                 .SelectMany(_ => OnLane(ProposeOwnTreeAtBoot))
                 .SubscribeOn(TaskPoolScheduler.Default)
-                .Subscribe(_ => { }, _ => MarkBootReconciled(), MarkBootReconciled));
+                .Subscribe(_ => { }, ex =>
+                {
+                    logger.LogWarning(ex,
+                        "[RegistryUpdate] boot: the own-line module-set proposal did not run — the mesh "
+                        + "stays on its current set until the next landing wave proposes");
+                    MarkBootReconciled();
+                }, MarkBootReconciled));
             return;
         }
 

@@ -38,6 +38,15 @@ namespace MeshWeaver.Hosting.Test;
 public class ARegistryBootProposesItsOwnLinesLandedSetTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
+    /// <inheritdoc />
+    public override async ValueTask DisposeAsync()
+    {
+        await base.DisposeAsync();
+        try { Directory.Delete(moduleRoot, recursive: true); }
+        catch (IOException) { /* a temp directory that outlives the test is harmless */ }
+        catch (UnauthorizedAccessException) { /* likewise */ }
+    }
+
     private const string AiModule = "MeshWeaver.AI";
 
     private readonly string moduleRoot =
@@ -76,16 +85,16 @@ public class ARegistryBootProposesItsOwnLinesLandedSetTest(ITestOutputHelper out
         await reconciler.BootReconciled.Should().Within(TestTimeouts.Convergence)
             .Emit("the boot of a process with no registry ends", ct);
 
-        var proposed = ModuleSetStore.Read(Landing.BaseDirectory).Proposed;
-        proposed.Should().NotBeNull("the boot closes the wave the tree already holds");
-        proposed!.Generations.Keys.Should().Contain(AiModule,
+        if (ModuleSetStore.Read(Landing.BaseDirectory).Proposed is not { } proposed)
+            throw new Xunit.Sdk.XunitException("the boot closes the wave the tree already holds — no set was proposed");
+        proposed.Generations.Keys.Should().Contain(AiModule,
             "a landed module this line's tree holds is in the set every replica of the line adopts");
 
         // Idempotent: a second boot over the same tree writes no new set.
         using var second = new RegistryUpdateReconciler(Mesh, NullLogger<RegistryUpdateReconciler>.Instance);
         await second.StartAsync(ct);
         await second.BootReconciled.Should().Within(TestTimeouts.Convergence).Emit("the second boot ends", ct);
-        ModuleSetStore.Read(Landing.BaseDirectory).Proposed!.Sequence.Should().Be(proposed.Sequence,
+        (ModuleSetStore.Read(Landing.BaseDirectory).Proposed?.Sequence).Should().Be(proposed.Sequence,
             "a tree already proposed writes nothing");
     }
 }
