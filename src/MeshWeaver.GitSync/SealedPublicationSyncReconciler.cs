@@ -431,7 +431,9 @@ internal sealed class SealedPublicationSyncReconciler(
                 {
                     if (GitHubWebhookProcessor.ToPushTarget(node) is not { } target)
                         continue;
-                    var config = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
+                    // As this instance syncs it — the same reading the push fan-out judges by.
+                    var config = GitSyncLine.Effective(hub.ServiceProvider,
+                        node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger));
                     if (read.Retired(node.Path, config) is { } retired)
                     {
                         retiredSkips.Add($"{node.Path} ({RetiredPackageSyncGate.SkipPhrase(retired)})");
