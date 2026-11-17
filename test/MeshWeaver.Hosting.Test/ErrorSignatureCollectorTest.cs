@@ -32,9 +32,12 @@ public class ErrorSignatureCollectorTest
     {
         var (collector, logger) = Tap();
 
-        logger.LogError("Failed to reach {Url} for order {OrderId}", "https://acme.example/a?sig=secret1", 4711);
-        logger.LogError("Failed to reach {Url} for order {OrderId}", "https://acme.example/b?sig=secret2", 4712);
-        logger.LogWarning("Failed to reach {Url} for order {OrderId}", "https://acme.example/c", 4713);
+        // Values that can never occur inside the digest's own fields: a bare number such as 4711 also
+        // matches the fractional seconds of firstSeen/lastSeen ("…02.4471173…"), which made the
+        // NotContain below fail on the clock rather than on a leaked value.
+        logger.LogError("Failed to reach {Url} for order {OrderId}", "https://acme.example/a?sig=secret1", "order-A4711");
+        logger.LogError("Failed to reach {Url} for order {OrderId}", "https://acme.example/b?sig=secret2", "order-A4712");
+        logger.LogWarning("Failed to reach {Url} for order {OrderId}", "https://acme.example/c", "order-A4713");
 
         var pending = collector.Pending();
         pending.Should().HaveCount(1, "two Error records of one template fold; the Warning is not collected");
@@ -44,7 +47,7 @@ public class ErrorSignatureCollectorTest
         signature.Category.Should().Be("MeshWeaver.Sample.Worker");
         signature.Level.Should().Be("Error");
         var wire = JsonSerializer.Serialize(signature, ErrorDigestPayloads.Json);
-        wire.Should().NotContain("acme.example").And.NotContain("secret1").And.NotContain("4711",
+        wire.Should().NotContain("acme.example").And.NotContain("secret1").And.NotContain("order-A4711",
             "a digest carries the template, never the values the line was formatted with");
     }
 
