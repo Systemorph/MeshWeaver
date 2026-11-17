@@ -256,6 +256,33 @@ public sealed class NodeTypeAccessRuleSet
     }
 
     /// <summary>
+    /// The node types whose GOVERNING Read rule replaces the permission fold in a listing
+    /// (<see cref="INodeTypeExclusiveRead"/>, tested on the rule itself under its lease): a query that
+    /// filters inside its store must never admit a row of these types through a grant, only through the
+    /// rule's own <see cref="RuleReadPredicate"/>s.
+    ///
+    /// <para>🚨 FAIL CLOSED. A rule that cannot be produced governs its type as a denying rule (see
+    /// <c>Governing</c>), and a point read of that type is refused; its type is returned here too, so a
+    /// listing refuses it the same way. A rule that no longer governs (a later registration won, its
+    /// module is not held) does not make its type exclusive.</para>
+    /// </summary>
+    /// <returns>The exclusive node types, in ordinal order.</returns>
+    public ImmutableArray<string> ExclusiveReadNodeTypes()
+    {
+        var result = ImmutableArray.CreateBuilder<string>();
+        foreach (var nodeType in rules.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        {
+            var governing = Governing(nodeType, (_, rule) =>
+                rule.SupportedOperations is var operations
+                && (operations.Count == 0 || operations.Contains(NodeOperation.Read))
+                && rule is INodeTypeExclusiveRead);
+            if (governing is not null)
+                result.Add(nodeType);
+        }
+        return result.ToImmutable();
+    }
+
+    /// <summary>
     /// Whether the rule that governs <paramref name="operation"/> for <paramref name="nodeType"/> is a
     /// <typeparamref name="TRule"/>. The same selection as <see cref="Find"/>, but the type test is made
     /// on the rule ITSELF, read under its lease: what <see cref="Find"/> hands out for a module's rule is
