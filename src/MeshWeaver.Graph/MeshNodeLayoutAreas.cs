@@ -1296,10 +1296,23 @@ public static class MeshNodeLayoutAreas
                 .WithView(NodeMenuSlot(host), area => area.WithId(NodePageMenuArea))
                 .WithView(page, area => area.WithId(NodePageBodyArea)));
 
-    /// <summary>True when the page is rendered as an <c>@@</c> embed (<c>?showHeader=false</c>).</summary>
-    private static bool IsEmbedded(LayoutAreaHost host)
-        => host.Reference.HasParameter("showHeader")
-           && string.Equals(host.Reference.GetParameterValue("showHeader"), "false", StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// The layout-area parameter an <c>@@</c> embed carries to drop the node chrome
+    /// (<c>?showHeader=false</c>, re-attached client-side from the <c>data-show-header</c> attribute
+    /// the markdown renderer emits).
+    /// </summary>
+    internal const string ShowHeaderParameter = "showHeader";
+
+    /// <summary>
+    /// True when the page is rendered as an <c>@@</c> embed (<c>?showHeader=false</c>). The ONE
+    /// probe for that opt-out: the Markdown page's header, its index rail and the composed actions
+    /// row all ask here, so the three can never disagree about what an embed is. Hidden only when
+    /// the parameter is explicitly <c>false</c>.
+    /// </summary>
+    /// <param name="host">The layout-area host rendering the page.</param>
+    internal static bool IsEmbedded(LayoutAreaHost host)
+        => host.Reference.HasParameter(ShowHeaderParameter)
+           && string.Equals(host.Reference.GetParameterValue(ShowHeaderParameter), "false", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The composed actions row: shown to a viewer who may read the node, hidden on a node excluded

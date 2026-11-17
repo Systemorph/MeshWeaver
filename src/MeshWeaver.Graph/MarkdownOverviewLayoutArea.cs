@@ -39,8 +39,7 @@ public static class MarkdownOverviewLayoutArea
         // A full-page render shows the node header; an @@ embed carries ?showHeader=false
         // (re-attached client-side from the data-show-header the renderer emits) — suppress the
         // header, comments and side menu. Hidden only when showHeader is explicitly "false".
-        var hideHeader = host.Reference.HasParameter("showHeader")
-            && string.Equals(host.Reference.GetParameterValue("showHeader"), "false", System.StringComparison.OrdinalIgnoreCase);
+        var hideHeader = MeshNodeLayoutAreas.IsEmbedded(host);
 
         // A module that OWNS this page may supply its own menu (a course lists the WHOLE course, not
         // the branch you are in). An @@ embed never gets a side menu, so its providers are not even
@@ -188,9 +187,7 @@ public static class MarkdownOverviewLayoutArea
     /// <param name="page">The page itself.</param>
     public static IObservable<UiControl?> WithIndexRail(LayoutAreaHost host, IObservable<UiControl?> page)
     {
-        var embedded = host.Reference.HasParameter("showHeader")
-            && string.Equals(host.Reference.GetParameterValue("showHeader"), "false", System.StringComparison.OrdinalIgnoreCase);
-        if (embedded)
+        if (MeshNodeLayoutAreas.IsEmbedded(host))
             return page;
         return page.CombineLatest(DefaultNodeNavigation.Observe(host), SuppliedNavigation(host),
             (content, defaultNavigation, supplied) =>
