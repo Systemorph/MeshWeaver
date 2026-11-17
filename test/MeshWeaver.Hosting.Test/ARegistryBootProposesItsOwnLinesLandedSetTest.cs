@@ -69,6 +69,9 @@ public class ARegistryBootProposesItsOwnLinesLandedSetTest(ITestOutputHelper out
     public async Task TheBootOfARegistry_ProposesTheModulesItsTreeAlreadyHolds()
     {
         var ct = TestContext.Current.CancellationToken;
+        // The line's first replica proposed before anything landed: set 1, naming no module.
+        (await Landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await(ct))!.Generations
+            .Should().BeEmpty("precondition: the stuck bootstrap is a recorded set that names no module");
         // The modules a publish shelved into this line's tree, before this process booted.
         await Landing.LandModule(
                 AiModule,
@@ -97,16 +100,33 @@ public class ARegistryBootProposesItsOwnLinesLandedSetTest(ITestOutputHelper out
         (ModuleSetStore.Read(Landing.BaseDirectory).Proposed?.Sequence).Should().Be(proposed.Sequence,
             "a tree already proposed writes nothing");
     }
+
+    [Fact(Timeout = 300_000)]
+    public async Task WithNoRecordedSet_TheBootLeavesTheTreeToItsLandingWave()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // No set has ever been proposed on this line: whatever the tree holds belongs to a landing
+        // wave that proposes when IT completes. The boot must not publish it — the wave may still be
+        // landing (the half-landed mix), and an activation request would swap in what just landed.
+        await Landing.LandModule(
+                AiModule,
+                [(AiModule + ".dll", File.ReadAllBytes(typeof(BundleReader).Assembly.Location))],
+                packagePath: "Plugins/AI",
+                version: "4.0.1",
+                staticAssets: [("wwwroot/version.txt", Encoding.UTF8.GetBytes("4.0.1"))])
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        using var reconciler = new RegistryUpdateReconciler(Mesh, NullLogger<RegistryUpdateReconciler>.Instance);
+        await reconciler.StartAsync(ct);
+        await reconciler.BootReconciled.Should().Within(TestTimeouts.Convergence).Emit("the boot ends", ct);
+
+        ModuleSetStore.Read(Landing.BaseDirectory).Proposed.Should().BeNull(
+            "with no recorded set the boot proposes nothing — the landing wave owns that proposal");
+        (await Landing.GetActivation().Timeout(TestTimeouts.Convergence).Await(ct)).PendingRestart
+            .Should().BeTrue("the landed module stays pending for its wave's own activation");
+    }
 }
 
-/// <summary>
-/// The same rule for a process that DOES reconcile against a registry: its boot proposes the modules
-/// its tree holds BEFORE the reconcile, so a registry that cannot serve this line (or cannot be
-/// reached at all) no longer keeps the landed modules out of every set for the whole pass. Measured
-/// on the 3 → 4 roll: the plugin registry lists itself as its registry, so the "no registry" boot
-/// never ran there, and its line-4 replica sat on the empty set until its rollout was rolled back.
-/// The registry here is a closed port: the reconcile cannot read it, and the set is proposed anyway.
-/// </summary>
 public class ABootWithAnUnreachableRegistryStillProposesItsTreeTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
@@ -145,6 +165,8 @@ public class ABootWithAnUnreachableRegistryStillProposesItsTreeTest(ITestOutputH
     public async Task TheBoot_ProposesTheTreesModules_BeforeTheRegistryReconcile()
     {
         var ct = TestContext.Current.CancellationToken;
+        (await Landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await(ct))!.Generations
+            .Should().BeEmpty("precondition: the stuck bootstrap is a recorded set that names no module");
         await Landing.LandModule(
                 AiModule,
                 [(AiModule + ".dll", File.ReadAllBytes(typeof(BundleReader).Assembly.Location))],
