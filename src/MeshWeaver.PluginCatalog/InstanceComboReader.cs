@@ -217,7 +217,9 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
             .Select(node => (
                 Module: AccessAssignmentGuard.PartitionOf(node.Namespace ?? ""),
                 Node: node,
-                Config: node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)))
+                // As this instance syncs it: the branch is the one this platform line reads.
+                Config: GitSyncLine.Effective(hub.ServiceProvider,
+                    node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger))))
             .Where(x => x.Module.Length > 0 && x.Config is not null)
             .Select(x => new SyncEntry(x.Module, x.Node.Id, x.Node.Path, x.Config!)));
 

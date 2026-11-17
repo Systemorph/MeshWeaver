@@ -94,9 +94,10 @@ public sealed class GitHubCodeSourceFiles(IMessageHub hub, ILogger<GitHubCodeSou
                 if (fromPackage is not null)
                     return Observable.Return<CodeSourceOrigin?>(fromPackage);
 
-                var config = found.syncs
+                // As this instance syncs it: its branch is the one this platform line reads.
+                var config = GitSyncLine.Effective(hub.ServiceProvider, found.syncs
                     .Select(n => n.ContentAs<GitHubSyncConfig>(options, logger))
-                    .FirstOrDefault(c => c is not null);
+                    .FirstOrDefault(c => c is not null));
                 if (config is null || !IsGitHub(config.RepositoryUrl))
                     return Observable.Return<CodeSourceOrigin?>(null);
                 // The exporter's file name needs the node itself (its serializer's extension) and

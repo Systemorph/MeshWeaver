@@ -285,6 +285,10 @@ public static class PluginCatalogConfigurationExtensions
                 // its own older dependency generation onto the record every replica reads as Error.
                 // It reads the loaded modules off the landing service's maintained snapshot, never a
                 // volume walk per call: it sits on every hydration, i.e. on the activation path.
+                // 🚨 Policy major-lines-run-separately — the branch every GitSync source reads on THIS
+                // instance's line, from the record's lineRefs (the declaration the registry serves each
+                // line by): a v3 instance syncs main3, a v4 instance main, from the same stored config.
+                .AddSingleton<MeshWeaver.GitSync.IGitSyncLineRefs>(DeclaredLineGitSyncRefs.Create)
                 .AddSingleton<MeshWeaver.Graph.Configuration.INodeTypeDependencyFloor>(sp =>
                     new NodeTypeDependencyFloorReader(
                         sp.GetRequiredService<IMessageHub>(),
