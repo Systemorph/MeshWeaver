@@ -221,6 +221,41 @@ public sealed class NodeTypeAccessRuleSet
     }
 
     /// <summary>
+    /// Every <see cref="RuleReadPredicate"/> the mesh's GOVERNING Read rules declare
+    /// (<see cref="INodeTypeReadPredicates"/>): for each indexed node type, the rule <see cref="Find"/>
+    /// would hand out for <see cref="NodeOperation.Read"/>, read under its lease, contributes the
+    /// predicates it declares for THAT node type. A predicate of a rule that no longer governs its type
+    /// (a later registration won, its module is gone) is not returned — fewer rows, never more. A rule
+    /// that cannot be produced governs as a denying rule and contributes nothing.
+    /// </summary>
+    /// <returns>The declared predicates, in node-type order.</returns>
+    public ImmutableArray<RuleReadPredicate> ReadPredicates()
+    {
+        var result = ImmutableArray.CreateBuilder<RuleReadPredicate>();
+        foreach (var nodeType in rules.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        {
+            IReadOnlyList<RuleReadPredicate>? declared = null;
+            string? governedType = null;
+            Governing(nodeType, (_, rule) =>
+            {
+                var operations = rule.SupportedOperations;
+                if (operations.Count != 0 && !operations.Contains(NodeOperation.Read))
+                    return false;
+                // Copied out INSIDE the lease: predicates are plain data.
+                declared = rule is INodeTypeReadPredicates p ? [.. p.ReadPredicates] : null;
+                governedType = rule.NodeType;
+                return true;
+            });
+            if (declared is null)
+                continue;
+            // ORDINAL, as ResolvedReadPredicate.Matches and the SQL clause compare: a predicate whose
+            // type differs from the rule's own only in case could never match a row, so it is not kept.
+            result.AddRange(declared.Where(p => string.Equals(p.NodeType, governedType, StringComparison.Ordinal)));
+        }
+        return result.ToImmutable();
+    }
+
+    /// <summary>
     /// Whether the rule that governs <paramref name="operation"/> for <paramref name="nodeType"/> is a
     /// <typeparamref name="TRule"/>. The same selection as <see cref="Find"/>, but the type test is made
     /// on the rule ITSELF, read under its lease: what <see cref="Find"/> hands out for a module's rule is
