@@ -48,6 +48,60 @@ DEFAULT_FILE = HERE.parent / "delivery-lines.json"
 BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 REQUIRED = ("branch", "pluginsRef", "satelliteRef", "label", "movesLatest")
+# 🚨 THE LINE'S FIRST INSTANCE (policy `line-first-instance`, Doc/Architecture/MajorLinesRunSeparately).
+# A line DECLARES which instance runs its build before the fleet is offered it, and the image
+# repository that instance runs — a repository of its OWN, tagged before arming exactly as
+# memex-control is. Both absent = the control instance (`.github/control-instance.json`) on
+# memex-control, unchanged. These repositories can never be one: `memex-portal-ai` is the FLEET's
+# (its version tag IS the arming write, so an instance on it can only run a set after the fleet is
+# offered it — the circular wait MeshWeaver#8365 measured), `memex-control` is control's, and
+# `memex-migration` is the set's migration image.
+FIRST_INSTANCE_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+FIRST_INSTANCE_IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+FIRST_INSTANCE_FORBIDDEN_IMAGES = {
+    "memex-portal-ai": "the FLEET's repository — its version tag is the arming write, so an instance on it "
+                       "can never run a set before the fleet is offered it (MeshWeaver#8365)",
+    "memex-control": "control's own repository — the control lane tags it, for control only",
+    "memex-migration": "the set's migration image, not a portal",
+}
+CONTROL_INSTANCE_FILE = HERE.parent / "control-instance.json"
+
+
+def _control_deployment() -> str | None:
+    """The control instance's deployment id (`.github/control-instance.json`), or None when that file
+    is not beside this one (a sparse checkout that did not ask for it)."""
+    try:
+        value = json.loads(CONTROL_INSTANCE_FILE.read_text(encoding="utf-8")).get("deployment")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def first_instance_problems(where: str, line: dict, control_deployment: str | None) -> list[str]:
+    """The refusals for one line's `firstInstance` / `firstInstanceImageRepository`. Pure."""
+    problems: list[str] = []
+    has_fi, has_img = "firstInstance" in line, "firstInstanceImageRepository" in line
+    if not has_fi and not has_img:
+        return problems
+    fi, img = line.get("firstInstance"), line.get("firstInstanceImageRepository")
+    if not has_fi:
+        return [f"{where}: `firstInstanceImageRepository` without `firstInstance` — an image repository names no "
+                "instance; declare both, or neither for the control instance"]
+    if not (isinstance(fi, str) and FIRST_INSTANCE_RE.match(fi)):
+        problems.append(f"{where}: `firstInstance` must be a deployment id (`mesh/Deployments/<id>.json`), got {fi!r} — "
+                        "a blank or malformed first instance is refused, never read as the control instance")
+    elif control_deployment is not None and fi == control_deployment:
+        problems.append(f"{where}: `firstInstance` {fi!r} IS the control instance — declare nothing for it (control on "
+                        "memex-control is the default); a second spelling of the default is two declarations of one fact")
+    if not has_img:
+        problems.append(f"{where}: `firstInstance` {fi!r} without `firstInstanceImageRepository` — the instance needs an "
+                        "image repository of its OWN, tagged before arming, or it can only ever run what the fleet runs")
+    elif not (isinstance(img, str) and FIRST_INSTANCE_IMAGE_RE.match(img)):
+        problems.append(f"{where}: `firstInstanceImageRepository` must be a plain repository name (no registry host, no "
+                        f"tag), got {img!r}")
+    elif img in FIRST_INSTANCE_FORBIDDEN_IMAGES:
+        problems.append(f"{where}: `firstInstanceImageRepository` {img!r} is {FIRST_INSTANCE_FORBIDDEN_IMAGES[img]}")
+    return problems
 
 
 class Refusal(Exception):
@@ -60,7 +114,7 @@ class DeclarationError(ValueError):
 
 # ─────────────────────────────── the declaration ───────────────────────────────
 
-def validate(doc) -> list[str]:
+def validate(doc, control_deployment: str | None = None) -> list[str]:
     if not isinstance(doc, dict):
         return ["the declaration's root must be an object"]
     problems = []
@@ -72,7 +126,7 @@ def validate(doc) -> list[str]:
     lines = doc.get("lines")
     if not isinstance(lines, list) or not lines:
         return problems + ["`lines` must be a non-empty list — a declaration with no line delivers nothing"]
-    branches, labels, movers = set(), set(), []
+    branches, labels, movers, first_images = set(), set(), [], set()
     for i, line in enumerate(lines):
         where = f"lines[{i}]"
         if not isinstance(line, dict):
@@ -104,6 +158,13 @@ def validate(doc) -> list[str]:
             labels.add(label)
         if line.get("movesLatest") is True:
             movers.append(branch)
+        problems.extend(first_instance_problems(where, line, control_deployment))
+        image = line.get("firstInstanceImageRepository")
+        if isinstance(image, str):
+            if image in first_images:
+                problems.append(f"{where}: duplicate firstInstanceImageRepository {image!r} — two lines would tag one "
+                                "repository, and an instance on it would be handed both lines' builds")
+            first_images.add(image)
     if len(movers) != 1:
         problems.append(f"exactly ONE line may move `latest`, got {movers} — two lines interleave run "
                         "numbers, so a forward-only check alone would hand `latest` between majors")
@@ -119,7 +180,7 @@ def load(path: Path = DEFAULT_FILE) -> dict:
         raise DeclarationError(f"{path} is missing — no line can be delivered without it") from error
     except json.JSONDecodeError as error:
         raise DeclarationError(f"{path} is not valid JSON: {error}") from error
-    problems = validate(doc)
+    problems = validate(doc, _control_deployment())
     if problems:
         raise DeclarationError(f"{path} is malformed: " + "; ".join(problems))
     return doc
@@ -180,6 +241,11 @@ def derive(doc: dict, event: str, ref_name: str, default_branch: str,
         "satellite_ref": line["satelliteRef"],
         "moves_latest": "true" if line["movesLatest"] else "false",
         "default_line": "true" if branch == default_branch else "false",
+        # The line's FIRST INSTANCE (policy `line-first-instance`): empty = the control instance on
+        # memex-control (its own lane, `control-first`); otherwise the deployment id and the image
+        # repository `first-instance-first` tags before arming and `arm` reads the record of.
+        "first_instance": line.get("firstInstance", ""),
+        "first_instance_image": line.get("firstInstanceImageRepository", ""),
     }
 
 
@@ -410,7 +476,8 @@ def self_test() -> int:
     # Plugins branch other than main for one bootstrap commit), so the case compares to the file, not a literal.
     declared_main = by_branch(doc)["main"]
     expect("workflow_run for a push to main → line main, its declared Plugins/satellite refs, label main, moves latest",
-           m == {"line": "main", "label": "main", "plugins_ref": declared_main["pluginsRef"],
+           {k: v for k, v in m.items() if not k.startswith("first_instance")}
+           == {"line": "main", "label": "main", "plugins_ref": declared_main["pluginsRef"],
                  "satellite_ref": declared_main["satelliteRef"], "moves_latest": "true", "default_line": "true"}, str(m))
     expect("workflow_run for main3 → REFUSED (main's file must never deliver main3)",
            "DEFAULT branch" in refused(derive, doc, "workflow_run", "main", "main", run_event="push",
@@ -423,8 +490,17 @@ def self_test() -> int:
     expect("schedule on a non-default ref → REFUSED", bool(refused(derive, doc, "schedule", "main3", "main")))
     p3 = derive(doc, "push", "main3", "main")
     expect("push main3 → line main3, Plugins main3, satellites main3, label main3, does NOT move latest",
-           p3 == {"line": "main3", "label": "main3", "plugins_ref": "main3", "satellite_ref": "main3",
-                  "moves_latest": "false", "default_line": "false"}, str(p3))
+           {k: v for k, v in p3.items() if not k.startswith("first_instance")}
+           == {"line": "main3", "label": "main3", "plugins_ref": "main3", "satellite_ref": "main3",
+               "moves_latest": "false", "default_line": "false"}, str(p3))
+    # 🚨 The line's FIRST INSTANCE (policy `line-first-instance`, MeshWeaver#8365): main3's is DECLARED
+    # (the owner's decision: memex, on an image repository of its own); main declares none and so is
+    # control's, unchanged.
+    expect("push main3 → its declared first instance memex on its own repository memex-portal-ai-first3",
+           p3.get("first_instance") == "memex" and p3.get("first_instance_image") == "memex-portal-ai-first3", str(p3))
+    dmain = derive(doc, "workflow_run", "main", "main", "push", "main")
+    expect("the default line declares no first instance → empty (the control instance, unchanged)",
+           dmain.get("first_instance") == "" and dmain.get("first_instance_image") == "", str(dmain))
     expect("push main → REFUSED (the default line delivers after the tests, on workflow_run)",
            "workflow_run" in refused(derive, doc, "push", "main", "main"))
     d3 = derive(doc, "workflow_dispatch", "main3", "main")
@@ -460,6 +536,44 @@ def self_test() -> int:
     expect("an undeclared default branch is malformed",
            any("not a declared line" in p for p in broken(lambda d: d.update(defaultBranch="trunk"))))
     expect("an empty line list is malformed", bool(broken(lambda d: d.update(lines=[]))))
+    # ── the line's first instance: every malformed declaration is refused BY NAME ──
+    def fi_broken(**fields) -> list[str]:
+        def mutate(d):
+            d["lines"][1].pop("firstInstance", None)
+            d["lines"][1].pop("firstInstanceImageRepository", None)
+            d["lines"][1].update(fields)
+        copy = json.loads(json.dumps(doc))
+        mutate(copy)
+        return validate(copy, "control")
+    expect("first instance: neither field declared is valid (the control instance, the default)", fi_broken() == [])
+    expect("first instance: a declared id on a repository of its own is valid",
+           fi_broken(firstInstance="memex", firstInstanceImageRepository="memex-portal-ai-first3") == [])
+    for bad in ("", "  ", None, 3, "Memex", "mesh/Deployments/memex"):
+        found = fi_broken(firstInstance=bad, firstInstanceImageRepository="memex-portal-ai-first3")
+        expect(f"first instance: a blank/malformed firstInstance {bad!r} is REFUSED by name",
+               any("`firstInstance` must be a deployment id" in p for p in found), str(found))
+    found = fi_broken(firstInstance="control", firstInstanceImageRepository="memex-portal-ai-first3")
+    expect("first instance: naming the control instance is REFUSED (declare nothing for the default)",
+           any("IS the control instance" in p for p in found), str(found))
+    found = fi_broken(firstInstance="memex")
+    expect("first instance: an id without its own image repository is REFUSED",
+           any("without `firstInstanceImageRepository`" in p for p in found), str(found))
+    found = fi_broken(firstInstanceImageRepository="memex-portal-ai-first3")
+    expect("first instance: an image repository without an instance is REFUSED",
+           any("without `firstInstance`" in p for p in found), str(found))
+    for image in ("memex-portal-ai", "memex-control", "memex-migration"):
+        found = fi_broken(firstInstance="memex", firstInstanceImageRepository=image)
+        expect(f"first instance: the shared repository {image} is REFUSED (an instance on it cannot run a set first)",
+               any(f"{image!r} is" in p for p in found), str(found))
+    for image in ("meshweaver.azurecr.io/memex-portal-ai-first3", "memex-portal-ai-first3:3.1.1", ""):
+        found = fi_broken(firstInstance="memex", firstInstanceImageRepository=image)
+        expect(f"first instance: a non-plain repository {image!r} is REFUSED",
+               any("plain repository name" in p for p in found), str(found))
+    dup = json.loads(json.dumps(doc))
+    dup["lines"][0].update(firstInstance="memex-cloud", firstInstanceImageRepository="memex-portal-ai-first3")
+    dup["lines"][1].update(firstInstance="memex", firstInstanceImageRepository="memex-portal-ai-first3")
+    expect("first instance: two lines on ONE first-instance repository are REFUSED",
+           any("duplicate firstInstanceImageRepository" in p for p in validate(dup, "control")), str(validate(dup, "control")))
     for field in ("branch", "label"):
         for bad in ({"x": 1}, ["main"]):
             try:
