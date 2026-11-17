@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.Mesh.Threading;
@@ -232,10 +233,8 @@ public sealed class DockerImageGate(
         // memory, so without this nothing the IMAGE asks for is activated — on a control image that
         // is MeshWeaver.Fleet.Control, the Hosting NodeTypes, and every Deployments record failed
         // "NodeType(s) not registered: Hosting/Deployment". See ImageBootModules.
-        var bootRead = ReadBootModules(imageRef, fullHost, ct);
-        if (bootRead.Error is { } bootError)
+        if (!TryReadBootModules(imageRef, fullHost, ct, out var boot, out var bootError))
             return new CandidateGateRun { ImageDigest = digest, Platform = Platform, Error = bootError };
-        var boot = bootRead.Set!;
         output.WriteLine(boot.Describe());
 
         // 🚨 REUSE THE SEALS FIRST (MeshWeaver#4413, option C step 1). Every package whose sealed
@@ -357,12 +356,26 @@ public sealed class DockerImageGate(
     /// inspect</c>) layered over the composed host's <c>appsettings.json</c> and
     /// <c>appsettings.{Environment}.json</c> — the portal's own copies — then resolved against the
     /// host. An image whose environment cannot be read is an INSTRUMENT failure (NotVerifiable),
-    /// never a gate run that silently activates nothing.
+    /// never a gate run that silently activates nothing — and so is an inspect that TIMED OUT,
+    /// whose empty output is not "an image with no environment".
     /// </summary>
-    private (ImageBootModuleSet? Set, string? Error) ReadBootModules(
-        string imageRef, string fullHost, CancellationToken ct)
+    /// <returns><c>true</c> with <paramref name="set"/> when the list was read; <c>false</c> with
+    /// <paramref name="error"/> naming why it could not be.</returns>
+    private bool TryReadBootModules(
+        string imageRef, string fullHost, CancellationToken ct,
+        [NotNullWhen(true)] out ImageBootModuleSet? set,
+        [NotNullWhen(false)] out string? error)
     {
-        var inspect = RunDocker(EnvironmentInspectArgs(imageRef), ct, TimeSpan.FromMinutes(1));
+        set = null;
+        var inspect = RunDocker(EnvironmentInspectArgs(imageRef), ct, EnvironmentInspectBudget);
+        if (inspect.TimedOut)
+        {
+            error = $"the environment inspect of '{imageRef}' timed out after "
+                    + $"{EnvironmentInspectBudget.TotalSeconds:0} s, so the image's own boot modules are "
+                    + "unknown — a timed-out read is not an image with no boot modules, and nothing "
+                    + "about the candidate was verified.";
+            return false;
+        }
         ImmutableArray<string> environment;
         try
         {
@@ -372,10 +385,11 @@ public sealed class DockerImageGate(
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
-            return (null, $"the environment of '{imageRef}' could not be read ({ex.Message}), so the "
-                          + "image's own boot modules are unknown and a gate without them would judge the "
-                          + "content by a host the portal never runs — nothing about the candidate was "
-                          + "verified.");
+            error = $"the environment of '{imageRef}' could not be read ({ex.Message}), so the "
+                    + "image's own boot modules are unknown and a gate without them would judge the "
+                    + "content by a host the portal never runs — nothing about the candidate was "
+                    + "verified.";
+            return false;
         }
         try
         {
@@ -384,16 +398,22 @@ public sealed class DockerImageGate(
                 ReadIfExists(Path.Combine(fullHost,
                     $"appsettings.{ImageBootModules.HostEnvironment(environment)}.json")),
                 environment);
-            return (ImageBootModules.Resolve(fullHost, declared,
-                modules?.Modules ?? ImmutableArray<string>.Empty, HostMount), null);
+            set = ImageBootModules.Resolve(fullHost, declared,
+                modules?.Modules ?? ImmutableArray<string>.Empty, HostMount);
+            error = null;
+            return true;
         }
         catch (Exception ex) when (ex is JsonException or IOException)
         {
-            return (null, $"the gate host's appsettings could not be read ({ex.GetType().Name}: "
-                          + $"{ex.Message}), so the image's boot modules are unknown — nothing about the "
-                          + "candidate was verified.");
+            error = $"the gate host's appsettings could not be read ({ex.GetType().Name}: "
+                    + $"{ex.Message}), so the image's boot modules are unknown — nothing about the "
+                    + "candidate was verified.";
+            return false;
         }
     }
+
+    /// <summary>How long the <c>docker image inspect</c> of the candidate's environment may take.</summary>
+    private static readonly TimeSpan EnvironmentInspectBudget = TimeSpan.FromMinutes(1);
 
     private static string? ReadIfExists(string path) => File.Exists(path) ? File.ReadAllText(path) : null;
 

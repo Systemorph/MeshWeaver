@@ -99,6 +99,38 @@ public sealed class ComboGateActivatesTheImagesBootModulesTest : IDisposable
         Assert.Contains("could not be read", run.Error);
     }
 
+    /// <summary>An environment inspect that TIMED OUT is an instrument failure named as a timeout —
+    /// never read as an image with no environment, which would run the gate without the image's
+    /// boot modules (the exact shape of MeshWeaver#4413).</summary>
+    [Fact]
+    public void ATimedOutEnvironmentInspect_RunsNoGate_AndSaysItTimedOut()
+    {
+        var docker = new FakeDocker([$"Modules__Assemblies__100={FleetControl}.dll"]) { InspectTimesOut = true };
+        var run = Gate(docker).Execute(Image, WorkRoot, CancellationToken.None);
+
+        Assert.Empty(docker.Containers);
+        Assert.Null(run.ExitCode);
+        Assert.Contains("timed out", run.Error);
+    }
+
+    /// <summary>Two variables that differ only in case (distinct on Linux, both legal in
+    /// <c>Config.Env</c>) resolve last-wins, the way <see cref="ImageBootModules.Declared"/> layers
+    /// the module list — and never throw, which would crash the gate instead of answering.</summary>
+    [Fact]
+    public void HostEnvironment_ToleratesANameSetTwiceModuloCase()
+    {
+        Assert.Equal("Staging", ImageBootModules.HostEnvironment(
+            ["ASPNETCORE_ENVIRONMENT=Production", "aspnetcore_environment=Staging"]));
+
+        var docker = new FakeDocker(
+            ["ASPNETCORE_ENVIRONMENT=Production", "aspnetcore_environment=Staging",
+             $"Modules__Assemblies__100={FleetControl}.dll"]);
+        var run = Gate(docker).Execute(Image, WorkRoot, CancellationToken.None);
+
+        Assert.Null(run.Error);
+        Assert.Equal(2, docker.Containers.Count);
+    }
+
     /// <summary>Configuration merges an array BY INDEX: a far index ADDS, index 0 REPLACES, and an
     /// environment-specific appsettings layers between the base file and the environment.</summary>
     [Fact]
@@ -153,6 +185,10 @@ public sealed class ComboGateActivatesTheImagesBootModulesTest : IDisposable
     {
         public List<string[]> Containers { get; } = [];
 
+        /// <summary>When set, the environment inspect answers the way RunDocker reports a budget
+        /// overrun: exit -1, no output, TimedOut.</summary>
+        public bool InspectTimesOut { get; init; }
+
         public DockerImageGate.DockerResult Call(
             IReadOnlyList<string> args, CancellationToken ct, TimeSpan budget)
         {
@@ -161,7 +197,9 @@ public sealed class ComboGateActivatesTheImagesBootModulesTest : IDisposable
                 if (args.Contains("{{.Os}}/{{.Architecture}}"))
                     return new(0, DockerImageGate.FleetPlatform, TimedOut: false);
                 if (args.Contains("{{json .Config.Env}}"))
-                    return environment is null
+                    return InspectTimesOut
+                        ? new(-1, "", TimedOut: true)
+                        : environment is null
                         ? new(1, "Error: No such image", TimedOut: false)
                         : new(0, System.Text.Json.JsonSerializer.Serialize(environment), TimedOut: false);
                 return new(0, "sha256:x", TimedOut: false);

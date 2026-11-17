@@ -75,14 +75,21 @@ public static class ImageBootModules
 
     /// <summary>The environment the portal's host selects its <c>appsettings.{Environment}.json</c>
     /// by — <c>ASPNETCORE_ENVIRONMENT</c>, else <c>DOTNET_ENVIRONMENT</c>, else <c>Production</c>,
-    /// the host builder's own default.</summary>
+    /// the host builder's own default.
+    ///
+    /// <para>Names compare case-insensitively, as configuration's do. A name the image sets twice
+    /// modulo case (<c>ASPNETCORE_ENVIRONMENT</c> and <c>aspnetcore_environment</c> are two distinct
+    /// variables on Linux, and <c>Config.Env</c> may carry both) resolves LAST-wins — the same rule
+    /// <see cref="Declared"/> applies to <c>Modules__Assemblies__N</c> — and never throws: an
+    /// unreadable environment is the gate's NotVerifiable, never a crash.</para></summary>
     /// <param name="imageEnvironment">The image's <c>Config.Env</c> lines.</param>
     public static string HostEnvironment(IEnumerable<string> imageEnvironment)
     {
         var env = imageEnvironment
             .Select(l => l.Split('=', 2))
             .Where(p => p.Length == 2)
-            .ToImmutableDictionary(p => p[0], p => p[1], StringComparer.OrdinalIgnoreCase);
+            .Aggregate(ImmutableDictionary.Create<string, string>(StringComparer.OrdinalIgnoreCase),
+                (acc, p) => acc.SetItem(p[0], p[1]));
         return new[] { "ASPNETCORE_ENVIRONMENT", "DOTNET_ENVIRONMENT" }
             .Select(k => env.GetValueOrDefault(k))
             .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "Production";
