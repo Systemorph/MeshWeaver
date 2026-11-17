@@ -411,7 +411,7 @@ public sealed class GitHubWebhookProcessor
         return QueryConfigNodesAsSystem().SelectMany(c =>
         {
             var groups = c.Items
-                .Select(node => (Node: node, Config: node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)))
+                .Select(node => (Node: node, Config: SyncedConfig(node)))
                 .Where(x => x.Config is { RepositoryUrl.Length: > 0 }
                             && x.Config.Direction != SyncDirection.ExportOnly
                             && ToPushTarget(x.Node) is not null)
@@ -453,10 +453,19 @@ public sealed class GitHubWebhookProcessor
         });
     }
 
-    /// <summary>The branch a config syncs — its configured one, <c>main</c> when blank (the same
-    /// default <see cref="GitHubSyncService.AskBranchState"/> applies).</summary>
-    private static string BranchOf(GitHubSyncConfig config)
-        => string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch;
+    /// <summary>The branch a config syncs. Every config this processor selects from is read through
+    /// <see cref="SyncedConfig"/>, so this is already the branch of this instance's platform line.</summary>
+    private static string BranchOf(GitHubSyncConfig config) => GitSyncLine.StoredBranchOf(config);
+
+    /// <summary>
+    /// A sync config AS THIS INSTANCE SYNCS IT (<see cref="GitSyncLine.Effective"/>) — the branch its
+    /// platform line reads (policy <c>major-lines-run-separately</c>). Both selections read through here
+    /// — a push's targets and the branch reconcile's groups — so a v3 instance resolves and matches
+    /// <c>main3</c> for a source stored as <c>main</c>, and a push to the other line's branch selects
+    /// nothing.
+    /// </summary>
+    private GitHubSyncConfig? SyncedConfig(MeshNode node)
+        => GitSyncLine.Effective(hub.ServiceProvider, node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger));
 
     /// <summary>Groups repository branches the way GitHub names them: case-insensitively.</summary>
     private sealed class RepoBranchComparer : IEqualityComparer<(string Repo, string Branch)>
@@ -489,7 +498,7 @@ public sealed class GitHubWebhookProcessor
             // Each candidate's content is parsed ONCE per delivery and threaded through: the gate's
             // inputs and the classification loop below read the same parse (review on #8053).
             .Select(match => (Match: match, Parsed: match.Configs
-                .Select(node => (Node: node, Config: node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)))
+                .Select(node => (Node: node, Config: SyncedConfig(node)))
                 .ToList()))
             .SelectMany(read => GateInputs(read.Parsed.Select(p => p.Config)).Select(gate => (read.Match, read.Parsed, gate)))
             .Select(read =>

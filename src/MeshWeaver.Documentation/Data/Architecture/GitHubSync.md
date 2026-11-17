@@ -67,7 +67,7 @@ Under **Repository**:
 | Field | Meaning |
 |---|---|
 | **Repository URL** | `https://github.com/owner/repo` — or an Azure Repos URL, which syncs the same way (see **Azure Repos** below). |
-| **Branch** | The branch to commit to (default `main`). |
+| **Branch** | The branch to commit to (default `main`). For a repository whose record declares a ref per platform line (`lineRefs`), a branch the declaration names is read as this instance's line's ref: a v3 instance syncs `main3`, a v4 instance `main` (see [The Plugin Registry Serves Each Line](../PluginRegistryServesEachLine), "GitSync syncs each line's ref"). |
 | **Sync direction** | `Bidirectional` (default), `ExportOnly`, or `ImportOnly` — see below. |
 | **Create the branch if it doesn't exist** | When on, a missing branch is created as a fresh snapshot commit. |
 | **Create the repository (private) if it doesn't exist** | When on, a missing repo is created **private** under the owner/org. |
