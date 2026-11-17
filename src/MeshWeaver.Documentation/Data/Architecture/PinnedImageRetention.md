@@ -940,6 +940,23 @@ ARM 8d drives the real method with `az` and the transport faked. Each check is f
 sabotage: dropping the hash check, dropping the retry, or reading a 404 as an empty index each turns
 the self-test red.
 
+#### The step summary carries the counts and the problems; the job log carries every line (MeshWeaver#7991)
+
+GitHub uploads no step summary over 1 MiB. It annotates `$GITHUB_STEP_SUMMARY upload aborted` as an
+`##[error]`, and the run page then shows no summary at all. The lock job wrote its whole report there,
+including one line per protected manifest and one per place that pins it. On 2026-11-17 that was
+1,925 KiB, and 1,826 KiB of it was the `PROTECTED` listing (21,688 lines). Every run, green ones
+included, carried that second `##[error]`.
+
+The per-manifest listing (`PROTECTED`, `LOCK`/`WOULD LOCK` and `RELEASE CANDIDATE` lines) now goes to
+the job log only. The summary keeps the section counts, every problem line (`UNPROTECTABLE`,
+`FLOATING`, `UNREADABLE`) and one line saying how many listing lines are in the log. The writer
+also has a budget of 768 KiB. A line that would cross it is not written, and the cut is marked
+once, so a report that grows again loses its tail instead of the whole summary. ARM 43 renders the
+real `report()` at fleet scale and checks four things: the summary stays under the budget, the log
+keeps every line, the summary keeps the counts, and the writer marks a cut exactly once. Run
+against the previous writer, the arm fails with a 2,027 KiB summary.
+
 ### Two questions about the lock job, settled by measurement rather than reasoning
 
 🚨 **"Should the scan read each repo's DEFAULT branch rather than every branch?" — it already does,
