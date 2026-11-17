@@ -1045,6 +1045,41 @@ All of this is pinned by `ComboComposesTheModuleHalfTest`. Each refusal has a ne
 the test fails when its guard is disabled, and the argv test fails when `RunArgs` drops the
 `--module` entries.
 
+### The image's own boot modules are activated too (#4413)
+
+The landed modules are one half of what a portal activates. The other half is what the IMAGE
+asks for itself: the `Modules:Assemblies` list in its `appsettings.json`, layered with
+`appsettings.{Environment}.json` and its container environment. A control image, for example,
+adds `MeshWeaver.Fleet.Control.dll` (the Hosting NodeTypes, compiled at image-build time) with
+`Modules__Assemblies__100` in its environment.
+
+The tester builds its own `Modules:Assemblies` in memory, so before this fix nothing the image
+asked for was activated, although the module sat on disk in the gate host. A control instance's
+`Deployments` records are typed `Hosting/Deployment`, so every candidate offered to a customer
+estate's control instance read Red on one module: `Deployments` — `NodeType(s) not registered:
+Hosting/Deployment` (3.1.13396 through 3.1.13514; run `44149403398`, slot 4). The instance itself
+types those records on the same image line. The verdict blamed the content, but the cause was the
+instrument.
+
+What the gate does now (`ImageBootModules`, called from `DockerImageGate.Execute`):
+
+1. It reads the candidate's `Config.Env` with `docker image inspect` and the host's
+   `appsettings.json` / `appsettings.{Environment}.json` (the portal's own copies). It merges them
+   the way configuration merges an array: by index, later layers replacing an index and a far
+   index adding one.
+2. It resolves each entry against the gate host the way `MeshBuilder.ResolveModulePath` does
+   (`modules/<Name>/<entry>`, else the app root). An entry the combo also lands is taken from the
+   landed copy only, because landed wins in a running portal too. An entry the image does not carry
+   is named in the run log and not passed.
+3. It passes each resolved module as `--module /host/…` to both the bake and the gate, ahead of the
+   landed modules.
+
+An image environment that cannot be read is an instrument failure: no container runs and the
+verdict is `NotVerifiable`, never a gate that silently activates nothing. Only the module list is
+read from the image's configuration. Other image settings, such as `Mesh__ClosedTypeSet` on the
+control image, are not applied to the gate. Pinned by `ComboGateActivatesTheImagesBootModulesTest`,
+whose guard fails on the gate without this step.
+
 ## The combo bakes first, then gates the bake (#4413)
 
 The combo gate runs in two docker calls, the same split every node-repo lane runs

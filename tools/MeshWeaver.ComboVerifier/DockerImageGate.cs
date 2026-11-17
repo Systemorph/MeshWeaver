@@ -228,6 +228,16 @@ public sealed class DockerImageGate(
         var fullHost = Path.GetFullPath(hostDir);
         var started = Clock.GetTimestamp();
 
+        // 🚨 THE IMAGE'S OWN BOOT MODULES (MeshWeaver#4413). The tester composes its module list in
+        // memory, so without this nothing the IMAGE asks for is activated — on a control image that
+        // is MeshWeaver.Fleet.Control, the Hosting NodeTypes, and every Deployments record failed
+        // "NodeType(s) not registered: Hosting/Deployment". See ImageBootModules.
+        var bootRead = ReadBootModules(imageRef, fullHost, ct);
+        if (bootRead.Error is { } bootError)
+            return new CandidateGateRun { ImageDigest = digest, Platform = Platform, Error = bootError };
+        var boot = bootRead.Set!;
+        output.WriteLine(boot.Describe());
+
         // 🚨 REUSE THE SEALS FIRST (MeshWeaver#4413, option C step 1). Every package whose sealed
         // bundle is this tree's build is taken as sealed; only the rest is compiled, from a staging
         // tree holding them and what they need installed. See SealedBundleReuse.
@@ -268,7 +278,7 @@ public sealed class DockerImageGate(
                 $"baking the combo with mw-plugin-test compile as {imageRef} ({Platform}), gate host "
                 + $"'{fullHost}', over '{compileRoot}' into '{bakeRoot}' (no mesh) …");
             var compile = RunDocker(
-                CompileArgs(imageRef, compileRoot, fullHost, bakeRoot, Platform, modules), ct, runBudget);
+                CompileArgs(imageRef, compileRoot, fullHost, bakeRoot, Platform, modules, boot), ct, runBudget);
             compileTail = Tail(compile.Output);
             if (compile.TimedOut)
                 return new CandidateGateRun
@@ -321,7 +331,7 @@ public sealed class DockerImageGate(
                 ? "— the bake compiled no NodeType, so there is no seed to consume …"
                 : $"consuming the bake in '{seed}' …"));
         var run = RunDocker(
-            RunArgs(imageRef, fullRoot, fullHost, Platform, modules, seed), ct, remaining);
+            RunArgs(imageRef, fullRoot, fullHost, Platform, modules, seed, boot), ct, remaining);
         if (run.TimedOut)
             return new CandidateGateRun
             {
@@ -340,6 +350,66 @@ public sealed class DockerImageGate(
             Report = ReadReport(reportFile),
             LogTail = Tail(run.Output),
         };
+    }
+
+    /// <summary>
+    /// Reads the candidate image's boot module list: its <c>Config.Env</c> (<c>docker image
+    /// inspect</c>) layered over the composed host's <c>appsettings.json</c> and
+    /// <c>appsettings.{Environment}.json</c> — the portal's own copies — then resolved against the
+    /// host. An image whose environment cannot be read is an INSTRUMENT failure (NotVerifiable),
+    /// never a gate run that silently activates nothing.
+    /// </summary>
+    private (ImageBootModuleSet? Set, string? Error) ReadBootModules(
+        string imageRef, string fullHost, CancellationToken ct)
+    {
+        var inspect = RunDocker(EnvironmentInspectArgs(imageRef), ct, TimeSpan.FromMinutes(1));
+        ImmutableArray<string> environment;
+        try
+        {
+            environment = inspect.ExitCode == 0
+                ? ParseEnvironment(inspect.Output)
+                : throw new InvalidOperationException($"exit {inspect.ExitCode}: {Tail(inspect.Output).Trim()}");
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            return (null, $"the environment of '{imageRef}' could not be read ({ex.Message}), so the "
+                          + "image's own boot modules are unknown and a gate without them would judge the "
+                          + "content by a host the portal never runs — nothing about the candidate was "
+                          + "verified.");
+        }
+        try
+        {
+            var declared = ImageBootModules.Declared(
+                ReadIfExists(Path.Combine(fullHost, "appsettings.json")),
+                ReadIfExists(Path.Combine(fullHost,
+                    $"appsettings.{ImageBootModules.HostEnvironment(environment)}.json")),
+                environment);
+            return (ImageBootModules.Resolve(fullHost, declared,
+                modules?.Modules ?? ImmutableArray<string>.Empty, HostMount), null);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException)
+        {
+            return (null, $"the gate host's appsettings could not be read ({ex.GetType().Name}: "
+                          + $"{ex.Message}), so the image's boot modules are unknown — nothing about the "
+                          + "candidate was verified.");
+        }
+    }
+
+    private static string? ReadIfExists(string path) => File.Exists(path) ? File.ReadAllText(path) : null;
+
+    /// <summary>The <c>docker image inspect</c> argv that prints the image's <c>Config.Env</c> as
+    /// a JSON array.</summary>
+    internal static string[] EnvironmentInspectArgs(string imageRef) =>
+        ["image", "inspect", "--format", "{{json .Config.Env}}", imageRef];
+
+    /// <summary>Parses <see cref="EnvironmentInspectArgs"/>' output; <c>null</c> (an image with no
+    /// environment) reads as empty.</summary>
+    internal static ImmutableArray<string> ParseEnvironment(string output)
+    {
+        var text = output.Trim();
+        if (text.Length == 0 || text == "null")
+            return [];
+        return [.. (JsonSerializer.Deserialize<string[]>(text) ?? [])];
     }
 
     private static void MakeWorldWritable(string directory)
@@ -421,10 +491,16 @@ public sealed class DockerImageGate(
     /// mounted read-only at <see cref="SeedMount"/> and passed as <c>--seed</c>, so the mesh ADOPTS
     /// the baked assemblies instead of compiling every NodeType itself (MeshWeaver#4413, see
     /// <see cref="Execute"/>).</para>
+    ///
+    /// <para>🚨 <paramref name="boot"/> is the candidate IMAGE's own boot module set
+    /// (<see cref="ImageBootModules"/>), passed as <c>--module</c> ahead of the combo's landed
+    /// modules, in the order the portal activates them. It lives inside the already-mounted host,
+    /// so it needs no mount of its own.</para>
     /// </summary>
     internal static string[] RunArgs(
         string imageRef, string fullRoot, string fullHost, string platform,
-        ComboModuleComposition? modules = null, string? fullSeed = null) =>
+        ComboModuleComposition? modules = null, string? fullSeed = null,
+        ImageBootModuleSet? boot = null) =>
     [
         "run", "--rm",
         // --init reaps the tester's children and lets a crashed runtime's SIGABRT end the process
@@ -446,6 +522,7 @@ public sealed class DockerImageGate(
         "/work",
         "--app", "/app",
         "--report", $"/work/{GateRunReport.FileName}",
+        .. boot is null ? [] : boot.TesterArgs(),
         .. modules is null ? [] : modules.TesterArgs(ModulesMount),
         .. fullSeed is null ? [] : new[] { "--seed", SeedMount },
     ];
@@ -462,7 +539,7 @@ public sealed class DockerImageGate(
     /// </summary>
     internal static string[] CompileArgs(
         string imageRef, string fullRoot, string fullHost, string fullBake, string platform,
-        ComboModuleComposition? modules = null) =>
+        ComboModuleComposition? modules = null, ImageBootModuleSet? boot = null) =>
     [
         "run", "--rm",
         "--init",
@@ -480,6 +557,7 @@ public sealed class DockerImageGate(
         "--output", BakeMount,
         "--app", "/app",
         "--shared-frameworks", PortalSharedFrameworks,
+        .. boot is null ? [] : boot.TesterArgs(),
         .. modules is null ? [] : modules.TesterArgs(ModulesMount),
     ];
 
