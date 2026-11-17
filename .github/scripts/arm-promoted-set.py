@@ -4,7 +4,8 @@
     python3 .github/scripts/arm-promoted-set.py select --armed-max N [--override SET] [--resume SET]
     python3 .github/scripts/arm-promoted-set.py armed-state --manifests portal.json   # the cursor
     python3 .github/scripts/arm-promoted-set.py control-first --control-manifests control.json --version V
-    python3 .github/scripts/arm-promoted-set.py control-announcement --version V --image-repository R --instance URL
+    python3 .github/scripts/arm-promoted-set.py control-announcement --version V --image-repository R --instance URL [--deployment D]
+    python3 .github/scripts/arm-promoted-set.py first-instance --branch B          # the line's first instance (policy line-first-instance)
     python3 .github/scripts/arm-promoted-set.py control-lag --control-record control.json  # control-always-latest, per line
     python3 .github/scripts/arm-promoted-set.py armed-base --manifests portal.json   # promote's record base
     python3 .github/scripts/arm-promoted-set.py --self-test
@@ -44,6 +45,19 @@ A set whose ladder is still running (or unreadable), or whose control reading is
 WAITING; one whose ladder is red, MISSING (the run has no ladder job) or AMBIGUOUS (several jobs
 answer to the ladder's name) is REFUSED: neither is armed, and a newer green set supersedes both.
 Silence is never a pass.
+
+THE LINE'S FIRST INSTANCE (policy `line-first-instance`, MeshWeaver#8365). "Control first" is one
+case of a per-line rule: every delivery line has ONE instance that runs its build before the fleet is
+offered it. A line that declares none in `.github/delivery-lines.json` has the control instance (its
+url from `.github/control-instance.json`, its builds from `control-first` below) — the line control
+follows, unchanged. A line that declares `firstInstance` has THAT instance: `first-instance-first`
+tags `<firstInstanceImageRepository>:<version>` and sends its record the signed announcement (the same
+`control-first` decision and `control-announcement` body), and `select` reads that instance's
+`/api/version` + `/health` at its record's `content.host` with the very `judge`/`control_lag`/
+`arming_frozen` it reads control with — the reading carries the instance's NAME and the LINE, so every
+sentence says whose run and which line. Its own repository is the point: an instance on the fleet's
+`memex-portal-ai` can only run a set after `arm` writes its version tag, i.e. after the fleet is
+offered it — a wait that can never end.
 
 CONTROL FIRST. `control-first` decides the control image's tags for THIS run's accepted build:
 every platform build that passed the control image's own acceptance is tagged
@@ -381,7 +395,7 @@ def control_announcement(deployment: str, version: str, image_repository: str, i
 RUNNING_MAJOR = re.compile(r"^\s*((\d+)\.\d+(?:\.\d+)?)")
 
 
-def control_line(version: str, code: int, body: str) -> dict:
+def control_line(version: str, code: int, body: str, who: str = "control") -> dict:
     """Policy `major-lines-run-separately`, the ANNOUNCING half of `platform-deploy-control-first`:
     whether THIS line's build may be handed to control at all. A line announces only a build of the
     MAJOR control currently runs (its public `/api/version`, `code`/`body` as fetched). Pure.
@@ -410,16 +424,16 @@ def control_line(version: str, code: int, body: str) -> dict:
         running = ""
     m = RUNNING_MAJOR.match(running)
     if m is None:
-        raise ValueError(f"control's /api/version answered {code} without a version (body: {str(body)[:200]!r}) — "
-                         "cannot tell which major control runs, so this build is NOT handed to it")
+        raise ValueError(f"{who}'s /api/version answered {code} without a version (body: {str(body)[:200]!r}) — "
+                         f"cannot tell which major {who} runs, so this build is NOT handed to it")
     control_major = int(m.group(2))
     running = m.group(1)
     if control_major == build_major:
         return {"line_announce": True, "control_major": control_major, "build_major": build_major,
-                "line_reason": f"control runs {running} (major {control_major}) — this {build_major}.x build is on its line"}
+                "line_reason": f"{who} runs {running} (major {control_major}) — this {build_major}.x build is on its line"}
     return {"line_announce": False, "control_major": control_major, "build_major": build_major,
-            "line_reason": f"control runs {running} (major {control_major}); this line's build {version} is major "
-                           f"{build_major} — NOT announced (policy major-lines-run-separately). A move of control to "
+            "line_reason": f"{who} runs {running} (major {control_major}); this line's build {version} is major "
+                           f"{build_major} — NOT announced (policy major-lines-run-separately). A move of {who} to "
                            f"{build_major}.x is declared on its record (updatePattern) and rolled deliberately"}
 
 
@@ -581,10 +595,13 @@ def ladder_of(jobs: list[dict] | None) -> str | None:
     return str(j.get("conclusion")) if j.get("status") == "completed" and j.get("conclusion") else None
 
 
-def control_given_at(jobs: list[dict] | None) -> str | None:
-    """When the run's `Deploy control first` job SUCCEEDED (ISO timestamp), else None. Pure."""
+def control_given_at(jobs: list[dict] | None, prefix: str = "") -> str | None:
+    """When the run's job that handed the line's first instance its build SUCCEEDED (ISO timestamp),
+    else None. Pure. `prefix` is that job's name prefix: `Deploy control first` for the control
+    instance (the default), `Deploy the line's first instance first` for a declared one."""
+    prefix = prefix or CONTROL_FIRST_JOB_PREFIX
     for j in jobs or []:
-        if str(j.get("name", "")).startswith(CONTROL_FIRST_JOB_PREFIX) and j.get("conclusion") == "success":
+        if str(j.get("name", "")).startswith(prefix) and j.get("conclusion") == "success":
             return str(j.get("completed_at") or "") or None
     return None
 
@@ -650,12 +667,29 @@ def describe_self_update(control: dict) -> str:
     """One sentence naming control's OWN self-update reading, for every place that says control has
     not taken a build. An absent reading is said as one, never read as a clean one. Pure."""
     su = control.get("self_update")
+    who = _who(control)
     if not su:
-        return ("control's /health publishes no `self_update` reading (its image predates the check, or /health "
-                "was not read) — read `Admin/UpdatePolicy.lastCheckVerdict` on control")
+        return (f"{who}'s /health publishes no `self_update` reading (its image predates the check, or /health "
+                f"was not read) — read `Admin/UpdatePolicy.lastCheckVerdict` on {who}")
     if su.get("status") != "Healthy":
-        return f"control's OWN self-update check is FAILING ({su.get('status')}): {su.get('text') or 'no verdict text'}"
-    return f"control's own self-update reads Healthy: {su.get('text') or 'no verdict text'}"
+        return f"{who}'s OWN self-update check is FAILING ({su.get('status')}): {su.get('text') or 'no verdict text'}"
+    return f"{who}'s own self-update reads Healthy: {su.get('text') or 'no verdict text'}"
+
+
+def _who(control: dict) -> str:
+    """The NAME of the instance a reading is of: `control`, or a line's declared first instance
+    (`first_instance_reading` stamps it). A reading without one is control's (every caller before
+    policy `line-first-instance`)."""
+    return str(control.get("name") or "control")
+
+
+def _first_rule(control: dict) -> str:
+    """How the wait is named: `control first` for control; for a declared first instance, whose and of
+    which line — so a 3.x reading never reads as a statement about control."""
+    who = _who(control)
+    if who == "control":
+        return "control first"
+    return f"{who} first (the first instance of line `{control.get('line') or '?'}`, policy line-first-instance)"
 
 
 def _fetch_public(url: str) -> tuple[int, str]:
@@ -684,6 +718,9 @@ def load_control_instance(path: Path) -> dict:
 
 LADDER_JOB_SUFFIX = "(ladder)"
 CONTROL_FIRST_JOB_PREFIX = "Deploy control first"
+# The job that hands a line's DECLARED first instance its build (main-cd `first-instance-first`).
+FIRST_INSTANCE_JOB_PREFIX = "Deploy the line's first instance first"
+NO_FIRST_INSTANCE = "LINE HAS NO FIRST INSTANCE"
 CONTAINED = ("identical", "ahead")
 
 
@@ -719,25 +756,32 @@ def judge(rec: dict, ladder: str | None, control: dict) -> tuple[str, str]:
         return "refused", (f"its compatibility ladder ended `{ladder}` — the published module set does not link "
                            "against this platform; fix compatibility (or declare an epoch bump), never re-bake")
     commit = control.get("commit") or ""
+    who = _who(control)
     if not commit:
-        return "waiting", f"the control instance's running build is unknown ({control.get('why') or 'not read'})"
+        instance = "the control instance" if who == "control" else f"{who} (line `{control.get('line')}`'s first instance)"
+        return "waiting", f"{instance}'s running build is unknown ({control.get('why') or 'not read'})"
     contains = (control.get("contains") or {}).get(rec["core_sha"])
     if contains is None:
-        return "waiting", f"could not establish whether control's {commit[:9]} contains {rec['core_sha'][:9]}"
+        return "waiting", f"could not establish whether {who}'s {commit[:9]} contains {rec['core_sha'][:9]}"
     if not contains:
+        if str(control.get("line_hold") or "").startswith(NO_FIRST_INSTANCE):
+            # The line has NO instance that could run it first (`control_line_hold`, undeclared):
+            # "control runs X" would be true and answer nothing, so the sentence is the missing
+            # declaration alone (MeshWeaver#8365: control on 4.0 read as the 3.x line's wait for 9 h).
+            return "waiting", str(control["line_hold"])
         if control.get("line_hold"):
-            # The line is HELD by control's own declaration (`control_line_hold`): control will not
-            # take this build at all, so "not yet" would be a false promise. Still a wait (control
-            # first holds), but one that names the declaration that ends it.
-            return "waiting", (f"control runs {commit[:9]}, which does not contain {rec['core_sha'][:9]} — "
+            # The line is HELD by a declaration (`control_line_hold`): its first instance will not
+            # take this build at all, so "not yet" would be a false promise. Still a wait (the first
+            # instance first holds), but one that names the declaration that ends it.
+            return "waiting", (f"{who} runs {commit[:9]}, which does not contain {rec['core_sha'][:9]} — "
                                + str(control["line_hold"]))
-        return "waiting", (f"control runs {commit[:9]}, which does not contain {rec['core_sha'][:9]} yet — "
-                           "control first: the fleet is offered a build only after control runs it; "
+        return "waiting", (f"{who} runs {commit[:9]}, which does not contain {rec['core_sha'][:9]} yet — "
+                           f"{_first_rule(control)}: the fleet is offered a build only after {who} runs it; "
                            + describe_self_update(control))
     if not control.get("healthy"):
-        return "waiting", (f"control runs {commit[:9]} (contains this set) but /health is not 200 "
-                           f"({control.get('why') or 'unhealthy'}) — not offered to the fleet until control is healthy")
-    return "green", f"ladder success; control runs {commit[:9]} (contains it) and is healthy"
+        return "waiting", (f"{who} runs {commit[:9]} (contains this set) but /health is not 200 "
+                           f"({control.get('why') or 'unhealthy'}) — not offered to the fleet until {who} is healthy")
+    return "green", f"ladder success; {who} runs {commit[:9]} (contains it) and is healthy"
 
 
 def select(records: list[dict], ladders: dict[int, str | None], control: dict, armed_max: int,
@@ -861,7 +905,8 @@ def line_of_major(majors: dict[str, int | None], major: int) -> str:
     return hits[0]
 
 
-def control_line_hold(control_pattern: str, major: int | None, branch: str) -> str | None:
+def control_line_hold(control_pattern: str, major: int | None, branch: str, who: str = "control",
+                      declared: bool = True) -> str | None:
     """Policy `major-lines-run-separately`: the sentence saying this delivery line is HELD by control's
     own declaration, or None when control's record admits the line's major. Pure.
 
@@ -878,18 +923,125 @@ def control_line_hold(control_pattern: str, major: int | None, branch: str) -> s
     sentence, and the fleet-unarmed reading carries it into that major's alert issue. It arms
     NOTHING: control first still decides, and control runs no build of an excluded major.
     `major` None (a caller that names no line) holds nothing. A pattern naming no single major is a
-    ValueError (`pattern_major`), never guessed into a hold or a pass."""
+    ValueError (`pattern_major`), never guessed into a hold or a pass.
+
+    🚨 PER LINE (policy `line-first-instance`, MeshWeaver#8365): the record read is the LINE'S FIRST
+    INSTANCE'S (`who`), control's only when the line declares none. And a line that declares none
+    (`declared` False) while control's record excludes its major is a DIFFERENT fact from a held
+    line: control cannot stand in for it at all, so the sentence names the missing declaration — the
+    reading this used to give, "control runs X", is true and answers nothing (control on 4.0 left the
+    3.x fleet `waiting` behind it for 9 h)."""
     if major is None:
         return None
     control_major = pattern_major(control_pattern)
     if control_major == major:
         return None
+    if not declared:
+        return (f"{NO_FIRST_INSTANCE}: line `{branch}` (major {major}) declares no `firstInstance` in "
+                f".github/delivery-lines.json, so the control instance would stand in for it — and control cannot: "
+                f"its record declares updatePattern `{control_pattern}` (major {control_major}), so control takes no "
+                f"{major}.x build and nothing it runs can arm this line. The remedy is a DECLARATION: the line's own "
+                f"first instance (`firstInstance` + `firstInstanceImageRepository`, policy line-first-instance) — "
+                f"never control's roll and never an arm override")
+    if who != "control":
+        return (f"LINE HELD BY DECLARATION: {who}'s record (line `{branch}`'s first instance) declares updatePattern "
+                f"`{control_pattern}` (major {control_major}), and line `{branch}` delivers major {major}. {who} takes no "
+                f"{major}.x build until its record declares that major, so every {major}.x set stays unarmed (policies "
+                f"line-first-instance, major-lines-run-separately). The remedy is a declaration — {who}'s record moving "
+                f"to {major}.x, or the line declaring another first instance — never {who}'s roll and never an arm override")
     return (f"LINE HELD BY DECLARATION: control's record declares updatePattern `{control_pattern}` (major "
             f"{control_major}), and line `{branch}` delivers major {major}. Control takes no {major}.x build until "
             f"its record declares that major, so control first holds every {major}.x set unarmed (policy "
             f"major-lines-run-separately). This is NOT a frozen control: control-always-latest judges control "
             f"against its own line's {control_major}.x builds. The remedy is the owner moving control's record to "
             f"{major}.x, never control's roll and never an arm override")
+
+
+HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+
+
+def line_first_instance(line: dict | None, control_instance: dict, branch: str) -> dict:
+    """Policy `line-first-instance` (MeshWeaver#8365): the ONE instance that runs line `branch`'s build
+    before the fleet is offered it, as `.github/delivery-lines.json` declares it. Pure.
+
+    Returns {"deployment", "name", "line", "declared", "image_repository", "given_prefix",
+    "record_path"}. A line that declares no `firstInstance` has the CONTROL instance — its deployment,
+    record and url from `.github/control-instance.json`, its builds handed by `control-first` — which
+    is the line control follows, unchanged. A declared one names its deployment, its OWN image
+    repository and the job that hands it builds (`first-instance-first`); its record sits beside
+    control's (same deployments repository and folder). The declaration's shape is cd-line.py's to
+    refuse; a line this function is asked about that is not declared at all is a ValueError."""
+    if line is None:
+        raise ValueError(f"line `{branch}` is not declared in .github/delivery-lines.json — no first instance can be named")
+    control_dep = str(control_instance.get("deployment") or "").strip()
+    record = control_instance.get("record") if isinstance(control_instance.get("record"), dict) else {}
+    control_path = str(record.get("path") or "").strip()
+    if not control_dep or not control_path.endswith(".json"):
+        raise ValueError("`.github/control-instance.json` names no `deployment` and `record.path` — the default first "
+                         "instance (control) cannot be named")
+    declared = str(line.get("firstInstance") or "").strip()
+    if not declared:
+        return {"deployment": control_dep, "name": "control", "line": branch, "declared": False,
+                "image_repository": "memex-control", "given_prefix": CONTROL_FIRST_JOB_PREFIX,
+                "record_path": control_path}
+    image = str(line.get("firstInstanceImageRepository") or "").strip()
+    if not image:
+        raise ValueError(f"line `{branch}` declares firstInstance {declared!r} without firstInstanceImageRepository")
+    folder = control_path.rsplit("/", 1)[0] if "/" in control_path else ""
+    return {"deployment": declared, "name": declared, "line": branch, "declared": True, "image_repository": image,
+            "given_prefix": FIRST_INSTANCE_JOB_PREFIX,
+            "record_path": f"{folder}/{declared}.json" if folder else f"{declared}.json"}
+
+
+def first_instance_url(first: dict, control_instance: dict, record: object) -> str:
+    """The public base URL whose /api/version and /health the arming reads for the line's first
+    instance. Pure. Control's is the one `.github/control-instance.json` declares (unchanged); a
+    declared first instance's is `https://` + its record's `content.host` — the record is the one
+    declaration of where an instance answers. A record that is not the first instance's (another
+    `id`), or carries no plain host, is a ValueError: reading the wrong instance would arm on it."""
+    if not first.get("declared"):
+        return str(control_instance["url"]).rstrip("/")
+    if not isinstance(record, dict):
+        raise ValueError(f"{first['name']}'s record is not a JSON object")
+    rid = str(record.get("id") or "")
+    if rid and rid != first["deployment"]:
+        raise ValueError(f"the record read for line `{first['line']}`'s first instance is {rid!r}, not "
+                         f"{first['deployment']!r} — refusing to judge the line on another instance")
+    content = record.get("content") if isinstance(record.get("content"), dict) else {}
+    host = str(content.get("host") or "").strip().lower()
+    if not HOST_RE.match(host):
+        raise ValueError(f"{first['name']}'s record carries no plain `content.host` (got {content.get('host')!r}) — "
+                         "where the line's first instance answers is declared there, and is never guessed")
+    return f"https://{host}"
+
+
+def first_instance_hold(first: dict, record: object, major: int | None) -> str | None:
+    """Every DECLARATION that keeps the line's first instance from running this line's builds, as
+    ONE sentence, or None. Pure. Two facts, both read off the first instance's record:
+
+      * its `updatePattern` excludes the line's major (`control_line_hold`; for a line that declares
+        no first instance this names the MISSING declaration — control cannot stand in);
+      * a DECLARED first instance whose record does not run the line's first-instance repository
+        (`content.imageRepository` ending `/<firstInstanceImageRepository>`): `first-instance-first`
+        tags and announces on a repository that record does not follow, so the instance can never
+        run the set — the state between this declaration and the record moving to that repository.
+
+    A hold arms nothing and is LOUD (a ::warning:: on every run and in the fleet-unarmed issue); it
+    is never the frozen red, because no roll of the instance would end it — a declaration does."""
+    pattern = record_update_pattern(record)
+    hold = control_line_hold(pattern, major, first["line"], who=first["name"], declared=first["declared"])
+    if hold or not first["declared"]:
+        return hold
+    content = record.get("content") if isinstance(record, dict) and isinstance(record.get("content"), dict) else {}
+    repo = str(content.get("imageRepository") or "").strip()
+    if repo.rsplit("/", 1)[-1] != first["image_repository"]:
+        return (f"LINE HELD BY DECLARATION: {first['name']}'s record names imageRepository `{repo or '<none>'}`, but "
+                f"line `{first['line']}` hands its first instance builds on `{first['image_repository']}` "
+                f"(.github/delivery-lines.json). {first['name']} follows another repository, so it can never run a set "
+                f"before the fleet is offered it. The remedy is {first['name']}'s record moving to "
+                f"`<registry>/{first['image_repository']}` (with an explicit migrationImageRepository), once that "
+                "repository carries a tag — never an arm override (policy line-first-instance)")
+    return None
 
 
 def _cd_line():
@@ -928,14 +1080,14 @@ def declared_line_majors(lines_file: Path, core_token: str, get: Get | None = No
 
 
 def given_to_control(records: list[dict], control: dict, jobs_of: Callable[[dict], list[dict] | None],
-                     contains_of: Callable[[str], bool | None]) -> list[dict]:
+                     contains_of: Callable[[str], bool | None], prefix: str = "") -> list[dict]:
     """The builds given to control, newest first, back to the first one control CONTAINS — the
     `control-lag` walk (the lag clock starts at the oldest one it does not, see `control_lag`).
     Ancestry is monotone along ONE line, so the walk stops at the first contained build: one jobs
     read and one compare per build control is behind. Fills `control["contains"]` as it goes."""
     given: list[dict] = []
     for r in records:
-        at = control_given_at(jobs_of(r))
+        at = control_given_at(jobs_of(r), prefix)
         if not at:
             continue
         given.append({"core_sha": r["core_sha"], "v_portal": r["v_portal"], "given_at": _iso_epoch(at)})
@@ -972,25 +1124,28 @@ def control_lag(given: list[dict] | dict | None, control: dict, now: float, boun
     build at all — is exactly the state in which builds keep arriving."""
     if isinstance(given, dict):
         given = [given]
+    who = _who(control)
+    job = CONTROL_FIRST_JOB_PREFIX if who == "control" else FIRST_INSTANCE_JOB_PREFIX
     if not given:
-        return "lag", ("no promoted set among the examined runs has a successful `Deploy control first` job — "
-                       "nothing proves control was given a build")
+        return "lag", (f"no promoted set among the examined runs has a successful `{job}` job — "
+                       f"nothing proves {who} was given a build")
     newest = given[0]
     commit = control.get("commit") or ""
     if not commit:
-        return "lag", (f"control's running build cannot be read ({control.get('why') or 'no answer'}) — "
+        return "lag", (f"{who}'s running build cannot be read ({control.get('why') or 'no answer'}) — "
                        f"it cannot be shown to be on {newest['v_portal']}")
     contains = control.get("contains") or {}
     first = contains.get(newest["core_sha"])
+    policy = "platform-deploy-control-first" if who == "control" else "line-first-instance"
     if first is True and not control.get("healthy"):
-        return "lag", (f"control runs {commit[:9]}, which contains the newest platform build {newest['v_portal']}, "
+        return "lag", (f"{who} runs {commit[:9]}, which contains the newest platform build {newest['v_portal']}, "
                        f"but /health is not 200 ({control.get('why') or 'unhealthy'}) — the fleet is offered nothing "
-                       "until control is healthy (policy platform-deploy-control-first)")
+                       f"until {who} is healthy (policy {policy})")
     if first is True:
-        return "ok", (f"control runs {commit[:9]}, which contains the newest platform build "
+        return "ok", (f"{who} runs {commit[:9]}, which contains the newest platform build "
                       f"{newest['v_portal']} ({newest['core_sha'][:9]})")
     if first is None:
-        return "lag", (f"could not establish whether control's {commit[:9]} contains {newest['v_portal']} "
+        return "lag", (f"could not establish whether {who}'s {commit[:9]} contains {newest['v_portal']} "
                        f"({newest['core_sha'][:9]}) — not shown to be latest")
     # Behind. Walk back to the OLDEST given build control does not contain: that is when it fell
     # behind. Reaching a build it contains ends the walk; an unreadable answer or the end of the
@@ -1008,15 +1163,16 @@ def control_lag(given: list[dict] | dict | None, control: dict, now: float, boun
     since = (f"since {missed['v_portal']} ({missed['core_sha'][:9]}), the first build it was given and did not take, "
              f"{'at least ' if floor else ''}{behind_min} min ago")
     if behind_min <= bound_minutes:
-        return "converging", (f"control runs {commit[:9]}; it has been behind the newest build {newest['v_portal']} "
+        return "converging", (f"{who} runs {commit[:9]}; it has been behind the newest build {newest['v_portal']} "
                               f"{since} — inside the {bound_minutes} min bound")
-    return "lag", (f"control runs {commit[:9]}, which does NOT contain the newest platform build {newest['v_portal']} "
+    lag_policy = "control-always-latest" if who == "control" else "line-first-instance"
+    return "lag", (f"{who} runs {commit[:9]}, which does NOT contain the newest platform build {newest['v_portal']} "
                    f"({newest['core_sha'][:9]}); it has been behind {since} — over the {bound_minutes} min bound "
-                   f"(policy control-always-latest). {describe_self_update(control)}")
+                   f"(policy {lag_policy}). {describe_self_update(control)}")
 
 
 def given_builds(records: list[dict], jobs_of: Callable[[dict], list[dict] | None],
-                 contains_of: Callable[[str], bool | None]) -> list[dict]:
+                 contains_of: Callable[[str], bool | None], prefix: str = "") -> list[dict]:
     """Every examined promoted set whose `Deploy control first` job SUCCEEDED, newest first, in the
     shape `control_lag` reads ({core_sha, v_portal, given_at epoch seconds}) — walked back to the
     FIRST one control contains (inclusive) or to the end of the examined records. Pure over its two
@@ -1029,7 +1185,7 @@ def given_builds(records: list[dict], jobs_of: Callable[[dict], list[dict] | Non
     — the very reset-by-new-builds blindness the alarm's clock was moved to avoid."""
     out = []
     for r in records:
-        at = control_given_at(jobs_of(r))
+        at = control_given_at(jobs_of(r), prefix)
         if not at:
             continue
         out.append({"core_sha": r["core_sha"], "v_portal": r["v_portal"], "given_at": _iso_epoch(at)})
@@ -1071,6 +1227,17 @@ def arming_frozen(chosen: dict | None, override: str, given: list[dict], control
     state, text = control_lag(given, control, now, bound_minutes)
     if state != "lag":
         return None
+    who = _who(control)
+    if who != "control":
+        # 🚨 Per line (policy `line-first-instance`): the line's DECLARED first instance is the one
+        # instance this line's fleet waits for, so its frozen reading names it and the line — never
+        # control, which neither runs nor is handed this line's builds.
+        line = control.get("line") or "?"
+        return (f"FLEET DELIVERY FROZEN ON {who} (the first instance of line `{line}`) — nothing can be armed: {text}. "
+                f"{who} first holds every newer set of line `{line}` until {who} RUNS it, so this is no longer a wait "
+                f"(policies control-first-never-silent, line-first-instance). The remedy is {who}'s own roll "
+                f"(read its Ops/Actions selfupdate-roll-{who}-*); the open `fleet-unarmed` issue of this major "
+                "carries the same reading.")
     return (f"FLEET DELIVERY FROZEN ON CONTROL — nothing can be armed: {text}. Control-first holds every newer "
             "set until control RUNS it, so this is no longer a wait (policy control-first-never-silent). The "
             "remedy is control's own roll; the open `control-lag` issue carries the same reading.")
@@ -1396,6 +1563,108 @@ def self_test() -> int:
     ua = unarmed_sets(records, ok, held_ctl, 9458)
     check("unarmed_sets: every examined set of a HELD line carries the hold into the fleet-unarmed reading",
           ua and all(s["state"] == "waiting" and "HELD BY DECLARATION" in s["sentence"] for s in ua), str(ua))
+    # ── THE LINE'S FIRST INSTANCE (policy `line-first-instance`, MeshWeaver#8365) ─────────────────────
+    # Owner decision: the 3.x line's first instance is memex (memex.systemorph.com), on an image line of
+    # its own (memex-portal-ai-first3), exactly like memex-control is control's.
+    shipped_ci = load_control_instance(Path(__file__).resolve().parents[1] / "control-instance.json")
+    cd_mod = _cd_line()
+    shipped_lines = cd_mod.by_branch(cd_mod.load(Path(__file__).resolve().parents[1] / "delivery-lines.json"))
+    f4 = line_first_instance(shipped_lines.get("main"), shipped_ci, "main")
+    check("first instance: line `main` (4.x) declares none → the CONTROL instance, its record and its job — unchanged",
+          f4["name"] == "control" and not f4["declared"] and f4["deployment"] == shipped_ci["deployment"]
+          and f4["record_path"] == shipped_ci["record"]["path"] and f4["given_prefix"] == CONTROL_FIRST_JOB_PREFIX
+          and first_instance_url(f4, shipped_ci, {}) == str(shipped_ci["url"]).rstrip("/"), str(f4))
+    f3 = line_first_instance(shipped_lines.get("main3"), shipped_ci, "main3")
+    check("first instance: line `main3` (3.x) → memex, its record beside control's, its own repository and job",
+          f3["name"] == "memex" and f3["declared"] and f3["record_path"] == "mesh/Deployments/memex.json"
+          and f3["image_repository"] == "memex-portal-ai-first3" and f3["given_prefix"] == FIRST_INSTANCE_JOB_PREFIX,
+          str(f3))
+    check("first instance: an undeclared LINE is refused, never defaulted",
+          _raises(lambda: line_first_instance(None, shipped_ci, "release/9")))
+    memex_rec = {"id": "memex", "content": {"host": "memex.systemorph.com", "updatePattern": "3.*",
+                                            "imageRepository": "meshweaver.azurecr.io/memex-portal-ai-first3"}}
+    check("first instance: a declared one answers at https:// + its record's content.host",
+          first_instance_url(f3, shipped_ci, memex_rec) == "https://memex.systemorph.com")
+    check("first instance: ANOTHER instance's record is refused (never judge the line on the wrong instance)",
+          _raises(lambda: first_instance_url(f3, shipped_ci, {**memex_rec, "id": "memex-cloud"})))
+    check("first instance: a record without a plain host is refused, never guessed",
+          _raises(lambda: first_instance_url(f3, shipped_ci, {"id": "memex", "content": {"updatePattern": "3.*"}}))
+          and _raises(lambda: first_instance_url(f3, shipped_ci, {"id": "memex", "content": {"host": "https://x.y/"}})))
+    check("first instance: memex on its own repository with `3.*` holds nothing for line 3",
+          first_instance_hold(f3, memex_rec, 3) is None)
+    mh = first_instance_hold(f3, {**memex_rec, "content": {**memex_rec["content"],
+                                                          "imageRepository": "meshweaver.azurecr.io/memex-portal-ai"}}, 3)
+    check("first instance: memex's record still on the FLEET's repository HOLDS the line, naming both repositories",
+          mh is not None and "HELD BY DECLARATION" in mh and "`meshweaver.azurecr.io/memex-portal-ai`" in mh
+          and "memex-portal-ai-first3" in mh and "main3" in mh, str(mh))
+    mp = first_instance_hold(f3, {**memex_rec, "content": {**memex_rec["content"], "updatePattern": "4.*"}}, 3)
+    check("first instance: memex's record on `4.*` HOLDS line 3 and names memex, not control",
+          mp is not None and mp.startswith("LINE HELD BY DECLARATION: memex's record") and "control's record" not in mp, str(mp))
+    control_v4 = {"id": "control", "content": {"host": "control.systemorph.com", "updatePattern": "4.*"}}
+    check("line 4 UNCHANGED: control on `4.*` holds nothing for the undeclared line `main`",
+          first_instance_hold(f4, control_v4, 4) is None)
+    # the reading, named: memex on line main3
+    def mctl(*on: dict, **kw) -> dict:
+        return {**ctl(*on, **kw), "name": "memex", "line": "main3"}
+    chosen, lines = select(records, ok, mctl(a, b, c), armed_max=9458)
+    check("line 3: the newest green set MEMEX runs is armed",
+          chosen is c and any("memex runs" in ln for ln in lines) and not any("control runs" in ln for ln in lines),
+          str(lines))
+    chosen, lines = select(records, ok, mctl(a), armed_max=9458)
+    check("line 3: memex not on the newer sets → only the one it runs is armed (memex first)",
+          chosen is a and any("memex first" in ln and "main3" in ln for ln in lines), str(lines))
+    chosen, lines = select(records, ok, mctl(), armed_max=9458)
+    check("line 3: memex running NONE of them → nothing armed, every wait NAMES memex and the line, never control",
+          chosen is None and all(("memex runs" in ln and "line `main3`" in ln) for ln in lines if "waiting" in ln)
+          and not any("control" in ln.split("—")[1].split(":")[0] for ln in lines if "waiting" in ln), str(lines))
+    check("line 4 UNCHANGED: the same reading of control still says `control runs … control first`",
+          "control runs" in judge(c, "success", ctl())[1] and "control first:" in judge(c, "success", ctl())[1])
+    # undeclared line 3 while control runs v4: no instance can run it first — the reading says THAT
+    nofi = first_instance_hold({**f4, "line": "main3"}, control_v4, 3)
+    st, text = judge(c, "success", {**ctl(), "line_hold": nofi})
+    check("undeclared line 3 while control is on 4.*: REFUSED to arm, naming the MISSING first instance — never 'control runs X'",
+          nofi is not None and nofi.startswith("LINE HAS NO FIRST INSTANCE") and "`main3`" in nofi
+          and "`4.*`" in nofi and st == "waiting" and "control runs" not in text and "firstInstance" in text,
+          f"{nofi} / {st}: {text}")
+    chosen, lines = select(records, ok, {**ctl(), "line_hold": nofi}, armed_max=9458)
+    check("...and select arms nothing on it", chosen is None, str(lines))
+    check("NEGATIVE CONTROL — a DECLARED line on a 4.* control-style record is a hold, not 'no first instance'",
+          not (control_line_hold("4.*", 3, "main3", who="memex", declared=True) or "").startswith("LINE HAS NO"))
+    # the lag clock and the frozen red, for memex
+    fjob = lambda ok_, at: [{"name": f"{FIRST_INSTANCE_JOB_PREFIX}: memex-portal-ai-first3:<version>",
+                             "conclusion": "success" if ok_ else "failure", "completed_at": at}]
+    cjob = lambda at: [{"name": "Deploy control first: memex-control:<version>", "conclusion": "success",
+                        "completed_at": at}]
+    gm = given_builds([c, b, a], lambda r: fjob(True, "2026-10-07T19:02:20Z"), lambda sha: False, FIRST_INSTANCE_JOB_PREFIX)
+    check("given_builds: memex's clock reads `Deploy the line's first instance first`",
+          [g["v_portal"] for g in gm] == [c["v_portal"], b["v_portal"], a["v_portal"]], str(gm))
+    check("NEGATIVE CONTROL — a `Deploy control first` success is NOT a build given to memex",
+          given_builds([c, b, a], lambda r: cjob("2026-10-07T19:02:20Z"), lambda sha: False,
+                       FIRST_INSTANCE_JOB_PREFIX) == [])
+    mfrozen = {**frozen_ctl, "name": "memex", "line": "main3"}
+    st, text = control_lag(given, mfrozen, now=t0 + 10 * 3600, bound_minutes=180)
+    check("lag clock: memex behind past the bound is RED, naming memex and its policy",
+          st == "lag" and text.startswith("memex runs") and "line-first-instance" in text
+          and "control-always-latest" not in text, text)
+    fz_m = arming_frozen(None, "", given, mfrozen, now=t0 + 10 * 3600, bound_minutes=180)
+    check("arming_frozen: FROZEN ON memex, naming the line — never 'ON CONTROL'",
+          (fz_m or "").startswith("FLEET DELIVERY FROZEN ON memex (the first instance of line `main3`)")
+          and "CONTROL" not in (fz_m or "") and "control-lag" not in (fz_m or ""), str(fz_m))
+    check("arming_frozen: memex inside the bound is a wait, not a red",
+          arming_frozen(None, "", given, mfrozen, now=t0 + 2 * 3600, bound_minutes=180) is None)
+    check("arming_frozen: a line HELD for memex (record still on the fleet's repository) is never FROZEN",
+          arming_frozen(None, "", given, mfrozen, now=t0 + 10 * 3600, bound_minutes=180, hold=mh) is None)
+    # the handover reuses control's two decisions, aimed at memex
+    ann = control_announcement("memex", "3.1.13471", "meshweaver.azurecr.io/memex-portal-ai-first3", "run", "t")
+    check("control_announcement: memex is handed <its own repository>:<version>, nothing of the fleet's",
+          ann["deployment"] == "memex" and ann["newImage"] == "meshweaver.azurecr.io/memex-portal-ai-first3:3.1.13471"
+          and ann["pattern"] == "3.1.*", str(ann))
+    mline = control_line("3.1.13471", 200, json.dumps({"version": "3.1.13430"}), who="memex")
+    check("control_line: memex on 3.1 takes the 3.x build, and the reason names memex",
+          mline["line_announce"] is True and mline["line_reason"].startswith("memex runs"), str(mline))
+    check("control_first: an EMPTY first-instance repository (its first build) is tagged and announced",
+          control_first([], "3.1.13471") == {"action": "tag", "version": "3.1.13471", "move_pointers": True,
+                                             "announce": True, "control_newest": ""})
     job = lambda ok_, at: [{"name": "Deploy control first: memex-control:<version>",
                             "conclusion": "success" if ok_ else "failure", "completed_at": at}]
     jm = {9461: job(True, "2026-10-07T19:02:20Z"), 9460: job(False, "x"), 9459: None}
@@ -1897,13 +2166,18 @@ def main() -> int:
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("command", nargs="?",
                     choices=("select", "armed-base", "armed-state", "control-first", "control-announcement", "control-line",
-                             "control-lag"))
+                             "control-lag", "first-instance"))
     ap.add_argument("--manifests", type=Path, help="armed-base/armed-state: memex-portal-ai manifest metadata (JSON list)")
     ap.add_argument("--control-manifests", type=Path, help="control-first: memex-control manifest metadata (JSON list)")
     ap.add_argument("--version", default="", help="control-first/control-announcement: THIS run's accepted platform version")
     ap.add_argument("--image-repository", default="",
                     help="control-announcement: the registry/repository the control image was tagged on (no tag)")
     ap.add_argument("--instance", default="", help="control-announcement: the announcer, for the audit trail (the run URL)")
+    ap.add_argument("--deployment", default="",
+                    help="control-announcement: the record the build is handed to (default: control's, from "
+                         "--control-instance); control-line: read THIS first instance (with --instance-url)")
+    ap.add_argument("--instance-url", default="",
+                    help="control-line: the first instance's public base URL (default: control's)")
     ap.add_argument("--control-instance", type=Path, default=Path(".github/control-instance.json"),
                     help="select/control-lag: the declaration of which instance is control")
     # 🚨 Policy `major-lines-run-separately`: the delivery LINE (`main`, `main3`) and its MAJOR (read
@@ -1970,10 +2244,15 @@ def main() -> int:
         if not a.version:
             ap.error("control-line needs --version")
         try:
-            ci = load_control_instance(a.control_instance)
-            url = f"{str(ci['url']).rstrip('/')}/api/version"
+            if a.instance_url:
+                if not a.instance_url.startswith("https://") or not a.deployment:
+                    ap.error("control-line --instance-url needs an https:// URL and --deployment (whose it is)")
+                base, who = a.instance_url, a.deployment
+            else:
+                base, who = str(load_control_instance(a.control_instance)["url"]), "control"
+            url = f"{base.rstrip('/')}/api/version"
             code, body = _fetch_public(url)
-            rows = control_line(a.version, code, body)
+            rows = control_line(a.version, code, body, who=who)
         except (OSError, ValueError) as e:
             print(f"::error::cannot decide whether {a.version} is on control's line: {e}")
             return 1
@@ -1988,12 +2267,30 @@ def main() -> int:
         from datetime import datetime, timezone
         try:
             ci = load_control_instance(a.control_instance)
-            body = control_announcement(str(ci.get("deployment") or ""), a.version, a.image_repository,
+            body = control_announcement(a.deployment or str(ci.get("deployment") or ""), a.version, a.image_repository,
                                         a.instance, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         except (OSError, ValueError) as e:
             print(f"::error::the control announcement cannot be composed: {e}", file=sys.stderr)
             return 1
         print(json.dumps(body, separators=(",", ":")))
+        return 0
+    if a.command == "first-instance":
+        # Offline and pure: which instance runs line --branch first, and where its record is
+        # (policy line-first-instance). The workflow reads that record with the fleet-reader App.
+        if not a.branch:
+            ap.error("first-instance needs --branch")
+        try:
+            cd = _cd_line()
+            first = line_first_instance(cd.by_branch(cd.load(a.delivery_lines)).get(a.branch),
+                                        load_control_instance(a.control_instance), a.branch)
+        except (OSError, ValueError) as e:
+            print(f"::error::line {a.branch}'s first instance cannot be named: {e}")
+            return 1
+        rows = {"deployment": first["deployment"], "name": first["name"], "declared": str(first["declared"]).lower(),
+                "image_repository": first["image_repository"], "record_path": first["record_path"],
+                "given_prefix": first["given_prefix"]}
+        _write_rows(rows)
+        print(json.dumps(rows))
         return 0
     if a.command == "armed-base":
         # Offline and pure: the caller reads the registry; this only interprets. Exit 1 = cannot say.
@@ -2062,21 +2359,35 @@ def main() -> int:
         print(f"control-always-latest (platform): {state} — {text}")
         return 0
     branch = a.branch or "main"
-    # 🚨 Is this line HELD by control's own declaration (MeshWeaver#8279)? Read off control's record,
-    # the same one `control-lag` reads. Required: a selection that cannot tell a declared hold from a
-    # frozen control would turn CD red on a deliberate decision (or, read the other way, pass silently).
+    # 🚨 WHICH INSTANCE RUNS THIS LINE FIRST (policy `line-first-instance`, MeshWeaver#8365): the line's
+    # declared `firstInstance`, else control. Everything below — the hold, the reading, the given
+    # clock, the frozen red — is of THAT instance, so a 3.x line is never judged on a 4.x control.
+    try:
+        cd = _cd_line()
+        first = line_first_instance(cd.by_branch(cd.load(a.delivery_lines)).get(branch), ci, branch)
+    except (OSError, ValueError) as e:
+        print(f"::error::line {branch}'s first instance cannot be named: {e}")
+        return 1
+    # 🚨 Is this line HELD by a declaration (MeshWeaver#8279)? Read off the FIRST INSTANCE's record
+    # (`--control-record`: control's for a line that declares none). Required: a selection that cannot
+    # tell a declared hold from a frozen instance would turn CD red on a deliberate decision (or, read
+    # the other way, pass silently).
     if a.control_record is None:
-        print("::error::select needs --control-record (control's Hosting/Deployment record): whether control's "
-              "declared updatePattern admits this line's major decides between a declared hold and a frozen control")
+        print(f"::error::select needs --control-record ({first['name']}'s Hosting/Deployment record, line {branch}'s "
+              "first instance): whether its declared updatePattern admits this line's major decides between a declared "
+              "hold and a frozen instance")
         return 1
     try:
-        control_pattern = record_update_pattern(json.loads(a.control_record.read_text()))
-        hold = control_line_hold(control_pattern, a.major, branch)
+        first_record = json.loads(a.control_record.read_text())
+        first_url = first_instance_url(first, ci, first_record)
+        control_pattern = record_update_pattern(first_record)
+        hold = first_instance_hold(first, first_record, a.major)
     except (OSError, ValueError) as e:
-        print(f"::error::control's declared line cannot be read off its record: {e}")
+        print(f"::error::{first['name']}'s declaration (line {branch}'s first instance) cannot be read off its record: {e}")
         return 1
-    print(f"control's record declares updatePattern {control_pattern!r}; line {branch}, major "
-          f"{a.major if a.major is not None else 'unnamed'}: {'HELD by that declaration' if hold else 'admitted'}")
+    print(f"line {branch}'s first instance: {first['name']} ({'declared' if first['declared'] else 'control, the default'}) "
+          f"at {first_url}; its record declares updatePattern {control_pattern!r}; major "
+          f"{a.major if a.major is not None else 'unnamed'}: {'HELD by a declaration' if hold else 'admitted'}")
     try:
         above = 0 if a.override else (a.armed_max - 1 if a.resume else a.armed_max)
         # The alert's reading must reach the armed cursor, so it pages on (bounded) past the
@@ -2091,8 +2402,9 @@ def main() -> int:
         return 1
     jobs = {int(r["run_number"]): read_run_jobs(http_get, core_token, r.get("run_id")) for r in records[:10]}
     ladders = {n: ladder_of(j) for n, j in jobs.items()}
-    control = read_control(ci["url"], http_get, core_token, [r["core_sha"] for r in records[:10]])
-    print(f"control {ci['url']}: running {control.get('commit') or 'UNKNOWN'}; "
+    control = read_control(first_url, http_get, core_token, [r["core_sha"] for r in records[:10]])
+    control["name"], control["line"] = first["name"], branch
+    print(f"{first['name']} {first_url}: running {control.get('commit') or 'UNKNOWN'}; "
           f"/health {'200' if control.get('healthy') else 'NOT 200'}{' — ' + control['why'] if control.get('why') else ''}; "
           f"{describe_self_update(control)}")
     if hold:
@@ -2121,7 +2433,8 @@ def main() -> int:
     # Only when nothing was selected: the walk then reads jobs and compares beyond the ten sets
     # `select` judged, back to the first build control contains — the clock's true start.
     # A HELD line reads no lag walk: control was never going to take its builds (MeshWeaver#8279).
-    given = [] if rec is not None or a.override or hold else given_builds(records, jobs_of, contains_of)
+    given = ([] if rec is not None or a.override or hold
+             else given_builds(records, jobs_of, contains_of, first["given_prefix"]))
     frozen = arming_frozen(rec, a.override, given, control, time.time(), int(ci["platformLagBoundMinutes"]),
                            hold=hold)
     if frozen:
@@ -2155,9 +2468,9 @@ def main() -> int:
             "unarmed": unarmed_sets(records, ladders, control, cursor)}, indent=1))
     print(f"ARM {rec['v_portal']} ({rec['key']})" if rec else "nothing to arm")
     if hold and rec is None:
-        print(f"::warning title=Line held by control's declaration::{hold}")
+        print(f"::warning title=Line {branch} held by a declaration::{hold}")
     if frozen:
-        print(f"::error title=Fleet delivery frozen on control::{frozen}")
+        print(f"::error title=Fleet delivery frozen on {first['name']} (line {branch})::{frozen}")
         return 1
     return 0
 
