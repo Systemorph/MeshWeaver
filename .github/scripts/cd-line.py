@@ -67,6 +67,23 @@ FIRST_INSTANCE_FORBIDDEN_IMAGES = {
 CONTROL_INSTANCE_FILE = HERE.parent / "control-instance.json"
 
 
+class FirstInstance:
+    """The RESERVED values of a line's `firstInstance` — an open vocabulary of string constants
+    (policy `open-vocabulary-string-constants`); every other value is a deployment id.
+
+    NONE — 🚨 the line DECLARES that no instance runs its build before the fleet is offered it
+    (policy `line-no-first-instance`): `first-instance-first` hands no instance anything and says so,
+    and `arm` arms the line's promoted set on the remaining PLATFORM evidence (promoted from a green
+    required check, its compatibility ladder green, the image-identity gate at the arming write).
+    It is a NAMED state that needs a non-blank `noFirstInstanceReason` beside it and no image
+    repository, never the reading of an absent field: an OMITTED `firstInstance` still means the
+    control instance, which holds a line whose major control's record excludes."""
+    NONE = "none"
+
+
+NO_FIRST_INSTANCE_REASON_MIN = 20  # a reason a reader can act on, not a placeholder like "n/a"
+
+
 def _control_deployment() -> str | None:
     """The control instance's deployment id (`.github/control-instance.json`), or None when that file
     is not beside this one (a sparse checkout that did not ask for it)."""
@@ -81,12 +98,27 @@ def first_instance_problems(where: str, line: dict, control_deployment: str | No
     """The refusals for one line's `firstInstance` / `firstInstanceImageRepository`. Pure."""
     problems: list[str] = []
     has_fi, has_img = "firstInstance" in line, "firstInstanceImageRepository" in line
+    fi, img = line.get("firstInstance"), line.get("firstInstanceImageRepository")
+    reason = line.get("noFirstInstanceReason")
+    if fi == FirstInstance.NONE:
+        # The DECLARED absence (policy `line-no-first-instance`): a named state with its reason, and
+        # nothing that would name an instance beside it.
+        if not (isinstance(reason, str) and len(reason.strip()) >= NO_FIRST_INSTANCE_REASON_MIN):
+            problems.append(f"{where}: `firstInstance` \"{FirstInstance.NONE}\" without a `noFirstInstanceReason` "
+                            f"(a sentence of at least {NO_FIRST_INSTANCE_REASON_MIN} characters, got {reason!r}) — a line "
+                            "that arms with no first instance says WHY, and `arm` prints it in every sentence")
+        if has_img:
+            problems.append(f"{where}: `firstInstance` \"{FirstInstance.NONE}\" with `firstInstanceImageRepository` "
+                            f"{img!r} — no instance runs a repository when none is declared; drop the repository")
+        return problems
+    if reason is not None or "noFirstInstanceReason" in line:
+        problems.append(f"{where}: `noFirstInstanceReason` without `firstInstance` \"{FirstInstance.NONE}\" — a reason "
+                        "for having no first instance on a line that has one (or control) is a contradiction")
     if not has_fi and not has_img:
         return problems
-    fi, img = line.get("firstInstance"), line.get("firstInstanceImageRepository")
     if not has_fi:
-        return [f"{where}: `firstInstanceImageRepository` without `firstInstance` — an image repository names no "
-                "instance; declare both, or neither for the control instance"]
+        return problems + [f"{where}: `firstInstanceImageRepository` without `firstInstance` — an image repository "
+                           "names no instance; declare both, or neither for the control instance"]
     if not (isinstance(fi, str) and FIRST_INSTANCE_RE.match(fi)):
         problems.append(f"{where}: `firstInstance` must be a deployment id (`mesh/Deployments/<id>.json`), got {fi!r} — "
                         "a blank or malformed first instance is refused, never read as the control instance")
@@ -242,8 +274,10 @@ def derive(doc: dict, event: str, ref_name: str, default_branch: str,
         "moves_latest": "true" if line["movesLatest"] else "false",
         "default_line": "true" if branch == default_branch else "false",
         # The line's FIRST INSTANCE (policy `line-first-instance`): empty = the control instance on
-        # memex-control (its own lane, `control-first`); otherwise the deployment id and the image
-        # repository `first-instance-first` tags before arming and `arm` reads the record of.
+        # memex-control (its own lane, `control-first`); `none` (FirstInstance.NONE, policy
+        # `line-no-first-instance`) = DECLARED to have none, with no repository; otherwise the
+        # deployment id and the image repository `first-instance-first` tags before arming and `arm`
+        # reads the record of.
         "first_instance": line.get("firstInstance", ""),
         "first_instance_image": line.get("firstInstanceImageRepository", ""),
     }
@@ -490,11 +524,13 @@ def self_test() -> int:
            {k: v for k, v in p3.items() if not k.startswith("first_instance")}
            == {"line": "main3", "label": "main3", "plugins_ref": "main3", "satellite_ref": "main3",
                "moves_latest": "false", "default_line": "false"}, str(p3))
-    # 🚨 The line's FIRST INSTANCE (policy `line-first-instance`, MeshWeaver#8365): main3's is DECLARED
-    # (the owner's decision: memex, on an image repository of its own); main declares none and so is
-    # control's, unchanged.
-    expect("push main3 → its declared first instance memex on its own repository memex-portal-ai-first3",
-           p3.get("first_instance") == "memex" and p3.get("first_instance_image") == "memex-portal-ai-first3", str(p3))
+    # 🚨 The line's FIRST INSTANCE (policies `line-first-instance`, `line-no-first-instance`): main3
+    # DECLARES that it has none (its last instances update themselves, so nothing runs a 3.x set first);
+    # main declares nothing and so is control's, unchanged.
+    expect("push main3 → its DECLARED absence of a first instance (`none`), with no repository",
+           p3.get("first_instance") == FirstInstance.NONE and p3.get("first_instance_image") == "", str(p3))
+    expect("the shipped main3 declaration carries the reason `arm` prints",
+           len(str(by_branch(doc)["main3"].get("noFirstInstanceReason") or "").strip()) >= NO_FIRST_INSTANCE_REASON_MIN)
     dmain = derive(doc, "workflow_run", "main", "main", "push", "main")
     expect("the default line declares no first instance → empty (the control instance, unchanged)",
            dmain.get("first_instance") == "" and dmain.get("first_instance_image") == "", str(dmain))
@@ -538,6 +574,7 @@ def self_test() -> int:
         def mutate(d):
             d["lines"][1].pop("firstInstance", None)
             d["lines"][1].pop("firstInstanceImageRepository", None)
+            d["lines"][1].pop("noFirstInstanceReason", None)
             d["lines"][1].update(fields)
         copy = json.loads(json.dumps(doc))
         mutate(copy)
@@ -566,6 +603,28 @@ def self_test() -> int:
         found = fi_broken(firstInstance="memex", firstInstanceImageRepository=image)
         expect(f"first instance: a non-plain repository {image!r} is REFUSED",
                any("plain repository name" in p for p in found), str(found))
+    # ── the DECLARED absence (policy `line-no-first-instance`): a named state, never an omission ──
+    why = "the line's remaining instances update themselves; nothing runs its sets first"
+    expect("no first instance: `none` with a reason is valid",
+           fi_broken(firstInstance=FirstInstance.NONE, noFirstInstanceReason=why) == [])
+    for bad in (None, "", "   ", "n/a", 3):
+        found = fi_broken(firstInstance=FirstInstance.NONE, **({} if bad is None else {"noFirstInstanceReason": bad}))
+        expect(f"no first instance: `none` with a missing/blank/short reason {bad!r} is REFUSED by name",
+               any("without a `noFirstInstanceReason`" in p for p in found), str(found))
+    found = fi_broken(firstInstance=FirstInstance.NONE, noFirstInstanceReason=why,
+                      firstInstanceImageRepository="memex-portal-ai-first3")
+    expect("no first instance: `none` beside an image repository is REFUSED (no instance runs one)",
+           any("no instance runs a repository" in p for p in found), str(found))
+    for fields in ({"noFirstInstanceReason": why},
+                   {"firstInstance": "memex", "firstInstanceImageRepository": "memex-portal-ai-first3",
+                    "noFirstInstanceReason": why}):
+        found = fi_broken(**fields)
+        expect(f"no first instance: a reason WITHOUT `none` ({sorted(fields)}) is REFUSED — never read as the absence",
+               any("`noFirstInstanceReason` without" in p for p in found), str(found))
+    for spelling in ("None", "NONE", " none", ""):
+        found = fi_broken(firstInstance=spelling, noFirstInstanceReason=why)
+        expect(f"no first instance: only the exact constant declares it — {spelling!r} is REFUSED",
+               bool(found), str(found))
     dup = json.loads(json.dumps(doc))
     dup["lines"][0].update(firstInstance="memex-cloud", firstInstanceImageRepository="memex-portal-ai-first3")
     dup["lines"][1].update(firstInstance="memex", firstInstanceImageRepository="memex-portal-ai-first3")

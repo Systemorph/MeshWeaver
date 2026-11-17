@@ -59,6 +59,14 @@ sentence says whose run and which line. Its own repository is the point: an inst
 `memex-portal-ai` can only run a set after `arm` writes its version tag, i.e. after the fleet is
 offered it — a wait that can never end.
 
+NO FIRST INSTANCE, DECLARED (policy `line-no-first-instance`). A line may declare `firstInstance:
+"none"` with a `noFirstInstanceReason` — a NAMED state cd-line.py validates, never the reading of an
+omitted field (omitted is control, which HOLDS a line whose major its record excludes). Such a line
+has no instance to read: `select` reads no record and no /api/version, and a set whose ladder passed
+is GREEN on the platform evidence alone — promoted from a commit whose required check is green, its
+compatibility ladder green, and (in the workflow) the image-identity gate before the arming write.
+Every one of its sentences carries the declaration and its reason; nothing is ever frozen on it.
+
 CONTROL FIRST. `control-first` decides the control image's tags for THIS run's accepted build:
 every platform build that passed the control image's own acceptance is tagged
 `memex-control:<version>` (+ line pointers, never backwards) in the run that built it — before,
@@ -721,6 +729,10 @@ CONTROL_FIRST_JOB_PREFIX = "Deploy control first"
 # The job that hands a line's DECLARED first instance its build (main-cd `first-instance-first`).
 FIRST_INSTANCE_JOB_PREFIX = "Deploy the line's first instance first"
 NO_FIRST_INSTANCE = "LINE HAS NO FIRST INSTANCE"
+# The DECLARED absence (policy `line-no-first-instance`): cd-line.py's FirstInstance.NONE, and the
+# sentence every verdict of such a line starts with.
+FIRST_INSTANCE_NONE = "none"
+NO_FIRST_INSTANCE_DECLARED = "NO FIRST INSTANCE, DECLARED"
 CONTAINED = ("identical", "ahead")
 
 
@@ -755,6 +767,11 @@ def judge(rec: dict, ladder: str | None, control: dict) -> tuple[str, str]:
     if ladder != "success":
         return "refused", (f"its compatibility ladder ended `{ladder}` — the published module set does not link "
                            "against this platform; fix compatibility (or declare an epoch bump), never re-bake")
+    if control.get("no_first_instance"):
+        # 🚨 Policy `line-no-first-instance`: the line DECLARES it has no first instance, so there is no
+        # running build to read and nothing to wait for — the set is green on the platform evidence
+        # (promoted from a green required check + the ladder above), and the sentence says so by name.
+        return "green", f"ladder success; {control['no_first_instance']}"
     commit = control.get("commit") or ""
     who = _who(control)
     if not commit:
@@ -941,8 +958,10 @@ def control_line_hold(control_pattern: str, major: int | None, branch: str, who:
                 f".github/delivery-lines.json, so the control instance would stand in for it — and control cannot: "
                 f"its record declares updatePattern `{control_pattern}` (major {control_major}), so control takes no "
                 f"{major}.x build and nothing it runs can arm this line. The remedy is a DECLARATION: the line's own "
-                f"first instance (`firstInstance` + `firstInstanceImageRepository`, policy line-first-instance) — "
-                f"never control's roll and never an arm override")
+                f"first instance (`firstInstance` + `firstInstanceImageRepository`, policy line-first-instance), or "
+                f"the line's DECLARED absence of one (`firstInstance: \"{FIRST_INSTANCE_NONE}\"` + "
+                f"`noFirstInstanceReason`, policy line-no-first-instance) — never control's roll and never an arm "
+                f"override, and never by omission")
     if who != "control":
         return (f"LINE HELD BY DECLARATION: {who}'s record (line `{branch}`'s first instance) declares updatePattern "
                 f"`{control_pattern}` (major {control_major}), and line `{branch}` delivers major {major}. {who} takes no "
@@ -981,16 +1000,42 @@ def line_first_instance(line: dict | None, control_instance: dict, branch: str) 
                          "instance (control) cannot be named")
     declared = str(line.get("firstInstance") or "").strip()
     if not declared:
-        return {"deployment": control_dep, "name": "control", "line": branch, "declared": False,
-                "image_repository": "memex-control", "given_prefix": CONTROL_FIRST_JOB_PREFIX,
+        return {"deployment": control_dep, "name": "control", "line": branch, "declared": False, "none": False,
+                "reason": "", "image_repository": "memex-control", "given_prefix": CONTROL_FIRST_JOB_PREFIX,
                 "record_path": control_path}
+    if declared == FIRST_INSTANCE_NONE:
+        # Policy `line-no-first-instance`: DECLARED, with its reason — no deployment, no record, no
+        # repository and no job that hands anything. cd-line.py refuses the shape; this refuses a
+        # caller that hands it an unvalidated one without the reason.
+        reason = str(line.get("noFirstInstanceReason") or "").strip()
+        minimum = _cd_line().NO_FIRST_INSTANCE_REASON_MIN  # cd-line.py's own bound — one number, never a copy
+        if len(reason) < minimum:
+            raise ValueError(f"line `{branch}` declares firstInstance \"{FIRST_INSTANCE_NONE}\" without a "
+                             f"noFirstInstanceReason of at least {minimum} characters (got {reason!r}) — the "
+                             "declared absence of a first instance says why")
+        if line.get("firstInstanceImageRepository"):
+            raise ValueError(f"line `{branch}` declares firstInstance \"{FIRST_INSTANCE_NONE}\" beside an image "
+                             "repository — no instance runs one")
+        return {"deployment": "", "name": FIRST_INSTANCE_NONE, "line": branch, "declared": True, "none": True,
+                "reason": reason, "image_repository": "", "given_prefix": "", "record_path": ""}
     image = str(line.get("firstInstanceImageRepository") or "").strip()
     if not image:
         raise ValueError(f"line `{branch}` declares firstInstance {declared!r} without firstInstanceImageRepository")
     folder = control_path.rsplit("/", 1)[0] if "/" in control_path else ""
-    return {"deployment": declared, "name": declared, "line": branch, "declared": True, "image_repository": image,
-            "given_prefix": FIRST_INSTANCE_JOB_PREFIX,
+    return {"deployment": declared, "name": declared, "line": branch, "declared": True, "none": False, "reason": "",
+            "image_repository": image, "given_prefix": FIRST_INSTANCE_JOB_PREFIX,
             "record_path": f"{folder}/{declared}.json" if folder else f"{declared}.json"}
+
+
+def no_first_instance_sentence(first: dict) -> str:
+    """The ONE sentence a line that DECLARES no first instance is armed under (policy
+    `line-no-first-instance`). Pure. It names the line, the declaration, its reason and the evidence
+    that still gates — so a green arming of such a line can never read as an instance having run it."""
+    return (f"{NO_FIRST_INSTANCE_DECLARED}: line `{first['line']}` declares firstInstance \"{FIRST_INSTANCE_NONE}\" "
+            f"in .github/delivery-lines.json ({first['reason']}) — no instance runs its sets before the fleet is "
+            "offered them, so this set arms on the platform evidence alone: promoted from a commit whose required "
+            "check is green, its compatibility ladder green, and the image-identity gate at the arming write "
+            "(policy line-no-first-instance)")
 
 
 def first_instance_url(first: dict, control_instance: dict, record: object) -> str:
@@ -998,7 +1043,10 @@ def first_instance_url(first: dict, control_instance: dict, record: object) -> s
     instance. Pure. Control's is the one `.github/control-instance.json` declares (unchanged); a
     declared first instance's is `https://` + its record's `content.host` — the record is the one
     declaration of where an instance answers. A record that is not the first instance's (another
-    `id`), or carries no plain host, is a ValueError: reading the wrong instance would arm on it."""
+    `id`), or carries no plain host, is a ValueError: reading the wrong instance would arm on it. A line
+    that DECLARES no first instance has no url at all — asking for one is a ValueError, never control's."""
+    if first.get("none"):
+        raise ValueError(f"line `{first['line']}` declares no first instance — there is no instance to read")
     if not first.get("declared"):
         return str(control_instance["url"]).rstrip("/")
     if not isinstance(record, dict):
@@ -1027,7 +1075,10 @@ def first_instance_hold(first: dict, record: object, major: int | None) -> str |
         run the set — the state between this declaration and the record moving to that repository.
 
     A hold arms nothing and is LOUD (a ::warning:: on every run and in the fleet-unarmed issue); it
-    is never the frozen red, because no roll of the instance would end it — a declaration does."""
+    is never the frozen red, because no roll of the instance would end it — a declaration does. A line
+    that DECLARES no first instance has no record to read: asking is a ValueError."""
+    if first.get("none"):
+        raise ValueError(f"line `{first['line']}` declares no first instance — there is no record to hold it")
     pattern = record_update_pattern(record)
     hold = control_line_hold(pattern, major, first["line"], who=first["name"], declared=first["declared"])
     if hold or not first["declared"]:
@@ -1564,8 +1615,9 @@ def self_test() -> int:
     check("unarmed_sets: every examined set of a HELD line carries the hold into the fleet-unarmed reading",
           ua and all(s["state"] == "waiting" and "HELD BY DECLARATION" in s["sentence"] for s in ua), str(ua))
     # ── THE LINE'S FIRST INSTANCE (policy `line-first-instance`, MeshWeaver#8365) ─────────────────────
-    # Owner decision: the 3.x line's first instance is memex (memex.systemorph.com), on an image line of
-    # its own (memex-portal-ai-first3), exactly like memex-control is control's.
+    # A DECLARED first instance (memex on an image line of its own, memex-portal-ai-first3, exactly like
+    # memex-control is control's) — fabricated here: the shipped 3.x line now DECLARES none (policy
+    # `line-no-first-instance`, its own cases below), and the declared-instance path stays proven.
     shipped_ci = load_control_instance(Path(__file__).resolve().parents[1] / "control-instance.json")
     cd_mod = _cd_line()
     shipped_lines = cd_mod.by_branch(cd_mod.load(Path(__file__).resolve().parents[1] / "delivery-lines.json"))
@@ -1574,7 +1626,8 @@ def self_test() -> int:
           f4["name"] == "control" and not f4["declared"] and f4["deployment"] == shipped_ci["deployment"]
           and f4["record_path"] == shipped_ci["record"]["path"] and f4["given_prefix"] == CONTROL_FIRST_JOB_PREFIX
           and first_instance_url(f4, shipped_ci, {}) == str(shipped_ci["url"]).rstrip("/"), str(f4))
-    f3 = line_first_instance(shipped_lines.get("main3"), shipped_ci, "main3")
+    f3 = line_first_instance({"branch": "main3", "firstInstance": "memex",
+                              "firstInstanceImageRepository": "memex-portal-ai-first3"}, shipped_ci, "main3")
     check("first instance: line `main3` (3.x) → memex, its record beside control's, its own repository and job",
           f3["name"] == "memex" and f3["declared"] and f3["record_path"] == "mesh/Deployments/memex.json"
           and f3["image_repository"] == "memex-portal-ai-first3" and f3["given_prefix"] == FIRST_INSTANCE_JOB_PREFIX,
@@ -1630,6 +1683,63 @@ def self_test() -> int:
     check("...and select arms nothing on it", chosen is None, str(lines))
     check("NEGATIVE CONTROL — a DECLARED line on a 4.* control-style record is a hold, not 'no first instance'",
           not (control_line_hold("4.*", 3, "main3", who="memex", declared=True) or "").startswith("LINE HAS NO"))
+    # ── NO FIRST INSTANCE, DECLARED (policy `line-no-first-instance`) ─────────────────────────────────
+    # The shipped 3.x line declares none: its sets arm on the platform evidence alone, by NAME.
+    fn = line_first_instance(shipped_lines.get("main3"), shipped_ci, "main3")
+    check("no first instance: the shipped line `main3` DECLARES none — no deployment, record, repository or job",
+          fn["none"] and fn["declared"] and fn["name"] == FIRST_INSTANCE_NONE and fn["deployment"] == ""
+          and fn["record_path"] == "" and fn["image_repository"] == "" and fn["given_prefix"] == ""
+          and len(fn["reason"]) >= 20, str(fn))
+    check("no first instance: there is no url and no record to read — asking is REFUSED, never control's",
+          _raises(lambda: first_instance_url(fn, shipped_ci, {})) and _raises(lambda: first_instance_hold(fn, {}, 3)))
+    check("no first instance: `none` without its reason is REFUSED, never armed on",
+          _raises(lambda: line_first_instance({"branch": "x", "firstInstance": FIRST_INSTANCE_NONE}, shipped_ci, "x")))
+    cd_min = cd_mod.NO_FIRST_INSTANCE_REASON_MIN
+    check("no first instance: a reason SHORTER than cd-line.py's minimum is REFUSED here too (one bound, two readers)",
+          _raises(lambda: line_first_instance({"branch": "x", "firstInstance": FIRST_INSTANCE_NONE,
+                                               "noFirstInstanceReason": "y" * (cd_min - 1)}, shipped_ci, "x")))
+    check("NEGATIVE CONTROL — a reason of exactly cd-line.py's minimum is accepted",
+          line_first_instance({"branch": "x", "firstInstance": FIRST_INSTANCE_NONE,
+                               "noFirstInstanceReason": "y" * cd_min}, shipped_ci, "x")["none"])
+    check("no first instance: `none` beside a repository is REFUSED",
+          _raises(lambda: line_first_instance({"branch": "x", "firstInstance": FIRST_INSTANCE_NONE,
+                                               "noFirstInstanceReason": "a reason long enough to read",
+                                               "firstInstanceImageRepository": "memex-portal-ai-first3"},
+                                              shipped_ci, "x")))
+    nsent = no_first_instance_sentence(fn)
+    nctl = {"commit": "", "healthy": False, "contains": {}, "why": "the line declares no first instance",
+            "name": FIRST_INSTANCE_NONE, "line": "main3", "no_first_instance": nsent}
+    st, text = judge(c, "success", nctl)
+    check("no first instance: a green-ladder set ARMS, its sentence naming the declaration, the line and the reason",
+          st == "green" and NO_FIRST_INSTANCE_DECLARED in text and "`main3`" in text and fn["reason"] in text
+          and "line-no-first-instance" in text and not re.search(r" runs [0-9a-f]{9}", text), f"{st}: {text}")
+    chosen, lines = select(records, ok, nctl, armed_max=9458)
+    check("no first instance: select arms the NEWEST promoted set whose ladder passed — no instance waited on",
+          chosen is c and any(NO_FIRST_INSTANCE_DECLARED in ln for ln in lines), str(lines))
+    for bad in ("failure", "missing", "ambiguous"):
+        st, text = judge(c, bad, nctl)
+        check(f"no first instance: every OTHER gate stays — a `{bad}` ladder is still REFUSED", st == "refused", text)
+    st, text = judge(c, None, nctl)
+    check("no first instance: an unfinished ladder still WAITS", st == "waiting", text)
+    chosen, lines = select(records, {9461: None, 9460: "failure", 9459: "success"}, nctl, armed_max=9458)
+    check("no first instance: past a red and an unfinished ladder, the newest GREEN set is armed",
+          chosen is a, str(lines))
+    chosen, lines = select(records, ok, nctl, armed_max=9461)
+    check("no first instance: never backwards — nothing newer than the armed set, nothing armed", chosen is None, str(lines))
+    check("no first instance: never frozen — no instance was handed a build, so there is no lag clock",
+          arming_frozen(None, "", [], nctl, now=t0 + 10 * 3600, bound_minutes=180) is None)
+    ua = unarmed_sets(records, {9461: None, 9460: "success", 9459: "success"}, nctl, 9459)
+    check("no first instance: the fleet-unarmed reading carries the declaration on each green set",
+          [s_["state"] for s_ in ua] == ["waiting", "green"] and NO_FIRST_INSTANCE_DECLARED in ua[1]["sentence"], str(ua))
+    # NEGATIVE CONTROL — an OMITTED firstInstance on the 3.x line is control, and control on 4.* HOLDS it
+    fo = line_first_instance({"branch": "main3"}, shipped_ci, "main3")
+    omitted_hold = first_instance_hold(fo, control_v4, 3)
+    st, text = judge(c, "success", {**ctl(), "line_hold": omitted_hold})
+    check("NEGATIVE CONTROL — OMITTING firstInstance is NOT the declared absence: control on 4.* HOLDS line 3, arms nothing",
+          not fo["none"] and fo["name"] == "control" and (omitted_hold or "").startswith(NO_FIRST_INSTANCE)
+          and "line-no-first-instance" in (omitted_hold or "") and st == "waiting"
+          and select(records, ok, {**ctl(), "line_hold": omitted_hold}, armed_max=9458)[0] is None,
+          f"{omitted_hold} / {st}: {text}")
     # the lag clock and the frozen red, for memex
     fjob = lambda ok_, at: [{"name": f"{FIRST_INSTANCE_JOB_PREFIX}: memex-portal-ai-first3:<version>",
                              "conclusion": "success" if ok_ else "failure", "completed_at": at}]
@@ -2287,8 +2397,9 @@ def main() -> int:
             print(f"::error::line {a.branch}'s first instance cannot be named: {e}")
             return 1
         rows = {"deployment": first["deployment"], "name": first["name"], "declared": str(first["declared"]).lower(),
-                "image_repository": first["image_repository"], "record_path": first["record_path"],
-                "given_prefix": first["given_prefix"]}
+                "none": str(first["none"]).lower(), "image_repository": first["image_repository"],
+                "record_path": first["record_path"], "given_prefix": first["given_prefix"],
+                "sentence": no_first_instance_sentence(first) if first["none"] else ""}
         _write_rows(rows)
         print(json.dumps(rows))
         return 0
@@ -2372,22 +2483,37 @@ def main() -> int:
     # (`--control-record`: control's for a line that declares none). Required: a selection that cannot
     # tell a declared hold from a frozen instance would turn CD red on a deliberate decision (or, read
     # the other way, pass silently).
-    if a.control_record is None:
+    if first["none"]:
+        # 🚨 Policy `line-no-first-instance`: the DECLARATION decides, never the arguments. A record
+        # passed for a line that declares none is a second, contradicting declaration — RED, by name.
+        if a.control_record is not None:
+            print(f"::error::line {branch} declares firstInstance \"{FIRST_INSTANCE_NONE}\" "
+                  "(.github/delivery-lines.json), but --control-record was passed — no record is read for a line "
+                  "with no first instance; two declarations of one fact are refused")
+            return 1
+    elif a.control_record is None:
         print(f"::error::select needs --control-record ({first['name']}'s Hosting/Deployment record, line {branch}'s "
               "first instance): whether its declared updatePattern admits this line's major decides between a declared "
               "hold and a frozen instance")
         return 1
-    try:
-        first_record = json.loads(a.control_record.read_text())
-        first_url = first_instance_url(first, ci, first_record)
-        control_pattern = record_update_pattern(first_record)
-        hold = first_instance_hold(first, first_record, a.major)
-    except (OSError, ValueError) as e:
-        print(f"::error::{first['name']}'s declaration (line {branch}'s first instance) cannot be read off its record: {e}")
-        return 1
-    print(f"line {branch}'s first instance: {first['name']} ({'declared' if first['declared'] else 'control, the default'}) "
-          f"at {first_url}; its record declares updatePattern {control_pattern!r}; major "
-          f"{a.major if a.major is not None else 'unnamed'}: {'HELD by a declaration' if hold else 'admitted'}")
+    no_first = no_first_instance_sentence(first) if first["none"] else ""
+    hold: str | None = None
+    if no_first:
+        first_url = ""
+        print(f"line {branch}'s first instance: NONE, declared — {no_first}")
+        print(f"::notice title=Line {branch} declares no first instance::{no_first}")
+    else:
+        try:
+            first_record = json.loads(a.control_record.read_text())
+            first_url = first_instance_url(first, ci, first_record)
+            control_pattern = record_update_pattern(first_record)
+            hold = first_instance_hold(first, first_record, a.major)
+        except (OSError, ValueError) as e:
+            print(f"::error::{first['name']}'s declaration (line {branch}'s first instance) cannot be read off its record: {e}")
+            return 1
+        print(f"line {branch}'s first instance: {first['name']} ({'declared' if first['declared'] else 'control, the default'}) "
+              f"at {first_url}; its record declares updatePattern {control_pattern!r}; major "
+              f"{a.major if a.major is not None else 'unnamed'}: {'HELD by a declaration' if hold else 'admitted'}")
     try:
         above = 0 if a.override else (a.armed_max - 1 if a.resume else a.armed_max)
         # The alert's reading must reach the armed cursor, so it pages on (bounded) past the
@@ -2402,11 +2528,16 @@ def main() -> int:
         return 1
     jobs = {int(r["run_number"]): read_run_jobs(http_get, core_token, r.get("run_id")) for r in records[:10]}
     ladders = {n: ladder_of(j) for n, j in jobs.items()}
-    control = read_control(first_url, http_get, core_token, [r["core_sha"] for r in records[:10]])
-    control["name"], control["line"] = first["name"], branch
-    print(f"{first['name']} {first_url}: running {control.get('commit') or 'UNKNOWN'}; "
-          f"/health {'200' if control.get('healthy') else 'NOT 200'}{' — ' + control['why'] if control.get('why') else ''}; "
-          f"{describe_self_update(control)}")
+    if no_first:
+        # Nothing to read: no instance runs this line first. `judge` reads the declaration instead.
+        control = {"commit": "", "healthy": False, "contains": {}, "why": "the line declares no first instance",
+                   "name": FIRST_INSTANCE_NONE, "line": branch, "no_first_instance": no_first}
+    else:
+        control = read_control(first_url, http_get, core_token, [r["core_sha"] for r in records[:10]])
+        control["name"], control["line"] = first["name"], branch
+        print(f"{first['name']} {first_url}: running {control.get('commit') or 'UNKNOWN'}; "
+              f"/health {'200' if control.get('healthy') else 'NOT 200'}{' — ' + control['why'] if control.get('why') else ''}; "
+              f"{describe_self_update(control)}")
     if hold:
         control["line_hold"] = hold
     try:
@@ -2433,7 +2564,8 @@ def main() -> int:
     # Only when nothing was selected: the walk then reads jobs and compares beyond the ten sets
     # `select` judged, back to the first build control contains — the clock's true start.
     # A HELD line reads no lag walk: control was never going to take its builds (MeshWeaver#8279).
-    given = ([] if rec is not None or a.override or hold
+    # A line that DECLARES no first instance has no lag clock: nothing was handed a build.
+    given = ([] if rec is not None or a.override or hold or no_first
              else given_builds(records, jobs_of, contains_of, first["given_prefix"]))
     frozen = arming_frozen(rec, a.override, given, control, time.time(), int(ci["platformLagBoundMinutes"]),
                            hold=hold)
@@ -2465,6 +2597,9 @@ def main() -> int:
             # The line is HELD by control's declaration (MeshWeaver#8279): the alert says so above its
             # table, so a held major's issue names the declaration that ends the hold. "" = not held.
             "control_hold": hold or "",
+            # The line DECLARES no first instance (policy `line-no-first-instance`): the alert says so
+            # above its table, so a stall there can only be the ladder's. "" = the line has one.
+            "no_first_instance": no_first,
             "unarmed": unarmed_sets(records, ladders, control, cursor)}, indent=1))
     print(f"ARM {rec['v_portal']} ({rec['key']})" if rec else "nothing to arm")
     if hold and rec is None:
