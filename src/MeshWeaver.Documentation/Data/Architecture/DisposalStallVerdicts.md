@@ -195,6 +195,14 @@ construction metadata as the heaviest allocation (`Entry[System.String][]`,
 `Func<JsonDerivedType,bool>`, the resolve-pipeline handlers of the DI container then in use — Autofac, since removed in MeshWeaver#7145) — the per-hub metadata
 multiplication tracked on #5555.
 
+A second owner was named later from a `[POOLSTALL]` capture taken 6 s after a burst of 47 of these
+verdicts: 14 of 41 pool workers were parked in Rx's process-wide `SystemClock` lock, which `StartWith`
+and `Merge` take on every subscription, inside hub turns. Such a worker runs no other hub's drain. The
+hub's own teardown, every data write's merge in the owner's `DataChangeRequest` turn, and the read
+admission every followed stream runs per revision no longer take it, and
+`SyncHubTeardownTakesNoProcessWideRxLockTest` holds the lock over a hub with live `sync/*` hubs to keep
+it that way — see [Rx StartWith and Merge Take a Process-Wide Lock](../RxStartWithProcessWideLock).
+
 ### What Orleans makes of M1
 
 `MessageHubGrain` wires the **root grain hub's** turn scheduler to the grain's
