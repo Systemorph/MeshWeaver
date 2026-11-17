@@ -81,6 +81,57 @@ A registry source declares the ref it is served at per line, on the record:
   line, so on the registry itself the default install, module discovery and the update watcher read
   the repository at the ref of the line the registry runs.
 
+## GitSync syncs each line's ref
+
+The registry serving each line is not enough on its own. A module Space also syncs straight from
+GitHub through its `{Space}/_GitSync` config, and that config stores ONE branch, written when the
+Space was provisioned. Measured on 2026-11-17 on memex.meshweaver.cloud (3.1.13482): every
+`_GitSync` of MeshWeaver.Plugins and MeshWeaver.SocialMedia stored `branch: main`, the record
+declared `lineRefs {"3": "main3"}` for both repositories, and the registry honoured it. GitSync
+did not. It imported the v4 tree from `main`, so `Marketing/Event` was refused at load by its
+`4.0.13190` floor and `Collaboration/Review` compiled into `CS0103`. A global admin could not repoint
+the branch either, because the config of a system-synced Space refuses a person's `Update`.
+
+**Decision: GitSync reads the SAME declaration the registry serves by, at read time.** No new field,
+no per-Space edit, and no migration.
+
+- **One declaration.** The ref per line is the record's `pluginRepos[].lineRefs`. It is rendered as
+  `PluginCatalog:LineRefs:{source}:{major}` beside `PluginCatalog:Sources:N`, and this instance's line
+  is read by `PlatformLine.Of`. PluginCatalog registers the reader (`DeclaredLineGitSyncRefs`, over
+  `PackageSources.FromConfiguration`), and GitSync asks it through its own seam (`IGitSyncLineRefs`).
+  The registry, the default install, discovery and GitSync therefore cannot pick different refs for
+  one line.
+- **One reading of the branch.** `GitSyncLine.BranchOf` / `GitSyncLine.Effective` is the branch a config
+  syncs: the stored branch (`main` when blank), moved to this line's ref. Every reader goes through it:
+  `GitHubSyncService.ReadConfig` (import, update, re-import, export, check branch, pull requests), the
+  push fan-out and the branch reconcile (`GitHubWebhookProcessor`), the sealed-publication reconcile,
+  the combo/provenance reader, and the GitHub menu and tabs.
+- **Only branches the declaration names move.** The stored branch moves only when it is the source's
+  configured ref or one of its line refs (`GitSyncLine.Resolve`). So `main` and `main3` both read as
+  the line's ref, while a branch somebody chose on purpose (`feature/x`) is never touched. A repository
+  that declares no `lineRefs` keeps its stored branch, as before.
+- **The stored config is never rewritten.** The line moves what is READ. A settings save
+  (`UpdateConfig`) starts from the stored node, so the line's branch is never persisted in place of
+  the declared one.
+- **A roll switches by itself.** The line is re-read on every call. A record moving from
+  `updatePattern: "3.*"` to `"4.*"` moves every declared source from `main3` to `main` on its next
+  reconcile or push, and a push to the other line's branch selects nothing.
+- **Why the record's line and not the running binary's.** `PlatformLine.Of` puts the record's
+  `updatePattern` before the running major. During a roll, replicas on both majors read the same
+  branch, so the sources do not flap between the two trees. A replica that cannot run the newer tree is
+  covered by the existing per-module floor decline (policy `package-min-mesh-version`): it leaves the
+  module on its last good build until it rolls.
+
+Measured by `GitSyncReadsItsPlatformLinesBranchTest` (MeshWeaver.Hosting.Test), on a real mesh through
+the real reconcile and push fan-out with the production reader. On line 3 the reconcile resolves
+`main3`, a push to `main` selects nothing and a push to `main3` imports. After the record's line moves
+to 4, the same stored config imports `main`, and its stored branch stays `main` throughout. With the
+branch read reverted to the stored one, the test fails: `Expected collection {"main"} to contain
+"main3"`. The rule and its controls are in `GitSyncLineRuleTest`.
+
+What it does not cover: a Space whose config names a repository that the record declares no source for,
+and a consumer instance (whose mounts may not declare `lineRefs`). Both keep their stored branch.
+
 ## Landing order
 
 1. Core: the record field, its rendering and the `PlatformLine`/`ForLine` reader. Changes nothing for a

@@ -92,17 +92,18 @@ public sealed class GitHubSyncMenuProvider : INodeMenuProvider
                             Area: GitHubActionArea.AreaName,
                             Icon: "🐙",
                             Order: order++,
-                            Tooltip: RepoSummary(cfg),
+                            Tooltip: RepoSummary(cfg, host.Hub.ServiceProvider),
                             Children: children));
                     }
                     return items;
                 });
     }
 
-    private static string RepoSummary(GitHubSyncConfig cfg)
+    private static string RepoSummary(GitHubSyncConfig cfg, IServiceProvider services)
     {
         var repo = cfg.RepositoryUrl!.Replace("https://github.com/", "", StringComparison.OrdinalIgnoreCase).TrimEnd('/');
-        var branch = string.IsNullOrWhiteSpace(cfg.Branch) ? "main" : cfg.Branch;
+        // The branch this instance's platform line syncs, not merely the stored one.
+        var branch = GitSyncLine.BranchOf(services, cfg);
         return $"{repo}@{branch} ({cfg.Direction})";
     }
 }
