@@ -215,10 +215,13 @@ against no registry, so nothing ended its boot that way. Its default install pro
 a fresh package, and the publishes that shelve a later line's modules are often served by replicas of the
 earlier line, which derive a set against their own platform. So after the floor fix above, the registry's
 v4 tree still held 40 landed modules while the mesh stayed on the empty v4 set. Every v4 replica failed its
-readiness gates and the roll never completed. With no registry configured, `RegistryUpdateReconciler` now
-ends the boot by proposing this process's own line's set from what its tree holds. The proposal is
+readiness gates and the roll never completed. `RegistryUpdateReconciler` now proposes this process's own
+line's set from what its tree holds at every boot: as the whole boot pass when no registry is configured,
+and BEFORE the registry reconcile when one is. The second case is the plugin registry itself, which lists
+itself as its registry: its reconcile proposes only after a full pass over every package, and a pass against
+a registry that does not yet serve this line can outlast the rollout. The proposal is
 checked against the dependency floors and is idempotent, and a set that moved requests its activation
-through the module reload path. Test: `ARegistryBootProposesItsOwnLinesLandedSetTest`.
+through the module reload path. Tests: `ARegistryBootProposesItsOwnLinesLandedSetTest`, `ABootWithAnUnreachableRegistryStillProposesItsTreeTest`.
 
 ## 4c. Each line has its own first instance
 

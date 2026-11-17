@@ -355,6 +355,14 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         subscriptions.Add(defaultsDone
             // Hop off whatever thread completed the default install before the reconcile chain runs.
             .ObserveOn(TaskPoolScheduler.Default)
+            // 🚨 FIRST close the wave this line's tree already holds, then reconcile. The reconcile
+            // proposes only after a whole pass over the registry's packages — each adoption bounded
+            // on its own (PerPackageAdoptBudget) — and a pass against a registry that does not yet
+            // serve this process's line can outlast a rollout, or fault before it proposes. Measured
+            // on the 3 → 4 roll: the plugin registry's first line-4 replica held 40 landed modules on
+            // the empty line-4 set for the whole rollout window and its readiness gates refused it.
+            // Checked and idempotent: a tree already proposed writes nothing.
+            .SelectMany(_ => OnLane(ProposeOwnTreeAtBoot))
             .SelectMany(_ => Reconcile(options))
             .SelectMany(_ => RetryFaultedReloads(options))
             // 🚨 SubscribeOn the thread pool, NOT the host-startup thread — the chain is synchronous
@@ -1697,9 +1705,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// The boot of a process that reconciles against no registry — the registry instance itself —
-    /// proposes its OWN line's module set from what its tree already holds, and asks for that set's
-    /// activation when it moved. Never faults: a refused proposal leaves the mesh on its set, logged.
+    /// Every boot proposes its OWN line's module set from what its tree already holds — before the
+    /// registry reconcile when there is one, as the whole boot pass when there is none — and asks
+    /// for that set's activation when it moved. Never faults: a refused proposal leaves the mesh on
+    /// its set, logged.
     /// </summary>
     private IObservable<Unit> ProposeOwnTreeAtBoot()
     {

@@ -98,3 +98,71 @@ public class ARegistryBootProposesItsOwnLinesLandedSetTest(ITestOutputHelper out
             "a tree already proposed writes nothing");
     }
 }
+
+/// <summary>
+/// The same rule for a process that DOES reconcile against a registry: its boot proposes the modules
+/// its tree holds BEFORE the reconcile, so a registry that cannot serve this line (or cannot be
+/// reached at all) no longer keeps the landed modules out of every set for the whole pass. Measured
+/// on the 3 → 4 roll: the plugin registry lists itself as its registry, so the "no registry" boot
+/// never ran there, and its line-4 replica sat on the empty set until its rollout was rolled back.
+/// The registry here is a closed port: the reconcile cannot read it, and the set is proposed anyway.
+/// </summary>
+public class ABootWithAnUnreachableRegistryStillProposesItsTreeTest(ITestOutputHelper output)
+    : MonolithMeshTestBase(output)
+{
+    private const string AiModule = "MeshWeaver.AI";
+
+    private readonly string moduleRoot =
+        Path.Combine(Path.GetTempPath(), "mw-regboot2-" + Guid.NewGuid().ToString("N")[..8]);
+
+    private ModuleLandingService? landing;
+
+    /// <inheritdoc />
+    public override async ValueTask DisposeAsync()
+    {
+        await base.DisposeAsync();
+        try { Directory.Delete(moduleRoot, recursive: true); }
+        catch (IOException) { /* a temp directory that outlives the test is harmless */ }
+        catch (UnauthorizedAccessException) { /* likewise */ }
+    }
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddPluginCatalog()
+            .ConfigureServices(services => services
+                .AddSingleton(new PluginCatalogOptions
+                {
+                    InstallPreInstalledPackages = false,
+                    // A registry that answers nothing: port 9 (discard) on loopback is closed.
+                    RegistryUrl = "http://127.0.0.1:9",
+                })
+                .AddSingleton(_ => landing ??= new ModuleLandingService(baseDirectory: moduleRoot)));
+
+    private ModuleLandingService Landing => Mesh.ServiceProvider.GetRequiredService<ModuleLandingService>();
+
+    [Fact(Timeout = 300_000)]
+    public async Task TheBoot_ProposesTheTreesModules_BeforeTheRegistryReconcile()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Landing.LandModule(
+                AiModule,
+                [(AiModule + ".dll", File.ReadAllBytes(typeof(BundleReader).Assembly.Location))],
+                packagePath: "Plugins/AI",
+                version: "4.0.1",
+                staticAssets: [("wwwroot/version.txt", Encoding.UTF8.GetBytes("4.0.1"))])
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        (ModuleSetStore.Read(Landing.BaseDirectory).Proposed?.Generations.ContainsKey(AiModule) ?? false)
+            .Should().BeFalse("precondition: landing alone proposes nothing");
+
+        using var reconciler = new RegistryUpdateReconciler(Mesh, NullLogger<RegistryUpdateReconciler>.Instance);
+        await reconciler.StartAsync(ct);
+        await reconciler.BootReconciled.Should().Within(TestTimeouts.Convergence)
+            .Emit("the boot pass ends even when the registry cannot be read", ct);
+
+        if (ModuleSetStore.Read(Landing.BaseDirectory).Proposed is not { } proposed)
+            throw new Xunit.Sdk.XunitException("the boot proposes the tree's modules before the reconcile — no set was proposed");
+        proposed.Generations.Keys.Should().Contain(AiModule,
+            "the tree's landed module is proposed although the registry reconcile could not run");
+    }
+}
