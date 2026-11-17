@@ -191,12 +191,13 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     /// <summary>
-    /// A landing page registered through <c>WithNodePage</c> with no verdict renders AS IT IS: the
-    /// provenance line moved into the portal shell's breadcrumb tooltip, so the framework composes
-    /// no strip above it (2026-10-26).
+    /// A landing page registered through <c>WithNodePage</c> with no verdict renders unchanged
+    /// beneath the node's actions row and NO provenance strip: the provenance line moved into the
+    /// portal shell's breadcrumb tooltip, while the actions row (Edit and ⋯ More) is composed above
+    /// the page so it offers the same options as every other node page (<see cref="NodePageMenu"/>).
     /// </summary>
     [Fact]
-    public async Task TheDefaultLandingPage_RendersWithoutAComposedStrip()
+    public async Task TheDefaultLandingPage_RendersBelowTheActionsRow_WithoutAProvenanceStrip()
     {
         var stream = Open(LandingPath, MeshNodeLayoutAreas.OverviewArea);
         await Find<MarkdownControl>(stream, MeshNodeLayoutAreas.OverviewArea,
@@ -204,8 +205,13 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
             "the page itself renders, unchanged");
         var root = await stream.GetControlStream(MeshNodeLayoutAreas.OverviewArea)
             .Where(c => c is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
-        root.Should().BeOfType<MarkdownControl>(
-            "nothing wraps the page — the provenance line lives in the shell's breadcrumb tooltip");
+        var areas = root.Should().BeOfType<StackControl>(
+                "the page sits in a stack beneath the composed actions row").Which.Areas
+            .Select(a => a.Area.ToString() ?? "")
+            .ToArray();
+        areas.Should().HaveCount(2, "the actions row and the page — no provenance strip");
+        areas[0].Should().EndWith("/" + MeshNodeLayoutAreas.NodePageMenuArea);
+        areas[1].Should().EndWith("/" + MeshNodeLayoutAreas.NodePageBodyArea);
     }
 
     [Fact]

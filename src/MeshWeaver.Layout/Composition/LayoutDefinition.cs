@@ -55,6 +55,15 @@ public record LayoutDefinition(IMessageHub Hub)
         = ImmutableDictionary<string, NodePageProvenance>.Empty;
 
     /// <summary>
+    /// What each node LANDING PAGE registered on this definition does about the node's actions row
+    /// (Edit and ⋯ More) — see <see cref="NodePageMenu"/>. Same lifecycle as <see cref="NodePages"/>:
+    /// removed by <see cref="WithNamedRenderer(string, ObservableRenderer)"/>, so it never outlives
+    /// the renderer it describes.
+    /// </summary>
+    private ImmutableDictionary<string, NodePageMenu> NodePageMenus { get; init; }
+        = ImmutableDictionary<string, NodePageMenu>.Empty;
+
+    /// <summary>
     /// The default area to display when no area is specified in the URL.
     /// </summary>
     public string? DefaultArea { get; init; }
@@ -132,7 +141,9 @@ public record LayoutDefinition(IMessageHub Hub)
             // remove this line and NodePageProvenanceVerdictTest
             // .A_verdict_does_not_survive_the_renderer_it_describes reads RenderedByThePage where
             // null is required — i.e. the takeover inherits the page it replaced.
-            NodePages = NodePages.Remove(area)
+            NodePages = NodePages.Remove(area),
+            // The actions-row verdict describes the same renderer, so it goes with it too.
+            NodePageMenus = NodePageMenus.Remove(area)
         };
 
     /// <summary>
@@ -157,6 +168,24 @@ public record LayoutDefinition(IMessageHub Hub)
     /// <param name="area">The area to ask about.</param>
     public NodePageProvenance? GetNodePageProvenance(string area)
         => NodePages.GetValueOrDefault(area);
+
+    /// <summary>
+    /// Records what the landing page registered for <paramref name="area"/> does about the node's
+    /// actions row. Called by <c>MeshNodeLayoutAreas.WithNodePage</c> AFTER the renderer is
+    /// registered — registering clears the entry.
+    /// </summary>
+    /// <param name="area">The area whose renderer the verdict describes.</param>
+    /// <param name="menu">The verdict — see <see cref="NodePageMenu"/>.</param>
+    public LayoutDefinition WithNodePageMenu(string area, NodePageMenu menu)
+        => this with { NodePageMenus = NodePageMenus.SetItem(area, menu) };
+
+    /// <summary>
+    /// The recorded actions-row verdict for <paramref name="area"/>, or <c>null</c> when the area's
+    /// renderer was not registered through <c>WithNodePage</c>.
+    /// </summary>
+    /// <param name="area">The area to ask about.</param>
+    public NodePageMenu? GetNodePageMenu(string area)
+        => NodePageMenus.GetValueOrDefault(area);
 
     /// <summary>
     /// True when a named renderer is registered for <paramref name="area"/>. Predicate

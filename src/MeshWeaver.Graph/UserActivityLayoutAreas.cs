@@ -108,7 +108,9 @@ public static class UserActivityLayoutAreas
                 + "system-security' across the top of somebody's home would state a fact about a "
                 + "database row to a reader asking about a colleague. The reader's real question — "
                 + "'member since' — belongs in the profile the page already renders "
-                + "(UserActivityLayoutAreas.BuildProfile) and is tracked separately."))
+                + "(UserActivityLayoutAreas.BuildProfile) and is tracked separately."),
+                // The page draws the Edit + More row itself, in its own HomeActions sub-area.
+                NodePageMenu.RenderedByThePage)
             .WithView(PinnedArea, PinnedAreaView)
             .WithView(ThreadsArea, ThreadsAreaView)
             .WithView(CatalogArea, CatalogAreaView)
