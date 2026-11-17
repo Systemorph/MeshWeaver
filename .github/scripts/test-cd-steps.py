@@ -1972,11 +1972,15 @@ def separation_problems(workflow_text: str) -> list[str]:
         if not said:
             problems.append("`first-instance-first` has no step that SAYS, by name, that a line declaring no first "
                             "instance hands no instance anything (`if: env.FIRST == 'none'`, a notice + the summary)")
-        for sid in ("record", "record-token", "first", "tags"):
-            st = next((x for x in steps if x.get("id") == sid), None)
-            if st is not None and "env.FIRST != 'none'" not in str(st.get("if", "")):
+        for st in steps:
+            if (str(st.get("uses", "")).startswith("actions/checkout") or "--self-test" in str(st.get("run", ""))
+                    or st in said):
+                continue
+            if "env.FIRST != 'none'" not in str(st.get("if", "")):
+                sid = st.get("id") or st.get("name") or "?"
                 problems.append(f"`first-instance-first`'s `{sid}` step is not conditioned on `env.FIRST != 'none'` — "
-                                "a line that declares no first instance would read a record or tag a repository")
+                                "a line that declares no first instance would read a record, tag a repository or "
+                                "announce a build (by declaration, never because an output happened to be empty)")
     if cf is not None and not any("post-self-update-announcement.sh" in str(st.get("run", ""))
                                   for st in cf.get("steps") or []):
         problems.append("`control-first` no longer delivers through post-self-update-announcement.sh — the two "
@@ -2670,8 +2674,8 @@ def main() -> int:
          fi_every_line != workflow_text and any("DECLARING a first instance" in p for p in separation_problems(fi_every_line)),
          "the mutation passed (or could not apply)")
     fi_unconditioned = workflow_text.replace(
-        "if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'",
-        "if: steps.tags.outputs.announce == 'true'", 1)
+        "steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'",
+        "steps.tags.outputs.announce == 'true'", 1)
     case("...and the guard catches a first-instance handover NOT conditioned on its line and its record's repository",
          fi_unconditioned != workflow_text and any("`first_line`" in p for p in separation_problems(fi_unconditioned)),
          "the mutation passed (or could not apply)")
@@ -2686,6 +2690,12 @@ def main() -> int:
     nf_tags = workflow_text.replace("        id: tags\n        if: env.FIRST != 'none'\n", "        id: tags\n", 1)
     case("...and the guard catches a first-instance `tags` step that would tag a repository for a line with none",
          nf_tags != workflow_text and any("`tags` step is not conditioned" in p for p in separation_problems(nf_tags)),
+         "the mutation passed (or could not apply)")
+    nf_hand = workflow_text.replace(
+        "        if: env.FIRST != 'none' && steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'",
+        "        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'", 1)
+    case("...and the guard catches a first-instance HANDOVER not conditioned on the declaration (only on an empty output)",
+         nf_hand != workflow_text and any("not conditioned on `env.FIRST != 'none'`" in p for p in separation_problems(nf_hand)),
          "the mutation passed (or could not apply)")
     nf_arm_record = workflow_text.replace(
         "        id: record\n        if: needs.line.outputs.first_instance != 'none'\n", "        id: record\n", 1)

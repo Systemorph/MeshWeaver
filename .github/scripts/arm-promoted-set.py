@@ -1008,9 +1008,11 @@ def line_first_instance(line: dict | None, control_instance: dict, branch: str) 
         # repository and no job that hands anything. cd-line.py refuses the shape; this refuses a
         # caller that hands it an unvalidated one without the reason.
         reason = str(line.get("noFirstInstanceReason") or "").strip()
-        if not reason:
-            raise ValueError(f"line `{branch}` declares firstInstance \"{FIRST_INSTANCE_NONE}\" without "
-                             "noFirstInstanceReason — the declared absence of a first instance says why")
+        minimum = _cd_line().NO_FIRST_INSTANCE_REASON_MIN  # cd-line.py's own bound — one number, never a copy
+        if len(reason) < minimum:
+            raise ValueError(f"line `{branch}` declares firstInstance \"{FIRST_INSTANCE_NONE}\" without a "
+                             f"noFirstInstanceReason of at least {minimum} characters (got {reason!r}) — the "
+                             "declared absence of a first instance says why")
         if line.get("firstInstanceImageRepository"):
             raise ValueError(f"line `{branch}` declares firstInstance \"{FIRST_INSTANCE_NONE}\" beside an image "
                              "repository — no instance runs one")
@@ -1692,6 +1694,13 @@ def self_test() -> int:
           _raises(lambda: first_instance_url(fn, shipped_ci, {})) and _raises(lambda: first_instance_hold(fn, {}, 3)))
     check("no first instance: `none` without its reason is REFUSED, never armed on",
           _raises(lambda: line_first_instance({"branch": "x", "firstInstance": FIRST_INSTANCE_NONE}, shipped_ci, "x")))
+    cd_min = cd_mod.NO_FIRST_INSTANCE_REASON_MIN
+    check("no first instance: a reason SHORTER than cd-line.py's minimum is REFUSED here too (one bound, two readers)",
+          _raises(lambda: line_first_instance({"branch": "x", "firstInstance": FIRST_INSTANCE_NONE,
+                                               "noFirstInstanceReason": "y" * (cd_min - 1)}, shipped_ci, "x")))
+    check("NEGATIVE CONTROL — a reason of exactly cd-line.py's minimum is accepted",
+          line_first_instance({"branch": "x", "firstInstance": FIRST_INSTANCE_NONE,
+                               "noFirstInstanceReason": "y" * cd_min}, shipped_ci, "x")["none"])
     check("no first instance: `none` beside a repository is REFUSED",
           _raises(lambda: line_first_instance({"branch": "x", "firstInstance": FIRST_INSTANCE_NONE,
                                                "noFirstInstanceReason": "a reason long enough to read",
