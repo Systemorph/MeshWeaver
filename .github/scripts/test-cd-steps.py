@@ -2120,7 +2120,7 @@ def run_release_pointer_cases(root, case) -> None:
 RELEASE_RESOLVE_STEP_ID = "rel"
 RELEASE_BUMP_STEP_ID = "bump"
 PROPS_LINE = """<PlatformVersion Condition="'$(PlatformVersion)' == ''">{v}</PlatformVersion>"""
-DOTNET_STUB = r'''#!/usr/bin/env bash
+RELEASE_PROPS_DOTNET_STUB = r'''#!/usr/bin/env bash
 sed -n "s/.*<PlatformVersion Condition=[^>]*>\([^<]*\)<\/PlatformVersion>.*/\1/p" Directory.Build.props
 '''
 
@@ -2183,7 +2183,7 @@ def run_release_resolve(tree: Path, tmp: Path, body: str, tag: str, sha: str,
     _git(tree, "checkout", "-q", "--detach", sha)
     binp = tmp / "bin"
     binp.mkdir(exist_ok=True)
-    (binp / "dotnet").write_text(DOTNET_STUB)
+    (binp / "dotnet").write_text(RELEASE_PROPS_DOTNET_STUB)
     (binp / "dotnet").chmod(0o755)
     run_tmp = tmp / f"run-{tag}-{sha[:7]}-{int(annotated)}"
     run_tmp.mkdir(exist_ok=True)
@@ -2248,6 +2248,14 @@ def run_release_line_cases(root, case) -> None:
         case("release: a declared line absent from the checkout refuses rather than deciding without it",
              rc != 0 and "origin/main3 is missing" in log, f"rc={rc} out={o} {log}")
         _git(tree, "update-ref", "refs/remotes/origin/main3", c["main3"])
+
+        # 5b ── FAIL CLOSED: a reader that yields no label/moves_latest refuses, never passes "" on.
+        derive_call = 'python3 .github/scripts/cd-line.py derive)'
+        silent = body.replace(derive_call, 'true)', 1)
+        rc, o, log = run_release_resolve(tree, tmp, silent, "v3.1.0", c["main3"])
+        case("release: an empty label/moves_latest from the line reader refuses the release",
+             derive_call in body and silent != body and rc != 0 and "no label" in log and "version" not in o,
+             f"rc={rc} out={o} {log}")
 
         # 6 ── MUTATION CONTROL: without the major test the first line containing the commit wins,
         #      and case 2 resolves a pre-split 3.x commit as a `main` set — the cases must see that.

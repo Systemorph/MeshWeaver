@@ -178,6 +178,12 @@ jobs:
           LINE_FIELDS=$(CD_EVENT=workflow_dispatch CD_REF_NAME="$LINE" CD_DEFAULT_BRANCH="" python3 .github/scripts/cd-line.py derive)
           LABEL=$(sed -n 's/^label=//p' <<<"$LINE_FIELDS")
           MOVES_LATEST=$(sed -n 's/^moves_latest=//p' <<<"$LINE_FIELDS")
+          # Fail closed here rather than lean on check-image-set.sh's own refusal of an empty value:
+          # an empty label or flag is a broken declaration or reader, never a line to release from.
+          if [ -z "$LABEL" ] || [ -z "$MOVES_LATEST" ]; then
+            echo "::error::cd-line.py derive gave line '$LINE' no label ('$LABEL') or moves_latest ('$MOVES_LATEST') — .github/delivery-lines.json or its reader is broken, and the set's per-line pointers cannot be asserted. Refusing to release."
+            exit 1
+          fi
           PROPS=$(dotnet msbuild "$VERSION_PROJECT" -getProperty:PlatformVersion -nologo | tr -d '[:space:]')
           if [ "$PROPS" != "$VERSION" ]; then
             echo "::error::PlatformVersion at $SHA is '$PROPS' but the tag says '$VERSION'. The tag must name the line the commit was built under — either the wrong commit was tagged, or Directory.Build.props was bumped ahead of the release. Retag the right commit."
