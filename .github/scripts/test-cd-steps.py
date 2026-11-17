@@ -2108,6 +2108,212 @@ def run_release_pointer_cases(root, case) -> None:
          mutated != body and rc == 0 and "3-latest" in ptrs.split(), f"rc={rc} pointers={ptrs!r}")
 
 
+
+# ── release.yml: a release is resolved on the DELIVERY LINE of its major ─────────────────────────────
+# Policy `major-lines-run-separately`: `main` builds the newest major, `main3` the 3.x line, and each
+# promotes and seals its own sets. Step `rel` used to ask "is the commit on main?" — which refuses
+# every 3.x commit made after the split — and `The set is complete` passed `--pointers` without the
+# per-line `--line-label`/`--moves-latest` check-image-set.sh refuses to run without. EXECUTED here
+# in a scratch repository whose branches model the split, with a stub `dotnet` that reads
+# PlatformVersion off the checked-out Directory.Build.props (what `dotnet msbuild -getProperty`
+# answers for it).
+RELEASE_RESOLVE_STEP_ID = "rel"
+RELEASE_BUMP_STEP_ID = "bump"
+PROPS_LINE = """<PlatformVersion Condition="'$(PlatformVersion)' == ''">{v}</PlatformVersion>"""
+RELEASE_PROPS_DOTNET_STUB = r'''#!/usr/bin/env bash
+sed -n "s/.*<PlatformVersion Condition=[^>]*>\([^<]*\)<\/PlatformVersion>.*/\1/p" Directory.Build.props
+'''
+
+
+def _git(tree: Path, *args: str) -> str:
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com", "GIT_CONFIG_GLOBAL": "/dev/null",
+           "GIT_CONFIG_NOSYSTEM": "1"}
+    p = subprocess.run(["git", *args], cwd=tree, env=env, capture_output=True, text=True)
+    if p.returncode != 0:
+        die(f"scratch git {' '.join(args)} failed: {p.stderr}")
+    return p.stdout.strip()
+
+
+def _commit(tree: Path, version: str, notes: dict[str, bool], message: str) -> str:
+    (tree / "Directory.Build.props").write_text(f"<Project><PropertyGroup>\n    {PROPS_LINE.format(v=version)}\n</PropertyGroup></Project>\n")
+    rn = tree / "src/MeshWeaver.Documentation/Data/ReleaseNotes"
+    rn.mkdir(parents=True, exist_ok=True)
+    for name, present in notes.items():
+        f = rn / f"{name}.md"
+        if present:
+            f.write_text(f"---\nName: MeshWeaver {name}\nCategory: Release Notes\n---\n\n# {name}\n")
+        elif f.exists():
+            f.unlink()
+    _git(tree, "add", "-A")
+    _git(tree, "commit", "-q", "--allow-empty", "-m", message)
+    return _git(tree, "rev-parse", "HEAD")
+
+
+def release_line_repo(root: Path, tmp: Path) -> tuple[Path, dict[str, str]]:
+    """main and main3 forked from one pre-split commit; a side branch on neither line."""
+    tree = tmp / "repo"
+    tree.mkdir()
+    _git(tree, "init", "-q", "-b", "main")
+    (tree / ".github/scripts").mkdir(parents=True)
+    (tree / ".github/delivery-lines.json").write_text((root / ".github/delivery-lines.json").read_text())
+    for script in ("cd-line.py", "platform-version.py"):
+        (tree / ".github/scripts" / script).write_text((root / ".github/scripts" / script).read_text())
+    c = {}
+    c["presplit"] = _commit(tree, "3.1.0", {"3_1_0": True}, "pre-split 3.1 commit, with notes")
+    c["main4"] = _commit(tree, "4.0.0", {"3_1_0": True, "4_0_0": True}, "main moves to the v4 line")
+    _git(tree, "switch", "-q", "-c", "main3", c["presplit"])
+    c["nonotes"] = _commit(tree, "3.1.0", {"3_1_0": False}, "main3: a sealed build without the notes page")
+    c["main3"] = _commit(tree, "3.1.0", {"3_1_0": True}, "main3: the notes page lands")
+    _git(tree, "switch", "-q", "-c", "side", c["presplit"])
+    c["side"] = _commit(tree, "3.1.0", {"3_1_0": True}, "a branch build on no line")
+    for branch, sha in (("main", c["main4"]), ("main3", c["main3"])):
+        _git(tree, "update-ref", f"refs/remotes/origin/{branch}", sha)
+    return tree, c
+
+
+def run_release_resolve(tree: Path, tmp: Path, body: str, tag: str, sha: str,
+                        annotated: bool = True) -> tuple[int, dict[str, str], str]:
+    if _git(tree, "tag", "-l", tag):
+        _git(tree, "tag", "-d", tag)
+    if annotated:
+        _git(tree, "tag", "-a", tag, "-m", tag, sha)
+    else:
+        _git(tree, "tag", tag, sha)
+    _git(tree, "checkout", "-q", "--detach", sha)
+    binp = tmp / "bin"
+    binp.mkdir(exist_ok=True)
+    (binp / "dotnet").write_text(RELEASE_PROPS_DOTNET_STUB)
+    (binp / "dotnet").chmod(0o755)
+    run_tmp = tmp / f"run-{tag}-{sha[:7]}-{int(annotated)}"
+    run_tmp.mkdir(exist_ok=True)
+    out = run_tmp / "out"
+    out.write_text("")
+    e = dict(os.environ)
+    e.update({"PATH": f"{binp}:{e['PATH']}", "GITHUB_OUTPUT": str(out), "RUNNER_TEMP": str(run_tmp),
+              "GITHUB_REF_NAME": tag, "VERSION_PROJECT": "src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj",
+              "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"})
+    p = subprocess.run(["bash", "-c", body], env=e, cwd=tree, capture_output=True, text=True)
+    outputs = dict(l.split("=", 1) for l in out.read_text().splitlines() if "=" in l)
+    return p.returncode, outputs, p.stdout + p.stderr
+
+
+def run_release_line_cases(root, case) -> None:
+    try:
+        body = workflow_yaml.step_run(root / RELEASE_WORKFLOW, RELEASE_RESOLVE_STEP_ID, job_name="release")
+    except workflow_yaml.WorkflowYamlError as e:
+        die(str(e))
+    for needle in ("cd-line.py lines", "merge-base --is-ancestor", "cd-line.py platform-major", "cd-line.py derive",
+                   "-getProperty:PlatformVersion", "ReleaseNotes"):
+        if needle not in body:
+            die(f"release.yml step `{RELEASE_RESOLVE_STEP_ID}` no longer contains {needle!r} — these cases would "
+                "measure a step that does not decide the way they assume")
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        tree, c = release_line_repo(root, tmp)
+
+        # 1 ── THE v3.1.0 CASE: a main3 commit with its notes, main already on 4.0.0.
+        rc, o, log = run_release_resolve(tree, tmp, body, "v3.1.0", c["main3"])
+        case("release: a 3.1.0 tag on a main3 commit resolves line main3 (label main3, does not move `latest`)",
+             rc == 0 and o.get("line") == "main3" and o.get("label") == "main3" and o.get("moves_latest") == "false"
+             and o.get("sha") == c["main3"] and o.get("next") == "3.2.0", f"rc={rc} out={o} {log}")
+
+        # 2 ── a commit from before the split is on BOTH branches; the major picks main3, not main.
+        rc, o, log = run_release_resolve(tree, tmp, body, "v3.1.0", c["presplit"])
+        case("release: a pre-split 3.1 commit (on main AND main3) resolves the 3.x line, never `main`",
+             rc == 0 and o.get("line") == "main3", f"rc={rc} out={o} {log}")
+
+        # 3 ── the default line still releases its own major, and moves `latest`.
+        rc, o, log = run_release_resolve(tree, tmp, body, "v4.0.0", c["main4"])
+        case("release: a 4.0.0 tag on main resolves line main (label main, moves `latest`)",
+             rc == 0 and o.get("line") == "main" and o.get("label") == "main" and o.get("moves_latest") == "true",
+             f"rc={rc} out={o} {log}")
+
+        # 4 ── every older refusal still holds.
+        rc, o, log = run_release_resolve(tree, tmp, body, "v3.1.0", c["nonotes"])
+        case("release: a line commit with no notes page is still refused (the notes rule is intact)",
+             rc != 0 and "no release-notes page" in log and "version" not in o, f"rc={rc} out={o} {log}")
+        rc, o, log = run_release_resolve(tree, tmp, body, "v3.1.0", c["side"])
+        case("release: a commit on no declared line is refused, naming the declared lines",
+             rc != 0 and "no declared delivery line" in log and "main3" in log, f"rc={rc} out={o} {log}")
+        rc, o, log = run_release_resolve(tree, tmp, body, "v3.1.0", c["main4"])
+        case("release: a 3.1.0 tag on a commit built under 4.0.0 is refused (main builds no 3.x)",
+             rc != 0 and "version" not in o, f"rc={rc} out={o} {log}")
+        rc, o, log = run_release_resolve(tree, tmp, body, "v3.1.0", c["main3"], annotated=False)
+        case("release: a lightweight tag is still refused", rc != 0 and "lightweight" in log, f"rc={rc} {log}")
+
+        # 5 ── FAIL CLOSED: a declared line missing from the checkout is a refusal, not a skip.
+        _git(tree, "update-ref", "-d", "refs/remotes/origin/main3")
+        rc, o, log = run_release_resolve(tree, tmp, body, "v3.1.0", c["main3"])
+        case("release: a declared line absent from the checkout refuses rather than deciding without it",
+             rc != 0 and "origin/main3 is missing" in log, f"rc={rc} out={o} {log}")
+        _git(tree, "update-ref", "refs/remotes/origin/main3", c["main3"])
+
+        # 5b ── FAIL CLOSED: a reader that yields no label/moves_latest refuses, never passes "" on.
+        derive_call = 'python3 .github/scripts/cd-line.py derive)'
+        silent = body.replace(derive_call, 'true)', 1)
+        rc, o, log = run_release_resolve(tree, tmp, silent, "v3.1.0", c["main3"])
+        case("release: an empty label/moves_latest from the line reader refuses the release",
+             derive_call in body and silent != body and rc != 0 and "no label" in log and "version" not in o,
+             f"rc={rc} out={o} {log}")
+
+        # 6 ── MUTATION CONTROL: without the major test the first line containing the commit wins,
+        #      and case 2 resolves a pre-split 3.x commit as a `main` set — the cases must see that.
+        mutated = body.replace('if [ "$LINE_MAJOR" = "$MAJOR" ]; then', "if true; then", 1)
+        rc, o, log = run_release_resolve(tree, tmp, mutated, "v3.1.0", c["presplit"])
+        case("control: a step that ignores the line's major releases a pre-split 3.x commit from `main`",
+             mutated != body and rc == 0 and o.get("line") == "main", f"rc={rc} out={o}")
+
+    # 7 ── the completeness check passes the PER-LINE pointer facts `rel` resolved (check-image-set.sh
+    #      refuses `--pointers` without them, so a release that omitted them could never pass).
+    rel_text = (root / RELEASE_WORKFLOW).read_text()
+    m = re.search(r'check-image-set\.sh\s+"\$\{\{ steps\.rel\.outputs\.short \}\}"(.*?)(?:\n\s*\n|\n\s*- )', rel_text, re.S)
+    args = m.group(1) if m else ""
+    case("release: `The set is complete` passes --line-label and --moves-latest from `rel`",
+         "--pointers" in args and '--line-label "${{ steps.rel.outputs.label }}"' in args
+         and '--moves-latest "${{ steps.rel.outputs.moves_latest }}"' in args, f"args={args!r}")
+
+
+def run_release_bump(body: str, main_reads: str, version: str, nxt: str) -> tuple[int, str, str, str]:
+    with tempfile.TemporaryDirectory() as td:
+        tree = Path(td)
+        props = tree / "Directory.Build.props"
+        props.write_text(f"<Project><PropertyGroup>\n    {PROPS_LINE.format(v=main_reads)}\n</PropertyGroup></Project>\n")
+        out, summary = tree / "out", tree / "summary"
+        out.touch(); summary.touch()
+        e = {**os.environ, "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary),
+             "VERSION": version, "NEXT": nxt}
+        p = subprocess.run(["bash", "-c", body], env=e, cwd=tree, capture_output=True, text=True)
+        changed = dict(l.split("=", 1) for l in out.read_text().splitlines() if "=" in l).get("changed", "<unset>")
+        reads = re.search(r">([^<]*)</PlatformVersion>", props.read_text()).group(1)
+        return p.returncode, changed, reads, p.stdout + p.stderr + summary.read_text()
+
+
+def run_release_bump_cases(root, case) -> None:
+    try:
+        body = workflow_yaml.step_run(root / RELEASE_WORKFLOW, RELEASE_BUMP_STEP_ID, job_name="open-next-line")
+    except workflow_yaml.WorkflowYamlError as e:
+        die(str(e))
+    rc, changed, reads, log = run_release_bump(body, "3.1.0", "3.1.0", "3.2.0")
+    case("bump: main on the released line moves to the next one", rc == 0 and changed == "true" and reads == "3.2.0",
+         f"rc={rc} changed={changed} reads={reads} {log}")
+    rc, changed, reads, log = run_release_bump(body, "4.0.0", "3.1.0", "3.2.0")
+    case("bump: releasing 3.1.0 while main reads 4.0.0 bumps NOTHING and says why",
+         rc == 0 and changed == "false" and reads == "4.0.0" and "4.0.0" in log and "backwards" in log,
+         f"rc={rc} changed={changed} reads={reads} {log}")
+    rc, changed, reads, log = run_release_bump(body, "3.2.0", "3.1.0", "3.2.0")
+    case("bump: main already on the next line is a no-op", rc == 0 and changed == "false" and reads == "3.2.0",
+         f"rc={rc} changed={changed} reads={reads} {log}")
+    rc, changed, reads, log = run_release_bump(body, "3.0.0", "3.1.0", "3.2.0")
+    case("bump: main BEHIND the release is still refused (bump by hand)", rc != 0 and reads == "3.0.0",
+         f"rc={rc} changed={changed} reads={reads} {log}")
+    # MUTATION CONTROL: without the newer-line test the 4.0.0 case is the old red refusal.
+    mutated = body.replace("tuple(int(x) for x in current[0][:2]) > released", "False", 1)
+    rc, changed, reads, log = run_release_bump(mutated, "4.0.0", "3.1.0", "3.2.0")
+    case("control: a bump step without the newer-line test fails the release run on main's 4.0.0",
+         mutated != body and rc != 0, f"rc={rc} changed={changed}")
+
+
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
     try:
@@ -2432,6 +2638,14 @@ def main() -> int:
     print()
     print(f"── release.yml step `{RELEASE_POINTERS_STEP_ID}` (legacy line pointers, never backwards) ──")
     run_release_pointer_cases(root, case)
+
+    print()
+    print(f"── release.yml step `{RELEASE_RESOLVE_STEP_ID}` (a release resolves on the delivery line of its major) ──")
+    run_release_line_cases(root, case)
+
+    print()
+    print(f"── release.yml step `{RELEASE_BUMP_STEP_ID}` (the next line never moves main backwards) ──")
+    run_release_bump_cases(root, case)
 
     print()
     if failures:

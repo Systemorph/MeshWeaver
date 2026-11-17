@@ -357,9 +357,15 @@ git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0
 
 The lane **promotes**; it compiles nothing. In order:
 
-1. **Refuses** a version that is not `v<major>.<minor>.<patch>`, a lightweight tag, a commit not on
-   `main`, a commit whose `PlatformVersion` differs from the tag, and a version with no committed
-   notes page at `Doc/ReleaseNotes/<x_y_z>`.
+1. **Refuses** a version that is not `v<major>.<minor>.<patch>`, a lightweight tag, a commit that is
+   not on the **delivery line of the tag's major**, a commit whose `PlatformVersion` differs from
+   the tag, and a version with no committed notes page at `Doc/ReleaseNotes/<x_y_z>` in the tagged
+   commit. The lines are the branches `.github/delivery-lines.json` declares (policy
+   [`major-lines-run-separately`](/Doc/Architecture/MajorLinesRunSeparately)): the tag's line is
+   the declared branch that contains the commit AND whose tip still builds the tag's major. That is
+   `main3` for a 3.x tag and `main` for a 4.x one. A commit from before the split is on both
+   branches, and the major decides. The same resolution yields the line's floating label and
+   whether it moves the tester's `latest`, which step 3 needs.
 2. **Resolves the build** for the commit from its `<major>.<minor>.<run>` tag (or a retired `3.0.0-ci.<n>` one) on the manifest
    that carries its identity (`<short-sha>`, or the build's `staging-<short-sha>-<run id>` when a
    rebuild moved the bare tag; the retired `<core>-p<plugins>` pair tag is no longer required), and
@@ -372,7 +378,17 @@ The lane **promotes**; it compiles nothing. In order:
 5. **Retags** `memex-migration`, `mw-plugin-test`, then `memex-portal-ai` last (`<short-sha>` →
    `3.1.0`, manifest-only, seconds), and mirrors the three to GHCR.
 6. **Publishes the GitHub Release** from the notes page.
-7. **Opens the pull request** that moves `PlatformVersion` to `3.2.0`.
+7. **Opens the pull request** that moves the default branch's `PlatformVersion` to the next minor —
+   unless the default branch already reads a NEWER line than the release. Then it opens nothing
+   and says why in the run summary: releasing `3.1.0` from `main3` while `main` reads `4.0.0` must
+   never move `main` back to `3.2.0`. The released line's own branch keeps its `PlatformVersion`;
+   moving it to the next minor is a separate decision, made by hand.
+
+> 🚨 **A tag runs the TAGGED COMMIT's copy of `release.yml`**, never the default branch's: a
+> `push: tags` run reads the workflow at the commit the tag points at. A change to this lane
+> therefore releases nothing until a commit that CARRIES it has been promoted and sealed on the
+> line being released. A 3.x release needs the change on `main3`, and a 4.x one on `main`. A set
+> sealed before the change cannot be released by it.
 
 Everything the lane needs is asserted RED by a `preflight` job — no `continue-on-error`, no
 `if: secret != ''` (AGENTS.md: a gate never tests its own inputs).
@@ -393,8 +409,10 @@ Everything the lane needs is asserted RED by a `preflight` job — no `continue-
    > `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` over the mesh MCP).
 2. **Pick the build to release.** A commit whose CD run has `Promote`, `Verify every image
    shipped` **and** `Bake platform content in the shipped image + publish` green — read the JOBS, never the run's conclusion (the `plugins` publication is MeshWeaver.Plugins' to seal since #6143; `release.yml` asserts it)
-   ([ContinuousDeliveryContract](/Doc/Architecture/ContinuousDeliveryContract)). Commit its notes
-   page, `Doc/ReleaseNotes/3_1_0`, first: the lane will not release without it.
+   ([ContinuousDeliveryContract](/Doc/Architecture/ContinuousDeliveryContract)). The notes page,
+   `Doc/ReleaseNotes/3_1_0`, must be IN the commit you tag: commit it on the release's line
+   branch (`main3` for 3.x) first, and pick a sealed build of a commit that carries it. The lane
+   will not release without it.
 3. **Scan it.** Run the two OWASP ZAP scans — public active, authenticated passive — against the
    deployment serving that build, and write the verdict and every finding's disposition on the
    notes page ([OWASP ZAP Scan — Every Release](/Doc/Architecture/SecurityScanning)). `FAIL-NEW`

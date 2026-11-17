@@ -304,7 +304,9 @@ az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
 ## Official release (promote a sealed continuous build)
 
 ```bash
-# 0. Pick the commit: on main, its CD run SEALED (preconditions above), PlatformVersion == the tag.
+# 0. Pick the commit: on the LINE branch of the tag's major (main3 for 3.x, main for 4.x — policy
+#    major-lines-run-separately), its CD run SEALED (preconditions above), PlatformVersion == the tag.
+#    🚨 The tag runs THAT commit's release.yml, never main's: a lane fix helps only a commit carrying it.
 grep -m1 '<PlatformVersion Condition' Directory.Build.props          # e.g. 3.1.0 — use THIS value below
 # 1. Make sure the notes page is committed at that commit — WITH the Security section: both OWASP
 #    ZAP verdict lines and a disposition per WARN (section above):
@@ -315,14 +317,15 @@ git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0
 #    → release.yml: resolves the 3.1.<run> build for <sha> → asserts complete + sealed → writes
 #      _releases/3.1.0 → retags memex-migration, mw-plugin-test, memex-portal-ai (last) → mirrors
 #      to GHCR (no line pointer moves: CD already moved them) → publishes the GitHub Release →
-#      opens "release: PlatformVersion 3.1.0 → 3.2.0".
+#      opens "release: PlatformVersion 3.1.0 → 3.2.0" on main — or NOTHING, saying why, when main
+#      already reads a newer line (3.1.0 from main3 while main reads 4.0.0).
 # 3. Merge that bump PR. Main builds keep sorting ABOVE the release either way (3.1.<run> > 3.1.0);
 #    the bump only lets Stable see the NEXT clean release.
 gh api "repos/Systemorph/MeshWeaver/pulls?state=open&head=Systemorph:release/open-3.2.0-line" --jq '.[].html_url'
 ```
 
 What the lane REFUSES, each with a red step naming the fix: a non-clean version (`v3.0.0-rc14`),
-a lightweight tag, a commit not on `main`, a `PlatformVersion` mismatch, a commit `main-cd` never
+a lightweight tag, a commit not on the delivery line of its major, a `PlatformVersion` mismatch, a commit `main-cd` never
 promoted, a set whose bake is not sealed, and a release with no notes page.
 
 ## "All portals update" — how (and how to confirm)
