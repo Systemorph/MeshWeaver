@@ -321,8 +321,21 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             logger.LogDebug(
                 "[RegistryUpdate] no registry configured — nothing to reconcile against. "
                 + "A registry instance learns from its own repos through the build watcher instead.");
-            // Nothing to be behind: whoever sequences after the boot reconcile may go at once.
-            MarkBootReconciled();
+            // 🚨 …but its OWN line's module set still has to be proposed by a process of that line.
+            // Nothing else here closes a wave on this tree: no registry reconcile runs, the default
+            // install proposes only after landing a fresh carrier, and a publish served by a replica
+            // of ANOTHER line derives this tree's set against its own platform. A registry's first
+            // replica of a new line therefore stayed on whatever set it booted with (an empty one,
+            // measured on the 3 → 4 roll), its landed modules activated nowhere and its readiness
+            // gates refused it for good. The boot closes the wave the shelf already holds — checked
+            // and idempotent, so a tree already proposed writes nothing.
+            var bootDefaults = hub.ServiceProvider.GetService<InstanceAutoRegistrationService>()?.Completed
+                .Take(1).Select(_ => Unit.Default) ?? Observable.Return(Unit.Default);
+            subscriptions.Add(bootDefaults
+                .ObserveOn(TaskPoolScheduler.Default)
+                .SelectMany(_ => OnLane(ProposeOwnTreeAtBoot))
+                .SubscribeOn(TaskPoolScheduler.Default)
+                .Subscribe(_ => { }, _ => MarkBootReconciled(), MarkBootReconciled));
             return;
         }
 
@@ -1675,6 +1688,52 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             : $"the package's update policy is {policy} — unattended module landing rides the Auto "
               + "policy only; use the catalog's manual Update instead (per-package policy, "
               + "independent of the platform's Admin/UpdatePolicy)";
+    }
+
+    /// <summary>
+    /// The boot of a process that reconciles against no registry — the registry instance itself —
+    /// proposes its OWN line's module set from what its tree already holds, and asks for that set's
+    /// activation when it moved. Never faults: a refused proposal leaves the mesh on its set, logged.
+    /// </summary>
+    private IObservable<Unit> ProposeOwnTreeAtBoot()
+    {
+        var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+        if (landing is null)
+            return Observable.Return(Unit.Default);
+        return ModuleDependencyFloor.ProposeChecked(hub, landing)
+            .DefaultIfEmpty()
+            .SelectMany(set => set is null
+                ? Observable.Return(Unit.Default)
+                : RequestActivationOf(set))
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "[RegistryUpdate] boot: this line's module set could not be proposed from the modules "
+                    + "its tree holds — the mesh stays on its current set. Cause: {Cause}", ex.Message);
+                return Observable.Return(Unit.Default);
+            });
+    }
+
+    /// <summary>Asks for the activation of a set the boot proposed — the one module reload path,
+    /// live where possible, otherwise exactly one restart.</summary>
+    private IObservable<Unit> RequestActivationOf(ModuleSet set)
+    {
+        logger.LogInformation(
+            "[RegistryUpdate] boot: proposed this line's module set {Sequence} ({Count} module(s)) from the "
+            + "modules its tree already held; requesting their activation.",
+            set.Sequence, set.Generations.Count);
+        return ModuleReload.Request(hub, new ModuleReloadRequest
+            {
+                Reason = $"boot proposed module set {set.Sequence} from the modules this line's tree already held",
+                RequestedBy = "boot",
+            }, $"boot-set-{set.Sequence}-{set.Id}")
+            .Select(_ => Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "[RegistryUpdate] boot: module set {Sequence} was proposed but its activation "
+                    + "could not be requested — it loads at the next restart", set.Sequence);
+                return Observable.Return(Unit.Default);
+            });
     }
 
     /// <summary>
