@@ -1705,21 +1705,31 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Every boot proposes its OWN line's module set from what its tree already holds — before the
-    /// registry reconcile when there is one, as the whole boot pass when there is none — and asks
-    /// for that set's activation when it moved. Never faults: a refused proposal leaves the mesh on
-    /// its set, logged.
+    /// Every boot closes a STUCK BOOTSTRAP of its own line — a recorded set that names no module
+    /// while the tree holds modules — before the registry reconcile when there is one, as the whole
+    /// boot pass when there is none, and asks for that set's activation when it moved. Any other
+    /// state is left to the landing waves. Never faults: a refused proposal leaves the mesh on its
+    /// set, logged.
     /// </summary>
     private IObservable<Unit> ProposeOwnTreeAtBoot()
     {
         var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null)
             return Observable.Return(Unit.Default);
-        return ModuleDependencyFloor.ProposeChecked(hub, landing)
-            .DefaultIfEmpty()
-            .SelectMany(set => set is null
-                ? Observable.Return(Unit.Default)
-                : RequestActivationOf(set))
+        // 🚨 ONLY the stuck bootstrap: this line's recorded set EXISTS and names no module. That is
+        // what a line's first replica leaves when it proposes before anything landed in its tree,
+        // and it never moves again on a registry (above). A line with no set yet, or one whose set
+        // names modules, is left to its landing waves: a proposal here would read the tree while a
+        // wave may still be landing into it and publish the half-landed mix the set exists to make
+        // unreachable — and an activation request would swap in modules a wave landed moments ago.
+        return landing.ReadPool.InvokeBlocking(ct =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return ModuleSetStore.Read(landing.BaseDirectory).Proposed;
+            })
+            .SelectMany(current => current is { Generations.Count: 0 }
+                ? ProposeOverTheEmptySet(landing)
+                : Observable.Return(Unit.Default))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex,
@@ -1728,6 +1738,15 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 return Observable.Return(Unit.Default);
             });
     }
+
+    /// <summary>Proposes over a recorded empty set — checked and idempotent — and asks for the
+    /// activation of the set it wrote.</summary>
+    private IObservable<Unit> ProposeOverTheEmptySet(ModuleLandingService landing)
+        => ModuleDependencyFloor.ProposeChecked(hub, landing)
+            .DefaultIfEmpty()
+            .SelectMany(set => set is null
+                ? Observable.Return(Unit.Default)
+                : RequestActivationOf(set));
 
     /// <summary>Asks for the activation of a set the boot proposed — the one module reload path,
     /// live where possible, otherwise exactly one restart.</summary>
