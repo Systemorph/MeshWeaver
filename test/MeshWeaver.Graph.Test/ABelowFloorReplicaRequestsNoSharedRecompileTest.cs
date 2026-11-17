@@ -183,6 +183,58 @@ public class ABelowFloorReplicaRequestsNoSharedRecompileTest(ITestOutputHelper o
         await ShouldServeTheDiagnosis_AndLeaveTheRecord(verdict, typeNode);
     }
 
+    /// <summary>
+    /// A record stamped <see cref="CompilationStatus.Unavailable"/> — which is what a below-floor
+    /// compile stamps — read on a replica below the floor. The page must name the FLOOR refusal,
+    /// never the "did not report its compilation state in time … Recompile forces a fresh attempt"
+    /// copy, which no recompile on this replica can make true. NEGATIVE CONTROL in
+    /// <see cref="AnUnavailableRecord_WithTheFloorMet_KeepsTheUndeterminedDiagnosis"/>.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnUnavailableRecord_OnABelowFloorReplica_ServesTheFloorDiagnosis()
+    {
+        var typeNode = await UnavailableType($"{BelowMarker}Unavailable");
+        var verdict = await Activate(typeNode, "below-floor-unavailable", TestContext.Current.CancellationToken);
+        var nack = NackOf(verdict, typeNode);
+        nack.Reason.Should().Contain("AI@^1.40.0",
+            "a replica below the floor serves the floor diagnosis naming the unmet requirement")
+            .And.NotContain(UndeterminedError, "not the stale 'state undetermined' reading of the shared record");
+    }
+
+    /// <summary>NEGATIVE CONTROL — the same Unavailable record on a replica that meets the floor
+    /// keeps the state-undetermined diagnosis.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnUnavailableRecord_WithTheFloorMet_KeepsTheUndeterminedDiagnosis()
+    {
+        var typeNode = await UnavailableType("FloorMetUnavailable");
+        var verdict = await Activate(typeNode, "floor-met-unavailable", TestContext.Current.CancellationToken);
+        NackOf(verdict, typeNode).Reason.Should().Contain(UndeterminedError);
+    }
+
+    private const string UndeterminedError = "the settle wait for this type timed out";
+
+    private Task<MeshNode> UnavailableType(string name) =>
+        CreateAsSystem(new MeshNode(name, TestPartition)
+        {
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Configuration = "config => config",
+                CompilationStatus = CompilationStatus.Unavailable,
+                CompilationError = UndeterminedError,
+            },
+        });
+
+    private static UnhandledMessageNack NackOf(MeshNode verdict, MeshNode typeNode)
+    {
+        verdict.HubConfiguration.Should().NotBeNull("an Unavailable record serves a diagnosis");
+        var nack = verdict.HubConfiguration!(
+                new MessageHubConfiguration(null, new Address("probe", typeNode.Id)))
+            .Get<UnhandledMessageNack>();
+        nack.Should().NotBeNull("the diagnosis overlay Nacks typed requests");
+        return nack!;
+    }
+
     /// <summary>NEGATIVE CONTROL — the identical bytes bind for a type whose floor is met.</summary>
     [Fact(Timeout = 120_000)]
     public async Task NegativeControl_TheSameBuild_WithTheFloorMet_Binds()
