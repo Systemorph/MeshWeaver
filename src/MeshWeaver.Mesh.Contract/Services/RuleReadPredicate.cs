@@ -158,9 +158,74 @@ public interface INodeTypeReadPredicates
     IReadOnlyList<RuleReadPredicate> ReadPredicates { get; }
 }
 
+/// <summary>
+/// Declared by an <see cref="INodeTypeAccessRule"/> whose Read decision REPLACES the permission fold in a
+/// LISTING too: a grant on the row's path never lists a row of this rule's node type; only the rule's own
+/// <see cref="INodeTypeReadPredicates"/> do (Doc/Architecture/AccessControl → "Rule read predicates").
+///
+/// <para><b>Why it exists.</b> A rule replaces the fold on a point read. Most rules only WIDEN it or
+/// delegate to it, so a query that applies the fold plus the rule's predicates lists no more than a
+/// point read admits. A rule that NARROWS — it refuses a caller who holds a Read grant on the node, as
+/// a feed readable by its owner alone does — would be bypassed by such a query: everyone holding Read on
+/// the partition would list rows the rule refuses them on a point read. A rule of that kind implements
+/// this interface, and a query executor that filters inside its store (Postgres) then excludes the type
+/// from the fold's arm of its row filter.</para>
+///
+/// <para>A marker: the declaration IS the type test, made on the governing rule under its lease
+/// (<see cref="NodeTypeAccessRuleSet.ExclusiveReadNodeTypes"/>). Pair it with
+/// <see cref="INodeTypeReadPredicates"/> to keep the rows the rule admits listable; without predicates
+/// the type is listed to nobody but System.</para>
+/// </summary>
+public interface INodeTypeExclusiveRead;
+
+/// <summary>
+/// What a query that filters inside its store applies of the node types' access rules for ONE caller
+/// (Doc/Architecture/AccessControl → "Rule read predicates").
+/// </summary>
+/// <param name="Predicates">The rows rules open to the caller (OR'd into the row filter).</param>
+/// <param name="ExclusiveNodeTypes">Node types whose governing Read rule replaces the fold in a listing
+/// (<see cref="INodeTypeExclusiveRead"/>): the fold's arm of the row filter never admits them, whoever the
+/// caller is. Caller-independent; resolved even when <paramref name="Predicates"/> could not be.</param>
+public sealed record RuleReadScope(
+    IReadOnlyList<ResolvedReadPredicate> Predicates,
+    IReadOnlyList<string> ExclusiveNodeTypes)
+{
+    /// <summary>No predicate and no exclusive type: the row filter is the fold alone.</summary>
+    public static RuleReadScope Empty { get; } = new([], []);
+
+    /// <summary>True when the scope changes nothing in a row filter.</summary>
+    public bool IsEmpty => Predicates.Count == 0 && ExclusiveNodeTypes.Count == 0;
+}
+
 /// <summary>Resolution of the mesh's declared <see cref="RuleReadPredicate"/>s for one caller.</summary>
 public static class RuleReadPredicates
 {
+    /// <summary>
+    /// The node types whose governing Read rule replaces the fold in a listing
+    /// (<see cref="NodeTypeAccessRuleSet.ExclusiveReadNodeTypes"/>). Synchronous and caller-independent;
+    /// empty when the mesh registers no rule set.
+    /// </summary>
+    /// <param name="hub">The mesh hub (its services carry the rule set).</param>
+    public static ImmutableArray<string> ExclusiveNodeTypes(IMessageHub hub)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return hub.ServiceProvider.GetService<NodeTypeAccessRuleSet>()?.ExclusiveReadNodeTypes()
+               ?? ImmutableArray<string>.Empty;
+    }
+
+    /// <summary>
+    /// The caller's <see cref="RuleReadScope"/>: <see cref="Resolve"/>'s predicates and
+    /// <see cref="ExclusiveNodeTypes"/>. Emits exactly once.
+    /// </summary>
+    /// <param name="hub">The mesh hub.</param>
+    /// <param name="userId">The reader.</param>
+    public static IObservable<RuleReadScope> ResolveScope(IMessageHub hub, string? userId)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        var exclusive = ExclusiveNodeTypes(hub);
+        return Resolve(hub, userId).Select(predicates => new RuleReadScope(predicates, exclusive));
+    }
+
     /// <summary>
     /// The predicates the mesh's governing Read rules declare, resolved for <paramref name="userId"/>:
     /// empty for anyone who is not a real user (anonymous, public, System — which reads unfiltered
