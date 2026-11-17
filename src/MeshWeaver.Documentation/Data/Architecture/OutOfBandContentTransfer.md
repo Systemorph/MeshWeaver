@@ -73,6 +73,22 @@ route already do: it asks the owning node's hub for the collection **config** wi
 qualified name `{nodePath}/{collection}`, and resolves a provider over it. **Only the config
 crosses the mesh; the bytes never do.**
 
+🚨 **The producer opens the destination's STORE, never the loaded collection.** It resolves the
+provider with `ContentService.OpenStore`, not `GetCollection`. `GetCollection` *initializes* what it
+opens: it reads and parses every markdown file under the collection root and attaches a change
+watcher, because the hub that owns a collection serves it. A producer staging one blob needs
+none of that. Until MeshWeaver#8158 it paid for all of it anyway. On a client partition's content
+share the scan is one network round-trip per file, and no deadline bounds it. The producer's
+write was not posted until the scan finished. That matches the reported symptom: a staged save
+timed out after 30–45 s, while the same file uploaded through the web UI (which never stages)
+landed at once. The pod logs that would confirm it were not readable. `OpenStore` opens a
+bare store once per name and never scans or watches it. It does not reuse a collection that
+`GetCollection` opened under the same name, because that one may still be scanning. A store that
+fails to open reaches the producer as the same "could not be opened from the posting hub" fault, and
+the transfer falls back to inline as before. Regression test: `AStagedUploadDoesNotScanTheCollectionTest`
+(Orleans), which parks the provider's whole-tree scan and requires the staged upload to land
+without starting one.
+
 ```text
 producer (import hub)                       receiver (Space-root node hub)
 ──────────────────────                      ──────────────────────────────

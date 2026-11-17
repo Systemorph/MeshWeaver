@@ -182,7 +182,7 @@ Its one step is the operator's `hosting-dump-analyze --namespace <ns> [selector]
    name, because nothing there outlived the crash.
 2. Creates **one short-lived Job in the instance's namespace**. The Job mounts that claim
    `readOnly: true` and carries no secret and no ServiceAccount token. It runs as non-root on
-   `mcr.microsoft.com/dotnet/sdk:10.0` and installs the pinned `dotnet-dump` into its own `/tmp`.
+   `mcr.microsoft.com/dotnet/sdk:11.0` and installs the pinned `dotnet-dump` into its own `/tmp`.
 3. Inside the Job, the script resolves the selected file and refuses it unless its real path lies
    under the mount, so a symlink cannot walk out. It then runs a **fixed** command set: `eeversion`,
    `threadpool`, `gcheapstat`, `dumpheap -stat`, `syncblk`, `clrthreads`, `clrstack -all` and
@@ -334,7 +334,7 @@ dump left in the scratch directory is invisible inside the container.
 
 ```bash
 docker run --rm --platform linux/amd64 -v "$HOME/segv-dump/shard/collected-logs:/dumps" \
-  mcr.microsoft.com/dotnet/sdk:10.0 bash -c '
+  mcr.microsoft.com/dotnet/sdk:11.0 bash -c '
     curl -sL https://aka.ms/dotnet-dump/linux-x64 -o /tmp/dotnet-dump && chmod +x /tmp/dotnet-dump
     /tmp/dotnet-dump analyze /dumps/<name>.dmp -c "<command>" -c "exit"
   '

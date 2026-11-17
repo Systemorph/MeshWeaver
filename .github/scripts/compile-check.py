@@ -7,7 +7,7 @@ it: it compiles every NodeType's C# `Source` against the framework assemblies EX
 does on import, and fails on any *regression*.
 
 Faithful mesh reproduction (mirrors scratchpad/build-check.sh, proven against the live compile):
-  * ref assemblies = every `<core>/src/*/bin/(Debug|Release)/net10.0/*.dll`, deduped by filename,
+  * ref assemblies = every `<core>/src/*/bin/(Debug|Release)/net11.0/*.dll`, deduped by filename,
     preferring the assembly's OWN project dir + newest mtime;
   * ONE COMPILATION UNIT per NodeType (`UNIT_FILE`): every source concatenated in node-path order
     with the `using` directives hoisted and deduped, which is what
@@ -469,6 +469,57 @@ def config_check_lines(lambda_src: str):
 
 # ── reference assemblies ───────────────────────────────────────────────────────────────────────────
 
+def _line_behind(core: "Path | str", rev: str) -> "tuple[int, str] | None":
+    """How far `rev` is behind the framework's own delivery line, as (commits, remote ref).
+
+    Core delivers more than one line (`.github/delivery-lines.json`: `main` is the default line,
+    `main3` the previous major), and a checkout of one line is NOT stale merely because another
+    line moved — measured against `origin/main` alone, every current `main3` checkout was refused
+    as hundreds of commits behind once `main` became v4. The lines are read from the checkout's own
+    copy of the file (a tree that predates it has the one line, `main`).
+
+    `rev`'s line is the line whose tip CONTAINS it. Among several (a commit older than the fork is in
+    both), the one it is fewest commits behind. When no line contains it (local commits on top), it is
+    the line it carries the fewest commits beyond — the line it was branched from. Containment, not
+    a bare minimum over every line: a line `rev` merely has IN it (a retired line reachable from the
+    current one counts 0 for every checkout) must never answer for it, and a stale checkout must be
+    measured, and told to pull, against its own line. None when no line's remote ref resolves."""
+    core = Path(core)
+    branches = ["main"]
+    lines_file = core / ".github" / "delivery-lines.json"
+    if lines_file.exists():
+        try:
+            doc = json.loads(lines_file.read_text(encoding="utf-8"))
+            declared = [ln.get("branch") for ln in doc.get("lines", []) if isinstance(ln, dict) and ln.get("branch")]
+            if declared:
+                branches = declared
+            else:
+                print(f"  ({lines_file} declares no line; measuring against origin/main)", file=sys.stderr)
+        except (OSError, ValueError, AttributeError) as exc:
+            print(f"  ({lines_file} could not be read ({exc}); measuring against origin/main)", file=sys.stderr)
+
+    def count(spec: str) -> "int | None":
+        r = subprocess.run(["git", "-C", str(core), "rev-list", "--count", spec],
+                           capture_output=True, text=True, timeout=15)
+        n = r.stdout.strip()
+        return int(n) if r.returncode == 0 and n.isdigit() else None
+
+    containing, beyond = [], []
+    for branch in branches:
+        ref = f"origin/{branch}"
+        behind, ahead = count(f"{rev}..{ref}"), count(f"{ref}..{rev}")
+        if behind is None or ahead is None:
+            continue
+        (containing if ahead == 0 else beyond).append((behind, ahead, ref))
+    if containing:
+        behind, _, ref = min(containing)
+        return behind, ref
+    if beyond:
+        behind, _, ref = min(beyond, key=lambda t: (t[1], t[0]))
+        return behind, ref
+    return None
+
+
 def _refuse_if_sibling_stale(core: "Path | str") -> None:
     """Refuse a verdict when the framework checkout is behind its remote.
 
@@ -498,25 +549,24 @@ def _refuse_if_sibling_stale(core: "Path | str") -> None:
         return
     core = Path(core)
     try:
-        r = subprocess.run(["git", "-C", str(core), "rev-list", "--count", "HEAD..origin/main"],
-                           capture_output=True, text=True, timeout=15)
+        behind = _line_behind(core, "HEAD")
     except Exception as exc:
         print(f"  (framework freshness unchecked for {core}: {exc})", file=sys.stderr)
         return
-    if r.returncode != 0:
-        return                                   # not a git repo / no origin/main — CI's case
-    n = r.stdout.strip()
-    if n.isdigit() and int(n) > 0:
+    if behind is None:
+        return                                   # not a git repo / no line's remote ref — CI's case
+    n, ref = behind
+    if n > 0:
         print(
             f"\n\u2717 REFUSING TO RUN: the framework checkout is {n} commit(s) behind its remote.\n"
             f"    {core}\n\n"
             "  Every src/ project compiles against it, so this gate's verdict would be meaningless.\n"
             "  This exact staleness has produced BOTH a phantom failure and a false pass.\n\n"
-            f"  Fix:  git -C {core} pull --ff-only origin main", flush=True)
+            f"  Fix:  git -C {core} pull --ff-only origin {ref.removeprefix('origin/')}", flush=True)
         # Its own code, not 1 (#6567): "your NodeTypes are broken" and "this run could not answer"
         # must never be the same exit status. Raised, so a script that imports discover_refs exits
         # with the same code.
-        sys.exit(refuse(EXIT_REFUSED_STALE, f"framework checkout {core} is {n} commit(s) behind origin/main"))
+        sys.exit(refuse(EXIT_REFUSED_STALE, f"framework checkout {core} is {n} commit(s) behind {ref}"))
 
 
 
@@ -555,7 +605,7 @@ def read_host_reference_set(refs_dir) -> "dict | None":
 
 def _refuse_if_host_build_stale(manifest: dict) -> None:
     """A host-built set records the core commit it was published from; refuse when the checkout it
-    came from has moved past that commit on `origin/main`. Same hazard and same exit code as a
+    came from has moved past that commit on its delivery line (`_line_behind`). Same hazard and same exit code as a
     stale sibling checkout (`_refuse_if_sibling_stale`): the set is a snapshot, and a snapshot older
     than main answers about a framework CI no longer runs."""
     if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
@@ -565,21 +615,20 @@ def _refuse_if_host_build_stale(manifest: dict) -> None:
         print("  (host-built reference set names no core commit; freshness unchecked)", file=sys.stderr)
         return
     try:
-        r = subprocess.run(["git", "-C", str(core), "rev-list", "--count", f"{sha}..origin/main"],
-                           capture_output=True, text=True, timeout=15)
+        behind = _line_behind(core, sha)
     except Exception as exc:
         print(f"  (host-built reference set freshness unchecked for {core}: {exc})", file=sys.stderr)
         return
-    if r.returncode != 0:
-        print(f"  (host-built reference set freshness unchecked: {r.stderr.strip()[:200]})", file=sys.stderr)
+    if behind is None:
+        print(f"  (host-built reference set freshness unchecked: no delivery line's remote ref in {core} contains a count for {sha[:12]})", file=sys.stderr)
         return
-    n = r.stdout.strip()
-    if n.isdigit() and int(n) > 0:
+    n, ref = behind
+    if n > 0:
         print(f"\n✗ REFUSING TO RUN: the host-built reference set was published from core {sha[:12]},\n"
-              f"  which is {n} commit(s) behind origin/main in {core}.\n\n"
+              f"  which is {n} commit(s) behind {ref} in {core}.\n\n"
               "  Fix:  update that checkout, then rebuild the set:\n"
               f"    python3 {core}/.github/scripts/build-host-reference-set.py", flush=True)
-        sys.exit(refuse(EXIT_REFUSED_STALE, f"host-built reference set is {n} commit(s) behind origin/main"))
+        sys.exit(refuse(EXIT_REFUSED_STALE, f"host-built reference set is {n} commit(s) behind {ref}"))
 
 
 def _report_framework_provenance(refs: dict, ref_roots) -> None:
@@ -643,7 +692,7 @@ def discover_refs(refs_arg):
        COMPLETE set means (see `short_reference_set_refusal`): `"image"` — a FLAT directory of
        assemblies extracted from the platform image (`--image`'s cache, CI's `refs/`), whose
        contents are CONTAINER-built and therefore need the image's shared frameworks too; or
-       `"source-build"` — the per-project `<proj>/bin/<cfg>/net10.0` layout of a core checkout
+       `"source-build"` — the per-project `<proj>/bin/<cfg>/net11.0` layout of a core checkout
        built on this host with the SDK, which needs the reference pack and no shared frameworks; or
        `"host-build"` — a FLAT directory carrying `HOST_REFERENCE_SET_MANIFEST`: the image's
        closure published on this host by `build-host-reference-set.py`. Like a source build it
@@ -652,7 +701,7 @@ def discover_refs(refs_arg):
     layout = "source-build"
     if refs_arg:
         # Prefer the PRECISE per-project output glob (the same clean set auto-discovery uses below):
-        # <refs>/<proj>/bin/(Debug|Release)/net10.0/*.dll. A bare recursive **/*.dll also sweeps
+        # <refs>/<proj>/bin/(Debug|Release)/net11.0/*.dll. A bare recursive **/*.dll also sweeps
         # obj/ intermediates, bin/.../ref/ metadata-only reference assemblies and runtimes/<rid>/
         # copies; on some CI runners that larger set deduped by filename to a mix that OMITTED the
         # real framework assemblies, so every NodeType failed CS0246 'MeshWeaver' could not be found
@@ -660,7 +709,7 @@ def discover_refs(refs_arg):
         # points at a FLAT assemblies dir (no src/*/bin layout), the other documented --refs usage.
         dlls = []
         for cfg in ("Debug", "Release"):
-            dlls = glob.glob(os.path.join(refs_arg, "*", "bin", cfg, "net10.0", "*.dll"))
+            dlls = glob.glob(os.path.join(refs_arg, "*", "bin", cfg, "net11.0", "*.dll"))
             if dlls:
                 break
         if not dlls:
@@ -697,7 +746,7 @@ def discover_refs(refs_arg):
         core_used = None
         for core in candidates:
             for cfg in ("Debug", "Release"):
-                dlls = glob.glob(str(core / "src" / "*" / "bin" / cfg / "net10.0" / "*.dll"))
+                dlls = glob.glob(str(core / "src" / "*" / "bin" / cfg / "net11.0" / "*.dll"))
                 if dlls:
                     core_used = core
                     break
@@ -798,7 +847,7 @@ MODULE_REFS_NOT_IN_IMAGE = ("MeshWeaver.AI", "MeshWeaver.Markdown.Collaboration"
 def discover_module_refs(search_roots, include_repo_build: bool = True):
     """Locate the MODULE assemblies that are no longer in the platform image. CI supplies them in
        the flat `--refs` dir (unpacked from the run's module bundles); locally they come from this
-       repo's own `src/<Module>/bin/{Release,Debug}/net10.0/`, since all three are built HERE.
+       repo's own `src/<Module>/bin/{Release,Debug}/net11.0/`, since all three are built HERE.
        Returns {name.dll: abspath} for whatever was found — the caller decides what a miss means.
        Prefers Release over Debug, and the newest file within a tier.
 
@@ -823,7 +872,7 @@ def discover_module_refs(search_roots, include_repo_build: bool = True):
     if include_repo_build:
         for name in MODULE_REFS_NOT_IN_IMAGE:
             for cfg in ("Release", "Debug"):
-                for dll in glob.glob(str(ROOT / "src" / name / "bin" / cfg / "net10.0" / f"{name}.dll")):
+                for dll in glob.glob(str(ROOT / "src" / name / "bin" / cfg / "net11.0" / f"{name}.dll")):
                     consider(dll, cfg == "Release")
     # …then anything the reference roots already carry (CI's flat dir, a sibling checkout's bins).
     for root in search_roots:
@@ -834,7 +883,7 @@ def discover_module_refs(search_roots, include_repo_build: bool = True):
             for dll in glob.glob(str(root / f"{name}.dll")):
                 consider(dll, True)
             for cfg in ("Release", "Debug"):
-                for dll in glob.glob(str(root / "**" / "bin" / cfg / "net10.0" / f"{name}.dll"),
+                for dll in glob.glob(str(root / "**" / "bin" / cfg / "net11.0" / f"{name}.dll"),
                                      recursive=True):
                     consider(dll, cfg == "Release")
     # Absolutize — these become <HintPath>s in a csproj that `dotnet build` runs from a TEMP dir.
@@ -844,7 +893,7 @@ def discover_module_refs(search_roots, include_repo_build: bool = True):
 def discover_ai_refs(search_roots):
     """Locate the `Microsoft.Extensions.AI*` assemblies the mesh supplies at runtime but that are
        NOT in the core `src/*/bin` set discover_refs globs (they live under the core's `test/*/bin`
-       output and in NuGet). Returns {name.dll: path} for net10.0, or {} if none can be found — in
+       output and in NuGet). Returns {name.dll: path} for net11.0, or {} if none can be found — in
        which case the AI-using sets stay UNVERIFIABLE. Prefers a build-output dll over a NuGet one,
        newest mtime within a tier."""
     found = {}   # name -> (path, from_build_output, mtime)
@@ -864,16 +913,16 @@ def discover_ai_refs(search_roots):
             continue
         root = Path(root)
         for cfg in ("Debug", "Release"):
-            for dll in glob.glob(str(root / "**" / "bin" / cfg / "net10.0" /
+            for dll in glob.glob(str(root / "**" / "bin" / cfg / "net11.0" /
                                     "Microsoft.Extensions.AI*.dll"), recursive=True):
                 consider(dll, True)
         # a flat --refs directory
         for dll in glob.glob(str(root / "Microsoft.Extensions.AI*.dll")):
             consider(dll, True)
-    # NuGet fallback (net10.0) only if nothing was found in the build output
+    # NuGet fallback (net11.0) only if nothing was found in the build output
     if not found:
         for dll in glob.glob(os.path.expanduser(
-                "~/.nuget/packages/microsoft.extensions.ai*/**/lib/net10.0/"
+                "~/.nuget/packages/microsoft.extensions.ai*/**/lib/net11.0/"
                 "Microsoft.Extensions.AI*.dll"), recursive=True):
             consider(dll, False)
     # Absolutize — same reason as discover_refs: these paths become <HintPath>s in a check.csproj
@@ -1198,7 +1247,7 @@ def build_csproj(work: Path, ref_xml: str, impl_frameworks: bool = False) -> str
     docfile = "true" if WARNINGS_AS_ERRORS else "false"
     return f'''<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <!-- Disable the SDK's implicit usings: the MESH compiler injects ONLY the explicit prelude
          (IMPLICIT_USINGS, lifted from DynamicMeshNodeAttributeGenerator) plus the authored
          `using`s the unit hoists. `ImplicitUsings=enable` would auto-add System.IO / System.Net.Http /
@@ -1961,14 +2010,14 @@ def _self_test() -> int:
             {k: v for k, v in complete_image.items() if k != "System.Reactive.dll"},
             "image", "NO System.Reactive.dll")
     refuses("a source build with no Rx",
-            {"MeshWeaver.Messaging.Hub.dll": "/x/bin/Release/net10.0/MeshWeaver.Messaging.Hub.dll"},
+            {"MeshWeaver.Messaging.Hub.dll": "/x/bin/Release/net11.0/MeshWeaver.Messaging.Hub.dll"},
             "source-build", "NO System.Reactive.dll")
     # 🚨 THE CONTROL ARM. A refusal that also fires on a GOOD set is a gate nobody can use: a complete
     # image cache, and the host-SDK core build that legitimately has no shared frameworks, must pass.
     refuses("a complete image cache", complete_image, "image", None)
     refuses("a core source build (the ref pack is correct there)",
-            {"MeshWeaver.Messaging.Hub.dll": "/c/src/X/bin/Release/net10.0/MeshWeaver.Messaging.Hub.dll",
-             "System.Reactive.dll": "/c/src/X/bin/Release/net10.0/System.Reactive.dll"},
+            {"MeshWeaver.Messaging.Hub.dll": "/c/src/X/bin/Release/net11.0/MeshWeaver.Messaging.Hub.dll",
+             "System.Reactive.dll": "/c/src/X/bin/Release/net11.0/System.Reactive.dll"},
             "source-build", None)
     # 🚨 THE HOST-BUILT FLAT SET. It has no System.Private.CoreLib.dll, legitimately, so it must PASS
     # as `host-build` and must NOT pass as `image`. The classification is read from its manifest. A
@@ -2604,6 +2653,65 @@ def _self_test_exit_codes(failures: list) -> None:
         if not git_ok:
             failures.append("  exit codes: could not build the stale-checkout fixture (git) — the "
                             "stale arm would go unexercised, which is exactly the trap this guards")
+
+        # Two delivery lines: a checkout current on origin/main3 while origin/main has moved on is
+        # NOT stale (the v3 line refused as "behind origin/main" once main became v4); one commit
+        # behind main3 still is, and is named against main3.
+        lines_core = tmp / "core-lines"
+        (lines_core / ".github").mkdir(parents=True)
+        (lines_core / ".github" / "delivery-lines.json").write_text(
+            json.dumps({"lines": [{"branch": "main"}, {"branch": "main3"}]}), encoding="utf-8")
+        lines_ok = True
+        for cmd in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "a"],
+                    ["commit", "-q", "--allow-empty", "-m", "b"], ["update-ref", "refs/remotes/origin/main3", "HEAD"],
+                    ["commit", "-q", "--allow-empty", "-m", "c"], ["commit", "-q", "--allow-empty", "-m", "d"],
+                    ["update-ref", "refs/remotes/origin/main", "HEAD"], ["reset", "-q", "--hard", "HEAD~2"]):
+            if subprocess.run(["git", "-C", str(lines_core), *cmd], env=git_env, capture_output=True).returncode != 0:
+                lines_ok = False
+                break
+        if not lines_ok:
+            failures.append("  line staleness: could not build the two-line fixture (git)")
+        else:
+            current, stale = _line_behind(lines_core, "HEAD"), _line_behind(lines_core, "HEAD~1")
+            if current != (0, "origin/main3"):
+                failures.append(f"  line staleness: a checkout current on main3 must be 0 behind its own line; got {current}")
+            if stale != (1, "origin/main3"):
+                failures.append(f"  line staleness: one commit behind main3 must be (1, origin/main3); got {stale}")
+            legacy = _line_behind(core, "HEAD") if git_ok else (1, "origin/main")
+            if legacy != (1, "origin/main"):
+                failures.append(f"  line staleness: a tree with no delivery-lines.json measures against main; got {legacy}")
+            # A line that is merely reachable (here main3's tip is inside main, as a retired line
+            # would be) must never answer for a checkout of the other: one behind main is stale.
+            masked = _line_behind(lines_core, "origin/main~1")
+            if masked != (1, "origin/main"):
+                failures.append(f"  line staleness: a reachable line must not mask a stale main checkout; got {masked}")
+
+        # Diverged lines: main3 a-m1-m2-m3, main a-v1. A main3 checkout two behind its own line is
+        # only ONE commit behind main, but main does not contain it: it is (2, origin/main3), and the
+        # remedy names main3. A main3 tip with a local commit on top belongs to main3, 0 behind.
+        div = tmp / "core-diverged"
+        (div / ".github").mkdir(parents=True)
+        (div / ".github" / "delivery-lines.json").write_text(
+            json.dumps({"lines": [{"branch": "main"}, {"branch": "main3"}]}), encoding="utf-8")
+        div_ok = True
+        for cmd in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "a"],
+                    ["commit", "-q", "--allow-empty", "-m", "m1"], ["commit", "-q", "--allow-empty", "-m", "m2"],
+                    ["commit", "-q", "--allow-empty", "-m", "m3"], ["update-ref", "refs/remotes/origin/main3", "HEAD"],
+                    ["checkout", "-q", "--detach", "HEAD~3"], ["commit", "-q", "--allow-empty", "-m", "v1"],
+                    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+                    ["checkout", "-q", "--detach", "origin/main3"], ["commit", "-q", "--allow-empty", "-m", "local"]):
+            if subprocess.run(["git", "-C", str(div), *cmd], env=git_env, capture_output=True).returncode != 0:
+                div_ok = False
+                break
+        if not div_ok:
+            failures.append("  line staleness: could not build the diverged-lines fixture (git)")
+        else:
+            stale3 = _line_behind(div, "origin/main3~2")
+            if stale3 != (2, "origin/main3"):
+                failures.append(f"  line staleness: a stale main3 checkout is measured against main3, not the nearer main; got {stale3}")
+            local3 = _line_behind(div, "HEAD")
+            if local3 != (0, "origin/main3"):
+                failures.append(f"  line staleness: a main3 tip with a local commit belongs to main3; got {local3}")
 
         def run(repo: Path, *argv: str) -> tuple[int, str]:
             env = {k: v for k, v in os.environ.items() if k not in ("CI", "GITHUB_ACTIONS")}

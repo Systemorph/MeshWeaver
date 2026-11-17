@@ -254,9 +254,12 @@ public static class PluginCatalogConfigurationExtensions
                             sp.GetService<ILogger<BootProgress>>());
                 })
                 .AddSingleton<BundleOfferingMemo>()
+                // 🚨 …and the resolved module root of THIS platform line (ModuleRoot.ResolveLine): two
+                // majors share the volume during a roll, and each must land into, read and sweep
+                // only its own tree.
                 .AddSingleton(sp => new ModuleLandingService(
                     sp.GetService<ILogger<ModuleLandingService>>(),
-                    ModuleRoot.Resolve(sp.GetService<IConfiguration>()))
+                    ModuleRoot.ResolveLine(sp.GetService<IConfiguration>()))
                 {
                     // 🚨 MeshWeaver#4963 — reads of the activation record run HERE, never on the
                     // service's cap-1 landing lane, so a bundle-index request no longer waits out
@@ -265,6 +268,15 @@ public static class PluginCatalogConfigurationExtensions
                         ?.Get(Mesh.Threading.IoPoolNames.FileSystem)
                         ?? Mesh.Threading.IoPool.Unbounded,
                 })
+                // 🚨 The registry's shelf, one per platform LINE (policy major-lines-run-separately,
+                // MeshWeaver.Plugins#5550): this process's own line is the landing service above, and
+                // every other line a publish stocks gets a landing service of its own, rooted at that
+                // line's tree — so a publish of one line never moves another line's head.
+                .AddSingleton(sp => new ModuleShelfLines(
+                    sp.GetRequiredService<ModuleLandingService>(),
+                    sp.GetService<IConfiguration>()?[ModuleRoot.ConfigKey],
+                    BundleLine.RunningLine(sp),
+                    loggerFactory: sp.GetService<ILoggerFactory>()))
                 // 🚨 MeshWeaver#6067 follow-up — what the GitSync import consults before it writes a
                 // package's sources: the module generation this process LOADED per package, so a
                 // package whose `requires` floor the loaded dependency does not meet is declined
@@ -300,7 +312,7 @@ public static class PluginCatalogConfigurationExtensions
                     sp.GetRequiredService<Mesh.Threading.IoPoolRegistry>(),
                     sp.GetService<ILogger<ModuleLiveActivation>>()))
                 .AddSingleton(sp => new PendingModuleActivations(
-                    ModuleRoot.Resolve(sp.GetService<IConfiguration>()))
+                    ModuleRoot.ResolveLine(sp.GetService<IConfiguration>()))
                 {
                     // 🚨 MeshWeaver#4655 — the pool every reading of the volume is TAKEN on, so no
                     // probe thread ever walks it. Without this line the reader falls back to the

@@ -48,7 +48,11 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
         _establishmentBudget =
             (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
+        // Resolved while the hub is alive; the budget fires later (Doc/Architecture/TimeoutIsError).
+        _reportTimeout = hub.ServiceProvider.TimeoutTerminalReporter();
     }
+
+    private readonly Action<TimeoutTerminal> _reportTimeout;
 
     /// <summary>
     /// This validator handles Read, Create, Update, and Delete operations.
@@ -272,7 +276,13 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
             // See UnestablishedCheck for why this chain otherwise has no terminal at all (#1446).
             .Timeout(_establishmentBudget)
             .Catch((Exception ex) =>
-                Observable.Return(UnestablishedCheck(context, userId, pathToCheck, ex)))
+            {
+                if (ex is TimeoutException)
+                    _reportTimeout(new TimeoutTerminal(TimeoutTerminalKinds.PermissionEstablishment, pathToCheck,
+                        $"the permission check on '{pathToCheck}' for '{userId}' reached no verdict within "
+                        + $"{_establishmentBudget.TotalSeconds:0.#}s"));
+                return Observable.Return(UnestablishedCheck(context, userId, pathToCheck, ex));
+            })
             // 🚨 THE THIRD TERMINAL — and it is an ALLOW without this line (issue #2742). The chain
             // above ends on a value or a fault, but the fold behind it can also COMPLETE WITHOUT
             // EVER EMITTING: CombineLatest completes the moment any source completes having produced

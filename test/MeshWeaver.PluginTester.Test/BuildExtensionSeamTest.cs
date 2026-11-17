@@ -43,7 +43,7 @@ public class BuildExtensionSeamTest : IDisposable
     private static string Project(string assemblyName, string items = "") => $"""
         <Project Sdk="Microsoft.NET.Sdk">
           <PropertyGroup>
-            <TargetFramework>net10.0</TargetFramework>
+            <TargetFramework>net11.0</TargetFramework>
             <AssemblyName>{assemblyName}</AssemblyName>
             <RootNamespace>Seam</RootNamespace>
             <ProbeGlobal>from-the-project</ProbeGlobal>

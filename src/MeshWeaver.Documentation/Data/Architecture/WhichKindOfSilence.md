@@ -310,7 +310,9 @@ their innermost 12 frames, the largest group first:
     running — so an idle shape is never again taken for what held the pool
     (`ThreadPoolStall.IsIdleWorker`);
   - a last section, `QUEUED WORK: N item(s) read, in M producer(s)`, grouping every queued item by
-    the code it will run — a `Task`'s delegate, an async method's state machine, or the first
+    the code it will run — a `Task`'s delegate, an async method's state machine, a runtime-async
+    method's resuming method (read off its continuation chain, see
+    [Adopting .NET 11](../AdoptingDotNet11), "Measured on the v4 line"), or the first
     delegate a work-item wrapper holds — largest first (`ThreadPoolQueueCensus`). A hub drain reads
     `MeshWeaver.Messaging.MessageService.DrainOne`. The census is read through the runtime's debugger
     enumeration `ThreadPool.GetQueuedWorkItems()` (internal, reached by reflection, the same walk SOS's
@@ -321,6 +323,23 @@ their innermost 12 frames, the largest group first:
   When reading a capture through a `Logs` action, include the header rows in the query
   (`|~ "^\\s+(at |×|->|LOCK|…|QUEUED|    ×)|POOLSTALL"`): a filter on `at ` alone drops every `×N:` and
   `-> ×N called from:` row, and the groups can then no longer be told apart.
+- **A native wait prints as its runtime frame, whatever code the thread entered (after core #8324's
+  CI run).** Whether ClrMD can name the P/Invoke behind an `InlinedCallFrame` depends on the code
+  version of the calling method, not on the wait: ReadyToRun code leaves the frame without a method,
+  and the same method re-jitted at tier 1 records one. Measured in one process with six threads
+  looping `Thread.Sleep`: the first three captures read every sleeper's top frames as
+  `InlinedCallFrame`, the next twelve — after `WaitSubsystem+ThreadWaitInfo.Wait` tiered up — read
+  `Interop+Sys.<LowLevelMonitor_TimedWait>g____PInvoke|70_0(IntPtr, Int32)` for the same wait, and with
+  `DOTNET_TieredCompilation=0` all fifteen read `InlinedCallFrame`. Printing the attached method split
+  workers standing in ONE wait into two shapes whenever their calls straddled a tier-up — four parked
+  sleepers came out `×3` and `×1`. The capture now prints every runtime frame by its frame name
+  (`BlockedThreadStacks.RenderFrame`); the managed frame under it still names where the thread waits.
+  An idle worker's stack therefore starts with `InlinedCallFrame` frames above
+  `LowLevelLifoSemaphore`, and `IsIdleWorker` skips them (`ThreadPoolStall.IsRuntimeFrame`).
+  🚨 And `ThreadState.WaitSleepJoin` is not "in the wait": on Unix the managed wait subsystem sets it
+  before it takes the thread's wait monitor and calls into the OS, so a test that needs a thread
+  INSIDE its wait reads that from the capture (innermost frame is a runtime frame), never from
+  `ThreadState`.
 - **Cost.** The dump suspends the process for about a second. It is taken at most once every
   30 minutes (`ThreadPoolStall.CaptureCooldown`), and only after a whole period in which the pool
   served nothing, or once a queued item has waited 5 s. The probe itself is one queued no-op at a
@@ -348,6 +367,10 @@ their innermost 12 frames, the largest group first:
   `ThreadPoolQueueCensusTest.OnTheRealThreadPool_TheCensusNamesTheItemsActuallyQueued` parks every pool
   worker, queues 1,000 marker items from the test thread and requires the census of the real queue to
   count all 1,000 under the marker's method — and none before they were queued.
+  `ANativeCallFromJittedCode_IsPrintedAsItsRuntimeFrame_NotAsTheMethodClrMdAttaches` parks a dedicated
+  thread in `read(2)` on a pipe from JIT-compiled code and, from one real dump, requires ClrMD's raw
+  frame to carry the P/Invoke (the negative control: the old rendering printed it) and the capture to
+  print `InlinedCallFrame`.
 
 ### The stall that made this necessary
 

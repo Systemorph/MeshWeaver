@@ -19,6 +19,75 @@ public class StringDeltaTest
         d.Apply("hello world").Should().Be("hello world");
     }
 
+    /// <summary>
+    /// An insert in front of an emoji that shares its HIGH surrogate with the inserted emoji
+    /// (🚨 U+1F6A8 and 💰 U+1F4B0 are both <c>\uD83D…</c>) must not split either pair: the
+    /// splice carries whole characters only, so it survives a JSON round trip unchanged.
+    /// </summary>
+    [Fact]
+    public void Compute_NeverSplitsASurrogatePair()
+    {
+        const string oldValue = "(\"\U0001F4B0 Earned\")";
+        const string newValue = "(\"\U0001F6A8 Mine\")\n(\"\U0001F4B0 Earned\")";
+
+        var d = StringDelta.Compute(oldValue, newValue);
+
+        IsWholeText(d.Inserted).Should().BeTrue();
+        IsWholeText(oldValue.Substring(0, d.Start)).Should().BeTrue();
+        d.Apply(oldValue).Should().Be(newValue);
+
+        // The wire round trip is where a lone surrogate turns into U+FFFD.
+        var wire = System.Text.Json.JsonSerializer.Serialize(d.Inserted);
+        var back = System.Text.Json.JsonSerializer.Deserialize<string>(wire) ?? throw new InvalidOperationException($"the wire form {wire} read back as null");
+        new StringDelta(d.Start, d.RemovedLength, back).Apply(oldValue).Should().Be(newValue);
+    }
+
+    /// <summary>A replace of one emoji by another that shares its high surrogate keeps both
+    /// pairs whole on the prefix AND the suffix side.</summary>
+    [Fact]
+    public void Compute_EmojiReplacedBySibling_KeepsPairsWhole()
+    {
+        const string oldValue = "a \U0001F501 b";   // 🔁 \uD83D\uDD01
+        const string newValue = "a \U0001F510 b";   // 🔐 \uD83D\uDD10
+
+        var d = StringDelta.Compute(oldValue, newValue);
+
+        d.Inserted.Should().Be("\U0001F510");
+        d.RemovedLength.Should().Be(2);
+        d.Apply(oldValue).Should().Be(newValue);
+    }
+
+    /// <summary>Two emoji that share their LOW surrogate (🤨 <c>\uD83E\uDD28</c>, 🔨
+    /// <c>\uD83D\uDD28</c>): the code-unit suffix match starts one unit into the character, and
+    /// the splice must still carry the whole replacement.</summary>
+    [Fact]
+    public void Compute_SharedLowSurrogate_KeepsSuffixWhole()
+    {
+        const string oldValue = "x\U0001F928y";
+        const string newValue = "x\U0001F528y";
+
+        var d = StringDelta.Compute(oldValue, newValue);
+
+        d.Inserted.Should().Be("\U0001F528");
+        d.RemovedLength.Should().Be(2);
+        d.Apply(oldValue).Should().Be(newValue);
+    }
+
+    private static bool IsWholeText(string s)
+    {
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (char.IsHighSurrogate(s[i]))
+            {
+                if (i + 1 >= s.Length || !char.IsLowSurrogate(s[i + 1])) return false;
+                i++;
+            }
+            else if (char.IsLowSurrogate(s[i]))
+                return false;
+        }
+        return true;
+    }
+
     [Fact]
     public void Compute_InsertInMiddle_OnlyEncodesInsertedSpan()
     {

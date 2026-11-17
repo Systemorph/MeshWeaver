@@ -40,7 +40,7 @@ public class ProjectBuildTest : IDisposable
     private const string LibraryProject = """
         <Project Sdk="Microsoft.NET.Sdk">
           <PropertyGroup>
-            <TargetFramework>net10.0</TargetFramework>
+            <TargetFramework>net11.0</TargetFramework>
             <Nullable>enable</Nullable>
             <ImplicitUsings>enable</ImplicitUsings>
             <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -194,7 +194,7 @@ public class ProjectBuildTest : IDisposable
         var app = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <Nullable>enable</Nullable>
                 <ImplicitUsings>enable</ImplicitUsings>
                 <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -327,14 +327,14 @@ public class ProjectBuildTest : IDisposable
         Write("Directory.Build.props", "<Project><PropertyGroup /></Project>");
         var app = Write("App/App.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup><ProjectReference Include="../Core/Core.csproj" /></ItemGroup>
             </Project>
             """);
         Write("App/Uses.cs", "namespace App; public static class Uses { public static int N => Core.Numbers.Answer; }");
         Write("Core/Core.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
             </Project>
             """);
         Write("Core/Numbers.cs", "namespace Core; public static class Numbers { public const int Answer = 42; }");
@@ -359,21 +359,21 @@ public class ProjectBuildTest : IDisposable
         Write("Directory.Build.props", "<Project><PropertyGroup /></Project>");
         var app = Write("TransitiveApp/TransitiveApp.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup><ProjectReference Include="../TransitiveMiddle/TransitiveMiddle.csproj" /></ItemGroup>
             </Project>
             """);
         Write("TransitiveApp/Uses.cs", "namespace TransitiveApp; public static class Uses { public static int N => TransitiveLeaf.Numbers.Answer; }");
         Write("TransitiveMiddle/TransitiveMiddle.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup><ProjectReference Include="../TransitiveLeaf/TransitiveLeaf.csproj" /></ItemGroup>
             </Project>
             """);
         Write("TransitiveMiddle/Marker.cs", "namespace TransitiveMiddle; public sealed class Marker;");
         Write("TransitiveLeaf/TransitiveLeaf.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
             </Project>
             """);
         Write("TransitiveLeaf/Numbers.cs", "namespace TransitiveLeaf; public static class Numbers { public const int Answer = 42; }");
@@ -397,14 +397,14 @@ public class ProjectBuildTest : IDisposable
         Write("Directory.Build.props", "<Project><PropertyGroup /></Project>");
         var a = Write("A/A.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup><ProjectReference Include="../B/B.csproj" /></ItemGroup>
             </Project>
             """);
         Write("A/One.cs", "namespace A; public class One;");
         Write("B/B.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup><ProjectReference Include="../A/A.csproj" /></ItemGroup>
             </Project>
             """);
@@ -425,7 +425,7 @@ public class ProjectBuildTest : IDisposable
         Write("Directory.Build.props", "<Project><PropertyGroup /></Project>");
         var project = Write("Lib/Lib.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup>
                 <ProjectReference Include="/elsewhere/MeshWeaver.Data/MeshWeaver.Data.csproj" />
               </ItemGroup>
@@ -445,7 +445,7 @@ public class ProjectBuildTest : IDisposable
         Write("Directory.Build.props", "<Project><PropertyGroup /></Project>");
         var project = Write("Lib/Lib.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup>
                 <ProjectReference Include="/elsewhere/Totally.Absent/Totally.Absent.csproj" />
               </ItemGroup>
@@ -466,7 +466,7 @@ public class ProjectBuildTest : IDisposable
     {
         var project = Write("Lib/Lib.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup>
                 <PackageReference Include="ClosedXML" Version="0.104.0" />
                 <PackageReference Include="CsvHelper" Version="33.0.1" />
@@ -490,7 +490,7 @@ public class ProjectBuildTest : IDisposable
     {
         var project = Write("Lib/Lib.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup><PackageReference Include="Extra.Library" Version="1.0.0" /></ItemGroup>
             </Project>
             """);
@@ -572,7 +572,7 @@ public class ProjectBuildTest : IDisposable
         var project = Write("Lib/Lib.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <NoWarn>$(NoWarn);CS0219</NoWarn>
               </PropertyGroup>
             </Project>
@@ -609,7 +609,7 @@ public class ProjectBuildTest : IDisposable
         var disabled = Write("Off/Off.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <Nullable>disable</Nullable>
                 <ImplicitUsings>enable</ImplicitUsings>
               </PropertyGroup>
@@ -654,7 +654,7 @@ public class ProjectBuildTest : IDisposable
     {
         var project = Write("Lib/Lib.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <Target Name="VerifyAssemblyVersionMatchesPlatform" BeforeTargets="CoreCompile" />
             </Project>
             """);

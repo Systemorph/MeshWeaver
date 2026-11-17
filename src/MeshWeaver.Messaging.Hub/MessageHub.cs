@@ -110,6 +110,7 @@ public sealed class MessageHub : IMessageHub
         => requestFates.Find(requestId)?.Add(stage, Address);
 
     private readonly ILogger logger;
+    private readonly Action<TimeoutTerminal> reportTimeoutTerminal;
     /// <summary>The immutable configuration this hub was built from.</summary>
     public MessageHubConfiguration Configuration { get; }
 
@@ -611,6 +612,9 @@ public sealed class MessageHub : IMessageHub
         hostedHubs.OwnerDisposalCause = () => DisposalOriginForChildren;
         ServiceProvider = serviceProvider;
         Configuration = configuration;
+        // Resolved ONCE while the container is alive: ApplyTimeout fires on a timer thread, possibly
+        // after this hub's container is gone (TimeoutTerminal.cs).
+        reportTimeoutTerminal = serviceProvider.TimeoutTerminalReporter();
         // #7324: the hub's ONE in-flight marker, created with it so every reader finds the same
         // instance (BeginAsyncOperation marks it, a module swap's recycle wave defers on it).
         Set(new HubStepsInFlight());
@@ -765,8 +769,9 @@ public sealed class MessageHub : IMessageHub
             // TimeoutException the SAME .Catch handles. Generous default (every legit init, incl. a
             // NodeType compile, finishes well inside it); a hub may tighten it via
             // Configuration.StartupTimeout, and every hub born inside THIS one's initialization
-            // contracts from there.
-            .Timeout(BuildupTimeout)
+            // contracts from there. On the hub's timeout clock (WithTimeoutClock): the real clock in
+            // production. `ToList` emits once, so the bound is on the whole Concat.
+            .Timeout(Deadline(Configuration.TimeoutClock, BuildupTimeout), _ => Observable.Never<Unit>())
             .Select(_ =>
             {
                 logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
@@ -1398,7 +1403,9 @@ public sealed class MessageHub : IMessageHub
         return ContinueOffBlockIfDeclared(
             RestoreUserContextOnEmission(
                 WrapWithCancelOnDispose(
-                    ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+                    probeOptions.IsSilenceBounded
+                        ? ApplyTimeout(subject, requestType, probeOptions.Target, messageId)
+                        : subject,
                     messageId, subject),
                 capturedCtx),
             r);
@@ -1445,7 +1452,9 @@ public sealed class MessageHub : IMessageHub
         return ContinueOffBlockIfDeclared(
             RestoreUserContextOnEmission(
                 WrapWithCancelOnDispose(
-                    ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+                    probeOptions.IsSilenceBounded
+                        ? ApplyTimeout(subject, requestType, probeOptions.Target, messageId)
+                        : subject,
                     messageId, subject),
                 capturedCtx),
             r);
@@ -1806,10 +1815,11 @@ public sealed class MessageHub : IMessageHub
                 ? entry.Progress
                 : Observable.Never<Unit>();
         var timeout = Configuration.RequestTimeout;
+        var clock = Configuration.TimeoutClock;
         // Fires `timeout` after the LATEST of {the start of the wait, the last progress report}.
         var silence = progress
             .StartWithInline(Unit.Default)
-            .Select(_ => Observable.Timer(timeout).Select(_ => Unit.Default))
+            .Select(_ => Deadline(clock, timeout))
             .Switch();
         // A single reply needs no bound after it arrives; a STREAM is bounded by the silence
         // between its elements, so each element re-arms the same silence clock.
@@ -1817,9 +1827,27 @@ public sealed class MessageHub : IMessageHub
             silence,
             _ => perElement ? silence : Observable.Never<Unit>(),
             System.Reactive.Linq.Observable.Defer<IMessageDelivery>(() =>
-                System.Reactive.Linq.Observable.Throw<IMessageDelivery>(
-                    new TimeoutException(BuildTimeoutMessage(requestType, target, messageId)))));
+            {
+                var message = BuildTimeoutMessage(requestType, target, messageId);
+                reportTimeoutTerminal(new TimeoutTerminal(
+                    TimeoutTerminalKinds.RequestTimeout, Address.ToString(), message));
+                return System.Reactive.Linq.Observable.Throw<IMessageDelivery>(new TimeoutException(message));
+            }));
     }
+
+    /// <summary>
+    /// One tick, <paramref name="dueIn"/> after Subscribe, on <paramref name="clock"/> — the hub's
+    /// <see cref="MessageHubConfiguration.WithTimeoutClock">timeout clock</see>. On the real clock this
+    /// is the same <see cref="System.Threading.Timer"/> (execution context flowed) that
+    /// <c>Observable.Timer</c> arms; disposing the subscription disposes the timer.
+    /// </summary>
+    private static IObservable<Unit> Deadline(TimeProvider clock, TimeSpan dueIn)
+        => Observable.Create<Unit>(observer =>
+            clock.CreateTimer(_ =>
+            {
+                observer.OnNext(Unit.Default);
+                observer.OnCompleted();
+            }, null, dueIn, Timeout.InfiniteTimeSpan));
 
     /// <summary>
     /// Names the request that timed out, AND this hub's own state at the moment it gave up.

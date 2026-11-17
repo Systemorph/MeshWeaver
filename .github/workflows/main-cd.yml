@@ -531,6 +531,10 @@ jobs:
       satellite_ref: ${{ steps.line.outputs.satellite_ref }}
       moves_latest: ${{ steps.line.outputs.moves_latest }}
       default_line: ${{ steps.line.outputs.default_line }}
+      # The line's FIRST INSTANCE (policy `line-first-instance`): empty = the control instance on
+      # memex-control (`control-first`); else the deployment `first-instance-first` hands the build to.
+      first_instance: ${{ steps.line.outputs.first_instance }}
+      first_instance_image: ${{ steps.line.outputs.first_instance_image }}
       major: ${{ steps.major.outputs.major }}
     steps:
       # The commit of the RUNNING file — on every entry the line's own tip (a workflow_run's file is
@@ -921,6 +925,7 @@ jobs:
           # The LINE's Plugins branch (main → Plugins main, main3 → Plugins main3), with
           # vars.MW_PLUGINS_REF already folded in as the override by the `line` step.
           PLUGINS_REF: ${{ needs.line.outputs.plugins_ref }}
+          LINE: ${{ needs.line.outputs.line }}
           SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
         run: |
           set -euo pipefail
@@ -936,6 +941,22 @@ jobs:
           # an empty string travelling downstream as "no pair to check".
           full=$(git ls-remote git@github.com:Systemorph/MeshWeaver.Plugins.git \
                    "refs/heads/$PLUGINS_REF" | awk '{print $1}' | head -1)
+          # 🚨 A pluginsRef that is not the line's own branch is a BOOTSTRAP (the first set of a new major is
+          # built against the Plugins branch carrying it — .github/delivery-lines.json). Once that branch is
+          # merged into the line's Plugins branch it is stale, and building from it would go on silently
+          # (Plugins keeps merged branches), so CD refuses it by name. Commits only (tree:0), no clone.
+          if [ -n "$full" ] && [ "$PLUGINS_REF" != "$LINE" ]; then
+            probe=$(mktemp -d)
+            git -C "$probe" init -q --bare
+            git -C "$probe" fetch -q --filter=tree:0 git@github.com:Systemorph/MeshWeaver.Plugins.git \
+              "refs/heads/$PLUGINS_REF:refs/bootstrap" "refs/heads/$LINE:refs/line"
+            if git -C "$probe" merge-base --is-ancestor refs/bootstrap refs/line; then
+              rm -f ~/.ssh/plugins_key
+              echo "::error::the $LINE line builds its portal host from Plugins '$PLUGINS_REF', which is already merged into Plugins '$LINE' — a bootstrap pluginsRef that outlived its merge. Set the $LINE line's pluginsRef back to '$LINE' in .github/delivery-lines.json (and clear vars.MW_PLUGINS_REF if it names that branch)."
+              exit 1
+            fi
+            echo "bootstrap: the $LINE line builds from Plugins '$PLUGINS_REF', not yet merged into Plugins '$LINE'"
+          fi
           rm -f ~/.ssh/plugins_key
           if [ -z "$full" ]; then
             echo "::error::'refs/heads/$PLUGINS_REF' does not resolve in Systemorph/MeshWeaver.Plugins — check MW_PLUGINS_REF, and the line's \`pluginsRef\` in .github/delivery-lines.json."
@@ -1633,10 +1654,52 @@ jobs:
           echo "release version $version (recovered from memex-migration:${SHORT_SHA}'s tag set — bake-only reconcile)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+  # ─────────────── THE PORTAL-AI BASE, NAMED BY THE TREE THAT DESCRIBES IT ───────────────
+  # Every portal-ai and control image is a framework-dependent publish layered on
+  # `memex-portal-ai-base`. That base used to be resolved as `:latest` — a tag built by hand that
+  # does not change when deploy/base-images/portal-ai does. The v4 line moved the Dockerfile to
+  # aspnet:11.0 and nobody rebuilt `:latest`, so run 43592014876 layered a net11.0 host on the
+  # aspnet:10.0 runtime of 2026-09-16 and the control image exited before Main ("You must install
+  # or update .NET to run this application"). The base is now `src-<content hash>` of that
+  # directory: this job builds it the first time any run needs it (~10 min, measured on the hand
+  # runbook) and is one tag listing otherwise, and each delivery line resolves exactly the base its
+  # own tree describes — so rebuilding for one line can never change what another line layers on.
+  # It also refuses a tree whose Dockerfile runtime differs from the platform's TargetFramework.
+  # Manual: Doc/Architecture/PortalAiBaseImage.
+  portal-ai-base:
+    name: "Ensure the portal-ai base this tree describes"
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.base.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - name: Set up QEMU (arm64 emulation for the base's RUN steps)
+        uses: docker/setup-qemu-action@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - name: Build the base if this tree's content tag is absent; print it
+        id: base
+        run: bash .github/scripts/ensure-portal-ai-base.sh --registry "${{ env.ACR }}" --acr-name meshweaver
+
   portal-image:
     name: "Build + push portal-ai image"
     # Gate: a commit whose required check is green, resolved by `gate` (push OR reconcile).
-    needs: gate
+    needs: [gate, portal-ai-base]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     # 🚨 35 minutes: 30 covered what this job did, and the cr mirror moved OUT of it on purpose
@@ -1710,7 +1773,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
       # 🚂 /next RIDES IN THIS IMAGE (policy `portal-next-in-platform-image`). The Next.js front end used to be its own image,
       # `memex-portal-next:3.0.0-next.<run>`, outside this set and never moved by a roll, so every
       # deployment that enabled it pinned it. It is built HERE now, from the SAME Plugins commit as the
@@ -1802,8 +1865,8 @@ jobs:
         # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
         run: bash .github/scripts/acr-login.sh
       # portal-ai app image — the deployment image (aspnet + node + Claude Code/Copilot CLIs),
-      # layered on the base already in ACR. The base (memex-portal-ai-base) changes rarely and is
-      # rebuilt by the release path / runbook §1, NOT on every main merge.
+      # layered on the base THIS tree describes: `portal-ai-base` resolved its content tag (and built
+      # it if this is the first run to need it). Never a moving base tag — see that job.
       # CIRun=true → continuous version 3.0.0-ci.<build> baked in; image tagged <sha> + moving `main`.
       #
       # MULTI-ARCH: we drop `-r linux-x64` and instead set ContainerRuntimeIdentifiers to
@@ -1816,9 +1879,8 @@ jobs:
       # global `-p:RuntimeIdentifiers` here: a global `-p:` propagates to every ProjectReference and makes
       # ~6 referenced libraries fail `NETSDK1083: RuntimeIdentifier 'linux-x64;linux-arm64' is not recognized`.
       # No Docker is needed: pushing the index straight to a remote registry (ContainerRegistry set) is Docker-free.
-      # 🚨 PREREQUISITE: memex-portal-ai-base:latest in ACR must itself be MULTI-ARCH, else the arm64 leg
-      # has no base layer and this step fails. base-image-acr.yml (workflow_dispatch) builds it multi-arch
-      # (buildx → ACR); operators doing the first multi-arch roll run that once (see LocalColimaMac.md).
+      # 🚨 The base must itself be MULTI-ARCH, else the arm64 leg has no base layer and this step fails;
+      # `portal-ai-base` builds it with buildx for both and refuses an index missing either child.
       # 🚨 List-valued `-p:` props are wrapped '"a;b"' — single-quoted DOUBLE-quotes around a REAL `;`, NOT
       # `%3B`. `%3B` is an MSBuild-ESCAPED (literal) semicolon, so `-p:ContainerRuntimeIdentifiers=a%3Bb` is a
       # SINGLE RID value "a;b" that NEVER splits into a list — the SDK then builds ONE image with the bogus RID
@@ -1877,7 +1939,7 @@ jobs:
                  -p:ContainerRegistry=${{ env.ACR }} \
                  -p:ContainerRepository=memex-portal-ai \
                  -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }} \
-                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest \
+                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:${{ needs.portal-ai-base.outputs.tag }} \
                  -p:PortalNextBundle="$RUNNER_TEMP/portal-next.zip" \
                  2>&1 | tee "$LOG"; then
               echo "::endgroup::"
@@ -2024,7 +2086,7 @@ jobs:
           digest=$(docker buildx imagetools inspect "${{ env.ACR }}/memex-portal-ai:$STAGING" --format '{{json .Manifest.Digest}}' | tr -d '"')
           mkdir -p "$RUNNER_TEMP/image-closure"
           # 🚨 The IMAGE selects the directories, never the find above alone (#6402): a multi-RID
-          # PublishContainer also lays down a RID-less outer `net10.0/publish` that carries the
+          # PublishContainer also lays down a RID-less outer `net11.0/publish` that carries the
           # surface manifest but is in no image layer, and recording it refused every publishing run
           # (38020659588, 38021975367, 38023872356). The manifest list names the platforms the
           # image actually carries; the script takes exactly one directory per platform and refuses
@@ -2189,7 +2251,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
       # 🚨 Read the version from a project that stays in THIS repo — the same rule, and the same
       # project, the portal leg above already follows, and for the same reason. This used to read
       # `plugins-repo/src/Memex.Database.Migration`, which lives in MeshWeaver.Plugins and does NOT
@@ -2289,7 +2351,7 @@ jobs:
   # the next promotion). Folding it into the verdict is a later, separate decision.
   control-image:
     name: "Build + push control image (staging tag)"
-    needs: gate
+    needs: [gate, portal-ai-base]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     # Same measured shape as `portal-image` (build + multi-arch push ~21 min) without its mirror.
@@ -2311,7 +2373,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
       # The same computed version as `portal-image` — the control image is not a separately
       # versioned product (design §3.2), it is the same build under another repository name.
       - name: Compute image version
@@ -2372,7 +2434,7 @@ jobs:
                  -p:ContainerRegistry=${{ env.ACR }} \
                  -p:ContainerRepository=memex-control \
                  -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }} \
-                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest \
+                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:${{ needs.portal-ai-base.outputs.tag }} \
                  2>&1 | tee "$LOG"; then
               echo "::endgroup::"
               echo "control published on attempt $attempt"
@@ -2595,6 +2657,7 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/control-instance.json
+            .github/delivery-lines.json
           sparse-checkout-cone-mode: false
       - name: "The decision can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
@@ -2615,6 +2678,24 @@ jobs:
             -o json --only-show-errors > "$RUNNER_TEMP/control-manifests.json"
           python3 .github/scripts/arm-promoted-set.py control-first \
             --control-manifests "$RUNNER_TEMP/control-manifests.json" --version "$V_CONTROL"
+      # 🚨 LINES RUN SEPARATELY (policy `major-lines-run-separately`). Each line's control-first hands
+      # control ONLY a build of the major control currently RUNS (its public /api/version). Measured
+      # 2026-11-14: `main` (the v4 line) announced 4.0.13212 and 4.0.13217 to a control on 3.* — the
+      # plane opened an approvable Roll, it was approved, and control stuck mid-roll (v3 modules do not
+      # load on v4). The control plane refuses a build outside the record's updatePattern too
+      # (MeshWeaver.Plugins SelfUpdateRouting.PatternRefusal); this is the announcing half. A control
+      # that cannot be read is RED — never "announce anyway", never a silent skip.
+      - name: Is this build on control's line?
+        id: control_line
+        if: steps.control_tags.outputs.announce == 'true'
+        run: python3 .github/scripts/arm-promoted-set.py control-line --version "$V_CONTROL"
+      - name: Not on control's line — say so
+        if: steps.control_tags.outputs.announce == 'true' && steps.control_line.outputs.line_announce != 'true'
+        env:
+          WHY: ${{ steps.control_line.outputs.line_reason }}
+        run: |
+          echo "::notice title=control-first: not announced::$WHY"
+          echo "- control NOT handed \`$V_CONTROL\`: $WHY" >> "$GITHUB_STEP_SUMMARY"
       - name: Already tagged — say where memex-control is
         if: steps.control_tags.outputs.action == 'done'
         run: echo "- memex-control already carries \`$V_CONTROL\` — nothing to write" >> "$GITHUB_STEP_SUMMARY"
@@ -2658,51 +2739,18 @@ jobs:
       # re-delivery is how a lost POST is closed. Never for a build OLDER than control's newest tag.
       # Every non-success ends the job: a build control was never handed is the outage this fixes.
       - name: "Hand the build to control's roll lane (signed self-update-available)"
-        if: steps.control_tags.outputs.announce == 'true'
+        if: steps.control_tags.outputs.announce == 'true' && steps.control_line.outputs.line_announce == 'true'
         env:
           URL: ${{ vars.CONTROL_WEBHOOK_URL }}
           SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          case "$URL" in
-            https://*/api/hooks/Hosting/PlatformBuilds) ;;
-            *) echo "::error::vars.CONTROL_WEBHOOK_URL is not an https URL of a Hosting/PlatformBuilds inbox — refusing to sign anything to it"; exit 1 ;;
-          esac
+          # The ONE delivery (post-self-update-announcement.sh): sign, POST, read the verdict — shared
+          # with `first-instance-first`, so the two handovers never disagree about what a 200 proves.
           BODY=$(python3 .github/scripts/arm-promoted-set.py control-announcement \
             --version "$V_CONTROL" --image-repository "${{ env.ACR }}/memex-control" --instance "$RUN_URL")
-          SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
-          code=$(curl -sS -o "$RUNNER_TEMP/announce-resp" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
-            -X POST "$URL" -H 'Content-Type: application/json' \
-            -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
-          echo "POST $URL -> $code"; cat "$RUNNER_TEMP/announce-resp" || true
-          verdict=$(tr -d '\n' < "$RUNNER_TEMP/announce-resp" 2>/dev/null | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-          case "$code" in
-            2*)
-              # Three answers, as `Did the inbox VERIFY the build fact?` reads them (#3338): `verified`
-              # passes; any other WORD is the receiver saying the HMAC we sent was not checked — RED;
-              # NO verdict is a receiver older than #3312 that cannot answer (its watcher still
-              # verifies before routing) — said, never read as a pass or a refusal.
-              case "$verdict" in
-                verified) ;;
-                "") echo "::warning::the control plane's inbox stored the announcement but answered no signature verdict (a pre-#3312 endpoint) — its watcher verifies before routing; read Ops/Actions/selfupdate-roll-control-* to confirm the Roll opened" ;;
-                *) echo "::error::the control plane's inbox stored the announcement but did not VERIFY its signature (signature: $verdict) — the router drops what it cannot verify, so control would not be rolled. Declare WebhookInbox__Targets__N__SecretConfigKey=Hosting:PlatformWebhookSecret on that instance."
-                   exit 1 ;;
-              esac
-              # 🚨 STORED AND VERIFIED IS NOT DELIVERED (policy `control-first-never-silent`). The inbox
-              # answers before its router runs, and the router DROPS an announcement whose `deployment`
-              # names no record the receiving plane holds (SelfUpdateRouting: "the record lookup IS the
-              # authorization") — measured 2026-10-07 from ci.10184 on: `200 accepted, verified` at a
-              # plane holding no Deployments record, every build dropped, control frozen 10+ h. So this
-              # line claims only what the 200 proves; whether control RUNS the build is read by `arm`
-              # (red past the bound) and by `control-always-latest`.
-              echo "- control handed \`$V_CONTROL\`: \`self-update-available\` for \`control\` STORED and signature-verified at \`${URL%/api/hooks/*}\` (HTTP $code). That is not yet a roll: the plane opens one only if it holds the \`control\` record — \`arm\` and \`control-always-latest\` read whether control actually runs this build" >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            000) echo "::error::could not reach the control plane's inbox at all (DNS/TLS/connection refused) — control was NOT handed $V_CONTROL"; exit 1 ;;
-            401) echo "::error::the control plane's inbox REFUSED the signature (HTTP 401): secrets.CONTROL_WEBHOOK_SECRET and that instance's Hosting:PlatformWebhookSecret are not byte-identical — control was NOT handed $V_CONTROL"; exit 1 ;;
-            404) echo "::error::the control plane's inbox answered 404 (an unlisted target or a wrong URL) — check vars.CONTROL_WEBHOOK_URL; control was NOT handed $V_CONTROL"; exit 1 ;;
-            *)   echo "::error::the control plane's inbox refused the announcement (HTTP $code) — control was NOT handed $V_CONTROL"; exit 1 ;;
-          esac
+          BODY="$BODY" WHO=control VERSION="$V_CONTROL" bash .github/scripts/post-self-update-announcement.sh
       # 📣 Like the rest of the control lane, a red here is NOT a fleet-delivery failure — this job is
       # deliberately outside `alert-on-failure` and `delivery-verdict` — so it reports itself on the
       # one open `control-image` issue instead of paging. `control-lane-report` closes that issue on
@@ -2732,6 +2780,174 @@ jobs:
               || echo "::warning::could not stamp bug + sev:M on ${url} — the issue-taxonomy lane will name it"
           fi
 
+
+  # 🥇 THE LINE'S FIRST INSTANCE, DEPLOYED FIRST (policy `line-first-instance`, MeshWeaver#8365).
+  # `control-first` is one case of a per-line rule: every line has ONE instance that runs its build
+  # before the fleet is offered it. A line that declares none (.github/delivery-lines.json) has
+  # control, handed its builds by `control-first`. A line that DECLARES one (`firstInstance`, on its
+  # own `firstInstanceImageRepository`) is handed each promoted set HERE: this job tags
+  # `<that repository>:<version>` from the portal's accepted staging image and sends that instance's
+  # record the signed `self-update-available` — the same `control-first` decision and
+  # `control-announcement` body, aimed at another record. `arm` then arms the set only once THAT
+  # instance runs it (`select` reads its record's host, the same verdict it reads control with).
+  #
+  # 🚨 ITS OWN REPOSITORY IS THE POINT. An instance on the fleet's `memex-portal-ai` can roll only to
+  # a `memex-portal-ai:<version>` tag, which `arm` alone writes — i.e. after the fleet is offered it.
+  # Gating the arm on such an instance is a wait that can never end (MeshWeaver#8365). Only the version
+  # tag is written: no line pointer moves on this repository — nothing seeds a new instance from it.
+  #
+  # Like the control lane it is outside `delivery-verdict`: a red here never says "the fleet did not
+  # ship", and `arm` turns red on its own once the first instance has been behind past the bound.
+  first-instance-first:
+    name: "Deploy the line's first instance first: <its own repository>:<version> before the fleet is offered it"
+    needs: [preflight, line, gate, portal-image, promote]
+    if: always() && needs.preflight.result == 'success' && needs.line.result == 'success' && needs.line.outputs.first_instance != '' && needs.gate.outputs.publish == 'true' && needs.portal-image.result == 'success' && needs.promote.result == 'success'
+    runs-on: ubuntu-latest
+    # ~3× the measured cr copy of a portal-sized manifest, as control-first.
+    timeout-minutes: 25
+    concurrency:
+      group: main-cd-first-instance-first-${{ needs.line.outputs.line }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STAGING: ${{ needs.gate.outputs.staging_tag }}
+      V_PORTAL: ${{ needs.portal-image.outputs.version }}
+      FIRST: ${{ needs.line.outputs.first_instance }}
+      FIRST_IMAGE: ${{ needs.line.outputs.first_instance_image }}
+      DELIVERY_LINE: ${{ needs.line.outputs.line }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            .github/control-instance.json
+            .github/delivery-lines.json
+          sparse-checkout-cone-mode: false
+      - name: "The decision can say no (self-test)"
+        run: python3 .github/scripts/arm-promoted-set.py --self-test
+      # The record is read exactly as `arm` reads it (the fleet-reader App, scoped to the deployments
+      # repository): where the instance answers (content.host), which major it takes (updatePattern) and
+      # which repository it rolls (imageRepository). An unknown `firstInstance` is RED here, by name.
+      - name: Where is the first instance's record declared?
+        id: record
+        run: |
+          set -euo pipefail
+          repo=$(jq -er '.record.repository' .github/control-instance.json)
+          path=$(python3 .github/scripts/arm-promoted-set.py first-instance --branch "$DELIVERY_LINE" | jq -er '.record_path')
+          owner=${repo%%/*}
+          name=${repo#*/}
+          [ "$owner" = "$GITHUB_REPOSITORY_OWNER" ] && [ -n "$name" ] && [ "$name" != "$repo" ] \
+            || { echo "::error::.github/control-instance.json record.repository '$repo' is not '<$GITHUB_REPOSITORY_OWNER>/<repository>' — the fleet-reader App is installed on $GITHUB_REPOSITORY_OWNER only"; exit 1; }
+          { echo "owner=$owner"; echo "name=$name"; echo "repo=$repo"; echo "path=$path"; } >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for the first instance's record
+        id: record-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.record.outputs.owner }}
+          repositories: ${{ steps.record.outputs.name }}
+          permission-contents: read
+      - name: Read the first instance's record
+        id: first
+        env:
+          GH_TOKEN: ${{ steps.record-token.outputs.token }}
+          REPO: ${{ steps.record.outputs.repo }}
+          RECORD_PATH: ${{ steps.record.outputs.path }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/contents/$RECORD_PATH" -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/first-record.json" \
+            || { echo "::error::line $DELIVERY_LINE declares firstInstance '$FIRST', but $REPO:$RECORD_PATH cannot be read — an unknown deployment, or the fleet-reader App is not installed on $REPO"; exit 1; }
+          host=$(jq -er '.content.host | strings' "$RUNNER_TEMP/first-record.json") \
+            || { echo "::error::$REPO:$RECORD_PATH carries no content.host — where $FIRST answers is declared there"; exit 1; }
+          rec_repo=$(jq -r '.content.imageRepository // ""' "$RUNNER_TEMP/first-record.json")
+          echo "host=$host" >> "$GITHUB_OUTPUT"
+          # 🚨 Its record must FOLLOW the repository this job tags, or the announcement is refused by the
+          # plane (SelfUpdateRouting: a newImage outside the record's imageRepository) and nothing rolls.
+          # Until the record moves (a Memex pull request, after this repository carries a tag) the build
+          # is tagged — that first tag is what lets the record move — and NOT announced, said out loud;
+          # `arm` reads the same mismatch as a declared hold.
+          if [ "${rec_repo##*/}" = "$FIRST_IMAGE" ]; then
+            echo "follows=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "follows=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=First instance not on its own image line::$FIRST's record names imageRepository '$rec_repo', not '$FIRST_IMAGE' (.github/delivery-lines.json, line $DELIVERY_LINE). $FIRST_IMAGE:$V_PORTAL is tagged below, but NOT announced: $FIRST cannot roll to a repository its record does not name. Move the record (Systemorph/Memex mesh/Deployments/$FIRST.json imageRepository + migrationImageRepository) — until then arm holds line $DELIVERY_LINE."
+          fi
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # The SAME decision control-first takes (`control_first`): tag unless already tagged, announce
+      # unless a NEWER version is already on the repository. A repository with no tag yet (its first
+      # build) is an empty listing — never an error.
+      - name: Which tag does the first instance's repository get for this build?
+        id: tags
+        run: |
+          set -euo pipefail
+          [ -n "${V_PORTAL:-}" ] && [ -n "${FIRST_IMAGE:-}" ] || { echo "::error::no portal version or no first-instance repository — refusing to tag nothing"; exit 1; }
+          if az acr repository show --name meshweaver --repository "$FIRST_IMAGE" -o none --only-show-errors 2> "$RUNNER_TEMP/repo-show.err"; then
+            az acr manifest list-metadata --registry meshweaver --name "$FIRST_IMAGE" --top 300 --orderby time_desc \
+              -o json --only-show-errors > "$RUNNER_TEMP/first-manifests.json"
+          elif grep -qi 'not found\|NAME_UNKNOWN\|RepositoryNotFound' "$RUNNER_TEMP/repo-show.err"; then
+            echo "::notice::$FIRST_IMAGE has no image yet — this is its first build"
+            echo '[]' > "$RUNNER_TEMP/first-manifests.json"
+          else
+            cat "$RUNNER_TEMP/repo-show.err"; echo "::error::could not read $FIRST_IMAGE on the registry (not a not-found) — refusing to decide its tags blind"; exit 1
+          fi
+          python3 .github/scripts/arm-promoted-set.py control-first \
+            --control-manifests "$RUNNER_TEMP/first-manifests.json" --version "$V_PORTAL"
+      - name: ACR login
+        if: steps.tags.outputs.action == 'tag'
+        run: bash .github/scripts/acr-login.sh
+      - name: Log in to the fleet registry (publisher)
+        if: steps.tags.outputs.action == 'tag'
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: "Tag <first instance repository>:<version> — the fleet registry first, ACR's version tag LAST"
+        if: steps.tags.outputs.action == 'tag'
+        run: |
+          set -euo pipefail
+          # The SOURCE is this run's PROMOTED portal (promote copied the same staging manifest to its
+          # identity tags). cr first: `done` is decided from ACR's version tag, so ACR is the LAST write.
+          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-portal-ai:$STAGING" "${{ env.REGISTRY }}/$FIRST_IMAGE:$V_PORTAL"
+          docker buildx imagetools create --tag "${{ env.ACR }}/$FIRST_IMAGE:$V_PORTAL" "${{ env.ACR }}/memex-portal-ai:$STAGING"
+          echo "- $FIRST DEPLOYED FIRST: \`$FIRST_IMAGE:$V_PORTAL\` (ACR + ${{ env.REGISTRY }}) — the fleet is offered it once $FIRST runs it" >> "$GITHUB_STEP_SUMMARY"
+      - name: Already tagged — say so
+        if: steps.tags.outputs.action == 'done'
+        run: echo "- $FIRST_IMAGE already carries \`$V_PORTAL\` — nothing to write" >> "$GITHUB_STEP_SUMMARY"
+      # 🚨 LINES RUN SEPARATELY: only a build of the major the instance RUNS (its public /api/version),
+      # as control-first asks of control. Unreadable is RED — never "announce anyway".
+      - name: Is this build on the first instance's line?
+        id: first_line
+        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true'
+        env:
+          HOST: ${{ steps.first.outputs.host }}
+        run: python3 .github/scripts/arm-promoted-set.py control-line --version "$V_PORTAL" --deployment "$FIRST" --instance-url "https://$HOST"
+      - name: Not on the first instance's line — say so
+        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce != 'true'
+        env:
+          WHY: ${{ steps.first_line.outputs.line_reason }}
+        run: |
+          echo "::notice title=first-instance-first: not announced::$WHY"
+          echo "- $FIRST NOT handed \`$V_PORTAL\`: $WHY" >> "$GITHUB_STEP_SUMMARY"
+      - name: "Hand the build to the first instance's roll lane (signed self-update-available)"
+        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'
+        env:
+          URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          BODY=$(python3 .github/scripts/arm-promoted-set.py control-announcement --deployment "$FIRST" \
+            --version "$V_PORTAL" --image-repository "${{ env.ACR }}/$FIRST_IMAGE" --instance "$RUN_URL")
+          BODY="$BODY" WHO="$FIRST" VERSION="$V_PORTAL" bash .github/scripts/post-self-update-announcement.sh
 
   # 📣 THE CONTROL LANE REPORTS ITSELF. It is outside `alert-on-failure` on purpose (its red must
   # not read as "the fleet did not ship"), so without this job a failure here would leave nothing
@@ -2806,7 +3022,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
       # Same $(Version) computation as the other legs — GITHUB_RUN_NUMBER is shared across the
       # run, so the <major>.<minor>.<run> tag matches the portal/migration images by construction.
       - name: Compute image version
@@ -2902,7 +3118,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
       # The SAME $(Version) computation as mw-plugin-test's leg, on the same project, so the two
       # carry one version by construction (promote asserts it).
       - name: Compute image version
@@ -3346,7 +3562,7 @@ jobs:
   # resolver. Those read the promoted set immediately; `delivery-verdict` judges PLATFORM delivery
   # and deliberately does not need this job (policy `platform-backwards-compatibility`).
   arm:
-    name: "Arm the fleet: the newest promoted set control runs and whose ladder passed"
+    name: "Arm the fleet: the newest promoted set the line's first instance runs and whose ladder passed"
     needs: [preflight, line, gate, promote, platform-ladder-compat]
     # `needs.line.result == 'success'`: without its line (and major) `arm` could only select across
     # majors — a refused or failed `line` is RED on its own job, and nothing is armed for it.
@@ -3398,6 +3614,7 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/control-instance.json
+            .github/delivery-lines.json
           sparse-checkout-cone-mode: false
       - name: "The selection can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
@@ -3425,8 +3642,54 @@ jobs:
             -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
           [ -n "$MAJOR" ] && [ -n "$DELIVERY_LINE" ] || { echo "::error::gate produced no line/major — refusing to read a cursor across lines"; exit 1; }
           python3 .github/scripts/arm-promoted-set.py armed-state --major "$MAJOR" --manifests "$RUNNER_TEMP/portal-manifests.json"
+      # 🚨 WHICH INSTANCE RUNS THIS LINE FIRST, AND IS IT HELD BY A DECLARATION? (policies
+      # `line-first-instance` — MeshWeaver#8365 — and `major-lines-run-separately`, MeshWeaver#8279.)
+      # The line's first instance is the one `.github/delivery-lines.json` declares for it, else
+      # control. Its record declares the ONE major it follows (`updatePattern`), where it answers
+      # (`content.host`) and which repository it rolls (`imageRepository`). A line its first instance
+      # does not take is HELD — `select` says so (a ::warning:: and the fleet-unarmed issue), never a
+      # frozen instance; a line with NO first instance control could stand in for says THAT. The record
+      # is read exactly as control-always-latest reads control's: the repository from
+      # `.github/control-instance.json` (every record sits beside control's), the READ-ONLY fleet-reader
+      # App (preflight asserts both secrets), scoped to that one repository. Unreadable — an unknown
+      # `firstInstance` included — is RED here, by name.
+      - name: Where is the line's first instance's record declared?
+        id: record
+        run: |
+          set -euo pipefail
+          repo=$(jq -er '.record.repository' .github/control-instance.json)
+          path=$(python3 .github/scripts/arm-promoted-set.py first-instance --branch "$DELIVERY_LINE" | jq -er '.record_path')
+          owner=${repo%%/*}
+          name=${repo#*/}
+          [ "$owner" = "$GITHUB_REPOSITORY_OWNER" ] && [ -n "$name" ] && [ "$name" != "$repo" ] \
+            || { echo "::error::.github/control-instance.json record.repository '$repo' is not '<$GITHUB_REPOSITORY_OWNER>/<repository>' — the fleet-reader App is installed on $GITHUB_REPOSITORY_OWNER only"; exit 1; }
+          { echo "owner=$owner"; echo "name=$name"; echo "repo=$repo"; echo "path=$path"; } >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for the first instance's record
+        id: record-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+          owner: ${{ steps.record.outputs.owner }}
+          repositories: ${{ steps.record.outputs.name }}
+          permission-contents: read
+      # `control-record.json` holds the LINE'S FIRST INSTANCE'S record (control's for a line that
+      # declares none) — the name `select --control-record` and the structural guard read.
+      - name: Read the first instance's record (its updatePattern, host and imageRepository)
+        env:
+          GH_TOKEN: ${{ steps.record-token.outputs.token }}
+          REPO: ${{ steps.record.outputs.repo }}
+          RECORD_PATH: ${{ steps.record.outputs.path }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/contents/$RECORD_PATH" -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/control-record.json" \
+            || { echo "::error::the fleet-reader token (scoped to $REPO, contents: read) could not read $REPO:$RECORD_PATH — the line's first instance (.github/delivery-lines.json firstInstance, else control) names no record there, or the App is not installed on $REPO"; exit 1; }
+          jq -e '.content.updatePattern | strings' "$RUNNER_TEMP/control-record.json" \
+            || { echo "::error::$REPO:$RECORD_PATH carries no content.updatePattern — which line that instance follows is declared there"; exit 1; }
       # The platform verdict reads only this repository (promotion records, each run's ladder job,
-      # compare for ancestry — the workflow's own token) and control's PUBLIC /api/version + /health.
+      # compare for ancestry — the workflow's own token) and the line's first instance's PUBLIC
+      # /api/version + /health, plus its record read above (where it answers, and whether a
+      # declaration holds the line).
       # No MeshWeaver.Plugins credential: nothing of Plugins is read (policy `platform-module-deploy-separate`).
       - name: Which promoted set may the fleet roll to?
         id: select
@@ -3440,6 +3703,7 @@ jobs:
           # --unarmed-out: every promoted set still newer than the armed one after this selection,
           # with its verdict — the reading the fleet-unarmed alert (last step) clocks a stall from.
           python3 .github/scripts/arm-promoted-set.py select --branch "$DELIVERY_LINE" --major "$MAJOR" --armed-max "$ARMED_MAX" \
+            --control-record "$RUNNER_TEMP/control-record.json" \
             --armed-version "$ARMED_VERSION" --unarmed-out "$RUNNER_TEMP/unarmed.json" \
             ${OVERRIDE:+--override "$OVERRIDE"} ${RESUME:+--resume "$RESUME"}
       - name: ACR login

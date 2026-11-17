@@ -31,7 +31,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// the older single-silo+client variant that conflated cross-process
 /// <c>IDataChangeNotifier</c> scoping with the cache.Update flow itself.</para>
 /// </summary>
-public class TwoSiloCacheUpdateFixture : IAsyncLifetime
+public class TwoSiloCacheUpdateFixture : IAsyncLifetime, MeshWeaver.Fixture.ITimeoutTerminalSource
 {
     /// <summary>
     /// Subclass hook: the silo configurator both silos are built with. A module-owning repo names
@@ -41,6 +41,11 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
     protected virtual Type SiloConfiguratorType => typeof(TwoSiloConfigurator);
 
     private OrleansTestClusterHost host = null!;
+
+    /// <summary>The timeout-terminal recorders of this cluster's silos and client host — the test's
+    /// window folds them in (timeout == error, Doc/Architecture/TimeoutIsError).</summary>
+    public IEnumerable<MeshWeaver.Fixture.TimeoutTerminalRecorder> TimeoutTerminalRecorders =>
+        host?.TimeoutTerminalRecorders ?? [];
 
     public TestCluster Cluster => host.Cluster;
 

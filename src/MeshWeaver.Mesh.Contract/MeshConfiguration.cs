@@ -154,13 +154,11 @@ public class MeshConfiguration(
     /// </summary>
     public IReadOnlySet<string> ClientHostedAddressTypes
     {
-        get => clientHostedAddressTypes;
-        init => clientHostedAddressTypes = value is null or { Count: 0 }
+        get;
+        init => field = value is null or { Count: 0 }
             ? EmptyAddressTypes
             : ImmutableHashSet.CreateRange(StringComparer.Ordinal, value);
-    }
-
-    private readonly IReadOnlySet<string> clientHostedAddressTypes = EmptyAddressTypes;
+    } = EmptyAddressTypes;
 
     /// <summary>Immutable, read-only, initialised once and never written — the sanctioned
     /// <c>static readonly</c> shape (see NoStaticState.md).</summary>

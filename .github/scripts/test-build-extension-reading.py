@@ -83,7 +83,7 @@ def evaluate(root: Path, project: str, out: Path, *extra: str) -> dict:
 def scratch_repo(root: Path) -> None:
     files = {
         "Ext/Ext.csproj": """<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
   <Import Project="../Lib/Ext.props" />
   <Import Project="../Lib/Optional.props" Condition="Exists('../Lib/Optional.props')" />
   <Import Project="../Imp/*.props" />
@@ -111,7 +111,7 @@ def scratch_repo(root: Path) -> None:
         "Glob/Last.cs": "// the only match of ../Glob/*.cs\n",
         "Glob/notes.txt": "beside the glob, not covered by it\n",
         "Unk/Unk.csproj": """<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
   <ItemGroup><Compile Include="$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '..', 'Elsewhere'))/*.cs" /></ItemGroup>
 </Project>
 """,
@@ -281,7 +281,7 @@ def run_controls() -> int:
 
         def tgt_eval(body: str):
             (tgt / "Tgt.csproj").write_text(
-                '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework>'
+                '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net11.0</TargetFramework>'
                 f'</PropertyGroup>{body}</Project>\n', encoding="utf-8")
             return run_evaluate(repo, "Tgt/Tgt.csproj", tmp / "tgt.json")
 
@@ -391,7 +391,7 @@ def run_controls() -> int:
             (repo / rel_).parent.mkdir(parents=True, exist_ok=True)
             (repo / rel_).write_text(text_)
         (sw / "Sw.csproj").write_text("""<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net10.0</TargetFramework><RepoTop>$(MSBuildProjectDirectory)/..</RepoTop></PropertyGroup>
+  <PropertyGroup><TargetFramework>net11.0</TargetFramework><RepoTop>$(MSBuildProjectDirectory)/..</RepoTop></PropertyGroup>
   <Import Project="../Lib/Extra.msbuild" />
   <ItemGroup><Reference Include="Foo"><HintPath>../Libs/Foo.dll</HintPath></Reference></ItemGroup>
   <ItemGroup Condition="Exists('$(RepoTop)')"><None Include="Sw.csproj" /></ItemGroup>

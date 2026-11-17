@@ -382,21 +382,37 @@ public static class CodeNodeType
                                 // the foreign-language branch above does. FailActivity never
                                 // overwrites a status the kernel already settled.
                                 //
-                                // 🚨 A TIMEOUT is not a failure of the run. The reply is the END of
-                                // the execution, and this wait is bounded by the hub's RequestTimeout
-                                // of silence — a healthy cell computing past it is still running, and
-                                // the kernel will settle its Activity when it ends. Failing it here
-                                // would mark a live run Failed (and race the kernel's own Complete).
-                                // What a timeout CAN say — nothing came back YET — it states as a
+                                // 🚨 The reply is the END of the execution, and a healthy cell
+                                // may compute for as long as it likes — so this wait has NO
+                                // silence bound (PostOptions.WithoutSilenceBound). It used to be
+                                // bounded by the hub's RequestTimeout and to treat its own
+                                // TimeoutException as "not yet": a timeout terminal firing under
+                                // every healthy cell that outlived the budget
+                                // (Doc/Architecture/TimeoutIsError). What the deadline CAN say —
+                                // nothing came back YET — is a NOTICE on its own timer
+                                // (RequestBudgetElapsed), disarmed by the answer: it states the
                                 // FACT on the Activity (ReplyOverdueSince, MarkAwaitingKernel), and
-                                // the Activity's OWNER turns it into the keyed notice only while the
-                                // run is still Running (KernelReplyOverdue): the run is visibly
+                                // the Activity's OWNER turns it into the keyed notice only while
+                                // the run is still Running (KernelReplyOverdue) — the run is visibly
                                 // waiting instead of silently Running (#7362), a late reply still
-                                // settles it normally, and a notice never outlives the kernel's answer.
-                                // The delivery faults (DeliveryFailure, NotFound) and a failed reply
-                                // are the verdicts this path writes.
-                                hub.Observe<SubmitCodeResponse>(submit, o => o.WithTarget(submitTarget))
+                                // settles it normally, and a notice never outlives the kernel's
+                                // answer. The kernel container always answers (the executor's reply,
+                                // or a failure when the executor was torn down without one), so the
+                                // wait ends; the delivery faults (DeliveryFailure, NotFound) and a
+                                // failed reply are the verdicts this path writes. This hub's own
+                                // teardown is no verdict on the kernel's run.
+                                var overdueNotice = hub.RequestBudgetElapsed().Subscribe(_ =>
+                                {
+                                    logger?.LogInformation(
+                                        "CodeNodeType: no reply for C# run {Activity} within the request "
+                                        + "budget — the run is still the kernel's; its Activity stays "
+                                        + "authoritative and is settled when the script ends",
+                                        activityPath);
+                                    MarkAwaitingKernel(hub, activityPath);
+                                });
+                                hub.Observe<SubmitCodeResponse>(submit, o => o.WithTarget(submitTarget).WithoutSilenceBound())
                                     .Take(1)
+                                    .Finally(overdueNotice.Dispose)
                                     .Subscribe(
                                         response =>
                                         {
@@ -411,15 +427,12 @@ public static class CodeNodeType
                                         },
                                         ex =>
                                         {
-                                            if (ex is TimeoutException)
-                                            {
+                                            if (ex is HubDisposedBeforeResponseException)
                                                 logger?.LogInformation(
-                                                    "CodeNodeType: no reply for C# run {Activity} within the request "
-                                                    + "budget — the run is still the kernel's; its Activity stays "
+                                                    "CodeNodeType: hub disposed while awaiting the reply for C# run "
+                                                    + "{Activity} — the run is still the kernel's; its Activity stays "
                                                     + "authoritative and is settled when the script ends",
                                                     activityPath);
-                                                MarkAwaitingKernel(hub, activityPath);
-                                            }
                                             else
                                                 FailActivity(hub, activityPath,
                                                     RunFailed("C#", $"{ex.GetType().Name}: {ex.Message}"), ex);

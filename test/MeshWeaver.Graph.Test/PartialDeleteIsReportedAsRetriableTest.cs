@@ -23,6 +23,8 @@ public class PartialDeleteIsReportedAsRetriableTest(ITestOutputHelper output)
     protected override int FanOutConcurrency => 8;
 
     [Fact(Timeout = 120000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.DeleteStage,
+        "a leaf's commit watchdog firing after 40 removals is the failure whose verdict (partial, retriable) this test asserts")]
     public async Task AFailureAfterRemovingNodes_SaysTheSubtreeIsPartial_AndThatARetryIsMeaningful()
     {
         var rootPath = await SeedWideTree("partial-reported");
@@ -56,6 +58,8 @@ public class PartialDeleteIsReportedAsRetriableTest(ITestOutputHelper output)
     }
 
     [Fact(Timeout = 120000)]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.DeleteStage,
+        "the first delete fails on a leaf's commit watchdog by design; this test asserts that a retry removes what that failure left")]
     public async Task ARetryOnceTheLaneServesAgain_RemovesWhatTheFailedDeleteLeftBehind()
     {
         var rootPath = await SeedWideTree("partial-retried");

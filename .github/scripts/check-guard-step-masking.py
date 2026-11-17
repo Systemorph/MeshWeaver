@@ -109,6 +109,23 @@ SUBJECTS: dict[str, dict[str, tuple[str, ...]]] = {
             "Assert the tools this gate needs",
             READINESS_STEP,
         ),
+        # Its two longest harnesses, split out for stage 0's critical path — the same line.
+        "workflow-shell-executions-publish": (
+            "uses:actions/checkout",
+            "Assert the tools this gate needs",
+            READINESS_STEP,
+        ),
+        "workflow-shell-executions-msbuild": (
+            "uses:actions/checkout",
+            "Assert the tools this gate needs",
+            READINESS_STEP,
+        ),
+        # The whole-tree guards, never path-selected (Doc/Architecture/CiOwnShellScope) — the same line.
+        "workflow-shell-tree": (
+            "uses:actions/checkout",
+            "Assert the tools this gate needs",
+            READINESS_STEP,
+        ),
     },
 }
 
@@ -268,12 +285,17 @@ def _shell_job(job: str, guard_if: str = "      if: ${{ !cancelled() && steps.re
     )
 
 
-_SHELL_OK = (
-    "on: {push: {}}\n"
-    "jobs:\n"
-    + _shell_job("workflow-shell")
-    + _shell_job("workflow-shell-executions")
-)
+# Every job of core's shell gate, in the order SUBJECTS declares them.
+_SHELL_JOBS = tuple(SUBJECTS["dotnet-test.yml"])
+
+
+def _shell_tree(broken: str | None = None) -> str:
+    """Core's shell gate with every job correct except `broken` (whose guard loses its `if:`)."""
+    return "on: {push: {}}\njobs:\n" + "".join(
+        _shell_job(j, guard_if="") if j == broken else _shell_job(j) for j in _SHELL_JOBS)
+
+
+_SHELL_OK = _shell_tree()
 
 _GATED = "${{ !cancelled() && steps.ready.outputs.ok == 'true' }}"
 
@@ -355,41 +377,24 @@ def self_test() -> int:
             print(f"self-test {'ok' if fired == expect else 'FAIL':4} {name:30} "
                   f"expected={'fire' if expect else 'silent'} got={'fire' if fired else 'silent'}")
     # 🚨 THE SECOND SUBJECT ON ITS OWN. Every case above keeps `dotnet-test.yml` correct, so none of
-    # them would notice if `workflow-shell` stopped being checked. This one leaves the validate lane
-    # correct and breaks only the shell job — the control for the other direction.
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        (root / ".github" / "workflows").mkdir(parents=True)
-        (root / ".github" / "workflows" / "node-repo-validate.yml").write_text(
-            _PREFIX + guarded, encoding="utf-8")
-        # Only the FIRST half is broken: replacing the condition across `_SHELL_OK` would break both
-        # halves, and the executions job would supply the violation even if `workflow-shell` were no
-        # longer checked at all (review on #7875).
-        (root / ".github" / "workflows" / "dotnet-test.yml").write_text(
-            "on: {push: {}}\njobs:\n" + _shell_job("workflow-shell", guard_if="")
-            + _shell_job("workflow-shell-executions"),
-            encoding="utf-8")
-        violations, _, _ = check_tree(root)
-        fired = bool(violations)
-        print(f"self-test {'ok' if fired else 'FAIL':4} {'shell-job-checked-too':30} expected=fire "
-              f"got={'fire' if fired else 'silent'}")
-        failures += 0 if fired else 1
-
-    # …and the gate's SECOND half on its own: a correct first half must not vouch for it.
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        (root / ".github" / "workflows").mkdir(parents=True)
-        (root / ".github" / "workflows" / "node-repo-validate.yml").write_text(
-            _PREFIX + guarded, encoding="utf-8")
-        (root / ".github" / "workflows" / "dotnet-test.yml").write_text(
-            "on: {push: {}}\njobs:\n" + _shell_job("workflow-shell")
-            + _shell_job("workflow-shell-executions", guard_if=""),
-            encoding="utf-8")
-        violations, _, _ = check_tree(root)
-        fired = bool(violations)
-        print(f"self-test {'ok' if fired else 'FAIL':4} {'executions-half-checked-too':30} expected=fire "
-              f"got={'fire' if fired else 'silent'}")
-        failures += 0 if fired else 1
+    # them would notice if a shell job stopped being checked. Each case below leaves the validate lane
+    # and every OTHER shell job correct and breaks only ONE — so no job can supply the violation for
+    # another that is no longer checked at all (review on #7875), and a correct job never vouches for
+    # a broken one.
+    for broken in _SHELL_JOBS:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / ".github" / "workflows" / "node-repo-validate.yml").write_text(
+                _PREFIX + guarded, encoding="utf-8")
+            (root / ".github" / "workflows" / "dotnet-test.yml").write_text(
+                _shell_tree(broken), encoding="utf-8")
+            violations, _, _ = check_tree(root)
+            fired = bool(violations)
+            label = f"{broken}-checked-too"
+            print(f"self-test {'ok' if fired else 'FAIL':4} {label:30} expected=fire "
+                  f"got={'fire' if fired else 'silent'}")
+            failures += 0 if fired else 1
 
     with tempfile.TemporaryDirectory() as tmp:  # the subject absent must FIRE, never pass vacuously
         violations, _, _ = check_tree(Path(tmp))

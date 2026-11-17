@@ -548,6 +548,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // it receives the real terminal (value / fail-fast RLS denial / optimistic fallback).
     private static readonly TimeSpan QueueAdvanceBound = TimeSpan.FromSeconds(5);
 
+    private readonly Action<TimeoutTerminal> reportTimeout;
+
     // 🚨 Per-path serial Update queue. Concurrent mirror-side Updates on the
     // SAME path race their `current` snapshot — each call's lambda runs against
     // the same initial state, so each computes a patch with field overrides
@@ -874,6 +876,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         this.meshHub = meshHub;
         this.logger = logger;
+        // Resolved while the mesh hub is alive; the bounds below fire later
+        // (timeout == error, Doc/Architecture/TimeoutIsError).
+        reportTimeout = meshHub.ServiceProvider.TimeoutTerminalReporter();
         contentTypeRegistry = meshHub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshContentTypeRegistry>();
         degradations = meshHub.ServiceProvider.GetService<ContentDegradationRegistry>();
         var onDemand = meshHub.ServiceProvider.GetService<ContentTypeOnDemandRegistration>();
@@ -2782,6 +2787,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     .Timeout(budget)
                     .Catch((Exception ex) =>
                     {
+                        if (ex is TimeoutException)
+                            reportTimeout(new TimeoutTerminal(TimeoutTerminalKinds.PermissionEstablishment, path,
+                                $"the standing Read of '{path}' for '{captured.ObjectId}' was not re-decided within "
+                                + $"{budget.TotalSeconds:0.#}s"));
                         logger.LogWarning(ex,
                             "MeshNodeStreamCache: the standing Read of {Path} for {User} could not be re-decided — undetermined, refused",
                             path, captured.ObjectId);

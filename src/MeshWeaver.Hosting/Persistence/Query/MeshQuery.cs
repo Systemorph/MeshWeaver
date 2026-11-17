@@ -342,6 +342,29 @@ public partial class MeshQuery : IMeshQueryCore
     /// with <c>hub: null</c>, and a hub whose DI scope is mid-disposal throws on
     /// <c>ServiceProvider</c>, so both cases fall back to the defaults rather than failing a query.
     /// </summary>
+    /// <summary>
+    /// Tells the registered <see cref="ITimeoutTerminalObserver"/>s that a stall terminal fired.
+    /// Resolved lazily and ONCE, for the reasons <see cref="OperationOptions"/> gives; a hub whose
+    /// scope is already disposed has no observer left to tell.
+    /// </summary>
+    private Action<TimeoutTerminal> TimeoutReporter
+    {
+        get
+        {
+            if (_timeoutReporter is not null) return _timeoutReporter;
+            try
+            {
+                return _timeoutReporter = hub?.ServiceProvider.TimeoutTerminalReporter()
+                    ?? TimeoutTerminalReporting.TimeoutTerminalReporter(null);
+            }
+            catch (ObjectDisposedException)
+            {
+                return _timeoutReporter = TimeoutTerminalReporting.TimeoutTerminalReporter(null);
+            }
+        }
+    }
+    private Action<TimeoutTerminal>? _timeoutReporter;
+
     private MeshOperationOptions OperationOptions
     {
         get
@@ -606,7 +629,7 @@ public partial class MeshQuery : IMeshQueryCore
                             emitter.OnCompleted();
                         })))
                     .ToList());
-            var arm = probe.Arm(budget, logger, query, userId, (stalled, reportTermination) =>
+            var arm = probe.Arm(budget, logger, query, userId, TimeoutReporter, (stalled, reportTermination) =>
             {
                 UnderGate(() =>
                 {
@@ -927,7 +950,7 @@ public partial class MeshQuery : IMeshQueryCore
                 var sawInitial = false;
                 var terminated = false;
                 var probeArm = singleProbe.Arm(
-                    singleBudget, singleProbeLogger, singleProbeQuery, singleProbeUser,
+                    singleBudget, singleProbeLogger, singleProbeQuery, singleProbeUser, TimeoutReporter,
                     (stalled, reportTermination) =>
                     {
                         UnderSingleGate(() =>
@@ -1309,7 +1332,7 @@ public partial class MeshQuery : IMeshQueryCore
             // firing at rung 4 is what ENDS that, so the terminal shortens the worst leak rather
             // than adding one (MeshHubDisposalLeakTest's TimerQueue shape).
             subscriptions.Add(stallProbe.Arm(
-                OperationOptions.QueryInitialBudget, Logger, request.Query, request.UserId,
+                OperationOptions.QueryInitialBudget, Logger, request.Query, request.UserId, TimeoutReporter,
                 (stalled, reportTermination) =>
                 {
                     UnderGate(() =>
@@ -1410,6 +1433,8 @@ public partial class MeshQuery : IMeshQueryCore
         /// <param name="delay">The fan-in's rung of the budget ladder
         /// (<see cref="MeshOperationOptions.QueryInitialBudget"/>).</param>
         /// <param name="logger">Diagnostic sink; absent on the hub-less unsecured registration.</param>
+        /// <param name="reportTimeout">Tells the registered <see cref="ITimeoutTerminalObserver"/>s
+        /// when the terminal is accepted.</param>
         /// <param name="query">The query text, for attribution.</param>
         /// <param name="userId">The identity the query ran under, for attribution.</param>
         /// <param name="onStalled">Delivers the terminal: given the exception and the action that
@@ -1417,6 +1442,7 @@ public partial class MeshQuery : IMeshQueryCore
         /// most once, on a timer thread.</param>
         public IDisposable Arm(
             TimeSpan delay, ILogger? logger, string? query, string? userId,
+            Action<TimeoutTerminal> reportTimeout,
             Action<QueryProviderStalledException, Action> onStalled)
         {
             var sub = Observable.Timer(delay).Subscribe(_ =>
@@ -1431,7 +1457,11 @@ public partial class MeshQuery : IMeshQueryCore
                 // and the fault says so.
                 var stalled = new QueryProviderStalledException(missing, delay, query, userId,
                     ThreadPool.PendingWorkItemCount, ThreadPool.ThreadCount);
-                onStalled(stalled, () => logger?.LogWarning(stalled,
+                onStalled(stalled, () =>
+                {
+                    reportTimeout(new TimeoutTerminal(
+                        TimeoutTerminalKinds.QueryInitial, query ?? string.Empty, stalled.Message));
+                    logger?.LogWarning(stalled,
                     "Query provider(s) [{Providers}] did not emit an Initial within {Delay}s for query "
                     + "'{Query}' (user '{UserId}') — the query is stalled on its all-providers Initial "
                     + "gate and has NO snapshot to answer with, so it is TERMINATED as unavailable "
@@ -1441,7 +1471,8 @@ public partial class MeshQuery : IMeshQueryCore
                     + "cause; never bump the consumer's timeout.",
                     missing, delay.TotalSeconds, query, userId,
                     stalled.ThreadPoolPending, stalled.ThreadPoolThreads,
-                    QueryProviderStalledException.BackloggedPendingThreshold));
+                    QueryProviderStalledException.BackloggedPendingThreshold);
+                });
             });
             // Publish the arm so MarkSeen can release it — and re-check, because a provider may have
             // answered synchronously between the subscribe above and this line, in which case the

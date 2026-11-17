@@ -653,6 +653,20 @@ on:
         required: false
         type: boolean
         default: true
+      compile-cache:
+        description: >-
+          Reuse NodeType compiles ACROSS RUNS (Doc/Architecture/NodeTypeCompileCache). When the run's
+          artifact store is a FILE store (`file:/…`, the share every runner pod mounts), the bake is
+          handed `--compile-cache <store>/cache/nodetype-compile/<identity>`: a compile whose inputs
+          and reference SURFACES an earlier bake already compiled reuses those bytes, so a gate over
+          unchanged content compiles nothing (MeshWeaver.Plugins measured 123 NodeTypes, 5.6–5.9 min
+          of every gate, recompiled on every run because the modules it composes get a fresh MVID
+          each run — CI profile 2026-11, R3). The bundles, records and verdict are the same either
+          way; a store that is not a file store, or a pinned tester that predates the flag, compiles
+          everything and SAYS so. False turns it off.
+        required: false
+        type: boolean
+        default: true
       runner:
         description: >-
           The `runs-on` label for the gate SHARDS (`gate`) and nothing else — `plan` and `verify`
@@ -1119,7 +1133,11 @@ jobs:
           # A FREEZE (the incident instruction) wins over the ceiling; the ceiling selects its own set.
           SELECT="${FREEZE:-${CEILING:-}}"
           echo "platform: no pin from the caller — resolving $([ -n "${CEILING:-}" ] && [ -z "${FREEZE:-}" ] && echo "the ceiling set ${CEILING}" || echo "the newest platform-sealed set") (freeze: '${FREEZE:-none}')"
-          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${SELECT:+--freeze "$SELECT"}
+          # 🚨 THE CORE LINE (policy `major-lines-run-separately`): the resolver lists the CD runs of
+          # the line it was fetched at — `scripts-ref: main3` resolves 3.1.N sets, `main` 4.0.N — and
+          # says so (`core line: …`). A sha/tag scripts-ref names no line: the resolver then takes the
+          # declared default line with a warning (Doc/Architecture/CdDeliveryLines → the resolver).
+          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --scripts-ref "$SCRIPTS_REF" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${SELECT:+--freeze "$SELECT"}
           python3 - "$ROWS" >> "$GITHUB_OUTPUT" <<'PY'
           import json, sys
           rows = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1], encoding="utf-8") if "=" in line)
@@ -1468,7 +1486,9 @@ jobs:
           # the baseline is a valid answer (see the script's FRESHNESS section). The CEILING selects
           # its own set exactly as in `plan`, so a refresh can never move a pull request past it.
           SELECT="${FREEZE:-${CEILING:-}}"
-          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${SELECT:+--freeze "$SELECT"}
+          # The same core line as `plan` (the ref the resolver was fetched at), so a refresh can
+          # never move a shard onto another major's set.
+          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --scripts-ref "$SCRIPTS_REF" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${SELECT:+--freeze "$SELECT"}
           python3 - "$ROWS" >> "$GITHUB_OUTPUT" <<'PY'
           import sys
           rows = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1], encoding="utf-8") if "=" in line)
@@ -1698,7 +1718,7 @@ jobs:
         if: steps.platform-source.outputs.mode == 'volume'
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "11.0.x"
       # 🚨 THE FIDELITY ASSERTION. `--shared-frameworks` is the reference set's framework half, and
       # in volume mode it is the RUNNER's install rather than the portal image's. A runner missing
       # Microsoft.AspNetCore.App, or carrying another major.minor, would compile every NodeType
@@ -2578,6 +2598,11 @@ jobs:
           PREPARED_DIR: ${{ (env.GATE_ROLE == 'shard' && env.BAKE_RESULT == 'success') && format('{0}/prepared-bake', runner.temp) || '' }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
           MODE: ${{ steps.platform-source.outputs.mode }}
+          # 🚨 Through env, never `${{ }}` inside `run:`. A run script holding an expression is
+          # compiled as ONE expression and GitHub caps that at 21,000 characters; past it the whole
+          # workflow, and every caller of this lane, is refused as invalid with no job and no
+          # message. Doc/Architecture/WorkflowExpressionLimit.
+          CAPTURE_COREDUMPS: ${{ inputs.capture-coredumps }}
           DOTNET: ${{ steps.dotnet.outputs.dotnet }}
           RUNNER_SHARED_FRAMEWORKS: ${{ steps.dotnet.outputs.shared }}
           PLATFORM_REF: ${{ steps.images.outputs.platform }}
@@ -2594,6 +2619,9 @@ jobs:
           SHARD: ${{ needs.plan.outputs.shards != '1' && format('{0}/{1}', matrix.shard, needs.plan.outputs.shards) || '' }}
           # Empty unless upstream-seed fetched a publication — then the tester consumes it.
           SEED_DIR: ${{ steps.seed.outputs.dir }}
+          # The cross-run compile cache lives on the run's FILE artifact store (see the input).
+          COMPILE_CACHE: ${{ inputs.compile-cache }}
+          ARTIFACT_STORE: ${{ needs.plan.outputs.artifact-store }}
           # The sealed set the volume served (volume mode only; empty in container mode). It is the
           # platform's release version, and in volume mode the tester learns it from here alone.
           VOLUME_SET: ${{ steps.platform-source.outputs.set }}
@@ -2715,7 +2743,7 @@ jobs:
           EXT_V=()
           [ -n "${EXT_MODULES_DIR:-}" ] && EXT_V=(-v "$EXT_MODULES_DIR:/ext")
           DUMP_ARGS=()
-          if [ "${{ inputs.capture-coredumps }}" = "true" ]; then
+          if [ "${CAPTURE_COREDUMPS:-false}" = "true" ]; then
             mkdir -p "${RUNNER_TEMP:-/tmp}/coredumps"
             chmod 0777 "${RUNNER_TEMP:-/tmp}/coredumps"
             if [ "$MODE" = volume ]; then
@@ -2815,10 +2843,38 @@ jobs:
             esac
           fi
           if [ "$ADOPTED" != true ]; then
+          # ── THE CROSS-RUN COMPILE CACHE (Doc/Architecture/NodeTypeCompileCache) ──
+          # Keyed on each compile's inputs and the reference set's PUBLIC SURFACES, never on a
+          # build identity — so it hits across runs that rebuilt the composed modules, and misses
+          # for every type when any reference's surface changed. It decides no verdict: a type it
+          # cannot serve compiles. So it is used when it can be, and when it cannot the log says
+          # which of the three reasons applies.
+          CACHE_ARGS=()
+          if [ "${COMPILE_CACHE:-true}" != "true" ]; then
+            echo "compile cache: OFF (compile-cache: false) — every NodeType compiles"
+          elif [ "${ARTIFACT_STORE#file:}" = "${ARTIFACT_STORE:-}" ] || [ ! -d "${ARTIFACT_STORE#file:}" ]; then
+            echo "::notice title=Compile cache not used::the run's artifact store ('${ARTIFACT_STORE:-<none>}') is not a mounted file store, so there is no shared directory to reuse compiles from — every NodeType compiles"
+          else
+            # Capture, then match (the --shard probe below explains why never `| grep -q`).
+            compile_help="$(run_tester compile --help 2>&1)" || compile_help=""
+            case "$compile_help" in
+              *--compile-cache*)
+                CACHE_DIR="${ARTIFACT_STORE#file:}/cache/nodetype-compile/${TARGET_IDENTITY}"
+                mkdir -p "$CACHE_DIR"
+                if [ "$MODE" = volume ]; then
+                  CACHE_ARGS=(--compile-cache "$CACHE_DIR")
+                else
+                  TESTER_MOUNTS+=(-v "$CACHE_DIR:/compile-cache")
+                  CACHE_ARGS=(--compile-cache /compile-cache)
+                fi
+                echo "compile cache: $CACHE_DIR" ;;
+              *) echo "::notice title=Compile cache not used::the pinned tester does not accept --compile-cache — every NodeType compiles until the pin reaches a platform build carrying it" ;;
+            esac
+          fi
           # shellcheck disable=SC2086  # MODULE_ARGS is a flag list; word-splitting is the point
           run_tester compile "$P_REPO" \
             --app "$P_APP" --shared-frameworks "$P_SHARED" \
-            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" "${DYN_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA"
+            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" "${DYN_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA" "${CACHE_ARGS[@]}"
           fi
           [ -s "$OWN_BAKE/framework-mvid.txt" ] || { echo "::error::compile ran but wrote no bake identity — the bake stage regressed (or the image predates the compile verb; pin ≥ 77bc5f1)"; exit 1; }
           baked="$(tr -d '[:space:]' < "$OWN_BAKE/framework-mvid.txt")"

@@ -2186,6 +2186,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             var diagLogger = _workspace.Hub.ServiceProvider
                 .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Mesh.MeshNodeStreamHandle");
+            // Resolved while the writer's hub is alive; the verdict deadline fires later.
+            var reportTimeout = _workspace.Hub.ServiceProvider.TimeoutTerminalReporter();
             diagLogger?.LogDebug(
                 "[UpdateRemote] BEGIN hub={Hub} target={Path} attempt={Attempt} corr={Corr}",
                 _workspace.Hub.Address, _path, attempt, corr);
@@ -2649,12 +2651,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             diagLogger?.LogWarning(
                                                 "[UpdateRemote] TEARDOWN_JOIN_TIMEOUT hub={Hub} target={Path} bound={BoundSeconds}s corr={Corr} — the activation that refused this patch as ShuttingDown did not finish its teardown inside the caller's verdict bound; the patch was NOT re-posted and did not apply",
                                                 _workspace.Hub.Address, _path, joinBound.TotalSeconds, corr);
-                                            return new MeshNodeStreamException(new MeshNodeError(
-                                                MeshNodeErrorCode.OwnerUnreachable, _path!,
+                                            var joinMessage =
                                                 $"The owner of '{_path}' refused this update while shutting down, and its "
                                                 + $"teardown did not complete within {joinBound.TotalSeconds:0}s. The update "
                                                 + "did NOT apply and was not re-sent — re-read the node and re-apply if the "
-                                                + "change is required."));
+                                                + "change is required.";
+                                            reportTimeout(new TimeoutTerminal(
+                                                TimeoutTerminalKinds.WriteTeardownJoin, _path!, joinMessage));
+                                            return new MeshNodeStreamException(new MeshNodeError(
+                                                MeshNodeErrorCode.OwnerUnreachable, _path!, joinMessage));
                                         });
                             }
 
@@ -3156,13 +3161,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                     diagLogger?.LogWarning(
                                                         "[UpdateRemote] VERDICT_TIMEOUT hub={Hub} target={Path} bound={BoundSeconds}s corr={Corr} — the owner produced no terminal for this patch inside the late-response window, which dominates every owner-side terminal path; the write is NOT confirmed. 🚨 #3477: `grep corr={Corr}` yields every attempt of this write, including re-enqueues that registered under a different requestId. Request trail: {Trail}",
                                                         _workspace.Hub.Address, _path, verdictBoundSeconds, corr, corr, trail);
-                                                    RaiseError(new MeshNodeStreamException(new MeshNodeError(
-                                                        MeshNodeErrorCode.OwnerUnreachable, _path!,
+                                                    var verdictMessage =
                                                         $"The owner of '{_path}' returned no verdict for this update within "
                                                         + $"{verdictBoundSeconds:0}s. "
                                                         + "The patch was posted and may still apply, but it is NOT confirmed — "
                                                         + "re-read the node and re-apply if the change is required. "
-                                                        + $"Request trail: {trail}")));
+                                                        + $"Request trail: {trail}";
+                                                    reportTimeout(new TimeoutTerminal(
+                                                        TimeoutTerminalKinds.WriteVerdict, _path!, verdictMessage));
+                                                    RaiseError(new MeshNodeStreamException(new MeshNodeError(
+                                                        MeshNodeErrorCode.OwnerUnreachable, _path!, verdictMessage)));
                                                 }));
                                         }
                                         else if (IsShuttingDownRefusal(ex)
@@ -3752,7 +3760,13 @@ public static class MeshNodeStreamExtensions
 
             var budget = timeout ?? MeshNodeStreamHandle.DefaultNodeReadBudget;
             var started = Stopwatch.StartNew();
-            var cts = new CancellationTokenSource(budget);
+            // The budget runs on the mesh's ReadBudgetClock when one is registered (the real clock
+            // otherwise — every production mesh). A dedicated seam, never an ambient TimeProvider: an
+            // unrelated clock registration must not take over every read budget. A test whose subject
+            // is the budget ELAPSING — what the verdict says about an unanswered re-probe — registers a
+            // virtual one and advances it, rather than sitting the budget out in real time.
+            var cts = new CancellationTokenSource(budget,
+                hub.ServiceProvider.GetService<ReadBudgetClock>()?.Clock ?? TimeProvider.System);
             var emitted = 0;
             // Inner hub.Observe subscription tracker. Captured so the returned
             // disposable can tear it down — without this, the outer CTS-timeout

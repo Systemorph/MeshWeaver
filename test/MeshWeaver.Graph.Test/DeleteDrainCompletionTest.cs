@@ -54,6 +54,11 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
     /// </summary>
     public int? StallAfterDeletes { get; set; }
 
+    private readonly System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit> _stalled = new();
+
+    /// <summary>Completes when the store first went silent under <see cref="StallAfterDeletes"/>.</summary>
+    public IObservable<System.Reactive.Unit> Stalled => _stalled;
+
     /// <summary>
     /// When true, deletes under <see cref="LatencyRoot"/> are served ONE AT A TIME, each taking
     /// <see cref="DeleteLatency"/> — the cap-1 <c>pg:{provider}</c> write pool every production
@@ -170,7 +175,11 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
             // timer: silence IS the subject, so the watchdog's own budget is what ends the wait.
             if (StallAfterDeletes is { } stallAfter
                 && Interlocked.Increment(ref _deletesServed) > stallAfter)
+            {
+                _stalled.OnNext(System.Reactive.Unit.Default);
+                _stalled.OnCompleted();
                 return Observable.Never<T>();
+            }
 
             if (HangInsideLane && DeleteLane is not null)
                 return WithLane(Observable.Never<T>());
@@ -629,6 +638,8 @@ public class WideDeleteUnboundedFanOutTest(ITestOutputHelper output)
     protected override int FanOutConcurrency => int.MaxValue;
 
     [Fact]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.DeleteStage,
+        "this negative control asserts that, unbounded, a leaf's own commit watchdog fires on its siblings' backlog")]
     public async Task AWideDelete_Unbounded_FailsALeafOnItsOwnSiblingsBacklog()
     {
         var rootPath = await SeedWideTree("wide-unbounded");
@@ -741,14 +752,22 @@ public class StalledDeleteStillTimesItsCallerOutTest(ITestOutputHelper output)
                 CascadeFanOutConcurrency = FanOutConcurrency
             }));
 
+    /// <summary>
+    /// The caller's silence bound is the subject, so it runs on the client's virtual timeout clock:
+    /// once the store has gone silent, the bound — re-armed by the last progress report — is fired.
+    /// </summary>
     [Fact]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.RequestTimeout,
+        "the caller's own deadline ending a delete that stopped progressing is the behaviour under test")]
     public async Task ADeleteThatStopsProgressing_StillTimesTheCallerOut()
     {
         var rootPath = await SeedWideTree("stalls-caller");
         // The store takes the 41st delete and never answers: no removal, so no progress, after it.
         Storage.StallAfterDeletes = 40;
+        var clock = new ManualTimeProvider();
         var client = GetClient(c => ConfigureClient(c)
-            .WithRequestTimeout(LongDeleteKeepsItsCallerTest.CallerDeadline));
+            .WithRequestTimeout(LongDeleteKeepsItsCallerTest.CallerDeadline)
+            .WithTimeoutClock(clock));
 
         // Either terminal is recorded, so a server reply that beats the caller's deadline fails the
         // assertion below by name instead of leaving the wait to run out.
@@ -764,6 +783,12 @@ public class StalledDeleteStillTimesItsCallerOutTest(ITestOutputHelper output)
                 outcome.OnNext(ex);
                 outcome.OnCompleted();
             });
+
+        await Storage.Stalled.Should().Within(20.Seconds())
+            .Emit("the store serves forty removals and then goes silent");
+        await clock.WhenArmed(LongDeleteKeepsItsCallerTest.CallerDeadline).Should().Within(20.Seconds())
+            .Emit("the caller's silence bound is armed on its timeout clock");
+        clock.Advance(LongDeleteKeepsItsCallerTest.CallerDeadline);
 
         var reported = await outcome.Should().Within(20.Seconds()).Emit(
             "progress keeps the caller's deadline open only while there IS progress — silence must "

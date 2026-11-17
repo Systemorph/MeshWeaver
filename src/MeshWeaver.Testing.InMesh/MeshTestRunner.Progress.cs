@@ -204,7 +204,9 @@ public static partial class MeshTestRunner
 
     // ———————————————————————————————————————————————————————— the snapshot fold
 
-    private abstract record RunEvent;
+    // A C# 15 `closed` record: these five cases are the whole set, so Apply's switch expression is
+    // proven exhaustive with no default arm (a sixth case is CS8509 until Apply handles it).
+    private closed record RunEvent;
     private sealed record StartedEvent : RunEvent;
     private sealed record LineEvent(string Text) : RunEvent;
     private sealed record FinishedEvent(CaseResult Result) : RunEvent;
@@ -257,38 +259,45 @@ public static partial class MeshTestRunner
     private static RunState Apply(RunState state, RunEvent e)
     {
         var at = DateTimeOffset.UtcNow;
-        switch (e)
+        return e switch
         {
-            case StartedEvent:
-            {
-                var index = FirstUnfinished(state.Rows);
-                if (index < 0) return state with { Emit = false };
-                var row = state.Rows[index] with { Result = RunningResult, Detail = "", Elapsed = TimeSpan.Zero };
-                return state with { Rows = state.Rows.SetItem(index, row), Running = index, RunningSince = at, RunningOutput = [], Dirty = true, Emit = false };
-            }
-            case LineEvent line when state.Running >= 0:
-            {
-                var output = state.RunningOutput.Add(line.Text);
-                var row = state.Rows[state.Running] with { Detail = string.Join(" · ", output) };
-                return state with { Rows = state.Rows.SetItem(state.Running, row), RunningOutput = output, Dirty = true, Emit = false };
-            }
-            case FinishedEvent done:
-            {
-                var index = state.Running >= 0 ? state.Running : FirstUnfinished(state.Rows);
-                if (index < 0) return state with { Emit = false };
-                return state with { Rows = state.Rows.SetItem(index, done.Result), Running = -1, RunningOutput = [], Dirty = true, Emit = false };
-            }
-            case TickEvent:
-            {
-                if (state.Running < 0)
-                    return state with { Emit = state.Dirty, Dirty = false };
-                var row = state.Rows[state.Running] with { Elapsed = at - state.RunningSince };
-                return state with { Rows = state.Rows.SetItem(state.Running, row), Emit = true, Dirty = false };
-            }
-            case DoneEvent:
-                return state with { Complete = true, Emit = true, Dirty = false };
-            default:
-                return state with { Emit = false };
+            StartedEvent => OnStarted(),
+            LineEvent line => OnLine(line),
+            FinishedEvent done => OnFinished(done),
+            TickEvent => OnTick(),
+            DoneEvent => state with { Complete = true, Emit = true, Dirty = false },
+        };
+
+        RunState OnStarted()
+        {
+            var index = FirstUnfinished(state.Rows);
+            if (index < 0) return state with { Emit = false };
+            var row = state.Rows[index] with { Result = RunningResult, Detail = "", Elapsed = TimeSpan.Zero };
+            return state with { Rows = state.Rows.SetItem(index, row), Running = index, RunningSince = at, RunningOutput = [], Dirty = true, Emit = false };
+        }
+
+        // A line with no case running has no row to land on: dropped, and nothing emitted.
+        RunState OnLine(LineEvent line)
+        {
+            if (state.Running < 0) return state with { Emit = false };
+            var output = state.RunningOutput.Add(line.Text);
+            var row = state.Rows[state.Running] with { Detail = string.Join(" · ", output) };
+            return state with { Rows = state.Rows.SetItem(state.Running, row), RunningOutput = output, Dirty = true, Emit = false };
+        }
+
+        RunState OnFinished(FinishedEvent done)
+        {
+            var index = state.Running >= 0 ? state.Running : FirstUnfinished(state.Rows);
+            if (index < 0) return state with { Emit = false };
+            return state with { Rows = state.Rows.SetItem(index, done.Result), Running = -1, RunningOutput = [], Dirty = true, Emit = false };
+        }
+
+        RunState OnTick()
+        {
+            if (state.Running < 0)
+                return state with { Emit = state.Dirty, Dirty = false };
+            var row = state.Rows[state.Running] with { Elapsed = at - state.RunningSince };
+            return state with { Rows = state.Rows.SetItem(state.Running, row), Emit = true, Dirty = false };
         }
     }
 

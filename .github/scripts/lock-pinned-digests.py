@@ -429,6 +429,33 @@ def extract_record_pins(text: str, registry: str) -> tuple[list[tuple[str, str]]
     return [(path, tag.strip())], []
 
 
+# The image NAME a record's portal runs, whatever registry holds it (MeshWeaver#4413).
+_IMAGE_NAME = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$")
+
+
+def extract_record_image_name(text: str) -> str | None:
+    """The repository NAME of a record's `imageRepository`, with its registry host dropped.
+
+    `meshweaver.azurecr.io/memex-control` and `<estate acr>/memex-control` both answer
+    `memex-control`: the name says WHICH image (the control image carries the fleet-control types,
+    the portal image does not); the registry only says where a copy of it lives. None when the record
+    names no repository, or names one that is not a plain registry path. Pure."""
+    try:
+        doc = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    content = doc.get("content", doc) if isinstance(doc, dict) else None
+    if not isinstance(content, dict):
+        return None
+    repository = content.get("imageRepository")
+    if not isinstance(repository, str):
+        return None
+    host, _, path = repository.strip().partition("/")
+    # A first segment with a dot or a port is a registry host; without one the value is a bare name.
+    name = path if ("." in host or ":" in host) and path else repository.strip()
+    return name if _IMAGE_NAME.match(name) else None
+
+
 # ── A CLIENT'S DEPLOYMENT RECORD NEVER REACHES THE PUBLIC LOG (Plugins#4364) ─────────────────────
 #
 # 🚨 THIS REPOSITORY'S ACTIONS LOGS ARE PUBLIC, AND THIS LANE READS THE FLEET'S DEPLOYMENT RECORDS.
@@ -950,6 +977,13 @@ class OverlayScan:
     # AXIS 3 can leave it out of the installation's running PORTAL set — the overlay half of the
     # same rule `record_portals` states for the record.
     overlay_operators: list[tuple[str, str]] = field(default_factory=list)
+    # (image NAME, record path) — the portal image a `Hosting/Deployment` record names through
+    # `imageRepository`, in ANY registry, with the registry host dropped (`memex-control`, never
+    # `<acr>/memex-control`). Combo verification reads it to pick the image an installation actually
+    # runs when the installation itself does not say (MeshWeaver#4413); unlike `record_portals` it is
+    # not scoped to the registry this lane locks, because a client estate mirrors the fleet's images
+    # into its own registry under the same names.
+    record_images: list[tuple[str, str]] = field(default_factory=list)
     # (record path, is the fleet's own, identifiers) — one per `Hosting/Deployment`-shaped record,
     # classified at the door it is read through (`record_identity`). A record that is NOT the
     # fleet's has every identifier withheld from the public log (Plugins#4364).
@@ -1024,6 +1058,9 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
             pins = pins + record_pins
             floating = floating + record_floating
             scan.record_portals.extend((repo, path) for repo, _ in record_pins + record_floating)
+            image = extract_record_image_name(text)
+            if image:
+                scan.record_images.append((image, path))
             sources, source_error = extract_record_sources(text)
             if source_error:
                 scan.source_errors.append((path, source_error))
@@ -1069,6 +1106,9 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
             pins = pins + record_pins
             floating = floating + record_floating
             scan.record_portals.extend((repo, rel) for repo, _ in record_pins + record_floating)
+            image = extract_record_image_name(text)
+            if image:
+                scan.record_images.append((image, rel))
             sources, source_error = extract_record_sources(text)
             if source_error:
                 scan.source_errors.append((rel, source_error))
@@ -4651,6 +4691,26 @@ def _continued_lines(text: str) -> list[tuple[int, str]]:
     return joined
 
 
+def _first_instance_repositories(root: str) -> tuple[list[str], str]:
+    """Every `firstInstanceImageRepository` `.github/delivery-lines.json` declares (policy
+    `line-first-instance`), sorted — the literal names main-cd's `$FIRST_IMAGE` ranges over — and
+    "" — or ([], the reason) when the declaration cannot be read, which the caller reports as a
+    problem: a push whose repositories cannot be named is never read as no push at all."""
+    path = Path(root) / ".github" / "delivery-lines.json"
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        lines = document["lines"]
+        names = sorted({str(line["firstInstanceImageRepository"]).strip() for line in lines
+                        if isinstance(line, dict) and line.get("firstInstanceImageRepository")})
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return [], (f"{path.relative_to(root) if path.is_absolute() else path} — the declaration it ranges over — "
+                    f"cannot be read ({error}), so the repositories being published cannot be named.")
+    bad = [n for n in names if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", n)]
+    if bad:
+        return [], f".github/delivery-lines.json declares first-instance repositories that are not plain names: {bad}."
+    return names, ""
+
+
 def publish_targets(root: str) -> tuple[dict[str, set[str]], dict[str, set[str]], list[str], int]:
     """Every `(host, repository)` this repository's own workflows PUSH an image to.
 
@@ -4739,6 +4799,19 @@ def publish_targets(root: str) -> tuple[dict[str, set[str]], dict[str, set[str]]
                 if namespace:
                     repository = repository.replace("${NS}", namespace).replace("$NS", namespace)
                 expansions = [repository]
+                # 🚨 A LINE'S FIRST-INSTANCE REPOSITORY (policy `line-first-instance`, MeshWeaver#8365):
+                # main-cd `first-instance-first` pushes `$FIRST_IMAGE`, which is a DECLARATION —
+                # `.github/delivery-lines.json` `firstInstanceImageRepository`, one per line that has
+                # a first instance of its own. It ranges over exactly those, read from the file the
+                # job reads; an unreadable declaration is a problem, never an empty range.
+                if "$FIRST_IMAGE" in repository or "${FIRST_IMAGE}" in repository:
+                    declared_first, why = _first_instance_repositories(root)
+                    if why:
+                        problems.append(f".github/workflows/{name}:{number} pushes `{repository}`, and {why}")
+                        expansions = []
+                    else:
+                        expansions = [repository.replace("${FIRST_IMAGE}", r).replace("$FIRST_IMAGE", r)
+                                      for r in declared_first]
                 if "$repo" in repository or "${repo}" in repository:
                     expansions = [repository.replace("${repo}", name_).replace("$repo", name_)
                                   for name_ in sorted(set(loops))] or []
@@ -7992,10 +8065,27 @@ ingress:
     # CD mirrors it beside the portal and migration images. (`mw-build-host`, the standing build
     # hosts' runner image, is no longer published from here: it moved to MeshWeaver.Deploy's
     # build-host.yml with the rest of the build-host deployment.)
+    # Plus every line's DECLARED first-instance repository (policy `line-first-instance`): main-cd
+    # `first-instance-first` mirrors `$FIRST_IMAGE`, which ranges over `.github/delivery-lines.json`.
+    _first_repos, _first_why = _first_instance_repositories(HERE_ROOT)
+    check(not _first_why, f"ARM 34: the declared first-instance repositories cannot be read: {_first_why}")
+    with tempfile.TemporaryDirectory() as _fi_tmp:
+        _fi_none, _fi_why = _first_instance_repositories(_fi_tmp)
+        check(_fi_none == [] and "cannot be read" in _fi_why,
+              "ARM 34: an UNREADABLE delivery-lines.json must make `$FIRST_IMAGE` a problem, never an empty range "
+              f"(got {_fi_none!r}, {_fi_why!r})")
+        (Path(_fi_tmp) / ".github").mkdir()
+        (Path(_fi_tmp) / ".github" / "delivery-lines.json").write_text(
+            json.dumps({"lines": [{"branch": "x", "firstInstanceImageRepository": "cr.example/evil"}]}))
+        _fi_bad, _fi_why = _first_instance_repositories(_fi_tmp)
+        check(_fi_bad == [] and "not plain names" in _fi_why,
+              f"ARM 34: a non-plain first-instance repository must be refused (got {_fi_bad!r}, {_fi_why!r})")
     check(_targets.get("cr.meshweaver.cloud") == {"memex-portal-ai", "memex-migration",
-                                                  "mw-plugin-test", "memex-control", "mw-core-tests"},
+                                                  "mw-plugin-test", "memex-control", "mw-core-tests",
+                                                  *_first_repos},
           f"ARM 34: the fleet's own registry was derived with "
-          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all five repositories. "
+          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all five repositories "
+          f"and the declared first-instance ones {_first_repos}. "
           f"`mw-plugin-test` and `memex-control` reach it through mirror calls whose destinations "
           f"are on the CONTINUATION line, and they are the repositories that vanish when the join "
           f"stops")

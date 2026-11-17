@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -63,6 +64,14 @@ public class TestBase : ServiceSetup, IAsyncLifetime
         // running (TestLoggerDoesNotRootTheTestTest).
         var fileOutput = FileOutput;
         Services.AddSingleton(fileOutput);
+
+        // 🚨 Timeout == error (TimeoutTerminalGuard.cs): every product-side timeout terminal that
+        // fires in this test's container is recorded here, and AutoTestLoggingAttribute.After
+        // turns an undeclared one into the test's failure when the guard is armed. One instance
+        // per test container — never static.
+        var timeoutTerminals = new TimeoutTerminalRecorder();
+        Services.AddSingleton(timeoutTerminals);
+        Services.AddSingleton<MeshWeaver.Messaging.ITimeoutTerminalObserver>(timeoutTerminals);
         Services.AddLogging(logging =>
         {
             logging.ClearProviders(); // Remove default providers
@@ -100,6 +109,80 @@ public class TestBase : ServiceSetup, IAsyncLifetime
 
 
 
+
+    private System.Collections.Immutable.ImmutableList<(TimeoutTerminalRecorder Recorder, int Watermark)> timeoutTerminalWindow =
+        System.Collections.Immutable.ImmutableList<(TimeoutTerminalRecorder, int)>.Empty;
+    private bool timeoutTerminalWindowOpen;
+
+    /// <summary>
+    /// Opens this test's timeout-terminal window. Read off <see cref="ServiceSetup.ServiceProvider"/>
+    /// rather than the instance registered in the constructor: a shared-mesh test class serves every
+    /// test from the FIRST instance's container, so that container's recorder is the one the mesh
+    /// reports to, and the watermark keeps an earlier test's terminals out of this one's verdict.
+    /// Every <see cref="ITimeoutTerminalSource"/> the test holds in an instance field (an Orleans
+    /// cluster fixture: its silos and client host each have a container of their own) adds its
+    /// recorders, each with its own watermark.
+    /// </summary>
+    internal void BeginTimeoutTerminalWindow()
+    {
+        var recorders = new List<TimeoutTerminalRecorder>();
+        if (ServiceProvider?.GetService<TimeoutTerminalRecorder>() is { } own)
+            recorders.Add(own);
+        recorders.AddRange(HeldTimeoutTerminalSources().SelectMany(source => source.TimeoutTerminalRecorders));
+        timeoutTerminalWindow = recorders
+            .Distinct()
+            .Select(recorder => (recorder, recorder.Fired.Count))
+            .ToImmutableList();
+        timeoutTerminalWindowOpen = true;
+    }
+
+    /// <summary>The <see cref="ITimeoutTerminalSource"/>s held in this test's instance fields, base classes included.</summary>
+    private IEnumerable<ITimeoutTerminalSource> HeldTimeoutTerminalSources()
+    {
+        for (var type = GetType(); type is not null && type != typeof(object); type = type.BaseType)
+        {
+            foreach (var field in type.GetFields(System.Reflection.BindingFlags.Instance
+                                                 | System.Reflection.BindingFlags.Public
+                                                 | System.Reflection.BindingFlags.NonPublic
+                                                 | System.Reflection.BindingFlags.DeclaredOnly))
+            {
+                if (!typeof(ITimeoutTerminalSource).IsAssignableFrom(field.FieldType)
+                    && !field.FieldType.IsAssignableFrom(typeof(ITimeoutTerminalSource)))
+                    continue;
+                if (field.GetValue(this) is ITimeoutTerminalSource source)
+                    yield return source;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Closes this test's timeout-terminal window: names every terminal that fired during the test
+    /// in its output and the shard trace, and — when the guard is armed — returns the failure the
+    /// caller throws. <c>null</c> when nothing is wrong or nothing was recorded.
+    /// </summary>
+    /// <param name="method">The test method.</param>
+    internal string? EndTimeoutTerminalWindow(System.Reflection.MethodInfo method)
+    {
+        var window = timeoutTerminalWindow;
+        var open = timeoutTerminalWindowOpen;
+        timeoutTerminalWindow = System.Collections.Immutable.ImmutableList<(TimeoutTerminalRecorder, int)>.Empty;
+        timeoutTerminalWindowOpen = false;
+        var declared = TimeoutTerminalVerdict.DeclaredKinds(method);
+        var fired = window
+            .SelectMany(entry => entry.Recorder.Fired.Skip(entry.Watermark))
+            .ToList();
+        var testName = $"{method.DeclaringType?.Name}.{method.Name}";
+        foreach (var terminal in fired)
+        {
+            var declaredMark = declared.Contains(terminal.Kind) ? "declared" : "UNDECLARED";
+            FileOutput.WriteLine($"=== TIMEOUT TERMINAL ({declaredMark}): {terminal.Kind} at '{terminal.Origin}' ===");
+            TestTraceLog.AppendPhase(method.DeclaringType?.Name ?? "UnknownTest", "TIMEOUT_TERMINAL",
+                extra: $"{method.Name} kind={terminal.Kind} {declaredMark} origin={terminal.Origin}");
+        }
+        if (!open || window.IsEmpty || !TimeoutTerminalVerdict.IsArmed(method))
+            return null;
+        return TimeoutTerminalVerdict.Evaluate(testName, fired, declared);
+    }
 
     /// <summary>
     /// Logs the test-class dispose marker, unregisters this test, and disposes the file output helper.

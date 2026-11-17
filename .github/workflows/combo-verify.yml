@@ -271,15 +271,60 @@ jobs:
           } >>"$GITHUB_OUTPUT"
           echo "Roster and sources derived; $count instance(s) will be verified in $count slot(s), each as this run's own identity."
 
+  # 🚨 THE VERIFIER IS BUILT ONCE PER RUN (saving R2 of Doc/Architecture/CiProfile2026-11). Every
+  # slot used to build `tools/MeshWeaver.ComboVerifier` itself: 1.5–2.8 min per slot, seven slots
+  # per run, about 340 runner-min/day spent compiling the same commit seven times. Now this job
+  # publishes it and each slot downloads it. The artifact is the build output of public source in a
+  # public repository and carries nothing about any installation, so its name is fixed.
+  #
+  # `needs: preflight`, so a run with no candidate (the preflight's EVENT condition skips it)
+  # builds nothing either. No `if:` of its own and no `continue-on-error:`: a verifier that does not
+  # build skips every slot, and the `verdict` job names that as its own red instead of letting it
+  # read as an empty matrix.
+  build-verifier:
+    name: "Build the verifier once for every slot"
+    needs: preflight
+    runs-on: ubuntu-latest
+    # One restore + one Release publish of a console tool and its two project references: about
+    # 2–3 minutes measured in the slots that used to do it. The fleet cap is 45.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 1 }
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 11.0.x
+
+      - name: Publish the verifier
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/combo-verifier"
+          dotnet publish tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj -c Release -o "$out"
+          # A positive signal, not "the command returned": the entry assembly and its runtimeconfig
+          # are what `dotnet <dll>` needs in every slot.
+          test -f "$out/mw-combo-verify.dll" || { echo "::error::the publish wrote no mw-combo-verify.dll to $out"; exit 1; }
+          test -f "$out/mw-combo-verify.runtimeconfig.json" || { echo "::error::the publish wrote no mw-combo-verify.runtimeconfig.json to $out"; exit 1; }
+          echo "Published the verifier: $(find "$out" -type f | wc -l) file(s)."
+
+      - name: Hand it to the slots
+        uses: actions/upload-artifact@v7
+        with:
+          name: combo-verifier
+          path: ${{ runner.temp }}/combo-verifier
+          if-no-files-found: error
+          retention-days: 1
+
   verify:
     # 🚨 THE SLOT, NEVER THE NAME (#3848). A job's name is not masked, and this repository's runs
     # are public — a client estate's installation name must not appear in one. The job's own log
     # says which installation the slot resolved to (masked there when it is a private one), and the
     # `verdict` job counts jobs by this exact name, so change both together.
     name: "Verify instance slot ${{ matrix.slot }} against its roll target"
-    # 🚨 `needs: preflight` and NOTHING else gating it. No `if:` — the preflight either asserted
-    # every input or went red; this job never asks a second time.
-    needs: preflight
+    # 🚨 `needs:` the preflight and the one verifier build, and NOTHING else gating it. No `if:` —
+    # the preflight either asserted every input or went red, the build either published the
+    # verifier or went red; this job never asks a second time.
+    needs: [preflight, build-verifier]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -328,7 +373,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
       - name: Azure login (OIDC)
         uses: azure/login@v3
@@ -343,8 +388,12 @@ jobs:
           command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
           bash .github/scripts/acr-login.sh
 
-      - name: Build the verifier
-        run: dotnet build tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj -c Release
+      # The verifier the `build-verifier` job published for this run — downloaded, never rebuilt.
+      - name: The verifier this run built once
+        uses: actions/download-artifact@v8
+        with:
+          name: combo-verifier
+          path: ${{ runner.temp }}/combo-verifier
 
       - name: "Verify, and LAND the verdict on the installation at slot ${{ matrix.slot }}"
         env:
@@ -352,6 +401,8 @@ jobs:
           # above, inside this job. They are asserted here rather than assumed: `${VAR:?}` reds
           # naming the variable if that step ever stops writing one.
           ARTIFACT_TAG: slot-${{ matrix.slot }}
+          # The verifier downloaded above. The lander asserts it exists before it calls the instance.
+          COMBO_VERIFIER: ${{ runner.temp }}/combo-verifier/mw-combo-verify.dll
           GITHUB_TOKEN: ${{ steps.repo-token.outputs.token }}
           WORK_ROOT: ${{ runner.temp }}/combo
           # The combo's MODULE half (MeshWeaver#4413): the sealed publications the instance's
@@ -360,6 +411,11 @@ jobs:
           # declares a compiled module, so an empty value is a red naming it, never a gate run
           # without the modules.
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          # The gate recompiles types the bake already compiled on every memex-sized slot (#4413);
+          # the adoption lines that say why are below the gate's default Warning level. The
+          # verifier forwards this to the gate container (DockerImageGate.ForwardedEnvironment) and
+          # the tester raises only these categories (GateVerbosity.CategoryFilters).
+          MW_LOG_CATEGORIES: "bake-seed=Debug,MeshWeaver.Graph.CompileWatcher=Debug"
         run: |
           set -euo pipefail
           : "${INSTANCE_NAME:?the slot step resolved no installation name}"
@@ -397,7 +453,7 @@ jobs:
     # verification that did not happen. It also prints THE DENOMINATOR — how many instances were
     # supposed to be verified — because a zero nobody can read is indistinguishable from a pass.
     if: always()
-    needs: [preflight, verify]
+    needs: [preflight, build-verifier, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # `actions: read` is what lets this job COUNT the per-instance jobs the run created (below).
@@ -441,6 +497,7 @@ jobs:
         id: verdict
         env:
           PREFLIGHT: ${{ needs.preflight.result }}
+          BUILD: ${{ needs.build-verifier.result }}
           VERIFY: ${{ needs.verify.result }}
           COUNT: ${{ needs.preflight.outputs.count }}
           STARTED: ${{ steps.jobs.outputs.started }}
@@ -449,11 +506,12 @@ jobs:
           TRIGGER: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || 'dispatch' }}
         run: |
           set -euo pipefail
-          echo "preflight=$PREFLIGHT verify=$VERIFY instances=${COUNT:-0} verify-jobs=${STARTED:-?} verify-jobs-succeeded=${PASSED:-?}"
+          echo "preflight=$PREFLIGHT build-verifier=${BUILD:-?} verify=$VERIFY instances=${COUNT:-0} verify-jobs=${STARTED:-?} verify-jobs-succeeded=${PASSED:-?}"
           {
             echo "## Combo verification"
             echo
             echo "- preflight: \`$PREFLIGHT\`"
+            echo "- build-verifier: \`${BUILD:-?}\`"
             echo "- verify: \`$VERIFY\` over \`${COUNT:-0}\` instance(s)"
             echo "- per-instance jobs created: \`${STARTED:-?}\`, succeeded: \`${PASSED:-?}\`"
           } >>"$GITHUB_STEP_SUMMARY"
@@ -487,6 +545,13 @@ jobs:
           fi
           if [ "$PREFLIGHT" != "success" ]; then
             echo "::error::the preflight FAILED, so NO instance was verified and every roll in the fleet is still UNVERIFIED (#3544). Read the preflight job: it either names the inputs to provision, or names the repository/declaration whose deployment overlays the instance roster could not be derived from."
+            exit 1
+          fi
+          # 🚨 THE ONE VERIFIER BUILD, NAMED. Every slot `needs:` it, so a failed build SKIPS the
+          # whole matrix — and without this arm the next one would call that "the matrix did not
+          # expand", sending the reader to the preflight's outputs for a defect that is a compile.
+          if [ "${BUILD:-}" != "success" ]; then
+            echo "::error::the verifier build (job 'Build the verifier once for every slot') concluded '${BUILD:-}', so NO instance was contacted and every roll is still UNVERIFIED (#3544). Read that job: it publishes tools/MeshWeaver.ComboVerifier once for every slot."
             exit 1
           fi
           # 🚨 THE EMPTY MATRIX, NAMED (#3848). The preflight succeeded and counted instances, and

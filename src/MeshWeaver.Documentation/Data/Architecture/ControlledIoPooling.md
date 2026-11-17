@@ -797,6 +797,30 @@ first-in-process script-reference build, on the Compile pool) on the strength of
   taken again (at most three dumps); the thread that exited is no longer listed by the next one. Any
   other failure is the capture's answer at once, and when every dump is voided the error names each
   attempt's reason. Pinned by `BlockedThreadStacksThreadExitTest`.
+  "Written" is read off the FILE, never off the call: the runtime reports a dump writer that died on a
+  SIGNAL as a success (coreclr's `PROCCreateCrashDump` answers `!WIFEXITED(status) ||
+  WEXITSTATUS(status) == 0`), so a `createdump` killed mid-dump makes `WriteDump` return normally over
+  no file, or over a file cut short. On a CI shard (core #8355) `createdump` printed `Gathering state for
+  process …` and nothing after it — not the `Target process is alive` line every one of its own exits
+  prints — and the capture then failed as ClrMD's `FileNotFoundException`. After every write the file
+  is therefore checked against its own headers (the ELF core's program headers on Linux, read through
+  section 0 when there are more than `e_phnum` holds; the Mach-O core's segments on macOS): a missing
+  or truncated dump is a named failure of the capture and nothing is read from it. WHAT killed the
+  writer on that shard is not known — the runtime discards the signal. Pinned by `DumpWriterDeathTest`
+  through the writer seam (no file; a real dump cut short). Never inject the death by killing the real
+  `createdump` of the test host: on Linux a ptrace tracer killed mid-dump leaves the SIGSTOP of its
+  `PTRACE_ATTACH` to be delivered on detach, so the whole dumped process stops until a SIGCONT — on a CI
+  shard that froze the shared xunit host for 7 min 50 s and timed out every test in it (core #8356).
+  To NAME the signal on the next red, two instruments exist, both evidence only. The real-dump tests
+  build their reader with `logDumpGeneration: true`, so the runtime runs `createdump --diag`, whose step
+  lines are flushed to stdout one by one and survive its death; the last line printed is where it died.
+  Production readers keep it off (it prints about a thousand lines per dump). And a shard whose host
+  exited non-zero prints the runner's kernel log for `createdump`, OOM and segfault lines
+  (`Evidence: kernel log of a failed shard` in `dotnet-test.yml`), which names an OOM kill or a crash.
+  Measured meanwhile, in a Linux container: the dump's size is dominated by the process's in-memory
+  assembly images (300 assemblies loaded from bytes give 193 MB; a bare process 10 MB), `createdump`'s
+  own anonymous memory is about the dump's size (523 MB for 540 MB), a Triage dump is no smaller, and
+  under a cgroup memory cap the OOM killer took the HOST, not the writer.
   A thread id names a thread, not a leaf: a leaf that returned between the expiry's
   snapshot and the dump has handed its thread back. So each leaf carries its own ticket, which is
   rechecked after the dump. A leaf whose ticket is gone is reported as having returned before its
@@ -954,6 +978,22 @@ registration per page ever opened, and a repeat dispose after the drain's releas
 MeshWeaver.Plugins by `SearchScopeReleasedBeforeThePoolCancelTest` (MeshWeaver.Mail.MicrosoftGraph.Test)
 and `NotificationFeedReleasedBeforeThePoolCancelTest` (MeshWeaver.Blazor.Portal.Test), each with an
 unowned control read the report must still name and a measured negative control.
+
+**A layout area's render legs are the same ordering bug, owned by the area host.** With the readers
+above owned, the stops still named a `LayoutAreaHost` family on BOTH pools at one stop: on `Layout`, the
+area's init render (`Defer<EntityStoreAndUpdates>`, subscribed by `BuildInitialization`) and a nested
+`RenderArea` leg; on `Query`, a `MeshQuery` fan-in opened at the same instant as that init render (both
+321.0 s old) — the query the area's view generator subscribed under its render. The host disposes every
+render subscription, but the host is disposed with its hub, and every hub outlives
+`IoPoolSiloTeardown`. So `LayoutAreaHost` now subscribes its renders through
+`IPooledSubscribeScheduler.SubscribeThroughPool(source, ownedUntilDrainBy)`, which hands each
+subscription to `IoPoolRegistry.OwnUntilDrain` (the release line reads `LayoutAreaHost×N`); a render that
+terminates, or that its area or host disposes first, forgets its registration. The one-argument overload
+is unchanged for every other caller. Pinned by `LayoutRenderReleasedBeforeThePoolCancelTest`
+(MeshWeaver.Graph.Test): a live area whose view is a standing mesh query, the registry disposed while the
+area is subscribed, plus an unowned control query the report must name. **Negative control, measured:**
+with the one-argument overload restored in `LayoutAreaHost`, the report names the init render's
+`Defer<EntityStoreAndUpdates>` leg and the test fails.
 
 **A one-shot read is not a mesh-lifetime reader — and the line now says which way it is stuck.**
 `EaGraphAuth.AddedAccountIds` (MeshWeaver.Plugins) kept appearing after the readers above were owned:

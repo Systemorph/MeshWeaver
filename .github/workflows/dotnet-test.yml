@@ -258,7 +258,7 @@ env:
   # The Playwright the shards' headless browser comes from, and the one whose `install-deps
   # --dry-run` the font set is checked against. Keep it in step with
   # deploy/base-images/portal-ai/Dockerfile.
-  PLAYWRIGHT_VERSION: 1.62.1
+  PLAYWRIGHT_VERSION: 1.65.0
 
 jobs:
   # 🚨 No `jlumbroso/free-disk-space` in any job — do not re-add it. Removed 2026-08-09 after
@@ -489,9 +489,12 @@ jobs:
     # ── Tests only for changed functionality (the fleet rule, applied to core 2026-09-13) ──────
     # Every run used to execute every test project — 5 shards, ~21 of a run's 31 job-minutes —
     # whatever the change touched. On a PULL REQUEST the diff against the base is mapped to the
-    # ProjectReference graph and only the test projects that reach a changed project run; a
-    # change outside src/ and test/ (a workflow, a props file, an allow list, tools/…) still runs
-    # everything, and docs/markdown-only changes run none. merge_group, push, schedule and
+    # ProjectReference graph and only the test projects that reach a changed project run. A
+    # `.github/**` file runs everything only when THIS lane consumes it (derived from this file's
+    # non-shell jobs and what they call), runs just the test projects that read it otherwise, and
+    # nothing when no .NET test reads it — the `workflow-shell*` jobs cover it
+    # (Doc/Architecture/CoreTestSelection). Any other change outside src/ and test/ (a props file,
+    # an allow list, tools/…) still runs everything; docs/markdown-only changes run none. merge_group, push, schedule and
     # dispatch always run the full suite — the merge queue is the coupling check. The verdict is
     # printed here and asserted downstream: every shard obeys the SAME selection through
     # shard-assign.sh, and the collector accepts "no evidence" ONLY for mode=none.
@@ -642,7 +645,10 @@ jobs:
   # or `cancelled` holds (stage 0 red), `skipped` passes. The green-tree reuse path is passed in too:
   # nothing is spent there, so it is not held.
   stage-gate:
-    needs: [precheck, pr-body, shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, workflow-shell, workflow-shell-executions, cross-repo-pair]
+    # 🔀 CI's own shell is NOT a need (CiProfile2026-11 R1, Doc/Architecture/CiOwnShellScope): its
+    # self-test jobs held every build until minute 5.7; they now run beside the build, only when
+    # their inputs change, and fail the required check (`Consolidate test results`) on their own.
+    needs: [precheck, pr-body, shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, cross-repo-pair]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/node-repo-stage-gate.yml
     permissions:
@@ -656,8 +662,7 @@ jobs:
       stage0-results: >-
         shared-rules=${{ needs.shared-rules.result }} closing-keywords=${{ needs.closing-keywords.result }}
         package-pin-removal=${{ needs.package-pin-removal.result }} interface-addition=${{ needs.interface-addition.result }}
-        i18n-mirror-sync=${{ needs.i18n-mirror-sync.result }} workflow-shell=${{ needs.workflow-shell.result }}
-        workflow-shell-executions=${{ needs.workflow-shell-executions.result }}
+        i18n-mirror-sync=${{ needs.i18n-mirror-sync.result }}
         cross-repo-pair=${{ needs.cross-repo-pair.result }} pr-body=${{ needs.pr-body.result }}
 
   # ── WHO RUNS THE BUILD AND THE SUITES: a standing build host, or Actions ─────────────────────
@@ -680,9 +685,12 @@ jobs:
     # No `main-sha`: precheck's main is the green-tree PROBE's and may be hours old by the time a held
     # run is released (see precheck's output). Empty, the host resolves the tip once as the suites
     # start — exactly what `build` does on the Actions route (policy suites-test-fresh-merge).
+    # 🧵 The LINE picks the build-host channel (policy major-lines-run-separately): a pull request onto main
+    # runs on the v4 host, onto main3 on latest3 — declared in .github/delivery-lines.json `buildHostChannel`.
     with:
       change-mode: ${{ needs.precheck.outputs.tests-mode }}
       scripts-ref: ${{ github.sha }}
+      line-channels: true
     secrets:
       build-webhook-secret: ${{ secrets.BUILD_WEBHOOK_SECRET }}
 
@@ -704,8 +712,10 @@ jobs:
     with:
       executor: host
       api-url: ${{ needs.admission.outputs.api-url }}
-      # The stage's CHECK name (build/<stage>): build-follow.py refuses a bare `build` as the aggregate check.
-      stage: build/${{ matrix.stage }}
+      # The stage's CHECK name (build/<stage> on latest, build-<channel>/<stage> off it): build-follow.py
+      # refuses a bare `build` as the aggregate check.
+      stage: ${{ needs.admission.outputs.channel == 'latest' && 'build' || format('build-{0}', needs.admission.outputs.channel) }}/${{ matrix.stage }}
+      channel: ${{ needs.admission.outputs.channel || 'latest' }}
       sha: ${{ github.event.pull_request.head.sha || github.sha }}
       scripts-ref: ${{ github.sha }}
 
@@ -740,11 +750,12 @@ jobs:
         API_URL: ${{ needs.admission.outputs.api-url }}
         SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         SHARD: ${{ matrix.shard }}
+        CHANNEL: ${{ needs.admission.outputs.channel || 'latest' }}
       run: |
         set -euo pipefail
         python3 .github/scripts/host-shard-results.py --self-test > /dev/null
         python3 .github/scripts/host-shard-results.py --api-url "$API_URL" --sha "$SHA" --shard "$SHARD" \
-          --channel latest --out "$GITHUB_WORKSPACE/results"
+          --channel "$CHANNEL" --out "$GITHUB_WORKSPACE/results"
     - name: "Upload artifact: shard test results (from the host)"
       uses: actions/upload-artifact@v7
       with:
@@ -786,11 +797,12 @@ jobs:
       env:
         API_URL: ${{ needs.admission.outputs.api-url }}
         SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        CHANNEL: ${{ needs.admission.outputs.channel || 'latest' }}
       run: |
         set -euo pipefail
         python3 .github/scripts/host-build-outputs.py --self-test > /dev/null
         python3 .github/scripts/host-build-outputs.py fetch --api-url "$API_URL" --sha "$SHA" \
-          --channel latest --out "$RUNNER_TEMP/host-build"
+          --channel "$CHANNEL" --out "$RUNNER_TEMP/host-build"
     # 🔀 The consumers merge the head onto this main-sha (policy suites-test-fresh-merge); a fresh merge
     # is a pure function of (main, head), so this one proves theirs is the tree the host compiled.
     - name: Merge the head onto the main the host build compiled
@@ -871,7 +883,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 10.0.x
+        dotnet-version: 11.0.x
     # The NuGet shelf (Memex ci-runners, mounted at /nuget-shelf on the self-hosted sets; absent on
     # ubuntu-latest, where both steps say so and do nothing): immutable per-version zips, the mesh's
     # own FileSystemNuGetPackageCache protocol, extracted into THIS runner's packages folder before
@@ -1146,7 +1158,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 10.0.x
+        dotnet-version: 11.0.x
     - name: "Download artifact: this shard's build output"
       uses: actions/download-artifact@v8
       with:
@@ -1437,7 +1449,7 @@ jobs:
           name=$(basename "$csproj" .csproj)
           label="$name"
           [ "$parts" -gt 1 ] && label="$name (part $part/$parts)"
-          dir=$(dirname "$csproj")/bin/Release/net10.0
+          dir=$(dirname "$csproj")/bin/Release/net11.0
           # Helper projects (TestDomain, Hub.Fixture, AI.Test.FakeCli) ship no
           # xunit.v3 host — nothing to run. Recorded so the log shows they were
           # consciously skipped, not lost.
@@ -1630,8 +1642,14 @@ jobs:
             if [ "$pspec" = "$entry" ]; then np=1; unit="$nm"; else
               np="${pspec##*/}"; unit="$nm (part ${pspec%%/*}/${np})"
             fi
-            # Whole-project weight from the table; a part carries 1/np of it.
+            # A part's own measured row when the table has one, else 1/np of the project's total —
+            # the same weight shard-assign.sh scheduled it at.
+            pw=""
+            [ "$np" -gt 1 ] && pw=$(awk -v u="$nm#$pspec" '$2 == u { print $1; exit }' /tmp/weight-table.txt)
             tw=$(awk -v n="$nm" '$2 == n { print $1; exit }' /tmp/weight-table.txt)
+            if [ -n "${pw:-}" ] && [ "$pw" -gt 0 ]; then
+              tw=$pw; np=1
+            fi
             if [ -n "${tw:-}" ] && [ "$np" -gt 0 ] && [ "$tw" -gt 0 ]; then
               expect=$(( tw / np ))
               [ "$expect" -lt 1 ] && expect=1
@@ -1648,8 +1666,8 @@ jobs:
           done < test/measured-weights.tsv
           {
             echo
-            echo "> ⚠️ = re-measure this entry in \`.github/scripts/shard-assign.sh\` (drift ≥25% and >30 s)."
-            echo "> Table weights are wall-clock seconds for the WHOLE project; a split unit shows its share."
+            echo "> ⚠️ = drift ≥25% and >30 s: regenerate the table with \`python3 .github/scripts/shard-weights.py refresh\` (it writes \`.github/scripts/shard-weights.txt\`)."
+            echo "> A split unit shows its own measured part weight, or its share of the project's total when the part has no row."
           } >> "$GITHUB_STEP_SUMMARY"
         fi
         exit 0
@@ -1671,7 +1689,7 @@ jobs:
         # dump was produced by — the matching DAC is what makes SOS work at all.
         while read -r sigproj; do
           [ -z "$sigproj" ] && continue
-          bindir=$(find test -type d -path "*/$sigproj/bin/Release/net10.0" | head -1)
+          bindir=$(find test -type d -path "*/$sigproj/bin/Release/net11.0" | head -1)
           [ -z "$bindir" ] && continue
           echo "Collecting symbols for signal-killed $sigproj from $bindir"
           mkdir -p "collected-logs/symbols-$sigproj"
@@ -1781,6 +1799,45 @@ jobs:
     - name: "Gate: no content degraded to an untyped JsonElement"
       if: always()
       run: bash .github/scripts/check-untyped-content.sh collected-logs
+    # ── Evidence only, never a verdict: the runner's kernel log for a shard whose host exited
+    #    non-zero. The runtime reports a createdump that died on a SIGNAL as a successful dump
+    #    (coreclr PROCCreateCrashDump: `!WIFEXITED(status) || WEXITSTATUS(status) == 0`), so the
+    #    stack capture can only say "no file"; the kernel says which signal and why (an OOM kill,
+    #    a segfault). This step always exits 0 and runs before the verdict steps below, so it can
+    #    neither fail the shard nor mask its verdict. Doc/Architecture/ControlledIoPooling.
+    - name: "Evidence: kernel log of a failed shard (createdump / OOM / segfault)"
+      if: always()
+      timeout-minutes: 1
+      # The trigger is the SAME marker the verdict step "Fail on non-zero project exit" gates on — the
+      # run step writes one `[CI] <project> exit=<rc> …` line per project, crashes and signals included
+      # (KernelLogEvidenceStepGuard pins the two greps to each other). A missing marker file is said
+      # aloud and the kernel log printed anyway; an unreadable kernel log is said aloud, never shown as
+      # an empty match.
+      run: |
+        if [ ! -f test/test-results.log ]; then
+          echo "no test/test-results.log — cannot tell whether a test host failed; printing the kernel log anyway"
+        elif ! grep -qE 'exit=[1-9]' test/test-results.log; then
+          echo "every test host exited 0 — no kernel log needed"
+          exit 0
+        else
+          echo "a test host exited non-zero"
+        fi
+        # The redirect is the runner user writing its own /tmp file; only dmesg needs root.
+        if ! { sudo -n dmesg -T; } > /tmp/kernel-log.txt 2>&1; then
+          echo "the kernel log could NOT be read (sudo -n dmesg failed):"
+          head -c 400 /tmp/kernel-log.txt
+          exit 0
+        fi
+        # grep finding nothing is an answer, not a failure: it must not end the step under -e/pipefail.
+        { grep -iE 'createdump|out of memory|oom-kill|invoked oom-killer|oom_reaper|segfault|killed process' /tmp/kernel-log.txt || true; } \
+          | tail -n 80 > /tmp/kernel-log-hits.txt
+        if [ -s /tmp/kernel-log-hits.txt ]; then
+          echo "the runner's kernel log lines for createdump, OOM kills and segfaults (last 80):"
+          cat /tmp/kernel-log-hits.txt
+        else
+          echo "the kernel log was read and holds NO createdump, OOM-kill or segfault line ($(wc -l < /tmp/kernel-log.txt) lines read)"
+        fi
+        exit 0
     # ── Per-shard surfacing: publish THIS shard's results as soon as it
     #    finishes, so you don't wait for the slowest sibling + the collector to
     #    see shard 0's outcome. The collect-results job re-consolidates all
@@ -1892,6 +1949,58 @@ jobs:
     outputs:
       verdict: ${{ steps.gate.outputs.verdict }}
     steps:
+    # CI profile R10 (Doc/Architecture/ClientsVerdict): this job used to spend 3.1 min of EVERY run
+    # waiting out the 180 s zero-runs grace period below, on change sets that could never start a
+    # Clients run. The two steps before the gate PROVE that instead of waiting for it: they apply
+    # clients.yml's own trigger (read at the commit under test) to the change set. Only a proven
+    # `applicable=false` shortens the grace period; `true` and `unknown` keep it, so every failure of
+    # this proof degrades to the old wait — never to a pass.
+    - uses: actions/checkout@v7
+      with:
+        sparse-checkout: .github
+        persist-credentials: false
+    - name: "Self-test the Clients applicability rule"
+      run: python3 .github/scripts/clients-applicability.py --self-test
+    - name: "Can this change set start a Clients run?"
+      id: scope
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EVENT: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PUSH_BEFORE: ${{ github.event.before }}
+        REF_NAME: ${{ github.ref_name }}
+      run: |
+        set -uo pipefail
+        files="$RUNNER_TEMP/clients-scope.tsv"
+        : > "$files"
+        extra=()
+        listed=0
+        # Each listing failure is reported and leaves the file list EMPTY, which the script answers
+        # `unknown` — the full grace period, exactly as before this step existed.
+        if [ "$EVENT" = "pull_request" ]; then
+          if expected=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.changed_files' 2>"$RUNNER_TEMP/clients-scope.err") \
+             && gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files?per_page=100" \
+                  --jq '.[] | [.filename, (.previous_filename // "")] | @tsv' > "$files" 2>>"$RUNNER_TEMP/clients-scope.err"; then
+            extra=(--expected "$expected")
+            listed=1
+          fi
+        elif [ "$EVENT" = "push" ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+          # The compare API lists at most 300 files; a listing that reaches the cap proves nothing.
+          if gh api "repos/${{ github.repository }}/compare/${PUSH_BEFORE}...${{ github.sha }}" \
+               --jq '.files[] | [.filename, (.previous_filename // "")] | @tsv' > "$files" 2>"$RUNNER_TEMP/clients-scope.err"; then
+            extra=(--truncated-at 300)
+            listed=1
+          fi
+        else
+          listed=2
+        fi
+        if [ "$listed" = "0" ]; then
+          : > "$files"
+          echo "Could not list the change set ($(tr '\n' ' ' < "$RUNNER_TEMP/clients-scope.err" | cut -c1-400)) — keeping the full grace period."
+        fi
+        python3 .github/scripts/clients-applicability.py \
+          --workflow .github/workflows/clients.yml --event "$EVENT" --ref-name "$REF_NAME" \
+          --files "$files" "${extra[@]}"
     - name: "Resolve the Clients workflow's conclusion for this commit"
       id: gate
       env:
@@ -1899,15 +2008,35 @@ jobs:
         # On a pull_request run, github.sha is the merge commit — the Clients workflow runs on
         # the PR's HEAD, so that is the sha its runs are keyed by.
         HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        APPLICABLE: ${{ steps.scope.outputs.applicable }}
+        APPLICABLE_REASON: ${{ steps.scope.outputs.reason }}
       run: |
         set -uo pipefail
         api="repos/${{ github.repository }}/actions/workflows/clients.yml/runs?head_sha=${HEAD_SHA}&per_page=100"
         # 🚨 "Zero runs" is only meaningful once GitHub has had time to CREATE the run. Both
         # workflows fire on the same event, so an immediate zero would be a race, and reading
         # it as "the path filter did not match" would silently re-open the very hole this gate
-        # closes. So a zero is only believed after this grace period of consecutive zeros.
+        # closes. So a zero is only believed after this grace period of consecutive zeros —
+        # UNLESS the step above PROVED that clients.yml's own trigger matches nothing in this
+        # change set (`applicable=false`). Then the grace shrinks to 30 s counted from THIS
+        # workflow run's creation, not from this job's start: GitHub creates every workflow run
+        # of one event together (measured over the last 12 Clients runs: created within 1 s of
+        # this workflow's run), so by then a run GitHub started despite the proof — a diff it
+        # could not compute runs the workflow anyway — is listed, and is gated on below. A
+        # failed read is still retried and still never a zero; if this run's creation time
+        # cannot be read, the full grace period applies.
         ZERO_GRACE_SECONDS=180
         started=$(date +%s)
+        if [ "$APPLICABLE" = "false" ]; then
+          if created=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.created_at' 2>"$RUNNER_TEMP/clients-gate.err") \
+             && createdEpoch=$(date -d "$created" +%s 2>>"$RUNNER_TEMP/clients-gate.err"); then
+            ZERO_GRACE_SECONDS=30
+            started=$createdEpoch
+          else
+            echo "Could not read this run's creation time ($(tr '\n' ' ' < "$RUNNER_TEMP/clients-gate.err" | cut -c1-400)) — keeping the full grace period."
+          fi
+        fi
+        echo "Clients applicability: ${APPLICABLE:-unset} — ${APPLICABLE_REASON:-no reason recorded} (zero-runs grace: ${ZERO_GRACE_SECONDS}s)"
         # 🚨 A FAILED QUERY IS NOT A ZERO. An auth error, a rate limit or a network blip must never
         # collapse into "no runs exist" — that would make this gate pass on no evidence, which is
         # precisely the trapdoor it was written to close (and the reason `gh api ... || echo
@@ -1929,7 +2058,10 @@ jobs:
           total=$(echo "$json" | jq -r '.total_count // 0')
           if [ "$total" = "0" ] && [ $(( $(date +%s) - started )) -lt "$ZERO_GRACE_SECONDS" ]; then
             echo "No Clients run for ${HEAD_SHA} yet — within the ${ZERO_GRACE_SECONDS}s creation grace period, waiting."
-            sleep 20
+            # Sleep to the end of the grace period (plus a second), never more than one poll interval.
+            wait=$(( ZERO_GRACE_SECONDS - ( $(date +%s) - started ) + 1 ))
+            if [ "$wait" -gt 20 ]; then wait=20; fi
+            sleep "$wait"
             continue
           fi
           if [ "$total" = "0" ]; then
@@ -1939,6 +2071,8 @@ jobs:
               echo "### ➖ Clients: not applicable"
               echo
               echo "No \`Clients\` run for \`${HEAD_SHA}\` — this PR changes none of the paths that workflow watches."
+              echo
+              echo "Applicability: \`${APPLICABLE:-unset}\` — ${APPLICABLE_REASON:-no reason recorded} (zero-runs grace ${ZERO_GRACE_SECONDS}s)."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -2021,7 +2155,7 @@ jobs:
         main-sha: ${{ needs.build.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 10.0.x
+        dotnet-version: 11.0.x
     - name: "Download artifact: build output (shard 0)"
       uses: actions/download-artifact@v8
       with:
@@ -2229,7 +2363,7 @@ jobs:
         main-sha: ${{ needs.build.outputs.main-sha || needs.host-build-outputs.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: 10.0.x
+        dotnet-version: 11.0.x
     - name: "Download artifact: build output (shard 0)"
       uses: actions/download-artifact@v8
       with:
@@ -2330,7 +2464,152 @@ jobs:
     - name: Check dependency licences
       run: python3 .github/scripts/check-licenses.py --evidence licence-evidence --report
 
+  # ── CI's own shell: IS IT OWED? (Doc/Architecture/CiOwnShellScope, CiProfile2026-11 R1) ─────────
+  # The four self-test jobs below prove CI's own code. They used to be a `needs:` of `stage-gate`,
+  # so no build started until the slowest of them finished — 5.7 of an 18.5-minute pull-request run
+  # (CiProfile2026-11 §3) — and they ran on every pull request whatever it changed (~870
+  # runner-minutes a day). Now they run BESIDE the build, and only when this job says their inputs
+  # changed. They still gate the required check:
+  #   * this job has no `needs:` and no `if:`, and its classifier proves itself first (`--self-test`,
+  #     whose negative control is that a `.github/scripts` change RUNS them);
+  #   * its decision (`run`, `reason`) is printed, written to the run summary and, on a skip, raised
+  #     as a notice — the skip is a recorded decision, never an absence;
+  #   * `Consolidate test results` accepts `skipped` from a self-test job ONLY when this job succeeded
+  #     AND said `run=false`; a failed or cancelled scope job, or `run=true` with anything but
+  #     `success`, is red there by name;
+  #   * not a pull request (push, merge_group, schedule, dispatch) → always `run=true`;
+  #   * the whole-tree guards that READ product files run unconditionally in `workflow-shell-tree`,
+  #     so this classifier never has to judge what they read.
+  # affected-tests.py accepts exactly this `needs:`/`if:` pair on a shell job, and no other.
+  workflow-shell-scope:
+    name: "CI's own shell: are its inputs changed?"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      reason: ${{ steps.scope.outputs.reason }}
+    steps:
+    - uses: actions/checkout@v7
+      # Depth 2: on a pull request HEAD is refs/pull/N/merge and its FIRST parent is the base it
+      # merged onto, so HEAD^1..HEAD is the pull request's own change set.
+      with: { fetch-depth: 2 }
+    - name: "The scope classifier can say both things — a .github/scripts change runs them (self-test)"
+      run: python3 .github/scripts/workflow-shell-scope.py --self-test
+    - name: Does this change set owe CI's own shell?
+      id: scope
+      env:
+        EVENT: ${{ github.event_name }}
+      run: |
+        set -euo pipefail
+        if [ "$EVENT" = "pull_request" ]; then
+          python3 .github/scripts/workflow-shell-scope.py | tee /tmp/scope.txt
+        else
+          python3 .github/scripts/workflow-shell-scope.py --all | tee /tmp/scope.txt
+        fi
+        # `reason` names PR-controlled file names. The classifier prints it as ONE line with `%`, CR,
+        # LF and `:` escaped the way GitHub's command parser requires and each name in a backtick-free
+        # code span, so it cannot add an output key, start a second `::` command or inject Markdown
+        # below (its self-test asserts this on a hostile name).
+        run=$(grep '^run=' /tmp/scope.txt | cut -d= -f2-)
+        reason=$(grep '^reason=' /tmp/scope.txt | cut -d= -f2-)
+        case "$run" in (true|false) ;; (*) echo "::error::the scope classifier printed no run=true|false verdict"; exit 1;; esac
+        {
+          echo "### CI's own shell: $( [ "$run" = true ] && echo 'owed — the self-test jobs run' || echo 'NOT owed — the self-test jobs are skipped by this decision' )"
+          echo
+          echo "- $reason"
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ "$run" = false ]; then
+          echo "::notice title=CI's own shell not owed (recorded decision)::$reason"
+        fi
+
+  # ── CI's own shell: the WHOLE-TREE guards (never path-selected) ─────────────────────────────
+  # These guards read PRODUCT files — every tracked text file (the Key Vault command scan), the test
+  # sources and docs (the build-stage census), the node trees (path collisions, retired fields) — so
+  # no change set is inert to them. They are cheap, so they run on every pull request, beside the
+  # build, with the same posture as the self-test jobs had: no `needs:`, no `if:`, no path filter, no
+  # `continue-on-error`, the same tool assertion and the one prerequisite line (#4784,
+  # check-guard-step-masking.py), and `Consolidate test results` fails on anything but `success`.
+  workflow-shell-tree:
+    name: "CI's own shell (whole-tree guards)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+
+    - name: Assert the tools this gate needs
+      uses: ./.github/actions/workflow-shell-tools
+
+    - name: The workspace and the tools are present — the ONE prerequisite every guard shares
+      id: ready
+      run: echo "ok=true" >> "$GITHUB_OUTPUT"
+
+    # 🔐 No doc, runbook, skill or script tells a human to set or read a Key Vault secret by hand
+    # (policy `secrets-write-only-entry`, Doc/Architecture/SecretsWriteOnlyEntry): secrets are
+    # entered through the write-only GUI of the app that owns them and written by the governed
+    # writer identity. Only the governed verbs (.github/manual-keyvault.allow) and a marked
+    # `kv-break-glass` procedure may hold such a command. Self-test first.
+    - name: "No manual Key Vault secret command — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-manual-keyvault.py --self-test
+    - name: "No manual Key Vault secret command outside the governed verbs"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-manual-keyvault.py --root .
+
+    # The shard weight table (.github/scripts/shard-weights.txt) is GENERATED from measurement by
+    # shard-weights.py and balanced by shard-assign.sh. Every test project, and every part of a split
+    # one, must land on exactly one shard under both selections — a dropped unit would read green
+    # having run nothing, a duplicated one would run twice. The self-test proves both checks can fail.
+    # A WHOLE-TREE guard, never path-selected: adding a test project anywhere moves the assignment.
+    - name: "Every test project runs on exactly one shard; the weight table's tools can fail (self-test + check)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: |
+        python3 .github/scripts/shard-weights.py --self-test
+        python3 .github/scripts/shard-weights.py check-assignment
+
+    # Two source files importing to ONE node path (`X.md` + `X.json`, `X.md` + `X/index.json`,
+    # case-folded) are silently last-writer-wins at import. Every node repo's validate lane fetches
+    # this guard from here, so it is proven here; and core's own trees are held to it. Both trees
+    # are held to the strict form. The samples tree is served by FileSystemStorageAdapter, which
+    # MERGES `X.json` + `X/index.md`, and it used to need `--filesystem-layout` for the one pair it
+    # carried (ACME.json + ACME/index.md). ACME left with the product demos, so no tree here needs
+    # the exemption, and a new merged pair is refused. The doc tree is served by
+    # DocumentationNodeProvider, which merges nothing.
+    - name: "Two files importing to one node path are caught (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-node-path-collisions.py --self-test
+    - name: "No two files in core's node trees import to the same node path"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: |
+        set -euo pipefail
+        python3 .github/scripts/check-node-path-collisions.py --tree src/MeshWeaver.Documentation/Data
+        python3 .github/scripts/check-node-path-collisions.py --tree samples/Graph/Data
+
+    # A node file carrying a member MeshNode no longer has is a BUILD ERROR (#6638): GitSync's strict
+    # reader refuses the whole snapshot on one such file, and the platform stays strict, so the
+    # content is migrated, never the reader. The register is `.github/meshnode-fields.json`
+    # (MeshNodeFieldsRegisterTest keeps it equal to the type). Every node repo's validate lane
+    # fetches this guard and the register from here, so both are proven here; and core's own trees
+    # are held to it.
+    - name: "A node file carrying a retired MeshNode field is caught (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-retired-node-fields.py --self-test
+    - name: "No node file in core's trees carries a retired MeshNode field"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-retired-node-fields.py --tree src/MeshWeaver.Documentation/Data --tree samples/Graph/Data
+
+    # Core's build stages (see the declaration rule in `workflow-shell`): the census behind
+    # `--check` reads every test source, doc and MSBuild file for container use, so it is a
+    # whole-tree guard and runs here on every pull request.
+    - name: "Core's build stages are build + one per CI shard + doc-gate, generated from CI_SHARD_TOTAL, owing what they owe (self-test + check)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: |
+        python3 .github/scripts/core-build-stages.py --self-test
+        python3 .github/scripts/core-build-stages.py --check
+
   workflow-shell:
+    needs: [workflow-shell-scope]
+    if: ${{ needs.workflow-shell-scope.outputs.run == 'true' }}
     name: "CI's own shell"
     # 🚨 THE GAP THIS CLOSES: `main-cd.yml` is 2000 lines of shell that decides what is built,
     # published and rolled to the fleet — and NOTHING opened it. It fires on `workflow_run`,
@@ -2351,14 +2630,20 @@ jobs:
     #
     # 🛡️ NO SKIP-TRAPDOOR. Every input is in this repository — no secret, no cluster, no registry
     # — so there is no condition under which this may decline to run and still render a tick:
-    #   * no `needs:`, so nothing upstream can skip it (not even the green-tree reuse path — this
-    #     gate is minutes, and the reuse optimisation exists for a 70-runner-minute suite);
-    #   * it runs as TWO jobs, this one and `workflow-shell-executions` below, because one job of
-    #     ~130 guards in series outgrew its 10-minute cap (see that job's header);
-    #   * no input-shaped `if:`, because GitHub renders a skipped job with the same tick as a
-    #     passed one;
-    #   * no path filter, which is that same defect from the other side (an unrelated PR would
-    #     "pass" by not running);
+    #   * its ONE `needs:` is `workflow-shell-scope`, an unconditional job whose RECORDED decision
+    #     says whether this change set touches the self-tests' inputs (Doc/Architecture/
+    #     CiOwnShellScope). Nothing else upstream can skip it (not the green-tree reuse path, not
+    #     stage-gate — it is no longer a need of stage-gate and runs beside the build);
+    #   * it runs as FOUR jobs — this one, `workflow-shell-executions`, and its two longest
+    #     harnesses split out as `workflow-shell-executions-publish` / `-msbuild` — because one job
+    #     of ~130 guards in series outgrew its 10-minute cap (see those jobs' headers); the
+    #     whole-tree guards that read product files run in `workflow-shell-tree`, never skipped;
+    #   * its ONE `if:` is that decision, never a question about an input's presence; and
+    #     `Consolidate test results` accepts this job's `skipped` ONLY beside a successful scope job
+    #     that said `run=false` — a skip is never mistaken for a pass on a change that touched its
+    #     inputs (GitHub renders a skipped job with the same tick as a passed one);
+    #   * no workflow path filter (an unrelated PR would "pass" by not running) — the decision is
+    #     a job of this run, printed and recorded;
     #   * no `continue-on-error`;
     #   * the tools it needs are ASSERTED, and a missing one fails RED rather than quietly
     #     reducing the gate to the checks it happened to be able to run.
@@ -2546,37 +2831,6 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-module-bundle-size.py --self-test
 
-    # Two source files importing to ONE node path (`X.md` + `X.json`, `X.md` + `X/index.json`,
-    # case-folded) are silently last-writer-wins at import. Every node repo's validate lane fetches
-    # this guard from here, so it is proven here; and core's own trees are held to it. Both trees
-    # are held to the strict form. The samples tree is served by FileSystemStorageAdapter, which
-    # MERGES `X.json` + `X/index.md`, and it used to need `--filesystem-layout` for the one pair it
-    # carried (ACME.json + ACME/index.md). ACME left with the product demos, so no tree here needs
-    # the exemption, and a new merged pair is refused. The doc tree is served by
-    # DocumentationNodeProvider, which merges nothing.
-    - name: "Two files importing to one node path are caught (self-test)"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/check-node-path-collisions.py --self-test
-    - name: "No two files in core's node trees import to the same node path"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: |
-        set -euo pipefail
-        python3 .github/scripts/check-node-path-collisions.py --tree src/MeshWeaver.Documentation/Data
-        python3 .github/scripts/check-node-path-collisions.py --tree samples/Graph/Data
-
-    # A node file carrying a member MeshNode no longer has is a BUILD ERROR (#6638): GitSync's strict
-    # reader refuses the whole snapshot on one such file, and the platform stays strict, so the
-    # content is migrated, never the reader. The register is `.github/meshnode-fields.json`
-    # (MeshNodeFieldsRegisterTest keeps it equal to the type). Every node repo's validate lane
-    # fetches this guard and the register from here, so both are proven here; and core's own trees
-    # are held to it.
-    - name: "A node file carrying a retired MeshNode field is caught (self-test)"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/check-retired-node-fields.py --self-test
-    - name: "No node file in core's trees carries a retired MeshNode field"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/check-retired-node-fields.py --tree src/MeshWeaver.Documentation/Data --tree samples/Graph/Data
-
     # The gate host every node-repo bake and gate RUNS AS since MeshWeaver#3022 — the portal's /app
     # with the tester CLI beside it (compose-gate-host.sh, fetched by the reusable lanes at their
     # platform-ref). Its rules are load-bearing (the portal's bytes win, the tester's deps.json and
@@ -2640,12 +2894,6 @@ jobs:
     - name: "The build-host declaration rule can fail (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-build-stages.py --self-test
-    - name: "Core's build stages are build + one per CI shard + doc-gate, generated from CI_SHARD_TOTAL, owing what they owe (self-test + check)"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: |
-        python3 .github/scripts/core-build-stages.py --self-test
-        python3 .github/scripts/core-build-stages.py --check
-
     - name: "The mw-core-tests runner reds every shard it cannot vouch for (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 deploy/core-tests/core-tests.py --self-test
@@ -2710,6 +2958,17 @@ jobs:
     - name: "Every moving image label is declared, and retention reads it as protected"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/release-channels.py check .
+
+    # The portal-ai BASE (Doc/Architecture/PortalAiBaseImage): CD layers every framework-dependent
+    # portal/control image on the base named by the content of deploy/base-images/portal-ai, and the
+    # Dockerfile's runtime must equal the platform's TargetFramework. The first v4 CD run layered a
+    # net11.0 host on a stale aspnet:10.0 `:latest` and the control image exited before Main.
+    - name: "The portal-ai base is named by its content and held to the target framework (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/portal-ai-base.py --self-test
+    - name: "The base runtime equals the platform's TargetFramework, and no workflow layers on a literal base tag"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/portal-ai-base.py check
 
     # The DELIVERY LINES (policy `major-lines-run-separately`): main-cd.yml derives its line once and
     # refuses an undeclared one (`derive`, driven here against fabricated events), and never spells a
@@ -2837,17 +3096,6 @@ jobs:
     - name: "A scheduled workflow's red has an audience"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-scheduled-lane-reporters.py --root .
-    # 🔐 No doc, runbook, skill or script tells a human to set or read a Key Vault secret by hand
-    # (policy `secrets-write-only-entry`, Doc/Architecture/SecretsWriteOnlyEntry): secrets are
-    # entered through the write-only GUI of the app that owns them and written by the governed
-    # writer identity. Only the governed verbs (.github/manual-keyvault.allow) and a marked
-    # `kv-break-glass` procedure may hold such a command. Self-test first.
-    - name: "No manual Key Vault secret command — the gate can fail (self-test)"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/check-manual-keyvault.py --self-test
-    - name: "No manual Key Vault secret command outside the governed verbs"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/check-manual-keyvault.py --root .
     # 🚨 A FAILING GUARD MUST NOT SKIP THE GUARDS AFTER IT (#4784). `node-repo-validate.yml`'s
     # `validate` job is ~36 independent guards in one step list, and GitHub's implicit step condition
     # is `success()` — so measured on MeshWeaver.SocialMedia#210, one drift red skipped 16 later
@@ -2926,6 +3174,16 @@ jobs:
     - name: "No workflow mapping writes a key twice"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-yaml-keys.py --root .
+
+    # 🚨 GitHub refuses a whole workflow, at load and with no job, when any string holding a `${{ }}`
+    # compiles past 21,000 characters. #8322 did that to node-repo-gate.yml and every caller's
+    # ci.yml went job-less fleet-wide (Doc/Architecture/WorkflowExpressionLimit).
+    - name: "No workflow string holding an expression nears GitHub's 21,000-character cap (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+      run: python3 .github/scripts/check-workflow-expression-length.py --self-test
+    - name: "No workflow string holding an expression nears GitHub's 21,000-character cap"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+      run: python3 .github/scripts/check-workflow-expression-length.py --root .
 
     # 🚨 The ledger every repository's red `main` is routed onto (node-repo-ci-failure.yml, maintainer
     # 2026-09-12: "put the ci-failure on all repos, in main") — proven here because core OWNS the
@@ -3339,11 +3597,15 @@ jobs:
   # a red with no verdict, on main, from a gate whose every step was green up to the cut. Nothing
   # in it was stuck: it is independent guards in series, so the cure is two jobs, not a higher cap.
   # This half holds the harnesses that EXECUTE a lane's or a script's real code against fixtures
-  # (the costliest, the publish-bake overlap harness, is ~2.5 min of real publications).
-  # Same posture as the first half: no `needs:`, no input-shaped `if:`, no path filter, no
-  # `continue-on-error`, the same tool assertion and the same one prerequisite line (#4784) —
-  # `check-guard-step-masking.py` holds this job to it too. Both halves gate stage 2 and Consolidate.
+  # (its two costliest — the publish-bake overlap harness and the real MSBuild reading — now run
+  # as `workflow-shell-executions-publish` and `-msbuild` below, in parallel with this job).
+  # Same posture as the first half: its one `needs:`/`if:` is the recorded scope decision, no
+  # input-shaped `if:`, no path filter, no `continue-on-error`, the same tool assertion and the same
+  # one prerequisite line (#4784) — `check-guard-step-masking.py` holds this job to it too. It runs
+  # beside the build (no longer a need of stage-gate) and gates Consolidate.
   workflow-shell-executions:
+    needs: [workflow-shell-scope]
+    if: ${{ needs.workflow-shell-scope.outputs.run == 'true' }}
     name: "CI's own shell (executions)"
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -3406,19 +3668,7 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-platform-canary.py
 
-    # The WRITER side of the same window (#3461). `prebuilt-bundles/<identity>/<source>/` has
-    # several publishers — core CD's `plugins-bake`, the satellite's own `publish-bake`, and (four
-    # times in one measured day, more often than the cross-lane case) two concurrent runs of ONE of
-    # them. Interleaved, publish-bake-bundles.sh used to seal a sentinel over bytes from two bakes:
-    # one seal, one generation, self-consistent to every consumer and WRONG, surfacing only as
-    # `dependency record mismatch — built against mvid:…` on a portal that renders nothing. This
-    # runs the REAL script twice, interleaved, against a stub share, and reads the verdict off the
-    # BYTES rather than off the script's own log.
-    - name: "Execute publish-bake-bundles.sh with two publishers on one prefix"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/test-publish-bake-overlap.py
-
-    # The READER side of the same lane, and a log-quality gate rather than a byte one (#3583).
+    # The READER side of the publish-bake lane, and a log-quality gate rather than a byte one (#3583).
     # `check-release-availability.sh` is the step that held MeshWeaver.Reinsurance 23 times in 24
     # hours. Every refusal exits 1 and must keep doing so — that is not what this asserts. It
     # asserts the three outcomes are TOLD APART in the log, because they want three different
@@ -3460,20 +3710,6 @@ jobs:
     - name: "The module-pack lane keys the extension SDK the caller's checkout resolves"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-pack-extension-sdk.py
-    # The MSBuild reading behind the extension/shelf key and scope REFUSES what it cannot model, and a
-    # rule written against fixtures alone once refused the one real extension. This positive control
-    # runs both scripts over an extension laid in this tree for the run (shaped like MeshWeaver.Plugins'
-    # Razor extension, referencing the real contract), with negative controls.
-    # The conservative sweep's ONE path parser (paths_in), held by a table of every spelling class:
-    # spaces, separators after a property, `\`, `..`, quotes, `;`-lists, globs, trailing separators,
-    # and the negatives (nonexistent, outside, root, output, .git, unresolved).
-    - name: "The MSBuild sweep's path parser resolves every spelling in its table"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/msbuild-evaluate.py --self-test
-    - name: "The real Razor build extension parses and keys cleanly"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/test-build-extension-reading.py
-
     # The gate and publish-bake lanes compose every external module into /ext/modules/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
     # that LOADS and then 404s every static asset it ships (`meshweaver/moduleassets/`), announced
@@ -3598,6 +3834,83 @@ jobs:
     - name: "Execute the two Azure-direct publication readers against a share with a generation"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-publication-pointer-readers.py
+
+  # ── CI's own shell, the two longest EXECUTIONS, each in its own job ───────────────────────────
+  # Split out of `workflow-shell-executions` for the critical path, not for a cap: that job sat in
+  # `stage-gate`'s needs at 479 s (main run 43636407276), the slowest stage-0 input by 3.5 minutes,
+  # with two harnesses alone at 181 s (publish-bake overlap) and 154 s (the real Razor build
+  # extension). Every step is an independent harness that reads only the checkout and the venv the
+  # tool assertion builds, so each job repeats exactly that setup and nothing else. Same posture as
+  # the other halves: the recorded scope decision as its one `needs:`/`if:`, no path filter, no
+  # `continue-on-error`, the same one prerequisite line (#4784, held by check-guard-step-masking.py);
+  # each runs beside the build and gates Consolidate on its own verdict.
+  # publish-bake-bundles.sh, two interleaved publishers against a stub share (~3 min of real publications).
+  workflow-shell-executions-publish:
+    needs: [workflow-shell-scope]
+    if: ${{ needs.workflow-shell-scope.outputs.run == 'true' }}
+    name: "CI's own shell (executions: publish-bake overlap)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+
+    - name: Assert the tools this gate needs
+      uses: ./.github/actions/workflow-shell-tools
+
+    - name: The workspace and the tools are present — the ONE prerequisite every guard shares
+      id: ready
+      run: echo "ok=true" >> "$GITHUB_OUTPUT"
+
+    # The WRITER side of the compose window above (#3461). `prebuilt-bundles/<identity>/<source>/` has
+    # several publishers — core CD's `plugins-bake`, the satellite's own `publish-bake`, and (four
+    # times in one measured day, more often than the cross-lane case) two concurrent runs of ONE of
+    # them. Interleaved, publish-bake-bundles.sh used to seal a sentinel over bytes from two bakes:
+    # one seal, one generation, self-consistent to every consumer and WRONG, surfacing only as
+    # `dependency record mismatch — built against mvid:…` on a portal that renders nothing. This
+    # runs the REAL script twice, interleaved, against a stub share, and reads the verdict off the
+    # BYTES rather than off the script's own log.
+    - name: "Execute publish-bake-bundles.sh with two publishers on one prefix"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-publish-bake-overlap.py
+
+  # The real `dotnet msbuild` evaluation behind the extension/shelf key and scope (~2.5 min).
+  workflow-shell-executions-msbuild:
+    needs: [workflow-shell-scope]
+    if: ${{ needs.workflow-shell-scope.outputs.run == 'true' }}
+    name: "CI's own shell (executions: MSBuild reading)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+
+    - name: Assert the tools this gate needs
+      uses: ./.github/actions/workflow-shell-tools
+
+    - name: The workspace and the tools are present — the ONE prerequisite every guard shares
+      id: ready
+      run: echo "ok=true" >> "$GITHUB_OUTPUT"
+
+    # The MSBuild reading behind the extension/shelf key and scope REFUSES what it cannot model, and a
+    # rule written against fixtures alone once refused the one real extension. This positive control
+    # runs both scripts over an extension laid in this tree for the run (shaped like MeshWeaver.Plugins'
+    # Razor extension, referencing the real contract), with negative controls.
+    # The conservative sweep's ONE path parser (paths_in), held by a table of every spelling class:
+    # spaces, separators after a property, `\`, `..`, quotes, `;`-lists, globs, trailing separators,
+    # and the negatives (nonexistent, outside, root, output, .git, unresolved).
+    - name: "The MSBuild sweep's path parser resolves every spelling in its table"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/msbuild-evaluate.py --self-test
+    - name: "The real Razor build extension parses and keys cleanly"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-build-extension-reading.py
+    # The ABI probe's REAL Roslyn comparer (.github/scripts/abi-syntax), built on this runner's SDK: a body edit
+    # keeps the surface; a signature, modifier, attribute, default, const, enum, #if, layout or generator-input edit
+    # moves it; the surface cache answers a warm run; and with stripping OFF a body edit moves it (negative control).
+    - name: "The ABI probe's syntax surface says unchanged only for a body edit — the comparer can say no"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/abi-key.py --self-test-syntax
 
   shared-rules:
     name: "AGENTS.md shared rule blocks"
@@ -4497,7 +4810,7 @@ jobs:
     # side (their push and daily runs). Nothing on the deploy side refuses a roll onto an unverified
     # core + plugin combination: arming (`one-promotion-gate`) judges platform evidence only, and the
     # combo verdict is ADVISORY (`platform-rolls-independently-of-packages`, ComboGateWiring).
-    needs: [precheck, stage-gate, admission, host-follow, host-results, host-build-outputs, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, workflow-shell-executions, shared-rules, pr-body, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
+    needs: [precheck, stage-gate, admission, host-follow, host-results, host-build-outputs, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell-scope, workflow-shell-tree, workflow-shell, workflow-shell-executions, workflow-shell-executions-publish, workflow-shell-executions-msbuild, shared-rules, pr-body, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -4537,7 +4850,7 @@ jobs:
         MODE: ${{ needs.stage-gate.outputs.mode }}
       run: |
         if [ "$MODE" = "stage0-red" ]; then
-          echo "::error title=Stage 2 held — stage 0 red::STAGE 2 HELD (stage 0 red): a cheap static control failed (shared rules, closing keywords, package pins, interface additions, i18n mirror, CI shell or cross-repo pair — see the red job), so the build and the shards did not start. Fix it and push; the new head restarts at stage 0."
+          echo "::error title=Stage 2 held — stage 0 red::STAGE 2 HELD (stage 0 red): a cheap static control failed (shared rules, closing keywords, package pins, interface additions, i18n mirror or cross-repo pair — see the red job), so the build and the shards did not start. Fix it and push; the new head restarts at stage 0."
         else
           echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the stage gate held the suites (with the opt-in review hold: the head's automatic review has not landed or a reviewer thread is unanswered) — see the stage gate job for exactly which. The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
         fi
@@ -4887,29 +5200,95 @@ jobs:
         echo "::error::The same job also carries the parser-delta control (#3492), so a red here can instead mean this diff makes the public-surface DETECTOR see less of the same tree — every gate built on it would then be guarding a smaller set, silently. That step prints both denominators and names the counter that fell. On a merge_group build the strict rule applies and no declaration is read (#3508)."
         exit 1
 
-    # ── …and a red Clients workflow decides it too ──────────────────────────────────────────
+    # ── …and CI's own shell decides it too ──────────────────────────────────────────────────
     # 🚨 `needs:` alone is NOT enough under `if: always()` — same lesson as the steps above.
-    # This is the merge gate #1555 did not have: its Portal-next job was red, naming the exact
-    # build main-cd would later run, and it was advisory.
-    - name: Fail if CI's own shell gate failed
-      # `!= 'success'` rather than `== 'failure'`: a gate that was skipped or cancelled has
-      # produced no verdict, and "no verdict" must never read as "passed".
-      # always(): a red half also fails stage-gate, and the 'Stage 2 held?' step above has then
-      # already failed this job — without it this verdict would be skipped instead of naming the half.
-      if: always() && needs.workflow-shell.result != 'success'
+    # The self-test jobs run beside the build (no longer a need of stage-gate) and only when
+    # workflow-shell-scope says their inputs changed; so the scope job's OWN verdict is a gate:
+    # without a successful decision, no self-test skip can be accepted.
+    - name: Fail if the CI's-own-shell scope decision is missing
+      if: always() && needs.workflow-shell-scope.result != 'success'
+      env:
+        SCOPE: ${{ needs.workflow-shell-scope.result }}
       run: |
-        echo "::error::The 'CI's own shell' gate concluded '${{ needs.workflow-shell.result }}' — see that job. It shellchecks every workflow \`run:\` block, refuses a captured command substitution that swallows BOTH stderr and its exit status (the #2642 shape: a failed call becomes an empty answer that is then read as authoritative), refuses an az \`--query\` that throws on a null field, runs actionlint over every workflow so a STRUCTURAL defect (#3228: a duplicate key PyYAML silently accepts and GitHub refuses) is named here instead of landing as a job-less \`startup_failure\` on a satellite that pins these lanes, and EXECUTES main-cd's release-version recovery against a fixture. main-cd.yml is exercised by no other check on this PR."
+        echo "::error::The 'CI's own shell: are its inputs changed?' job concluded '$SCOPE' — see that job. Without its recorded decision a skipped CI's-own-shell self-test cannot be told from a pass, so this run is RED. Its classifier self-test runs first (negative control: a .github/scripts change must run the self-tests); Doc/Architecture/CiOwnShellScope."
+        exit 1
+
+    - name: Fail if the CI's-own-shell scope decision is unreadable
+      if: always() && needs.workflow-shell-scope.result == 'success' && needs.workflow-shell-scope.outputs.run != 'true' && needs.workflow-shell-scope.outputs.run != 'false'
+      env:
+        RUN: ${{ needs.workflow-shell-scope.outputs.run }}
+      run: |
+        echo "::error::The 'CI's own shell: are its inputs changed?' job succeeded but its decision reads run='$RUN', neither true nor false — no self-test skip can be accepted on it. Doc/Architecture/CiOwnShellScope."
+        exit 1
+
+    - name: "CI's own shell not owed — recorded decision"
+      if: always() && needs.workflow-shell-scope.result == 'success' && needs.workflow-shell-scope.outputs.run == 'false'
+      env:
+        REASON: ${{ needs.workflow-shell-scope.outputs.reason }}
+      run: |
+        echo "::notice title=CI's own shell not owed (recorded decision)::$REASON"
+        echo "### CI's own shell: not owed by this change set — its four self-test jobs were skipped by decision; the whole-tree guards ran" >> "$GITHUB_STEP_SUMMARY"
+        echo "- $REASON" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Fail if CI's own shell gate failed (whole-tree guards)
+      # Never path-selected: `!= 'success'` with no exemption.
+      if: always() && needs.workflow-shell-tree.result != 'success'
+      run: |
+        echo "::error::The 'CI's own shell (whole-tree guards)' gate concluded '${{ needs.workflow-shell-tree.result }}' — see that job. It reads product files on every pull request: the Key Vault secret-command scan over every tracked text file, the build-stage census of test sources, and the node-tree path-collision and retired-field scans."
+        exit 1
+
+    - name: Fail if CI's own shell gate failed
+      # `!= 'success'`: a skipped or cancelled gate produced no verdict, and no verdict never reads
+      # as passed — with ONE exemption, the recorded scope decision: `skipped` is accepted only when
+      # workflow-shell-scope SUCCEEDED and said run=false (Doc/Architecture/CiOwnShellScope).
+      if: always() && needs.workflow-shell.result != 'success' && !(needs.workflow-shell.result == 'skipped' && needs.workflow-shell-scope.result == 'success' && needs.workflow-shell-scope.outputs.run == 'false')
+      env:
+        RESULT: ${{ needs.workflow-shell.result }}
+        SCOPE: ${{ needs.workflow-shell-scope.result }}
+        RUN: ${{ needs.workflow-shell-scope.outputs.run }}
+      run: |
+        echo "::error::The 'CI's own shell' gate concluded '$RESULT' (scope job: '$SCOPE', run='$RUN') — see that job. It shellchecks every workflow \`run:\` block, refuses a captured command substitution that swallows BOTH stderr and its exit status (the #2642 shape: a failed call becomes an empty answer that is then read as authoritative), refuses an az \`--query\` that throws on a null field, runs actionlint over every workflow so a STRUCTURAL defect (#3228: a duplicate key PyYAML silently accepts and GitHub refuses) is named here instead of landing as a job-less \`startup_failure\` on a satellite that pins these lanes, and EXECUTES main-cd's release-version recovery against a fixture. main-cd.yml is exercised by no other check on this PR."
         exit 1
 
     # The gate's second half (split for its 10-minute cap) — the same rule, its own verdict.
     - name: Fail if CI's own shell gate failed (executions half)
-      # `!= 'success'` rather than `== 'failure'`: a gate that was skipped or cancelled has
-      # produced no verdict, and "no verdict" must never read as "passed".
-      # always(): a red half also fails stage-gate, and the 'Stage 2 held?' step above has then
-      # already failed this job — without it this verdict would be skipped instead of naming the half.
-      if: always() && needs.workflow-shell-executions.result != 'success'
+      # `!= 'success'`: a skipped or cancelled gate produced no verdict, and no verdict never reads
+      # as passed — with ONE exemption, the recorded scope decision: `skipped` is accepted only when
+      # workflow-shell-scope SUCCEEDED and said run=false (Doc/Architecture/CiOwnShellScope).
+      if: always() && needs.workflow-shell-executions.result != 'success' && !(needs.workflow-shell-executions.result == 'skipped' && needs.workflow-shell-scope.result == 'success' && needs.workflow-shell-scope.outputs.run == 'false')
+      env:
+        RESULT: ${{ needs.workflow-shell-executions.result }}
+        SCOPE: ${{ needs.workflow-shell-scope.result }}
+        RUN: ${{ needs.workflow-shell-scope.outputs.run }}
       run: |
-        echo "::error::The 'CI's own shell (executions)' gate concluded '${{ needs.workflow-shell-executions.result }}' — see that job. It EXECUTES the lanes' and scripts' real code against fixtures — main-cd's decision steps, the publish-bake overlap harness, the module publication and pack lanes, the compile-check reference set, the seal and carry-forward scripts — none of which any other check on this PR runs."
+        echo "::error::The 'CI's own shell (executions half)' gate concluded '$RESULT' (scope job: '$SCOPE', run='$RUN') — see that job. It EXECUTES the lanes' and scripts' real code against fixtures — main-cd's decision steps, the module publication and pack lanes, the compile-check reference set, the seal and carry-forward scripts — none of which any other check on this PR runs."
+        exit 1
+
+    # The two longest executions, split out — each its own verdict.
+    - name: Fail if CI's own shell gate failed (publish-bake overlap)
+      # `!= 'success'`: a skipped or cancelled gate produced no verdict, and no verdict never reads
+      # as passed — with ONE exemption, the recorded scope decision: `skipped` is accepted only when
+      # workflow-shell-scope SUCCEEDED and said run=false (Doc/Architecture/CiOwnShellScope).
+      if: always() && needs.workflow-shell-executions-publish.result != 'success' && !(needs.workflow-shell-executions-publish.result == 'skipped' && needs.workflow-shell-scope.result == 'success' && needs.workflow-shell-scope.outputs.run == 'false')
+      env:
+        RESULT: ${{ needs.workflow-shell-executions-publish.result }}
+        SCOPE: ${{ needs.workflow-shell-scope.result }}
+        RUN: ${{ needs.workflow-shell-scope.outputs.run }}
+      run: |
+        echo "::error::The 'CI's own shell (publish-bake overlap)' gate concluded '$RESULT' (scope job: '$SCOPE', run='$RUN') — see that job. It runs the REAL publish-bake-bundles.sh twice, interleaved, against a stub share and reads the verdict off the bytes; no other check on this PR runs it."
+        exit 1
+
+    - name: Fail if CI's own shell gate failed (MSBuild reading)
+      # `!= 'success'`: a skipped or cancelled gate produced no verdict, and no verdict never reads
+      # as passed — with ONE exemption, the recorded scope decision: `skipped` is accepted only when
+      # workflow-shell-scope SUCCEEDED and said run=false (Doc/Architecture/CiOwnShellScope).
+      if: always() && needs.workflow-shell-executions-msbuild.result != 'success' && !(needs.workflow-shell-executions-msbuild.result == 'skipped' && needs.workflow-shell-scope.result == 'success' && needs.workflow-shell-scope.outputs.run == 'false')
+      env:
+        RESULT: ${{ needs.workflow-shell-executions-msbuild.result }}
+        SCOPE: ${{ needs.workflow-shell-scope.result }}
+        RUN: ${{ needs.workflow-shell-scope.outputs.run }}
+      run: |
+        echo "::error::The 'CI's own shell (MSBuild reading)' gate concluded '$RESULT' (scope job: '$SCOPE', run='$RUN') — see that job. It runs the real MSBuild evaluation behind the extension/shelf key and scope (msbuild-evaluate.py, test-build-extension-reading.py) over a Razor-shaped extension, with negative controls."
         exit 1
 
     # `!= 'success'` rather than `== 'failure'`, for the same reason as the gate above: a job

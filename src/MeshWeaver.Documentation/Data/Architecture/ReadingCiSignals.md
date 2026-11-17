@@ -148,10 +148,12 @@ That keeps the two failure modes apart, which is the whole property:
 | a **prerequisite** (checkout, its history fetch, the tool/Python setup) | `ready` is skipped, its output is empty, every guard is skipped, and the prerequisite's own red is the verdict |
 | a **guard** | `ready` is untouched, so every other guard still reports |
 
-`.github/scripts/check-guard-step-masking.py` enforces both halves on three declared subjects —
-`node-repo-validate.yml`'s `validate` and the two halves of `dotnet-test.yml`'s *CI's own shell*,
-`workflow-shell` and `workflow-shell-executions` (the gate on `main-cd.yml`, the module lanes and every
-script a satellite fetches). It also
+`.github/scripts/check-guard-step-masking.py` enforces both halves on five declared subjects —
+`node-repo-validate.yml`'s `validate` and the four jobs of `dotnet-test.yml`'s *CI's own shell*,
+`workflow-shell`, `workflow-shell-executions`, `workflow-shell-executions-publish` and
+`workflow-shell-executions-msbuild` (the gate on `main-cd.yml`, the module lanes and every script a
+satellite fetches). Its self-test breaks each shell job ALONE, so no correct job vouches for a broken
+one. It also
 requires the prerequisites to *be* a prefix, matched exactly (a prefix comparison let
 `actions/checkout-foo` satisfy `uses:actions/checkout`), refuses a job whose guard list is empty so it
 cannot pass by having nothing to check, and refuses a readiness step that stopped publishing `ok=true`.
@@ -162,10 +164,22 @@ capped at 10 minutes, and by 2026-11-03 they summed to 9–10 minutes on every m
 10m0s"* — a `cancelled` with no verdict, which Consolidate correctly reads as red. Nothing was stuck,
 so the cap stayed and the work was split: `workflow-shell` keeps the static guards and self-tests,
 `workflow-shell-executions` runs the harnesses that EXECUTE a lane's or a script's real code against
-fixtures (the costliest, the publish-bake overlap harness, is about 2.5 minutes). Both run the same
-tool assertion (`.github/actions/workflow-shell-tools`, so their pins cannot drift) and the same one
-prerequisite line, and both are needs of the stage gate and of Consolidate. When a half approaches
-its cap again, split again — a higher cap is the band-aid this replaced.
+fixtures. Both run the same tool assertion (`.github/actions/workflow-shell-tools`, so their pins
+cannot drift) and the same one prerequisite line, and both are needs of the stage gate and of
+Consolidate. When a half approaches its cap again, split again — a higher cap is the band-aid this
+replaced.
+
+**…and the executions half is THREE jobs because it sat on the critical path.** Every core pull
+request's build and shards wait for the stage gate, and the stage gate waits for every stage-0
+control. Measured on main run 43636407276: `workflow-shell-executions` ran 479 s and was the slowest
+stage-0 input by about 3.5 minutes (`workflow-shell`, next, ran 270 s), in a run of 1312 s wall clock.
+Two of its harnesses were most of that — the publish-bake overlap harness (181 s) and the real MSBuild
+reading of a Razor-shaped extension (154 s) — so each now has its own job,
+`workflow-shell-executions-publish` and `workflow-shell-executions-msbuild`, and the remaining
+harnesses (about 2 minutes) stay in `workflow-shell-executions`. Every harness reads only the checkout
+and the venv the tool assertion builds, so each job repeats exactly that setup and nothing else. Each
+is a need of the stage gate (and named in its `stage0-results`) and of Consolidate, with its own
+explicit fail step, so a red, skipped or cancelled split job still reds both.
 
 A guard's own *fetch* is deliberately **not** a prerequisite: its consumers run and fail naming the file
 they could not open, which is a second red rather than a silent skip, and the fetch's `::error::` is the
@@ -834,7 +848,7 @@ The workflow is not concealing it. The reuse job writes *"This run **did not exe
 into the step summary with the marker ref, the TTL and a link to the run that gathered the evidence;
 the `main is red` job refuses to take its bisect window from the run list for exactly this reason;
 and `Consolidate test results` carries a zero-evidence gate that fails on zero `.trx` unless the run
-was a reuse or an affected-tests `none`. **The whole gap is in the reader.**
+was a reuse or an affected-tests `none` ([Core Test Selection](../CoreTestSelection)). **The whole gap is in the reader.**
 
 🚨 **So never cite a run's `success` as coverage without reading whether its shards ran.** One REST
 call answers it — `actions/runs/<id>/jobs` — and `Run tests (shard …) | skipped` is the entire tell.

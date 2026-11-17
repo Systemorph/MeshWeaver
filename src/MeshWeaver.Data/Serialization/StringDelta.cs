@@ -37,12 +37,29 @@ public readonly record struct StringDelta(int Start, int RemovedLength, string I
         while (prefix < maxPrefix && oldValue[prefix] == newValue[prefix])
             prefix++;
 
+        // 🚨 Never cut between the two halves of a surrogate pair (an emoji outside the BMP).
+        // Two different emoji commonly share their HIGH surrogate (🚨 U+1F6A8 and 💰 U+1F4B0 are
+        // both \uD83D…), so a code-unit prefix match ends one unit INTO the character and the
+        // splice would carry a lone low surrogate. A lone surrogate is not valid text: the JSON
+        // writer replaces it with U+FFFD, so the receiver stores "\uFFFD\uFFFD" where the emoji
+        // was — measured on a fleet mesh, 2026-11-14, where three NodeTypes' sources were
+        // corrupted that way, their source fingerprints never matched the shipped prebuilt
+        // bundle again, and the types were refused execution. The prefix and suffix are equal on
+        // both sides, so checking one string is enough.
+        if (prefix > 0 && char.IsHighSurrogate(newValue[prefix - 1]))
+            prefix--;
+
         // Common suffix, not eating into the already-matched prefix on either side.
         var maxSuffix = Math.Min(oldValue.Length, newValue.Length) - prefix;
         var suffix = 0;
         while (suffix < maxSuffix
                && oldValue[oldValue.Length - 1 - suffix] == newValue[newValue.Length - 1 - suffix])
             suffix++;
+
+        // Same rule at the other end: a suffix that STARTS with a low surrogate leaves its high
+        // half in the splice.
+        if (suffix > 0 && char.IsLowSurrogate(newValue[newValue.Length - suffix]))
+            suffix--;
 
         var removed = oldValue.Length - prefix - suffix;
         var inserted = newValue.Substring(prefix, newValue.Length - prefix - suffix);

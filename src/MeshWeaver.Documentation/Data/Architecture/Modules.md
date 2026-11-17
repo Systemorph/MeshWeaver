@@ -176,6 +176,55 @@ pointers. This is rule R1 of the [Module Adoption Policy](../ModuleAdoptionPolic
 installation runs the newest generation of every module that loads, and keeps the one it has until
 a newer one does.*
 
+### 🚨 One module tree per platform line
+
+A deployment's replicas share one volume, and while it rolls from one platform major to the next,
+replicas of BOTH majors run on it at once (policy `major-lines-run-separately`,
+[Major Lines Run Separately](../MajorLinesRunSeparately)). A store-delivered module built against
+one major's libraries does not load on the other — a view pack built against the old major's UI
+library links types the new major no longer ships — yet the activation record names ONE head per
+module name. With one shared tree, the new-major replica booted the old major's heads, its
+`required_modules` and `view_packs` probes stayed red and the roll never converged; and the
+old-major replicas, still updating under their own policy, kept landing old-major generations into
+the same records, so the new major could not even keep a head it had landed. Image-shipped
+modules were never affected: the image's own copy wins on an identity mismatch
+([Module Adoption Policy](../ModuleAdoptionPolicy)).
+
+So the landed-module tree is resolved PER LINE by `ModuleRoot.ResolveLine`:
+
+| Running core major | Landed-module tree (`Modules:Root` = `<root>`) |
+|---|---|
+| ≤ `ModuleRoot.LastSharedRootMajor` (3), or unknown | `<root>/modules/` — the shared root itself, unchanged |
+| 4 and later | `<root>/lines/<major>/modules/` |
+
+- **Everything under `modules/` moves together**: the generations, `activation.d/` (entry files,
+  landing records, tombstones, verdicts, markers such as `.pending-restart`, `.unloadable`,
+  `.tier-refused`), the legacy aggregate `activation.json`, and the module sets (`sets/`). A
+  new-line replica therefore never reads, adopts, overwrites or proposes from an old-line record,
+  and its modules GC sweeps only its own tree.
+- **Migration: a flat entry belongs to the shared-root line, always.** Every flat record on a
+  volume was written by an image that predates the split, and every image of major 3 and below
+  keeps reading and writing the flat tree. A major-4 replica never adopts one; it lands its own
+  generations from the registry (or runs the image's copy) into its own tree. Deciding by an
+  entry's recorded framework or floor was rejected: a v3 replica can land a bundle whose floor or
+  identity names v4 (and an early v4 image wrote flat records before the split), so the field
+  would hand the new line a record the old line still owns.
+- **No change on the old line is needed.** A shared-root image's sweep walks `<root>/modules/`
+  only, which `lines/` is not under, and its readers never look outside it — so the split lands on
+  the new major alone, and the old major's replicas run exactly as before until they are replaced.
+- **The major is the running CORE's assembly major** (`ModuleRoot.RunningMajor`, pinned to
+  `<major>.<minor>.0.0` for a whole line), never a configured line or update pattern: what decides
+  whether module bytes load is the binary the process runs, and the configuration every replica
+  reads can already name the next line while an old-major replica is still up.
+- **Only the module tree moves.** What belongs to the INSTANCE — the setup manifest, the boot
+  progress — stays under `ModuleRoot.Resolve` (`<root>` itself). An unconfigured root is the image's
+  own directory, which no other image sees, and is not split.
+- **The old flat tree outlives its line.** Once the last shared-root replica is gone, nothing sweeps
+  `<root>/modules/` any more: every later major's GC walks only `lines/<major>/modules/`. Its
+  generations and records stay on the volume, inert (no reader of a newer line looks at them), until
+  they are retired deliberately: a `StoragePrune` of the deployment's data claim, after the roll
+  that replaced the last shared-root replica has converged.
+
 ### 🚨 "Keeps loading across ordinary platform updates" is a promise the PLATFORM owes (#2370)
 
 The semver floor above is not a weaker gate than MVID equality — it is a **different contract**, and
@@ -380,6 +429,44 @@ reports **unresolvable** (re-install), not pending (wait for a restart).
 > open exactly while the mesh has proposed a set no replica has booted onto. The full design, the
 > record layout, the GC consequence and the rejected alternatives are in
 > [Module Set Convergence](/Doc/Architecture/ModuleSetConvergence).
+
+#### 🚨 A DEFERRED required module is never "a restart activates it"
+
+Boot loads the mesh's proposed set, so a module that LANDED (enabled record, bytes on the volume)
+but that no proposed set names is **deferred**: it runs on no replica, and a restart does not change
+that — only a landing wave that proposes a set naming it does. `required_modules` used to classify
+off the activation record alone, so it called such a module *"landed on the volume, not yet loaded
+in this process — a restart activates it"*.
+
+**Measured on a v4 control instance:** `MeshWeaver.Blazor.Chat` and `MeshWeaver.Mcp` were landed
+in the line's own tree (`lines/4/modules/`) and named with that sentence; the deployment was
+restarted and the new pods named them with the same sentence. The chat views and the instance's MCP
+endpoint stayed absent. `pending_module_activation` — which does project onto the set and listed
+both as `Deferred` — was `Healthy`, because it degrades only on *pending* and *unresolvable*, and
+`/health` prints only non-Healthy entries, so the one line that knew was never shown.
+
+What changed:
+
+- **One deferral rule.** `ModuleActivationBoot.IsDeferredBy(entry, set)` is the predicate boot's
+  projection (`ProjectOntoMeshSet`) applies, and `RequiredModuleStatus.Classify` applies the same
+  one. It asks the set only about an enabled, named entry that names a generation (a
+  `Directory`); a disabled entry and a legacy fixed folder `modules/<name>/` pass through first,
+  untouched, exactly as `ModuleSetStore.GenerationsOf` leaves them out of every set. The set
+  reaches the classifier on the activation record it already reads —
+  `ModuleActivationList.MeshModuleSet`, a `[JsonIgnore]` property `PendingModuleActivations` fills
+  from the set it read beside the record — the same route `TierRefusals` takes, so no host signature
+  changes.
+- **The reason says what is true:** *"landed on the volume, but NOT in the mesh's module set N (…)
+  — boot DEFERS it, so a restart does NOT activate it"*, and where to look when no wave proposes:
+  the `[ModuleSet] NOT proposing` and `[DefaultInstall] module phase` log lines name the refusal
+  (an unmet dependency floor, a package the pass could not clear, an unreadable record).
+- The state stays `ExpectedLater` (Degraded): under `required-modules-readiness-only` only the
+  image's own lost packs and an incompatible present module stall a roll.
+
+**What a deferred module needs** is a proposal, never a restart: a landing wave (an install, a
+reload, the auto-update reconcile, the default install) that completes and whose checked proposal
+is accepted. A proposal that is refused leaves every module landed after the last accepted set
+deferred until the cause is removed — read the refusal before restarting anything.
 
 ### 🚨 GC is OFF the readiness path (#2684)
 

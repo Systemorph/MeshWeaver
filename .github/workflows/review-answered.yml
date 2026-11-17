@@ -181,6 +181,43 @@ jobs:
       - name: "Prove the predicate can say no (self-test)"
         run: python3 .github/scripts/check-review-answered.py --self-test
 
+      # 🚨 WHO WRITES THE VERDICT DECIDES WHETHER THE RULESET SEES IT (Doc/Architecture/ReviewFindingsAnswered →
+      # "Which suite holds the verdict"). A check-run POSTed with the job token is filed into the OLDEST
+      # github-actions suite on the head — usually the `Disarm auto-merge on push` run's — and when that workflow
+      # runs AGAIN on the same sha (a draft marked ready), its older suite is superseded and the ruleset stops
+      # reading the verdict inside it: success on the commit, merge refused with "… is expected" (#8164, #8165,
+      # #8168). Written with the meshweaver-cloud App's installation token, the check-run lands in that App's OWN
+      # suite, which no workflow run owns. The ruleset pins no integration for the context, so nothing changes
+      # there. The two steps below run for the WRITER shape only — the SAME condition as the job name and
+      # VERDICT_CHECK_RUN (the self-test asserts all four agree): a fork, Dependabot and the merge queue keep the
+      # job-shaped check and need no token. An absent credential is RED, named — never a fallback to the job token.
+      - name: The verdict App's credential, or a red run naming what to provision
+        if: ${{ (github.event_name == 'schedule' || (github.event_name != 'merge_group' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) }}
+        env:
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -n "$MESHWEAVER_APP_ID" ]          || missing+=("secrets.MESHWEAVER_APP_ID           app id of the org's meshweaver-cloud GitHub App (holds checks: write)")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the verdict writer cannot publish 'Automatic review answered' — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "verdict App credential present."
+
+      - name: Mint the verdict App's installation token (checks write)
+        id: verdict-app
+        if: ${{ (github.event_name == 'schedule' || (github.event_name != 'merge_group' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) }}
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          # No owner/repositories: the action then scopes the token to THIS repository alone — and a
+          # `schedule` payload carries no `repository` object to name it from.
+          permission-checks: write
+
       # 🚨 `--settle-replies 60`: answering N findings posts N separate review-comment events, so a
       # pull request with seven findings fired this workflow EIGHT times on one head sha and
       # published eight check-runs — six failures while the replies were still being written, then
@@ -242,14 +279,16 @@ jobs:
           QUEUE_REF: ${{ github.event.merge_group.head_ref }}
           VERDICT_CHECK_RUN: ${{ (github.event_name == 'schedule' || (github.event_name != 'merge_group' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) && 'Automatic review answered' || '' }}
           MW_API_OUTAGE_WAIT_MINUTES: "5"
+          # Only the WRITE goes through the App (VERDICT_APP_SLUG in the predicate); every read stays on the job token.
+          MW_VERDICT_APP_TOKEN: ${{ steps.verdict-app.outputs.token }}
         # The writer takes NO review wait and NO settle wait: a pending verdict is not red, the sweep above
         # re-judges it, and every evaluation PATCHes the same check-run (the newest READ stands).
         run: |
           set -euo pipefail
           if [ -n "${VERDICT_CHECK_RUN:-}" ] && [ "$EVENT_NAME" = "schedule" ]; then
-            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --verdict-sweep --verdict-check-run "$VERDICT_CHECK_RUN"
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --verdict-sweep --verdict-check-run "$VERDICT_CHECK_RUN" --verdict-app meshweaver-cloud
           elif [ -n "${VERDICT_CHECK_RUN:-}" ]; then
-            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --verdict-check-run "$VERDICT_CHECK_RUN"
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --verdict-check-run "$VERDICT_CHECK_RUN" --verdict-app meshweaver-cloud
           elif [ "$EVENT_NAME" = "merge_group" ]; then
             python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --merge-group-ref "$QUEUE_REF" --wait-for-review 15 --settle-replies 60
           else

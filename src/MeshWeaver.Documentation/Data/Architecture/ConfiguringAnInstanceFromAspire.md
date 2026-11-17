@@ -225,6 +225,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithHttpPort(port)` | `HttpPort` | `config.memex_portal.ASPNETCORE_HTTP_PORTS` | `ASPNETCORE_HTTP_PORTS` |
 | `WithResources(requestsCpu, requestsMemory, limitsCpu, limitsMemory)` | `Resources.Requests.Cpu`, `Resources.Requests.Memory`, `Resources.Limits.Cpu`, `Resources.Limits.Memory` | `resources` | — |
 | `WithAutoscaling(enabled, minReplicas, maxReplicas, cpuTarget, memoryTarget)` | `Autoscaling.Enabled`, `Autoscaling.MinReplicas`, `Autoscaling.MaxReplicas`, `Autoscaling.CpuTarget`, `Autoscaling.MemoryTarget` | `keda` | — |
+| `WithPortalNodeSelector(label, value)` | `PortalNodeSelector` | `portal.nodeSelector` (the portal pod spec's `nodeSelector`; empty renders no selector. A cluster concern with no Aspire equivalent) | — |
 | `WithVolume(name, mountPath, size, claimName, storageClass, accessMode, create)` | `Volumes[].Name`, `Volumes[].MountPath`, `Volumes[].Size`, `Volumes[].ClaimName`, `Volumes[].StorageClass`, `Volumes[].AccessMode`, `Volumes[].Create` | `persistence`, `extraVolumes`, `extraVolumeMounts` (Aspire: a named Docker volume at the mount path) | — |
 | `WithReadOnlyVolume(name, mountPath, claimName)` | `Volumes[].Name`, `Volumes[].MountPath`, `Volumes[].ClaimName`, `Volumes[].ReadOnly` | `persistence.<name>.readOnly` (Aspire: a read-only Docker mount) | — |
 | `ClearVolumes()` | `Volumes` | `persistence` | — |
@@ -242,7 +243,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithKeyVaultSecretClass(secretClass)` | `KeyVaultSecretClasses` | `keyVaultSecretClasses` | — |
 | `WithVaultValuesKeys(keys)` | `VaultValuesKeys` | `extraEnvFrom` | — |
 | `WithSecretMount(volumeName, secretProviderClass, syncedSecret, mountPath)` | `SecretMounts[].VolumeName`, `SecretMounts[].SecretProviderClass`, `SecretMounts[].SyncedSecret`, `SecretMounts[].MountPath` | `extraVolumes`, `extraVolumeMounts` | — |
-| `WithInlineEnv(key, value, isSecret, shadows, agreesWithShadowed, reason)` | `InlineEnv[].Key`, `InlineEnv[].Value`, `InlineEnv[].IsSecret`, `InlineEnv[].Shadows`, `InlineEnv[].AgreesWithShadowed`, `InlineEnv[].Reason`, `InlineEnv[].RetiredBy` | the env-precedence ledger the `Audit` reads | — |
+| `WithInlineEnv(key, value, isSecret, shadows, agreesWithShadowed, reason)` | `InlineEnv[].Key`, `InlineEnv[].Value`, `InlineEnv[].IsSecret`, `InlineEnv[].Shadows`, `InlineEnv[].AgreesWithShadowed`, `InlineEnv[].Reason`, `InlineEnv[].RetiredBy`, `InlineEnv[].RemoveDespiteDifference`, `InlineEnv[].ShadowedValue` | the env-precedence ledger the `Audit` reads | — |
 | `WithLiveOnlyVolume(name, mountPath, source, reason, retiredBy)` | `LiveOnlyVolumes[].Name`, `LiveOnlyVolumes[].MountPath`, `LiveOnlyVolumes[].Source`, `LiveOnlyVolumes[].Reason`, `LiveOnlyVolumes[].RetiredBy` | — (declarative: Reconcile's `RetireLiveOnlyVolume` removes a retired one) | — |
 | `WithSignIn(provider, microsoftClientId, microsoftTenantId, googleClientId, linkedInClientId, appleClientId, enableDevLogin)` | `SignIn.Provider`, `SignIn.MicrosoftClientId`, `SignIn.MicrosoftTenantId`, `SignIn.GoogleClientId`, `SignIn.LinkedInClientId`, `SignIn.AppleClientId`, `SignIn.EnableDevLogin` | `config.memex_portal.Authentication__*` | `Authentication__Provider`, `Authentication__EnableDevLogin`, `Authentication__Microsoft__ClientId`, `Authentication__Microsoft__TenantId`, `Authentication__Google__ClientId`, `Authentication__LinkedIn__ClientId`, `Authentication__Apple__ClientId` |
 | `WithEmail(enabled, mailboxAddress, clientId, tenantId, useManagedIdentity, inboundEnabled, webhookBaseUrl, inboundForwardAddress)` | `Email.Enabled`, `Email.MailboxAddress`, `Email.ClientId`, `Email.TenantId`, `Email.UseManagedIdentity`, `Email.InboundEnabled`, `Email.WebhookBaseUrl`, `Email.InboundForwardAddress` | `config.memex_portal.Email__*` | `Email__Enabled`, `Email__MailboxAddress`, `Email__ClientId`, `Email__TenantId`, `Email__UseManagedIdentity`, `Email__InboundEnabled`, `Email__WebhookBaseUrl`, `Email__Inbound__ForwardAddress` |
@@ -338,6 +339,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `HttpPort` | HTTP port | HTTP-Port |
 | `DeploymentContent` | `Resources` | Resources (RAM / CPU) | Ressourcen (RAM / CPU) |
 | `DeploymentContent` | `Autoscaling` | Autoscaling | Automatische Skalierung |
+| `DeploymentContent` | `PortalNodeSelector` | Portal node selector (node labels the portal pods must land on) | Node-Selector des Portals (Node-Labels, auf denen die Portal-Pods laufen müssen) |
 | `DeploymentContent` | `Volumes` | Volumes | Volumes |
 | `DeploymentContent` | `Ingress` | Ingress | Ingress |
 | `DeploymentContent` | `PortalNext` | React front end at /next | React-Oberfläche unter /next |
@@ -528,6 +530,8 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `InlineEnvOverride` | `AgreesWithShadowed` | Does the shadowed source agree? Unset means not compared (a Secret) | Stimmt die überdeckte Quelle überein? Nicht gesetzt heißt nicht verglichen (ein Secret) |
 | `InlineEnvOverride` | `Reason` | Why it is still set inline | Warum es weiterhin inline gesetzt ist |
 | `InlineEnvOverride` | `RetiredBy` | What retires it (issue reference) | Was es ablöst (Issue-Referenz) |
+| `InlineEnvOverride` | `RemoveDespiteDifference` | Remove it although the shadowed source carries a different value | Entfernen, obwohl die überdeckte Quelle einen anderen Wert trägt |
+| `InlineEnvOverride` | `ShadowedValue` | The value the shadowed source carries (never a credential) | Der Wert der überdeckten Quelle (nie ein Zugangsdaten-Wert) |
 | `LiveOnlyVolume` | `Name` | Pod volume name, as on the live Deployment | Name des Pod-Volumes, wie auf dem laufenden Deployment |
 | `LiveOnlyVolume` | `MountPath` | Mount path in the containers | Einhängepfad in den Containern |
 | `LiveOnlyVolume` | `Source` | Its source, e.g. secret/<name> (names only) | Seine Quelle, z. B. secret/<name> (nur Namen) |

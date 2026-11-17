@@ -392,8 +392,11 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
         /// <summary>Catalog listing requests (<c>/api/plugins</c>), answered 500.</summary>
         public int Listings => Volatile.Read(ref listings);
 
+        // The index states the registry's own line (its identity), as every registry does: an entry
+        // stating no line of its own is read on the registry's line (BundleLine), never as this one's.
         public void Serve(string plugin, string version, string module) =>
-            index = "{\"bundles\":[{\"plugin\":\"" + plugin + "\",\"version\":\"" + version
+            index = "{\"frameworkMvid\":\"" + MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid
+                + "\",\"bundles\":[{\"plugin\":\"" + plugin + "\",\"version\":\"" + version
                 + "\",\"url\":\"" + Url + PluginBundleClient.RoutePrefix + "/" + plugin
                 + ".zip\",\"module\":\"" + module + "\"}]}";
 

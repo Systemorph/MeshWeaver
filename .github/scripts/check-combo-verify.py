@@ -123,8 +123,23 @@ the 401 guidance, a fresh mint before EVERY instance call — and the absence of
 and executes the lander once with no OIDC request URL to prove it stops red naming
 `id-token: write`. `--self-test` feeds it the old credential-holding lander and requires it to fail.
 
+PART FOUR — DECIDE BEFORE PAYING, AND BUILD THE VERIFIER ONCE (saving R2 of CiProfile2026-11)
+------------------------------------------------------------------------------------------------
+Each slot used to build the verifier itself, and pulled two images, composed the gate host and
+fetched the sealed modules BEFORE the verifier found out the combo could not even be assembled.
+Now one `build-verifier` job publishes the verifier for every slot, and the lander runs
+`mw-combo-verify --assemble-only` before anything the gate needs. This part asserts the structure
+(the slots need the build and never build; the verdict names a failed build as its own red) and
+EXECUTES the lander's up-front block with a stand-in verifier over every exit it can see:
+
+      assembly decides NotVerifiable (exit 1 + verdict)  → landed, and the gate is NOT reached
+      only the gate can answer (exit 0, no verdict)      → the gate IS reached (the negative control)
+      exit 1 claiming Green or Red                       → RED, nothing landed: no pass without a gate
+      exit 0 with a verdict file / exit 1 without one    → RED, nothing landed: the phases disagree
+      any other exit                                     → RED, nothing landed: a broken instrument
+
 Usage:
-    python3 .github/scripts/check-combo-verify.py              # run both parts
+    python3 .github/scripts/check-combo-verify.py              # run every part
     python3 .github/scripts/check-combo-verify.py --self-test  # prove each part detects its defect
 """
 
@@ -264,8 +279,8 @@ MASKED = [value for row in json.loads(DERIVED)
 MASKED += FULLY_PROVISIONED["SOURCES"].split()
 
 # (label, env, expected exit code, text the output MUST contain, expected `verified=` or None)
-VERDICT_OK = {"PREFLIGHT": "success", "VERIFY": "success", "COUNT": "6", "TRIGGER": "success",
-              "STARTED": "6", "PASSED": "6"}
+VERDICT_OK = {"PREFLIGHT": "success", "BUILD": "success", "VERIFY": "success", "COUNT": "6",
+              "TRIGGER": "success", "STARTED": "6", "PASSED": "6"}
 VERDICT_SCENARIOS = [
     (
         # 🚨 THE MEASURED DEFECT (#3848, 2026-10-10): the matrix input was dropped, no job exists.
@@ -305,21 +320,33 @@ VERDICT_SCENARIOS = [
     ),
     (
         "no candidate: the triggering CD was cancelled",
-        {**VERDICT_OK, "PREFLIGHT": "skipped", "VERIFY": "skipped", "COUNT": "",
-         "TRIGGER": "cancelled", "STARTED": "0", "PASSED": "0"},
+        {**VERDICT_OK, "PREFLIGHT": "skipped", "BUILD": "skipped", "VERIFY": "skipped",
+         "COUNT": "", "TRIGGER": "cancelled", "STARTED": "0", "PASSED": "0"},
         0, "No candidate", "false",
     ),
     (
         "the preflight was skipped although CD succeeded (the skip-trapdoor)",
-        {**VERDICT_OK, "PREFLIGHT": "skipped", "VERIFY": "skipped", "COUNT": "",
-         "STARTED": "0", "PASSED": "0"},
+        {**VERDICT_OK, "PREFLIGHT": "skipped", "BUILD": "skipped", "VERIFY": "skipped",
+         "COUNT": "", "STARTED": "0", "PASSED": "0"},
         1, "the preflight was SKIPPED", None,
     ),
     (
         "the preflight failed",
-        {**VERDICT_OK, "PREFLIGHT": "failure", "VERIFY": "skipped", "COUNT": "",
-         "STARTED": "0", "PASSED": "0"},
+        {**VERDICT_OK, "PREFLIGHT": "failure", "BUILD": "skipped", "VERIFY": "skipped",
+         "COUNT": "", "STARTED": "0", "PASSED": "0"},
         1, "the preflight FAILED", None,
+    ),
+    (
+        # The ONE build every slot needs: a failed compile skips the whole matrix, and must be
+        # named as what it is rather than as an unexpanded matrix.
+        "the verifier build failed, so every slot was skipped",
+        {**VERDICT_OK, "BUILD": "failure", "VERIFY": "skipped", "STARTED": "0", "PASSED": "0"},
+        1, "the verifier build", None,
+    ),
+    (
+        "the verifier build was cancelled, so every slot was skipped",
+        {**VERDICT_OK, "BUILD": "cancelled", "VERIFY": "skipped", "STARTED": "0", "PASSED": "0"},
+        1, "the verifier build", None,
     ),
 ]
 
@@ -350,8 +377,16 @@ LANDER_REQUIRED = {
     # #4413: the selected version is a tag in the repository the instance's poller lists.
     "the candidate image comes from the repository the instance rolls": 'PORTAL_IMAGE="$ACR/$REPO:$CANDIDATE"',
     "that repository is read from the instance's own roll-target answer": "REPO=$(jq -r '.repository // \"\"' <\"$roll\")",
+    # Saving R2 of Doc/Architecture/CiProfile2026-11: the verifier is the one the run built once.
+    "the verifier is the one the run built once, asserted before any instance call":
+        ': "${COMBO_VERIFIER:?',
+    "the combo is assembled BEFORE any candidate image is pulled": 'dotnet "$COMBO_VERIFIER" --assemble-only',
+    "the full run reuses the root the up-front phase materialised": 'verifier_cmd=(dotnet "$COMBO_VERIFIER" --assembled',
+    "only NotVerifiable may be decided before the gate": '[ "$KIND" = "NotVerifiable" ]',
 }
 LANDER_FORBIDDEN = {
+    "a per-slot build or run of the verifier project (it is built once per run)":
+        "dotnet run --project tools/MeshWeaver.ComboVerifier",
     "an mwi_ instance key": "INSTANCE_KEY",
     "a global admin's mw_ token": "ADMIN_TOKEN",
     "a raw mesh patch of Admin/UpdatePolicy": "/api/mesh/patch",
@@ -613,13 +648,151 @@ def handover_problems(doc: dict) -> list[str]:
     if (venv.get("STARTED") != "${{ steps.jobs.outputs.started }}"
             or venv.get("PASSED") != "${{ steps.jobs.outputs.passed }}"):
         problems.append("the verdict step must read STARTED and PASSED from the job-count step.")
-    if verdict.get("if") != "always()" or verdict.get("needs") != ["preflight", "verify"]:
-        problems.append("jobs.verdict must run `if: always()` and need [preflight, verify].")
+    if verdict.get("if") != "always()" or verdict.get("needs") != VERDICT_NEEDS:
+        problems.append(f"jobs.verdict must run `if: always()` and need {VERDICT_NEEDS}.")
+    problems.extend(build_once_problems(doc))
     if verdict.get("permissions") != {"actions": "read"}:
         problems.append("jobs.verdict needs exactly `permissions: {actions: read}` to list the "
                         "run's jobs.")
     problems.extend(ledger_problems(doc))
     return problems
+
+
+# ── PART FOUR: the verifier is built ONCE per run (saving R2 of Doc/Architecture/CiProfile2026-11)
+BUILD_JOB = "build-verifier"
+VERIFY_NEEDS = ["preflight", BUILD_JOB]
+VERDICT_NEEDS = ["preflight", BUILD_JOB, "verify"]
+VERIFIER_ARTIFACT = "combo-verifier"
+COMBO_VERIFIER_ENV = "${{ runner.temp }}/combo-verifier/mw-combo-verify.dll"
+
+
+def build_once_problems(doc: dict) -> list[str]:
+    """One job builds the verifier; every slot downloads it and none builds it again."""
+    problems: list[str] = []
+    jobs = doc.get("jobs", {})
+    build = jobs.get(BUILD_JOB)
+    verify = jobs.get("verify", {})
+    if not isinstance(build, dict):
+        return [f"jobs.{BUILD_JOB} is missing — the verifier must be built ONCE per run, not in "
+                "every slot."]
+    if build.get("needs") != "preflight":
+        problems.append(f"jobs.{BUILD_JOB} must need `preflight` (so a run with no candidate builds "
+                        f"nothing); it needs {build.get('needs')!r}.")
+    if "if" in build:
+        problems.append(f"jobs.{BUILD_JOB} carries an `if:` — it is gated by the preflight and "
+                        "nothing else.")
+    build_steps = [step for step in build.get("steps", []) if isinstance(step, dict)]
+    if any(step.get("continue-on-error") or "if" in step for step in build_steps):
+        problems.append(f"a step of jobs.{BUILD_JOB} is conditional or continue-on-error — a "
+                        "verifier that did not build must be a red build job.")
+    if not any("dotnet publish tools/MeshWeaver.ComboVerifier/" in str(step.get("run", ""))
+               for step in build_steps):
+        problems.append(f"jobs.{BUILD_JOB} no longer publishes tools/MeshWeaver.ComboVerifier.")
+    uploads = [step for step in build_steps if "upload-artifact" in str(step.get("uses", ""))]
+    if (len(uploads) != 1 or (uploads[0].get("with") or {}).get("name") != VERIFIER_ARTIFACT
+            or (uploads[0].get("with") or {}).get("if-no-files-found") != "error"):
+        problems.append(f"jobs.{BUILD_JOB} must upload exactly one artifact named "
+                        f"{VERIFIER_ARTIFACT!r} with `if-no-files-found: error`.")
+    if verify.get("needs") != VERIFY_NEEDS:
+        problems.append(f"jobs.verify must need exactly {VERIFY_NEEDS}; it needs "
+                        f"{verify.get('needs')!r}. A slot that does not wait for the one build "
+                        "has no verifier to run.")
+    verify_steps = [step for step in verify.get("steps", []) if isinstance(step, dict)]
+    for step in verify_steps:
+        text = str(step.get("run", ""))
+        if "dotnet build" in text or "dotnet publish" in text or "dotnet run --project" in text:
+            problems.append("a verify step builds or runs a project — the verifier is built once in "
+                            f"jobs.{BUILD_JOB} and downloaded; seven slots compiling the same commit "
+                            "is the waste R2 removed.")
+    downloads = [step for step in verify_steps
+                 if "download-artifact" in str(step.get("uses", ""))
+                 and (step.get("with") or {}).get("name") == VERIFIER_ARTIFACT]
+    if len(downloads) != 1 or "if" in downloads[0] or downloads[0].get("continue-on-error"):
+        problems.append(f"jobs.verify must download the {VERIFIER_ARTIFACT!r} artifact in exactly one "
+                        "unconditional step.")
+    lander = next((step for step in verify_steps
+                   if "bash .github/scripts/combo-verify-instance.sh" in str(step.get("run", ""))), {})
+    if (lander.get("env") or {}).get("COMBO_VERIFIER") != COMBO_VERIFIER_ENV:
+        problems.append(f"the lander step must set COMBO_VERIFIER to {COMBO_VERIFIER_ENV}.")
+    return problems
+
+
+# ── PART FOUR, BEHAVIOUR: the lander's up-front block, executed ─────────────────────────────────
+UPFRONT_START = 'rm -f "$verdict"\n'
+UPFRONT_END = "# ── 3. Verify"
+# (label, stand-in exit, verdict the stand-in writes or None, expected exit, text the output must
+#  contain, whether the gate must be reached, whether a verdict must be landed)
+UPFRONT_SCENARIOS = [
+    ("the assembly decides NotVerifiable ⇒ landed, gate NOT reached",
+     1, "NotVerifiable", 1, "DECIDED BEFORE THE GATE", False, True),
+    ("NEGATIVE CONTROL: only the gate can answer ⇒ the gate IS reached",
+     0, None, 0, "REACHED-THE-GATE", True, False),
+    ("an up-front Green is refused — no pass without a gate",
+     1, "Green", 1, "Only NotVerifiable can be decided before the gate", False, False),
+    ("an up-front Red is refused — no verdict about the candidate without a gate",
+     1, "Red", 1, "Only NotVerifiable can be decided before the gate", False, False),
+    ("exit 0 with a verdict file ⇒ the phases disagree",
+     0, "NotVerifiable", 1, "the two phases disagree", False, False),
+    ("exit 1 with no verdict file ⇒ nothing to land",
+     1, None, 1, "wrote no verdict file", False, False),
+    ("a broken instrument (exit 3) ⇒ red, nothing landed",
+     3, None, 1, "could not run (exit 3)", False, False),
+]
+
+
+def read_upfront(text: str) -> str:
+    start = text.find(UPFRONT_START)
+    end = text.find(UPFRONT_END, start if start >= 0 else 0)
+    if start < 0 or end < 0:
+        raise SystemExit(f"::error::{LANDER}: the up-front block (from {UPFRONT_START.strip()!r} to "
+                         f"{UPFRONT_END!r}) moved, and this guard did not follow — it would "
+                         "otherwise pass having checked nothing.")
+    return text[start:end]
+
+
+def check_upfront(block: str) -> int:
+    """Executes the lander's up-front block with a stand-in `dotnet` over each exit it can see."""
+    failures = 0
+    for label, stand_exit, writes, want_code, want_text, want_gate, want_landed in UPFRONT_SCENARIOS:
+        with tempfile.TemporaryDirectory() as tmp:
+            prelude = f"""set -euo pipefail
+fail() {{ echo "FAIL: $*"; exit 1; }}
+note() {{ echo "NOTE: $*"; }}
+land_verdict() {{ echo "LANDED $KIND"; exit 1; }}
+dotnet() {{
+  local out="" prev=""
+  for a in "$@"; do [ "$prev" = "--verdict" ] && out=$a; prev=$a; done
+  echo "stand-in verifier: $*"
+  if [ -n "${{STAND_VERDICT:-}}" ]; then printf '{{"verdict":"%s"}}' "$STAND_VERDICT" >"$out"; fi
+  return "$STAND_EXIT"
+}}
+PRIVATE=false
+COMBO_VERIFIER=/stand-in/mw-combo-verify.dll
+CANDIDATE=9.9.9
+tag=slot-0
+WORK_ROOT={tmp}/work
+verdict={tmp}/verdict.json
+assembly_args=(combo.json image:9.9.9 --verdict "$verdict")
+"""
+            script = prelude + block + '\necho "REACHED-THE-GATE"\n'
+            env = dict(os.environ)
+            env["STAND_EXIT"] = str(stand_exit)
+            env["STAND_VERDICT"] = writes or ""
+            proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
+                                  text=True, check=False)
+        out = proc.stdout + proc.stderr
+        reached = "REACHED-THE-GATE" in out
+        landed = "LANDED " in out
+        ok = (proc.returncode == want_code and want_text in out
+              and reached == want_gate and landed == want_landed)
+        print(f"[{'PASS' if ok else 'FAIL'}] up-front: {label}: exit={proc.returncode} "
+              f"(want {want_code}), gate {'reached' if reached else 'not reached'}, "
+              f"{'landed' if landed else 'nothing landed'}")
+        if not ok:
+            failures += 1
+            print(f"::error::the lander's up-front block behaved wrongly for '{label}'")
+            print("  " + out.replace("\n", "\n  "))
+    return failures
 
 
 # The ledger pair's severity (#4413). Under policy `platform-rolls-independently-of-packages` the
@@ -916,12 +1089,51 @@ def self_test(root: Path) -> int:
                           for step in jobs["verdict"]["steps"] if step.get("id") == "jobs"],
         "the verify job made conditional":
             lambda jobs: jobs["verify"].update({"if": "needs.preflight.outputs.count != '0'"}),
+        "the verifier built in every slot again":
+            lambda jobs: jobs["verify"]["steps"].insert(0, {
+                "name": "Build the verifier",
+                "run": "dotnet build tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj -c Release"}),
+        "the slots no longer waiting for the one build":
+            lambda jobs: jobs["verify"].update(needs="preflight"),
+        "the one build removed":
+            lambda jobs: jobs.pop(BUILD_JOB),
+        "the one build made conditional":
+            lambda jobs: jobs[BUILD_JOB].update({"if": "github.event_name == 'workflow_dispatch'"}),
+        "the build's upload allowed to find nothing":
+            lambda jobs: [step["with"].update({"if-no-files-found": "ignore"})
+                          for step in jobs[BUILD_JOB]["steps"]
+                          if "upload-artifact" in str(step.get("uses", ""))],
+        "the verdict no longer reading the build":
+            lambda jobs: jobs["verdict"].update(needs=["preflight", "verify"]),
     }
     for label, change in mutations.items():
         if not mutated(change):
             print(f"::error::--self-test: {label} passed the structural hand-over check.")
             return 1
     print(f"--self-test: {len(mutations)} hand-over mutation(s) each refused.")
+
+    # ── Part four, behaviour: each way the up-front block could hide a doomed slot or skip a gate.
+    upfront = read_upfront(read_lander(root))
+    if check_upfront(upfront):
+        print("::error::--self-test: the shipped up-front block fails its own scenarios.")
+        return 1
+    upfront_mutations = {
+        "an up-front verdict landed whatever it says (no NotVerifiable guard)":
+            upfront.replace('[ "$KIND" = "NotVerifiable" ] \\\n', 'true \\\n', 1),
+        "a verifiable slot that stops instead of running the gate":
+            upfront.replace('composing it."\n', 'composing it."\n    exit 0\n', 1),
+        "a broken instrument read as 'only the gate can answer'":
+            upfront.replace("  0)\n", "  0|3)\n", 1),
+    }
+    for label, block in upfront_mutations.items():
+        if block == upfront:
+            print(f"::error::--self-test: could not build the mutation '{label}' — the up-front "
+                  "block changed shape and this self-test did not follow.")
+            return 1
+        if check_upfront(block) == 0:
+            print(f"::error::--self-test: {label} passed every up-front scenario.")
+            return 1
+    print(f"--self-test: {len(upfront_mutations)} up-front mutation(s) each fail a scenario.")
     return 0
 
 
@@ -938,13 +1150,15 @@ def main() -> int:
 
     scripts = read_preflight(root)
     failures = (check(scripts) + check_lander(read_lander(root))
-                + check_source_split(root) + check_verdict(scripts["verdict"]))
+                + check_source_split(root) + check_verdict(scripts["verdict"])
+                + check_upfront(read_upfront(read_lander(root))))
     if failures:
         print(f"::error::{failures} combo-verify check(s) behaved wrongly.")
         return 1
     print(f"check-combo-verify: {len(SCENARIOS)} preflight scenario(s) over "
           f"{len(SENTINELS)} assertion step(s) + the lander's identity checks + "
-          f"{len(VERDICT_SCENARIOS)} verdict scenario(s) + the roster hand-over's structure, "
+          f"{len(VERDICT_SCENARIOS)} verdict scenario(s) + {len(UPFRONT_SCENARIOS)} up-front "
+          "scenario(s) + the roster hand-over's and the one build's structure, "
           "0 violation(s).")
     # 🚨 WHAT THIS GREEN DOES NOT COVER, said by the gate rather than left to a reader.
     # Every `roster` scenario feeds a SUCCESSFUL derivation (`INSTANCES=DERIVED`), because that is

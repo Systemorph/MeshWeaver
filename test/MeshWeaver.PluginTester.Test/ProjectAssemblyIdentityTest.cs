@@ -84,7 +84,7 @@ public class ProjectAssemblyIdentityTest : IDisposable
         var project = Write("Lib/Lib.csproj", $"""
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
             {properties}
               </PropertyGroup>
             </Project>
@@ -476,7 +476,7 @@ public class ProjectAssemblyIdentityTest : IDisposable
     {
         var project = Write("Lib/Lib.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup>
                 <InternalsVisibleTo Include="Lib.Test" />
                 <AssemblyMetadata Include="CommitHash" Value="deadbeef" />
@@ -508,7 +508,7 @@ public class ProjectAssemblyIdentityTest : IDisposable
     {
         var project = Write("Lib/Lib.csproj", """
             <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup>
               <ItemGroup>
                 <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
                   <_Parameter1>MeshWeaverFrameworkIdentity</_Parameter1>

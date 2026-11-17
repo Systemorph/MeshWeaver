@@ -79,6 +79,42 @@ On the module side, two things still guard what an instance runs:
 - **Ceilings.** Policy `platform-backwards-compatibility` lets a declared break set a ceiling on
   the affected modules.
 
+### Why the compatibility input reads after the images
+
+In `main-cd.yml`, `published-modules` runs after `promote`, so a run whose sealed `plugins`
+publication is missing has already built every image when it goes red. The CI profile counted 31
+such runs and proposed reading the publication first and stopping before the images (proposal R8
+in [CI Profile, November 2026](../CiProfile2026-11)). That proposal was measured and refuted. The
+workflow keeps its order, for these reasons:
+
+1. **The publish decision already comes first.** `gate` (resolve the target commit, decide whether
+   to publish) needs only `line`. Every image job needs `gate` and runs only on
+   `publish == 'true'`. A run with nothing to publish builds no image. For example, reconcile run
+   `43757848237` skipped all six image jobs and ended after about six minutes.
+2. **The images are the platform delivery, not wasted work.** In the three failing `workflow_run`
+   runs read over REST (`43714234066`, `43700790045`, `43693523389`, all failing with *upstream
+   'plugins' has no SEALED publication … for identity c004e001*), `promote`, `publish-bake`,
+   `verify-images`, `delivery-verdict`, `control-promote` and `control-first` all succeeded. Only
+   `published-modules` and the ladder were red, so `arm` armed no set from those runs. That is the
+   ladder in policy `platform-backwards-compatibility`: a missing module publication withholds the
+   fleet's arming and nothing else.
+3. **Gating the images on the publication would deadlock a declared break.** The identity is
+   `c<major>e<epoch>`. After a major or epoch bump the publication for the new identity does not
+   exist yet, and the modules' lanes seal it by building against the platform set this workflow
+   promotes. If no set were built until the publication existed, neither side could move. Control
+   first would stop too, since `control-first` deploys every accepted platform build.
+4. **The guard forbids it.** `PlatformDeliveryNeverWaitsOnPluginsGuard` treats `published-modules`
+   as module-side and fails on any platform job (`portal-image`, `promote`, `publish-bake`,
+   `control-first`, …) that reaches it through its needs.
+
+The input does depend on this run's images, but only for its identity. The step runs the
+promoted tester image's `--print-framework-identity`, which reads `MeshWeaver.Compiler.dll`. The
+same `c<major>e<epoch>` could be derived from `Directory.Build.props` and
+`src/MeshWeaver.Compiler/platform-compatibility.json`, so the read could start in parallel with
+the images. That is not done. It saves no runner minutes, because the images are built either way.
+It would surface the red about fifteen minutes earlier, and it would add a second derivation of
+the identity that could drift from the shipped one.
+
 ## Control first, in practice
 
 - `control-first` (`main-cd.yml`) tags `memex-control:<version>` and moves the line pointers. It
@@ -176,10 +212,48 @@ and never-backwards.
 - The record also declares `moduleUpdatePolicy: Auto`, so control takes every newest compatible
   module (`packages-auto-update`).
 
+### Each line announces only to control's own major
+
+With two delivery lines (policy `major-lines-run-separately`), every line's `control-first` runs.
+Until this change, each line also announced its build to control, whatever major control was on.
+**Measured 2026-11-14:** core `main` (the v4 line) announced `4.0.13212`, and later `4.0.13217`,
+for the `control` record. That record declares `updatePattern: 3.*`. The control plane opened an
+approvable Roll, someone approved it, and control got stuck mid-roll, because v3 modules do not
+load on v4.
+
+Two layers now prevent that.
+
+1. **The announcing side (this repo, on every line).** The step *Is this build on control's line?*
+   runs `arm-promoted-set.py control-line`. It reads control's public `/api/version` from the URL
+   in `.github/control-instance.json`. The build is handed over only when its major equals the
+   major control runs. Otherwise the job writes a notice and a summary line, *"control NOT handed
+   `<version>`: control runs 3.1.0+… (major 3); this line's build 4.0.… is major 4 — NOT
+   announced"*, and the tag stays written. A control whose `/api/version` cannot be read fails the
+   job red, and the red is reported on the `control-image` issue. It is never treated as
+   "announce anyway", and never skipped in silence.
+2. **The receiving side (MeshWeaver.Plugins `SelfUpdateRouting.PatternRefusal`).** An announced
+   build outside the record's `updatePattern` opens nothing. The control plane refuses it, and
+   records the refusal as `Ops/Issue/<record>__AnnouncementOutsidePattern`. The record is the one
+   declaration of an instance's line (Plugins `Hosting/RecordBoundsTheUnattendedRoll`, *Outside
+   the record's line, nothing opens*).
+
+**Moving control to another major is a deliberate act.** First set the record's `updatePattern`
+to the new line (`4.*`). Then file the first roll by hand, as an approved `Roll`. Once control
+runs the new major, that major's line announces to it and the old line stops: it is the same rule,
+applied from both ends.
+
 ## The alarm (`control-always-latest`)
 
 **Platform half.** The core workflow `.github/workflows/control-always-latest.yml` runs every 30
-minutes and calls `arm-promoted-set.py control-lag`. It finds the newest promoted set whose
+minutes and calls `arm-promoted-set.py control-lag --control-record <record>`. It reads only the
+builds of the ONE delivery line control follows: the `updatePattern` of control's record (located by
+`record` in `.github/control-instance.json`, read with the read-only fleet-reader App) names the
+major, and the declared line whose `Directory.Build.props` carries that major is the branch. Nothing
+is hard-coded, so when the record moves to `4.*` the reading follows `main`. Ancestry means
+something only along one line: a `main3` cherry-pick does not contain its `main` original, so a
+reading over `main`'s builds once called a control running the newest v3 build "behind"
+(MeshWeaver#8197). A pattern naming no single major (`*`), or no declared line of that major, is RED.
+Within that line it finds the newest promoted set whose
 `Deploy control first` job succeeded, and checks whether control's running commit contains that
 set. When it does not, it walks back through the earlier builds given to control until it reaches
 one control contains. The **first build control was given and did not take** starts the clock. The
@@ -279,6 +353,46 @@ Meanwhile:
    self-update costs delivery, and pulling the pod delivers nothing.
 4. **The hand-over says only what a `200` proves.** `Deploy control first` now writes "stored and
    signature-verified … that is not yet a roll". It no longer claims that a `Roll` opened.
+
+### A line held by control's declaration is not a frozen control
+
+Control's record declares the ONE major it follows (`updatePattern`). A delivery line of ANOTHER
+major is never taken by control: its builds are not announced to control (*Each line announces only
+to control's own major*, above), and the control plane refuses them anyway. Control first therefore
+holds every set of that line unarmed, by design, until the owner moves control's record to that
+major.
+
+**What happened (measured 2026-11-15, MeshWeaver#8279).** Core `main` became the v4 line while the
+`control` record kept `updatePattern: 3.*`, deliberately. `arm` on `main` read control's lag against
+the v4 builds `Deploy control first` had tagged, and from `4.0.13212` on reported *"FLEET DELIVERY
+FROZEN ON CONTROL … over the 180 min bound (policy control-always-latest)"* on every run. Every
+main-cd run on `main` went red, and `alert-on-failure` filed a CD-failed issue each hour. Control
+itself was on the newest build of its own line; `control-always-latest`, which already reads control
+per line (MeshWeaver#8197), was green throughout.
+
+**What the arming does now.** The `arm` job reads control's record exactly as the alarm does (the
+location from `record` in `.github/control-instance.json`, the read-only fleet-reader App, scoped to
+that one repository) and passes it to `select --control-record`. When the record's major is not the
+line's major (`control_line_hold`):
+
+- the frozen verdict is not computed: there is no lag of control's to clock on builds control was
+  never going to take;
+- nothing is armed that control does not run, so control first still holds;
+- the hold is LOUD. The job writes `::warning title=Line held by control's declaration::`, naming
+  the record's pattern, the line and its major. Every waiting set's sentence names the hold instead
+  of promising "not yet", and the reading carries it to that major's `fleet-unarmed` issue, which
+  still opens past its threshold and says the line is held above its table.
+
+A record without `updatePattern`, or one whose pattern names no single major, is RED, as is a record
+the job cannot read. When the record's major IS the line's major, nothing changes: a control behind
+its own line past the bound is still `FLEET DELIVERY FROZEN ON CONTROL`. The self-test pins both
+sides. The remedy for a hold is the owner moving control's record, never control's roll and never an
+arm override.
+
+`main3` needs no carry of this today. Its major is the one control's record declares, so on `main3`
+the hold would never be computed and its arming behaves as before. The carry is due before control's
+record moves to `4.*`: from then on `main3` is the held line, and without the carry its `arm` would
+read the same false freeze.
 
 **Can control fix its own identity without a Reconcile? No.** The fix (core #6227) changes the
 pod's ServiceAccount annotation, the `azure.workload.identity/use` label and `AZURE_CLIENT_ID`,

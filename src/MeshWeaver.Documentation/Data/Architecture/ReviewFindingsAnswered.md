@@ -258,6 +258,81 @@ Watched failing under five mutations:
   4. An outage that keeps even that first write from landing leaves the context absent until the
      retry listener re-runs it.
 
+The first bullet has since been answered, and the answer was a defect: see the next section.
+
+### Which suite holds the verdict
+
+A check-run is not free-standing. GitHub files every check-run into a **check suite**, and for GitHub
+Actions every workflow run owns one suite. The writer used to create the verdict with the job token
+(`GITHUB_TOKEN`). A check-run created that way does not land in the suite of the run that wrote it.
+GitHub files it into the **oldest** github-actions suite on the head commit. Measured over 65 core heads
+on 2026-11-14, that was the oldest suite in 65 of 65. In 59 of them the oldest suite belonged to
+`Disarm auto-merge on push`, a `pull_request_target` run that starts a few seconds before everything
+else.
+
+That suite is not always read. When the same workflow runs again on the same commit for the same
+event, the older run's suite is superseded, and branch protection stops reading the check-runs inside
+it. A draft that is marked ready re-runs `Disarm auto-merge on push` on the same commit, because the
+workflow listens to `ready_for_review`. So for a pull request whose head was pushed while it was a
+draft:
+
+1. The verdict lands in the first Disarm suite and reads `success` on the commit, including in the
+   commit's status rollup.
+2. Marking the pull request ready creates a second Disarm suite on the same commit.
+3. The merge is refused: `405 Required status check "Automatic review answered" is expected`.
+   Auto-merge, armed on that head, never fires.
+
+The data, read over REST on 2026-11-14:
+
+| heads | verdict's suite superseded by a newer run of the same workflow and event | outcome |
+|---|---|---|
+| #8164 @ `51ad833f2`, #8165 @ `03e34cd7b`, #8168 @ `0407c7712` (each pushed as a draft, then marked ready) | 3 of 3 | refused |
+| the 121 merged heads before them (core, 2026-11-10 → 11-14) | 0 of 121 (one more could not be read) | merged |
+
+Three readings from the same data rule out the first explanation offered, that a ruleset ignores a
+check-run in a `pull_request_target` suite. First, 59 of the merged heads had their verdict in exactly
+such a suite. Second, re-running the superseded Disarm run (#8168, attempt 2) did not help. GitHub
+copied every check-run of the suite, the verdict included, into the new attempt, but the newer
+`ready_for_review` run still superseded it. Third, a fresh head merged at once, because it had only
+one Disarm run.
+
+**The fix: the required verdict is written by a GitHub App.** A check-run created with an App's
+installation token lands in that App's own suite on the commit. No workflow run owns that suite, so
+nothing can supersede it. Core's writer (`review-answered.yml`, job `answered`) mints a
+`meshweaver-cloud` installation token with `checks: write`. It passes the token to the predicate in
+`MW_VERDICT_APP_TOKEN` with `--verdict-app meshweaver-cloud`. Only the write goes through the App;
+every read stays on the job token. The ruleset pins no integration for the context, so this needs no
+ruleset change.
+
+- **Never a fallback.** If the credential is missing, the job goes red and names what to provision.
+  A `--verdict-app` with no token is a red that names the variable. In neither case is the verdict
+  written with the job token instead.
+- **The two steps run only for the writer.** They carry the same condition as the job name and
+  `VERDICT_CHECK_RUN`. A fork, Dependabot and the merge queue keep the job-shaped check, which is its
+  run's own job, so they need no token.
+- **Older verdicts are converged.** A head written before the move carries a job-token verdict. Each
+  evaluation PATCHes it to the App verdict's state and never creates a new one, so two check-runs of
+  the required name never disagree. The deadline clock still starts at the oldest of them.
+- **The placement is pinned by the self-test.** `verdict_publisher_problems` reads the workflow and
+  is checked against the real file and five mutations: the flag dropped, the token not passed,
+  `checks: write` not minted, the mint narrowed to `pull_request`, and a step that continues on error.
+  Each mutation must be reported. The App-writer cases include the negative control that, without the
+  App writer, the verdict is the Actions App's.
+
+**Not changed: the fleet lane.** `node-repo-review-answered.yml` still writes its opt-in verdict
+(`verdict-check-run`) with the job token, so it has the same exposure. No satellite opts in today:
+measured 2026-11-14, MeshWeaver.Plugins, Memex, Reinsurance, Education, SocialMedia, Manufacturing and
+Crm all call the lane without `verdict-check-run`. Each of them publishes the job-shaped check, which
+is its own run's job and therefore in its own suite. Core's lane opts in, but publishes the
+non-required `lane / Automatic review answered`. A satellite that opts in needs the App writer first.
+MeshWeaver.Plugins pins its review context to the Actions App (id 15368), so moving its verdict to an
+App would also be a protection change there.
+
+**Not established.** GitHub does not document that a superseded suite's check-runs stop counting, nor
+where an API-created `GITHUB_TOKEN` check-run is filed. Both are read off the measurements above, not
+from documentation. The commit rollup (GraphQL `statusCheckRollup` on the commit) still listed the
+verdict on the refused heads, so whatever the merge check reads is not that rollup.
+
 ## Reviewed, nothing found — the only evidence that counts
 
 Policy [`review-evidence-any-head`](../PolicyNotProse) answers the question #4730 left open:

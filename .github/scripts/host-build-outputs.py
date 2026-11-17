@@ -388,7 +388,7 @@ def self_test() -> int:
 
     # A fake checkout: a built tester bin, a staged evidence dir, a commit, and a base to merge it onto.
     repo = os.path.join(tmp, "repo")
-    bin_dir = os.path.join(repo, *TESTER_BIN.split("/"), "Release", "net10.0")
+    bin_dir = os.path.join(repo, *TESTER_BIN.split("/"), "Release", "net11.0")
     os.makedirs(bin_dir)
     open(os.path.join(bin_dir, TESTER_DLL), "wb").write(b"MZ tester")
     open(os.path.join(bin_dir, "MeshWeaver.Messaging.dll"), "wb").write(b"MZ core")
@@ -421,7 +421,7 @@ def self_test() -> int:
     with tarfile.open(os.path.join(art, UNIT, TESTER_TAR)) as tf:
         names = tf.getnames()
     check("the tester tar holds the bin under its repository path (platform-compat's find pattern)",
-          f"{TESTER_BIN}/Release/net10.0/{TESTER_DLL}" in names and all(n.startswith(TESTER_BIN + "/") for n in names), names)
+          f"{TESTER_BIN}/Release/net11.0/{TESTER_DLL}" in names and all(n.startswith(TESTER_BIN + "/") for n in names), names)
     first = open(os.path.join(art, UNIT, TESTER_TAR), "rb").read()
     stage(repo, head, evidence, art)
     check("the tar bytes are a function of the tree (re-staged: identical)", open(os.path.join(art, UNIT, TESTER_TAR), "rb").read() == first)
@@ -494,7 +494,7 @@ def self_test() -> int:
         check("a complete hand-back: main-sha = the host's merge base, tree = the built tree",
               r["main-sha"] == base and r["tree"] == merged_tree, r)
         check("the tester lands where platform-compat's find looks for it",
-              os.path.isfile(os.path.join(r["out"], "build-output-0", *TESTER_BIN.split("/"), "Release", "net10.0", TESTER_DLL)))
+              os.path.isfile(os.path.join(r["out"], "build-output-0", *TESTER_BIN.split("/"), "Release", "net11.0", TESTER_DLL)))
         check("the evidence lands as check-licenses.py --evidence reads it",
               os.path.isfile(os.path.join(r["out"], "licence-evidence", EVIDENCE_MANIFEST))
               and os.path.isfile(os.path.join(r["out"], "licence-evidence", "packages", "a", "1.0.0", "a.nuspec")))
@@ -541,7 +541,7 @@ def self_test() -> int:
 
     def with_tester(members) -> list[dict]:
         return [x for x in good[:3] if not x["unit"].endswith(TESTER_TAR)] + [rc(TESTER_TAR, tar_of(members))]
-    dll = f"{TESTER_BIN}/Release/net10.0/{TESTER_DLL}"
+    dll = f"{TESTER_BIN}/Release/net11.0/{TESTER_DLL}"
     check("negative control: a hand-made tester tar of the right shape is accepted", not red_run(with_tester([(dll, b"MZ", "f")])))
     check("RED: a tester tar member escaping the tree", red_run(with_tester([(dll, b"MZ", "f"), (f"{TESTER_BIN}/../../x", b"x", "f")])))
     check("RED: an absolute tester tar member", red_run(with_tester([(dll, b"MZ", "f"), ("/etc/x", b"x", "f")])))

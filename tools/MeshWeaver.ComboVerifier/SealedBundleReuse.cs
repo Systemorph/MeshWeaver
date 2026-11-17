@@ -36,6 +36,12 @@ public sealed record SealedBundlePlan(
     ImmutableSortedSet<string> Staged,
     ImmutableArray<string> SealProblems)
 {
+    /// <summary>Packages that declare no NodeType of their own: nothing to compile, so no bake writes
+    /// a bundle for them and none is needed. They are neither reused nor rebuilt, and are staged only
+    /// when a rebuilt package needs them installed. An init property, not a constructor parameter, so
+    /// the record's primary constructor keeps its shape (binary compatibility).</summary>
+    public ImmutableSortedSet<string> NoNodeTypes { get; init; } = ImmutableSortedSet<string>.Empty;
+
     /// <summary>True when every package's sealed bytes stand, so there is nothing to compile.</summary>
     public bool BakesNothing => Staged.IsEmpty;
 
@@ -46,6 +52,7 @@ public sealed record SealedBundlePlan(
         yield return $"sealed bundles: {Reused.Count} package(s) reuse the producing repositories' sealed "
                      + $"bytes for identity {FrameworkIdentity}; {Rebuilt.Count} rebuilt; the bake mounts "
                      + $"{Staged.Count} package(s)"
+                     + (NoNodeTypes.IsEmpty ? "" : $"; {NoNodeTypes.Count} declare no NodeType (nothing to bake)")
                      + (BakesNothing ? " — nothing to compile." : ".");
         foreach (var problem in SealProblems)
             yield return $"  ⚠ {problem}";
@@ -66,6 +73,11 @@ public sealed record SealedBundlePlan(
 /// <para><b>When a sealed bundle stands for a package.</b> All four, or the package is rebuilt and
 /// the reason is printed:</para>
 /// <list type="number">
+///   <item>(a package that declares NO NodeType of its own is outside this list: it has nothing to
+///     compile, so no bake writes it a bundle and none is needed — see
+///     <see cref="SealedBundlePlan.NoNodeTypes"/>. The first run after the reuse landed, 43586622051,
+///     counted such packages as "no fetched seal carries a bundle for it" and staged each one WITH its
+///     install closure, so packages whose seals stood were compiled again);</item>
 ///   <item>exactly one fetched seal carries a bundle for the package, keyed to the candidate's
 ///     framework identity, with assemblies and no producer misses;</item>
 ///   <item>the bundle's node-definition content (the package tree the producer baked, which every
@@ -117,8 +129,17 @@ public static class SealedBundleReuse
 
         var rebuilt = ImmutableSortedDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
         var candidates = ImmutableSortedDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        var typeless = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
         foreach (var package in packages)
         {
+            // Nothing to compile, so nothing a seal could carry: "no bundle" is this package's normal
+            // state, never evidence that it changed. Counting it as rebuilt staged it as a ROOT of the
+            // bake together with its whole install closure, recompiling packages whose seals stood.
+            if (!NodeRepoPackageGraph.DefinesNodeTypes(package, tree.Snapshot))
+            {
+                typeless.Add(package.Id);
+                continue;
+            }
             var (bundle, reason) = Decide(package, tree, sealedBundles, source.FrameworkIdentity);
             if (bundle is not null)
                 candidates[package.Id] = bundle;
@@ -137,10 +158,20 @@ public static class SealedBundleReuse
             {
                 var stale = sources.GetValueOrDefault(id, []).Where(rebuilt.ContainsKey)
                     .OrderBy(d => d, StringComparer.Ordinal).FirstOrDefault();
-                if (stale is null)
+                // 🚨 A package with no NodeType can still hold sources another package includes. No
+                // seal carries ITS bytes, so nothing shows the instance's copy is the one the
+                // includer's seal was compiled from: conservative, exactly as for a rebuilt one.
+                var unproven = stale is null
+                    ? sources.GetValueOrDefault(id, []).Where(typeless.Contains)
+                        .OrderBy(d => d, StringComparer.Ordinal).FirstOrDefault()
+                    : null;
+                if (stale is null && unproven is null)
                     continue;
                 candidates.Remove(id);
-                rebuilt[id] = $"its sealed bundle includes sources of '{stale}', which is rebuilt";
+                rebuilt[id] = stale is not null
+                    ? $"its sealed bundle includes sources of '{stale}', which is rebuilt"
+                    : $"its sealed bundle includes sources of '{unproven}', which declares no NodeType, "
+                      + "so no seal shows the instance's copy is the one it was compiled from";
                 changed = true;
             }
         }
@@ -160,7 +191,10 @@ public static class SealedBundleReuse
 
         return new SealedBundlePlan(
             source.FrameworkIdentity, candidates.ToImmutable(), rebuilt.ToImmutable(), staged.ToImmutable(),
-            problems);
+            problems)
+        {
+            NoNodeTypes = typeless.ToImmutable(),
+        };
     }
 
     /// <summary>

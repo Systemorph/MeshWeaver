@@ -73,28 +73,40 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     private readonly Subject<Submission> submissions = new();
 
     // Per-SUBMISSION settlement signals, keyed by the forwarded delivery's id (KernelContainer sets
-    // it). The container's idle-disconnect claim waits on one when its bounded wait for the reply
-    // times out — the claim must last until THIS submission ends, and an Activity's status cannot
-    // say that: one Activity carries many submissions. AsyncSubject, so a settlement that lands
-    // before the container subscribes is still seen.
-    private ImmutableDictionary<string, AsyncSubject<Unit>> settlements =
-        ImmutableDictionary<string, AsyncSubject<Unit>>.Empty;
+    // it). The container ends its wait for a submission on whichever comes first, the reply or this
+    // settlement — the claim must last until THIS submission ends, and an Activity's status cannot
+    // say that: one Activity carries many submissions. The settlement CARRIES the response the
+    // executor answered with, because it is signalled synchronously right after that response is
+    // posted and so usually arrives before the reply does; it carries null only when the executor
+    // was torn down without answering. AsyncSubject, so a settlement that lands before the
+    // container subscribes is still seen.
+    private ImmutableDictionary<string, AsyncSubject<SubmitCodeResponse?>> settlements =
+        ImmutableDictionary<string, AsyncSubject<SubmitCodeResponse?>>.Empty;
 
-    /// <summary>The settlement signal of the submission delivered under <paramref name="deliveryId"/>:
-    /// emits once and completes when the executor has settled it (any outcome) or is torn down.</summary>
-    internal IObservable<Unit> ExpectSettlement(string deliveryId)
-        => ImmutableInterlocked.GetOrAdd(ref settlements, deliveryId, _ => new AsyncSubject<Unit>());
+    /// <summary>The settlement of the submission delivered under <paramref name="deliveryId"/>: emits
+    /// once and completes when the executor has settled it — with the response it answered — or is
+    /// torn down without answering it (null).</summary>
+    internal IObservable<SubmitCodeResponse?> ExpectSettlement(string deliveryId)
+        => ImmutableInterlocked.GetOrAdd(ref settlements, deliveryId, _ => new AsyncSubject<SubmitCodeResponse?>());
 
     /// <summary>Drops an expected settlement whose submission never reached this executor.</summary>
     internal void ForgetSettlement(string deliveryId)
         => ImmutableInterlocked.TryRemove(ref settlements, deliveryId, out _);
 
-    private void Settle(string deliveryId)
+    private void Settle(string deliveryId, SubmitCodeResponse? response)
     {
         if (!ImmutableInterlocked.TryRemove(ref settlements, deliveryId, out var settled))
             return;
-        settled.OnNext(Unit.Default);
+        settled.OnNext(response);
         settled.OnCompleted();
+    }
+
+    /// <summary>Answers the submission <paramref name="request"/> with <paramref name="response"/>
+    /// and settles it with the same response.</summary>
+    private void Answer(IMessageHub hub, IMessageDelivery request, SubmitCodeResponse response)
+    {
+        hub.Post(response, o => o.ResponseFor(request));
+        Settle(request.Id, response);
     }
     private IDisposable? submissionPump;
 
@@ -212,7 +224,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     // Nothing here will settle any more: release every waiter (the claim's dead-executor
                     // check would too, but only at the next idle tick).
                     foreach (var deliveryId in settlements.Keys)
-                        Settle(deliveryId);
+                        Settle(deliveryId, null);
                     session?.Dispose();
                     session = null;
                     // Release the cell-surface generation pins with the session — after this,
@@ -349,9 +361,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                         ? null
                         : JsonSerializer.SerializeToElement(returnValue, hub.JsonSerializerOptions);
                     activityLogger.Complete(ActivityStatus.Succeeded, returnElement);
-                    hub.Post(new SubmitCodeResponse(msg.Id, true) { ActivitySettled = true },
-                        o => o.ResponseFor(request));
-                    Settle(request.Id);
+                    Answer(hub, request, new SubmitCodeResponse(msg.Id, true) { ActivitySettled = true });
                 }
                 catch (Exception settleEx)
                 {
@@ -366,10 +376,8 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     activityLogger.LogError(settleEx,
                         "Failed to record script result: {Reason}", settleEx.Message);
                     activityLogger.Complete(ActivityStatus.Failed);
-                    hub.Post(
-                        new SubmitCodeResponse(msg.Id, false) { Error = settleEx.Message, ActivitySettled = true },
-                        o => o.ResponseFor(request));
-                    Settle(request.Id);
+                    Answer(hub, request,
+                        new SubmitCodeResponse(msg.Id, false) { Error = settleEx.Message, ActivitySettled = true });
                 }
             },
             ex =>
@@ -414,14 +422,12 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     activityLogger.LogError(ex, "Script execution failed: {Reason}", ex.Message);
                     activityLogger.Complete(ActivityStatus.Failed);
                 }
-                hub.Post(
+                Answer(hub, request,
                     new SubmitCodeResponse(msg.Id, false)
                     {
                         Error = canceled ? "Cancelled" : ex.Message,
                         ActivitySettled = true,
-                    },
-                    o => o.ResponseFor(request));
-                Settle(request.Id);
+                    });
             });
 
         ImmutableInterlocked.TryAdd(ref pendingRuns, request.Id, new PendingRun(result, cts));

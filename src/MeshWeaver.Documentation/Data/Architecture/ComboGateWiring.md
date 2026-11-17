@@ -121,9 +121,19 @@ per instance it does exactly the three steps
    `memex-control`, whose version tag exists before `memex-portal-ai`'s is armed, and also exists
    for builds that never arm it. The lander used to pull `memex-portal-ai:<selected>` for every
    instance, so the control slot failed `not found` whenever its candidate was not armed yet (#4413).
-   It now pulls `<acr>/<repository>:<selected>`. An instance on an image from before the field
-   names no repository, and the lander falls back to the poller's default (`memex-portal-ai`),
-   which is what that image lists.
+   It now pulls `<acr>/<repository>:<selected>`.
+
+   **An instance on an image from before the field names no repository, and then the image comes
+   from its deployment record.** The roster carries each installation's record `imageRepository`
+   with the registry host dropped (`derive-combo-instances.py` → `INSTANCE_IMAGE_REPOSITORY`), and
+   the lander uses it when the roll target is silent. Only a record that declares no image falls
+   back to `memex-portal-ai`, and the slot says so. The fallback used to be `memex-portal-ai` for
+   every instance. That is wrong for a control instance, which runs `memex-control`, the image that
+   carries the fleet-control NodeTypes. A client estate's control instance still on a pre-#4413
+   image, and rolling only through an approval gate, was verified against the portal image on every
+   run. Each run read Red with `NodeType(s) not registered: Hosting/Deployment` for its
+   `Deployments` space, and the lane stayed red on a verdict about an image that instance does not
+   run.
 2. **Ask the instance what it runs** — `GET /api/plugins/combo`, added by #3544 beside its two
    `mwi_`-gated siblings. Its body is an `InstanceCombo` serialized with
    `InstanceComboAssembler.Json`, i.e. it **is** `combo.json`, byte-for-byte what `mw-combo-verify`
@@ -144,6 +154,48 @@ in-process.
 🚨 **Green is the only pass.** A `Red` fails the job (delivery promoted a candidate that some of a
 live instance's modules do not survive) and a `NotVerifiable` fails it too — that outcome means *nothing was checked*, which is
 "the gate never ran" wearing the colour of "the gate passed".
+
+### The verdict the assembly decides is decided first, and the verifier is built once
+
+Saving R2 of the [CI profile](../CiProfile2026-11) changed two things about how a slot spends its
+time. Neither changes a verdict.
+
+- **Decided before paying.** Step 3 used to pull the candidate's portal and tester images, compose
+  the gate host and fetch the sealed module set, and only then let `mw-combo-verify` assemble the
+  combo. When the assembly fails (a module whose ref moved past its install record, a fetch that
+  failed, an incomplete combo, a module without an `index.json` root, or nothing but retired
+  modules), the verdict is `NotVerifiable` whatever the candidate is. The images and modules were
+  never used. On the slots measured on 2026-11-15 that ended "the combo did not assemble", that
+  was about 4 of their 10 minutes. The lander now runs `mw-combo-verify --assemble-only` first. It
+  needs only the combo and git. It either decides (exit 1, verdict written, each reason on its
+  module entry, plus a caveat saying it was decided before the gate) or hands over (exit 0, no
+  verdict). The full run then passes `--assembled` and reuses the manifest (`combo-assembly.json`)
+  and the materialised root instead of fetching every module twice. A manifest that is missing,
+  unreadable or about another combo read is a broken instrument (exit 3), never a verdict.
+  The classifier is `InstanceComboVerifier.DecideBeforeGate`. It is the same fold the one-shot run
+  applied when it skipped the gate, so deciding earlier changes no verdict. **It can only say
+  `NotVerifiable`.** The lander refuses an up-front Green or Red without landing anything, and
+  `check-combo-verify.py` runs the lander's up-front block with a stand-in verifier over every exit
+  code it can see. That includes the negative control: a combo that assembles still reaches the
+  gate.
+- **A retired package dooms nothing.** It is folded out of the verdict
+  (see *Retired, not verifiable* below), so an instance that carries retired
+  packages beside live ones still reaches the gate. The NotVerifiable slots that ran for 25 minutes
+  (for example job 132432200108) were **gate runs that exceeded the budget**: the candidate itself
+  did not complete inside the gate. No precondition read up front predicts that, so those slots
+  still pay the gate. Only fixing what hangs makes them cheaper.
+- **Built once per run.** Each of the seven slots used to run `dotnet build` on
+  `tools/MeshWeaver.ComboVerifier` (1.5–2.8 min each). The `build-verifier` job now publishes it
+  once, the slots download the `combo-verifier` artifact and run `dotnet $COMBO_VERIFIER`, and the
+  `verdict` job names a failed build as its own red instead of as a matrix that did not expand.
+
+What this does **not** save: re-verifying a candidate the instance already holds a verdict for.
+One slot verified the same candidate in three or four consecutive runs, read Red each time, and
+spent about 10 minutes on each. Reusing that verdict is sound only when its whole input is
+unchanged: the candidate, the combo, the sealed publications for the candidate's identity (which
+a satellite can republish) and the verifier itself. The publications are only known after the
+module fetch, and the instance offers no read of its landed verdicts to this run's identity, so
+the reuse is not built.
 
 ### Why it is its own workflow, and why an instance's verify job is red until that instance is provisioned
 
@@ -1079,6 +1131,27 @@ is refused, and that the flag is refused with a named package list.
    orders an install. A source dependency with no bundle of its own cannot be shown equal, so it
    counts as rebuilt.
 
+**A package with no NodeType is outside these rules.** It has nothing to compile, so no bake
+writes a bundle for it (`TreeBake.WriteBundles` skips a package with no compiled entry), and none is
+needed. `NodeRepoPackageGraph.DefinesNodeTypes` decides it with the same `$type` test the
+source-edge reader uses. Such a package is neither reused nor rebuilt. It is staged only when a
+rebuilt package needs it installed, and the plan line counts it separately when there is any (`N declare no NodeType
+(nothing to bake)`). One case stays conservative: a package whose NodeType includes sources from a
+package with no NodeType is rebuilt, because no seal carries those source bytes.
+
+The first run after the reuse landed showed why this matters. In run
+[43586622051](https://github.com/Systemorph/MeshWeaver/actions/runs/43586622051), slot 2, the plan
+read `35 package(s) reuse …; 46 rebuilt; the bake mounts 54 package(s)`. 37 of the 46 were marked
+`no fetched seal carries a bundle for it`, and 36 of those 37 declare no NodeType on the plugins
+repository's `main` (the provider and channel modules, for example; the 37th, `Deployments`, is not
+in that repository). Each one was staged with its whole install closure. The bake still compiled
+155 NodeTypes in 547 s, against 218 in 542 s before the reuse. The other 9 rebuilds are real:
+`Hosting`, `Store` and `Governance` differ from their seals, and 6 packages include `Store`'s
+sources. How much of the 155 the typeless roots accounted for is measured by the first run after
+this change, not here.
+`ComboGateReusesSealedBundlesTest.APackageWithNoNodeType_IsNotRebuilt_AndStagesNothing` pins the
+change.
+
 **What is baked.** Only the rebuilt packages, together with everything they need installed (every
 edge kind, `NodeRepoPackageGraph.DependencyMap`). These are copied into `<work root>.stage`, and that
 directory is mounted as `/work` for the `compile` call. This is the same narrowing a publish-bake
@@ -1131,6 +1204,39 @@ node whose write is still queued, or plain starvation from roughly 64 × network
 Also not established: whether the producing repository's own seeded gate shows the same chain at a
 smaller scale. The 5 s stamp budget is not the fix. Raising it would hide the unanswered reads, and
 the reads would still cost every type its adoption.
+
+## Open: the gate compiles the large package a second time (#4413)
+
+Large combos (about 81 modules) sometimes end `NotVerifiable` because the gate runs out of
+`GATE_TIMEOUT`. The clock covers the bake and the gate together. What fills it, read from the
+slot logs of runs 43730201284 and 43722437356 (NotVerifiable) and 43725330495 (Green):
+
+- **Bake:** 408 s to 827 s for the same 165 NodeTypes. 15 packages reuse their sealed bundles;
+  30 are rebuilt because the instance runs older package commits than the newest seal.
+- **Gate, every package except `Hosting`:** about 3 minutes.
+- **Gate, `Hosting`:** the rest. All 64 Hosting NodeTypes log
+  `reported 1 adopted assembly(ies) but the node still has no usable build 5s later — compiling
+  instead`. The gate then compiles every one of them again, although the bake compiled them, and
+  each type's tests wait for its own compile.
+
+This happens on the Green memex run too: there the bake was fast enough to leave room for it.
+Packages installed before `Hosting`, under less load, are adopted without a second compile.
+
+What is NOT yet known is why the node has no usable build after the adoption reports success. The
+seeder's write already completes on the owning hub's verdict (#2661), so "the write had not landed
+yet" is not the answer. The leading candidate is a definite ordering: the install-time adoption
+stamps the type `Ok`; the release request then finds the source versions not yet stamped (source
+reads time out under the 999-file install) and flips the type `Pending`; the watcher's on-demand
+adoption then finds the same bytes already recorded, returns `AlreadyServed` and writes nothing; and
+the watcher, which requires status `Ok`, compiles.
+
+To decide it, the lane sets `MW_LOG_CATEGORIES=bake-seed=Debug,MeshWeaver.Graph.CompileWatcher=Debug`
+on the verify step. The verifier forwards that variable to the gate container by name
+(`DockerImageGate.ForwardedEnvironment`), and the tester raises only the categories it names,
+even at its default Warning level (`GateVerbosity.CategoryFilters`). The compile watcher's
+warning also names the last state it saw (`status`, `coordinates`, `usable`, `dirty`). Both
+tester-side halves ship in the candidate image, so they appear from the first candidate built
+after this change.
 
 ## Known boundary: the combo moves
 

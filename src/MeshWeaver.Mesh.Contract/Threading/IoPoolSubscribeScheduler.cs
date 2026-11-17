@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Threading;
@@ -16,4 +17,19 @@ public sealed class IoPoolSubscribeScheduler(IoPoolRegistry registry) : IPooledS
     /// <inheritdoc />
     public IObservable<T> SubscribeThroughPool<T>(IObservable<T> source) =>
         registry.Get(IoPoolNames.Layout).SubscribeThroughPool(source);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Each subscription is handed to <see cref="IoPoolRegistry.OwnUntilDrain"/>, so both drains (the
+    /// silo's <see cref="IoPoolRegistry.Dispose"/> and mesh teardown's <see cref="IoPoolRegistry.DrainAll()"/>)
+    /// dispose it before the <see cref="IoPoolNames.Layout"/> pool is cancelled. A subscription that
+    /// terminates, or whose owner disposes it first, removes its registration: <c>Observable.Create</c>
+    /// disposes the handle on a terminal, and the handle forgets the entry.
+    /// </remarks>
+    public IObservable<T> SubscribeThroughPool<T>(IObservable<T> source, string ownedUntilDrainBy)
+    {
+        var pooled = SubscribeThroughPool(source);
+        return Observable.Create<T>(observer =>
+            registry.OwnUntilDrain(pooled.Subscribe(observer), ownedUntilDrainBy));
+    }
 }

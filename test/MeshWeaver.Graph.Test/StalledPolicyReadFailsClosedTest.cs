@@ -73,9 +73,16 @@ public class StalledPolicyReadFailsClosedTest(ITestOutputHelper output) : Monoli
             .AddRowLevelSecurity()
             .AddGraph()
             .AddSpaceType()
-            .ConfigureServices(services => services.AddSingleton<IMeshQueryProvider>(provider))
+            // 🚨 The ladder is registered at MESH level, beside the provider — never through
+            // ConfigureHub(c => c.WithMeshOperationTimeout(…)). The fan-in under test is the
+            // mesh-singleton IMeshQueryCore, built from the mesh's root provider, which cannot see a
+            // registration made on the mesh HUB's own services: configured that way the fan-in kept
+            // the DEFAULT rung, the stall terminal fired at 15 s instead of 500 ms, and this test
+            // passed only by sitting the production bound out on the wall clock (15 s per run).
+            .ConfigureServices(services => services
+                .AddSingleton<IMeshQueryProvider>(provider)
+                .AddSingleton(new MeshOperationOptions { Timeout = ShortLadder }))
             .ConfigureHub(c => c
-                .WithMeshOperationTimeout(ShortLadder)
                 .WithQuiesceTimeout(TestQuiesceTimeout)
                 .WithRequestTimeout(TimeSpan.FromSeconds(60)));
 
@@ -124,6 +131,13 @@ public class StalledPolicyReadFailsClosedTest(ITestOutputHelper output) : Monoli
             + "answer is an availability failure (retryable, ErrorType.Unavailable), never "
             + "'Access denied' — which would send a correctly-entitled caller to request "
             + "permissions they already hold and file an outage as a policy decision (#974)");
+        stalled.UndeterminedReason.Should().Contain(
+            "within the query fan-in's "
+            + FormattableString.Invariant(
+                $"{new MeshOperationOptions { Timeout = ShortLadder }.QueryInitialBudget.TotalSeconds:0.###}")
+            + "s bound",
+            "the terminal must fire on the CONFIGURED rung of the ladder — a fan-in that fell back to "
+            + "the default 15 s rung means the ladder this test configures never reached it");
         stalled.UndeterminedReason.Should().Contain(nameof(StalledPolicyProvider),
             "the reason has to NAME the provider that starved — that attribution is the only thing "
             + "the fan-in's rung of the ladder exists to produce, and no level above it can");

@@ -82,7 +82,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
       - name: Restore workloads
         run: dotnet workload restore
       - name: Restore dependencies
@@ -99,7 +99,7 @@ jobs:
           set -uo pipefail
           mkdir -p /tmp/coredumps probe-logs
           name="$PROBE_PROJECT"
-          dir="test/$name/bin/Release/net10.0"
+          dir="test/$name/bin/Release/net11.0"
           if [ ! -f "$dir/$name.dll" ]; then
             echo "::error::no native xUnit v3 host at $dir/$name.dll"; exit 1
           fi

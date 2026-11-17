@@ -1,0 +1,5 @@
+<Project>
+  <!-- Stops MSBuild's upward walk: the repository's Directory.Build.props (TargetFramework, analyzers, warnings)
+       belongs to the solution's projects, not to the build logic's own comparer, which must build on whatever SDK
+       the lane installed (AbiSyntax.csproj). -->
+</Project>

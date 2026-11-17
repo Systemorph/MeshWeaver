@@ -14,7 +14,7 @@ using MeshWeaver.PluginCatalog;
 //     [--allow-moving] [--allow-incomplete]
 //     [--source <name>=<url>]… [--default-source <url>]
 //     [--fetch-timeout <seconds>] [--gate-timeout <seconds>] [--token-env <VAR>]
-//     [--platform <os/arch>]
+//     [--platform <os/arch>] [--assemble-only | --assembled]
 //
 // Step 3 of the Candidate Release Protocol's instance gate — the whole combo check as ONE ops/CI
 // job: read the instance's combo (the file InstanceComboReader emits — step 1), materialise every
@@ -29,6 +29,23 @@ using MeshWeaver.PluginCatalog;
 //     (no verdict)  the gate host is not runnable (no tester CLI, runtimeconfig or portal
 //                   manifest in it) — the INSTRUMENT is missing, so no question was asked and no
 //                   verdict file is written — exit 3.
+//
+// 🚨 DECIDE BEFORE YOU PAY (saving R2 of Doc/Architecture/CiProfile2026-11). A combo that does not
+// assemble into a gate-runnable root is NotVerifiable whatever the candidate is, and assembling it
+// needs only the combo and git — not the candidate images, the composed host or the sealed modules
+// the lander fetches first. So the lander runs TWO phases:
+//
+//     --assemble-only  materialise the combo into --work-root and stop. Exit 1 with the
+//                      NotVerifiable verdict written when the assembly already decides it (every
+//                      reason named on the module entries and caveats); exit 0 with NO verdict file
+//                      when only the gate can answer. --host is not needed.
+//     --assembled      the full run over the SAME --work-root, reusing the manifest phase one wrote
+//                      (combo-assembly.json) instead of fetching every module a second time. A
+//                      manifest that is missing, unreadable or about another combo read is a broken
+//                      instrument (exit 3), never a verdict.
+//
+// Neither phase can turn a slot green that the one-shot run would not: the up-front decision is the
+// same fold the one-shot run applied when it skipped the gate (InstanceComboVerifier.DecideBeforeGate).
 //
 // <candidate-image> is the candidate PORTAL image (memex-portal-ai:<tag>); its own `dotnet` starts
 // the gate. --host is the COMPOSED GATE HOST for that candidate: the portal's /app with the
@@ -68,6 +85,8 @@ var sources = ImmutableDictionary<string, string>.Empty
 var moduleBundleDirs = ImmutableList<string>.Empty;
 var sealedBundleDirs = ImmutableArray<string>.Empty;
 string? frameworkIdentity = null;
+var assembleOnly = false;
+var reuseAssembly = false;
 
 for (var i = 0; i < args.Length; i++)
 {
@@ -78,6 +97,12 @@ for (var i = 0; i < args.Length; i++)
             break;
         case "--allow-incomplete":
             allowIncomplete = true;
+            break;
+        case "--assemble-only":
+            assembleOnly = true;
+            break;
+        case "--assembled":
+            reuseAssembly = true;
             break;
         case "--work-root" when i + 1 < args.Length:
             workRoot = args[++i];
@@ -147,7 +172,13 @@ for (var i = 0; i < args.Length; i++)
                 + "[--allow-incomplete] [--source <name>=<url>]... [--default-source <url>] "
                 + "[--fetch-timeout <s>] [--gate-timeout <s>] [--token-env <VAR>] "
                 + "[--module-bundles <dir>]... [--sealed-bundles <dir>... --framework-identity <id>] "
-                + $"[--platform <os/arch>, default {DockerImageGate.FleetPlatform}]\n"
+                + $"[--platform <os/arch>, default {DockerImageGate.FleetPlatform}] "
+                + "[--assemble-only | --assembled]\n"
+                + "  --assemble-only: materialise the combo into --work-root and stop; exit 1 with the "
+                + "NotVerifiable verdict written when the assembly already decides it, exit 0 with "
+                + "no verdict when only the gate can answer. --host is not needed.\n"
+                + "  --assembled: reuse the manifest an --assemble-only run wrote into the same "
+                + "--work-root instead of materialising again.\n"
                 + "  --module-bundles <dir>: sealed module bundles for the candidate's framework "
                 + "identity. Required when the combo's packages declare compiled modules: the "
                 + "tester ships none, so without them every Skill/Agent install is refused.\n"
@@ -175,7 +206,19 @@ if (comboPath is null || imageRef is null)
         "Both <combo.json> and <candidate-image> are required. Try --help.");
     return 2;
 }
-if (hostDir is null)
+if (assembleOnly && reuseAssembly)
+{
+    Console.Error.WriteLine("--assemble-only and --assembled are the two phases of one run; pass one. Try --help.");
+    return 2;
+}
+if ((assembleOnly || reuseAssembly) && workRoot is null)
+{
+    Console.Error.WriteLine(
+        "--assemble-only / --assembled need an explicit --work-root: the second phase reuses what the "
+        + "first materialised there. Try --help.");
+    return 2;
+}
+if (hostDir is null && !assembleOnly)
 {
     Console.Error.WriteLine(
         "--host <gate-host-dir> is required: the candidate portal's /app with the candidate set's "
@@ -246,6 +289,82 @@ var assembler = new InstanceComboAssembler(
         Output = Console.Out,
     });
 
+// ── Phase one: --assemble-only ─────────────────────────────────────────────────────────────────
+// Materialise and decide. Nothing the gate needs is touched: no host, no modules, no docker.
+if (assembleOnly)
+{
+    var assembled = (await assembler.Assemble(combo, workRoot).FirstAsync()
+        .ObserveCompletion(ex => Console.Error.WriteLine(
+            $"combo assembly faulted AFTER it was reported — reported, not orphaned: {ex}")))!;
+    var tagForVerdict = string.IsNullOrWhiteSpace(candidateTag)
+        ? InstanceComboVerifier.TagOf(imageRef)
+        : candidateTag;
+    var decided = InstanceComboVerifier.DecideBeforeGate(assembled, imageRef, tagForVerdict);
+    if (decided is null)
+    {
+        Console.WriteLine(
+            "assemble-only: the combo assembled into a gate-runnable root at "
+            + $"'{Path.GetFullPath(workRoot)}' — only the gate can answer; no verdict written. Run "
+            + "again with --assembled to verify over it.");
+        return 0;
+    }
+    decided.WriteSummary(Console.Out);
+    var upFront = decided.Verdict with
+    {
+        Caveats = decided.Verdict.Caveats.Add(
+            "decided BEFORE the gate: the combo does not assemble into a root the gate can run "
+            + "over, so no candidate image was pulled and no gate was started — the module entries "
+            + "name each reason, and a full run would have reached the same NotVerifiable without the gate."),
+    };
+    var upFrontPath = Path.GetFullPath(verdictPath);
+    File.WriteAllText(upFrontPath, JsonSerializer.Serialize(upFront, InstanceComboAssembler.Json));
+    Console.WriteLine();
+    Console.WriteLine($"verdict ({upFront.Verdict}, decided before the gate) written to '{upFrontPath}'.");
+    return 1;
+}
+
+// ── Phase two: --assembled ─────────────────────────────────────────────────────────────────────
+// The manifest phase one wrote, held to THIS combo read: a manifest about another read would be a
+// verdict about something other than what the instance answered.
+ComboAssemblyReport? reusedAssembly = null;
+if (reuseAssembly)
+{
+    var manifestPath = Path.Combine(Path.GetFullPath(workRoot), InstanceComboAssembler.ManifestFileName);
+    try
+    {
+        reusedAssembly = File.Exists(manifestPath)
+            ? JsonSerializer.Deserialize<ComboAssemblyReport>(
+                File.ReadAllText(manifestPath), InstanceComboAssembler.Json)
+            : null;
+    }
+    catch (JsonException ex)
+    {
+        Console.Error.WriteLine($"mw-combo-verify: --assembled: '{manifestPath}' is not an assembly manifest: {ex.Message}");
+        return DockerImageGate.TesterMissingExitCode;
+    }
+    if (reusedAssembly is null)
+    {
+        Console.Error.WriteLine(
+            $"mw-combo-verify: --assembled: no assembly manifest at '{manifestPath}' — run "
+            + "--assemble-only over the same --work-root first. Nothing was verified and no verdict is written.");
+        return DockerImageGate.TesterMissingExitCode;
+    }
+    if (reusedAssembly.ComboReadAt != combo.ReadAt
+        || reusedAssembly.AllowMoving != allowMoving
+        || reusedAssembly.AllowIncomplete != allowIncomplete)
+    {
+        Console.Error.WriteLine(
+            $"mw-combo-verify: --assembled: the manifest at '{manifestPath}' was assembled from the "
+            + $"combo read at {reusedAssembly.ComboReadAt:O} (allow-moving={reusedAssembly.AllowMoving}, "
+            + $"allow-incomplete={reusedAssembly.AllowIncomplete}), not this one ({combo.ReadAt:O}, "
+            + $"{allowMoving}, {allowIncomplete}). Nothing was verified and no verdict is written.");
+        return DockerImageGate.TesterMissingExitCode;
+    }
+    Console.WriteLine(
+        $"assembled: reusing the manifest phase one wrote ({reusedAssembly.Modules.Count} module(s), "
+        + $"assembled at {reusedAssembly.AssembledAt:O}).");
+}
+
 // 🚨 THE MODULE HALF OF THE COMBO (MeshWeaver#4413). The instance runs every installed package's
 // compiled module; the tester's image ships none. A gate run without them registers no Skill or
 // Agent type, refuses the first install that needs one, and cascades into a red that blames every
@@ -299,8 +418,15 @@ if (declaredModules.Length > 0)
             + $"NOT loaded: {string.Join(", ", moduleSet.NotDeclared)}");
 }
 
+// Phase one returned above and the arguments already refused a full run without --host; this
+// re-states it for the compiler, never a second rule.
+if (hostDir is not { } gateHost)
+{
+    Console.Error.WriteLine("--host <gate-host-dir> is required for a run that executes the gate. Try --help.");
+    return 2;
+}
 var gate = new DockerImageGate(
-    pools, gateTimeout, Console.Out, platform, hostDir, moduleSet, sealedBundles);
+    pools, gateTimeout, Console.Out, platform, gateHost, moduleSet, sealedBundles);
 
 // 🚨 THE INSTRUMENT FIRST (#3848). A gate with no tester to start exits 127 with no report, which
 // folds into a NotVerifiable that reads as a statement about the candidate — and was landed on live
@@ -321,7 +447,10 @@ var verifier = new InstanceComboVerifier(assembler, gate.Run);
 // "no ToTask ever"). Rx's bridge resumes this top-level continuation INLINE on whichever
 // thread the verifier's last stage signalled from, still inside Rx's trampoline — and every
 // later `await` in this file then schedules onto that same captured scheduler.
-var run = (await verifier.Verify(combo, imageRef, workRoot, candidateTag).FirstAsync()
+var verification = reusedAssembly is not null
+    ? verifier.VerifyAssembled(reusedAssembly, imageRef, workRoot, candidateTag)
+    : verifier.Verify(combo, imageRef, workRoot, candidateTag);
+var run = (await verification.FirstAsync()
     .ObserveCompletion(ex => Console.Error.WriteLine(
         $"combo verify faulted AFTER the run was reported — reported, not orphaned: {ex}")))!;
 

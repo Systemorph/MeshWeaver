@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using MeshWeaver.Connection.Orleans;
 using Xunit;
@@ -25,6 +26,13 @@ public class ThreadPoolWorkerStacksTest
     private int parked;
     private int left;
     private int release;
+    private readonly Thread?[] parkedThreads = new Thread?[Held];
+
+    // Per parked slot: who may still interrupt it. The test interrupts ONLY a slot it claimed while the
+    // worker was asleep, and a worker that finds its slot claimed takes that interrupt before it leaves —
+    // so no interrupt is ever left armed on a pooled thread (a later test's blocking call would throw it).
+    private const int SlotEmpty = 0, SlotAsleep = 1, SlotClaimed = 2, SlotLeaving = 3;
+    private readonly int[] slotState = new int[Held];
 
     [Fact]
     public void AStalledPool_TheCaptureNamesTheFrameItsWorkersAreHeldIn()
@@ -33,14 +41,28 @@ public class ThreadPoolWorkerStacksTest
         {
             for (var i = 0; i < Held; i++)
                 ThreadPool.UnsafeQueueUserWorkItem(_ => HeldInTheParkedLeaf(), null);
-            SpinWait.SpinUntil(() => Volatile.Read(ref parked) == Held, Budget)
-                .Should().BeTrue("the reproduction needs {0} pool workers parked before it captures", Held);
+            // Parked means SLEEPING in the leaf, not merely arrived: a worker counted but not yet in
+            // Thread.Sleep would be captured in another frame and split the group (core #8272 run).
+            SpinWait.SpinUntil(() => Volatile.Read(ref parked) == Held && AllParkedThreadsAsleep(), Budget)
+                .Should().BeTrue("the reproduction needs {0} pool workers asleep in the leaf before it captures", Held);
 
-            var stacks = new ThreadPoolWorkerStacks().CaptureWorkerStacks();
-
-            var held = stacks
-                .Where(stack => stack.Contains(nameof(HeldInTheParkedLeaf), StringComparison.Ordinal))
-                .ToArray();
+            // 🚨 WaitSleepJoin is NOT "in the wait": on Unix the managed wait subsystem sets it
+            // (ThreadWaitInfo.Wait → SetWaitSleepJoinState) BEFORE it acquires the thread's wait monitor and
+            // calls into the OS, so a worker can read WaitSleepJoin while still executing managed code. The
+            // exact signal is the capture itself: a worker whose innermost captured frame is a runtime
+            // transition frame has left managed code for its native wait. A capture that catches one still
+            // on its way is not the subject — the next one is read instead.
+            var reader = LoggingReader();
+            var held = Array.Empty<string>();
+            SpinWait.SpinUntil(() =>
+                {
+                    held = reader.CaptureWorkerStacks()
+                        .Where(stack => stack.Contains(nameof(HeldInTheParkedLeaf), StringComparison.Ordinal))
+                        .ToArray();
+                    return held.Length == Held && held.All(InItsNativeWait);
+                }, Budget)
+                .Should().BeTrue("a capture must find {0} parked workers each inside its native wait; the last one read:{1}{2}",
+                    Held, Environment.NewLine, string.Join(Environment.NewLine + "--" + Environment.NewLine, held));
             held.Should().HaveCount(Held, "every parked worker is a ThreadPool worker standing in the parked leaf");
 
             // Only the captured parked-worker subset is rendered: the rest of this test process's pool
@@ -59,7 +81,9 @@ public class ThreadPoolWorkerStacksTest
         {
             // Released, and every parked worker seen to LEAVE the leaf, so the negative control
             // (or any later capture) can never find one of these still standing in it.
-            Volatile.Write(ref release, 1);
+            for (var i = 0; i < parkedThreads.Length; i++)
+                if (Interlocked.CompareExchange(ref slotState[i], SlotClaimed, SlotAsleep) == SlotAsleep)
+                    Volatile.Read(ref parkedThreads[i])?.Interrupt();
             SpinWait.SpinUntil(() => Volatile.Read(ref left) == Volatile.Read(ref parked), Budget);
         }
     }
@@ -104,7 +128,7 @@ public class ThreadPoolWorkerStacksTest
                                      && Monitor.LockContentionCount - contentionBefore >= Held, Budget)
                 .Should().BeTrue("the reproduction needs {0} pool workers contending for the gate", Held);
 
-            var stacks = new ThreadPoolWorkerStacks().CaptureStacks();
+            var stacks = LoggingReader().CaptureStacks();
 
             var waiters = stacks.Workers
                 .Where(stack => stack.Contains(OuterFrame, StringComparison.Ordinal))
@@ -120,7 +144,7 @@ public class ThreadPoolWorkerStacksTest
                 "the holder is a dedicated thread, so only the non-worker half of the capture can show it");
 
             // The workers-only path keeps its old per-stack cap: the outer-frame change widens only the stall capture.
-            new ThreadPoolWorkerStacks().CaptureWorkerStacks()
+            LoggingReader().CaptureWorkerStacks()
                 .Should().OnlyContain(stack => stack.Split(Environment.NewLine).Length <= BlockedThreadStacks.MaxFrames,
                     "CaptureThreadPoolWorkers still renders at most {0} frames per stack", BlockedThreadStacks.MaxFrames);
 
@@ -246,11 +270,90 @@ public class ThreadPoolWorkerStacksTest
         SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, Budget);
     }
 
+    /// <summary>
+    /// 🚨 Root cause of core #8324's ×3/×1 split of four parked sleepers: ClrMD attaches the P/Invoke's
+    /// method to an <c>InlinedCallFrame</c> only when the calling code was JIT-compiled (ReadyToRun code
+    /// leaves it without one), so the same native wait printed as <c>InlinedCallFrame</c> or as the
+    /// P/Invoke's signature depending on the code version the thread had entered — and a tier-up
+    /// between the parked workers' calls put them in two shapes. This parks a dedicated thread in a native
+    /// <c>read(2)</c> called from JIT-compiled code, the variant ClrMD names. Negative control, from the
+    /// SAME dump: ClrMD's raw frame DOES carry the method, so the old rendering
+    /// (<c>Method?.Signature ?? FrameName</c>) would have printed it; the capture prints the frame kind.
+    /// </summary>
+    [Fact]
+    public void ANativeCallFromJittedCode_IsPrintedAsItsRuntimeFrame_NotAsTheMethodClrMdAttaches()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "the reproduction blocks in the C library's read(2) on a pipe");
+        var fds = new int[2];
+        Libc.pipe(fds).Should().Be(0, "the reproduction needs a pipe to block on");
+        var buffer = Marshal.AllocHGlobal(1);
+        var reader = new Thread(() => BlockedInANativeRead(fds[0], buffer)) { IsBackground = true, Name = "p8324-native-read" };
+        try
+        {
+            reader.Start();
+            var stacks = new BlockedThreadStacks();
+            var raw = "";
+            var rendered = "";
+            // Ready means IN the native call: the dump's innermost frame for the thread is a runtime frame.
+            SpinWait.SpinUntil(() => stacks.Read(runtime =>
+                {
+                    if (runtime.Threads.FirstOrDefault(t => t.ManagedThreadId == reader.ManagedThreadId)?.EnumerateStackTrace()
+                            .FirstOrDefault() is not { Kind: Microsoft.Diagnostics.Runtime.ClrStackFrameKind.Runtime } frame)
+                        return false;
+                    raw = frame.Method?.Signature ?? frame.FrameName ?? "";
+                    rendered = BlockedThreadStacks.RenderFrame(frame);
+                    return true;
+                }), Budget)
+                .Should().BeTrue("the reader thread must be captured inside its native read");
+
+            raw.Should().Contain(nameof(Libc.read) + "(",
+                "negative control: ClrMD attaches the P/Invoke to this frame, so the old rendering printed the method");
+            rendered.Should().Be("InlinedCallFrame",
+                "the capture prints a runtime frame by its kind, whichever code version the thread entered");
+            ThreadPoolStall.IsRuntimeFrame(rendered).Should().BeTrue("the line recognises it as a runtime frame");
+            ThreadPoolStall.IsRuntimeFrame(raw).Should().BeFalse(
+                "negative control: the method ClrMD attaches reads as a managed frame, which is what split the group");
+        }
+        finally
+        {
+            // One byte releases the read; the thread is joined before the pipe and the buffer go.
+            Marshal.WriteByte(buffer, 1);
+            Libc.write(fds[1], buffer, 1);
+            reader.Join(Budget);
+            Libc.close(fds[0]);
+            Libc.close(fds[1]);
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    /// <summary>JIT-compiled (never ReadyToRun): the caller whose inlined P/Invoke ClrMD names.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void BlockedInANativeRead(int fd, nint buffer) => Libc.read(fd, buffer, 1);
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "IDE1006:Naming Styles",
+        Justification = "The C library's own names.")]
+    private static class Libc
+    {
+        // Blittable signatures with no SetLastError, so the call is inlined into its caller with an
+        // InlinedCallFrame — the shape a framework wait (LowLevelMonitor_TimedWait) has.
+        [DllImport("libc")]
+        public static extern int pipe(int[] fds);
+
+        [DllImport("libc")]
+        public static extern nint read(int fd, nint buffer, nint count);
+
+        [DllImport("libc")]
+        public static extern nint write(int fd, nint buffer, nint count);
+
+        [DllImport("libc")]
+        public static extern int close(int fd);
+    }
+
     /// <summary>Negative control: with nothing parked, the same capture does not find the parked leaf.</summary>
     [Fact]
     public void AnUnheldPool_TheCaptureDoesNotFindTheParkedLeaf()
     {
-        var stacks = new ThreadPoolWorkerStacks().CaptureWorkerStacks();
+        var stacks = LoggingReader().CaptureWorkerStacks();
 
         stacks.Should().NotContain(stack => stack.Contains(nameof(HeldInTheParkedLeaf), StringComparison.Ordinal));
     }
@@ -268,17 +371,61 @@ public class ThreadPoolWorkerStacksTest
         failure!.Message.Should().Contain(missing);
     }
 
+    /// <summary>
+    /// Holds a pool worker in ONE frame until the test interrupts it: a single bounded
+    /// <see cref="Thread.Sleep(TimeSpan)"/>. A polling wait (SpinUntil, a sleep loop) moves the worker between
+    /// Yield, Sleep and the predicate, so a snapshot caught the parked workers in different frames and
+    /// split them into two groups ("2:" / "3:" instead of "4:").
+    /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void HeldInTheParkedLeaf()
     {
-        Interlocked.Increment(ref parked);
+        var slot = Interlocked.Increment(ref parked) - 1;
+        Volatile.Write(ref parkedThreads[slot], Thread.CurrentThread);
+        Volatile.Write(ref slotState[slot], SlotAsleep);
+        var interrupted = false;
         try
         {
-            SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, Budget);
+            Thread.Sleep(Budget);
+        }
+        catch (ThreadInterruptedException)
+        {
+            // The release: the test interrupts each parked worker it claimed once it has captured.
+            interrupted = true;
         }
         finally
         {
+            // Budget expired before the release, but the test claimed this slot: its interrupt has been or
+            // is about to be delivered — take it here rather than return the thread to the pool armed.
+            if (Interlocked.CompareExchange(ref slotState[slot], SlotLeaving, SlotAsleep) == SlotClaimed && !interrupted)
+            {
+                try { Thread.Sleep(Budget); }
+                catch (ThreadInterruptedException) { }
+            }
             Interlocked.Increment(ref left);
         }
+    }
+
+    /// <summary>
+    /// The production reader with the dump writer's step log on (<c>createdump --diag</c>): a capture in
+    /// this test host has seen its writer die silently on CI (core #8355, #8358), and the log names the last
+    /// step it reached. Production readers keep it off.
+    /// </summary>
+    private static ThreadPoolWorkerStacks LoggingReader() =>
+        new() { Stacks = new BlockedThreadStacks(logDumpGeneration: true) };
+
+    /// <summary>Whether a captured stack's innermost frame is a runtime transition frame — the thread is in native code.</summary>
+    private static bool InItsNativeWait(string stack) =>
+        stack.Split(Environment.NewLine) is [var innermost, ..] && ThreadPoolStall.IsRuntimeFrame(innermost);
+
+    private bool AllParkedThreadsAsleep()
+    {
+        for (var i = 0; i < parkedThreads.Length; i++)
+        {
+            var thread = Volatile.Read(ref parkedThreads[i]);
+            if (thread is null || (thread.ThreadState & ThreadState.WaitSleepJoin) == 0)
+                return false;
+        }
+        return true;
     }
 }

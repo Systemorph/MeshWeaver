@@ -40,15 +40,15 @@ public class ContainerReferenceSetTest : IDisposable
         string meshWeaverAssemblyVersion = "3.0.0.0",
         string? secondMeshWeaverAssemblyVersion = null) => $$"""
         {
-          "runtimeTarget": { "name": "net10.0" },
+          "runtimeTarget": { "name": "net11.0" },
           "targets": {
-            "net10.0": {
+            "net11.0": {
               "Host/1.0.0": {},
               "Some.Package/4.2.0": {
-                "runtime": { "lib/net10.0/Some.Package.dll": { "assemblyVersion": "4.2.0.0" } }
+                "runtime": { "lib/net11.0/Some.Package.dll": { "assemblyVersion": "4.2.0.0" } }
               },
               "Renamed.Package/1.0.0": {
-                "runtime": { "lib/net10.0/Renamed.Assembly.dll": { "assemblyVersion": "1.0.0.0" } }
+                "runtime": { "lib/net11.0/Renamed.Assembly.dll": { "assemblyVersion": "1.0.0.0" } }
               },
               "Metapackage.Only/9.9.9": {},
               "MeshWeaver.Data/3.0.0": {
@@ -142,7 +142,7 @@ public class ContainerReferenceSetTest : IDisposable
         Dll(app, "MeshWeaver.Data");
         File.WriteAllText(Path.Combine(app, "host.deps.json"), """
             {
-              "targets": { "net10.0": { "Host/1.0.0": {} } },
+              "targets": { "net11.0": { "Host/1.0.0": {} } },
               "libraries": { "Host/1.0.0": { "type": "project" } }
             }
             """);

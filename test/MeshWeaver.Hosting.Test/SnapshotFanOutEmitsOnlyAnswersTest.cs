@@ -12,6 +12,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.Reactive.Assertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -228,6 +229,8 @@ public class SnapshotFanOutEmitsOnlyAnswersTest : HubTestBase
     /// </summary>
     [Theory(Timeout = 240_000)]
     [MemberData(nameof(Surfaces))]
+    [ExpectsTimeoutTerminal(TimeoutTerminalKinds.QueryInitial,
+        "the fan-in's stall terminal faulting a query with nothing to show is the behaviour under test")]
     public async Task AStalledProvider_WithNothingToShow_FaultsNamingIt(string surface)
     {
         var mesh = new MeshQuery(
