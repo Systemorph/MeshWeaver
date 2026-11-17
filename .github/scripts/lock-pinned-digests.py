@@ -2969,12 +2969,38 @@ def resolve_and_classify(plan: Plan, registry: Registry,
 # ── Reporting ──────────────────────────────────────────────────────────────────────────────────
 
 
-def emit(text: str) -> None:
+# GitHub refuses a step summary over 1 MiB and then uploads NONE of it (`$GITHUB_STEP_SUMMARY
+# upload aborted, supports content up to a size of 1024k`, an `##[error]` on every run). The budget
+# leaves headroom under that limit; the cut marker says where the rest went.
+SUMMARY_LIMIT_BYTES = 1024 * 1024
+SUMMARY_BUDGET_BYTES = 768 * 1024
+SUMMARY_CUT_MARKER = ("\n**Step summary cut at the budget — GitHub uploads no summary over 1 MiB. "
+                      "The job log carries every line.**\n")
+
+
+def emit(text: str, summary: bool = True) -> None:
+    """Print `text` to the job log, and append it to the step summary unless `summary` is False.
+
+    The log is the complete record. The summary is held under SUMMARY_BUDGET_BYTES: a line that
+    would cross it is not written, and the cut is marked once, so GitHub never refuses the whole
+    summary for being over its limit."""
     print(text)
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as handle:
-            handle.write(public_text(text) + "\n")
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path or not summary:
+        return
+    line = (public_text(text) + "\n").encode("utf-8")
+    marker = SUMMARY_CUT_MARKER.encode("utf-8")
+    with open(path, "a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        if size + len(line) <= SUMMARY_BUDGET_BYTES:
+            handle.write(line)
+            return
+        handle.seek(max(0, size - len(marker)))
+        if handle.read() == marker:
+            return
+        handle.seek(0, os.SEEK_END)
+        handle.write(marker)
 
 
 def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
@@ -3199,15 +3225,21 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
         if scan.unreadable:
             emit(f"  A2 {scan.gh_repo}: UNREADABLE — {scan.unreadable}")
 
+    # The per-manifest listing goes to the job LOG only. At fleet scale it is most of the report —
+    # 21,688 PROTECTED lines and 1.8 MiB on 2026-11-17 — and a summary over 1 MiB is not uploaded
+    # at all (#7991). The summary keeps the counts above and every problem line below.
+    emit(f"  per-manifest listing ({len(plan.already_protected)} protected, "
+         f"{len(plan.to_lock)} to lock, {len(plan.release_candidates)} release candidate(s)): "
+         "in the job log only.")
     for entry in sorted(plan.already_protected, key=lambda w: (w.acr_repo, w.digest or "")):
-        emit(f"  PROTECTED  {entry.acr_repo}@{(entry.digest or '')[:26]}…")
+        emit(f"  PROTECTED  {entry.acr_repo}@{(entry.digest or '')[:26]}…", summary=False)
         for source in entry.sources:
-            emit(f"               ← {source}")
+            emit(f"               ← {source}", summary=False)
     for entry in sorted(plan.to_lock, key=lambda w: (w.acr_repo, w.digest or "")):
         emit(f"  {'LOCK      ' if apply else 'WOULD LOCK'} "
-             f"{entry.acr_repo}@{(entry.digest or '')[:26]}…")
+             f"{entry.acr_repo}@{(entry.digest or '')[:26]}…", summary=False)
         for source in entry.sources:
-            emit(f"               ← {source}")
+            emit(f"               ← {source}", summary=False)
     for entry in sorted([w for w in plan.wanted if w.problem], key=lambda w: w.acr_repo):
         emit(f"  UNPROTECTABLE {entry.acr_repo}"
              + (f":{entry.tag}" if entry.tag else f"@{(entry.digest or '')[:26]}…"))
@@ -3231,9 +3263,10 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
     emit("  that is not there. The candidates below are REPORTED so the stale-lock debt is visible.")
     for manifest in plan.release_candidates:
         emit(f"  RELEASE CANDIDATE  {manifest.acr_repo}@{manifest.digest[:26]}…  "
-             f"tags={manifest.tags or '(none)'}")
+             f"tags={manifest.tags or '(none)'}", summary=False)
         emit("               🚨 a lock a PERSON placed for a reason no pin scan can see — a pin "
-             "that is about to exist — looks exactly like this. Review before releasing.")
+             "that is about to exist — looks exactly like this. Review before releasing.",
+             summary=False)
     if not plan.release_candidates:
         emit("  (none — every locked manifest is pinned by something this run could see.)")
     emit("")
@@ -10294,6 +10327,71 @@ env:
                   "ARM 42k (negative control): the registry diagnostic was blanked entirely")
     finally:
         consistency.az = _saved_az
+        if _saved_summary is None:
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        else:
+            os.environ["GITHUB_STEP_SUMMARY"] = _saved_summary
+
+    # ── ARM 43: the step summary stays under GitHub's upload limit at fleet scale (#7991) ───────
+    # GitHub uploads NO step summary over 1 MiB — it annotates `$GITHUB_STEP_SUMMARY upload
+    # aborted` as an `##[error]` and the run page shows nothing at all. The nightly run wrote the
+    # whole per-manifest listing there: 1,925 KiB on 2026-11-17, of which 1,826 KiB was the
+    # PROTECTED lines and their `← source` lines (21,688 lines). Drive the REAL report at that
+    # scale and hold the summary to the budget, the log to every line, and the summary to the
+    # counts and the problems.
+    _scale_plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
+                               probe=_answers(), apply=False)
+    _bulk_sources = [f"Systemorph/Fixture deployments/aks/fleet-{n}/values.yaml" for n in range(60)]
+    for _n in range(400):
+        _scale_plan.already_protected.append(
+            Wanted("memex-portal-ai", "sha256:" + hashlib.sha256(str(_n).encode()).hexdigest(),
+                   sources=list(_bulk_sources)))
+    for _n in range(1000):
+        _scale_plan.release_candidates.append(Manifest(
+            "mw-plugin-test", "sha256:" + hashlib.sha256(f"rc{_n}".encode()).hexdigest(),
+            False, True, [f"3.0.0-ci.{_n}"], ""))
+    _saved_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    try:
+        with tempfile.TemporaryDirectory() as _summary_dir:
+            _summary = Path(_summary_dir) / "summary.md"
+            _summary.write_text("", encoding="utf-8")
+            os.environ["GITHUB_STEP_SUMMARY"] = str(_summary)
+            _scale_log = io.StringIO()
+            with contextlib.redirect_stdout(_scale_log):
+                report(_scale_plan, clean1, clean2, REGISTRY_DEFAULT, _inventory(),
+                       apply=False, release_enabled=False, root=HERE_ROOT)
+            _scale_bytes = _summary.stat().st_size
+            _scale_summary = _summary.read_text(encoding="utf-8")
+            check(len(_scale_log.getvalue().encode("utf-8")) > SUMMARY_LIMIT_BYTES,
+                  "ARM 43 (falsification): the fixture's report is under 1 MiB, so the arm below "
+                  "would pass about a summary that could never have overflowed")
+            check(_scale_bytes <= SUMMARY_BUDGET_BYTES,
+                  f"ARM 43: the step summary is {_scale_bytes // 1024} KiB at fleet scale — over "
+                  f"the {SUMMARY_BUDGET_BYTES // 1024} KiB budget, so GitHub's 1 MiB limit "
+                  "uploads none of it")
+            check(_scale_log.getvalue().count("  PROTECTED  ") == len(_scale_plan.already_protected)
+                  and _scale_log.getvalue().count("RELEASE CANDIDATE  ")
+                  == len(_scale_plan.release_candidates),
+                  "ARM 43: the job LOG lost per-manifest lines — the summary budget must never "
+                  "cost the log a line")
+            check("…already protected (deleteEnabled false)" in _scale_summary
+                  and "job log" in _scale_summary,
+                  "ARM 43: the step summary lost the counts, or does not say where the "
+                  "per-manifest listing went")
+            check("UNPROTECTABLE" in _scale_summary or not any(w.problem for w in _scale_plan.wanted),
+                  "ARM 43: a PROBLEM line was dropped from the step summary with the listing")
+            # The backstop: whatever grows next, the writer itself refuses to cross the budget and
+            # says so ONCE, rather than letting GitHub drop the whole summary.
+            _summary.write_text("", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                for _n in range(SUMMARY_BUDGET_BYTES // 40):
+                    emit(f"filler line {_n:08d} " + "x" * 40)
+            _backstop = _summary.read_text(encoding="utf-8")
+            check(_summary.stat().st_size <= SUMMARY_LIMIT_BYTES
+                  and _backstop.count(SUMMARY_CUT_MARKER.strip()) == 1,
+                  f"ARM 43: the summary writer crossed the limit ({_summary.stat().st_size} "
+                  "bytes) or did not mark the cut exactly once")
+    finally:
         if _saved_summary is None:
             os.environ.pop("GITHUB_STEP_SUMMARY", None)
         else:
