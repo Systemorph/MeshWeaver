@@ -1874,6 +1874,18 @@ def separation_problems(workflow_text: str) -> list[str]:
             problems.append("`arm` runs `select` without --control-record — a line held by control's declared updatePattern would read as a frozen control")
         if not any("control-record.json" in r and "gh api" in r for r in arm_runs):
             problems.append("`arm` never reads control's record into control-record.json — `select --control-record` has nothing to read")
+        # 10. 🚫 Policy `line-no-first-instance`: a line that DECLARES none reads no record, and `select`
+        #     is called without one ONLY on that declaration (cd-line.py's `first_instance` output).
+        for sid in ("record", "record-token"):
+            st = next((x for x in arm.get("steps") or [] if x.get("id") == sid), None)
+            if st is None or "needs.line.outputs.first_instance != 'none'" not in str(st.get("if", "")):
+                problems.append(f"`arm`'s `{sid}` step is not conditioned on `needs.line.outputs.first_instance != 'none'` "
+                                "— a line that declares no first instance would read a record that does not exist")
+        sel = next((x for x in arm.get("steps") or [] if x.get("id") == "select"), {})
+        if ('[ "$FIRST_INSTANCE" = none ]' not in str(sel.get("run", ""))
+                or "needs.line.outputs.first_instance" not in str((sel.get("env") or {}).get("FIRST_INSTANCE", ""))):
+            problems.append("`arm`'s `select` drops --control-record on something other than the line's DECLARED "
+                            "`firstInstance: none` (FIRST_INSTANCE from needs.line.outputs.first_instance)")
     # `arm-promoted-set.py` (its self-test AND its line lookup) reads `.github/delivery-lines.json`;
     # a sparse checkout without it refused every CD run on main3 (13233..13266) before arming.
     for job_name in ("arm", "control-first", "first-instance-first"):
@@ -1952,6 +1964,23 @@ def separation_problems(workflow_text: str) -> list[str]:
                                 "(`first_line`) AND its record following the repository (`follows`)")
         if "memex-portal-ai:$STAGING" not in json.dumps(steps):
             problems.append("`first-instance-first` does not tag from the PROMOTED portal's staging image")
+        # 10. 🚫 A line that DECLARES no first instance (policy `line-no-first-instance`): this job hands
+        #     no instance anything and SAYS so by name, and nothing that reads a record or a registry runs.
+        said = [st for st in steps if "env.FIRST == 'none'" in str(st.get("if", ""))
+                and "arm-promoted-set.py first-instance" in str(st.get("run", ""))
+                and "::notice" in str(st.get("run", "")) and "GITHUB_STEP_SUMMARY" in str(st.get("run", ""))]
+        if not said:
+            problems.append("`first-instance-first` has no step that SAYS, by name, that a line declaring no first "
+                            "instance hands no instance anything (`if: env.FIRST == 'none'`, a notice + the summary)")
+        for st in steps:
+            if (str(st.get("uses", "")).startswith("actions/checkout") or "--self-test" in str(st.get("run", ""))
+                    or st in said):
+                continue
+            if "env.FIRST != 'none'" not in str(st.get("if", "")):
+                sid = st.get("id") or st.get("name") or "?"
+                problems.append(f"`first-instance-first`'s `{sid}` step is not conditioned on `env.FIRST != 'none'` — "
+                                "a line that declares no first instance would read a record, tag a repository or "
+                                "announce a build (by declaration, never because an output happened to be empty)")
     if cf is not None and not any("post-self-update-announcement.sh" in str(st.get("run", ""))
                                   for st in cf.get("steps") or []):
         problems.append("`control-first` no longer delivers through post-self-update-announcement.sh — the two "
@@ -2020,6 +2049,95 @@ def module_pack_permission_problems(workflow_text: str) -> list[str]:
                 f"{name} declares permissions instead of inheriting the caller's login mode"
             )
     return problems
+
+
+def run_no_first_instance_cases(root, case) -> None:
+    """🚫 Policy `line-no-first-instance`, EXECUTED: the declared absence ARMS on the platform evidence,
+    an OMITTED `firstInstance` still HOLDS (control on another major), and a malformed declaration is
+    REFUSED by cd-line.py — through the real scripts, the shipped declaration and fabricated ones."""
+    import importlib.util
+
+    def load(name: str):
+        spec = importlib.util.spec_from_file_location(name.replace("-", "_"), root / ".github/scripts" / name)
+        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        return mod
+
+    arm, cdl = load("arm-promoted-set.py"), load("cd-line.py")
+    lines_file = root / ".github/delivery-lines.json"
+    ci_file = root / ".github/control-instance.json"
+    shipped = json.loads(lines_file.read_text())
+    ci = arm.load_control_instance(ci_file)
+    rec = {"run_number": 13500, "v_portal": "3.1.13500", "core_sha": "a" * 40, "key": "k"}
+
+    # 1. the shipped 3.x line DECLARES none, and a green-ladder set ARMS, the sentence naming it
+    first = arm.line_first_instance(cdl.by_branch(cdl.load(lines_file)).get("main3"), ci, "main3")
+    ctl = {"commit": "", "healthy": False, "contains": {}, "name": "none", "line": "main3",
+           "no_first_instance": arm.no_first_instance_sentence(first)}
+    chosen, said = arm.select([rec], {13500: "success"}, ctl, armed_max=13400)
+    case("no first instance: the shipped main3 declares `none` and its green-ladder set ARMS on platform evidence",
+         first["none"] and chosen is rec and any("NO FIRST INSTANCE, DECLARED" in ln and "`main3`" in ln for ln in said),
+         str(said))
+    chosen, said = arm.select([rec], {13500: "failure"}, ctl, armed_max=13400)
+    case("...and every other gate stays: a red ladder arms nothing", chosen is None, str(said))
+
+    # 2. an OMITTED firstInstance is control — on a 4.* control the 3.x line is HELD, nothing armed
+    omitted = arm.line_first_instance({"branch": "main3"}, ci, "main3")
+    hold = arm.first_instance_hold(omitted, {"id": ci["deployment"], "content": {"updatePattern": "4.*"}}, 3)
+    chosen, said = arm.select([rec], {13500: "success"}, {"commit": "b" * 40, "healthy": True,
+                                                          "contains": {rec["core_sha"]: False}, "line_hold": hold}, 13400)
+    case("omitted firstInstance: control on 4.* HOLDS line 3 by name and arms nothing (never the declared absence)",
+         not omitted["none"] and chosen is None and (hold or "").startswith("LINE HAS NO FIRST INSTANCE"), str(said))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        def write(mutate) -> Path:
+            doc = json.loads(json.dumps(shipped))
+            mutate(next(l for l in doc["lines"] if l["branch"] == "main3"))
+            f = Path(tmp) / f"lines-{len(list(Path(tmp).iterdir()))}.json"
+            f.write_text(json.dumps(doc))
+            return f
+
+        def run(*args: str) -> tuple[int, str]:
+            res = subprocess.run([sys.executable, str(root / ".github/scripts/arm-promoted-set.py"), *args,
+                                  "--control-instance", str(ci_file)],
+                                 capture_output=True, text=True, cwd=tmp,
+                                 env={**os.environ, "GH_TOKEN": "offline", "GITHUB_OUTPUT": "", "GITHUB_STEP_SUMMARY": ""})
+            return res.returncode, res.stdout + res.stderr
+
+        # the CLI the workflow calls, on the shipped declaration
+        rc, out = run("first-instance", "--branch", "main3", "--delivery-lines", str(lines_file))
+        row = json.loads(out.strip().splitlines()[-1]) if rc == 0 else {}
+        case("cli first-instance: main3 → none=true, no record, and the sentence `first-instance-first` prints",
+             rc == 0 and row.get("none") == "true" and row.get("record_path") == ""
+             and "NO FIRST INSTANCE, DECLARED" in row.get("sentence", ""), out)
+        # select refuses a record passed for a declared-none line BEFORE reading anything remote
+        rec_file = Path(tmp) / "record.json"
+        rec_file.write_text(json.dumps({"id": ci["deployment"], "content": {"updatePattern": "4.*"}}))
+        rc, out = run("select", "--branch", "main3", "--major", "3", "--delivery-lines", str(lines_file),
+                      "--control-record", str(rec_file))
+        case("cli select: a record passed for a line that DECLARES none is REFUSED (two declarations of one fact)",
+             rc == 1 and 'declares firstInstance "none"' in out, out)
+        # ...and an OMITTED declaration with no record is refused, never read as "none"
+        omitted_file = write(lambda l: [l.pop(k, None) for k in ("firstInstance", "noFirstInstanceReason",
+                                                                  "firstInstanceImageRepository")])
+        rc, out = run("select", "--branch", "main3", "--major", "3", "--delivery-lines", str(omitted_file))
+        case("cli select: an OMITTED firstInstance without a record is REFUSED — omission never means `none`",
+             rc == 1 and "select needs --control-record" in out, out)
+
+        # 3. malformed declarations are REFUSED by cd-line.py (exit 2, by name) and so by the arm step
+        for why, mutate in (
+                ("`none` without a reason", lambda l: l.pop("noFirstInstanceReason")),
+                ("`none` with a placeholder reason", lambda l: l.update(noFirstInstanceReason="n/a")),
+                ("`none` beside an image repository", lambda l: l.update(firstInstanceImageRepository="memex-portal-ai-first3")),
+                ("a reason without `none`", lambda l: l.update(firstInstance="memex",
+                                                               firstInstanceImageRepository="memex-portal-ai-first3")),
+                ("a mis-spelt `None`", lambda l: l.update(firstInstance="None"))):
+            bad = write(mutate)
+            code = cdl.main(["cd-line.py", "derive"], env={"CD_EVENT": "workflow_dispatch", "CD_REF_NAME": "main3",
+                                                           "CD_DEFAULT_BRANCH": "main"}, declaration=bad)
+            rc, out = run("first-instance", "--branch", "main3", "--delivery-lines", str(bad))
+            case(f"malformed declaration ({why}): cd-line.py derive REFUSES it (exit 2) and the arm step cannot name a first instance",
+                 code == 2 and rc == 1 and "cannot be named" in out, f"derive={code} first-instance={rc}: {out}")
 
 
 def run_control_webhook_cases(root, case) -> None:
@@ -2274,7 +2392,7 @@ def main() -> int:
         case(f"...and the guard catches `{job_name}` checking out no delivery lines",
              no_lines != workflow_text and any(f"`{job_name}`'s sparse checkout omits `.github/delivery-lines.json`" in p for p in separation_problems(no_lines)),
              f"the mutation passed (or could not apply) with a `{job_name}` whose self-test cannot read delivery-lines.json")
-    no_record = workflow_text.replace('            --control-record "$RUNNER_TEMP/control-record.json" \\\n', "", 1)
+    no_record = workflow_text.replace('          record=(--control-record "$RUNNER_TEMP/control-record.json")\n', "", 1)
     case("...and the guard catches an arm whose `select` reads no control record (MeshWeaver#8279)",
          no_record != workflow_text and any("without --control-record" in p for p in separation_problems(no_record)),
          "the mutation passed (or could not apply) with a `select` that cannot tell a declared hold from a frozen control")
@@ -2350,10 +2468,38 @@ def main() -> int:
          fi_every_line != workflow_text and any("DECLARING a first instance" in p for p in separation_problems(fi_every_line)),
          "the mutation passed (or could not apply)")
     fi_unconditioned = workflow_text.replace(
-        "if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'",
-        "if: steps.tags.outputs.announce == 'true'", 1)
+        "steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'",
+        "steps.tags.outputs.announce == 'true'", 1)
     case("...and the guard catches a first-instance handover NOT conditioned on its line and its record's repository",
          fi_unconditioned != workflow_text and any("`first_line`" in p for p in separation_problems(fi_unconditioned)),
+         "the mutation passed (or could not apply)")
+    # Policy `line-no-first-instance`: each detector on the declared absence must fail.
+    case("the shipped workflow handles a line that DECLARES no first instance (no `none` problem)",
+         not any("'none'" in p or "no first instance" in p for p in separation_problems(workflow_text)),
+         str([p for p in separation_problems(workflow_text) if "none" in p]))
+    nf_silent = workflow_text.replace("        if: env.FIRST == 'none'\n", "        if: env.FIRST == 'NEVER'\n", 1)
+    case("...and the guard catches `first-instance-first` that no longer SAYS it hands no instance anything",
+         nf_silent != workflow_text and any("SAYS, by name" in p for p in separation_problems(nf_silent)),
+         "the mutation passed (or could not apply)")
+    nf_tags = workflow_text.replace("        id: tags\n        if: env.FIRST != 'none'\n", "        id: tags\n", 1)
+    case("...and the guard catches a first-instance `tags` step that would tag a repository for a line with none",
+         nf_tags != workflow_text and any("`tags` step is not conditioned" in p for p in separation_problems(nf_tags)),
+         "the mutation passed (or could not apply)")
+    nf_hand = workflow_text.replace(
+        "        if: env.FIRST != 'none' && steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'",
+        "        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'", 1)
+    case("...and the guard catches a first-instance HANDOVER not conditioned on the declaration (only on an empty output)",
+         nf_hand != workflow_text and any("not conditioned on `env.FIRST != 'none'`" in p for p in separation_problems(nf_hand)),
+         "the mutation passed (or could not apply)")
+    nf_arm_record = workflow_text.replace(
+        "        id: record\n        if: needs.line.outputs.first_instance != 'none'\n", "        id: record\n", 1)
+    case("...and the guard catches `arm` reading a record for a line that declares no first instance",
+         nf_arm_record != workflow_text and any("`arm`'s `record` step" in p for p in separation_problems(nf_arm_record)),
+         "the mutation passed (or could not apply)")
+    nf_any_omission = workflow_text.replace('if [ "$FIRST_INSTANCE" = none ]; then record=(); fi',
+                                            'if [ -z "${FIRST_INSTANCE:-}" ]; then record=(); fi', 1)
+    case("...and the guard catches `select` dropping the record on an OMISSION instead of the declaration",
+         nf_any_omission != workflow_text and any("DECLARED" in p for p in separation_problems(nf_any_omission)),
          "the mutation passed (or could not apply)")
     fi_undelivered = workflow_text.replace("arm-promoted-set.py control-announcement --deployment", "arm-promoted-set.py control-REMOVED --deployment", 1)
     case("...and the guard catches `first-instance-first` tagging without handing the build over",
@@ -2511,6 +2657,10 @@ def main() -> int:
     print()
     print("── control webhook preflight guard ──")
     run_control_webhook_cases(root, case)
+
+    print()
+    print("── a line that DECLARES no first instance (policy `line-no-first-instance`) ──")
+    run_no_first_instance_cases(root, case)
 
     print()
     print(f"── steps `{IMAGE_VERSION_STEP_NAME}` (every image leg) ──")

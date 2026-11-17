@@ -211,7 +211,10 @@ outage, used to freeze fleet updates while every main-cd run stayed green with `
 armed (policy `control-first-never-silent`), and never on a line whose first instance's record
 EXCLUDES its major or names another repository: that is a declared hold, said as a warning and above
 this issue's table, never a frozen instance ([Platform and Module Deploy](../PlatformAndModuleDeploy), *A line held by control's
-declaration is not a frozen control*). The other stalls now have their own signal.
+declaration is not a frozen control*). A line that DECLARES no first instance (policy
+`line-no-first-instance`, [Major Lines Run Separately](../MajorLinesRunSeparately) §4d) is never
+frozen: no instance was handed a build, so its sets arm on the platform evidence alone, and its issue
+names that declaration above the table. The other stalls now have their own signal.
 
 - **What is read.** `arm-promoted-set.py select --unarmed-out` writes every promoted set still NEWER
   than the armed one after this run's selection. Each set carries its own verdict: `waiting`,
