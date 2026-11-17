@@ -240,7 +240,8 @@ public sealed class ComboGateBakesThenSeedsTest : IDisposable
         {
             if (args[0] == "image")
                 return new DockerImageGate.DockerResult(0,
-                    args.Contains("{{.Os}}/{{.Architecture}}") ? DockerImageGate.FleetPlatform : "sha256:x",
+                    args.Contains("{{.Os}}/{{.Architecture}}") ? DockerImageGate.FleetPlatform
+                    : args.Contains("{{json .Config.Env}}") ? "[\"PATH=/usr/bin\"]" : "sha256:x",
                     TimedOut: false);
             if (args[0] != "run")
                 throw new InvalidOperationException($"unexpected docker call: {string.Join(' ', args)}");
