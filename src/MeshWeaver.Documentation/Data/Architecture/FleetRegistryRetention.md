@@ -171,9 +171,12 @@ says `rule: derived-protected-set`, and it carries:
   nothing enforces. Every what-if so far — the newest is
   `Ops/Actions/fleet-registry-cleanup-whatif-20261117-7530` on the control instance — read 0 manifests
   and refused (R1). That proves the refusal, not the deletion.
-- **A dry run in flight never holds the cleanup back** (#7530). The lease admits only a request that
-  is not a dry run, and the cleanup's in-flight reading now skips a dry run by the same rule, so a
-  read-only `RegistryRetention` or `DeleteClusterManifest` dry run no longer refuses a what-if.
+- **A dry run in flight must not hold the cleanup back** (#7530). The lease admits only a request
+  that is not a dry run. The cleanup's in-flight reading did not apply the same rule, so the
+  2026-11-17 what-if was refused by a read-only `RegistryRetention` dry run and a
+  `DeleteClusterManifest` dry run. The fix is
+  [Plugins#5625](https://github.com/Systemorph/MeshWeaver.Plugins/pull/5625). Until it is merged
+  and deployed on the control instance, a what-if filed while any dry run is in flight still refuses.
 
 🚨 **Naming a cleanup does not switch off the search for a second one.** Before #7530 the gate
 checked a `derived-protected-set` rule's axes and then skipped the chart, the ACL and the deleter

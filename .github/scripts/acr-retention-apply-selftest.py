@@ -120,7 +120,12 @@ if key == ("acr", "task", "list-runs"):
                   key=lambda r: r["createTime"])
     if done:
         r = done[-1]
-        print(f"{r['runId']}\t{r['status']}\t{r['createTime']}")
+        # 🚨 ONE VALUE PER LINE, as the real CLI answers a multiselect LIST under `-o tsv`. This fake
+        # used to print the three on one tab-separated line, and the reader that `read`s one line was
+        # green here and blind on the control instance: control `Ops/Actions/registry-retention-dryrun-
+        # 20261117b-3438` (Memex run 44191272249) printed `newest completed run dt21 (, created )` and
+        # `run dt21 ended ''` — the run id on the first line, the status and time never read.
+        print(f"{r['runId']}\n{r['status']}\n{r['createTime']}")
     sys.exit(0)
 if key == ("acr", "task", "show"):
     q = opts.get("--query")
