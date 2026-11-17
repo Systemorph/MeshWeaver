@@ -253,6 +253,14 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
         (await NodeTypeAccessRuleGate.Evaluate(healthy!, update, "user").Timeout(Budget).Await(ct)).IsGranted
             .Should().BeFalse("the module's rule denies");
 
+        // Listings fail closed the same way (Doc/Architecture/AccessControl → "Rule read predicates"): a rule that
+        // cannot be produced denies every point read of its type, so its type is EXCLUSIVE — a grant never lists it.
+        set.ExclusiveReadNodeTypes().Should().NotContain(GovernedNodeType,
+            "control: the healthy rule does not declare INodeTypeExclusiveRead");
+        FailConstruction(RuleType, Constructions(RuleType) + 1);
+        set.ExclusiveReadNodeTypes().Should().Contain(GovernedNodeType,
+            "a rule that cannot be produced makes its type exclusive, or grant holders would list rows a point read refuses");
+
         FailConstruction(RuleType, Constructions(RuleType) + 1);
         var faulted = set.Find(GovernedNodeType, NodeOperation.Update);
         faulted.Should().NotBeNull("a rule that cannot be constructed is NOT absent — 'no rule' would fall back to the ordinary grant");
