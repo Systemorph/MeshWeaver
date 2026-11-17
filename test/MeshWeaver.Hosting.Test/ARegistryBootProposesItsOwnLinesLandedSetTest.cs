@@ -127,6 +127,14 @@ public class ARegistryBootProposesItsOwnLinesLandedSetTest(ITestOutputHelper out
     }
 }
 
+/// <summary>
+/// The stuck bootstrap for a process that DOES reconcile against a registry: its boot closes it BEFORE
+/// the reconcile, so a registry that cannot serve this line (or cannot be reached at all) no longer
+/// keeps the landed modules out of every set. Measured on the 3 → 4 roll: the plugin registry lists
+/// itself as its registry, so the "no registry" boot never ran there, and its line-4 replica sat on the
+/// empty set until its rollout was rolled back. The registry here is a closed port: the reconcile
+/// cannot read it, and the set is proposed anyway.
+/// </summary>
 public class ABootWithAnUnreachableRegistryStillProposesItsTreeTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
