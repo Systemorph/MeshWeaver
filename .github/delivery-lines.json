@@ -47,6 +47,17 @@
     "                 instance's OWN: never memex-portal-ai (its version tag IS the arming write, so an",
     "                 instance on it can only run a set after the fleet is offered it — MeshWeaver#8365),",
     "                 never memex-control, never memex-migration. `cd-line.py` refuses each by name.",
+    "  firstInstance: \"none\" — the line DECLARES that it has NO first instance (policy",
+    "                 `line-no-first-instance`): nothing runs its sets before the fleet is offered them.",
+    "                 `first-instance-first` hands no instance anything and says so by name, and `arm`",
+    "                 arms the line's newest promoted set on the PLATFORM evidence alone (promoted from a",
+    "                 green required check, its compatibility ladder green, the image-identity gate at",
+    "                 the arming write), printing the declaration and its reason in every sentence.",
+    "                 Requires `noFirstInstanceReason` (a sentence) and forbids an image repository. It is",
+    "                 never the reading of an OMITTED field: omitted still means the control instance,",
+    "                 which HOLDS a line whose major control's record excludes.",
+    "  noFirstInstanceReason — required with firstInstance \"none\", refused anywhere else: why the line",
+    "                 has no instance that could run its sets first.",
     "",
     "WHO DELIVERS EACH LINE",
     "  the default branch — workflow_run after Build-and-Test, the hourly schedule, dispatch.",
@@ -74,8 +85,8 @@
       "label": "main3",
       "buildHostChannel": "latest3",
       "movesLatest": false,
-      "firstInstance": "memex",
-      "firstInstanceImageRepository": "memex-portal-ai-first3"
+      "firstInstance": "none",
+      "noFirstInstanceReason": "every instance the platform team runs follows 4.x; the remaining 3.x instance is a customer portal its own admins update, so no instance runs a 3.x set before the fleet is offered it"
     }
   ]
 }
