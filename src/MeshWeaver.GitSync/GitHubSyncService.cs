@@ -1680,9 +1680,16 @@ public sealed class GitHubSyncService
 
     /// <summary>One-shot config read for actions (Sync / Re-import). The synced query's first
     /// emission already reflects a committed write (the GUI auto-saves the repo URL on edit, so by
-    /// Sync time the config is present).</summary>
+    /// Sync time the config is present).
+    ///
+    /// <para>🚨 Answers the config AS THIS INSTANCE SYNCS IT (<see cref="GitSyncLine.Effective"/>): its
+    /// branch is the one this instance's platform line reads, so every import, export, branch check and
+    /// pull request a caller starts from here reads that line's branch (policy
+    /// <c>major-lines-run-separately</c>). A config WRITE never starts from this —
+    /// <see cref="UpdateConfig"/> reads the stored node — so the stored branch is never rewritten.</para>
+    /// </summary>
     public IObservable<GitHubSyncConfig?> ReadConfig(string spacePath, string? sourceId = null)
-        => WatchConfig(spacePath, sourceId).Take(1);
+        => WatchConfig(spacePath, sourceId).Take(1).Select(c => GitSyncLine.Effective(hub.ServiceProvider, c));
 
     /// <summary>Persists the repository settings (preserving the recorded last-sync state).</summary>
     public IObservable<MeshNode> SaveConfig(
@@ -1718,7 +1725,9 @@ public sealed class GitHubSyncService
             return Observable.Throw<MeshNode>(policyRefusal.ToException());
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
-        return ReadConfig(spacePath, sourceId).SelectMany(current =>
+        // The STORED config, never ReadConfig's line-resolved one: a settings save must not persist
+        // the branch this instance's line happens to read in place of the one the source declares.
+        return WatchConfig(spacePath, sourceId).Take(1).SelectMany(current =>
             WriteConfig(spacePath, ctx, update(current ?? new GitHubSyncConfig()), sourceId));
     }
 
