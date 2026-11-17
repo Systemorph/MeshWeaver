@@ -223,7 +223,10 @@ host that should track the line sets `Continuous` + `3.0.0-ci*`). When `SelfUpda
 is SET — which is what a fleet deployment record's `updatePolicy` renders — the self-updater also
 converges an EXISTING record's `policy` and `pattern` to those values at every start (policy
 `self-update-record-authoritative`, [Why the Fleet Stopped Rolling Itself](../SelfUpdateFreeze));
-with it unset, an existing record is edited on the record, never by configuration.
+with it unset, an existing record is edited on the record, never by configuration. A deployment record
+whose `updatePolicy` is `InstanceAdmin` renders NEITHER key, under every renderer
+(`DeploymentPortalConfig.InstanceAdminUpdatePolicy`): the instance's own administrators own its policy
+and pattern in Settings → Updates (policy `customer-instance-governance`).
 
 > 🚨 **There is no rc line and there will be none** (maintainer, 2026-09-05; restated and settled
 > 2026-09-07). `3.0.0-rc1` … `3.0.0-rc13` were tagged and rebuilt on tagging, which made each
