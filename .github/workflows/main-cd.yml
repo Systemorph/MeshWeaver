@@ -2841,7 +2841,7 @@ jobs:
           # names the line, the declaration and its reason. A file that disagrees with `line` is RED.
           python3 .github/scripts/arm-promoted-set.py first-instance --branch "$DELIVERY_LINE" > "$RUNNER_TEMP/first.json"
           jq -e '.none == "true"' "$RUNNER_TEMP/first.json" >/dev/null \
-            || { echo "::error::line $DELIVERY_LINE's \`line` output says firstInstance 'none', but .github/delivery-lines.json does not declare it — refusing to skip a handover on one of two disagreeing readings"; exit 1; }
+            || { echo "::error::line $DELIVERY_LINE's cd-line.py derive output (job line) says firstInstance 'none', but .github/delivery-lines.json does not declare it — refusing to skip a handover on one of two disagreeing readings"; exit 1; }
           sentence=$(jq -er '.sentence' "$RUNNER_TEMP/first.json")
           echo "::notice title=first-instance-first: no instance handed ${V_PORTAL}::$sentence"
           echo "- NO instance handed \`$V_PORTAL\`: $sentence" >> "$GITHUB_STEP_SUMMARY"
@@ -2908,8 +2908,9 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       # The SAME decision control-first takes (`control_first`): tag unless already tagged, announce
       # unless a NEWER version is already on the repository. A repository with no tag yet (its first
-      # build) is an empty listing — never an error. Every later step reads this step's outputs, so a
-      # line that declares no first instance tags and announces nothing.
+      # build) is an empty listing — never an error. Every later step reads this step's outputs AND carries
+      # `env.FIRST != 'none'` itself, so a line that declares no first instance tags and announces
+      # nothing by declaration, not merely because an output happened to be empty.
       - name: Which tag does the first instance's repository get for this build?
         id: tags
         if: env.FIRST != 'none'
@@ -2928,15 +2929,15 @@ jobs:
           python3 .github/scripts/arm-promoted-set.py control-first \
             --control-manifests "$RUNNER_TEMP/first-manifests.json" --version "$V_PORTAL"
       - name: ACR login
-        if: steps.tags.outputs.action == 'tag'
+        if: env.FIRST != 'none' && steps.tags.outputs.action == 'tag'
         run: bash .github/scripts/acr-login.sh
       - name: Log in to the fleet registry (publisher)
-        if: steps.tags.outputs.action == 'tag'
+        if: env.FIRST != 'none' && steps.tags.outputs.action == 'tag'
         env:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: "Tag <first instance repository>:<version> — the fleet registry first, ACR's version tag LAST"
-        if: steps.tags.outputs.action == 'tag'
+        if: env.FIRST != 'none' && steps.tags.outputs.action == 'tag'
         run: |
           set -euo pipefail
           # The SOURCE is this run's PROMOTED portal (promote copied the same staging manifest to its
@@ -2945,25 +2946,25 @@ jobs:
           docker buildx imagetools create --tag "${{ env.ACR }}/$FIRST_IMAGE:$V_PORTAL" "${{ env.ACR }}/memex-portal-ai:$STAGING"
           echo "- $FIRST DEPLOYED FIRST: \`$FIRST_IMAGE:$V_PORTAL\` (ACR + ${{ env.REGISTRY }}) — the fleet is offered it once $FIRST runs it" >> "$GITHUB_STEP_SUMMARY"
       - name: Already tagged — say so
-        if: steps.tags.outputs.action == 'done'
+        if: env.FIRST != 'none' && steps.tags.outputs.action == 'done'
         run: echo "- $FIRST_IMAGE already carries \`$V_PORTAL\` — nothing to write" >> "$GITHUB_STEP_SUMMARY"
       # 🚨 LINES RUN SEPARATELY: only a build of the major the instance RUNS (its public /api/version),
       # as control-first asks of control. Unreadable is RED — never "announce anyway".
       - name: Is this build on the first instance's line?
         id: first_line
-        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true'
+        if: env.FIRST != 'none' && steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true'
         env:
           HOST: ${{ steps.first.outputs.host }}
         run: python3 .github/scripts/arm-promoted-set.py control-line --version "$V_PORTAL" --deployment "$FIRST" --instance-url "https://$HOST"
       - name: Not on the first instance's line — say so
-        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce != 'true'
+        if: env.FIRST != 'none' && steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce != 'true'
         env:
           WHY: ${{ steps.first_line.outputs.line_reason }}
         run: |
           echo "::notice title=first-instance-first: not announced::$WHY"
           echo "- $FIRST NOT handed \`$V_PORTAL\`: $WHY" >> "$GITHUB_STEP_SUMMARY"
       - name: "Hand the build to the first instance's roll lane (signed self-update-available)"
-        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'
+        if: env.FIRST != 'none' && steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'
         env:
           URL: ${{ vars.CONTROL_WEBHOOK_URL }}
           SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
