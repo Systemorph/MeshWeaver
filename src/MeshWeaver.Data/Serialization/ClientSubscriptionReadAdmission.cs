@@ -174,7 +174,11 @@ public static class RevisionAdmission
                 // decided while the previous one is still followed, and its first refusal is latched
                 // then, whatever the verdict says afterwards.
                 .Select((revision, index) => Prepare(revision, index, verdictOf, firstVerdictBudget, owned))
-                .Publish(prepared => Observable.Merge(
+                // MergeInline, never Rx's Merge(a, b): that one registers an AsyncLockScheduler under Rx's
+                // ONE process-wide SystemClock lock on every subscription — here once per followed read and
+                // once per revision, on the stream's sync/* hub (MeshWeaver#5799;
+                // Doc/Architecture/RxStartWithProcessWideLock).
+                .Publish(prepared => InlineRxOperators.MergeInline(
                     // Ordered admission: one revision at a time, each forwarded only once its own
                     // FIRST decision admits it AND no refusal has been latched for it (review of
                     // #7016, thread 4336840192). The latch is consulted first: a verdict that
@@ -182,7 +186,7 @@ public static class RevisionAdmission
                     // the time the revision gets here, and must be refused, never forwarded ahead of
                     // the follow branch that would have ended the sequence.
                     prepared
-                        .Select(item => item.Refused.Merge(item.First).Take(1)
+                        .Select(item => item.Refused.MergeInline(item.First).Take(1)
                             .SelectMany(decision => decision.Admitted
                                 ? Observable.Return(item)
                                 : Observable.Throw<Prepared<T>>(EndOf(decision))))

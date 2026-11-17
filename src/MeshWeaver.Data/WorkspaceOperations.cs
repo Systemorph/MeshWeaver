@@ -150,7 +150,10 @@ public static class WorkspaceOperations
         if (applied.Length == 0)
             return Observable.Return(new DataChangeReceipt(Finish(workspace.Hub, messages), []));
 
-        return applied.Merge()
+        // MergeInline, never Rx's sources.Merge(): that one registers an AsyncLockScheduler under Rx's ONE
+        // process-wide SystemClock lock on every subscription, and this runs inside the owner's
+        // DataChangeRequest turn — every write in the mesh (MeshWeaver#5799; Doc/Architecture/RxStartWithProcessWideLock).
+        return applied.MergeInline()
             .ToArray()
             .Select(results => new DataChangeReceipt(
                 Finish(workspace.Hub,
