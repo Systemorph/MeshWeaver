@@ -197,6 +197,34 @@ a satellite can republish) and the verifier itself. The publications are only kn
 module fetch, and the instance offers no read of its landed verdicts to this run's identity, so
 the reuse is not built.
 
+### The lane is red only when the CHECK broke, never for the verdict it landed (#4413)
+
+Under policy `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)) the
+combo verdict is **advisory**: the instance's own gate reads it at decision time, a Red is named
+among the roll's advisories, and the platform still rolls. The lane follows the same rule.
+
+- **A per-instance verify job is green when a verdict was produced and LANDED** on its instance,
+  whatever its kind. A Green, a Red and a NotVerifiable all end `land_verdict` with exit 0. The
+  kind is written to the job's step summary, and a Red or NotVerifiable is also raised as a
+  `::warning::` annotation naming the candidate. The verdict on the instance is the record that
+  matters; the job colour only says whether the check worked.
+- **A per-instance verify job is red when the check broke.** That covers no verdict produced (a
+  missing instrument, an assembly that could not run, a verifier that wrote nothing), a verdict
+  that did not land (HTTP 401 or any non-200, or a 200 that does not confirm `recorded`), and a
+  verdict kind the lane cannot classify.
+- **So the `verdict` job, and with it the `ci-combo-unverified` ledger, reds only on a broken
+  check.** A fleet whose rolls carry Red or NotVerifiable verdicts is the content's state, and the
+  content's state is not filed as a red main. A public slot's `combo-slot-N.json` and verdict are
+  uploaded whenever the job was not cancelled (`!cancelled()`), because the landed Red and
+  NotVerifiable slots are the ones a reader opens.
+
+Until #4413 a landed Red or NotVerifiable failed its job, so the ledger stayed open on the fleet's
+content state. Run `44149403398`, for example, landed a verdict on every one of its 7 instances
+and still filed an entry. `check-combo-verify.py` executes the real `land_verdict` with a
+stand-in `curl` in both directions: a landed Red or NotVerifiable is green and reported, and a
+refused, unconfirmed, unreachable or unclassifiable landing is red. Its `--self-test` restores the
+old Green-only rule and removes each landing check, and requires a scenario to fail each time.
+
 ### Why it is its own workflow, and why an instance's verify job is red until that instance is provisioned
 
 The lane holds **no credential for any instance** (#3848). Each verify job reaches its instance as
@@ -1044,6 +1072,41 @@ the module set beside it (`<work root>.modules`). On anything else it keeps both
 All of this is pinned by `ComboComposesTheModuleHalfTest`. Each refusal has a negative control:
 the test fails when its guard is disabled, and the argv test fails when `RunArgs` drops the
 `--module` entries.
+
+### The image's own boot modules are activated too (#4413)
+
+The landed modules are one half of what a portal activates. The other half is what the IMAGE
+asks for itself: the `Modules:Assemblies` list in its `appsettings.json`, layered with
+`appsettings.{Environment}.json` and its container environment. A control image, for example,
+adds `MeshWeaver.Fleet.Control.dll` (the Hosting NodeTypes, compiled at image-build time) with
+`Modules__Assemblies__100` in its environment.
+
+The tester builds its own `Modules:Assemblies` in memory, so before this fix nothing the image
+asked for was activated, although the module sat on disk in the gate host. A control instance's
+`Deployments` records are typed `Hosting/Deployment`, so every candidate offered to a customer
+estate's control instance read Red on one module: `Deployments` — `NodeType(s) not registered:
+Hosting/Deployment` (3.1.13396 through 3.1.13514; run `44149403398`, slot 4). The instance itself
+types those records on the same image line. The verdict blamed the content, but the cause was the
+instrument.
+
+What the gate does now (`ImageBootModules`, called from `DockerImageGate.Execute`):
+
+1. It reads the candidate's `Config.Env` with `docker image inspect` and the host's
+   `appsettings.json` / `appsettings.{Environment}.json` (the portal's own copies). It merges them
+   the way configuration merges an array: by index, later layers replacing an index and a far
+   index adding one.
+2. It resolves each entry against the gate host the way `MeshBuilder.ResolveModulePath` does
+   (`modules/<Name>/<entry>`, else the app root). An entry the combo also lands is taken from the
+   landed copy only, because landed wins in a running portal too. An entry the image does not carry
+   is named in the run log and not passed.
+3. It passes each resolved module as `--module /host/…` to both the bake and the gate, ahead of the
+   landed modules.
+
+An image environment that cannot be read is an instrument failure: no container runs and the
+verdict is `NotVerifiable`, never a gate that silently activates nothing. Only the module list is
+read from the image's configuration. Other image settings, such as `Mesh__ClosedTypeSet` on the
+control image, are not applied to the gate. Pinned by `ComboGateActivatesTheImagesBootModulesTest`,
+whose guard fails on the gate without this step.
 
 ## The combo bakes first, then gates the bake (#4413)
 
