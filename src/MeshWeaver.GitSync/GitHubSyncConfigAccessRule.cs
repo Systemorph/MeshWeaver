@@ -44,10 +44,19 @@ namespace MeshWeaver.GitSync;
 /// Consulted through <see cref="NodeTypeAccessRuleGate"/> by all three seams (RLS read filter,
 /// delivery gate, delete pre-flight), so they cannot answer differently (#3061).</para>
 /// </summary>
-public sealed class GitHubSyncConfigAccessRule(IMessageHub hub) : INodeTypeAccessRule
+public sealed class GitHubSyncConfigAccessRule(IMessageHub hub) : INodeTypeAccessRule, INodeTypeReadPredicates
 {
     /// <inheritdoc />
     public string NodeType => GitHubSyncService.ConfigNodeType;
+
+    /// <summary>
+    /// The rows the platform-admin leg of <see cref="HasAccess"/> opens to Read, as data a QUERY applies
+    /// (Doc/Architecture/AccessControl → "Rule read predicates"): every sync config, for a global admin.
+    /// No path prefix, so it opens no partition to a fan-out by itself; it applies in the partitions a
+    /// query reads.
+    /// </summary>
+    public IReadOnlyList<RuleReadPredicate> ReadPredicates =>
+        [new() { NodeType = GitHubSyncService.ConfigNodeType, Subject = RuleReadSubject.GlobalAdmin }];
 
     /// <summary>
     /// Read and Delete only. Create and Update deliberately stay on the standard check: this rule
