@@ -30,6 +30,8 @@ index push leaves behind), and one digest carrying `aaf95af`, `main` and `3.0.0-
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -1863,9 +1865,18 @@ def separation_problems(workflow_text: str) -> list[str]:
         sparse = str((checkout.get("with") or {}).get("sparse-checkout", ""))
         if sparse and ".github/control-instance.json" not in sparse:
             problems.append("`arm`'s sparse checkout omits `.github/control-instance.json` — `select` cannot name control and refuses every arming")
+        # MeshWeaver#8279: `select` tells a line HELD by control's declared updatePattern from a frozen
+        # control only with control's record; without it every run refuses (and, before, a held v4
+        # line read as FROZEN and turned CD red every hour).
+        arm_runs = [str(s.get("run", "")) for s in arm.get("steps") or []]
+        select_run = next((r for r in arm_runs if "arm-promoted-set.py select" in r), "")
+        if "--control-record" not in select_run:
+            problems.append("`arm` runs `select` without --control-record — a line held by control's declared updatePattern would read as a frozen control")
+        if not any("control-record.json" in r and "gh api" in r for r in arm_runs):
+            problems.append("`arm` never reads control's record into control-record.json — `select --control-record` has nothing to read")
     # `arm-promoted-set.py` (its self-test AND its line lookup) reads `.github/delivery-lines.json`;
     # a sparse checkout without it refused every CD run on main3 (13233..13266) before arming.
-    for job_name in ("arm", "control-first"):
+    for job_name in ("arm", "control-first", "first-instance-first"):
         job = jobs.get(job_name) or {}
         checkout = next((s for s in job.get("steps") or [] if str(s.get("uses", "")).startswith("actions/checkout")), {})
         sparse = str((checkout.get("with") or {}).get("sparse-checkout", ""))
@@ -1905,6 +1916,46 @@ def separation_problems(workflow_text: str) -> list[str]:
         if hand and not all("steps.control_line.outputs.line_announce == 'true'" in str(st.get("if", "")) for st in hand):
             problems.append("`control-first`'s handover is not conditioned on `steps.control_line.outputs.line_announce == 'true'` "
                             "— a build of another major would be announced to control")
+    # 9. 🚨 THE LINE'S FIRST INSTANCE (policy `line-first-instance`, MeshWeaver#8365): a line that
+    #    declares its own first instance is handed each PROMOTED set by `first-instance-first` — on that
+    #    instance's OWN repository, before arming — or `arm` waits on an instance nothing ever hands a
+    #    build (an instance on the fleet's repository can only roll to what `arm` already armed).
+    fi = jobs.get("first-instance-first")
+    if fi is None:
+        problems.append("`first-instance-first` is missing — a line's declared first instance is never handed its build, "
+                        "so `arm` waits on it for ever")
+    else:
+        needs = fi.get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        cond = " ".join(str(fi.get("if", "")).split())
+        if "arm" in needs or "notify-platform-update" in needs:
+            problems.append("`first-instance-first` waits for the fleet's arming — the first instance must run the set FIRST")
+        if "promote" not in needs or "needs.promote.result == 'success'" not in cond:
+            problems.append("`first-instance-first` does not follow a SUCCESSFUL `promote` — it would tag a set never promoted")
+        if "needs.line.outputs.first_instance != ''" not in cond:
+            problems.append("`first-instance-first` is not conditioned on the line DECLARING a first instance — it would "
+                            "also hand control's line a second, competing handover")
+        steps = fi.get("steps") or []
+        hand = [st for st in steps if "arm-promoted-set.py control-announcement --deployment" in str(st.get("run", ""))]
+        if not hand:
+            problems.append("`first-instance-first` never hands the build to the first instance's record "
+                            "(no `control-announcement --deployment` step)")
+        else:
+            if not all("vars.CONTROL_WEBHOOK_URL" in json.dumps(st.get("env") or {})
+                       and "secrets.CONTROL_WEBHOOK_SECRET" in json.dumps(st.get("env") or {})
+                       and "post-self-update-announcement.sh" in str(st.get("run", "")) for st in hand):
+                problems.append("`first-instance-first`'s handover is not the ONE signed delivery "
+                                "(post-self-update-announcement.sh with vars.CONTROL_WEBHOOK_URL + secrets.CONTROL_WEBHOOK_SECRET)")
+            if not all("steps.first_line.outputs.line_announce == 'true'" in str(st.get("if", ""))
+                       and "steps.first.outputs.follows == 'true'" in str(st.get("if", "")) for st in hand):
+                problems.append("`first-instance-first`'s handover is not conditioned on the instance's line "
+                                "(`first_line`) AND its record following the repository (`follows`)")
+        if "memex-portal-ai:$STAGING" not in json.dumps(steps):
+            problems.append("`first-instance-first` does not tag from the PROMOTED portal's staging image")
+    if cf is not None and not any("post-self-update-announcement.sh" in str(st.get("run", ""))
+                                  for st in cf.get("steps") or []):
+        problems.append("`control-first` no longer delivers through post-self-update-announcement.sh — the two "
+                        "handovers would disagree about what a 200 proves")
     for name in ("published-modules", "platform-ladder-compat"):
         job = jobs.get(name)
         if job is None:
@@ -2223,6 +2274,10 @@ def main() -> int:
         case(f"...and the guard catches `{job_name}` checking out no delivery lines",
              no_lines != workflow_text and any(f"`{job_name}`'s sparse checkout omits `.github/delivery-lines.json`" in p for p in separation_problems(no_lines)),
              f"the mutation passed (or could not apply) with a `{job_name}` whose self-test cannot read delivery-lines.json")
+    no_record = workflow_text.replace('            --control-record "$RUNNER_TEMP/control-record.json" \\\n', "", 1)
+    case("...and the guard catches an arm whose `select` reads no control record (MeshWeaver#8279)",
+         no_record != workflow_text and any("without --control-record" in p for p in separation_problems(no_record)),
+         "the mutation passed (or could not apply) with a `select` that cannot tell a declared hold from a frozen control")
     alarm = (root / ".github/workflows/control-always-latest.yml").read_text()
     alarm_checkout = alarm.split("\n  platform:", 1)[-1].split("steps:", 1)[-1].split("- name:", 1)[0]
     case("the control-always-latest alarm checks out the control declaration it reads",
@@ -2280,6 +2335,46 @@ def main() -> int:
     case("...and the guard catches control-first with no control_line decision at all",
          no_line_step != workflow_text and any("no `control_line` step" in p for p in separation_problems(no_line_step)),
          "the mutation passed (or could not apply) with no control-line step")
+    # MeshWeaver#8365 (policy `line-first-instance`): every detector on `first-instance-first` must fail.
+    fi_gone = workflow_text.replace("  first-instance-first:\n", "  first-instance-REMOVED:\n", 1)
+    case("...and the guard catches a workflow with no `first-instance-first` (a declared first instance never handed a build)",
+         fi_gone != workflow_text and any("`first-instance-first` is missing" in p for p in separation_problems(fi_gone)),
+         "the mutation passed (or could not apply)")
+    fi_after_arm = workflow_text.replace("    needs: [preflight, line, gate, portal-image, promote]\n",
+                                         "    needs: [preflight, line, gate, portal-image, promote, arm]\n", 1)
+    case("...and the guard catches the first instance waiting for the fleet's arming (the #8365 circular wait)",
+         fi_after_arm != workflow_text and any("first instance must run the set FIRST" in p for p in separation_problems(fi_after_arm)),
+         "the mutation passed (or could not apply)")
+    fi_every_line = workflow_text.replace(" && needs.line.outputs.first_instance != ''", "", 1)
+    case("...and the guard catches `first-instance-first` running on a line that declares none (control's)",
+         fi_every_line != workflow_text and any("DECLARING a first instance" in p for p in separation_problems(fi_every_line)),
+         "the mutation passed (or could not apply)")
+    fi_unconditioned = workflow_text.replace(
+        "if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'",
+        "if: steps.tags.outputs.announce == 'true'", 1)
+    case("...and the guard catches a first-instance handover NOT conditioned on its line and its record's repository",
+         fi_unconditioned != workflow_text and any("`first_line`" in p for p in separation_problems(fi_unconditioned)),
+         "the mutation passed (or could not apply)")
+    fi_undelivered = workflow_text.replace("arm-promoted-set.py control-announcement --deployment", "arm-promoted-set.py control-REMOVED --deployment", 1)
+    case("...and the guard catches `first-instance-first` tagging without handing the build over",
+         fi_undelivered != workflow_text and any("never hands the build to the first instance" in p for p in separation_problems(fi_undelivered)),
+         "the mutation passed (or could not apply)")
+    # The one signed delivery keys its HMAC from the ENVIRONMENT: a secret on an argv is readable by
+    # every process on the runner (review on MeshWeaver#8372). Executed, not grepped: the script's
+    # own signing line must sign exactly as `openssl -hmac` would, with the secret in no argv.
+    announce = (root / ".github/scripts/post-self-update-announcement.sh").read_text()
+    sig_line = next((ln.strip() for ln in announce.splitlines() if ln.strip().startswith("SIG=")), "")
+    case("post-self-update-announcement.sh puts the HMAC secret on no command line",
+         sig_line != "" and "-hmac" not in "\n".join(ln for ln in announce.splitlines() if not ln.lstrip().startswith("#")),
+         sig_line or "no SIG= line")
+    with tempfile.TemporaryDirectory() as sig_tmp:
+        sig_body, sig_secret = '{"event":"self-update-available","deployment":"memex"}', "s3cr3t"
+        proc = subprocess.run(["bash", "-c", f"set -euo pipefail\n{sig_line}\nprintf '%s' \"$SIG\""],
+                              capture_output=True, text=True, cwd=sig_tmp,
+                              env={**os.environ, "BODY": sig_body, "SECRET": sig_secret})
+        want = "sha256=" + hmac.new(sig_secret.encode(), sig_body.encode(), hashlib.sha256).hexdigest()
+        case("...and that line signs exactly the X-Hub-Signature-256 the inbox verifies",
+             proc.returncode == 0 and proc.stdout == want, f"rc={proc.returncode} got={proc.stdout!r} want={want!r} {proc.stderr}")
     case("...and the shipped control-first hands the build over (no handover problem on main-cd.yml)",
          not any("hands the build" in p or "handover" in p for p in separation_problems(workflow_text)),
          str(separation_problems(workflow_text)))
