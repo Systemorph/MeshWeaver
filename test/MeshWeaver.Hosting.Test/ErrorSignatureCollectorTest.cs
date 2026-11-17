@@ -32,9 +32,13 @@ public class ErrorSignatureCollectorTest
     {
         var (collector, logger) = Tap();
 
-        logger.LogError("Failed to reach {Url} for order {OrderId}", "https://acme.example/a?sig=secret1", 4711);
-        logger.LogError("Failed to reach {Url} for order {OrderId}", "https://acme.example/b?sig=secret2", 4712);
-        logger.LogWarning("Failed to reach {Url} for order {OrderId}", "https://acme.example/c", 4713);
+        // Every logged value is a marker that cannot occur in any field the signature carries by
+        // itself: no digits (the wire carries timestamps, a count and an event id) and letters outside
+        // hex (the signature is a hex hash). A numeric marker such as 4711 matched a firstSeen of
+        // "…02.4711…" and failed the test with nothing leaking.
+        logger.LogError("Failed to reach {Url} for order {OrderId}", "https://acme.example/a?sig=secretQX", "order-QXZW");
+        logger.LogError("Failed to reach {Url} for order {OrderId}", "https://acme.example/b?sig=secretQY", "order-QYZW");
+        logger.LogWarning("Failed to reach {Url} for order {OrderId}", "https://acme.example/c", "order-QZZW");
 
         var pending = collector.Pending();
         pending.Should().HaveCount(1, "two Error records of one template fold; the Warning is not collected");
@@ -44,7 +48,8 @@ public class ErrorSignatureCollectorTest
         signature.Category.Should().Be("MeshWeaver.Sample.Worker");
         signature.Level.Should().Be("Error");
         var wire = JsonSerializer.Serialize(signature, ErrorDigestPayloads.Json);
-        wire.Should().NotContain("acme.example").And.NotContain("secret1").And.NotContain("4711",
+        wire.Should().NotContain("acme.example").And.NotContain("secretQX").And.NotContain("secretQY")
+            .And.NotContain("QXZW").And.NotContain("QYZW",
             "a digest carries the template, never the values the line was formatted with");
     }
 
