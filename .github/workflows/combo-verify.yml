@@ -435,8 +435,10 @@ jobs:
       # uploads nothing, so the condition fails CLOSED. This is not an input-shaped `if:` on a
       # gate — it withholds a diagnostic, and the job's verdict is decided before it. For a private
       # row the lander prints the verdict and counts only; the full verdict is on the instance.
-      - name: Keep the work root of a failed verification
-        if: failure() && env.INSTANCE_PRIVATE == 'false'
+      # 🚨 `!cancelled()`, not `failure()` (#4413): a landed Red or NotVerifiable leaves this job
+      # GREEN (the verdict is advisory), and those are exactly the slots whose verdict a reader wants.
+      - name: Keep the combo and verdict of a public slot
+        if: ${{ !cancelled() && env.INSTANCE_PRIVATE == 'false' }}
         uses: actions/upload-artifact@v7
         with:
           name: combo-work-slot-${{ matrix.slot }}
@@ -568,7 +570,7 @@ jobs:
             exit 1
           fi
           if [ "$VERIFY" != "success" ]; then
-            echo "::error::combo verification did not succeed for every instance (result: $VERIFY; $PASSED of $STARTED per-instance job(s) succeeded). A candidate a live instance cannot take is not delivered; read the per-instance jobs for the module that failed."
+            echo "::error::the combo CHECK is broken for at least one instance (result: $VERIFY; $PASSED of $STARTED per-instance job(s) produced and landed a verdict). A per-instance job is red only when no verdict was produced or it did not land on its instance — a Red or NotVerifiable verdict that landed is green there and reported as a warning (advisory, policy platform-rolls-independently-of-packages). Read the red per-instance job for what stopped it."
             exit 1
           fi
           # 🚨 THE LAST BACKSTOP, AND IT SURVIVED THE MOVE TO A DERIVED ROSTER ON PURPOSE (#3848).
@@ -587,7 +589,7 @@ jobs:
             exit 1
           fi
           echo "verified=true" >>"$GITHUB_OUTPUT"
-          echo "Every derived instance ($PASSED of $COUNT) has a landed combo verdict for its roll target."
+          echo "Every derived instance ($PASSED of $COUNT) has a landed combo verdict for its roll target. Its KIND (Green / Red / NotVerifiable) is in each per-instance job's summary and warnings: the verdict is advisory (policy platform-rolls-independently-of-packages), so a Red is reported on the roll, never filed as a red main."
 
   # ── The audience (#4395) ────────────────────────────────────────────────────────────────────────
   #

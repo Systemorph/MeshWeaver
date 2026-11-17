@@ -254,13 +254,21 @@ note "landed: $(body_of 200 "$landed")"
   fi
 } >>"$summary"
 
-# 🚨 Exit AFTER landing, and Green is the ONLY pass. A Red says this candidate cannot serve the
-# modules this instance runs — delivery promoted something a live instance must refuse. A
-# NotVerifiable says nothing was checked at all, which is the one outcome a gate must never paint
-# green: it is "the gate never ran" wearing the colour of "the gate passed".
-[ "$KIND" = "Green" ] \
-  || fail "verdict is $KIND for $CANDIDATE. It IS landed on $where, so the instance's own gate will act on it; this run is red because a candidate a live instance cannot take has not been delivered."
-note "GREEN"
+# 🚨 THIS JOB IS GREEN WHEN THE VERDICT WAS PRODUCED AND LANDED — whatever its kind (#4413).
+# Under policy `platform-rolls-independently-of-packages` the combo verdict is ADVISORY: the
+# instance's own gate reads it at decision time, a Red is NAMED on the roll, and the platform still
+# rolls. So a Red or a NotVerifiable is a REPORT about the candidate, not a broken check, and a red
+# job here would file the fleet's content state as a red main. What stays red is everything that
+# stopped a verdict from being produced or landed — every `fail` above, and the 401/non-200/
+# not-recorded checks of the landing itself. The kind is in the step summary (written above) and as
+# a warning annotation on the run, so it is reported, never swallowed.
+case "$KIND" in
+  Green) note "GREEN — verdict landed" ;;
+  Red|NotVerifiable)
+    echo "::warning::[$shown] verdict is $KIND for $CANDIDATE, LANDED on $where — the instance's own gate names it on the roll (advisory, policy platform-rolls-independently-of-packages). This job is green because the check produced and landed a verdict; read the verdict, not the job colour, for the candidate's state." ;;
+  *) fail "the verifier wrote an unknown verdict kind '$KIND' for $CANDIDATE — it was landed, but a verdict this lane cannot classify is a broken check." ;;
+esac
+exit 0
 }
 
 # ── 2b. DECIDE BEFORE PAYING (saving R2 of Doc/Architecture/CiProfile2026-11) ────────────────
@@ -320,7 +328,7 @@ case "$assemble_exit" in
     fi
     note "verdict=$KIND for $CANDIDATE, DECIDED BEFORE THE GATE: the combo does not assemble into a root the gate can run over (the module entries name each reason), so no candidate image was pulled."
     land_verdict
-    exit 1  # land_verdict exits on its own; this line is unreachable unless it stops doing so
+    fail "land_verdict returned instead of ending the slot — nothing after it may run"  # unreachable unless it stops exiting
     ;;
   *)
     fail "the up-front assembly could not run (exit $assemble_exit) — nothing was verified and nothing is landed. Its output is above (or in its withheld log for a private row)."
