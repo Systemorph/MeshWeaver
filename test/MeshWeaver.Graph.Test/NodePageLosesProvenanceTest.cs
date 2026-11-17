@@ -146,8 +146,11 @@ public class ABareWithViewLosesProvenanceTest(ITestOutputHelper output)
 /// <summary>
 /// The default, on the identical page. <c>WithNodePage</c> with no stated opinion used to compose the
 /// provenance line above the page; since 2026-10-26 the portal shell carries it as the breadcrumb's
-/// current-crumb tooltip on every page, so the framework composes NOTHING and the page renders as
-/// it is. The verdict is still recorded, so "nobody decided" stays unrepresentable.
+/// current-crumb tooltip on every page, so the framework composes NO strip. What it DOES compose is
+/// the node's actions row (<see cref="NodePageMenu"/>): the root is a stack of the
+/// <see cref="MeshNodeLayoutAreas.NodePageMenuArea"/> and <see cref="MeshNodeLayoutAreas.NodePageBodyArea"/>
+/// sub-areas, and the page renders unchanged inside the body sub-area. The verdict is still recorded,
+/// so "nobody decided" stays unrepresentable.
 /// </summary>
 public class WithNodePageLeavesProvenanceToTheShellTest(ITestOutputHelper output)
     : NodePageProvenanceExperimentBase(output)
@@ -164,10 +167,19 @@ public class WithNodePageLeavesProvenanceToTheShellTest(ITestOutputHelper output
     {
         var root = await LandingPageRoot();
 
-        // The page's own body is a direct child of the landing area's root — nothing wrapped it.
-        Assert.Contains(root.Areas, IsPageBody);
+        // The root carries the composed actions row and the page's sub-area — and no strip.
+        Assert.Contains(root.Areas, a => EndsWith(a, MeshNodeLayoutAreas.NodePageMenuArea));
+        var bodyArea = Assert.Single(root.Areas, a => EndsWith(a, MeshNodeLayoutAreas.NodePageBodyArea));
         Assert.DoesNotContain(root.Areas, IsProvenanceStrip);
+
+        // The page itself is unchanged inside its sub-area: its own body is there, no strip beside it.
+        var page = await Child(bodyArea);
+        Assert.Contains(page.Areas, IsPageBody);
+        Assert.DoesNotContain(page.Areas, IsProvenanceStrip);
     }
+
+    private static bool EndsWith(NamedAreaControl area, string id) =>
+        area.Area is string key && key.EndsWith('/' + id, StringComparison.Ordinal);
 }
 
 /// <summary>
