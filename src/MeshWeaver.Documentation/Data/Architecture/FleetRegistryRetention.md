@@ -158,11 +158,22 @@ says `rule: derived-protected-set`, and it carries:
   does not render yet is printed, not red, and it accepts nothing until it is rendered. Otherwise
   the record would block the chart repository's pull request that adds the Job.
 - **`cleanupAuthorized: false`, with `authorizationBlockedBy`** naming what it waits for. That list is:
-  the Plugins half of blob GC, which drives the window from the lease-holding run (Plugins#4370 slice 3); migration Jobs outside instance actions (slice 4); tag writers outside
-  instance actions, which do not respect the lease; the publisher credential on the control instance;
-  and the owner's approval of a first deleting run against a complete what-if. The one what-if so far,
-  `Ops/Actions/fleet-registry-cleanup-whatif-20261101-7530` on the control instance, read 0 manifests
+  tag writers outside instance actions (the promotion retag, the CD pointer moves and the mirror
+  push), which do not respect the lease — making publish and seal mutually exclusive with it needs a
+  mechanism the owner has not chosen yet; CD's push steps, which do not yet wait out the read-only
+  window's refusal; the publisher credential on the control instance; and the owner's approval of a
+  first deleting run against a complete what-if. The Plugins half of blob GC is no longer on it: the
+  lease-holding run drives the read-only window
+  ([Plugins#5299](https://github.com/Systemorph/MeshWeaver.Plugins/pull/5299),
+  [#5400](https://github.com/Systemorph/MeshWeaver.Plugins/pull/5400)) through the approved aks-ops
+  lane ([Memex#1031](https://github.com/Systemorph/Memex/pull/1031)). Nor are migration Jobs outside
+  instance actions: they were closed by a written break-glass rule (Plugins#4370 decision 2A), which
+  nothing enforces. Every what-if so far — the newest is
+  `Ops/Actions/fleet-registry-cleanup-whatif-20261117-7530` on the control instance — read 0 manifests
   and refused (R1). That proves the refusal, not the deletion.
+- **A dry run in flight never holds the cleanup back** (#7530). The lease admits only a request that
+  is not a dry run, and the cleanup's in-flight reading now skips a dry run by the same rule, so a
+  read-only `RegistryRetention` or `DeleteClusterManifest` dry run no longer refuses a what-if.
 
 🚨 **Naming a cleanup does not switch off the search for a second one.** Before #7530 the gate
 checked a `derived-protected-set` rule's axes and then skipped the chart, the ACL and the deleter
