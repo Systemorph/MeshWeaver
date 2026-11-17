@@ -65,7 +65,9 @@ public record DeploymentContent
     [Description("Image pull Secret name in the instance namespace — required when the image registry is not ACR")]
     public string? ImagePullSecret { get; init; }
 
-    /// <summary>The PLATFORM image self-update policy: Continuous (default), Stable, or None. Governs the image roll only.</summary>
+    /// <summary>The PLATFORM image self-update policy: Continuous (default), Stable, or None — or
+    /// <c>InstanceAdmin</c> (<see cref="DeploymentPortalConfig.InstanceAdminUpdatePolicy"/>), which hands
+    /// the policy to the instance's own administrators and renders nothing. Governs the image roll only.</summary>
     public string? UpdatePolicy { get; init; }
 
     /// <summary>

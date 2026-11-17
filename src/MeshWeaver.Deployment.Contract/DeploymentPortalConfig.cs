@@ -1242,8 +1242,13 @@ public static class DeploymentPortalConfig
         // reached the ConfigMap would abort the host in the configuration binder, on the new
         // ReplicaSet, while the old pods keep serving — the #2210 shape. So the renderer refuses
         // anything but the three names, and emits them in their canonical casing.
-        Set("SelfUpdate__DefaultPolicy", UpdatePolicyName(d.UpdatePolicy));
-        Set("SelfUpdate__DefaultPattern", string.IsNullOrWhiteSpace(d.UpdatePattern) ? null : d.UpdatePattern!.Trim());
+        // 🚨 …unless the record hands the policy to the instance's own administrators
+        // (InstanceAdminUpdatePolicy): then NEITHER key renders, the node is seeded once and stays as
+        // they set it in Settings → Updates. The pattern is withheld too — a rendered pattern would
+        // still seed a fresh node and is what the instance's registry line (PlatformLine) reads first.
+        var adminOwned = IsInstanceAdminUpdatePolicy(d.UpdatePolicy);
+        Set("SelfUpdate__DefaultPolicy", adminOwned ? null : UpdatePolicyName(d.UpdatePolicy));
+        Set("SelfUpdate__DefaultPattern", adminOwned || string.IsNullOrWhiteSpace(d.UpdatePattern) ? null : d.UpdatePattern!.Trim());
         // The repositories the self-updater LISTS and rolls to are the ones the record's pods pull
         // (Systemorph/MeshWeaver.Plugins#2994): the image's default (memex-portal-ai /
         // memex-migration) is right for most of the fleet and wrong for every instance on another
@@ -1506,6 +1511,20 @@ public static class DeploymentPortalConfig
 
     /// <summary>The platform self-update policies the portal binds (<c>UpdatePolicyKind</c>), in the casing the binder reads.</summary>
     public static readonly IReadOnlyList<string> UpdatePolicyNames = ["Continuous", "Stable", "None"];
+
+    /// <summary>
+    /// The record <see cref="DeploymentContent.UpdatePolicy"/> that hands the instance's platform update
+    /// policy to its OWN administrators (policy <c>customer-instance-governance</c>). It is a record
+    /// value, never a pod value: the renderer emits neither <c>SelfUpdate__DefaultPolicy</c> nor
+    /// <c>SelfUpdate__DefaultPattern</c> for it, so <c>Admin/UpdatePolicy</c> is seeded once and never
+    /// converged (policy <c>self-update-record-authoritative</c> applies only to a declared policy).
+    /// </summary>
+    public const string InstanceAdminUpdatePolicy = "InstanceAdmin";
+
+    /// <summary>Whether <paramref name="policy"/> is <see cref="InstanceAdminUpdatePolicy"/> — trimmed, case-insensitive. Pure.</summary>
+    /// <param name="policy">A record's <see cref="DeploymentContent.UpdatePolicy"/>.</param>
+    public static bool IsInstanceAdminUpdatePolicy(string? policy) =>
+        string.Equals((policy ?? "").Trim(), InstanceAdminUpdatePolicy, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The canonical spelling of a record's <see cref="DeploymentContent.UpdatePolicy"/>, or

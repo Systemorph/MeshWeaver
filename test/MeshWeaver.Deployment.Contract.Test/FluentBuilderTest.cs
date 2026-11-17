@@ -617,6 +617,34 @@ public class FluentBuilderTest
     }
 
     /// <summary>
+    /// 🚨 <c>updatePolicy: InstanceAdmin</c> hands the policy to the instance's own administrators:
+    /// BOTH renderers (Helm and Aspire — the one derivation every caller passes through) emit neither
+    /// self-update key, even with a pattern stated, and never refuse the value. CONTROL: a declared
+    /// policy still renders both keys under both options.
+    /// </summary>
+    [Fact]
+    public void InstanceAdminPolicy_RendersNoSelfUpdateKey_InEveryRenderer()
+    {
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080"), PortalConfigOptions.Aspire(mcpBaseUrl: null) })
+        {
+            foreach (var spelling in new[] { DeploymentPortalConfig.InstanceAdminUpdatePolicy, " instanceadmin " })
+            {
+                var config = DeploymentPortalConfig.PortalConfig(
+                    new DeploymentContent().WithUpdatePolicy(spelling).WithUpdatePattern("4.*"), options);
+                Assert.False(config.ContainsKey("SelfUpdate__DefaultPolicy"), $"'{spelling}' renders no policy key");
+                Assert.False(config.ContainsKey("SelfUpdate__DefaultPattern"), $"'{spelling}' renders no pattern key either");
+            }
+            var declared = DeploymentPortalConfig.PortalConfig(
+                new DeploymentContent().WithUpdatePolicy("Continuous").WithUpdatePattern("4.*"), options);
+            Assert.Equal("Continuous", declared["SelfUpdate__DefaultPolicy"]);
+            Assert.Equal("4.*", declared["SelfUpdate__DefaultPattern"]);
+        }
+        Assert.True(DeploymentPortalConfig.IsInstanceAdminUpdatePolicy(" INSTANCEADMIN "));
+        Assert.False(DeploymentPortalConfig.IsInstanceAdminUpdatePolicy("Continuous"));
+        Assert.False(DeploymentPortalConfig.IsInstanceAdminUpdatePolicy(null));
+    }
+
+    /// <summary>
     /// 🚂 /next is served from the portal image when no image is stated (policy
     /// <c>portal-next-in-platform-image</c>), so a record pinned to an override image must be able to
     /// move to that bundled shape: an EMPTY image clears the override (its replicas and origin with it),
