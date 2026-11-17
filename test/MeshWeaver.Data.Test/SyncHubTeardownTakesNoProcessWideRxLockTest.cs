@@ -50,11 +50,12 @@ public class SyncHubTeardownTakesNoProcessWideRxLockTest(ITestOutputHelper outpu
     /// <summary>The lock <c>SystemClock.Register</c> takes: its static set of registered schedulers.</summary>
     private static object SystemClockRegistrationLock()
     {
-        var systemClock = typeof(Observable).Assembly.GetType("System.Reactive.PlatformServices.SystemClock", throwOnError: true)!;
-        var set = systemClock.GetField("SystemClockChanged", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
-            ?.GetValue(null);
-        set.Should().NotBeNull("System.Reactive's SystemClock keeps its registrations in a static SystemClockChanged set");
-        return set!;
+        var systemClock = typeof(Observable).Assembly.GetType("System.Reactive.PlatformServices.SystemClock", throwOnError: true)
+            ?? throw new InvalidOperationException("System.Reactive no longer has a SystemClock type");
+        return systemClock.GetField("SystemClockChanged", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
+                   ?.GetValue(null)
+               ?? throw new InvalidOperationException(
+                   "System.Reactive's SystemClock no longer keeps its registrations in a static SystemClockChanged set, so this test cannot hold its lock");
     }
 
     private static int LiveSyncHubs(IMessageHub hub) =>
@@ -197,24 +198,91 @@ public class SyncHubTeardownTakesNoProcessWideRxLockTest(ITestOutputHelper outpu
             var revisions = new System.Reactive.Subjects.Subject<int>();
             var admitted = revisions.AdmitEachRevision(_ => Observable.Return(true), Budget,
                 () => new UnauthorizedAccessException("refused")).Replay();
-            var subscribed = 0;
+            // The producer thread hands the connection over and ends; the test owns it from then on and
+            // disposes it in the finally, so nothing keeps running after the test returns.
+            IDisposable? connection = null;
             var delivered = 0;
             new Thread(() =>
             {
-                using var connection = admitted.Connect();
-                Volatile.Write(ref subscribed, 1);
+                Volatile.Write(ref connection, admitted.Connect());
                 revisions.OnNext(1);
                 revisions.OnNext(2);
                 Volatile.Write(ref delivered, 1);
-                SpinWait.SpinUntil(() => false, Budget);
             }) { IsBackground = true, Name = "revision-producer" }.Start();
-            SpinWait.SpinUntil(() => Volatile.Read(ref subscribed) == 1, Budget).Should().BeTrue(
-                "subscribing a read admission must not wait for Rx's process-wide SystemClock lock");
-            SpinWait.SpinUntil(() => Volatile.Read(ref delivered) == 1, Budget).Should().BeTrue(
-                "delivering revisions into a read admission must not wait for Rx's process-wide SystemClock lock");
-            await admitted.Where(revision => revision == 2).Should().Within(Budget)
-                .Emit("an admitted revision must be forwarded without Rx's process-wide SystemClock lock",
-                    cancellationToken: TestContext.Current.CancellationToken);
+            try
+            {
+                SpinWait.SpinUntil(() => Volatile.Read(ref connection) is not null, Budget).Should().BeTrue(
+                    "subscribing a read admission must not wait for Rx's process-wide SystemClock lock");
+                SpinWait.SpinUntil(() => Volatile.Read(ref delivered) == 1, Budget).Should().BeTrue(
+                    "delivering revisions into a read admission must not wait for Rx's process-wide SystemClock lock");
+                await admitted.Where(revision => revision == 2).Should().Within(Budget)
+                    .Emit("an admitted revision must be forwarded without Rx's process-wide SystemClock lock",
+                        cancellationToken: TestContext.Current.CancellationToken);
+            }
+            finally
+            {
+                Volatile.Read(ref connection)?.Dispose();
+            }
         });
+    }
+
+    /// <summary>
+    /// The two migrated sites depend on <c>MergeInline</c> delivering exactly as Rx's <c>Merge</c> does: a data
+    /// write's receipt must still fail when one data source's apply fails, and the read admission's latch
+    /// relies on its two sources never interleaving inside one delivery. Both operators end in the same
+    /// <c>Merge</c> of an observable of observables — only the OUTER source differs — so the log of each scenario
+    /// must be identical. The control for each is Rx's own <c>Merge</c> over the same sources.
+    /// </summary>
+    [Fact]
+    public void MergeInline_PropagatesErrorsAndSerializesReentrantDeliveries_AsMergeDoes()
+    {
+        System.Collections.Immutable.ImmutableList<string> Errors(
+            Func<IObservable<int>, IObservable<int>, IObservable<int>> merge)
+        {
+            var log = System.Collections.Immutable.ImmutableList<string>.Empty;
+            var failing = new System.Reactive.Subjects.Subject<int>();
+            var healthy = new System.Reactive.Subjects.Subject<int>();
+            using (merge(failing, healthy).Subscribe(
+                       value => log = log.Add($"value {value}"),
+                       error => log = log.Add($"error {error.Message}"),
+                       () => log = log.Add("completed")))
+            {
+                healthy.OnNext(1);
+                failing.OnError(new InvalidOperationException("apply failed"));
+                healthy.OnNext(2);
+                healthy.OnCompleted();
+            }
+            return log;
+        }
+
+        System.Collections.Immutable.ImmutableList<string> Reentrant(
+            Func<IObservable<int>, IObservable<int>, IObservable<int>> merge)
+        {
+            var log = System.Collections.Immutable.ImmutableList<string>.Empty;
+            var first = new System.Reactive.Subjects.Subject<int>();
+            var second = new System.Reactive.Subjects.Subject<int>();
+            using (merge(first, second).Subscribe(value =>
+                   {
+                       log = log.Add($"enter {value}");
+                       // A delivery that triggers the other source from inside the observer.
+                       if (value == 1)
+                           second.OnNext(2);
+                       log = log.Add($"leave {value}");
+                   }))
+            {
+                first.OnNext(1);
+            }
+            return log;
+        }
+
+        var inlineErrors = Errors((a, b) => a.MergeInline(b));
+        inlineErrors.Should().Equal("value 1", "error apply failed");
+        inlineErrors.Should().Equal(Errors((a, b) => a.Merge(b)));
+        Errors((a, b) => new[] { a, b }.MergeInline()).Should().Equal(Errors((a, b) => new[] { a, b }.Merge()));
+
+        var inlineReentrant = Reentrant((a, b) => a.MergeInline(b));
+        inlineReentrant.Should().Equal(Reentrant((a, b) => a.Merge(b)));
+        Reentrant((a, b) => new[] { a, b }.MergeInline()).Should().Equal(Reentrant((a, b) => new[] { a, b }.Merge()));
+        Output.WriteLine($"reentrant delivery order (both operators): {string.Join(", ", inlineReentrant)}");
     }
 }
