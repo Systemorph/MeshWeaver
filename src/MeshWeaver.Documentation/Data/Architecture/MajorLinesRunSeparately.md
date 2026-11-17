@@ -166,6 +166,68 @@ mesh, but the landed module tree is per line (a v4 image lands under `lines/4/`)
 Chat record requiring `AI@^1.51.0`, judged against the v4 tree's AI 4.0.1, refused every v4 proposal. A
 record that states no floor is still judged.
 
+## 4c. Each line has its own first instance
+
+Policy `line-first-instance` (MeshWeaver#8365). The fleet of a line is offered a set only after ONE
+instance runs it — "control first" is the case of the line control follows, not a rule about
+control. Once control moved to v4, the v3 line had no instance that could run its builds: the arm
+read `control runs <a v4 commit>, which does not contain <the v3 set> yet` for nine hours, while four
+promoted 3.x sets waited behind it.
+
+**The declaration.** `.github/delivery-lines.json` names the line's first instance:
+
+```json
+{ "branch": "main3", …, "firstInstance": "memex", "firstInstanceImageRepository": "memex-portal-ai-first3" }
+```
+
+Both fields absent means the control instance on `memex-control`, handed its builds by
+`control-first`. That case is unchanged. `cd-line.py` refuses the following, each by name:
+- a blank or malformed id;
+- the control instance spelled out;
+- an id without its repository, or a repository without an id;
+- a repository that is not a plain name;
+- the shared repositories `memex-portal-ai`, `memex-control` and `memex-migration`;
+- two lines on one repository.
+
+**Why the instance has its own image repository.** An instance on the fleet's `memex-portal-ai` can
+roll only to a `memex-portal-ai:<version>` tag. That tag is the ARMING write: `arm` alone writes it,
+and every Continuous instance on that repository sees it at once. So an instance on the fleet's
+repository can never run a set before the fleet is offered it, and gating the arm on such an
+instance is a wait that cannot end. The first instance therefore runs a repository of its own,
+exactly as control runs `memex-control`.
+
+**The handover.** For a line that declares a first instance, main-cd's `first-instance-first` job
+does the following after `promote`, for every promoted set:
+1. It tags `<firstInstanceImageRepository>:<version>` from the portal's staging image, on cr first
+   and ACR last. It writes the version tag only: nothing seeds a new instance from this repository.
+2. It sends the instance's record the signed `self-update-available`.
+
+These are the same two decisions `control-first` takes (`control_first`, `control_announcement`,
+and the one delivery script `post-self-update-announcement.sh`), aimed at another record. It
+announces only a build of the major the instance runs (`control-line --instance-url`). It also
+announces only when the instance's record names that repository: until the record moves, the build
+is tagged and not announced, and the job says so in a warning.
+
+**The arm.** `select` reads the line's first instance as it reads control:
+- **What it reads.** The record sits beside control's (`mesh/Deployments/<id>.json`, read with the
+  fleet-reader App). `/api/version` and `/health` are read at `https://` + the record's
+  `content.host`. The lag clock starts at that line's `Deploy the line's first instance first` job.
+  The bound is `platformLagBoundMinutes`.
+- **What it says.** Every sentence names the instance and the line (`memex runs …`; `FLEET DELIVERY
+  FROZEN ON memex (the first instance of line main3)`).
+- **What holds a line.** Each of these is a declaration. It arms nothing and is a warning, never the
+  frozen red:
+  - the instance's record excludes the line's major (`updatePattern`);
+  - the instance's record still names another repository;
+  - the line declares no first instance while control's record excludes its major. This reading is
+    `LINE HAS NO FIRST INSTANCE`, and it names the missing declaration.
+
+**Moving the instance onto its repository.** The record's `imageRepository` moves to
+`<registry>/<firstInstanceImageRepository>` only after that repository carries a tag. The record also
+sets `migrationImageRepository` explicitly, because the derived name (`imageRepository` with
+`memex-portal-ai` replaced by `memex-migration`) names a repository nobody writes. Until the record
+moves, the line is held, and the hold says so.
+
 ## 5. Order of work
 
 Each step is its own pull request and lands before the next begins:

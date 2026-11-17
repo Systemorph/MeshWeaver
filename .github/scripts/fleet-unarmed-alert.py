@@ -243,9 +243,9 @@ def render_body(d: Decision, threshold_hours: float, run_url: str, now: datetime
         "",
         "Read it by state: **refused** — the set's compatibility ladder is red, missing or ambiguous; fix "
         "compatibility (or declare an epoch bump), a newer green set then arms past it. **waiting** — the ladder "
-        "is still running, or control has not taken the set; a control behind past its bound is the open "
-        "`control-lag` issue, and a line HELD by control's declared updatePattern says so above the table (its "
-        "remedy is that declaration, never control's roll). **not examined** — older than the ten newest sets `select` judges. The incident "
+        "is still running, or the line's first instance (control, unless the line declares its own — policy "
+        "`line-first-instance`) has not taken the set; past its bound that is a red `arm` naming the instance, and "
+        "a line HELD by a declaration says so above the table (its remedy is that declaration, never a roll). **not examined** — older than the ten newest sets `select` judges. The incident "
         "override (main-cd `workflow_dispatch` with `arm_override` + `arm_reason`) exists and stays the "
         "maintainer's call; it is not the remedy this issue suggests.",
         "",

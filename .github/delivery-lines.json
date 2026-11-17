@@ -28,6 +28,20 @@
     "  movesLatest  — whether this line moves the line-less `latest` labels (the tester's",
     "                 MW_TEST_IMAGE). EXACTLY ONE line does: two lines interleave run numbers, so a",
     "                 forward-only check alone would hand `latest` back and forth between majors.",
+    "  firstInstance — (optional) the deployment id (Systemorph/Memex mesh/Deployments/<id>.json) of the",
+    "                 instance that RUNS the line's build before the fleet is offered it (policy",
+    "                 `line-first-instance`). ABSENT = the control instance (.github/control-instance.json)",
+    "                 on memex-control, through `control-first` — unchanged for the line control follows.",
+    "                 Declared, the line's `first-instance-first` job tags",
+    "                 <firstInstanceImageRepository>:<version> before arming and sends that record the",
+    "                 signed self-update announcement, and `arm` arms a set only once THAT instance runs",
+    "                 it (its record's content.host serves /api/version and /health; its updatePattern",
+    "                 decides whether it admits the line's major at all).",
+    "  firstInstanceImageRepository — required with firstInstance: the plain repository name (no registry,",
+    "                 no tag) the instance's record names as its imageRepository. It must be the",
+    "                 instance's OWN: never memex-portal-ai (its version tag IS the arming write, so an",
+    "                 instance on it can only run a set after the fleet is offered it — MeshWeaver#8365),",
+    "                 never memex-control, never memex-migration. `cd-line.py` refuses each by name.",
     "",
     "WHO DELIVERS EACH LINE",
     "  the default branch — workflow_run after Build-and-Test, the hourly schedule, dispatch.",
@@ -52,7 +66,9 @@
       "pluginsRef": "main3",
       "satelliteRef": "main3",
       "label": "main3",
-      "movesLatest": false
+      "movesLatest": false,
+      "firstInstance": "memex",
+      "firstInstanceImageRepository": "memex-portal-ai-first3"
     }
   ]
 }
