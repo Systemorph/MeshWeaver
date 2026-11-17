@@ -86,6 +86,27 @@ These sites were migrated with the fix:
 - the `StartWith` calls in `MeshNodeStreamExtensions`, `IoPoolRegistry`, `MeshNodeStreamCache`,
   `MeshService` and `RoutingQuiescence`.
 
+### The turns of `sync/*` hubs
+
+#5799's verdict, `THE PUMP IS NOT TURNING`, is printed for hosted `sync/*` hubs: their drain was handed to
+`TaskScheduler.Default` and no worker started it. A worker parked on this lock inside one hub's turn is a
+worker no other hub's drain gets, so every lock-taking subscription on a turn those hubs take all the time
+feeds the starvation. Holding the lock in a test over a hub with live remote streams
+(`SyncHubTeardownTakesNoProcessWideRxLockTest`) found two that survived the first migration:
+
+- **Every data write.** `WorkspaceOperations.Change` merged the per-data-source results with
+  `applied.Merge()`, subscribed inside the owner's `DataChangeRequest` turn. A `dotnet-stack` of the stuck
+  test showed that turn in `Monitor.Enter` under `SystemClock.Register`, called from
+  `Merge.Observables` ← `ToArray` ← `DataExtensions.HandleDataChangeRequest`. The client applied the write;
+  the owner never did.
+- **Every followed read, once per revision.** `ClientSubscriptionReadAdmission.AdmitEachRevision`
+  (used by `JsonSynchronizationStream.FollowReadAdmission` and `MeshNodeStreamCache`) built its pipeline
+  with `Observable.Merge(a, b)` and each revision's decision with `Refused.Merge(First)`.
+
+Both now use `MergeInline`. The teardown of the `sync/*` hubs themselves already completed under the
+hold after #8140; the test keeps it pinned, and with the inline operators pointed back at Rx's own
+`StartWith`/`Merge` it parks `Dispose()` for as long as the lock is held.
+
 **Not migrated.** About 60 `StartWith` calls in layout areas, settings tabs and GitSync views, and
 about 130 `Merge` calls across `MeshWeaver.Hosting`, `MeshWeaver.Mesh.Contract`, `MeshWeaver.Data`,
 `MeshWeaver.Graph` and others. Each `Merge` call needs its overload checked: a `Merge` of an
@@ -97,6 +118,10 @@ While the lock is held, a request/response round trip and a hub's teardown must 
 the lock held they complete within about 50 ms. The negative control is Rx's own `StartWith`, which
 must NOT complete under the same hold. Run against the unfixed hub, the test fails on the round trip:
 *"a request/response round trip must not need Rx's process-wide SystemClock lock"*.
+`SyncHubTeardownTakesNoProcessWideRxLockTest` (MeshWeaver.Data.Test) does the same over a hub with live
+remote streams: its teardown, a write through a remote stream, and a read admission's revisions must all
+complete under the hold. It runs `Dispose()` on a thread of its own, because a `Dispose()` that waits for
+the lock would otherwise block the test thread and only be measured after the hold ended.
 
 ## Related
 
