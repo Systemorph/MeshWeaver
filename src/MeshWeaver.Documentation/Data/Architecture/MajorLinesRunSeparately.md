@@ -201,7 +201,13 @@ mesh, but the landed module tree is per line (`ModuleRoot.ResolveLine`). The mod
 (`ModuleDependencyFloor.Unmet`) therefore judges only records of its own line: a record whose
 `minMeshVersion` names another line describes a build this tree does not load. Before this rule, a v3
 Chat record requiring `AI@^1.51.0`, judged against the v4 tree's AI 4.0.1, refused every v4 proposal. A
-record that states no floor is still judged.
+record that states no floor is still judged, but only against a dependency build of the legacy line.
+Stating no floor is what every producer did before the split, and a dependent moves to a later line by
+raising its floor (step 6 below), so its requirement speaks about legacy-line builds. A dependency build
+states its line the way an index entry does: its framework identity, else its floor, else the legacy
+line. Before this rule, a course that had not opted into v4 (no floor, `requires AI@^1.0.0`) was compared
+with the v4 tree's AI 4.0.1 (`c004e001`). Every v4 proposal on the plugin registry was refused, its first
+v4 replica proposed an empty set, and none of the modules it landed afterwards activated.
 
 ## 4c. Each line has its own first instance
 

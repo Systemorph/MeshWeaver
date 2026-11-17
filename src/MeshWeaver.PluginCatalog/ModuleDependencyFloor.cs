@@ -79,6 +79,17 @@ public static class ModuleDependencyFloor
     /// this set: a line-3 Chat record requiring <c>AI@^1.51.0</c>, judged against the line-4 tree's
     /// AI 4.0.1, refused every line-4 proposal while nothing in that set was inconsistent. A record
     /// that states no floor is judged — absence of a line is no evidence of another one.</para>
+    ///
+    /// <para>🚨 <b>…but a record that states no floor is compared only with a dependency build of the
+    /// LEGACY line.</b> Stating no floor is what every producer did before the lines split, and a
+    /// dependent moves to a later line by raising its floor to it — the same reading
+    /// <see cref="BundleLine.Read(string?, string?, string?)"/> gives a build that states nothing. So its
+    /// requirement (<c>AI@^1.0.0</c>) speaks about the legacy line's builds and says nothing about a
+    /// build that states a later line (its framework identity, else its floor — a fact about the bytes):
+    /// a course stating no floor, compared with the line-4 tree's AI 4.0.1 (<c>c004e001</c>), refused
+    /// every line-4 proposal, so the first line-4 replica of a deployment carrying that course proposed
+    /// an empty set and no module landed afterwards ever activated. Against a dependency build of the
+    /// legacy line — or one that states no line either — the record is judged as before.</para>
     /// </summary>
     /// <param name="installed">The install records.</param>
     /// <param name="landed">The activation list of the tree the set is derived from.</param>
@@ -100,6 +111,8 @@ public static class ModuleDependencyFloor
                     continue;
                 if (LandedModuleOf(dependencyId, installed, landed) is not { } entry)
                     continue;
+                if (line is not null && !SameLine(dependent, entry))
+                    continue;
                 var range = PackageRequirement.RangeOf(requirement);
                 if (Satisfies(range, entry.Version!) == false)
                     unmet.Add(new UnmetDependencyFloor(
@@ -109,6 +122,17 @@ public static class ModuleDependencyFloor
         }
         return unmet.ToImmutable();
     }
+
+    /// <summary>
+    /// Whether <paramref name="dependent"/>'s requirements can speak about the dependency build
+    /// <paramref name="entry"/>: a dependent that states a floor is already on the tree's line
+    /// (<see cref="OnLine"/>); one that states none speaks only about builds of the legacy line, and
+    /// <paramref name="entry"/>'s line is the one it states — its framework identity, else its floor,
+    /// else the legacy line (<see cref="BundleLine.Read(string?, string?, string?)"/>). Pure.
+    /// </summary>
+    private static bool SameLine(PackageManifest dependent, ModuleActivationEntry entry) =>
+        MeshWeaver.Hosting.PrebuiltAdoptionPolicy.MajorOf(dependent.MinMeshVersion) is not null
+        || BundleLine.Read(entry.FrameworkMvid, entry.MinMeshVersion, fallbackIdentity: null).Line == BundleLine.LegacyLine;
 
     /// <summary>Whether <paramref name="record"/> belongs to platform line <paramref name="line"/>: its
     /// declared floor's line equals it, or it declares no floor, or the line is unknown. Pure.</summary>
