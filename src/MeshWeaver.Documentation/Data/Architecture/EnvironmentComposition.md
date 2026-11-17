@@ -122,10 +122,16 @@ Reconciling costs an up-to-date instance nothing: the content-identity gate in
 A flag declared off **in so many words** — `Enabled` present and the boolean `false` — also
 **retires an installed copy** of every package it names, at boot, through **phase 1** of the
 [package uninstall request](../PackageUninstall): the module is retired, the install record is
-removed, and **no data is dropped**. That is how an estate turns a pre-installed package (MCP, a
-harness) off through its record alone, with no call to the endpoint it wants gone
+removed, and **no data is dropped**. That is how an estate turns off, through its record alone, a
+pre-installed package that **no other installed package requires**: for example, the coding-agent
+harnesses (`Plugins/ClaudeCode`, `Plugins/Codex`, …) through the `cliHarnesses` flag
 (MeshWeaver.Plugins#5055). The record is the source of truth: under policy `declared-not-derived`
 pruning removes what the declaration dropped, and an explicit `false` is such a declaration.
+
+**A package another installed package requires cannot be retired through a flag.** The retire is
+refused, as the list below describes. `Mcp` is such a package: `Essentials`, which carries the
+base agents, skills and operation requests, requires it, so the flag cannot turn MCP off on an
+instance that keeps `Essentials` (MeshWeaver.Plugins#5593).
 
 | the flag | install selection | an installed copy |
 |---|---|---|
