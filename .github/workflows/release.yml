@@ -16,7 +16,9 @@ name: Release (promote a sealed set)
 # annotated tag v<major>.<minor>.<patch> on a commit that main-cd has already promoted AND sealed:
 #
 #   1. refuses anything else — a lightweight tag, a pre-release version (the rc line is closed), a
-#      tag whose commit carries a different PlatformVersion, a commit main-cd never promoted, a set
+#      commit that is not on the delivery line of the tag's major (.github/delivery-lines.json:
+#      `main` for the default major, `main3` for 3.x — policy `major-lines-run-separately`), a tag
+#      whose commit carries a different PlatformVersion, a commit main-cd never promoted, a set
 #      whose content bake is not sealed, a release with no committed release-notes page;
 #   2. copies the release marker  _releases/<build-version> → _releases/<clean>  on every artifact
 #      store, so the gates that ask "which framework identity is release 3.0.0?" get the answer the
@@ -27,7 +29,14 @@ name: Release (promote a sealed set)
 #   4. mirrors the three images to GHCR, the public channel;
 #   5. publishes the GitHub Release from Doc/ReleaseNotes/<x_y_z>;
 #   6. opens the pull request that moves PlatformVersion to the next line, so the very next
-#      continuous build sorts above the release again (Directory.Build.props explains the ordering).
+#      continuous build sorts above the release again (Directory.Build.props explains the ordering)
+#      — and opens NOTHING when the default branch already reads a newer line than the release
+#      (a 3.x release while main is on 4.0.0 must never move main back to 3.2.0).
+#
+# 🚨 A TAG RUNS THE TAGGED COMMIT'S COPY OF THIS FILE. A `push: tags` run reads release.yml at the
+# commit the tag points at, never the default branch's. So a fix to this lane releases nothing
+# until a commit CARRYING the fix is promoted and sealed on the line being released: a 3.x release
+# needs the fix on `main3`, a 4.x one on `main`.
 #
 # 🚨 No `continue-on-error`, no `if: secret != ''`: every input is asserted RED by `preflight`
 # (AGENTS.md: a gate never tests its own inputs). Every job carries a literal timeout ≤ 45.
@@ -114,13 +123,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0   # the tag OBJECT (annotated or not) and main's history (is the commit on main?)
+          fetch-depth: 0   # the tag OBJECT (annotated or not) and every line branch's history (is the commit on its line?)
 
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
 
-      - name: "Resolve the release: clean version, annotated tag, on main, PlatformVersion agrees, notes exist"
+      - name: "Resolve the release: clean version, annotated tag, on its delivery line, PlatformVersion agrees, notes exist"
         id: rel
         run: |
           set -euo pipefail
@@ -135,10 +144,40 @@ jobs:
             exit 1
           fi
           SHA=$(git rev-parse "$TAG^{commit}")
-          if ! git merge-base --is-ancestor "$SHA" origin/main; then
-            echo "::error::$TAG points at $SHA, which is not on main. Only a commit main-cd has published can be promoted; a branch build has no promoted set."
+          IFS=. read -r MAJOR MINOR _ <<<"$VERSION"
+          # THE LINE (policy `major-lines-run-separately`, .github/delivery-lines.json): each platform
+          # major is delivered by its own branch — `main` carries the newest major, `main3` the 3.x
+          # line — and main-cd promotes and seals a set on THAT branch. So the tagged commit must sit
+          # on a declared line whose branch tip still builds the tag's major. "On main" alone was the
+          # rule while there was one line; since the split it refuses every 3.x commit made after it
+          # (they are on main3 only). A commit from before the split is on both branches; the major
+          # decides which line it is released from.
+          LINE=""; ON_LINES=""
+          for branch in $(python3 .github/scripts/cd-line.py lines); do
+            if ! git rev-parse --verify -q "refs/remotes/origin/$branch" >/dev/null; then
+              echo "::error::the declared delivery line '$branch' is not in this checkout (origin/$branch is missing), so whether $SHA is on it cannot be decided — refusing rather than guessing."
+              exit 1
+            fi
+            git merge-base --is-ancestor "$SHA" "origin/$branch" || continue
+            ON_LINES="$ON_LINES $branch"
+            git show "origin/$branch:Directory.Build.props" > "$RUNNER_TEMP/line-props"
+            LINE_MAJOR=$(python3 .github/scripts/cd-line.py platform-major "$RUNNER_TEMP/line-props")
+            if [ "$LINE_MAJOR" = "$MAJOR" ]; then LINE="$branch"; break; fi
+          done
+          if [ -z "$LINE" ]; then
+            if [ -z "$ON_LINES" ]; then
+              echo "::error::$TAG points at $SHA, which is on no declared delivery line ($(python3 .github/scripts/cd-line.py lines | tr '\n' ' ')— .github/delivery-lines.json). Only a commit main-cd has published can be promoted; a branch build has no promoted set."
+            else
+              echo "::error::$TAG points at $SHA, which is on${ON_LINES}, but none of those branches builds major $MAJOR any more. A $MAJOR.x release is promoted from the line whose branch delivers $MAJOR.x."
+            fi
             exit 1
           fi
+          # The line's floating label and whether it moves the tester's `latest` — the two facts
+          # `check-image-set.sh --pointers` needs, read from the declaration through the one reader
+          # main-cd's `gate` uses, never written here.
+          LINE_FIELDS=$(CD_EVENT=workflow_dispatch CD_REF_NAME="$LINE" CD_DEFAULT_BRANCH="" python3 .github/scripts/cd-line.py derive)
+          LABEL=$(sed -n 's/^label=//p' <<<"$LINE_FIELDS")
+          MOVES_LATEST=$(sed -n 's/^moves_latest=//p' <<<"$LINE_FIELDS")
           PROPS=$(dotnet msbuild "$VERSION_PROJECT" -getProperty:PlatformVersion -nologo | tr -d '[:space:]')
           if [ "$PROPS" != "$VERSION" ]; then
             echo "::error::PlatformVersion at $SHA is '$PROPS' but the tag says '$VERSION'. The tag must name the line the commit was built under — either the wrong commit was tagged, or Directory.Build.props was bumped ahead of the release. Retag the right commit."
@@ -152,7 +191,6 @@ jobs:
             echo "::error::no release-notes page at $NOTES. The GitHub Release is published FROM that page (Doc/ReleaseNotes/${VERSION//./_}); commit it (Category: Release Notes) and tag a commit that carries it."
             exit 1
           fi
-          IFS=. read -r MAJOR MINOR _ <<<"$VERSION"
           NEXT="$MAJOR.$((MINOR + 1)).0"
           {
             echo "version=$VERSION"
@@ -160,8 +198,11 @@ jobs:
             echo "short=$(printf '%s' "$SHA" | cut -c1-7)"
             echo "notes=$NOTES"
             echo "next=$NEXT"
+            echo "line=$LINE"
+            echo "label=$LABEL"
+            echo "moves_latest=$MOVES_LATEST"
           } >> "$GITHUB_OUTPUT"
-          echo "release $VERSION = $SHA (next line $NEXT); notes at $NOTES"
+          echo "release $VERSION = $SHA on line $LINE (label $LABEL; next line $NEXT); notes at $NOTES"
 
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
@@ -236,11 +277,16 @@ jobs:
       # one half and not the other) is not releasable, and this is the last moment anything can say
       # so. The version is the one resolved from the tags on this commit's own digest above, never a
       # re-derivation. See Doc/Architecture/ImageTagContract.
+      # The pointers are PER LINE (check-image-set.sh refuses `--pointers` without them): the line's
+      # own floating label (`main`, `main3`) and whether that line moves the tester's `latest`, both
+      # resolved by `rel` from .github/delivery-lines.json.
       - name: "The set is complete"
         run: >
           .github/scripts/check-image-set.sh
           "${{ steps.rel.outputs.short }}"
           --pointers "${{ steps.set.outputs.ci_version }}"
+          --line-label "${{ steps.rel.outputs.label }}"
+          --moves-latest "${{ steps.rel.outputs.moves_latest }}"
 
       - name: "The set is sealed — platform content and the Plugins modules"
         env:
@@ -495,10 +541,26 @@ jobs:
           text = open(path, encoding="utf-8").read()
           old = f"""<PlatformVersion Condition="'$(PlatformVersion)' == ''">{version}</PlatformVersion>"""
           new = f"""<PlatformVersion Condition="'$(PlatformVersion)' == ''">{nxt}</PlatformVersion>"""
-          if new in text:
-              print(f"::notice::main already reads PlatformVersion {nxt}; nothing to bump")
+          def no_op(why):
+              print(f"::notice::{why}")
               open(os.environ["GITHUB_OUTPUT"], "a").write("changed=false\n")
+              summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary:
+                  open(summary, "a", encoding="utf-8").write(f"- next line: nothing bumped — {why}\n")
               sys.exit(0)
+          if new in text:
+              no_op(f"main already reads PlatformVersion {nxt}")
+          # A release from an OLDER line (policy `major-lines-run-separately`: 3.x is promoted from
+          # main3 while main builds 4.x) has no next line to open on main: main already sorts above
+          # it, and a "bump" to the released line's next minor would move main BACKWARDS. Read
+          # main's one PlatformVersion and stop, saying why, when its major.minor is above the
+          # release's. Anything else unexpected stays a refusal below.
+          current = re.findall(r"""<PlatformVersion Condition="'\$\(PlatformVersion\)' == ''">(\d+)\.(\d+)\.(\d+)</PlatformVersion>""", text)
+          released = tuple(int(x) for x in version.split(".")[:2])
+          if len(current) == 1 and tuple(int(x) for x in current[0][:2]) > released:
+              no_op(f"main reads PlatformVersion {'.'.join(current[0])}, a newer line than the released "
+                    f"{released[0]}.{released[1]}; moving it to {nxt} would move it backwards. The released "
+                    f"line's own branch keeps its PlatformVersion; moving that line on is a separate decision.")
           if text.count(old) != 1:
               print(f"::error::expected exactly one '{old}' in {path}, found {text.count(old)} — main has moved to a version this lane did not expect; bump by hand")
               sys.exit(1)
