@@ -1722,7 +1722,11 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         // names modules, is left to its landing waves: a proposal here would read the tree while a
         // wave may still be landing into it and publish the half-landed mix the set exists to make
         // unreachable — and an activation request would swap in modules a wave landed moments ago.
-        return landing.ReadPool.InvokeBlocking(_ => ModuleSetStore.Read(landing.BaseDirectory).Proposed)
+        return landing.ReadPool.InvokeBlocking(ct =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return ModuleSetStore.Read(landing.BaseDirectory).Proposed;
+            })
             .SelectMany(current => current is { Generations.Count: 0 }
                 ? ProposeOverTheEmptySet(landing)
                 : Observable.Return(Unit.Default))
