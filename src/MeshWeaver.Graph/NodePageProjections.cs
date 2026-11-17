@@ -53,6 +53,10 @@ internal static class NodePageProjections
     /// <param name="Markdown">The markdown.</param>
     internal sealed record TextView(string Markdown);
 
+    /// <summary>The style of a piece of node chrome: shown, or hidden for a header-excluded node.</summary>
+    /// <param name="Style">The style to apply.</param>
+    internal sealed record ChromeView(string Style);
+
     /// <summary>The style that hides a bound section whose node says it has nothing to show.</summary>
     internal const string Hidden = "display: none;";
 
@@ -90,6 +94,16 @@ internal static class NodePageProjections
                 (node, partitionRoot) => ProjectHeader(node, partitionRoot, hubPath, visibleStyle, viewer))
             .DistinctUntilChanged();
     }
+
+    /// <summary>
+    /// Whether the hub's own node shows node chrome: <paramref name="visibleStyle"/>, or
+    /// <see cref="Hidden"/> for a node excluded from the header context — the same per-node opt-out
+    /// that hides the standard header. The composed actions row binds its style to this.
+    /// </summary>
+    internal static IObservable<ChromeView> Chrome(LayoutAreaHost host, string visibleStyle)
+        => host.Workspace.GetMeshNodeStream()
+            .Select(node => new ChromeView(IsHeaderless(node) ? Hidden : visibleStyle))
+            .DistinctUntilChanged();
 
     /// <summary>The markdown body of the hub's own node.</summary>
     internal static IObservable<BodyView> Body(LayoutAreaHost host, string visibleStyle)

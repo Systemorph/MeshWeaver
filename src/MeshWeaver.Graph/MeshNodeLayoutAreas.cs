@@ -1318,22 +1318,33 @@ public static class MeshNodeLayoutAreas
     /// The composed actions row: shown to a viewer who may read the node, hidden on a node excluded
     /// from the header context (<see cref="MeshNodeVisibility.HeaderContext"/> — the same per-node
     /// opt-out that removes the standard header, and with it the menu, from a chrome-less cover).
-    /// Seeded hidden, so the page paints at once and the row appears when the facts are in.
+    /// A TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the permission decides
+    /// STRUCTURE (row or nothing), and the header-context opt-out is a style BOUND to a projection
+    /// of the node (<see cref="NodePageProjections.Chrome"/>), never a value read on the hub and
+    /// baked into the control.
     /// </summary>
     private static IObservable<UiControl?> NodeMenuSlot(LayoutAreaHost host)
     {
         var hubPath = host.Hub.Address.ToString();
-        var headerExcluded = host.Workspace.GetMeshNodeStream()
-            .Select(node => node?.IsExcludedFromContext(MeshNodeVisibility.HeaderContext) == true)
-            .DistinctUntilChanged();
         return PermissionGate(host, hubPath)
-            .CombineLatest(headerExcluded, (gate, excluded) => (gate.Read, gate.Update, Excluded: excluded))
-            .DistinctUntilChanged()
-            .Select(s => s.Read && !s.Excluded
-                ? ActionsBar(host, hubPath, s.Update)
-                : (UiControl?)Controls.Stack)
-            .StartWith((UiControl?)Controls.Stack);
+            .Select(gate =>
+            {
+                if (!gate.Read)
+                    return (UiControl?)Controls.Stack;
+                var actions = BuildHeaderActionRow(host, false, hubPath, gate.Update);
+                return NodePageProjections.Chrome(host, ActionsBarStyle)
+                    .Bind(p => ActionsBarTemplate(p.Style, actions), NodeMenuDataId);
+            });
     }
+
+    /// <summary>The <c>/data</c> id the composed actions row's chrome projection is published under.</summary>
+    internal const string NodeMenuDataId = "nodePageMenu";
+
+    private const string ActionsBarStyle = "width: 100%; align-items: flex-end; padding: 8px 0 0 0;";
+
+    /// <summary>The composed actions row with its style as a POINTER into <see cref="NodePageProjections.ChromeView"/>.</summary>
+    internal static StackControl ActionsBarTemplate(object style, UiControl actions)
+        => (Controls.Stack with { Style = style }).WithView(actions);
 
     /// <summary>The header's Edit + ⋯ More row on a bar of its own, right-aligned above a page.</summary>
     private static UiControl ActionsBar(LayoutAreaHost host, string hubPath, bool canEdit)
