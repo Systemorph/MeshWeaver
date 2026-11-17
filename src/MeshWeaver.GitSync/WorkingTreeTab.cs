@@ -103,7 +103,7 @@ public static class WorkingTreeTab
 
         // Everything depends on the Space's connected repo (RepositoryUrl + Branch) from the GitHub-Sync config.
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
-            .Select(cfg => (UiControl?)BuildWorkspace(workingTrees, userId, cfg, host.ViewerLocale()))
+            .Select(cfg => (UiControl?)BuildWorkspace(workingTrees, userId, GitSyncLine.Effective(host.Hub.ServiceProvider, cfg), host.ViewerLocale()))
             .StartWith((UiControl?)GitSyncViews.Hint(host.Localize("ui.gitSync.loadingRepoSettings"))));
 
         // Result/status line.
@@ -119,7 +119,7 @@ public static class WorkingTreeTab
             return GitSyncViews.Hint(LocalizationCatalog.Get("ui.gitSync.workspace.connectFirst", locale));
 
         var repoSlug = RepoSlug(repoFullName);
-        var branch = string.IsNullOrWhiteSpace(cfg!.Branch) ? "main" : cfg.Branch;
+        var branch = GitSyncLine.StoredBranchOf(cfg!);
 
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap:12px;");
 

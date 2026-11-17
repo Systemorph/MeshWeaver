@@ -107,7 +107,7 @@ public static class GitHistoryTab
 
         // Everything keys off the Space's connected repo (slug + branch) from the GitHub-Sync config.
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
-            .Select(cfg => (UiControl?)BuildBrowser(workingTrees, userId, cfg, locale: host.ViewerLocale()))
+            .Select(cfg => (UiControl?)BuildBrowser(workingTrees, userId, GitSyncLine.Effective(host.Hub.ServiceProvider, cfg), locale: host.ViewerLocale()))
             .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingRepoSettings"))));
 
         return stack;
@@ -120,7 +120,7 @@ public static class GitHistoryTab
             return Controls.Markdown(LocalizationCatalog.Get("ui.connectRepoFirst", locale));
 
         var repoSlug = WorkingTreeTab.RepoSlug(repoFullName);
-        var branch = string.IsNullOrWhiteSpace(cfg!.Branch) ? "main" : cfg.Branch;
+        var branch = GitSyncLine.StoredBranchOf(cfg!);
 
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap:12px;");
 
