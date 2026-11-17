@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -11,6 +12,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Storage;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -52,8 +54,31 @@ public class NarrowingRulesAreExclusiveTest(ITestOutputHelper output) : Monolith
             .ConfigureServices(services =>
             {
                 services.AddGitHubSyncServices();
+                services.AddSingleton<ILoggerProvider>(_captured);
                 return services;
             });
+
+    private readonly CapturingLoggerProvider _captured = new();
+
+    /// <summary>Records every Warning-or-above message of the mesh's loggers — one per test instance.</summary>
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        public ConcurrentQueue<string> Warnings { get; } = new();
+        public ILogger CreateLogger(string categoryName) => new Capture(Warnings);
+        public void Dispose() { }
+
+        private sealed class Capture(ConcurrentQueue<string> sink) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (IsEnabled(logLevel))
+                    sink.Enqueue(formatter(state, exception));
+            }
+        }
+    }
 
     private NodeTypeAccessRuleSet Rules => Mesh.ServiceProvider.GetRequiredService<NodeTypeAccessRuleSet>();
 
@@ -131,6 +156,32 @@ public class NarrowingRulesAreExclusiveTest(ITestOutputHelper output) : Monolith
         RuleReadPredicates.Bind(Rules.ReadPredicates(), Owner, isGlobalAdmin: false)
             .Should().NotContain(p => p.NodeType == StorageBindingPaths.NodeType,
                 "🚨 fail closed: a store that does not support the permission subject is never bound it (it would apply the type term alone)");
+    }
+
+    /// <summary>
+    /// 🚨 A subject NOBODY knows is logged by name and opens nothing — through the baseline <c>Bind</c> as well
+    /// as <c>BindSupporting</c> — while a subject this assembly knows but the consumer does not apply is skipped
+    /// silently (the expected state of an older store). Control: the same call with only the known subject
+    /// logs nothing.
+    /// </summary>
+    [Fact]
+    public void AnUnknownSubject_IsLoggedByName_AKnownUnsupportedOneIsSilent()
+    {
+        RuleReadPredicate known = new()
+        {
+            NodeType = StorageBindingPaths.NodeType, Subject = RuleReadSubject.PermissionOnPartitionRoot,
+            HeldPermission = Permission.Update,
+        };
+        RuleReadPredicate unknown = new() { NodeType = StorageBindingPaths.NodeType, Subject = "SomeModulesOwnSubject" };
+
+        RuleReadPredicates.Bind([known], Owner, isGlobalAdmin: false, Mesh).Should().BeEmpty("a baseline consumer is never bound a permission subject");
+        _captured.Warnings.Where(w => w.Contains(StorageBindingPaths.NodeType)).Should().BeEmpty(
+            "control: a known subject the consumer does not apply is the expected state, not a warning");
+
+        RuleReadPredicates.Bind([unknown], Owner, isGlobalAdmin: false, Mesh).Should().BeEmpty("an unknown subject opens nothing");
+        RuleReadPredicates.BindSupporting([unknown], Owner, isGlobalAdmin: false, RuleReadSubject.All, Mesh).Should().BeEmpty();
+        _captured.Warnings.Count(w => w.Contains("SomeModulesOwnSubject")).Should().Be(2,
+            "🚨 an unknown subject is logged by name on every bind, or a module's new subject fails closed unnoticed");
     }
 
     /// <summary>

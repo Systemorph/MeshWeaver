@@ -380,7 +380,10 @@ public static class RuleReadPredicates
         var builder = ImmutableArray.CreateBuilder<ResolvedReadPredicate>();
         foreach (var p in declared)
         {
-            if (!supportedSubjects.Contains(p.Subject))
+            // A subject this assembly KNOWS but the consumer does not apply is skipped silently: that is
+            // the expected state of an older store. A subject NOBODY knows is not skipped here — it falls
+            // through to the switch's default, which logs it by name (and opens nothing).
+            if (RuleReadSubject.All.Contains(p.Subject) && !supportedSubjects.Contains(p.Subject))
                 continue;
             switch (p.Subject)
             {
