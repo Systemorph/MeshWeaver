@@ -155,7 +155,7 @@ public sealed class GitHubPartitionSyncSourceProvider(GitHubSyncService sync, IM
         if (config?.RepositoryUrl is not { Length: > 0 } url)
             return "not configured";
         var repo = url.Replace("https://github.com/", "", StringComparison.OrdinalIgnoreCase).TrimEnd('/');
-        return $"{repo}@{(string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch)} ({config.Direction})";
+        return $"{repo}@{GitSyncLine.BranchOf(hub.ServiceProvider, config)} ({config.Direction})";
     }
 
     /// <inheritdoc />
