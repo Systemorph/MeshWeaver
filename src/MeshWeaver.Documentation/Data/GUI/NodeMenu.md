@@ -95,7 +95,48 @@ node's own hub, and Recycle tears that hub down (#2202). Its ⋯ entry therefore
 stale-build banner uses (`MoreActionHref`). An unknown action id follows its `Href`, its documented
 graceful degradation.
 
-**A node type that replaces its landing page owns the actions row.** The row above is drawn by the standard header. A landing page registered with `WithNodePage(..., Declined)` or `(..., RenderedByThePage)` that does not call the standard header gets no More dropdown unless its own page draws one. The User home is the worked example: `UserActivityLayoutAreas.Activity` mounts `MeshNodeLayoutAreas.HeaderActionsSlot` (Edit plus More) in a stable `HomeActions` sub-area above the `HomeBody` sub-area, so a user's own home keeps its menu beside the page and the body's per-edit rebuild never re-creates it. On that protected root More carries Files, Data and the like, never Move, Copy or Delete.
+### Every node page carries it — `WithNodePage` composes the row
+
+The row above used to ride on ONE renderer, the standard header. A node type that registered its own
+landing page replaced that renderer and lost the row with it: a Markdown page offered every option,
+while an Agent, a Store plugin or a desk offered none. The same inversion the provenance line got
+([Node Page Provenance](../../Architecture/NodePageProvenance)) now applies to the menu: **every
+landing page registered through `MeshNodeLayoutAreas.WithNodePage` records a `NodePageMenu`
+verdict, and the default carries the menu.**
+
+| Verdict | What the page gets |
+|---|---|
+| `NodePageMenu.FrameworkSupplied` | The framework composes the SAME Edit + ⋯ More row above the page, right-aligned, in the named sub-area `NodePageMenu` (`MeshNodeLayoutAreas.NodePageMenuArea`); the page itself renders in the sibling sub-area `NodePageBody` (`NodePageBodyArea`). Both sub-areas are stable, so the page's per-edit re-emissions never re-create the menu. |
+| `NodePageMenu.RenderedByThePage` | Nothing added — the page draws the row itself (the standard header, or the header actions slot). Two ⋯ menus on one page is a worse page than one. |
+| `NodePageMenu.Declined("<why>")` | No row. The reason is mandatory and refused when blank. |
+
+**When a page states no menu verdict, it follows the provenance verdict** (`NodePageMenu.For`):
+
+- no provenance verdict (`FrameworkSupplied`) — the page draws no chrome, so the framework composes the menu;
+- `RenderedByThePage` — the page draws the standard header, which carries the menu;
+- `Declined(...)` — the page made a considered call to carry no node chrome, and several such pages are
+  embedded many times inside another page: each message of a chat thread is its message node's landing
+  page, rendered inside the thread. Composing a menu onto those would put a button row on every chat
+  message, so the decline carries over. A declined page that SHOULD carry the menu opts in with the
+  five-argument overload: `WithNodePage(area, page, NodePageProvenance.Declined("…"), NodePageMenu.FrameworkSupplied)`.
+
+A page that must not carry the menu where it would otherwise get it opts out the same way:
+`WithNodePage(area, page, provenance, NodePageMenu.Declined("<why>"))`.
+
+The composed row honours the two opt-outs the Markdown page's header honours: an `@@` embed
+(`?showHeader=false`) gets the page alone, and a node excluded from the header context
+(`ExcludeFromContext: [header]`, a chrome-less cover) shows no row. It is shown only to a viewer who may
+read the node, and is seeded hidden so the page paints at once.
+
+The User home is the worked example of a page that draws the row itself:
+`UserActivityLayoutAreas.Activity` mounts `MeshNodeLayoutAreas.HeaderActionsSlot` (Edit plus More) in a
+stable `HomeActions` sub-area above the `HomeBody` sub-area and registers with
+`NodePageMenu.RenderedByThePage`. On that protected root More carries Files, Data and the like, never
+Move, Copy or Delete.
+
+🚨 **What the composition does NOT reach**: a landing page registered with the bare `WithView` rather
+than `WithNodePage` records no verdict and gets nothing composed. The `NodePagesWithoutProvenance.allow`
+ratchet already holds those to a shrinking list; moving a page to `WithNodePage` gives it the menu too.
 
 The top-bar cube still renders the same list while the portals roll; MeshWeaver.Plugins removes it
 once the header menu has reached a sealed platform.

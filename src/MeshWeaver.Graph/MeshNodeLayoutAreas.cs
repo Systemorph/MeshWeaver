@@ -98,8 +98,8 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Area ID of the provenance line INSIDE whatever page renders it — the standard header's row 2
-    /// (<see cref="BuildHeader(LayoutAreaHost, MeshNode?, bool)"/>) and the row
-    /// <see cref="WithNodePage"/> composes for a page that does not draw its own.
+    /// (<see cref="BuildHeader(LayoutAreaHost, MeshNode?, bool)"/>) and any page that draws the
+    /// row itself with <see cref="BuildMetaRow"/>.
     ///
     /// <para>🚨 A stable ID rather than the positional auto-name, so "does this page carry
     /// provenance?" is a question anyone can ASK of a rendered page: nested containers render into
@@ -827,10 +827,7 @@ public static class MeshNodeLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
         return PermissionGate(host, hubPath)
-            .Select(gate => (UiControl?)(gate.Read
-                ? Controls.Stack.WithWidth("100%").WithStyle("align-items: flex-end; padding: 8px 0 0 0;")
-                    .WithView(BuildHeaderActionRow(host, false, hubPath, gate.Update))
-                : Controls.Stack));
+            .Select(gate => gate.Read ? ActionsBar(host, hubPath, gate.Update) : (UiControl?)Controls.Stack);
     }
 
     /// <summary>
@@ -1171,13 +1168,54 @@ public static class MeshNodeLayoutAreas
         NodePageProvenance? provenance = null)
     {
         var verdict = provenance ?? NodePageProvenance.FrameworkSupplied;
+        return layout.WithNodePage(area, page, verdict, NodePageMenu.For(verdict));
+    }
+
+    /// <summary>
+    /// <see cref="WithNodePage(LayoutDefinition, string, Func{LayoutAreaHost, RenderingContext, IObservable{UiControl}}, NodePageProvenance)"/>
+    /// with the page's verdict on the node's ACTIONS ROW stated explicitly — Edit and the ⋯ More
+    /// dropdown that lists every option of the node menu.
+    ///
+    /// <para><b>The default carries the menu.</b> Without this argument the menu verdict follows the
+    /// provenance verdict (<see cref="NodePageMenu.For"/>): a page that draws nothing gets the row
+    /// composed above it, a page that draws the standard header already has it, and a page that
+    /// declined the node chrome keeps its page as it is. Pass <see cref="NodePageMenu.FrameworkSupplied"/>
+    /// to give a declined page the row, or <see cref="NodePageMenu.Declined"/> — with a reason — to
+    /// keep it off a page where it is wrong.</para>
+    ///
+    /// <para>🚨 A separate overload rather than a fifth optional parameter: this method is a
+    /// module-facing contract compiled against by out-of-tree modules, and adding a parameter —
+    /// default or not — replaces the signature every already-compiled module was built against.</para>
+    /// </summary>
+    /// <param name="layout">The layout definition to register on.</param>
+    /// <param name="area">The landing area — the one this hub's <c>WithDefaultArea</c> names.</param>
+    /// <param name="page">The page's own content.</param>
+    /// <param name="provenance">The provenance verdict; null means <see cref="NodePageProvenance.FrameworkSupplied"/>.</param>
+    /// <param name="menu">The actions-row verdict.</param>
+    public static LayoutDefinition WithNodePage(
+        this LayoutDefinition layout,
+        string area,
+        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl?>> page,
+        NodePageProvenance? provenance,
+        NodePageMenu menu)
+    {
+        var verdict = provenance ?? NodePageProvenance.FrameworkSupplied;
 
         // 🚨 Order is load-bearing: every WithView overload funnels through WithNamedRenderer,
-        // which REMOVES the area's verdict (LayoutDefinition.NodePages) so a verdict can never
-        // outlive the renderer it describes. Record it AFTER registering, never before.
-        var registered = layout.WithView(area, page);
+        // which REMOVES the area's verdicts (LayoutDefinition.NodePages / NodePageMenus) so a
+        // verdict can never outlive the renderer it describes. Record them AFTER registering.
+        //
+        // WithDecoratedView, not WithView, on the composing path: the area's catalog metadata
+        // ([Browsable(false)], the XML summary) is read off the generator's METHOD, and a lambda
+        // has neither — see LayoutDefinitionExtensions.WithDecoratedView.
+        var registered = menu.Kind == NodePageMenuKind.FrameworkSupplied
+            ? layout.WithDecoratedView<UiControl>(
+                area, (host, ctx) => ComposeNodeMenu(host, page.Invoke(host, ctx)), page)
+            : layout.WithView(area, page);
 
-        return registered.WithNodePageProvenance(area, verdict);
+        return registered
+            .WithNodePageProvenance(area, verdict)
+            .WithNodePageMenu(area, menu);
     }
 
     /// <summary>
@@ -1197,10 +1235,97 @@ public static class MeshNodeLayoutAreas
         NodePageProvenance? provenance = null) where T : UiControl?
     {
         var verdict = provenance ?? NodePageProvenance.FrameworkSupplied;
-        var registered = layout.WithView(area, page);
-
-        return registered.WithNodePageProvenance(area, verdict);
+        return layout.WithNodePage(area, page, verdict, NodePageMenu.For(verdict));
     }
+
+    /// <summary>
+    /// <see cref="WithNodePage{T}(LayoutDefinition, string, Func{LayoutAreaHost, RenderingContext, T}, NodePageProvenance)"/>
+    /// with the actions-row verdict stated explicitly. Same contract as the observable form.
+    /// </summary>
+    /// <typeparam name="T">The UiControl subtype the page factory returns.</typeparam>
+    /// <param name="layout">The layout definition to register on.</param>
+    /// <param name="area">The landing area — the one this hub's <c>WithDefaultArea</c> names.</param>
+    /// <param name="page">The page's own content.</param>
+    /// <param name="provenance">The provenance verdict; null means <see cref="NodePageProvenance.FrameworkSupplied"/>.</param>
+    /// <param name="menu">The actions-row verdict.</param>
+    public static LayoutDefinition WithNodePage<T>(
+        this LayoutDefinition layout,
+        string area,
+        Func<LayoutAreaHost, RenderingContext, T> page,
+        NodePageProvenance? provenance,
+        NodePageMenu menu) where T : UiControl?
+    {
+        var verdict = provenance ?? NodePageProvenance.FrameworkSupplied;
+        var registered = menu.Kind == NodePageMenuKind.FrameworkSupplied
+            ? layout.WithDecoratedView(
+                area,
+                (host, ctx) => ComposeNodeMenu(host, Observable.Return<UiControl?>(page.Invoke(host, ctx))),
+                page)
+            : layout.WithView(area, page);
+
+        return registered
+            .WithNodePageProvenance(area, verdict)
+            .WithNodePageMenu(area, menu);
+    }
+
+    /// <summary>Sub-area of a composed landing page that holds the node's actions row (Edit and ⋯ More).</summary>
+    public const string NodePageMenuArea = "NodePageMenu";
+
+    /// <summary>Sub-area of a composed landing page that holds the page's own content.</summary>
+    public const string NodePageBodyArea = "NodePageBody";
+
+    /// <summary>
+    /// The actions row composed above a landing page that does not draw the standard header — the
+    /// same Edit button and ⋯ More dropdown the Markdown page's header carries
+    /// (<see cref="BuildHeaderActionRow"/>, fed by <c>$Menu:Node</c>), so every node page offers
+    /// the same options.
+    ///
+    /// <para>Two STABLE sub-areas, never a <c>Select</c> over the page: the page re-emits on every
+    /// edit of its node, and rebuilding the stack around it would re-create the menu (and re-open
+    /// its subscriptions) on each one. The page's own emissions — a null pass-through frame
+    /// included — reach its sub-area unchanged.</para>
+    ///
+    /// <para>An <c>@@</c> embed (<c>?showHeader=false</c>) gets the page alone, exactly as the
+    /// Markdown page drops its header there.</para>
+    /// </summary>
+    private static IObservable<UiControl?> ComposeNodeMenu(LayoutAreaHost host, IObservable<UiControl?> page)
+        => IsEmbedded(host)
+            ? page
+            : Observable.Return<UiControl?>(Controls.Stack
+                .WithWidth("100%")
+                .WithView(NodeMenuSlot(host), area => area.WithId(NodePageMenuArea))
+                .WithView(page, area => area.WithId(NodePageBodyArea)));
+
+    /// <summary>True when the page is rendered as an <c>@@</c> embed (<c>?showHeader=false</c>).</summary>
+    private static bool IsEmbedded(LayoutAreaHost host)
+        => host.Reference.HasParameter("showHeader")
+           && string.Equals(host.Reference.GetParameterValue("showHeader"), "false", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The composed actions row: shown to a viewer who may read the node, hidden on a node excluded
+    /// from the header context (<see cref="MeshNodeVisibility.HeaderContext"/> — the same per-node
+    /// opt-out that removes the standard header, and with it the menu, from a chrome-less cover).
+    /// Seeded hidden, so the page paints at once and the row appears when the facts are in.
+    /// </summary>
+    private static IObservable<UiControl?> NodeMenuSlot(LayoutAreaHost host)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var headerExcluded = host.Workspace.GetMeshNodeStream()
+            .Select(node => node?.IsExcludedFromContext(MeshNodeVisibility.HeaderContext) == true)
+            .DistinctUntilChanged();
+        return PermissionGate(host, hubPath)
+            .CombineLatest(headerExcluded, (gate, excluded) => (gate.Read, gate.Update, Excluded: excluded))
+            .DistinctUntilChanged()
+            .Select(s => s.Read && !s.Excluded
+                ? ActionsBar(host, hubPath, s.Update)
+                : (UiControl?)Controls.Stack)
+            .StartWith((UiControl?)Controls.Stack);
+    }
+
+    /// <summary>The header's Edit + ⋯ More row on a bar of its own, right-aligned above a page.</summary>
+    private static UiControl ActionsBar(LayoutAreaHost host, string hubPath, bool canEdit)
+        => Controls.Stack.WithWidth("100%").WithStyle("align-items: flex-end; padding: 8px 0 0 0;")
+            .WithView(BuildHeaderActionRow(host, false, hubPath, canEdit));
 
     /// <summary>
     /// Builds a content URL for navigating to a specific layout area of a node.
