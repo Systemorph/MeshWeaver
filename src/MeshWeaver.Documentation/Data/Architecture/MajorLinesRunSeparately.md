@@ -177,7 +177,7 @@ promoted 3.x sets waited behind it.
 **The declaration.** `.github/delivery-lines.json` names the line's first instance:
 
 ```json
-{ "branch": "main3", …, "firstInstance": "memex", "firstInstanceImageRepository": "memex-portal-ai-first3" }
+{ "branch": "<line>", …, "firstInstance": "<deployment id>", "firstInstanceImageRepository": "<its own repository>" }
 ```
 
 Both fields absent means the control instance on `memex-control`, handed its builds by
@@ -227,6 +227,55 @@ is tagged and not announced, and the job says so in a warning.
 sets `migrationImageRepository` explicitly, because the derived name (`imageRepository` with
 `memex-portal-ai` replaced by `memex-migration`) names a repository nobody writes. Until the record
 moves, the line is held, and the hold says so.
+
+## 4d. A line may declare that it has NO first instance
+
+Policy `line-no-first-instance`. A line can be left with no instance that could run its sets first:
+every instance the platform team runs has moved to the next major, and the line's remaining
+instances are updated by their own administrators. Holding such a line for a first instance would
+freeze it for good. Leaving the field out would not work either, because an omitted `firstInstance`
+means control, and control on another major HOLDS the line (`LINE HAS NO FIRST INSTANCE`).
+
+So the absence is DECLARED, as a named state:
+
+```json
+{ "branch": "main3", …, "firstInstance": "none",
+  "noFirstInstanceReason": "every instance the platform team runs follows 4.x; the remaining 3.x instance is a customer portal its own admins update, …" }
+```
+
+The 3.x line (`main3`) declares exactly this.
+
+**What `cd-line.py` refuses**, each by name:
+- `none` without a `noFirstInstanceReason` of at least 20 characters;
+- `none` beside a `firstInstanceImageRepository` (no instance runs one);
+- a `noFirstInstanceReason` on a line that does not declare `none`;
+- any other spelling (`None`, `NONE`, `" none"`), which is a malformed deployment id.
+
+`none` is the one reserved value of `firstInstance` (`FirstInstance.NONE`, policy
+`open-vocabulary-string-constants`). Every other value is a deployment id.
+
+**`first-instance-first`.** The job runs for the line and hands no instance anything. Nothing is
+read, tagged or announced. One step prints the declaration and its reason as a notice and in the
+run summary. Every step that would read a record or a registry is conditioned on that declaration,
+never on whether an input happens to be present.
+
+**`arm`.** The record steps are skipped on the declaration. `select` re-reads the declaration itself:
+- it refuses a `--control-record` passed for a line that declares none;
+- it still refuses a missing record for every other line.
+
+So no workflow branch can turn an omission into "no first instance". With no instance to read, a set
+is green on the remaining platform evidence:
+- it was promoted from a commit whose required check is green;
+- its compatibility ladder passed;
+- the image-identity gate runs before the arming write.
+
+A red, missing or ambiguous ladder is still refused, an unfinished one still waits, and nothing is
+ever armed backwards. There is no lag clock and nothing can freeze, because no instance was handed a
+build. Every sentence starts `NO FIRST INSTANCE, DECLARED: line `main3` declares firstInstance
+"none" … (policy line-no-first-instance)`. The fleet-unarmed issue for that major says the same above
+its table, so a stall there reads as the ladder's or the arming's own, never as an instance's.
+
+Control first is unchanged for the line control follows.
 
 ## 5. Order of work
 
