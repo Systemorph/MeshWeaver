@@ -1857,7 +1857,11 @@ internal static class NodeTypeEnrichmentHelpers
                 meshHub, nodeType,
                 belowFloor => RefuseBelowDependencyFloor(
                     node, nodeType, typeNode, def, meshHub, logger,
-                    $"collection={def.LatestAssemblyCollection}, path={def.LatestAssemblyPath}",
+                    // An Unavailable record may never have carried a build (a first compile the
+                    // floor declined): say so rather than print an empty "collection=, path=".
+                    def.LatestAssemblyPath is { Length: > 0 } recordedPath
+                        ? $"collection={def.LatestAssemblyCollection}, path={recordedPath}"
+                        : "no recorded build",
                     belowFloor),
                 () =>
                 {
