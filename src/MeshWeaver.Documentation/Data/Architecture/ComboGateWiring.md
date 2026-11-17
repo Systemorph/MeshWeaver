@@ -197,6 +197,34 @@ a satellite can republish) and the verifier itself. The publications are only kn
 module fetch, and the instance offers no read of its landed verdicts to this run's identity, so
 the reuse is not built.
 
+### The lane is red only when the CHECK broke, never for the verdict it landed (#4413)
+
+Under policy `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)) the
+combo verdict is **advisory**: the instance's own gate reads it at decision time, a Red is named
+among the roll's advisories, and the platform still rolls. The lane follows the same rule.
+
+- **A per-instance verify job is green when a verdict was produced and LANDED** on its instance,
+  whatever its kind. A Green, a Red and a NotVerifiable all end `land_verdict` with exit 0. The
+  kind is written to the job's step summary, and a Red or NotVerifiable is also raised as a
+  `::warning::` annotation naming the candidate. The verdict on the instance is the record that
+  matters; the job colour only says whether the check worked.
+- **A per-instance verify job is red when the check broke.** That covers no verdict produced (a
+  missing instrument, an assembly that could not run, a verifier that wrote nothing), a verdict
+  that did not land (HTTP 401 or any non-200, or a 200 that does not confirm `recorded`), and a
+  verdict kind the lane cannot classify.
+- **So the `verdict` job, and with it the `ci-combo-unverified` ledger, reds only on a broken
+  check.** A fleet whose rolls carry Red or NotVerifiable verdicts is the content's state, and the
+  content's state is not filed as a red main. A public slot's `combo-slot-N.json` and verdict are
+  uploaded whenever the job was not cancelled (`!cancelled()`), because the landed Red and
+  NotVerifiable slots are the ones a reader opens.
+
+Until #4413 a landed Red or NotVerifiable failed its job, so the ledger stayed open on the fleet's
+content state. Run `44149403398`, for example, landed a verdict on every one of its 7 instances
+and still filed an entry. `check-combo-verify.py` executes the real `land_verdict` with a
+stand-in `curl` in both directions: a landed Red or NotVerifiable is green and reported, and a
+refused, unconfirmed, unreachable or unclassifiable landing is red. Its `--self-test` restores the
+old Green-only rule and removes each landing check, and requires a scenario to fail each time.
+
 ### Why it is its own workflow, and why an instance's verify job is red until that instance is provisioned
 
 The lane holds **no credential for any instance** (#3848). Each verify job reaches its instance as

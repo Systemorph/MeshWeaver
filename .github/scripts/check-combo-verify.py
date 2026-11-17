@@ -174,7 +174,9 @@ VERIFY_JOB_NAME = "Verify instance slot ${{ matrix.slot }} against its roll targ
 # The roster digest's HMAC key: a secret the preflight asserts, identical in both jobs.
 DIGEST_KEY = "${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}"
 # The ONLY condition under which a verify job may upload anything (see handover_problems).
-UPLOAD_CONDITION = "failure() && env.INSTANCE_PRIVATE == 'false'"
+# `!cancelled()`, not `failure()` (#4413): a LANDED Red or NotVerifiable leaves the job green (the
+# verdict is advisory), and those are the slots whose combo and verdict a reader wants.
+UPLOAD_CONDITION = "${{ !cancelled() && env.INSTANCE_PRIVATE == 'false' }}"
 # …and what it may be called and may contain: the slot, never a name. An artifact's name and the
 # file names inside it are not masked.
 UPLOAD_NAME = "combo-work-slot-${{ matrix.slot }}"
@@ -296,7 +298,7 @@ VERDICT_SCENARIOS = [
     (
         "6 of 6 created, one failed",
         {**VERDICT_OK, "VERIFY": "failure", "PASSED": "5"},
-        1, "5 of 6 per-instance job(s) succeeded", None,
+        1, "5 of 6 per-instance job(s) produced and landed a verdict", None,
     ),
     (
         "6 of 6 created, the matrix reads success, only 5 concluded success",
@@ -723,8 +725,10 @@ UPFRONT_END = "# ── 3. Verify"
 # (label, stand-in exit, verdict the stand-in writes or None, expected exit, text the output must
 #  contain, whether the gate must be reached, whether a verdict must be landed)
 UPFRONT_SCENARIOS = [
-    ("the assembly decides NotVerifiable ⇒ landed, gate NOT reached",
-     1, "NotVerifiable", 1, "DECIDED BEFORE THE GATE", False, True),
+    # A landed NotVerifiable ends the slot GREEN: the verdict is advisory (#4413, policy
+    # `platform-rolls-independently-of-packages`); the job is red only when the check broke.
+    ("the assembly decides NotVerifiable ⇒ landed, gate NOT reached, slot green",
+     1, "NotVerifiable", 0, "DECIDED BEFORE THE GATE", False, True),
     ("NEGATIVE CONTROL: only the gate can answer ⇒ the gate IS reached",
      0, None, 0, "REACHED-THE-GATE", True, False),
     ("an up-front Green is refused — no pass without a gate",
@@ -758,7 +762,7 @@ def check_upfront(block: str) -> int:
             prelude = f"""set -euo pipefail
 fail() {{ echo "FAIL: $*"; exit 1; }}
 note() {{ echo "NOTE: $*"; }}
-land_verdict() {{ echo "LANDED $KIND"; exit 1; }}
+land_verdict() {{ echo "LANDED $KIND"; exit 0; }}
 dotnet() {{
   local out="" prev=""
   for a in "$@"; do [ "$prev" = "--verdict" ] && out=$a; prev=$a; done
@@ -791,6 +795,98 @@ assembly_args=(combo.json image:9.9.9 --verdict "$verdict")
         if not ok:
             failures += 1
             print(f"::error::the lander's up-front block behaved wrongly for '{label}'")
+            print("  " + out.replace("\n", "\n  "))
+    return failures
+
+
+# ── The landing decides the slot's colour (#4413) ─────────────────────────────────────────────
+# Under policy `platform-rolls-independently-of-packages` the combo verdict is ADVISORY, so a
+# per-instance job is red ONLY when the check broke — no verdict produced, or it did not land on its
+# instance. A Red or NotVerifiable that LANDED is reported (summary + warning) and the job is green;
+# filing it as a red main would ledger the fleet's content state as a broken build. The real
+# `land_verdict` function is executed with a stand-in `curl` over both directions.
+LANDING_START = "land_verdict() {\n"
+LANDING_END = "\n}\n"
+
+# (label, verdict kind written, HTTP code, response body, want exit, text the output must contain,
+#  text the summary must contain or None)
+LANDING_SCENARIOS = [
+    ("a Red verdict that LANDED ⇒ green, reported as a warning and in the summary",
+     "Red", "200", '{"recorded":true}', 0, "::warning::", "→ **Red**"),
+    ("a NotVerifiable verdict that LANDED ⇒ green, reported",
+     "NotVerifiable", "200", '{"recorded":true}', 0, "verdict is NotVerifiable", "→ **NotVerifiable**"),
+    ("a Green verdict that LANDED ⇒ green",
+     "Green", "200", '{"recorded":true}', 0, "GREEN", "→ **Green**"),
+    ("a verdict the instance refused (HTTP 500) ⇒ RED, not landed",
+     "Red", "500", "boom", 1, "was NOT landed", None),
+    ("a verdict the instance did not authenticate (HTTP 401) ⇒ RED",
+     "Green", "401", "", 1, "HTTP 401", None),
+    ("a 200 that does not confirm the recording ⇒ RED",
+     "Red", "200", '{"recorded":false}', 1, "did not confirm", None),
+    ("an unreachable instance (curl failed) ⇒ RED",
+     "Green", "CURLFAIL", "", 1, "HTTP 000", None),
+    ("a verdict kind this lane cannot classify ⇒ RED even though it landed",
+     "Purple", "200", '{"recorded":true}', 1, "unknown verdict kind", None),
+]
+
+
+def read_landing(text: str) -> str:
+    start = text.find(LANDING_START)
+    end = text.find(LANDING_END, start if start >= 0 else 0)
+    if start < 0 or end < 0:
+        raise SystemExit(f"::error::{LANDER}: the land_verdict function moved, and this guard did "
+                         "not follow — it would otherwise pass having checked nothing.")
+    return text[start:end + len(LANDING_END)]
+
+
+def check_landing(function: str) -> int:
+    """Executes the real `land_verdict` over each landing outcome with a stand-in `curl`."""
+    failures = 0
+    for label, kind, code, body, want_code, want_text, want_summary in LANDING_SCENARIOS:
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = Path(tmp) / "verdict.json"
+            verdict.write_text(json.dumps({"verdict": kind, "modules": [], "caveats": []}),
+                               encoding="utf-8")
+            summary = Path(tmp) / "summary"
+            summary.touch()
+            prelude = f"""set -euo pipefail
+fail() {{ echo "::error::[slot-0] $*"; exit 1; }}
+note() {{ echo "[slot-0] $*"; }}
+body_of() {{ head -c "$1" "$2" 2>/dev/null || true; }}
+mint_token() {{ TOKEN=stand-in; }}
+curl() {{
+  local out="" prev=""
+  for a in "$@"; do [ "$prev" = "-o" ] && out=$a; prev=$a; done
+  [ "$STAND_CODE" != "CURLFAIL" ] || return 7
+  printf '%s' "$STAND_BODY" >"$out"
+  printf '%s' "$STAND_CODE"
+}}
+shown=slot-0
+where="this instance"
+PRIVATE=false
+CANDIDATE=9.9.9
+tag=slot-0
+out_dir={tmp}
+summary={summary}
+BASE_URL=http://127.0.0.1:9
+unauthorized_hint="provision the build principal"
+verdict={verdict}
+KIND={kind}
+"""
+            script = prelude + function + '\nland_verdict\necho "RETURNED"; exit 99\n'
+            env = dict(os.environ)
+            env["STAND_CODE"] = code
+            env["STAND_BODY"] = body
+            proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
+                                  text=True, check=False)
+            summary_text = summary.read_text(encoding="utf-8")
+        out = proc.stdout + proc.stderr
+        ok = (proc.returncode == want_code and want_text in out
+              and (want_summary is None or want_summary in summary_text))
+        print(f"[{'PASS' if ok else 'FAIL'}] landing: {label}: exit={proc.returncode} (want {want_code})")
+        if not ok:
+            failures += 1
+            print(f"::error::the lander's land_verdict behaved wrongly for '{label}'")
             print("  " + out.replace("\n", "\n  "))
     return failures
 
@@ -1043,7 +1139,7 @@ def self_test(root: Path) -> int:
             lambda jobs: [step["env"].pop("ARTIFACT_TAG") for step in jobs["verify"]["steps"]
                           if "combo-verify-instance.sh" in str(step.get("run", ""))],
         "the failed-verification upload re-enabled for a private row":
-            lambda jobs: [step.update({"if": "failure()"}) for step in jobs["verify"]["steps"]
+            lambda jobs: [step.update({"if": "${{ !cancelled() }}"}) for step in jobs["verify"]["steps"]
                           if "upload-artifact" in str(step.get("uses", ""))],
         "the artifact itself named after the installation":
             lambda jobs: [step["with"].update(name="combo-work-${{ env.INSTANCE_NAME }}")
@@ -1134,6 +1230,32 @@ def self_test(root: Path) -> int:
             print(f"::error::--self-test: {label} passed every up-front scenario.")
             return 1
     print(f"--self-test: {len(upfront_mutations)} up-front mutation(s) each fail a scenario.")
+
+    # ── The landing, behaviour: both directions must be able to fail (#4413).
+    landing = read_landing(read_lander(root))
+    if check_landing(landing):
+        print("::error::--self-test: the shipped land_verdict fails its own scenarios.")
+        return 1
+    landing_mutations = {
+        "the old rule back: a landed Red or NotVerifiable reds the job (an advisory verdict filed as a red main)":
+            landing.replace('  Red|NotVerifiable)\n', '  Red|NotVerifiable) fail "verdict is $KIND";\n', 1),
+        "an unconfirmed recording accepted as landed":
+            landing.replace("jq -e '.recorded == true' >/dev/null <\"$landed\"", "true", 1),
+        "a refused POST accepted as landed":
+            landing.replace('[ "$land_code" = "200" ] \\\n', 'true \\\n', 1),
+        "an unknown verdict kind accepted":
+            landing.replace('  *) fail "the verifier wrote an unknown verdict kind',
+                            '  *) note "the verifier wrote an unknown verdict kind', 1),
+    }
+    for label, block in landing_mutations.items():
+        if block == landing:
+            print(f"::error::--self-test: could not build the mutation '{label}' — land_verdict "
+                  "changed shape and this self-test did not follow.")
+            return 1
+        if check_landing(block) == 0:
+            print(f"::error::--self-test: {label} passed every landing scenario.")
+            return 1
+    print(f"--self-test: {len(landing_mutations)} landing mutation(s) each fail a scenario.")
     return 0
 
 
@@ -1151,13 +1273,15 @@ def main() -> int:
     scripts = read_preflight(root)
     failures = (check(scripts) + check_lander(read_lander(root))
                 + check_source_split(root) + check_verdict(scripts["verdict"])
-                + check_upfront(read_upfront(read_lander(root))))
+                + check_upfront(read_upfront(read_lander(root)))
+                + check_landing(read_landing(read_lander(root))))
     if failures:
         print(f"::error::{failures} combo-verify check(s) behaved wrongly.")
         return 1
     print(f"check-combo-verify: {len(SCENARIOS)} preflight scenario(s) over "
           f"{len(SENTINELS)} assertion step(s) + the lander's identity checks + "
           f"{len(VERDICT_SCENARIOS)} verdict scenario(s) + {len(UPFRONT_SCENARIOS)} up-front "
+          f"scenario(s) + {len(LANDING_SCENARIOS)} landing "
           "scenario(s) + the roster hand-over's and the one build's structure, "
           "0 violation(s).")
     # 🚨 WHAT THIS GREEN DOES NOT COVER, said by the gate rather than left to a reader.
