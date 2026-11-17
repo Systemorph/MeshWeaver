@@ -304,7 +304,11 @@ cmd_dry_run_report() {
       echo "  This needs Microsoft.ContainerRegistry/registries/runs/read." >&2
       rc=1; continue
     fi
-    read -r run_id run_status run_created <<< "$runs"
+    # 🚨 `-o tsv` prints a multiselect LIST one value per LINE, so a single `read` of the answer took
+    # the run id and left the status and time empty — measured on the control instance (Memex run
+    # 44191272249: `newest completed run dt21 (, created )`, then `ended ''`, NO VERDICT on every
+    # read-back). Fold the lines to one before splitting, so one line or three reads the same.
+    read -r run_id run_status run_created <<< "$(printf '%s' "$runs" | tr '\n\t' '  ')"
     if [ -z "${run_id:-}" ]; then
       echo "::error::'$task' is recorded as an enabled dry run and has NO completed run to read."
       rc=1; continue
