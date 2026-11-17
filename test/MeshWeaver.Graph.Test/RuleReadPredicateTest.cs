@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Text.Json.Nodes;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Security;
@@ -37,18 +36,24 @@ public class RuleReadPredicateTest(ITestOutputHelper output) : MonolithMeshTestB
 
     // ConfigureMeshBase, never ConfigureMesh: the default test configuration grants Public Admin.
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => ConfigureMeshBase(builder)
+        .WithMeshType(typeof(RecordContent), nameof(RecordContent))
         .AddMeshNodes(
             new MeshNode("Record", "Inbox")
             {
                 NodeType = "NodeType",
                 Name = RecordType,
                 Content = new NodeTypeDefinition(),
-                HubConfiguration = config => config.AddDefaultLayoutAreas(),
+                HubConfiguration = config => config.WithContentType<RecordContent>().AddDefaultLayoutAreas(),
             },
             new MeshNode(PermissionEvaluator.AdminScope) { NodeType = "Markdown", Name = "Admin" },
             AssignmentNodeFactory.UserRole(Erin.ObjectId, "Admin", PermissionEvaluator.AdminScope))
         .ConfigureServices(services => services
             .AddSingleton<INodeTypeAccessRule>(sp => new SubmissionRule(sp.GetRequiredService<IMessageHub>())));
+
+    /// <summary>A submission record: who filed it, and what it says.</summary>
+    /// <param name="SubmittedBy">The submitter's user id.</param>
+    /// <param name="Message">The record's text.</param>
+    public sealed record RecordContent(string SubmittedBy, string Message);
 
     /// <summary>The feedback-submission shape: the fold, else Read below <see cref="Prefix"/> for the
     /// record's own submitter and for a global admin.</summary>
@@ -102,7 +107,7 @@ public class RuleReadPredicateTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         NodeType = RecordType,
         Name = id,
-        Content = new JsonObject { ["submittedBy"] = submitter, ["message"] = "m" },
+        Content = new RecordContent(submitter, "m"),
     };
 
     /// <summary>
@@ -161,18 +166,18 @@ public class RuleReadPredicateTest(ITestOutputHelper output) : MonolithMeshTestB
         var (carols, others) = await Seed(ct);
         var outside = (await AsSystem(new MeshNode("c", Partition)
         {
-            NodeType = RecordType, Name = "c", Content = new JsonObject { ["submittedBy"] = Carol.ObjectId },
+            NodeType = RecordType, Name = "c", Content = new RecordContent(Carol.ObjectId, "m"),
         }, ct)).Path;
         var matched = 0;
         foreach (var caller in new[] { Erin, Carol, Dave })
         {
-            var resolved = await Resolve(caller.ObjectId!, ct);
+            var resolved = await Resolve(caller.ObjectId, ct);
             foreach (var path in new[] { carols, others, outside })
             {
                 var stored = await Mesh.ServiceProvider.GetRequiredService<AccessService>()
-                    .RunAsSystem(() => Mesh.GetMeshNodeStream(path)).Where(n => n is not null).Take(1)
+                    .RunAsSystem(() => Mesh.GetMeshNodeStream(path)).OfType<MeshNode>().Take(1)
                     .Should().Within(TimeSpan.FromSeconds(10)).Emit(cancellationToken: ct);
-                foreach (var predicate in resolved.Where(p => p.Matches(stored!, "Markdown", Mesh.JsonSerializerOptions)))
+                foreach (var predicate in resolved.Where(p => p.Matches(stored, "Markdown", Mesh.JsonSerializerOptions)))
                 {
                     matched++;
                     Assert.True(await PointRead(caller, path, ct),
@@ -184,7 +189,7 @@ public class RuleReadPredicateTest(ITestOutputHelper output) : MonolithMeshTestB
         Assert.Equal(3, matched);
     }
 
-    private Task<ImmutableArray<ResolvedReadPredicate>> Resolve(string userId, CancellationToken ct)
+    private Task<ImmutableArray<ResolvedReadPredicate>> Resolve(string? userId, CancellationToken ct)
         => RuleReadPredicates.Resolve(Mesh, userId).Should().Within(TimeSpan.FromSeconds(10)).Emit(cancellationToken: ct);
 
     private Task<bool> PointRead(AccessContext caller, string path, CancellationToken ct)
@@ -208,10 +213,45 @@ public class RuleReadPredicateTest(ITestOutputHelper output) : MonolithMeshTestB
                 NodeFactory.Query<MeshNode>(MeshQueryRequest.FromQuery($"{query} select:path")))
             .Where(change => change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Take(1)
-            .Select(change => (change.Items ?? []).Select(n => n.Path!).Where(p => !string.IsNullOrEmpty(p)).ToArray())
+            .Select(change => (change.Items ?? []).Select(n => n.Path).OfType<string>().Where(p => p.Length > 0).ToArray())
             .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
 
-    private async Task<MeshNode> AsSystem(MeshNode node, CancellationToken ct)
-        => (await Mesh.ServiceProvider.GetRequiredService<AccessService>()
-            .RunAsSystem(() => NodeFactory.CreateNode(node)).Should().Emit(cancellationToken: ct))!;
+    private Task<MeshNode> AsSystem(MeshNode node, CancellationToken ct)
+        => Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => NodeFactory.CreateNode(node)).OfType<MeshNode>().Should().Emit(cancellationToken: ct);
+
+    /// <summary>
+    /// 🚨 FAIL CLOSED — a subject no resolver knows opens NOTHING, for every caller, a global admin
+    /// included; it is never read as a default subject. Pure: <see cref="RuleReadPredicates.Bind"/>.
+    /// </summary>
+    [Fact]
+    public void AnUnknownSubject_OpensNothing_ForAnyCaller()
+    {
+        RuleReadPredicate[] declared =
+        [
+            new() { NodeType = RecordType, PathPrefix = Prefix, Subject = "SomeModulesOwnSubject" },
+            new() { NodeType = RecordType, PathPrefix = Prefix, Subject = RuleReadSubject.ContentFieldIsCaller },
+        ];
+        Assert.Empty(RuleReadPredicates.Bind(declared, Erin.ObjectId, isGlobalAdmin: true));
+        Assert.Empty(RuleReadPredicates.Bind(declared, Dave.ObjectId, isGlobalAdmin: false));
+    }
+
+    /// <summary>
+    /// 🚨 FAIL CLOSED — excluded partition-root types: a row whose partition root is excluded does not
+    /// match, nor does a row whose root is ABSENT; a row under any other root does. Pure:
+    /// <see cref="ResolvedReadPredicate.Matches"/>.
+    /// </summary>
+    [Fact]
+    public void ExcludedPartitionRootTypes_CloseAPersonsHome_AndAnAbsentRoot()
+    {
+        var predicate = Assert.Single(RuleReadPredicates.Bind(
+            [new() { NodeType = RecordType, Subject = RuleReadSubject.GlobalAdmin, ExcludedPartitionRootTypes = ["User"] }],
+            Erin.ObjectId, isGlobalAdmin: true));
+        var row = new MeshNode("r", "pkg/_Thread") { NodeType = RecordType, Content = new RecordContent("x", "m") };
+        var options = Mesh.JsonSerializerOptions;
+        Assert.True(predicate.Matches(row, "Space", options), "a row under another root type matches");
+        Assert.False(predicate.Matches(row, "User", options), "a row in a person's home does not");
+        Assert.False(predicate.Matches(row, null, options), "a row whose partition root is absent does not");
+        Assert.False(predicate.Matches(row with { NodeType = "Other" }, "Space", options), "another node type never matches");
+    }
 }

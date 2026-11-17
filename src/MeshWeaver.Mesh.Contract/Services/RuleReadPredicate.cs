@@ -175,9 +175,8 @@ public static class RuleReadPredicates
         ArgumentNullException.ThrowIfNull(hub);
         var declared = hub.ServiceProvider.GetService<NodeTypeAccessRuleSet>()?.ReadPredicates()
                        ?? ImmutableArray<RuleReadPredicate>.Empty;
-        if (declared.IsEmpty || !IsRealUser(userId))
+        if (declared.IsEmpty || userId is not { Length: > 0 } caller || !IsRealUser(caller))
             return Observable.Return(ImmutableArray<ResolvedReadPredicate>.Empty);
-        var caller = userId!;
         var needsAdmin = declared.Any(p => p.Subject == RuleReadSubject.GlobalAdmin);
         return (needsAdmin ? hub.IsGlobalAdmin(caller).Take(1).DefaultIfEmpty(false) : Observable.Return(false))
             .Select(isAdmin => Bind(declared, caller, isAdmin, hub));
