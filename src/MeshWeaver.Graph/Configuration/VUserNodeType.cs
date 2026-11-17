@@ -61,8 +61,10 @@ public static class VUserNodeType
     /// Custom access rule for VUser nodes. Replaces the standard RLS check inside RlsNodeValidator.
     /// Allows any identity in the portal namespace to create/read/edit VUser nodes.
     /// Other identities are denied (the standard AccessAssignment check is NOT performed).
+    /// It NARROWS the fold, so it is <see cref="INodeTypeExclusiveRead"/> with no predicate: a Read grant
+    /// never lists a VUser node either (Doc/Architecture/AccessControl → "Rule read predicates").
     /// </summary>
-    private class VUserAccessRule : INodeTypeAccessRule
+    private sealed class VUserAccessRule : INodeTypeAccessRule, INodeTypeExclusiveRead
     {
         public string NodeType => VUserNodeType.NodeType;
 
