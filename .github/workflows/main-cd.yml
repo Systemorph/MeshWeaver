@@ -2740,6 +2740,12 @@ jobs:
   #
   # Like the control lane it is outside `delivery-verdict`: a red here never says "the fleet did not
   # ship", and `arm` turns red on its own once the first instance has been behind past the bound.
+  #
+  # 🚫 A line that DECLARES no first instance (`firstInstance: "none"` + `noFirstInstanceReason`,
+  # policy `line-no-first-instance`) runs this job too: it hands no instance anything — nothing is
+  # read, tagged or announced — and says so by name (a notice and the summary). Every step that would
+  # read a record or a registry is conditioned on that DECLARATION (`FIRST`, from cd-line.py), never
+  # on whether an input happens to be present.
   first-instance-first:
     name: "Deploy the line's first instance first: <its own repository>:<version> before the fleet is offered it"
     needs: [preflight, line, gate, portal-image, promote]
@@ -2769,11 +2775,24 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: "The decision can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
+      - name: "No first instance declared — hand no instance anything, and say so"
+        if: env.FIRST == 'none'
+        run: |
+          set -euo pipefail
+          # The declaration is re-read from the file (cd-line.py validated its reason): the sentence
+          # names the line, the declaration and its reason. A file that disagrees with `line` is RED.
+          python3 .github/scripts/arm-promoted-set.py first-instance --branch "$DELIVERY_LINE" > "$RUNNER_TEMP/first.json"
+          jq -e '.none == "true"' "$RUNNER_TEMP/first.json" >/dev/null \
+            || { echo "::error::line $DELIVERY_LINE's cd-line.py derive output (job line) says firstInstance 'none', but .github/delivery-lines.json does not declare it — refusing to skip a handover on one of two disagreeing readings"; exit 1; }
+          sentence=$(jq -er '.sentence' "$RUNNER_TEMP/first.json")
+          echo "::notice title=first-instance-first: no instance handed ${V_PORTAL}::$sentence"
+          echo "- NO instance handed \`$V_PORTAL\`: $sentence" >> "$GITHUB_STEP_SUMMARY"
       # The record is read exactly as `arm` reads it (the fleet-reader App, scoped to the deployments
       # repository): where the instance answers (content.host), which major it takes (updatePattern) and
       # which repository it rolls (imageRepository). An unknown `firstInstance` is RED here, by name.
       - name: Where is the first instance's record declared?
         id: record
+        if: env.FIRST != 'none'
         run: |
           set -euo pipefail
           repo=$(jq -er '.record.repository' .github/control-instance.json)
@@ -2785,6 +2804,7 @@ jobs:
           { echo "owner=$owner"; echo "name=$name"; echo "repo=$repo"; echo "path=$path"; } >> "$GITHUB_OUTPUT"
       - name: Mint a read token for the first instance's record
         id: record-token
+        if: env.FIRST != 'none'
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.FLEET_READER_APP_ID }}
@@ -2794,6 +2814,7 @@ jobs:
           permission-contents: read
       - name: Read the first instance's record
         id: first
+        if: env.FIRST != 'none'
         env:
           GH_TOKEN: ${{ steps.record-token.outputs.token }}
           REPO: ${{ steps.record.outputs.repo }}
@@ -2818,8 +2839,10 @@ jobs:
             echo "::warning title=First instance not on its own image line::$FIRST's record names imageRepository '$rec_repo', not '$FIRST_IMAGE' (.github/delivery-lines.json, line $DELIVERY_LINE). $FIRST_IMAGE:$V_PORTAL is tagged below, but NOT announced: $FIRST cannot roll to a repository its record does not name. Move the record (Systemorph/Memex mesh/Deployments/$FIRST.json imageRepository + migrationImageRepository) — until then arm holds line $DELIVERY_LINE."
           fi
       - name: Ensure Azure CLI
+        if: env.FIRST != 'none'
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
+        if: env.FIRST != 'none'
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -2827,9 +2850,12 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       # The SAME decision control-first takes (`control_first`): tag unless already tagged, announce
       # unless a NEWER version is already on the repository. A repository with no tag yet (its first
-      # build) is an empty listing — never an error.
+      # build) is an empty listing — never an error. Every later step reads this step's outputs AND carries
+      # `env.FIRST != 'none'` itself, so a line that declares no first instance tags and announces
+      # nothing by declaration, not merely because an output happened to be empty.
       - name: Which tag does the first instance's repository get for this build?
         id: tags
+        if: env.FIRST != 'none'
         run: |
           set -euo pipefail
           [ -n "${V_PORTAL:-}" ] && [ -n "${FIRST_IMAGE:-}" ] || { echo "::error::no portal version or no first-instance repository — refusing to tag nothing"; exit 1; }
@@ -2845,15 +2871,15 @@ jobs:
           python3 .github/scripts/arm-promoted-set.py control-first \
             --control-manifests "$RUNNER_TEMP/first-manifests.json" --version "$V_PORTAL"
       - name: ACR login
-        if: steps.tags.outputs.action == 'tag'
+        if: env.FIRST != 'none' && steps.tags.outputs.action == 'tag'
         run: bash .github/scripts/acr-login.sh
       - name: Log in to the fleet registry (publisher)
-        if: steps.tags.outputs.action == 'tag'
+        if: env.FIRST != 'none' && steps.tags.outputs.action == 'tag'
         env:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: "Tag <first instance repository>:<version> — the fleet registry first, ACR's version tag LAST"
-        if: steps.tags.outputs.action == 'tag'
+        if: env.FIRST != 'none' && steps.tags.outputs.action == 'tag'
         run: |
           set -euo pipefail
           # The SOURCE is this run's PROMOTED portal (promote copied the same staging manifest to its
@@ -2862,25 +2888,25 @@ jobs:
           docker buildx imagetools create --tag "${{ env.ACR }}/$FIRST_IMAGE:$V_PORTAL" "${{ env.ACR }}/memex-portal-ai:$STAGING"
           echo "- $FIRST DEPLOYED FIRST: \`$FIRST_IMAGE:$V_PORTAL\` (ACR + ${{ env.REGISTRY }}) — the fleet is offered it once $FIRST runs it" >> "$GITHUB_STEP_SUMMARY"
       - name: Already tagged — say so
-        if: steps.tags.outputs.action == 'done'
+        if: env.FIRST != 'none' && steps.tags.outputs.action == 'done'
         run: echo "- $FIRST_IMAGE already carries \`$V_PORTAL\` — nothing to write" >> "$GITHUB_STEP_SUMMARY"
       # 🚨 LINES RUN SEPARATELY: only a build of the major the instance RUNS (its public /api/version),
       # as control-first asks of control. Unreadable is RED — never "announce anyway".
       - name: Is this build on the first instance's line?
         id: first_line
-        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true'
+        if: env.FIRST != 'none' && steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true'
         env:
           HOST: ${{ steps.first.outputs.host }}
         run: python3 .github/scripts/arm-promoted-set.py control-line --version "$V_PORTAL" --deployment "$FIRST" --instance-url "https://$HOST"
       - name: Not on the first instance's line — say so
-        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce != 'true'
+        if: env.FIRST != 'none' && steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce != 'true'
         env:
           WHY: ${{ steps.first_line.outputs.line_reason }}
         run: |
           echo "::notice title=first-instance-first: not announced::$WHY"
           echo "- $FIRST NOT handed \`$V_PORTAL\`: $WHY" >> "$GITHUB_STEP_SUMMARY"
       - name: "Hand the build to the first instance's roll lane (signed self-update-available)"
-        if: steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'
+        if: env.FIRST != 'none' && steps.tags.outputs.announce == 'true' && steps.first.outputs.follows == 'true' && steps.first_line.outputs.line_announce == 'true'
         env:
           URL: ${{ vars.CONTROL_WEBHOOK_URL }}
           SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
@@ -3594,9 +3620,12 @@ jobs:
       # is read exactly as control-always-latest reads control's: the repository from
       # `.github/control-instance.json` (every record sits beside control's), the READ-ONLY fleet-reader
       # App (preflight asserts both secrets), scoped to that one repository. Unreadable — an unknown
-      # `firstInstance` included — is RED here, by name.
+      # `firstInstance` included — is RED here, by name. A line that DECLARES no first instance
+      # (`firstInstance: "none"`, policy `line-no-first-instance`) has no record: these three steps are
+      # conditioned on that declaration, and `select` re-reads it and refuses a record passed for it.
       - name: Where is the line's first instance's record declared?
         id: record
+        if: needs.line.outputs.first_instance != 'none'
         run: |
           set -euo pipefail
           repo=$(jq -er '.record.repository' .github/control-instance.json)
@@ -3608,6 +3637,7 @@ jobs:
           { echo "owner=$owner"; echo "name=$name"; echo "repo=$repo"; echo "path=$path"; } >> "$GITHUB_OUTPUT"
       - name: Mint a read token for the first instance's record
         id: record-token
+        if: needs.line.outputs.first_instance != 'none'
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.FLEET_READER_APP_ID }}
@@ -3618,6 +3648,7 @@ jobs:
       # `control-record.json` holds the LINE'S FIRST INSTANCE'S record (control's for a line that
       # declares none) — the name `select --control-record` and the structural guard read.
       - name: Read the first instance's record (its updatePattern, host and imageRepository)
+        if: needs.line.outputs.first_instance != 'none'
         env:
           GH_TOKEN: ${{ steps.record-token.outputs.token }}
           REPO: ${{ steps.record.outputs.repo }}
@@ -3640,12 +3671,19 @@ jobs:
           ARMED_MAX: ${{ steps.armed.outputs.max }}
           ARMED_VERSION: ${{ steps.armed.outputs.version }}
           RESUME: ${{ steps.armed.outputs.complete == 'false' && steps.armed.outputs.version || '' }}
+          FIRST_INSTANCE: ${{ needs.line.outputs.first_instance }}
         run: |
           set -euo pipefail
+          # The first instance's record, read above — none for a line that DECLARES no first instance
+          # (policy `line-no-first-instance`). `select` re-reads the declaration itself: it refuses a
+          # record passed for such a line and refuses a missing one for every other line, so this
+          # branch can never turn an omission into "no first instance".
+          record=(--control-record "$RUNNER_TEMP/control-record.json")
+          if [ "$FIRST_INSTANCE" = none ]; then record=(); fi
           # --unarmed-out: every promoted set still newer than the armed one after this selection,
           # with its verdict — the reading the fleet-unarmed alert (last step) clocks a stall from.
           python3 .github/scripts/arm-promoted-set.py select --branch "$DELIVERY_LINE" --major "$MAJOR" --armed-max "$ARMED_MAX" \
-            --control-record "$RUNNER_TEMP/control-record.json" \
+            "${record[@]}" \
             --armed-version "$ARMED_VERSION" --unarmed-out "$RUNNER_TEMP/unarmed.json" \
             ${OVERRIDE:+--override "$OVERRIDE"} ${RESUME:+--resume "$RESUME"}
       - name: ACR login
