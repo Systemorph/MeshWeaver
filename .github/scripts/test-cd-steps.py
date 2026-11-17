@@ -30,6 +30,8 @@ index push leaves behind), and one digest carrying `aaf95af`, `main` and `3.0.0-
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -2357,6 +2359,22 @@ def main() -> int:
     case("...and the guard catches `first-instance-first` tagging without handing the build over",
          fi_undelivered != workflow_text and any("never hands the build to the first instance" in p for p in separation_problems(fi_undelivered)),
          "the mutation passed (or could not apply)")
+    # The one signed delivery keys its HMAC from the ENVIRONMENT: a secret on an argv is readable by
+    # every process on the runner (review on MeshWeaver#8372). Executed, not grepped: the script's
+    # own signing line must sign exactly as `openssl -hmac` would, with the secret in no argv.
+    announce = (root / ".github/scripts/post-self-update-announcement.sh").read_text()
+    sig_line = next((ln.strip() for ln in announce.splitlines() if ln.strip().startswith("SIG=")), "")
+    case("post-self-update-announcement.sh puts the HMAC secret on no command line",
+         sig_line != "" and "-hmac" not in "\n".join(ln for ln in announce.splitlines() if not ln.lstrip().startswith("#")),
+         sig_line or "no SIG= line")
+    with tempfile.TemporaryDirectory() as sig_tmp:
+        sig_body, sig_secret = '{"event":"self-update-available","deployment":"memex"}', "s3cr3t"
+        proc = subprocess.run(["bash", "-c", f"set -euo pipefail\n{sig_line}\nprintf '%s' \"$SIG\""],
+                              capture_output=True, text=True, cwd=sig_tmp,
+                              env={**os.environ, "BODY": sig_body, "SECRET": sig_secret})
+        want = "sha256=" + hmac.new(sig_secret.encode(), sig_body.encode(), hashlib.sha256).hexdigest()
+        case("...and that line signs exactly the X-Hub-Signature-256 the inbox verifies",
+             proc.returncode == 0 and proc.stdout == want, f"rc={proc.returncode} got={proc.stdout!r} want={want!r} {proc.stderr}")
     case("...and the shipped control-first hands the build over (no handover problem on main-cd.yml)",
          not any("hands the build" in p or "handover" in p for p in separation_problems(workflow_text)),
          str(separation_problems(workflow_text)))

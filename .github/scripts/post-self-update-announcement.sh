@@ -26,7 +26,10 @@ case "$URL" in
 esac
 resp="${RUNNER_TEMP:-/tmp}/announce-resp-$$"
 : > "$resp"
-SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
+# The HMAC is keyed from the ENVIRONMENT inside python3, never `openssl -hmac "$SECRET"`: an argv is
+# readable by every process on the runner (/proc/<pid>/cmdline) for the life of the call, which is
+# exactly the exposure this script's contract rules out (review on MeshWeaver#8372).
+SIG=$(BODY="$BODY" SECRET="$SECRET" python3 -c 'import hashlib, hmac, os; print("sha256=" + hmac.new(os.environ["SECRET"].encode(), os.environ["BODY"].encode(), hashlib.sha256).hexdigest())')
 code=$(curl -sS -o "$resp" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
   -X POST "$URL" -H 'Content-Type: application/json' \
   -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
