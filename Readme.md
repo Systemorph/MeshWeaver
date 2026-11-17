@@ -104,6 +104,9 @@ dotnet tool install -g MeshWeaver.Cli                                           
 dotnet add package MeshWeaver.Aspire.Hosting.Memex                                     # the Aspire integration, in your AppHost
 ```
 
+`brew trust` is how Homebrew 7 admits a third-party tap. On an older Homebrew that has no
+`brew trust`, run `brew install systemorph/memex/memex` alone.
+
 The `memex` CLI operates any portal's mesh from the shell (its mesh commands are generated at run
 time from the connected instance's MCP tool catalog) and builds plugins inside the platform image:
 
