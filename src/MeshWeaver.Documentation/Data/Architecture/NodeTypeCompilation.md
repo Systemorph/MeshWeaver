@@ -557,6 +557,29 @@ keeps running however long it needs (see the stage bounds above).
 
 ---
 
+## A floor refusal is its own card — never the timeout card
+
+A replica below its type's **package floor** — the root's `minMeshVersion` (#7467) or a
+`requires` range on another package (#6195) — neither compiles nor loads the type, and stamps a
+compile it declined as `CompilationStatus.Unavailable`. That status is shared with genuine
+"state undetermined" outcomes (a settle wait that timed out), and the instance page used to
+render both with the same copy: *"This item's type did not report its compilation state in time …
+the last attempt timed out … **Recompile** forces a fresh attempt"* — directly under the floor
+sentence (*"package 'Marketing' requires platform ≥ 4.0.13190; this instance runs 3.1.13482"*,
+a 3.x memex instance, 2026-11). Nothing timed out, and no compile on that instance can meet a
+floor.
+
+So the enrichment asks the floor (`INodeTypeDependencyFloor`) **live, for the replica serving the
+page**, before it reads `Unavailable` as "undetermined" — the record is shared, the question is
+about this replica, so it is asked rather than parsed out of `CompilationError`. Below the floor,
+the instance serves `WithBelowPackageFloorOverlay`: the floor sentence verbatim, copy from the
+catalog (`ui.belowPackageFloorIntro` / `ui.belowPackageFloorGuidance`, English and German) that
+names it a floor refusal, says **Recompile will not help**, and names the two ways out — upgrade
+the instance to a platform (and packages) that meet the floor, or sync the package from the branch
+of the instance's own platform line. The NACK is unchanged (`CompilationFailed`, naming the
+refusal). Pinned by `BelowPackageFloorPageTest` and
+`ABelowFloorReplicaRequestsNoSharedRecompileTest.AnUnavailableRecord_*`.
+
 ## A fault card must not outlive its cause — the overlay RE-EVALUATES
 
 The overlay is a **degraded binding with a lifetime**, never a verdict. Enrichment binds a

@@ -1844,21 +1844,41 @@ internal static class NodeTypeEnrichmentHelpers
         // this page must NOT say "correct the code": it swaps in the same
         // no-code-change-needed copy the slow-path timeout uses, and links the compile
         // log so the operator can see how far the build got.
+        //
+        // 🚨 Unavailable is ALSO what a below-floor compile stamps (DependencyFloorUnmetException is
+        // an availability non-verdict), so the floor is asked FIRST, live, for THIS replica: when it
+        // is below the type's package floor the page names the floor refusal — never "timed out …
+        // Recompile forces a fresh attempt", which no recompile here can make true. Asked rather
+        // than parsed out of CompilationError, because the record is shared and the question is
+        // about the replica serving this page.
         if (def.CompilationStatus == CompilationStatus.Unavailable)
         {
-            var (undeterminedIntro, undeterminedCta, undeterminedGuidance) =
-                OverlayCopy(OverlayCause.StateUndetermined);
-            return Observable.Return(
-                WithOverlaySelfHeal(
-                    WithKeyedCompilationErrorOverlay(node, nodeType,
-                        def.CompilationError
-                            ?? $"The compile state of NodeType '{nodeType}' could not be determined.",
-                        errorText: def.CompilationErrorText,
-                        guidance: undeterminedGuidance,
-                        intro: undeterminedIntro,
-                        callToAction: undeterminedCta,
-                        activityPath: def.LastCompilationActivityPath),
-                    meshHub, nodeType, typeNode.Version, logger));
+            return UnlessBelowDependencyFloor(
+                meshHub, nodeType,
+                belowFloor => RefuseBelowDependencyFloor(
+                    node, nodeType, typeNode, def, meshHub, logger,
+                    // An Unavailable record may never have carried a build (a first compile the
+                    // floor declined): say so rather than print an empty "collection=, path=".
+                    def.LatestAssemblyPath is { Length: > 0 } recordedPath
+                        ? $"collection={def.LatestAssemblyCollection}, path={recordedPath}"
+                        : "no recorded build",
+                    belowFloor),
+                () =>
+                {
+                    var (undeterminedIntro, undeterminedCta, undeterminedGuidance) =
+                        OverlayCopy(OverlayCause.StateUndetermined);
+                    return Observable.Return(
+                        WithOverlaySelfHeal(
+                            WithKeyedCompilationErrorOverlay(node, nodeType,
+                                def.CompilationError
+                                    ?? $"The compile state of NodeType '{nodeType}' could not be determined.",
+                                errorText: def.CompilationErrorText,
+                                guidance: undeterminedGuidance,
+                                intro: undeterminedIntro,
+                                callToAction: undeterminedCta,
+                                activityPath: def.LastCompilationActivityPath),
+                            meshHub, nodeType, typeNode.Version, logger));
+                });
         }
 
         var error = def.CompilationError ?? "Compilation failed";
@@ -2210,17 +2230,76 @@ internal static class NodeTypeEnrichmentHelpers
             + "for instance '{InstancePath}' — {Unmet}. No recompile is requested: the record stays as it "
             + "is, and the replicas that meet the floor keep serving the build (#6195).",
             nodeType, bytes, node.Path, belowFloor.Unmet);
-        var (intro, callToAction, guidance) = OverlayCopy(OverlayCause.StateUndetermined);
         return Observable.Return(
             WithOverlaySelfHeal(
-                WithCompilationErrorOverlay(node, nodeType,
-                    $"'{nodeType}' ({bytes}): {belowFloor.Unmet}",
-                    guidance: guidance,
-                    intro: intro,
-                    callToAction: callToAction,
-                    activityPath: def.LastCompilationActivityPath),
+                WithBelowPackageFloorOverlay(node, nodeType, bytes, belowFloor.Unmet,
+                    def.LastCompilationActivityPath),
                 meshHub, nodeType, typeNode.Version, logger));
     }
+
+    /// <summary>
+    /// The BELOW-PACKAGE-FLOOR overlay (<see cref="RefuseBelowDependencyFloor"/>): the type's
+    /// package declares a floor — <c>minMeshVersion</c>, or a <c>requires</c> range on another
+    /// package — that THIS instance does not meet, so its build is neither compiled nor loaded here.
+    ///
+    /// <para>🚨 <b>Its own page, never the timeout page.</b> This refusal used to borrow
+    /// <see cref="OverlayCause.StateUndetermined"/>'s copy, so a reader was told the type "did not
+    /// report its compilation state in time", that the last attempt "timed out", and that
+    /// <b>Recompile</b> "forces a fresh attempt" — directly under the sentence that names the floor
+    /// (measured on a 3.x memex instance: <c>package 'Marketing' requires platform ≥ 4.0.13190; this
+    /// instance runs 3.1.13482</c>). Nothing timed out, and no compile on this instance can meet a
+    /// floor: the instance has to move (a newer platform), or the package has to (its sources
+    /// synced from the branch of the instance's own platform line). The page says exactly that.</para>
+    ///
+    /// <para>A sibling of <see cref="WithClosedTypeSetOverlay"/> for the same reason: the copy is
+    /// resolved through <c>host.Localize</c> at RENDER time, off the viewer's locale. The NACK is
+    /// the one <see cref="WithKeyedCompilationErrorOverlay"/> sent for this refusal before — callers
+    /// that classify it keep seeing the same signal; only the page changed.</para>
+    /// </summary>
+    internal static MeshNode WithBelowPackageFloorOverlay(
+        MeshNode node, string nodeType, string bytes, string unmet, string? activityPath)
+    {
+        Func<MessageHubConfiguration, MessageHubConfiguration> overlay =
+            config => config.AddLayout(layout =>
+                layout.WithNodePage(MeshNodeLayoutAreas.OverviewArea, (host, _) =>
+                    Observable.Return<UiControl?>(Controls.Stack
+                        .WithStyle(CompilationErrorCardStyle)
+                        .WithView(Controls.Markdown(BuildBelowPackageFloorMarkdown(
+                            (key, args) => host.Localize(key, args),
+                            nodeType, bytes, unmet, activityPath)))),
+                    EmergencyPageProvenance));
+        var nack = new UnhandledMessageNack(
+            $"NodeType '{nodeType}' has no usable hub configuration for '{node.Path}': "
+            + $"'{nodeType}' ({bytes}): {unmet}",
+            ErrorType.CompilationFailed,
+            nodeType);
+        return node with { HubConfiguration = config => overlay(config).Set(nack) };
+    }
+
+    /// <summary>Localization key for the below-package-floor overlay's lead-in.</summary>
+    internal const string BelowPackageFloorIntroKey = "ui.belowPackageFloorIntro";
+
+    /// <summary>Localization key for the below-package-floor overlay's guidance paragraph.</summary>
+    internal const string BelowPackageFloorGuidanceKey = "ui.belowPackageFloorGuidance";
+
+    /// <summary>
+    /// The below-package-floor page's markdown (<see cref="WithBelowPackageFloorOverlay"/>). The
+    /// refusal sentence itself (<paramref name="unmet"/>) is the floor reader's verbatim statement
+    /// of the facts — package, floor, what this instance runs — and is shown as such.
+    /// </summary>
+    internal static string BuildBelowPackageFloorMarkdown(
+        Func<string, object?[], string> localize,
+        string nodeType,
+        string bytes,
+        string unmet,
+        string? activityPath)
+        => BuildCompilationErrorMarkdownText(
+            errorMessage: $"'{nodeType}' ({bytes}): {unmet}",
+            guidance: localize(BelowPackageFloorGuidanceKey, []),
+            intro: localize(BelowPackageFloorIntroKey, []),
+            callToAction: localize(NoCodeChangeNeededKey, []),
+            activityPath: activityPath,
+            activityLinkLabel: localize("ui.viewCompileLog", []));
 
     /// <summary>
     /// Runs <paramref name="proceed"/> unless THIS process is below the declared dependency floor of
