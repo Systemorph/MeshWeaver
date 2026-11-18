@@ -397,6 +397,36 @@ The kind stays `Adopted`, because the NodeTypes that arrived were adopted, and a
 mesh still does not fail on it. The ledger's summary line now says the content "did not arrive"
 rather than that it "is compiled here instead", which was never true of a module.
 
+### A partial adoption says why each assembly was declined
+
+When a bundle's NodeType assemblies arrive but the seeder declines some of them, `/health`
+`bundle_adoption` used to print only `<package>: adopted only 0/N — the rest compile here`. The
+seeder's answer for each assembly (`PrebuiltAssemblySeeder.SeedDetailed` → `SeedOutcome`) was
+collapsed to covered-or-not before the outcome was built, so a framework-identity decline, a
+dependency-record decline and a source-fingerprint decline (#2813) read the same. With the
+portal's log unreachable, nothing else could tell them apart.
+
+The adoption outcome now carries the decline counts by reason (`BundleAdoptionOutcome.Declined`,
+built by the per-assembly `BundleOffering.AdoptedOutcome` overload), and the line names them,
+largest first:
+
+```text
+Essentials: adopted only 0/10 — the rest compile here; declined: fingerprint×7, dependencies×3
+```
+
+| label | seed outcome | meaning |
+|---|---|---|
+| `identity` | `DeclinedIdentity` | the bytes were built for another framework identity |
+| `dependencies` | `DeclinedDependencies` | the per-type dependency record does not resolve here |
+| `fingerprint` | `DeclinedStaleSources` | built from sources other than the live ones; the live build still resolves |
+| `fingerprint (compiling)` | `DeclinedStaleSourcesCompileDispatched` | as above, and a fresh compile of the live source was dispatched |
+| `fingerprint (unservable)` | `DeclinedStaleSourcesUnservable` | as above, and nothing on this process will serve the type |
+| `not seeded` | `NotSeeded` | nothing was written for another reason |
+
+A value the mapping does not know renders by its own name rather than as one of these labels.
+`/health` carries **counts only**, never type names: it is public and names packages, not nodes
+(#4258). The portal log carries one example type per reason (`declined on <reason> (e.g. <path>)`).
+
 ### The index advertises a version that can carry its module (MeshWeaver#7181)
 
 The record running ahead is the ordinary state whenever the package repository's publish lane is
