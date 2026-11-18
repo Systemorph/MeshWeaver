@@ -23,7 +23,7 @@ namespace MeshWeaver.Graph.Test;
 /// setup, and every one of them added the "module is not held" verdict under the module's name.</para>
 ///
 /// <para>The module here has the same shape: a singleton whose constructor throws (so boot withdraws it) and
-/// two health-check setups (an <c>AddCheck</c> and a named <c>Configure</c>). Negative control: without the
+/// two health-check setups (two <c>AddHealthChecks().AddCheck</c> calls). Negative control: without the
 /// once-per-module guard the health-check service throws exactly the duplicate-name exception.</para>
 /// </summary>
 public sealed class AWithdrawnModuleIsOneHealthVerdictTest : MonolithMeshTestBase
@@ -33,6 +33,15 @@ public sealed class AWithdrawnModuleIsOneHealthVerdictTest : MonolithMeshTestBas
 
     public AWithdrawnModuleIsOneHealthVerdictTest(ITestOutputHelper output) : base(output)
     {
+    }
+
+    /// <inheritdoc />
+    public override async ValueTask DisposeAsync()
+    {
+        await base.DisposeAsync();
+        try { Directory.Delete(root, recursive: true); }
+        catch (IOException) { /* a temp directory that outlives the test is harmless */ }
+        catch (UnauthorizedAccessException) { /* likewise */ }
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
