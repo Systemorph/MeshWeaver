@@ -3478,6 +3478,16 @@ jobs:
     # no credential and no cluster, and it prints its denominator (registries declared, charts
     # re-derived, files swept, files skipped and why) because "no deleter found" and "nothing was
     # swept" are the same output without one. Doc/Architecture/FleetRegistryRetention.
+    # 🚨 THE CD HALF OF THE REGISTRY-MAINTENANCE LEASE (MeshWeaver#7530, owner decision A). A CD write to
+    # a lease-governed registry (cr.meshweaver.cloud: no lock, so the lease is the cleanup's whole safety
+    # margin) is admitted on control first, or it does not happen. Driven offline against a fake control
+    # that verifies the HMAC: a publish during a held lease copies nothing, every other refusal is red,
+    # and the publishing lanes are read so no `--tag` push bypasses the admitted mirror and every mirror
+    # step carries the secret. Doc/Architecture/FleetRegistryRetention → "Publishing under the lease".
+    - name: "…and a CD write to the fleet registry is admitted under the maintenance lease first (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/registry-publish-admission-selftest.py
+
     - name: "…and every registry the fleet pins in still says what DELETES from it"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/lock-pinned-digests.py --check-registry-retention .
