@@ -366,13 +366,55 @@ is held with a reference nothing can satisfy. The first call into it throws `Fil
 wherever that call happens. On build.meshweaver.cloud (4.0.13559), `MeshWeaver.Blazor.Chat`'s mesh-hub
 configuration called into an absent `MeshWeaver.AI` inside `MapMeshWeaver`, and every replacement pod
 died at boot (exit 139) before it could serve, reconcile its module set or say why.
-`MeshBuilder.WithdrawDependentsOfAbsentModules` runs after the load loop. To a fixed point, it
-withdraws every loaded module whose assembly references name a batch module that did not load and is
+Its first form, `WithdrawDependentsOfAbsentModules`, ran after the load loop. To a fixed point, it
+withdrew every loaded module whose assembly references name a batch module that did not load and is
 not held in the default context. Each withdrawn module is recorded as an `IncompatibleModule` that
 names the dependency (`MissingMember`) and inherits its `RefusedBeforeLoad`, so a store dependency
 refused for another platform stalls no roll through its dependents either. The process boots, and the
 refusals are on `/health`. A module that fell back to an earlier generation, or one the image binds,
 is present, so its dependents are untouched. So is a module an earlier batch committed that the registry still holds as current: a refused newer generation leaves that one serving. Pinned by `AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest` and `AModuleWhoseDependencyIsHeldFromAnEarlierBatchIsKeptTest`.
+
+🚨 **"Absent" means the module's own resolver cannot bind it — never "refused in this batch".** The
+first form of that pass matched only a dependency the batch had REFUSED, and on build.meshweaver.cloud
+(4.0.13590) the same `FileNotFoundException` for `MeshWeaver.AI` killed the pod again from
+`BlazorChatExtensions.AddChatTypes` with the pass in the image. `MeshWeaver.AI` was not a refused
+batch member, so nothing matched. A dependency can miss the batch entirely:
+`ModuleActivationBoot.ComputeEffectiveModuleEntries` skips a persisted entry whose landed DLL is
+missing (it names the skip on stderr), a disabled or unreadable entry, and anything never installed.
+The probe can still pass the dependent, because its surface is a **union** that no module load
+context sees: the application closure, every assembly loaded in **any** load context
+(`AppDomain.GetAssemblies`), and the files of **every** directory the batch loads from. A
+`ModuleLoadContext` resolves in three steps only: (1) the default context (trusted platform
+assemblies, or an image-bound module); (2) a module the registry holds as current, or an assembly a
+module it depends on holds; (3) its own generation directory. A copy beside an unrelated module, or one
+some other context loaded, is reachable by none of them.
+
+So the pass is now `MeshBuilder.WithdrawModulesWhoseReferencesDoNotResolve`. To a fixed point, it asks
+of every `MeshWeaver.*` reference of every loaded module whether that resolver binds it, without loading
+anything: (1) a trusted platform assembly or one loaded in the default context; (2) for a module held in
+its own context, a module the registry holds as current (this batch's or an earlier one's), or a file
+in the directory of a current module this one references; (3) a file in the module's own directory. A
+withdrawn module resolves for nobody. A module that fails is withdrawn and recorded as an
+`IncompatibleModule` naming the reference (`MissingMember`), and the process boots with it on
+`/health`. When the dependency was refused in this batch, the dependent inherits its
+`RefusedBeforeLoad`. When the batch never held the dependency, the dependent gets
+`RefusedBeforeLoad = true`: the gap is in the module set, a reconcile closes it, and a roll must not
+stall on it. References outside the platform prefix are not judged, matching the probe's rule that a
+private dependency is unchecked.
+
+What this pass cannot establish about build: whether the copy that passed the probe there lay beside
+another batch module or was loaded in another context. The crash dump names the throw and not the
+surface, and the pod's volume was not read. Both shapes are pinned:
+`AModuleWhoseDependencyIsOnlyBesideAnotherModuleIsWithdrawnAtBootTest` and
+`AModuleWhoseDependencyIsLoadedOnlyInAnotherContextIsWithdrawnAtBootTest` each fail with the #8401 pass (the
+mesh hub throws `FileNotFoundException`) and pass with this one.
+`AModuleWhoseDependencyIsInItsOwnDirectoryIsKeptAtBootTest` guards the other direction: a dependency in
+the module's own directory is its private closure and resolves, so the module is kept. One step is
+still accepted without proof that it will resolve. A file in a current dependency's directory binds
+only once that dependency's context has loaded it (`ModuleContexts.ResolveForDependent` serves
+assemblies it already holds), so a module that touches such a file before its dependency does can
+still throw. That is not this incident's shape, and withdrawing for it would withdraw modules that run
+today.
 
 ### At the roll — the surface travels as a document
 
