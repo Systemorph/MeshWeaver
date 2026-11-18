@@ -404,7 +404,15 @@ jobs:
         env:
           LANE: ${{ inputs.lane }}
           DECLARED: ${{ inputs.modules }}
-          TRUNK: ${{ github.event.repository.default_branch }}
+          # 🚦 THE PUSHED LINE'S trunk, never the default branch's (policy `major-lines-run-separately`,
+          # MeshWeaver.Plugins#5638). A repo with several delivery lines (MeshWeaver.Plugins: `main` for
+          # v4, `main3` for v3) publishes each line from its own branch; reading the DEFAULT branch's tip
+          # here made a `main3` publish stand down behind `main`'s tip run for every module `main`'s tip
+          # also reaches — a newer commit of ANOTHER line, which never publishes this line's build. On a
+          # push (and a dispatch) `github.ref` is the branch that runs; on every other event — `schedule`
+          # (the default branch) and `repository_dispatch` (the default branch) — `ref_name` is the default
+          # branch too, so single-line repos read exactly what they read before.
+          TRUNK: ${{ startsWith(github.ref, 'refs/heads/') && github.ref_name || github.event.repository.default_branch }}
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
           GH_TOKEN: ${{ github.token }}
@@ -412,7 +420,8 @@ jobs:
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          [ -n "${TRUNK:-}" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
+          [ -n "${TRUNK:-}" ] || { echo "::error::the event names neither a pushed branch nor a default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
+          echo "publish-newest-only reads the trunk ${TRUNK} (the branch this run publishes from)"
           git -C newest fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
           mine="$(git -C newest rev-parse HEAD)"
           tip="$(git -C newest rev-parse "refs/remotes/origin/$TRUNK")"

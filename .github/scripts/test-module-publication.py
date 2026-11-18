@@ -397,6 +397,17 @@ def main() -> int:  # noqa: C901
         finally:
             registry.close()
 
+    print("\n== publish-newest-only: the trunk is the PUSHED line's branch (MeshWeaver.Plugins#5638)")
+    # A repo with several delivery lines publishes each from its own branch; the default branch's
+    # tip is ANOTHER line's commit there and must never make this line's publish stand down.
+    trunk_lines = [ln.strip() for ln in PUBLISH_WORKFLOW.read_text().splitlines()
+                   if ln.strip().startswith("TRUNK:")]
+    check("the `newer` step's TRUNK reads the pushed branch first, the default branch only as fallback",
+          trunk_lines == ["TRUNK: ${{ startsWith(github.ref, 'refs/heads/') && github.ref_name "
+                          "|| github.event.repository.default_branch }}"], repr(trunk_lines))
+    check("NEGATIVE CONTROL — the default-branch-only shape is not what the step declares",
+          "TRUNK: ${{ github.event.repository.default_branch }}" not in trunk_lines, repr(trunk_lines))
+
     print("\n== publish-newest-only: the REAL `newer` step, over a scratch trunk and the real scope script")
     newer_body = extract_step(PUBLISH_WORKFLOW, "newer")
     with tempfile.TemporaryDirectory() as td:
