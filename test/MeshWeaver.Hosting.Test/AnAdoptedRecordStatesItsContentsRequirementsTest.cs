@@ -125,8 +125,8 @@ public class AnEqualHashPassHealsTheRecordsRequirementsTest(ITestOutputHelper ou
         System.Threading.CancellationToken ct) =>
         Mesh.GetMeshNodeStream(RecordPath(id))
             .Select(n => n?.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions))
-            .Where(m => m is not null && until(m))
-            .Select(m => m!)
+            .OfType<PackageManifest>()
+            .Where(until)
             .Take(1)
             .Timeout(TestTimeouts.Convergence).Await(ct);
 
