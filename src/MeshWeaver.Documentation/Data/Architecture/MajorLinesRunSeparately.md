@@ -166,6 +166,17 @@ mesh, but the landed module tree is per line (a v4 image lands under `lines/4/`)
 Chat record requiring `AI@^1.51.0`, judged against the v4 tree's AI 4.0.1, refused every v4 proposal. A
 record that states no floor is still judged.
 
+**The line test reads the record's floor, so the floor and the requirements must describe the SAME
+release.** A sync adoption (`PackageUpdateReconciler.AdoptedFromSync`) moves a record to the content its
+sync source landed. It used to take the candidate's version, hash and floor and keep the record's old
+requirements, which produced a record of the new line carrying the old line's `requires`. Measured on the
+plugin registry during the 3 → 4 roll: Governance recorded 4.0.3 with floor 4.0.13516 and the September
+release's `AI@^1.0.0`. That record passed the line test, and the stale requirement refused every v4
+proposal against the landed AI 4.0.3.
+The adoption now takes the candidate's requirements with its floor. A record already at the listed
+content whose requirements differ is corrected in place by the reconciler's equal-hash gate, which
+fetches nothing and notifies nobody.
+
 ## 4c. Each line has its own first instance
 
 Policy `line-first-instance` (MeshWeaver#8365). The fleet of a line is offered a set only after ONE
