@@ -209,6 +209,17 @@ line. Before this rule, a course that had not opted into v4 (no floor, `requires
 with the v4 tree's AI 4.0.1 (`c004e001`). Every v4 proposal on the plugin registry was refused, its first
 v4 replica proposed an empty set, and none of the modules it landed afterwards activated.
 
+**The line test reads the record's floor, so the floor and the requirements must describe the SAME
+release.** A sync adoption (`PackageUpdateReconciler.AdoptedFromSync`) moves a record to the content its
+sync source landed. It used to take the candidate's version, hash and floor and keep the record's old
+requirements, which produced a record of the new line carrying the old line's `requires`. Measured on the
+plugin registry during the 3 → 4 roll: Governance recorded 4.0.3 with floor 4.0.13516 and the September
+release's `AI@^1.0.0`. That record passed the line test, and the stale requirement refused every v4
+proposal against the landed AI 4.0.3, even after the boot proposal of the stuck bootstrap below shipped.
+The adoption now takes the candidate's requirements with its floor. A record already at the listed
+content whose declarations differ is corrected in place by the reconciler's equal-hash gate, which
+fetches nothing and notifies nobody.
+
 **A registry's replica of a line proposes that line's set at boot.** A consumer ends every boot with
 the registry reconcile, and that reconcile closes its wave with a proposal. The registry reconciles
 against no registry, so nothing ended its boot that way. Its default install proposes only after it lands
