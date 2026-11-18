@@ -217,7 +217,7 @@ plugin registry during the 3 → 4 roll: Governance recorded 4.0.3 with floor 4.
 release's `AI@^1.0.0`. That record passed the line test, and the stale requirement refused every v4
 proposal against the landed AI 4.0.3, even after the boot proposal of the stuck bootstrap below shipped.
 The adoption now takes the candidate's requirements with its floor. A record already at the listed
-content whose declarations differ is corrected in place by the reconciler's equal-hash gate, which
+content whose requirements differ is corrected in place by the reconciler's equal-hash gate, which
 fetches nothing and notifies nobody.
 
 **A registry's replica of a line proposes that line's set at boot.** A consumer ends every boot with
