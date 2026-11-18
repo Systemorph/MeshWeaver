@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using MeshWeaver.Connection.Orleans;
@@ -58,6 +59,103 @@ public class BlockedThreadStacksThreadExitTest
         {
             Volatile.Write(ref release, 1);
         }
+    }
+
+    /// <summary>
+    /// 🚨 Regression (core #8409's shard 4): the runtime hands back at most 1023 characters of createdump's
+    /// error, and createdump writes a tolerated <c>ptrace(ATTACH, tid) … No such process (3)</c> line for every
+    /// thread already gone BEFORE the line that fails the dump. With a dozen threads stopping, the fatal line
+    /// was past the cut, the error named nothing but exited threads, and the capture threw it from the first
+    /// attempt instead of taking the dump again. The first dump fails with that error, shaped as on CI
+    /// (eleven gone threads, the twelfth line cut, 1023 characters); every later dump is real.
+    /// </summary>
+    [Fact]
+    public void AnErrorCutOffBeforeItsFatalLine_AfterOnlyThreadsGoneBeforeAttach_IsTakenAgain()
+    {
+        var dumps = 0;
+        var stacks = new BlockedThreadStacks(writeDump: path =>
+        {
+            if (Interlocked.Increment(ref dumps) == 1)
+                throw new ServerErrorException(ThreadsGoneBeforeAttach_CutAtTheRuntimesErrorBuffer());
+            BlockedThreadStacks.WriteDumpOfThisProcess(path);
+        });
+
+        var thread = new Thread(() => ParkedWhileAnUnrelatedThreadExits()) { IsBackground = true, Name = "parked" };
+        try
+        {
+            thread.Start();
+            SpinWait.SpinUntil(() => Volatile.Read(ref parked) == 1, Budget)
+                .Should().BeTrue("precondition: the thread whose stack is wanted is parked before the capture");
+
+            var captured = stacks.Capture([thread.ManagedThreadId]);
+
+            captured[thread.ManagedThreadId].Should().Contain(nameof(ParkedWhileAnUnrelatedThreadExits),
+                "an error that names only threads which exited is the vanished-thread race, whose cure is a fresh dump");
+            dumps.Should().BeInRange(2, BlockedThreadStacks.MaxDumpAttempts,
+                "the dump the exiting threads voided is taken again, and the attempts stay bounded");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+    }
+
+    /// <summary>
+    /// Negative control for the cut-error rule: the same attach failures followed by a DIFFERENT fatal line
+    /// are classified by that line, so the dump is not taken again.
+    /// </summary>
+    [Fact]
+    public void ThreadsGoneBeforeAttach_FollowedByAnotherFatalLine_AreNotRetried()
+    {
+        var dumps = 0;
+        var stacks = new BlockedThreadStacks(writeDump: _ =>
+        {
+            Interlocked.Increment(ref dumps);
+            throw new ServerErrorException(
+                $"{AttachFailure(Environment.ProcessId + 1)}\n{AttachFailure(Environment.ProcessId + 2)}\n"
+                + "[createdump] Could not write dump: No space left on device (28)");
+        });
+
+        var failure = Record.Exception(() => stacks.Capture([Environment.CurrentManagedThreadId]));
+
+        failure.Should().BeOfType<ServerErrorException>("a visible fatal line that is not a vanished thread is the capture's answer");
+        dumps.Should().Be(1);
+    }
+
+    /// <summary>Negative control: the process's OWN id among the attach failures is never a vanished thread.</summary>
+    [Fact]
+    public void AnErrorCutOffAfterTheProcessItselfWasGone_IsNotRetried()
+    {
+        var dumps = 0;
+        var stacks = new BlockedThreadStacks(writeDump: _ =>
+        {
+            Interlocked.Increment(ref dumps);
+            throw new ServerErrorException(
+                $"{AttachFailure(Environment.ProcessId)}\n{AttachFailure(Environment.ProcessId + 1)}\n[createdump] Problem susp");
+        });
+
+        var failure = Record.Exception(() => stacks.Capture([Environment.CurrentManagedThreadId]));
+
+        failure.Should().BeOfType<ServerErrorException>();
+        dumps.Should().Be(1);
+    }
+
+    /// <summary>createdump's tolerated line for a thread that was gone before its attach.</summary>
+    private static string AttachFailure(int tid) =>
+        $"[createdump] Problem suspending thread: ptrace(ATTACH, {tid}) FAILED No such process (3)";
+
+    /// <summary>
+    /// The CI shard's error text, verbatim but the tids: attach failures for threads that are not this process,
+    /// cut to the 1023 characters the runtime hands back — so the line that failed the dump is not in it.
+    /// </summary>
+    private static string ThreadsGoneBeforeAttach_CutAtTheRuntimesErrorBuffer()
+    {
+        var full = string.Join("\n", Enumerable.Range(1, 20).Select(i => AttachFailure(Environment.ProcessId + 40 + i)))
+            + "\n[createdump] GetStatus fopen(/proc/1/status) FAILED No such file or directory (2)";
+        var cut = full[..1023];
+        cut.Should().NotContain("GetStatus", "precondition: the fatal line is past the cut, as on CI");
+        cut.Should().NotEndWith("(3)", "precondition: the last line is cut part-way, as on CI");
+        return cut;
     }
 
     /// <summary>Negative control: a dump failure that is NOT a vanished thread is not retried.</summary>

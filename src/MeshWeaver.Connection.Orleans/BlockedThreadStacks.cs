@@ -44,6 +44,18 @@ namespace MeshWeaver.Connection.Orleans;
 /// again: the next enumeration no longer lists the thread that exited. Any other failure is reported as
 /// before, and when every attempt fails the error names each attempt's reason.</para>
 ///
+/// <para>🚨 <b>The fatal line can be CUT OFF the error, so its absence is not another cause.</b> The runtime hands
+/// back at most 1023 characters of createdump's error text (measured on a CI shard, core #8409's run: the
+/// <see cref="ServerErrorException"/> message was exactly 1023 characters after its type prefix and ended
+/// mid-line, <c>ptrace(ATTACH, 2</c>). createdump writes one tolerated
+/// <c>Problem suspending thread: ptrace(ATTACH, &lt;tid&gt;) FAILED No such process (3)</c> line for each thread
+/// already gone before its attach, and it writes them BEFORE the line that fails the dump — so when a silo's
+/// threads are stopping, a dozen of those lines push the fatal one past the cut, and the error the capture
+/// sees names nothing but threads that exited. That text is evidence of the same race, never of a different
+/// failure: a message made up ONLY of such lines for threads other than the process (its last line possibly
+/// cut) is classified as a vanished thread and the dump is taken again. A message carrying any other line is
+/// classified by that line alone, as before.</para>
+///
 /// <para>🚨 <b>"Written" is read off the FILE, never off the call.</b> The runtime reports a dump writer that
 /// died on a SIGNAL as a success: on Unix it waits for <c>createdump</c> and answers
 /// <c>!WIFEXITED(status) || WEXITSTATUS(status) == 0</c> (<c>PROCCreateCrashDump</c>, coreclr's
@@ -83,6 +95,17 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
         + @"|ptrace\(PTRACE_GETREGSET, (?<tid>\d+), NT_\w+\) FAILED [^\r\n]*\(3\)",
         RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// createdump's tolerated line for a thread already gone before its attach (ESRCH, 3). Group <c>tid</c>
+    /// is the thread.
+    /// </summary>
+    private static readonly Regex GoneBeforeAttach = new(
+        @"^\[createdump\] Problem suspending thread: ptrace\(ATTACH, (?<tid>\d+)\) FAILED No such process \(3\)$",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>The start every attach-failure line shares — what a line cut by the runtime's error buffer still shows.</summary>
+    private const string AttachFailurePrefix = "[createdump] Problem suspending thread: ptrace(ATTACH, ";
+
     private readonly Action<string> dumpWriter = writeDump ?? (path => WriteDumpOfThisProcess(path, logDumpGeneration));
 
     /// <summary>Asks the runtime, over its diagnostic port, to write a Normal minidump of this process.</summary>
@@ -98,7 +121,35 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
     /// <param name="failure">What writing the dump threw.</param>
     internal static bool IsVanishedThread(Exception failure) =>
         VanishedThread.Matches(failure.Message).Any(
-            m => int.TryParse(m.Groups["tid"].Value, out var tid) && tid != Environment.ProcessId);
+            m => int.TryParse(m.Groups["tid"].Value, out var tid) && tid != Environment.ProcessId)
+        || NamesOnlyThreadsGoneBeforeAttach(failure.Message);
+
+    /// <summary>
+    /// Whether <paramref name="message"/> consists ONLY of createdump's attach failures for threads other
+    /// than this process that were already gone (see the class remarks: the line that failed the dump was cut
+    /// off the error) — every complete line is one, and the last line is one or the cut start of one.
+    /// </summary>
+    /// <param name="message">The dump writer's error text.</param>
+    private static bool NamesOnlyThreadsGoneBeforeAttach(string message)
+    {
+        var lines = message.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimEnd('\r').Trim())
+            .Where(line => line.Length > 0)
+            .ToArray();
+        if (lines.Length == 0)
+            return false;
+        bool IsGoneThread(string line) =>
+            GoneBeforeAttach.Match(line) is { Success: true } m
+            && int.TryParse(m.Groups["tid"].Value, out var tid) && tid != Environment.ProcessId;
+        bool IsCutAttachLine(string line) =>
+            line.StartsWith(AttachFailurePrefix, StringComparison.Ordinal)
+            || AttachFailurePrefix.StartsWith(line, StringComparison.Ordinal);
+        var complete = lines[..^1];
+        var last = lines[^1];
+        return complete.Length > 0
+            && complete.All(IsGoneThread)
+            && (IsGoneThread(last) || IsCutAttachLine(last));
+    }
 
     /// <summary>How many frames of a thread's stack are reported — the blocking frame is at the top.</summary>
     internal const int MaxFrames = 40;

@@ -797,6 +797,14 @@ first-in-process script-reference build, on the Compile pool) on the strength of
   taken again (at most three dumps); the thread that exited is no longer listed by the next one. Any
   other failure is the capture's answer at once, and when every dump is voided the error names each
   attempt's reason. Pinned by `BlockedThreadStacksThreadExitTest`.
+  The line that failed the dump can be CUT OFF the error: the runtime hands back at most 1023
+  characters of createdump's error text, and createdump first writes one tolerated
+  `Problem suspending thread: ptrace(ATTACH, <tid>) FAILED No such process (3)` line per thread that
+  was gone before its attach. With a silo's threads stopping, a dozen of those pushed the fatal line
+  past the cut, the error named nothing but exited threads, and the capture threw it from its first
+  attempt (core #8409's shard 4, `ThreadPoolWorkerStacksTest`). An error made up ONLY of such lines for
+  threads other than the process (its last line possibly cut) is therefore the same race and the dump
+  is taken again; an error carrying any other line is classified by that line.
   "Written" is read off the FILE, never off the call: the runtime reports a dump writer that died on a
   SIGNAL as a success (coreclr's `PROCCreateCrashDump` answers `!WIFEXITED(status) ||
   WEXITSTATUS(status) == 0`), so a `createdump` killed mid-dump makes `WriteDump` return normally over
