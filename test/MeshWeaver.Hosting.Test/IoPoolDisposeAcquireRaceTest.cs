@@ -168,9 +168,20 @@ public class IoPoolDisposeAcquireRaceTest
 
     /// <summary>
     /// The region must not be held past the work it guards: a pool with a long-lived
-    /// <c>SubscribeThroughPool</c> subscription still open must complete disposal once the drain
-    /// cancellation has torn that subscription down — otherwise <see cref="IoPool.Disposed"/> would
-    /// park silo shutdown behind every live change feed routed through the pool.
+    /// <c>SubscribeThroughPool</c> subscription still open must complete disposal — otherwise
+    /// <see cref="IoPool.Disposed"/> would park silo shutdown behind every live change feed routed
+    /// through the pool.
+    ///
+    /// <para>🚨 <b>The subscription is LIVE before the pool dies, deterministically.</b> This test used
+    /// to subscribe and dispose back to back and then wait for the subscriber to receive a terminal.
+    /// That waited on a signal the pool's contract no longer gives (#7968, "The drain runs no consumer
+    /// code"): once the source is OPEN, the drain disposes the pool's own subscription to it and
+    /// delivers NOTHING, recording an unowned leak instead. Only a leg cancelled BEFORE its source
+    /// opened is terminated, from the setup leaf (pinned by <c>IoPoolLateDrainRegistrationTest</c>).
+    /// So the old shape passed when the canceller beat the setup leaf and timed out when the setup
+    /// leaf opened the source first — a ThreadPool dispatch order, i.e. a coin toss. Here the source
+    /// is open and the setup leaf has released its slot before <c>Dispose()</c>, which is the one
+    /// case the name describes.</para>
     /// </summary>
     [Fact]
     public async Task Disposal_completes_even_with_a_live_SubscribeThroughPool_subscription()
@@ -178,14 +189,43 @@ public class IoPoolDisposeAcquireRaceTest
         var pool = new IoPool(2);
         var disposed = pool.Disposed.FirstAsync().Await();
 
-        var terminated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var sub = pool.SubscribeThroughPool(Observable.Never<int>())
-            .Subscribe(_ => { }, _ => terminated.TrySetResult(), () => terminated.TrySetResult());
+        var sourceOpen = 0;
+        var sourceTornDown = 0;
+        var consumerTerminals = 0;
+        var source = Observable.Create<int>(_ =>
+        {
+            Volatile.Write(ref sourceOpen, 1);
+            return () => Volatile.Write(ref sourceTornDown, 1);
+        });
 
-        pool.Dispose();
+        // UNOWNED on purpose — nothing disposes it before the pool does; that is the subject.
+        var sub = pool.SubscribeThroughPool(source)
+            .Subscribe(
+                _ => { },
+                _ => Interlocked.Increment(ref consumerTerminals),
+                () => Interlocked.Increment(ref consumerTerminals));
+        try
+        {
+            SpinWait.SpinUntil(() => Volatile.Read(ref sourceOpen) == 1, Timeout10)
+                .Should().BeTrue("precondition: the setup leaf opened the source — the subscription is live");
+            // `sourceOpen` is written INSIDE source.Subscribe, before the setup leaf hands the returned
+            // subscription over and leaves its region; wait for it to release its slot.
+            SpinWait.SpinUntil(() => pool.CurrentInFlight == 0, Timeout10)
+                .Should().BeTrue("precondition: the setup leaf finished — only the subscription is left");
 
-        await terminated.Task.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
-        var leaked = await disposed.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
-        leaked.Should().Be(0, "the admission region is released with the subscribe, not with the subscription");
+            pool.Dispose();
+
+            var leaked = await disposed.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
+            leaked.Should().Be(0, "the admission region is released with the subscribe, not with the subscription");
+            Volatile.Read(ref sourceTornDown).Should().Be(1,
+                "the drain tears down the pool's OWN resource — its subscription to the source");
+            Volatile.Read(ref consumerTerminals).Should().Be(0,
+                "the pool's cancel delivers nothing to a consumer whose source is open (#7968)");
+            pool.UnownedLeaks.Should().Be(1, "the subscription was still attached when the pool was cancelled");
+        }
+        finally
+        {
+            sub.Dispose();
+        }
     }
 }

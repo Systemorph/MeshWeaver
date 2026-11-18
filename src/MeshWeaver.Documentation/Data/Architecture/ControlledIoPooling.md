@@ -889,6 +889,18 @@ frames.
   the token's callback, and the continuation is `ExecuteSynchronously`), it records a leak and delivers
   nothing. Off the canceller, #4545's terminal stands.
 
+**🚨 A test of either branch must PLACE the cancel, never race it.** Whether a pooled subscription gets
+a terminal depends only on whether its source was open when the cancel landed, and a subscribe followed
+at once by `Dispose()` leaves that to the ThreadPool: the setup leaf and the canceller thread race, so a
+test that subscribes, disposes and then waits for the subscriber's terminal passes when the canceller
+wins and times out when the setup leaf opens the source first. `IoPoolDisposeAcquireRaceTest.Disposal_completes_even_with_a_live_SubscribeThroughPool_subscription`
+had exactly that shape after the reversal above and timed out on an unrelated pull request. It now waits
+until the source is open and the setup leaf has released its slot (`CurrentInFlight == 0`), then
+disposes, and asserts what the contract gives: `Disposed` fires with no residual, the source
+subscription is torn down, the subscriber receives nothing, and one unowned leak is recorded. The other
+branch is placed by parking the setup leaf on `OnSubscribeSetupLeafStarting` until the cancel has
+returned (`IoPoolLateDrainRegistrationTest`).
+
 **Who owned the legs #1789 needed terminated.** #1789 (prod 2026-08-17) added the drain's `OnCompleted`
 because `RoutingGrain.Dispatch`'s in-flight decrement and `OrderedRouteDispatcher`'s FIFO advance live
 in a `.Finally` that never ran when the drain merely disposed a leg. That bookkeeping is now released by
