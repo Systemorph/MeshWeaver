@@ -1,4 +1,4 @@
-#pragma warning disable CS1591
+
 
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.PluginCatalog;
