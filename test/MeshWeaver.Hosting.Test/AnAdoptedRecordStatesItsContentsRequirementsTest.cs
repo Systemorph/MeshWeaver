@@ -37,6 +37,7 @@ public class AnAdoptedRecordStatesItsContentsRequirementsTest
         MinMeshVersion = "3.0.0-ci.7845",
         Requires = ["Store@^1.0.0", "AI@^1.0.0", "Signature@^1.2.0"],
         AuthorizedBy = "system-security",
+        InstalledAtUtc = new DateTimeOffset(2026, 9, 23, 16, 23, 10, TimeSpan.Zero),
     };
 
     private static PackageManifest Candidate() => new()
@@ -83,6 +84,7 @@ public class AnAdoptedRecordStatesItsContentsRequirementsTest
         Assert.Equal(Candidate().Requires, healed.Requires);
         Assert.Equal(stale.ModuleVersion, healed.ModuleVersion);
         Assert.Equal(stale.AuthorizedBy, healed.AuthorizedBy);
+        Assert.NotNull(stale.InstalledAtUtc);
         Assert.Equal(stale.InstalledAtUtc, healed.InstalledAtUtc);
     }
 
