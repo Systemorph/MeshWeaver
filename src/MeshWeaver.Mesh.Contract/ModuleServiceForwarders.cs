@@ -362,7 +362,14 @@ internal sealed class ModuleHealthCheckOptionsForwarder(ModuleContexts contexts,
             // Withdrawn before the options were first read: its checks cannot even be named. One
             // named verdict stands for them (the withdrawal itself is an IncompatibleModule record) —
             // on the default name only, where a setup that cannot say its name lands.
-            if (optionsName == Options.DefaultName)
+            // 🚨 ONE verdict per module, not one per forwarder: a module that makes several health-check
+            // setups (AddHealthChecks().AddCheck… more than once, or a named Configure beside it) has one
+            // forwarder EACH, and every one of them lands here. Adding the module's name twice makes the
+            // health-check service refuse its registrations at startup ("Duplicate health checks were
+            // registered with the name(s): MeshWeaver.SelfUpdate.Aks, MeshWeaver.SelfUpdate.Aks"), which
+            // took a v4 build portal down on every boot (exit 139, CrashLoopBackOff).
+            if (optionsName == Options.DefaultName
+                && !options.Registrations.Any(r => string.Equals(r.Name, module, StringComparison.Ordinal)))
                 options.Registrations.Add(new HealthCheckRegistration(module,
                     _ => Absent($"module {module} is not held by this mesh's module registry — it was withdrawn, so its health checks cannot run"),
                     HealthStatus.Degraded, null));

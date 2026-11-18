@@ -505,6 +505,17 @@ through the root's `HealthCheckService` each time. On the base, the swap case th
 (`Unable to resolve service for type '…Beat' while attempting to activate '…ProbeCheck'`) and the
 retire case throws `Module … holds no service scope`.
 
+🚨 **A module withdrawn at boot is ONE verdict, not one per forwarder.** The root holds one
+`ModuleHealthCheckOptionsForwarder` per health-check setup a module makes, and a module withdrawn before the
+health options are first read (its shared instances could not be built, see the next section) reaches the
+"not held" branch in every one of them. Each used to add a check named after the module, so a module with
+several setups produced duplicate names, and the health-check service refused them at startup. Measured on a v4
+build portal: `ArgumentException: Duplicate health checks were registered with the name(s):
+MeshWeaver.SelfUpdate.Aks, MeshWeaver.SelfUpdate.Aks` out of `MapHealthChecks` on every boot (exit 139,
+CrashLoopBackOff), so a withdrawn module took the whole portal down instead of being reported. The verdict is
+added once per module. `AWithdrawnModuleIsOneHealthVerdictTest` withdraws a module with two setups at boot; without
+the guard it throws exactly that exception.
+
 ### Built before published (MeshWeaver#6542)
 
 🚨 **The root only ever READS a module's instances.** Every PROCESS-LIFETIME instance the root can
