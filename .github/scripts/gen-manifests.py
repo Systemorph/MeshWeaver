@@ -179,6 +179,21 @@ LOCK_OWNER_MAIN = "main"
 LOCK_OWNERS = {LOCK_OWNER_BRANCH, LOCK_OWNER_MAIN}
 SETTLEMENT_PR_BRANCH = "ci/settle-manifest-locks"
 SETTLEMENT_PR_AUTHOR = "meshweaver-cloud[bot]"
+# 🚦 EVERY DELIVERY LINE SETTLES ITS OWN LOCKS (policy `major-lines-run-separately`). A repo that
+# carries more than one delivery line (MeshWeaver.Plugins: `main` for v4, `main3` for v3) owns each
+# line's locks on that line's branch, so each line has its OWN settle pull request: the default
+# branch's is `ci/settle-manifest-locks` (unchanged), another line's is `ci/settle-manifest-locks-<line>`
+# — never one branch for two bases, which would propose one line's evidence onto the other.
+# MeshWeaver.Plugins#5638: `main3` was recognised as no settle base at all, so nothing merged there
+# since the split ever reached a line-3 instance.
+LOCK_TRUNK_ENV = "MW_LOCK_TRUNK"
+
+
+def settlement_branch(base_ref: str, default_branch: str | None = None) -> str:
+    """The settle pull request's head branch for a pull request into `base_ref`."""
+    if base_ref == (default_branch or "main"):
+        return SETTLEMENT_PR_BRANCH
+    return f"{SETTLEMENT_PR_BRANCH}-{base_ref}"
 # 🚨 THE FLOOR STAMP RIDES THE SETTLE (policy `floor-stamp-rides-the-settle`). A node repo that
 # stamps package floors (`content.minMeshVersion` + a `<Package>/mesh-floor.lock` witness, written by
 # main's run once it has compiled and tested the sources) used to land that stamp as a SECOND bot
@@ -578,16 +593,53 @@ def _sample(drift: list[str], limit: int = 5) -> str:
     return shown if len(drift) <= limit else f"{shown}, … (+{len(drift) - limit} more)"
 
 
+def _trunk_branch() -> str | None:
+    """The delivery line this run derives against, when it is named — else None (the remote HEAD).
+
+    🚨 A repo with more than one delivery line has more than one trunk, and the remote's HEAD names
+    only the default one. Deriving a `main3` tree against `main`'s locks reads a v4 witness for a v3
+    tree (discarded by series, so the #434 window is open again on `main3`), and once `main3` cuts
+    tags of its own the settle could not tell them from nothing. So, in order:
+
+      1. `MW_LOCK_TRUNK` names the line explicitly (scripts/floor-proposal.sh sets it);
+      2. a PUSH to a branch is that branch's run, and the pushed branch IS its trunk;
+      3. the line's own settle pull request derives against its base, exactly as its writer did;
+      4. otherwise the remote's HEAD — every single-line repo, every ordinary pull request.
+    """
+    explicit = os.environ.get(LOCK_TRUNK_ENV, "").strip()
+    if explicit:
+        return explicit.removeprefix("refs/heads/")
+    ref = os.environ.get("GITHUB_REF", "").strip()
+    if os.environ.get("GITHUB_EVENT_NAME") == "push" and ref.startswith("refs/heads/"):
+        return ref.removeprefix("refs/heads/")
+    if is_manifest_lock_settlement_pr():
+        base = os.environ.get("GITHUB_BASE_REF", "").strip()
+        if base:
+            return base
+    return None
+
+
 def _published_trunk(root: Path, remote: str) -> tuple[str, str | None] | None:
-    """`(ref, oid)` of the branch `remote`'s HEAD points at — the TRUNK, whose committed
-    `manifest.lock` files are the second witness every version is derived against.
+    """`(ref, oid)` of the TRUNK, whose committed `manifest.lock` files are the second witness
+    every version is derived against: the line `_trunk_branch` names, else the branch `remote`'s
+    HEAD points at.
 
     `--symref` answers both halves in one round-trip: the symbolic line names the default branch
     (never hard-code `main` — a fork, or a sibling node repo, may not use it) and the ordinary line
     carries the tip it currently points at. `oid` is None for a remote that has the symref but no
     commit behind it (a repo nothing has been pushed to): nothing is published there, so there is no
-    baseline to derive against — which is a different answer from "could not ask".
+    baseline to derive against — which is a different answer from "could not ask". A NAMED line the
+    remote does not carry is the same "nothing published there" answer.
     """
+    line = _trunk_branch()
+    if line:
+        named = git(root, ["ls-remote", remote, f"refs/heads/{line}"], timeout=60)
+        if named is None:
+            return None
+        oid = next((value.strip() for value, _, name in
+                    (row.partition("\t") for row in named.splitlines())
+                    if name.strip() == f"refs/heads/{line}" and value.strip()), None)
+        return f"refs/heads/{line}", oid
     listed = git(root, ["ls-remote", "--symref", remote, "HEAD"], timeout=60)
     if listed is None:
         return None
@@ -758,17 +810,33 @@ def released_versions(root: Path, module: str, major: int, minor: int,
                       as_of: str | None = None) -> list[tuple[int, str]]:
     """Every `<module>/vMAJOR.MINOR.PATCH` tag in this series, as (patch, tag), highest first.
 
-    `as_of` limits the set to tags REACHABLE from that commit. The tag job publishes a tag for
-    every trunk commit it releases, so when the trunk commit derived against is older than the
-    tip (#1426, see _trunk_commit) the tags published for the commits after it are not this
-    tree's history and must not be its witness. For the tip itself every published tag is
-    reachable, so the normal case reads exactly what it read before.
+    `as_of` leaves out the tags published for commits AFTER it on its own history. The tag job
+    publishes a tag for every trunk commit it releases, so when the trunk commit derived against is
+    older than the tip (#1426, see _trunk_commit) the tags published for the commits after it are
+    not this tree's history and must not be its witness.
+
+    🚨 It does NOT limit the set to tags reachable from `as_of`. The tag namespace — and the
+    registry's `{package}@{version}` key — is SHARED by every delivery line of the repo, and a
+    series can live on two lines at once (MeshWeaver.Plugins after the v3/v4 split: `main` cut
+    `Hosting/v1.92.1`…`v1.92.10` after `main3` forked, and Manufacturing, Parties and SharePoint sit
+    in the same series on both). A tag cut on another line is reachable from neither this tree nor
+    its trunk, and reading "reachable only" would hand its number out a second time, for other
+    content (MeshWeaver.Plugins#5638). So: every tag in the series, minus those on commits that
+    DESCEND from `as_of` without being `as_of`'s own history. For the tip itself nothing descends
+    from it, so the normal case reads every published tag.
     """
-    listed = git(root, ["tag", "--list", f"{module}/v{major}.{minor}.*"]
-                 + (["--merged", as_of] if as_of else []))
+    pattern = f"{module}/v{major}.{minor}.*"
+    listed = git(root, ["tag", "--list", pattern])
+    later: set[str] = set()
+    if as_of:
+        after = set((git(root, ["tag", "--list", pattern, "--contains", as_of]) or "").split())
+        own = set((git(root, ["tag", "--list", pattern, "--merged", as_of]) or "").split())
+        later = after - own
     found: list[tuple[int, str]] = []
     for tag in (listed or "").splitlines():
         tag = tag.strip()
+        if tag in later:
+            continue
         try:
             found.append((int(tag.rsplit(".", 1)[1]), tag))
         except (ValueError, IndexError):
@@ -1051,7 +1119,10 @@ def is_manifest_lock_settlement_pr() -> bool:
 
     The author and branch are both load-bearing. A normal PR — including one that happens to use
     the reserved branch name — still cannot commit generated locks. This is a very narrow alternate
-    check for the CI-created lock PR, not a general opt-out from the main-owned rule.
+    check for the CI-created lock PR, not a general opt-out from the main-owned rule. The branch
+    must be THE settle branch of the pull request's base (`settlement_branch`): the default
+    branch's own, or `ci/settle-manifest-locks-<line>` into that line — never one line's settle
+    into another line.
     """
     if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
         return False
@@ -1080,8 +1151,8 @@ def is_manifest_lock_settlement_pr() -> bool:
         and str(repository.get("full_name", "")).casefold() == repository_name
         and str(head_repo.get("full_name", "")).casefold() == repository_name
         and str(base_repo.get("full_name", "")).casefold() == repository_name
-        and head.get("ref") == SETTLEMENT_PR_BRANCH
-        and base.get("ref") == "main"
+        and bool(base.get("ref"))
+        and head.get("ref") == settlement_branch(str(base.get("ref")), repository.get("default_branch"))
         and isinstance(pr.get("user"), dict)
         and pr["user"].get("login") == SETTLEMENT_PR_AUTHOR
     )
@@ -1430,19 +1501,29 @@ def settled_past_published(root: Path, module: str, materialized: str, settled: 
     claim ("settled v1.2.1 but --materialize derives v1.2.0"), so the settlement PR could never go
     green (MeshWeaver.Plugins#5424). The same holds for a first-claim tag whose package moved again.
 
-    The bar is exact: the settled number is the materialized one plus ONE, a tag for the
-    materialized number is reachable from `as_of`, and that tag released content other than this
-    tree's. Anything else — the settle behind it, more than one ahead, ahead with that number
-    unpublished, or a tag for this very content — stays the failure it was.
+    🚨 The gap can be MORE than one, and only across delivery lines. A line that forked carries
+    its locks from before the fork, while the other line kept cutting tags in the same series —
+    MeshWeaver.Plugins `main3` (#5638): its AI lock said 1.52.0, `main` had since published
+    `AI/v1.52.1`…`v1.52.3` for other content, so `--materialize` named the moved tree 1.52.1 (a
+    taken number) and `--settle` rightly wrote 1.52.4. The rule is the same one, read at the top
+    of the series rather than at the materialized number: the settle writes ONE past the HIGHEST
+    published tag, so every number from the materialized one up to that tag is taken.
+
+    The bar is exact: the settled number is one past the HIGHEST tag of the series (as `as_of`
+    reads them — see released_versions), that tag is at or above the materialized number, and it
+    released content other than this tree's. Anything else — the settle behind the materialized
+    number, ahead with the top of the series unpublished, or a top tag for this very content —
+    stays the failure it was.
     """
     if not (VERSION_RE.fullmatch(materialized) and VERSION_RE.fullmatch(settled)):
         return False
     m_major, m_minor, m_patch = (int(p) for p in materialized.split("."))
-    if tuple(int(p) for p in settled.split(".")) != (m_major, m_minor, m_patch + 1):
+    s_major, s_minor, s_patch = (int(p) for p in settled.split("."))
+    if (s_major, s_minor) != (m_major, m_minor) or s_patch <= m_patch:
         return False
-    for patch, tag in released_versions(root, module, m_major, m_minor, as_of):
-        if patch != m_patch:
-            continue
+    for patch, tag in released_versions(root, module, m_major, m_minor, as_of)[:1]:
+        if patch != s_patch - 1 or patch < m_patch:
+            return False
         released = _tag_annotated_content(root, tag)
         if released is None:
             lock = _lock_at(root, tag, module)
@@ -1870,7 +1951,8 @@ def _loose_worktree_paths(root: Path, locks: list[str]) -> list[str] | None:
 
 
 # The run context the self-test's fixtures must never inherit (see main()'s --self-test).
-_SELF_TEST_ENV_ISOLATED = ("GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "GITHUB_BASE_REF", "MW_LOCK_BASE")
+_SELF_TEST_ENV_ISOLATED = ("GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "GITHUB_BASE_REF", "MW_LOCK_BASE",
+                           "GITHUB_REF", "GITHUB_REPOSITORY", LOCK_TRUNK_ENV)
 
 
 def self_test() -> int:
@@ -2637,6 +2719,104 @@ def _self_test_published_tag_wins(repo: Path) -> list[str]:
         if got != want:
             failures.append(f"trunk-only window — {name}: expected {want}, derived {got} ({basis})")
     failures.extend(_self_test_first_claim_tag(repo.parent / "first-claim"))
+    failures.extend(_self_test_two_lines(repo.parent / "two-lines"))
+    return failures
+
+
+def _self_test_two_lines(repo: Path) -> list[str]:
+    """Two delivery lines share ONE tag namespace — and each settles on its own trunk.
+
+    The shape MeshWeaver.Plugins reached after the v3/v4 split (#5638): `main` cut tags in a series
+    after `main3` forked, so a `main3` tree reaches neither them nor `main`'s locks, and `main3`'s
+    own tags are reachable from no `main` commit. Every assertion carries its negative control.
+    """
+    failures: list[str] = []
+
+    def g(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+                              text=True, check=False).stdout.strip()
+
+    (repo / "Mod").mkdir(parents=True)
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "t")
+    (repo / "Mod" / "index.json").write_text('{"content": {"version": "1.3"}}\n')
+    (repo / "Mod" / "manifest.lock").write_text('{"moduleVersion": "A", "version": "1.3.0"}\n')
+    g("add", "-A")
+    g("commit", "-qm", "1.3.0 = A")
+    g("tag", "-a", "Mod/v1.3.0", "-m", "Mod 1.3.0 (content A)")
+    fork = g("rev-parse", "HEAD")
+    g("commit", "-q", "--allow-empty", "-m", "main moves on")
+    older_main = g("rev-parse", "HEAD")
+    g("commit", "-q", "--allow-empty", "-m", "main releases B")
+    g("tag", "-a", "Mod/v1.3.2", "-m", "Mod 1.3.2 (content B)")
+    g("checkout", "-q", "-b", "main3", fork)
+    (repo / "Mod" / "manifest.lock").write_text('{"moduleVersion": "C", "version": "1.3.1"}\n')
+    g("commit", "-qam", "main3 releases 1.3.1 = C")
+    g("tag", "-a", "Mod/v1.3.1", "-m", "Mod 1.3.1 (content C)")
+
+    def patches(as_of: str | None) -> list[int]:
+        return [p for p, _ in released_versions(repo, "Mod", 1, 3, as_of)]
+
+    for name, as_of, want in [("main3's tip sees main's later tag", "main3", [2, 1, 0]),
+                              ("main's tip sees main3's tag", "main", [2, 1, 0]),
+                              ("no as_of reads every tag", None, [2, 1, 0]),
+                              # #1426 kept: an older main commit does not read main's LATER tag —
+                              # and still reads the other line's, which is not its own history.
+                              ("an older main commit skips main's later tag", older_main, [1, 0])]:
+        got = patches(as_of)
+        if got != want:
+            failures.append(f"two lines — {name}: expected patches {want}, got {got}")
+    plugin = repo / "Mod"
+    got, basis = derive_release(repo, plugin, "D", trunk="main3")
+    if got != "1.3.3":
+        failures.append(f"two lines — a new main3 tree must derive past main's v1.3.2: expected 1.3.3, "
+                        f"derived {got} ({basis}); 'reachable only' would hand out 1.3.2 twice")
+    got, basis = derive_release(repo, plugin, "B", trunk="main3")
+    if got != "1.3.2":
+        failures.append(f"two lines — main's released tree B (NEGATIVE CONTROL: the tag decides): "
+                        f"expected 1.3.2, derived {got} ({basis})")
+
+    # The settle pull request of each line, and nothing crossing lines.
+    event = repo.parent / "two-lines-event.json"
+    saved = {k: os.environ.pop(k) for k in _SELF_TEST_ENV_ISOLATED if k in os.environ}
+    try:
+        os.environ["GITHUB_REPOSITORY"] = "o/r"
+        for head, base, want in [("ci/settle-manifest-locks", "main", True),
+                                 ("ci/settle-manifest-locks-main3", "main3", True),
+                                 ("ci/settle-manifest-locks", "main3", False),
+                                 ("ci/settle-manifest-locks-main3", "main", False),
+                                 ("feature/x", "main3", False)]:
+            r = {"full_name": "o/r"}
+            event.write_text(json.dumps({
+                "repository": {"full_name": "o/r", "default_branch": "main"},
+                "pull_request": {"head": {"ref": head, "repo": r}, "base": {"ref": base, "repo": r},
+                                 "user": {"login": SETTLEMENT_PR_AUTHOR}}}))
+            os.environ["GITHUB_EVENT_NAME"] = "pull_request"
+            os.environ["GITHUB_EVENT_PATH"] = str(event)
+            os.environ["GITHUB_BASE_REF"] = base
+            if is_manifest_lock_settlement_pr() is not want:
+                failures.append(f"two lines — {head} into {base}: settlement PR should be {want}")
+            trunk = _trunk_branch()
+            if trunk != (base if want else None):
+                failures.append(f"two lines — {head} into {base}: trunk should be "
+                                f"{base if want else None}, got {trunk}")
+        for k in ("GITHUB_EVENT_PATH", "GITHUB_BASE_REF"):
+            os.environ.pop(k, None)
+        os.environ["GITHUB_EVENT_NAME"] = "push"
+        os.environ["GITHUB_REF"] = "refs/heads/main3"
+        if _trunk_branch() != "main3":
+            failures.append(f"two lines — a push to main3 derives against main3, got {_trunk_branch()}")
+        os.environ["GITHUB_REF"] = "refs/tags/Mod/v1.3.1"
+        if _trunk_branch() is not None:
+            failures.append("two lines — a tag push names no trunk (NEGATIVE CONTROL)")
+        os.environ[LOCK_TRUNK_ENV] = "main3"
+        if _trunk_branch() != "main3":
+            failures.append(f"two lines — {LOCK_TRUNK_ENV} names the trunk, got {_trunk_branch()}")
+    finally:
+        for k in _SELF_TEST_ENV_ISOLATED:
+            os.environ.pop(k, None)
+        os.environ.update(saved)
     return failures
 
 
@@ -3220,6 +3400,22 @@ def _self_test_published_before_first_lock(tmp: Path) -> list[str]:
         got = settled_past_published(work, "Mod", args[0], args[1], args[2], head)
         if got != want:
             failures.append(f"settled_past_published — {name}: expected {want}, got {got}")
+
+    # 8. ACROSS DELIVERY LINES (#5638): another line took v1.2.1 and v1.2.2 for other content
+    # after this line's lock was written, so the settle writes one past the TOP of the series.
+    g("tag", "-a", "Mod/v1.2.1", "-m", "Mod 1.2.1 (content lineA)")
+    g("tag", "-a", "Mod/v1.2.2", "-m", "Mod 1.2.2 (content lineB)")
+    for name, args, want in [
+        ("one past the top of a series another line kept tagging", ("1.2.0", "1.2.3", moved), True),
+        ("one past the top, materialized inside the taken run", ("1.2.1", "1.2.3", moved), True),
+        ("past the top by two (NEGATIVE CONTROL)", ("1.2.0", "1.2.4", moved), False),
+        ("short of the top (NEGATIVE CONTROL)", ("1.2.0", "1.2.2", moved), False),
+        ("the top tag released THIS content (NEGATIVE CONTROL)", ("1.2.0", "1.2.3", "lineB"), False),
+        ("materialized above the top (NEGATIVE CONTROL)", ("1.2.3", "1.2.4", moved), False),
+    ]:
+        got = settled_past_published(work, "Mod", args[0], args[1], args[2], head)
+        if got != want:
+            failures.append(f"settled_past_published across lines — {name}: expected {want}, got {got}")
     _CONFIG_CACHE.pop(work.resolve(), None)
     _CONFIG_CACHE.pop(tagless.resolve(), None)
     return failures
