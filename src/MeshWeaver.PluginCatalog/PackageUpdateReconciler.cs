@@ -219,7 +219,10 @@ internal static class PackageUpdateReconciler
         // Governance recorded 4.0.3 with floor 4.0.13516 and the September release's `AI@^1.0.0`, and
         // that one stale line refused every line-4 module-set proposal against the landed AI 4.0.3.
         // Nothing else rewrites it (the content never changes again), so this gate heals it in place:
-        // no file is fetched and nothing is told — only the record's declaration is corrected.
+        // no file is fetched and nothing is told — only the record's requirements are corrected. Ahead
+        // of the ORIGIN gate below by design: the requirements live in the hashed index.json, so a
+        // candidate at this hash — from whichever origin — declares exactly what the installed bytes
+        // declare; it can make the record agree with its own content and with nothing else.
         if (string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
             return DeclaresAsTheCandidate(record, pkg)
                 ? Observable.Return(Unit.Default)
@@ -601,7 +604,7 @@ internal static class PackageUpdateReconciler
             ModuleVersion = pkg.ModuleVersion,
             MinMeshVersion = pkg.MinMeshVersion,
             PreInstalled = pkg.PreInstalled,
-            Requires = pkg.Requires,
+            Requires = pkg.Requires ?? [],
             InstalledFiles = pkg.ManifestFiles ?? current.InstalledFiles,
             InstalledAtUtc = now,
             NotifiedModuleVersion = pkg.ModuleVersion,
@@ -611,48 +614,57 @@ internal static class PackageUpdateReconciler
             HeldSince = null,
         };
 
-    /// <summary>Whether <paramref name="record"/> already states what the candidate at the SAME
-    /// content declares — its requirements and its platform floor (pure).</summary>
+    /// <summary>Whether <paramref name="record"/> already states the requirements the candidate at
+    /// the SAME content declares (pure). Only the requirements: they live in the package's
+    /// <c>index.json</c>, which the content hash covers, so an equal hash pins them and no two
+    /// listings of one hash can disagree about them. The platform floor is deliberately not compared —
+    /// a floor-only re-stamp is settled without moving the hash (<c>gen-manifests.py</c>), so two
+    /// listings of one hash CAN carry different floors and a heal of it would flip between them.</summary>
     /// <param name="record">The install record.</param>
     /// <param name="pkg">The candidate, at the record's content hash.</param>
     internal static bool DeclaresAsTheCandidate(PackageManifest record, PackageManifest pkg) =>
-        string.Equals(record.MinMeshVersion, pkg.MinMeshVersion, StringComparison.Ordinal)
-        && record.Requires.SequenceEqual(pkg.Requires, StringComparer.Ordinal);
+        (record.Requires ?? []).SequenceEqual(pkg.Requires ?? [], StringComparer.Ordinal);
 
-    /// <summary>The record with the declarations of the candidate at its own content hash (pure) —
-    /// requirements and platform floor; nothing install-time moves.</summary>
+    /// <summary>The record with the requirements of the candidate at its own content hash (pure);
+    /// nothing install-time moves.</summary>
     /// <param name="current">The record as it stands.</param>
     /// <param name="pkg">The candidate, at the record's content hash.</param>
     internal static PackageManifest WithCandidateDeclarations(PackageManifest current, PackageManifest pkg) =>
-        current with { Requires = pkg.Requires, MinMeshVersion = pkg.MinMeshVersion };
+        current with { Requires = pkg.Requires ?? [] };
 
     private static IObservable<Unit> HealDeclarations(
         IMessageHub hub, AccessService accessService, PackageManifest pkg, PackageManifest record,
         string recordPath, ILogger? logger)
-    {
-        logger?.LogInformation(
-            "Package update: {Id}'s install record is at the listed content ({Hash}) but states other "
-            + "declarations (requires [{Old}], floor {OldFloor}); taking the content's own "
-            + "(requires [{New}], floor {NewFloor}). No content is written.",
-            pkg.Id, pkg.ModuleVersion, string.Join(", ", record.Requires), record.MinMeshVersion,
-            string.Join(", ", pkg.Requires), pkg.MinMeshVersion);
-        return accessService.RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
+        => accessService.RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
                 .Update<PackageManifest>(current =>
+                {
                     // Re-checked on the owner's current value: a concurrent install that moved the
-                    // record to other content keeps its own declarations.
-                    string.Equals(current.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal)
-                        ? WithCandidateDeclarations(current, pkg)
-                        : current))
+                    // record to other content keeps its own declarations — and says so.
+                    if (!string.Equals(current.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
+                    {
+                        logger?.LogInformation(
+                            "Package update: {Id}'s install record moved to other content ({Now}) before its "
+                            + "requirements could be corrected; left as it is.", pkg.Id, current.ModuleVersion);
+                        return current;
+                    }
+                    if (DeclaresAsTheCandidate(current, pkg))
+                        return current;
+                    logger?.LogInformation(
+                        "Package update: {Id}'s install record is at the listed content ({Hash}) but states "
+                        + "other requirements ([{Old}]); taking the content's own ([{New}]). No content is written.",
+                        pkg.Id, pkg.ModuleVersion, string.Join(", ", current.Requires ?? []),
+                        string.Join(", ", pkg.Requires ?? []));
+                    return WithCandidateDeclarations(current, pkg);
+                }))
             .Take(1)
             .Select(_ => Unit.Default)
             .DefaultIfEmpty(Unit.Default)
             .Catch((Exception ex) =>
             {
-                logger?.LogWarning(ex, "Package update: correcting the declarations of {Id} on {Path} failed.",
+                logger?.LogWarning(ex, "Package update: correcting the requirements of {Id} on {Path} failed.",
                     pkg.Id, recordPath);
                 return Observable.Return(Unit.Default);
             });
-    }
 
     /// <summary>The hold sentence for a sync-owned package whose sync has NOT landed the
     /// candidate yet (pure) — what the record and the fleet view say instead of a silent reminder.</summary>

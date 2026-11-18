@@ -1,5 +1,15 @@
 using System;
+using System.Linq;
+using System.Reactive.Linq;
+using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -16,6 +26,7 @@ namespace MeshWeaver.Hosting.Test;
 public class AnAdoptedRecordStatesItsContentsRequirementsTest
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 18, 1, 0, 0, TimeSpan.Zero);
+    private const string CandidateHash = "531fdb35d7d08c01";
 
     private static PackageManifest SeptemberRecord(string moduleVersion) => new()
     {
@@ -33,7 +44,7 @@ public class AnAdoptedRecordStatesItsContentsRequirementsTest
         Id = "Governance",
         Source = "Plugins",
         Version = "4.0.3",
-        ModuleVersion = "531fdb35d7d08c01",
+        ModuleVersion = CandidateHash,
         MinMeshVersion = "4.0.13516",
         Requires = ["Store@^4.0.0", "AI@^4.0.0", "Signature@^4.0.0", "Essentials@^4.0.0"],
     };
@@ -54,7 +65,7 @@ public class AnAdoptedRecordStatesItsContentsRequirementsTest
     [Fact]
     public void ARecordAtTheCandidatesContent_WithOldRequirements_DoesNotDeclareAsTheCandidate()
     {
-        var stale = SeptemberRecord(Candidate().ModuleVersion!) with { MinMeshVersion = "4.0.13516", Version = "4.0.3" };
+        var stale = SeptemberRecord(CandidateHash) with { MinMeshVersion = "4.0.13516", Version = "4.0.3" };
 
         Assert.False(PackageUpdateReconciler.DeclaresAsTheCandidate(stale, Candidate()));
         Assert.True(PackageUpdateReconciler.DeclaresAsTheCandidate(
@@ -65,7 +76,7 @@ public class AnAdoptedRecordStatesItsContentsRequirementsTest
     [Fact]
     public void HealingTheDeclarations_KeepsEverythingInstallTime()
     {
-        var stale = SeptemberRecord(Candidate().ModuleVersion!) with { MinMeshVersion = "4.0.13516", Version = "4.0.3" };
+        var stale = SeptemberRecord(CandidateHash) with { MinMeshVersion = "4.0.13516", Version = "4.0.3" };
 
         var healed = PackageUpdateReconciler.WithCandidateDeclarations(stale, Candidate());
 
@@ -79,4 +90,68 @@ public class AnAdoptedRecordStatesItsContentsRequirementsTest
     [Fact]
     public void ARecordStatingTheCandidatesDeclarations_NeedsNoHeal()
         => Assert.True(PackageUpdateReconciler.DeclaresAsTheCandidate(Candidate(), Candidate()));
+}
+
+/// <summary>
+/// The heal's WRITE path, through the real reconciler on a real mesh: a stored record at the listed
+/// content hash that states the September requirements is corrected to the content's own by
+/// <see cref="PackageUpdateReconciler.ReconcileInstalled"/>. The source fetches nothing — it throws if
+/// asked — because an equal-hash pass must not read any content.
+/// </summary>
+public class AnEqualHashPassHealsTheRecordsRequirementsTest(ITestOutputHelper output)
+    : MeshWeaver.Hosting.Monolith.TestBase.MonolithMeshTestBase(output)
+{
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => base.ConfigureMesh(builder).AddPluginCatalog();
+
+    private static string RecordPath(string id) => $"{PackageInstaller.InstalledPartition}/{id}";
+
+    private static PackageManifest Manifest(string id, string hash, params string[] requires) => new()
+    {
+        Id = id, Name = id, Source = "Plugins", Version = "4.0.3", TargetPartition = id,
+        Kind = PackageKind.NodeRepo, ModuleVersion = hash, MinMeshVersion = "4.0.13516",
+        Requires = [.. requires], UpdatePolicy = PackageUpdatePolicy.Auto,
+    };
+
+    private System.Threading.Tasks.Task Store(PackageManifest record, System.Threading.CancellationToken ct) =>
+        InstallRecordGate.Write(Mesh, MeshNode.FromPath(RecordPath(record.Id)) with
+            {
+                NodeType = PackageInstaller.PackageNodeType, Name = record.Id, State = MeshNodeState.Active, Content = record,
+            }, PackageRecordWriteIntent.CreateAllowed, NullLogger.Instance)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+    private System.Threading.Tasks.Task<PackageManifest> Live(string id, Func<PackageManifest, bool> until,
+        System.Threading.CancellationToken ct) =>
+        Mesh.GetMeshNodeStream(RecordPath(id))
+            .Select(n => n?.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions))
+            .Where(m => m is not null && until(m))
+            .Select(m => m!)
+            .Take(1)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+    private sealed class SilentSource : IPackageSource
+    {
+        public IObservable<System.Collections.Generic.IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
+            Observable.Return((System.Collections.Generic.IReadOnlyList<PackageManifest>)[]);
+
+        public IObservable<System.Collections.Generic.IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
+            Observable.Throw<System.Collections.Generic.IReadOnlyList<PackageFile>>(
+                new InvalidOperationException("an equal-hash pass must fetch nothing"));
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async System.Threading.Tasks.Task AStaleRecordAtTheListedContent_TakesTheContentsRequirements()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Store(Manifest("HealGov", "h1", "Store@^1.0.0", "AI@^1.0.0"), ct);
+        var candidate = Manifest("HealGov", "h1", "Store@^4.0.0", "AI@^4.0.0");
+
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>().RunAsSystem(() =>
+                PackageUpdateReconciler.ReconcileInstalled(Mesh, new SilentSource(), "HEAD", [candidate], "test",
+                    NullLogger.Instance))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var healed = await Live("HealGov", m => m.Requires.Contains("AI@^4.0.0"), ct);
+        Assert.Equal(candidate.Requires, healed.Requires);
+        Assert.Equal("h1", healed.ModuleVersion);
+    }
 }
