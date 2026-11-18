@@ -642,8 +642,8 @@ numbers equal what `--materialize` gives whenever the trunk it derived against i
 itself — the property that makes a bundle named at pull-request time the bundle `main` publishes.
 
 🚨 **One disagreement is accepted, exactly: settled = one past the HIGHEST published tag of the
-series, where that tag is at or above the materialized number and released OTHER content**
-(`settled_past_published`). The tags are the settle's witness, so where a tag holds the number the
+series, where that tag is at or above the materialized number and EVERY tag from the materialized
+number up to it released OTHER content** (`settled_past_published`). The tags are the settle's witness, so where a tag holds the number the
 lock implies, the settle moves one past it and `--materialize` cannot see why. Until that settle
 merges, a bundle named with the taken number is one the publication decision withholds; once it
 merges, the committed lock carries the settled number and both derivations agree again. The
@@ -653,7 +653,7 @@ refused its own claim (*"settled v1.2.1 but --materialize derives v1.2.0"*), so 
 could never go green (MeshWeaver.Plugins#5424). A first-claim tag whose package moved again is the
 same shape (Hosting and Store on the same tree). On ONE line the gap is one; across delivery lines
 it can be more (below). Anything else — past the top tag by more than one, short of it, past an
-unpublished number, past a top tag for this very content — stays a refusal. Self-test:
+unpublished number, past a tag in that run for this very content — stays a refusal. Self-test:
 `_self_test_published_before_first_lock`, with negative controls that disable the acceptance.
 
 ### Several delivery lines in one repo (policy `major-lines-run-separately`)
@@ -672,9 +672,17 @@ namespace and the registry's `{package}@{version}` key. Three rules follow, all 
   remote's HEAD, so a `main3` settle read `main`'s committed locks — another series — and skipped the
   postcondition that compares the settle with `--materialize`.
 - **Tags count from every line.** `released_versions` reads every tag of the series, minus only the
-  tags on commits after the derived commit on its own history (the #1426 rule). It used to read the
-  tags REACHABLE from the trunk, which on two lines hides the other line's tags and hands their
-  numbers out again. Measured on MeshWeaver.Plugins `main3` (MeshWeaver.Plugins#5638): after the fork,
+  tags reachable from the verified tip of the derived commit's OWN line and not from that commit
+  (the #1426 rule, made same-line: "descends from the commit" alone would also hide a line forked at
+  or after it). It used to read the tags REACHABLE from the trunk, which on two lines hides the other
+  line's tags and hands their numbers out again.
+- **A tree its line never touched keeps its number.** When the trunk's committed lock claims a
+  number for this content and that number's tag released this content too, the tree is released as
+  that number even though another line has tagged the series higher (`derive_release`). Measured on
+  `main3`: Providers' lock and `Providers/v1.3.5` both record its content while `main` tagged v1.3.6
+  and v1.3.7 for other content; "one past the top" would have handed the same tree v1.3.8.
+- **A named trunk must exist.** A trunk named by `MW_LOCK_TRUNK`, the pushed branch or the settle
+  PR's base that the remote does not carry is an error, never "nothing published yet". Measured on MeshWeaver.Plugins `main3` (MeshWeaver.Plugins#5638): after the fork,
   `main` cut `Hosting/v1.92.1`…`v1.92.10` and `AI/v1.52.1`…`v1.52.3` before bumping to `4.x`, and
   Manufacturing, Parties and SharePoint still sit in one series on both lines. So `main3`'s settle
   writes Hosting 1.92.11 and AI 1.52.4, past numbers `--materialize` would name from its pre-fork

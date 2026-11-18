@@ -189,9 +189,13 @@ SETTLEMENT_PR_AUTHOR = "meshweaver-cloud[bot]"
 LOCK_TRUNK_ENV = "MW_LOCK_TRUNK"
 
 
-def settlement_branch(base_ref: str, default_branch: str | None = None) -> str:
-    """The settle pull request's head branch for a pull request into `base_ref`."""
-    if base_ref == (default_branch or "main"):
+def settlement_branch(base_ref: str, default_branch: str | None) -> str | None:
+    """The settle pull request's head branch for a pull request into `base_ref`, or None when the
+    repository's default branch is not known — never a guessed `main` (a fork, or a sibling node
+    repo, may not use it), so an event without `repository.default_branch` is no settle at all."""
+    if not base_ref or not default_branch:
+        return None
+    if base_ref == default_branch:
         return SETTLEMENT_PR_BRANCH
     return f"{SETTLEMENT_PR_BRANCH}-{base_ref}"
 # 🚨 THE FLOOR STAMP RIDES THE SETTLE (policy `floor-stamp-rides-the-settle`). A node repo that
@@ -656,6 +660,15 @@ def _published_trunk(root: Path, remote: str) -> tuple[str, str | None] | None:
     return (ref, oid) if ref else None
 
 
+# The verified tip of the line each checkout derives against, recorded by `_trunk_commit` (keyed by
+# the resolved root, like _CONFIG_CACHE) and read by `released_versions` for the #1426 exclusion.
+_LINE_TIPS: dict[str, str] = {}
+
+
+def _record_line_tip(root: Path, oid: str) -> None:
+    _LINE_TIPS[str(Path(root).resolve())] = oid
+
+
 def _have_commit(root: Path, oid: str) -> bool:
     """True when this checkout already holds `oid` (and its tree — `git show` needs both)."""
     return git(root, ["cat-file", "-e", f"{oid}^{{commit}}"]) is not None
@@ -681,6 +694,16 @@ def _trunk_commit(root: Path, remote: str, fetch: bool) -> tuple[str | None, lis
                       f"Fix: restore access to '{remote}' and re-run."]
     ref, oid = trunk
     branch = ref.removeprefix("refs/heads/")
+    if oid is None and _trunk_branch():
+        # 🚨 A NAMED line must exist to have locks or a settle pull request at all, so a remote that
+        # does not carry it is a mistake (a typo'd MW_LOCK_TRUNK, a mis-derived line) — never the
+        # "nothing published yet" answer below, which would derive with no trunk witness at all
+        # (review of MeshWeaver#8404).
+        return None, [f"the trunk line '{branch}' (named by {LOCK_TRUNK_ENV}, the pushed branch or the "
+                      f"settle pull request's base) does not exist on '{remote}' — "
+                      f"`git ls-remote {remote} {ref}` answered nothing. Its committed manifest.lock "
+                      f"files are half the version baseline, so nothing is derived without them. "
+                      f"Fix: name an existing line."]
     if oid is None:
         print(f"  trunk: nothing published on {remote} yet — no committed baseline to derive from")
         return None, []
@@ -719,8 +742,10 @@ def _trunk_commit(root: Path, remote: str, fetch: bool) -> tuple[str | None, lis
         # before. The self-test holds both negative controls.
         print(f"  trunk: this checkout is a clean {remote}/{branch} @ {head[:8]}, behind the tip "
               f"{oid[:8]} — deriving against itself, not against locks committed after it")
+        _record_line_tip(root, oid)
         return head, []
     print(f"  trunk: verified baseline {remote}/{branch} @ {oid[:8]}")
+    _record_line_tip(root, oid)
     return oid, []
 
 
@@ -821,17 +846,22 @@ def released_versions(root: Path, module: str, major: int, minor: int,
     `Hosting/v1.92.1`…`v1.92.10` after `main3` forked, and Manufacturing, Parties and SharePoint sit
     in the same series on both). A tag cut on another line is reachable from neither this tree nor
     its trunk, and reading "reachable only" would hand its number out a second time, for other
-    content (MeshWeaver.Plugins#5638). So: every tag in the series, minus those on commits that
-    DESCEND from `as_of` without being `as_of`'s own history. For the tip itself nothing descends
-    from it, so the normal case reads every published tag.
+    content (MeshWeaver.Plugins#5638). So: every tag in the series, minus those reachable from the
+    verified TIP of `as_of`'s own line (`_trunk_commit` records it) but not from `as_of` — the tags
+    of that same line cut after it. "Descends from `as_of`" alone is not that set: another line
+    forked at or after `as_of` descends from it too, and its tags would vanish exactly in the window
+    right after a fork (review of MeshWeaver#8404). For the tip itself the set is empty, so the
+    normal case reads every published tag; with no recorded tip (a direct caller) nothing is left
+    out, which can only derive a HIGHER number, never re-issue one.
     """
     pattern = f"{module}/v{major}.{minor}.*"
     listed = git(root, ["tag", "--list", pattern])
     later: set[str] = set()
-    if as_of:
-        after = set((git(root, ["tag", "--list", pattern, "--contains", as_of]) or "").split())
+    tip = _LINE_TIPS.get(str(Path(root).resolve()))
+    if as_of and tip:
+        on_line = set((git(root, ["tag", "--list", pattern, "--merged", tip]) or "").split())
         own = set((git(root, ["tag", "--list", pattern, "--merged", as_of]) or "").split())
-        later = after - own
+        later = on_line - own
     found: list[tuple[int, str]] = []
     for tag in (listed or "").splitlines():
         tag = tag.strip()
@@ -898,6 +928,22 @@ def tag_baseline(root: Path, module: str, major: int, minor: int,
     return None
 
 
+def published_content_at(root: Path, module: str, major: int, minor: int, patch: int,
+                         as_of: str | None = None) -> str | None:
+    """The content the published tag `<module>/vMAJOR.MINOR.PATCH` released (annotation first, the
+    lock at the tagged commit as the fallback — tag_baseline's reading), or None when no such tag is
+    published (as `as_of` reads the series)."""
+    for tagged, tag in released_versions(root, module, major, minor, as_of):
+        if tagged != patch:
+            continue
+        annotated = _tag_annotated_content(root, tag)
+        if annotated is not None:
+            return annotated
+        lock = _lock_at(root, tag, module)
+        return lock.get("moduleVersion") if lock is not None else None
+    return None
+
+
 def trunk_baseline(root: Path, trunk: str, module: str, major: int, minor: int) \
         -> tuple[int, str | None, str] | None:
     """`(patch, recorded moduleVersion, label)` of the release the TRUNK's committed lock claims.
@@ -952,12 +998,24 @@ def derive_release(root: Path, plugin: Path, content_hash: str,
     """
     major, minor = declared_series(plugin)
     published = tag_baseline(root, plugin.name, major, minor, as_of=trunk)
-    witnesses = [w for w in (
-        published,
-        trunk_baseline(root, trunk, plugin.name, major, minor) if trunk else None,
-    ) if w is not None]
+    on_trunk = trunk_baseline(root, trunk, plugin.name, major, minor) if trunk else None
+    witnesses = [w for w in (published, on_trunk) if w is not None]
     if not witnesses:
         return f"{major}.{minor}.0", f"nothing released yet in the {major}.{minor} series"
+    # 🚦 UNCHANGED ON ITS OWN LINE, while ANOTHER line tagged past it (policy
+    # `major-lines-run-separately`). When the trunk's committed lock claims a number for THIS content
+    # and the tag of that number released THIS content too, both witnesses agree the tree is released
+    # as that number — however high another line has since tagged the series. On one line this
+    # cannot arise (a higher tag there moves the trunk's lock with it); across lines it is the
+    # ordinary state of a package the forked line never touched. Measured on MeshWeaver.Plugins
+    # `main3` @ 3eb032ec (#5638): Providers' lock and `Providers/v1.3.5` both record 5600576d…, while
+    # `main` tagged v1.3.6 and v1.3.7 for other content — deriving "one past the top" handed the
+    # same tree a second number, v1.3.8 (review of MeshWeaver#8405).
+    if on_trunk is not None and on_trunk[1] == content_hash \
+            and (published is None or published[1] != content_hash) \
+            and published_content_at(root, plugin.name, major, minor, on_trunk[0], trunk) == content_hash:
+        return (f"{major}.{minor}.{on_trunk[0]}",
+                f"unchanged since {on_trunk[2]}, published with this content")
 
     patch = max(p for p, _, _ in witnesses)
     highest = [w for w in witnesses if w[0] == patch]
@@ -1151,8 +1209,8 @@ def is_manifest_lock_settlement_pr() -> bool:
         and str(repository.get("full_name", "")).casefold() == repository_name
         and str(head_repo.get("full_name", "")).casefold() == repository_name
         and str(base_repo.get("full_name", "")).casefold() == repository_name
-        and bool(base.get("ref"))
-        and head.get("ref") == settlement_branch(str(base.get("ref")), repository.get("default_branch"))
+        and settlement_branch(str(base.get("ref") or ""), repository.get("default_branch")) is not None
+        and head.get("ref") == settlement_branch(str(base.get("ref") or ""), repository.get("default_branch"))
         and isinstance(pr.get("user"), dict)
         and pr["user"].get("login") == SETTLEMENT_PR_AUTHOR
     )
@@ -1521,15 +1579,26 @@ def settled_past_published(root: Path, module: str, materialized: str, settled: 
     s_major, s_minor, s_patch = (int(p) for p in settled.split("."))
     if (s_major, s_minor) != (m_major, m_minor) or s_patch <= m_patch:
         return False
-    for patch, tag in released_versions(root, module, m_major, m_minor, as_of)[:1]:
-        if patch != s_patch - 1 or patch < m_patch:
-            return False
+    def released_content(tag: str) -> str | None:
         released = _tag_annotated_content(root, tag)
         if released is None:
             lock = _lock_at(root, tag, module)
             released = lock.get("moduleVersion") if lock is not None else None
-        return released is not None and released != content_hash
-    return False
+        return released
+
+    tags = released_versions(root, module, m_major, m_minor, as_of)
+    if not tags or tags[0][0] != s_patch - 1 or tags[0][0] < m_patch:
+        return False
+    # 🚨 EVERY number in the taken run released OTHER content (review of MeshWeaver#8405). A tag at
+    # or above the materialized number that already released THIS tree would leave one tree under
+    # two published numbers — refused, as the top-tag case always was.
+    for patch, tag in tags:
+        if patch < m_patch:
+            break
+        released = released_content(tag)
+        if released is None or released == content_hash:
+            return False
+    return True
 
 
 def settle(root: Path, fetch: bool = True) -> int:
@@ -2750,32 +2819,75 @@ def _self_test_two_lines(repo: Path) -> list[str]:
     older_main = g("rev-parse", "HEAD")
     g("commit", "-q", "--allow-empty", "-m", "main releases B")
     g("tag", "-a", "Mod/v1.3.2", "-m", "Mod 1.3.2 (content B)")
+    main_tip = g("rev-parse", "HEAD")
     g("checkout", "-q", "-b", "main3", fork)
     (repo / "Mod" / "manifest.lock").write_text('{"moduleVersion": "C", "version": "1.3.1"}\n')
     g("commit", "-qam", "main3 releases 1.3.1 = C")
     g("tag", "-a", "Mod/v1.3.1", "-m", "Mod 1.3.1 (content C)")
+    main3_tip = g("rev-parse", "HEAD")
+    # A third line forked AT main's current tip: its commits DESCEND from that tip, so "descends from
+    # as_of" would hide its tag from main's own derivation (review of MeshWeaver#8404).
+    g("checkout", "-q", "-b", "main5", main_tip)
+    g("commit", "-q", "--allow-empty", "-m", "main5 releases E")
+    g("tag", "-a", "Mod/v1.3.4", "-m", "Mod 1.3.4 (content E)")
+    g("checkout", "-q", "main3")
 
-    def patches(as_of: str | None) -> list[int]:
+    def patches(as_of: str | None, tip: str | None) -> list[int]:
+        _LINE_TIPS.pop(str(repo.resolve()), None)
+        if tip:
+            _record_line_tip(repo, tip)
         return [p for p, _ in released_versions(repo, "Mod", 1, 3, as_of)]
 
-    for name, as_of, want in [("main3's tip sees main's later tag", "main3", [2, 1, 0]),
-                              ("main's tip sees main3's tag", "main", [2, 1, 0]),
-                              ("no as_of reads every tag", None, [2, 1, 0]),
-                              # #1426 kept: an older main commit does not read main's LATER tag —
-                              # and still reads the other line's, which is not its own history.
-                              ("an older main commit skips main's later tag", older_main, [1, 0])]:
-        got = patches(as_of)
+    for name, as_of, tip, want in [
+            ("main3's tip sees main's later tags", main3_tip, main3_tip, [4, 2, 1, 0]),
+            ("main's tip sees main3's tag AND the tag of a line forked at that very tip", main_tip, main_tip,
+             [4, 2, 1, 0]),
+            ("no as_of reads every tag", None, None, [4, 2, 1, 0]),
+            # #1426 kept: an older main commit does not read main's LATER tag — and still reads the
+            # other lines' tags, which are not its own line's history.
+            ("an older main commit skips main's later tag, and only that", older_main, main_tip, [4, 1, 0]),
+            ("no recorded tip leaves nothing out (it can only derive higher)", older_main, None, [4, 2, 1, 0])]:
+        got = patches(as_of, tip)
         if got != want:
             failures.append(f"two lines — {name}: expected patches {want}, got {got}")
+    _LINE_TIPS.pop(str(repo.resolve()), None)
+    _record_line_tip(repo, main3_tip)
     plugin = repo / "Mod"
     got, basis = derive_release(repo, plugin, "D", trunk="main3")
-    if got != "1.3.3":
-        failures.append(f"two lines — a new main3 tree must derive past main's v1.3.2: expected 1.3.3, "
-                        f"derived {got} ({basis}); 'reachable only' would hand out 1.3.2 twice")
-    got, basis = derive_release(repo, plugin, "B", trunk="main3")
-    if got != "1.3.2":
-        failures.append(f"two lines — main's released tree B (NEGATIVE CONTROL: the tag decides): "
-                        f"expected 1.3.2, derived {got} ({basis})")
+    if got != "1.3.5":
+        failures.append(f"two lines — a new main3 tree must derive past every line's tags: expected 1.3.5, "
+                        f"derived {got} ({basis}); 'reachable only' would hand out a taken number again")
+    got, basis = derive_release(repo, plugin, "E", trunk="main3")
+    if got != "1.3.4":
+        failures.append(f"two lines — the released tree E (NEGATIVE CONTROL: the top tag decides): "
+                        f"expected 1.3.4, derived {got} ({basis})")
+    # main3's own released tree C, untouched on its line while other lines tagged past it: its lock
+    # and its tag agree, so it keeps 1.3.1 — never a second number for one tree (review of #8405).
+    got, basis = derive_release(repo, plugin, "C", trunk="main3")
+    if got != "1.3.1":
+        failures.append(f"two lines — main3's unchanged tree C keeps its own number: expected 1.3.1, "
+                        f"derived {got} ({basis})")
+    _LINE_TIPS.pop(str(repo.resolve()), None)
+
+    # A NAMED trunk the remote does not carry is an error, never "nothing published" (review of #8404).
+    remote = repo.parent / "two-lines-remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(remote)], capture_output=True, check=False)
+    g("remote", "add", "origin", str(remote))
+    saved_trunk = os.environ.pop(LOCK_TRUNK_ENV, None)
+    try:
+        os.environ[LOCK_TRUNK_ENV] = "main3"
+        trunk, errors = _trunk_commit(repo, "origin", fetch=False)
+        if errors or not trunk:
+            failures.append(f"two lines — an existing named line resolves (NEGATIVE CONTROL): {trunk} {errors}")
+        os.environ[LOCK_TRUNK_ENV] = "no-such-line"
+        trunk, errors = _trunk_commit(repo, "origin", fetch=False)
+        if trunk is not None or not errors or "does not exist" not in errors[0]:
+            failures.append(f"two lines — a named line the remote lacks must be an ERROR, got {trunk} {errors}")
+    finally:
+        os.environ.pop(LOCK_TRUNK_ENV, None)
+        if saved_trunk is not None:
+            os.environ[LOCK_TRUNK_ENV] = saved_trunk
+        _LINE_TIPS.pop(str(repo.resolve()), None)
 
     # The settle pull request of each line, and nothing crossing lines.
     event = repo.parent / "two-lines-event.json"
@@ -2797,6 +2909,19 @@ def _self_test_two_lines(repo: Path) -> list[str]:
             os.environ["GITHUB_BASE_REF"] = base
             if is_manifest_lock_settlement_pr() is not want:
                 failures.append(f"two lines — {head} into {base}: settlement PR should be {want}")
+            if want:
+                # Fail closed: the same event without the repository's default branch is no settle.
+                event.write_text(json.dumps({
+                    "repository": {"full_name": "o/r"},
+                    "pull_request": {"head": {"ref": head, "repo": r}, "base": {"ref": base, "repo": r},
+                                     "user": {"login": SETTLEMENT_PR_AUTHOR}}}))
+                if is_manifest_lock_settlement_pr():
+                    failures.append(f"two lines — {head} into {base} with NO default_branch must not be a "
+                                    f"settlement PR (never a guessed main)")
+                event.write_text(json.dumps({
+                    "repository": {"full_name": "o/r", "default_branch": "main"},
+                    "pull_request": {"head": {"ref": head, "repo": r}, "base": {"ref": base, "repo": r},
+                                     "user": {"login": SETTLEMENT_PR_AUTHOR}}}))
             trunk = _trunk_branch()
             if trunk != (base if want else None):
                 failures.append(f"two lines — {head} into {base}: trunk should be "
@@ -3004,7 +3129,7 @@ def _self_test_main_owned(repo: Path) -> list[str]:
     settled_good = sg("rev-parse", "HEAD").stdout.strip()   # the exact, uncorrupted settlement
     settlement_event_path = settlement_repo.parent / "event.json"
     settlement_event = {
-        "repository": {"full_name": "Systemorph/MeshWeaver.Plugins"},
+        "repository": {"full_name": "Systemorph/MeshWeaver.Plugins", "default_branch": "main"},
         "pull_request": {
             "user": {"login": SETTLEMENT_PR_AUTHOR},
             "head": {"ref": SETTLEMENT_PR_BRANCH,
@@ -3412,6 +3537,8 @@ def _self_test_published_before_first_lock(tmp: Path) -> list[str]:
         ("short of the top (NEGATIVE CONTROL)", ("1.2.0", "1.2.2", moved), False),
         ("the top tag released THIS content (NEGATIVE CONTROL)", ("1.2.0", "1.2.3", "lineB"), False),
         ("materialized above the top (NEGATIVE CONTROL)", ("1.2.3", "1.2.4", moved), False),
+        # Review of MeshWeaver#8405: a tag INSIDE the taken run already released this tree.
+        ("an intermediate tag released THIS content (NEGATIVE CONTROL)", ("1.2.0", "1.2.3", "lineA"), False),
     ]:
         got = settled_past_published(work, "Mod", args[0], args[1], args[2], head)
         if got != want:
