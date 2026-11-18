@@ -359,6 +359,21 @@ module landed beside it; measuring against `/app` alone would report that siblin
 platform assembly and quarantine a module that is perfectly fine. The runtime's own resolution
 surface is what has to be measured.
 
+🚨 **A file on that surface is not a module in the process, so boot closes the batch after it
+loads.** The surface carries a sibling's directory whether or not the sibling then loads. When the
+sibling is refused and has nothing to fall back to, a module that references it passed the probe and
+is held with a reference nothing can satisfy. The first call into it throws `FileNotFoundException`
+wherever that call happens. On build.meshweaver.cloud (4.0.13559), `MeshWeaver.Blazor.Chat`'s mesh-hub
+configuration called into an absent `MeshWeaver.AI` inside `MapMeshWeaver`, and every replacement pod
+died at boot (exit 139) before it could serve, reconcile its module set or say why.
+`MeshBuilder.WithdrawDependentsOfAbsentModules` runs after the load loop. To a fixed point, it
+withdraws every loaded module whose assembly references name a batch module that did not load and is
+not held in the default context. Each withdrawn module is recorded as an `IncompatibleModule` that
+names the dependency (`MissingMember`) and inherits its `RefusedBeforeLoad`, so a store dependency
+refused for another platform stalls no roll through its dependents either. The process boots, and the
+refusals are on `/health`. A module that fell back to an earlier generation, or one the image binds,
+is present, so its dependents are untouched. Pinned by `AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest`.
+
 ### At the roll — the surface travels as a document
 
 **The package verdict refuses only a module that provably cannot load on the target, and nothing

@@ -455,6 +455,18 @@ public partial record MeshBuilder
             incompatible.Add(Report(newest.Refused with { Error = reason }));
         }
 
+        // 🚨 The batch's CLOSURE. The link probe above measures each module against a surface that
+        // carries every directory this batch loads from, so a module that references a sibling
+        // MODULE passes it while that sibling's files are on disk — whether or not the sibling then
+        // loads. When the sibling was refused, the dependent is held with a reference nothing in the
+        // process can satisfy, and the first call into it throws FileNotFoundException from wherever
+        // it happens: on build.meshweaver.cloud (4.0.13559) that was MeshWeaver.Blazor.Chat's mesh-hub
+        // configuration calling into an absent MeshWeaver.AI, inside MapMeshWeaver, so every
+        // replacement pod died at boot (exit 139) before it could serve, reconcile or report.
+        // A module whose dependency is absent cannot run, so it is withdrawn here with that
+        // dependency — named, never silent — and the process boots.
+        WithdrawDependentsOfAbsentModules(ModuleContexts, pending, incompatible);
+
         // 🚨 A node's GlobalServiceConfigurations delegate is invoked IMMEDIATELY by
         // ConfigureServices — it runs against the live IServiceCollection, not queued for later
         // (see ConfigureServices / InstallServices below) — so it is exactly as hazardous as the
@@ -1035,6 +1047,75 @@ public partial record MeshBuilder
         Console.Error.WriteLine($"[MeshWeaver.Mesh.IncompatibleModule] {module.Report()}");
         return module;
     }
+
+    /// <summary>
+    /// Withdraws, to a fixed point, every loaded module of this batch that references a module this
+    /// batch failed to load, and records each as incompatible naming the dependency. A name counts as
+    /// absent only when no copy of it is in the process: a module that fell back to an earlier
+    /// generation, or one the image binds in the default context, is present.
+    /// </summary>
+    /// <param name="contexts">The registry holding the modules loaded into their own context.</param>
+    /// <param name="pending">The modules that loaded; withdrawn ones are removed.</param>
+    /// <param name="incompatible">The refusals so far; a record is added per withdrawn module.</param>
+    private static void WithdrawDependentsOfAbsentModules(
+        ModuleContexts contexts, List<PendingModuleInstall> pending, List<IncompatibleModule> incompatible)
+    {
+        var present = pending
+            .Select(module => module.Assembly.GetName().Name)
+            .OfType<string>()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var absent = incompatible
+            .Where(refused => !present.Contains(refused.Name) && !HeldInDefaultContext(refused.Name))
+            .GroupBy(refused => refused.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        if (absent.Count == 0)
+            return;
+
+        bool withdrew;
+        do
+        {
+            withdrew = false;
+            foreach (var module in pending.ToArray())
+            {
+                var dependency = module.Assembly.GetReferencedAssemblies()
+                    .Select(reference => reference.Name)
+                    .FirstOrDefault(name => name is not null && absent.ContainsKey(name));
+                if (dependency is null)
+                    continue;
+                var name = module.Assembly.GetName().Name ?? Path.GetFileNameWithoutExtension(module.Assembly.Location);
+                pending.Remove(module);
+                if (contexts.Current(name) is { } held && ReferenceEquals(held.Assembly, module.Assembly))
+                {
+                    contexts.Uncommit(held);
+                    contexts.Discard(held);
+                }
+                var refused = Report(new IncompatibleModule(
+                    module.Assembly.Location,
+                    name,
+                    $"it references the module '{dependency}', which did not load in this process "
+                    + $"({absent[dependency].Error}) — a module cannot run without a module it is linked "
+                    + "against, so it is withdrawn with it",
+                    dependency)
+                {
+                    // The dependency's case decides whether a rollout can fix it, so the dependent
+                    // inherits it: a store module refused for a platform this one is not running
+                    // does not stall a roll, and neither does the module that needs it.
+                    RefusedBeforeLoad = absent[dependency].RefusedBeforeLoad,
+                });
+                incompatible.Add(refused);
+                absent.TryAdd(name, refused);
+                withdrew = true;
+            }
+        }
+        while (withdrew);
+    }
+
+    /// <summary>Whether an assembly of this simple name is already loaded in the default context
+    /// (an image-bound copy), in which case a reference to it resolves.</summary>
+    private static bool HeldInDefaultContext(string simpleName) =>
+        System.Runtime.Loader.AssemblyLoadContext.Default.Assemblies.Any(assembly =>
+            !assembly.IsDynamic
+            && string.Equals(assembly.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Records a module that could not install, and writes it to stderr — see
