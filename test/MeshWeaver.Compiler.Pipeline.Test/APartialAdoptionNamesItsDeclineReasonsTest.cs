@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.PluginCatalog;
 using Xunit;
@@ -18,6 +16,7 @@ public class APartialAdoptionNamesItsDeclineReasonsTest
 {
     private const string Registry = "https://registry.example.com";
 
+    /// <summary>Every decline reason the seeder can answer, with the label it must render as.</summary>
     public static TheoryData<Seed, string> EachDeclineReason => new()
     {
         { Seed.DeclinedIdentity, "identity×1" },
@@ -28,6 +27,9 @@ public class APartialAdoptionNamesItsDeclineReasonsTest
         { Seed.NotSeeded, "not seeded×1" },
     };
 
+    /// <summary>Each decline reason, next to one adopted assembly, is named in <see cref="BundleAdoptionOutcome.Describe"/>.</summary>
+    /// <param name="declined">The seeder's answer for the declined assembly.</param>
+    /// <param name="expected">The label and count the line must carry.</param>
     [Theory]
     [MemberData(nameof(EachDeclineReason))]
     public void EachDeclineReason_IsNamedInDescribe(Seed declined, string expected)
@@ -42,6 +44,7 @@ public class APartialAdoptionNamesItsDeclineReasonsTest
             $"Essentials: adopted only 1/2 — the rest compile here; declined: {expected}");
     }
 
+    /// <summary>Several reasons are counted per reason, largest first, and reach the ledger line /health prints.</summary>
     [Fact]
     public void MixedDeclines_AreCountedByReason_LargestFirst()
     {
@@ -62,6 +65,7 @@ public class APartialAdoptionNamesItsDeclineReasonsTest
 
     // ---- negative controls ----
 
+    /// <summary>Negative control: covered outcomes are not declines and the line stays clean.</summary>
     [Fact]
     public void CoveredOutcomes_AreNotDeclines()
     {
@@ -73,6 +77,7 @@ public class APartialAdoptionNamesItsDeclineReasonsTest
         outcome.Describe().Should().Be("Essentials: adopted 3/3");
     }
 
+    /// <summary>Negative control: an outcome built from counts alone keeps the old line, with no invented reasons.</summary>
     [Fact]
     public void AnOutcomeBuiltFromCountsOnly_KeepsTheOldLine()
     {
