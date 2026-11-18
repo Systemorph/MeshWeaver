@@ -372,7 +372,7 @@ not held in the default context. Each withdrawn module is recorded as an `Incomp
 names the dependency (`MissingMember`) and inherits its `RefusedBeforeLoad`, so a store dependency
 refused for another platform stalls no roll through its dependents either. The process boots, and the
 refusals are on `/health`. A module that fell back to an earlier generation, or one the image binds,
-is present, so its dependents are untouched. Pinned by `AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest`.
+is present, so its dependents are untouched. So is a module an earlier batch committed that the registry still holds as current: a refused newer generation leaves that one serving. Pinned by `AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest` and `AModuleWhoseDependencyIsHeldFromAnEarlierBatchIsKeptTest`.
 
 ### At the roll — the surface travels as a document
 
