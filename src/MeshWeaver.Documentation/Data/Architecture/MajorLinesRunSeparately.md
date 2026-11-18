@@ -166,6 +166,35 @@ mesh, but the landed module tree is per line (a v4 image lands under `lines/4/`)
 Chat record requiring `AI@^1.51.0`, judged against the v4 tree's AI 4.0.1, refused every v4 proposal. A
 record that states no floor is still judged.
 
+**The line test reads the record's floor, so the floor and the requirements must describe the SAME
+release.** A sync adoption (`PackageUpdateReconciler.AdoptedFromSync`) moves a record to the content its
+sync source landed. It used to take the candidate's version, hash and floor and keep the record's old
+requirements, which produced a record of the new line carrying the old line's `requires`. Measured on the
+plugin registry during the 3 → 4 roll: Governance recorded 4.0.3 with floor 4.0.13516 and the September
+release's `AI@^1.0.0`. That record passed the line test, and the stale requirement refused every v4
+proposal against the landed AI 4.0.3, even after the boot proposal of the stuck bootstrap below shipped.
+The adoption now takes the candidate's requirements with its floor. A record already at the listed
+content whose declarations differ is corrected in place by the reconciler's equal-hash gate, which
+fetches nothing and notifies nobody.
+
+**A registry's replica of a line proposes that line's set at boot.** A consumer ends every boot with
+the registry reconcile, and that reconcile closes its wave with a proposal. The registry reconciles
+against no registry, so nothing ended its boot that way. Its default install proposes only after it lands
+a fresh package, and the publishes that shelve a later line's modules are often served by replicas of the
+earlier line, which derive a set against their own platform. So after the floor fix above, the registry's
+v4 tree still held 40 landed modules while the mesh stayed on the empty v4 set. Every v4 replica failed its
+readiness gates and the roll never completed. `RegistryUpdateReconciler` now closes that **stuck bootstrap**
+at every boot: when this line's recorded set exists and names no module while the tree holds modules, it
+proposes from the tree (as the whole boot pass when no registry is configured, and BEFORE the registry
+reconcile when one is). Any other state is left to the landing waves: with no set yet, or a set that names
+modules, a boot-time proposal could publish a wave still landing, and an activation request would swap in
+what just landed (that broke MeshWeaver.Plugins' module-activation tests when the first version proposed
+unconditionally). The second case is the plugin registry itself, which lists
+itself as its registry: its reconcile proposes only after a full pass over every package, and a pass against
+a registry that does not yet serve this line can outlast the rollout. The proposal is
+checked against the dependency floors and is idempotent, and a set that moved requests its activation
+through the module reload path. Tests: `ARegistryBootProposesItsOwnLinesLandedSetTest`, `ABootWithAnUnreachableRegistryStillProposesItsTreeTest`.
+
 ## 4c. Each line has its own first instance
 
 Policy `line-first-instance` (MeshWeaver#8365). The fleet of a line is offered a set only after ONE
