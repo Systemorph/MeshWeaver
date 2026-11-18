@@ -1052,7 +1052,9 @@ public partial record MeshBuilder
     /// Withdraws, to a fixed point, every loaded module of this batch that references a module this
     /// batch failed to load, and records each as incompatible naming the dependency. A name counts as
     /// absent only when no copy of it is in the process: a module that fell back to an earlier
-    /// generation, or one the image binds in the default context, is present.
+    /// generation, one an EARLIER batch committed and the registry still holds as current (a refused
+    /// newer generation leaves that one serving), or one the image binds in the default context, is
+    /// present.
     /// </summary>
     /// <param name="contexts">The registry holding the modules loaded into their own context.</param>
     /// <param name="pending">The modules that loaded; withdrawn ones are removed.</param>
@@ -1065,7 +1067,9 @@ public partial record MeshBuilder
             .OfType<string>()
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var absent = incompatible
-            .Where(refused => !present.Contains(refused.Name) && !HeldInDefaultContext(refused.Name))
+            .Where(refused => !present.Contains(refused.Name)
+                && contexts.Current(refused.Name) is null
+                && !HeldInDefaultContext(refused.Name))
             .GroupBy(refused => refused.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         if (absent.Count == 0)
