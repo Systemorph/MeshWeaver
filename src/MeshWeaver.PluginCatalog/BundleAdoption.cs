@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.PluginCatalog;
@@ -180,6 +181,66 @@ public static class BundleOffering
             ModulesNotServed = ModulesNotServed(manifest),
         };
 
+    /// <summary>
+    /// The outcome of a bundle whose NodeType assemblies arrived, built from what the seeder answered
+    /// for EACH of them — so a partial adoption carries WHY every declined assembly was declined
+    /// (<see cref="BundleAdoptionOutcome.Declined"/>) instead of only how many were.
+    ///
+    /// <para>🚨 Before this, <c>/health</c> → <c>bundle_adoption</c> printed
+    /// <c>&lt;package&gt;: adopted only 0/N — the rest compile here</c> and nothing more: a framework
+    /// identity decline, a dependency-record decline and a source-fingerprint decline (#2813) all read
+    /// the same, and with the portal's log unreachable no other surface could tell them apart. A health
+    /// entry that hides the reason for its own verdict is the defect.</para>
+    /// </summary>
+    /// <param name="pluginId">The package.</param>
+    /// <param name="registry">The registry asked.</param>
+    /// <param name="seeded">The seeder's answer for each assembly the bundle carried, in order.</param>
+    /// <param name="manifest">The bundle's manifest.</param>
+    public static BundleAdoptionOutcome AdoptedOutcome(
+        string pluginId, string registry,
+        IReadOnlyList<PrebuiltAssemblySeeder.SeedOutcome> seeded, BundleReader.Manifest? manifest)
+    {
+        ArgumentNullException.ThrowIfNull(seeded);
+        var adopted = seeded.Count(PrebuiltAssemblySeeder.IsCovered);
+        return AdoptedOutcome(pluginId, registry, adopted, seeded.Count, manifest) with
+        {
+            Declined = DeclinedByReason(seeded),
+        };
+    }
+
+    /// <summary>
+    /// How many of <paramref name="seeded"/> were declined, keyed by <see cref="DeclineLabel"/>.
+    /// Covered outcomes are not counted. Empty when everything was covered.
+    /// </summary>
+    /// <param name="seeded">The seeder's per-assembly answers.</param>
+    public static ImmutableDictionary<string, int> DeclinedByReason(
+        IEnumerable<PrebuiltAssemblySeeder.SeedOutcome> seeded) =>
+        seeded
+            .Where(o => !PrebuiltAssemblySeeder.IsCovered(o))
+            .GroupBy(DeclineLabel, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+    /// <summary>
+    /// The short reason a declined seed renders as on <c>/health</c>: <c>identity</c> (built for
+    /// another framework), <c>dependencies</c> (the per-type dependency record does not resolve here),
+    /// <c>fingerprint</c> (built from sources other than the live ones, #2813 — with
+    /// <c>(compiling)</c> when a fresh compile was dispatched, <c>(unservable)</c> when nothing on this
+    /// process will serve the type), and <c>not seeded</c> (nothing was written for another reason).
+    /// A value this switch does not know renders by its own name — unknown stays named, never folded
+    /// into a known reason.
+    /// </summary>
+    /// <param name="outcome">A seed outcome that is not covered.</param>
+    public static string DeclineLabel(PrebuiltAssemblySeeder.SeedOutcome outcome) => outcome switch
+    {
+        PrebuiltAssemblySeeder.SeedOutcome.DeclinedIdentity => "identity",
+        PrebuiltAssemblySeeder.SeedOutcome.DeclinedDependencies => "dependencies",
+        PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSources => "fingerprint",
+        PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSourcesCompileDispatched => "fingerprint (compiling)",
+        PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSourcesUnservable => "fingerprint (unservable)",
+        PrebuiltAssemblySeeder.SeedOutcome.NotSeeded => "not seeded",
+        _ => outcome.ToString(),
+    };
+
     /// <summary>What an empty-but-complete bundle offered instead of NodeTypes, for the log.</summary>
     public static string OfferingOf(BundleReader.Manifest? manifest) =>
         manifest?.Module?.AssemblyName is { Length: > 0 } name
@@ -216,6 +277,19 @@ public sealed record BundleAdoptionOutcome(
     public ImmutableArray<string> ModulesNotServed { get; init; } = ImmutableArray<string>.Empty;
 
     /// <summary>
+    /// For an <see cref="BundleAdoptionKind.Adopted"/> attempt: how many of the offered assemblies the
+    /// seeder DECLINED, by reason (<see cref="BundleOffering.DeclineLabel"/>) — so
+    /// <see cref="Describe"/> can say WHY a partial adoption left the rest to compile here
+    /// (<c>declined: fingerprint×7, dependencies×3</c>). Counts by reason only, never type names:
+    /// <c>/health</c> is public and names packages, not nodes (#4258). Empty when nothing was declined,
+    /// or when the outcome was built without the per-assembly answers.
+    ///
+    /// <para>An INIT property for the same reason as <see cref="ModulesNotServed"/>.</para>
+    /// </summary>
+    public ImmutableDictionary<string, int> Declined { get; init; } =
+        ImmutableDictionary<string, int>.Empty;
+
+    /// <summary>
     /// Whether this attempt left content to be COMPILED here that the distribution lane was meant
     /// to serve. Adopting fewer assemblies than were offered counts — a partial adoption is a
     /// partial miss, and rounding it to "adopted" is how a regression hides inside a success.
@@ -238,7 +312,8 @@ public sealed record BundleAdoptionOutcome(
         BundleAdoptionKind.Adopted when Adopted >= Offered =>
             $"{PluginId}: adopted {Adopted}/{Offered}" + ModuleSuffix(),
         BundleAdoptionKind.Adopted =>
-            $"{PluginId}: adopted only {Adopted}/{Offered} — the rest compile here" + ModuleSuffix(),
+            $"{PluginId}: adopted only {Adopted}/{Offered} — the rest compile here" + DeclinedSuffix()
+            + ModuleSuffix(),
         BundleAdoptionKind.NothingToAdopt =>
             $"{PluginId}: no NodeTypes to adopt"
             + (string.IsNullOrWhiteSpace(Reason) ? string.Empty : $" ({Reason})"),
@@ -248,6 +323,14 @@ public sealed record BundleAdoptionOutcome(
         _ => $"{PluginId}: {Kind}"
              + (string.IsNullOrWhiteSpace(Reason) ? string.Empty : $" ({Reason})"),
     };
+
+    // Largest reason first, then by name, so the line is stable across replicas and runs.
+    private string DeclinedSuffix() => Declined.IsEmpty
+        ? string.Empty
+        : "; declined: " + string.Join(", ", Declined
+            .OrderByDescending(d => d.Value)
+            .ThenBy(d => d.Key, StringComparer.Ordinal)
+            .Select(d => $"{d.Key}×{d.Value}"));
 
     private string ModuleSuffix() => ModulesNotServed.IsDefaultOrEmpty
         ? string.Empty

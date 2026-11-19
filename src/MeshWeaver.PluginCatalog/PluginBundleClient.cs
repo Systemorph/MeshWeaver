@@ -1667,14 +1667,27 @@ public sealed class PluginBundleClient
                         // The producer's dependency edges for the build the record now serves
                         // (Doc/Architecture/DependencyGraph → adopted prebuilts). Never changes the verdict.
                         .SelectMany(outcome => PrebuiltAssemblySeeder.WithAdoptedEdges(_hub, a.NodePath, a.DependencyEdges, outcome, _logger))
-                        .Select(PrebuiltAssemblySeeder.IsCovered))
+                        // 🚨 The per-assembly outcome is KEPT, not collapsed to covered/not: a partial
+                        // adoption has to say WHY each declined assembly was declined, and this is the
+                        // only place that knows.
+                        .Select(outcome => (a.NodePath, Outcome: outcome)))
                     .Concat()
-                    .Count(adopted => adopted)
-                    .Do(count =>
+                    .ToList()
+                    .Do(seeded =>
                     {
+                        var count = seeded.Count(s => PrebuiltAssemblySeeder.IsCovered(s.Outcome));
                         _logger?.LogInformation(
                             "Bundle for {Plugin}: adopted {Adopted}/{Total} prebuilt assemblies",
                             pluginId, count, assemblies.Count);
+                        // The decline reasons, each with ONE example type, for the log — /health
+                        // carries the counts only (it names packages, never nodes: #4258).
+                        foreach (var reason in seeded
+                                     .Where(s => !PrebuiltAssemblySeeder.IsCovered(s.Outcome))
+                                     .GroupBy(s => BundleOffering.DeclineLabel(s.Outcome), StringComparer.Ordinal))
+                            _logger?.LogInformation(
+                                "Bundle for {Plugin}: {Count} assembly/assemblies declined on {Reason} "
+                                + "(e.g. {Example}) — compiling instead",
+                                pluginId, reason.Count(), reason.Key, reason.First().NodePath);
                         // 🚨 #7401 — a MIXED package whose module the registry declared but did not
                         // serve. The NodeTypes above arrived, so the empty-bundle branch that names
                         // this reason was never reached, and the miss was dropped: the outcome read
@@ -1691,8 +1704,9 @@ public sealed class PluginBundleClient
                         // success — the other nine are compiled here, which is precisely the cost
                         // this lane exists to remove.
                         _ledger?.Record(BundleOffering.AdoptedOutcome(
-                            pluginId, _registryUrl, count, assemblies.Count, manifest));
-                    });
+                            pluginId, _registryUrl, seeded.Select(s => s.Outcome).ToArray(), manifest));
+                    })
+                    .Select(seeded => seeded.Count(s => PrebuiltAssemblySeeder.IsCovered(s.Outcome)));
             });
 
     // Per-REQUEST auth header — never on the client: _http can be the process-wide SharedHttp, and
