@@ -771,6 +771,7 @@
   "files.newFolder": "Neuer Ordner",
   "files.addFolder": "Ordner hinzufügen",
   "files.newArticle": "Neuer Artikel",
+  "files.dropToUpload": "Dateien hier ablegen, um sie hochzuladen",
   "files.includeSatellites": "Satellitendaten einbeziehen:",
   "form.validationFailed": "Validierung fehlgeschlagen",
   "grid.itemsPerPage": "Einträge pro Seite:",
