@@ -169,7 +169,8 @@ public static class NodeTypeLayoutAreas
             })
             .StartWith((IEnumerable<MeshNode>)[]);
 
-        return typeNodeStream.CombineLatest(sweepStream, (node, sweepNodes) =>
+        return typeNodeStream.CombineLatest(sweepStream, ViewerCompilePermission(host, nodeTypePath),
+            (node, sweepNodes, compile) =>
             {
                 // ContentAs, not a CLR type test: on the overlay surface the type node
                 // arrives over a cross-hub sync stream and may still be an un-materialized
@@ -212,40 +213,22 @@ public static class NodeTypeLayoutAreas
                     // overlay) — so the user sees WHAT broke and WHERE, never an indefinite spinner.
                     // Do NOT embed the activity LayoutAreaControl here — the compile activity is
                     // history and may be unaddressable; subscribing to an inexistent address is the
-                    // resubscribe storm that wedged the portal. The Recompile button flips
-                    // RequestedReleaseAt + Force on the NodeType's node via the shared stream
-                    // handle — cross-hub on the instance overlay surface, local on the NodeType's
-                    // own hub; the compile watcher reacts either way.
+                    // resubscribe storm that wedged the portal. The Recompile button requests a
+                    // forced release through the ONE permission-checked entry point (ReleaseClick →
+                    // ObserveNodeTypeRelease) — cross-hub on the instance overlay surface, local on
+                    // the NodeType's own hub; the compile watcher reacts either way. It used to
+                    // write RequestedReleaseAt straight through the stream, which asked for no
+                    // Compile permission at all and stamped no RequestedReleaseBy. A viewer DENIED
+                    // Compile is not offered it; the line says why (MeshWeaver#8412).
                     stack = AppendCompileErrorSources(stack, def);
-                    stack = stack.WithView(Controls.Button(host.Localize("ui.recompile"))
-                        .WithAppearance(Appearance.Accent)
-                        .WithClickAction(_ =>
-                        {
-                            // 🚨 ContentAs, never `curr?.Content is NodeTypeDefinition`. On the
-                            // INSTANCE overlay surface this is a cross-hub write, and UpdateRemote
-                            // hands the lambda the mirror value verbatim — normally an
-                            // un-materialized JsonElement. The CLR type test then fails, the lambda
-                            // returns `curr` unchanged, and the write is a silent no-op: the one
-                            // remedy this stuck page offers the user did nothing at all (#2409).
-                            host.Hub.GetMeshNodeStream(nodeTypePath)
-                                .Update(curr => curr
-                                        ?.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)
-                                        is { } cd
-                                    ? curr with
-                                    {
-                                        Content = cd with
-                                        {
-                                            RequestedReleaseAt = DateTimeOffset.UtcNow,
-                                            RequestedReleaseForce = true
-                                        }
-                                    }
-                                    : curr!)
-                                .Subscribe(_ => { },
-                                    ex => host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                                        ?.CreateLogger(typeof(NodeTypeLayoutAreas))
-                                        .LogWarning(ex, "Recompile trigger failed for {Path}", nodeTypePath));
-                            return Task.CompletedTask;
-                        }));
+                    stack = compile is { IsGranted: false, IsUndetermined: false }
+                        ? stack.WithView(Controls.Body(host.Localize("ui.compileNotPermitted",
+                                nodeTypePath.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
+                                ?? nodeTypePath))
+                            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px;"))
+                        : stack.WithView(Controls.Button(host.Localize("ui.recompile"))
+                            .WithAppearance(Appearance.Accent)
+                            .WithReactiveClickAction(ctx => ReleaseClick(ctx.Host.Hub, nodeTypePath)));
                 }
                 else if (def.CompilationStatus == CompilationStatus.Unavailable)
                 {
@@ -785,8 +768,37 @@ public static class NodeTypeLayoutAreas
         var locale = host.ViewerLocale();
         var options = host.Hub.JsonSerializerOptions;
         return host.Workspace.GetMeshNodeStream()
-            .Select(node => NodeTypeStatusView.From(
-                node, node?.ContentAs<NodeTypeDefinition>(options), nodeTypePath, locale));
+            .CombineLatest(ViewerCompilePermission(host, nodeTypePath), (node, compile) =>
+                NodeTypeStatusView.From(
+                        node, node?.ContentAs<NodeTypeDefinition>(options), nodeTypePath, locale)
+                    .ForViewer(compile, nodeTypePath, locale));
+    }
+
+    /// <summary>
+    /// The VIEWER's Compile verdict on <paramref name="nodeTypePath"/> — the question the release
+    /// request asks (<see cref="NodeTypeReleaseExtensions.ObserveCompilePermission"/>), so the pages
+    /// offer the compile and release buttons exactly when a click would be accepted (MeshWeaver#8412).
+    ///
+    /// <para>The viewer is the one the host renders for (<see cref="LayoutAreaHost.ViewerContext"/>,
+    /// falling back to the ambient context as the node menu does), never whatever identity is
+    /// ambient on a later emission's turn (MeshWeaver.Plugins#2784); a logged-out or
+    /// virtual visitor is DENIED without asking — the release request would refuse them too.
+    /// <c>StartWith(null)</c>: the page never waits on the check; until it answers the buttons stay
+    /// as the compile state decides.</para>
+    /// </summary>
+    internal static IObservable<MeshWeaver.Mesh.Security.PermissionCheckOutcome?> ViewerCompilePermission(
+        LayoutAreaHost host, string nodeTypePath)
+    {
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewer = host.ViewerContext ?? accessService?.Context ?? accessService?.CircuitContext;
+        var userId = viewer?.ObjectId;
+        var verdict = string.IsNullOrEmpty(userId) || viewer?.IsVirtual == true
+            ? Observable.Return(MeshWeaver.Mesh.Security.PermissionCheckOutcome.Denied)
+            : host.Hub.ObserveCompilePermission(nodeTypePath, userId);
+        return verdict
+            .Select(outcome => (MeshWeaver.Mesh.Security.PermissionCheckOutcome?)outcome)
+            .StartWith((MeshWeaver.Mesh.Security.PermissionCheckOutcome?)null)
+            .DistinctUntilChanged();
     }
 
     /// <summary>
@@ -1377,6 +1389,7 @@ public static class NodeTypeLayoutAreas
             .WithWidth("100%")
             .WithStyle("padding: 24px; gap: 12px;")
             .WithView(headerRow)
+            .WithView(CompileDeniedHint())
             .WithView(Controls.Body(LocalizationCatalog.Get("ui.releasesIntro", locale))
                 .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"))
             .WithView(Controls.Body(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.PendingReleaseNotes))) with
@@ -1421,11 +1434,30 @@ public static class NodeTypeLayoutAreas
     /// on success it flips <see cref="NodeTypeDefinition.RequestedReleaseAt"/> (forced) through the
     /// node stream and the per-NodeType hub's release watcher compiles. No bespoke request type.
     /// </summary>
-    private static ButtonControl CreateReleaseButton(string nodeTypePath, string? locale)
-        => Controls.Button(LocalizationCatalog.Get("ui.createRelease", locale))
+    /// <remarks>Disabled for a viewer DENIED Compile (MeshWeaver#8412) — bound to
+    /// <see cref="NodeTypeStatusView.ReleaseDisabled"/>, with the reason in
+    /// <see cref="CompileDeniedHint"/> beside it.</remarks>
+    internal static ButtonControl CreateReleaseButton(string nodeTypePath, string? locale)
+        => (Controls.Button(LocalizationCatalog.Get("ui.createRelease", locale)) with
+            {
+                Disabled = NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.ReleaseDisabled)),
+                DataContext = NodeTypeStatusView.DataContext
+            })
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Play())
             .WithReactiveClickAction(ctx => ReleaseClick(ctx.Host.Hub, nodeTypePath));
+
+    /// <summary>
+    /// The line that says why the compile and release buttons are disabled for this viewer
+    /// (<see cref="NodeTypeStatusView.CompileDeniedHint"/>) — hidden unless the viewer was denied
+    /// Compile. Bound to the status projection, so it renders at once and fills in.
+    /// </summary>
+    internal static UiControl CompileDeniedHint()
+        => Controls.Body(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.CompileDeniedHint))) with
+        {
+            Style = NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.CompileDeniedHintStyle)),
+            DataContext = NodeTypeStatusView.DataContext
+        };
 
     /// <summary>
     /// The compile buttons' one write, as the CLICK's own outcome: requests a FORCED release of
@@ -1524,6 +1556,7 @@ public static class NodeTypeLayoutAreas
             .WithWidth("100%")
             .WithStyle("padding: 24px; gap: 20px;")
             .WithView(headerRow)
+            .WithView(CompileDeniedHint())
             .WithView(BuildCompileLogTemplate())
             .WithView(BuildDeliveryHoldTemplate());
 
@@ -1816,7 +1849,7 @@ public static class NodeTypeLayoutAreas
     /// Compile-state panel rendered at the top of <see cref="Overview"/>, as a TEMPLATE bound to the
     /// <see cref="NodeTypeStatusView"/> projection: the state chip (compiling / failed / undetermined
     /// / never compiled / source changed / up to date), the compile button — disabled while a compile
-    /// runs — and a link to the latest release. Hidden for a NodeType with no code, which never
+    /// runs, and for a viewer denied Compile (MeshWeaver#8412), with the reason beside it — and a link to the latest release. Hidden for a NodeType with no code, which never
     /// participates in compilation. The decisions live in <see cref="NodeTypeStatusView.From"/>.
     /// The button routes through the permission-checked release request (<see cref="ReleaseClick"/>).
     /// </summary>
@@ -1841,6 +1874,7 @@ public static class NodeTypeLayoutAreas
                 }
                 .WithAppearance(Appearance.Accent)
                 .WithReactiveClickAction(ctx => ReleaseClick(ctx.Host.Hub, nodeTypePath)))
+            .WithView(CompileDeniedHint())
             .WithView(Controls.Markdown(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.LatestReleaseLink)))
                 .WithStyle("margin-left: auto; font-size: 12px;") with { DataContext = status });
     }

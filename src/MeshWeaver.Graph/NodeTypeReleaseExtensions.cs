@@ -195,6 +195,24 @@ public static class NodeTypeReleaseExtensions
             .Subscribe(_ => { });
 
     /// <summary>
+    /// Whether <paramref name="userId"/> may request a release of <paramref name="nodeTypePath"/> —
+    /// the SAME question the release request asks before it writes the trigger
+    /// (<see cref="Permission.Compile"/> on the type, through the hub's configured permission
+    /// evaluator), CLASSIFIED: granted, denied, or no verdict. The NodeType pages decide from it
+    /// whether to offer their compile and release buttons (MeshWeaver#8412), so a page can never
+    /// offer a click the request would refuse — nor hide one it would accept.
+    ///
+    /// <para>Live, not a snapshot: the evaluator re-emits when the viewer's grants change, so a
+    /// page bound to it follows a grant or a revocation without a reload.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose evaluator answers.</param>
+    /// <param name="nodeTypePath">The NodeType's path.</param>
+    /// <param name="userId">The user the question is about — explicit, never ambient.</param>
+    public static IObservable<PermissionCheckOutcome> ObserveCompilePermission(
+        this IMessageHub hub, string nodeTypePath, string userId)
+        => hub.CheckPermissionOutcome(nodeTypePath, userId, Permission.Compile);
+
+    /// <summary>
     /// The OBSERVABLE form of <see cref="RequestNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string,System.Action{string})"/>: identical semantics, but the
     /// caller learns when the trigger has actually LANDED and can therefore ORDER other work
     /// against it. Emits <c>true</c> once the <see cref="NodeTypeDefinition.RequestedReleaseAt"/>
@@ -355,7 +373,13 @@ public static class NodeTypeReleaseExtensions
                                 : null) ?? Disposable.Empty,
                             _ => hub.GetWorkspace().GetMeshNodeStream(nodeTypePath).Update(curr =>
                             {
-                                if (curr?.Content is not NodeTypeDefinition def) return curr!;
+                                // ContentAs, never a CLR type test: from a hub that does not own
+                                // the type (the instance compile-progress overlay) the value is the
+                                // mirror's, normally an un-materialized JsonElement, and a type
+                                // test would make the trigger a silent no-op (#2409).
+                                if (curr?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)
+                                        is not { } def)
+                                    return curr!;
                                 return curr with
                                 {
                                     Content = def with

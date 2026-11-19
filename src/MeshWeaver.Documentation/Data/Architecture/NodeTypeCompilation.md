@@ -290,6 +290,30 @@ state; no bound was raised. `BakeOutput.NotYetSettled` is the predicate, pinned 
 
 Use this to capture a named release with author-written `ReleaseNotes`.
 
+#### The pages offer the button only to a viewer who may compile
+
+The request refuses a caller without `Permission.Compile` on the type. Every compile button on the
+NodeType pages asks the same question first, so a page never offers a click the request would refuse:
+**Recompile** / **Compile** on the Overview, **Create Release** on the Releases and Configuration
+panes, and **Recompile** on the compile-failed page (MeshWeaver#8412). The question is
+`hub.ObserveCompilePermission(path, userId)` — `Permission.Compile` through the hub's permission
+evaluator, the same check the request makes — asked for the viewer the page renders for
+(`LayoutAreaHost.ViewerContext`). The node menu already hid Compile and Recycle from that viewer.
+
+- **Denied** — the buttons are disabled, and a line beside them names the permission and the
+  partition whose Editor and Admin roles carry it (`ui.compileNotPermitted`). A global admin is not a
+  data superuser: an administrator of the instance holds no Compile on a partition where they hold no
+  role, so that line is what they see.
+- **Not answered yet, or no verdict** — the buttons stay as the compile state decides. A degraded
+  permission fold is not a refusal (#974); a click asks again and reports the honest no-verdict.
+
+The verdict is published on the `NodeTypeStatusView` projection (`ReleaseDisabled`, `CompileDisabled`,
+`CompileDeniedHint`), so the pages render at once and the buttons follow later grants or
+revocations without a reload. The compile-failed page's Recompile goes through the same
+permission-checked request (`ReleaseClick`). Before this change it wrote `RequestedReleaseAt` straight
+through the stream, so it asked for no Compile permission and stamped no `RequestedReleaseBy`.
+Proven by `CompileButtonsFollowTheViewersPermissionTest`.
+
 #### 🚨 A release request builds every source edit written BEFORE it
 
 The watcher may consume a request without compiling — "satisfied by the existing current build" —
