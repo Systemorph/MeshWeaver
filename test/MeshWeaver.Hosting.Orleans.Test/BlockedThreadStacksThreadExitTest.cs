@@ -140,6 +140,39 @@ public class BlockedThreadStacksThreadExitTest
         dumps.Should().Be(1);
     }
 
+    /// <summary>
+    /// Negative control (review of #8410): only a CUT last line is let through. A COMPLETE last line is held
+    /// to the full "No such process (3)" form for a thread other than the process, so the process's own id or
+    /// another errno in the last position is not retried; nor is a cut last line still showing the process's own id.
+    /// </summary>
+    /// <param name="shape">Which last line follows a gone-thread line.</param>
+    [Theory]
+    [InlineData("own-id-complete")]
+    [InlineData("other-errno-complete")]
+    [InlineData("own-id-cut")]
+    public void ACompleteOrOwnIdLastLine_IsNotTreatedAsCut(string shape)
+    {
+        var pid = Environment.ProcessId;
+        var last = shape switch
+        {
+            "own-id-complete" => AttachFailure(pid),
+            "other-errno-complete" =>
+                $"[createdump] Problem suspending thread: ptrace(ATTACH, {pid + 2}) FAILED Operation not permitted (1)",
+            _ => $"[createdump] Problem suspending thread: ptrace(ATTACH, {pid}) FAILED No such pro",
+        };
+        var dumps = 0;
+        var stacks = new BlockedThreadStacks(writeDump: _ =>
+        {
+            Interlocked.Increment(ref dumps);
+            throw new ServerErrorException($"{AttachFailure(pid + 1)}\n{last}");
+        });
+
+        var failure = Record.Exception(() => stacks.Capture([Environment.CurrentManagedThreadId]));
+
+        failure.Should().BeOfType<ServerErrorException>($"a last line of shape '{shape}' is not the vanished-thread race");
+        dumps.Should().Be(1);
+    }
+
     /// <summary>createdump's tolerated line for a thread that was gone before its attach.</summary>
     private static string AttachFailure(int tid) =>
         $"[createdump] Problem suspending thread: ptrace(ATTACH, {tid}) FAILED No such process (3)";

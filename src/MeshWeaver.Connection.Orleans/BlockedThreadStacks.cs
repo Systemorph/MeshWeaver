@@ -106,6 +106,19 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
     /// <summary>The start every attach-failure line shares — what a line cut by the runtime's error buffer still shows.</summary>
     private const string AttachFailurePrefix = "[createdump] Problem suspending thread: ptrace(ATTACH, ";
 
+    /// <summary>
+    /// A COMPLETE attach-failure line, whatever its errno — never a cut one, so it is classified by what it
+    /// says. Group <c>tid</c> is the thread.
+    /// </summary>
+    private static readonly Regex CompleteAttachFailure = new(
+        @"^\[createdump\] Problem suspending thread: ptrace\(ATTACH, (?<tid>\d+)\) FAILED [^\r\n]*\(\d+\)$",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>The thread id a cut attach-failure line still shows in full (its closing parenthesis survived the cut).</summary>
+    private static readonly Regex VisibleAttachTid = new(
+        @"^\[createdump\] Problem suspending thread: ptrace\(ATTACH, (?<tid>\d+)\)",
+        RegexOptions.CultureInvariant);
+
     private readonly Action<string> dumpWriter = writeDump ?? (path => WriteDumpOfThisProcess(path, logDumpGeneration));
 
     /// <summary>Asks the runtime, over its diagnostic port, to write a Normal minidump of this process.</summary>
@@ -127,7 +140,10 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
     /// <summary>
     /// Whether <paramref name="message"/> consists ONLY of createdump's attach failures for threads other
     /// than this process that were already gone (see the class remarks: the line that failed the dump was cut
-    /// off the error) — every complete line is one, and the last line is one or the cut start of one.
+    /// off the error) — every complete line is one, and the last line is one or the CUT start of one. A last
+    /// line that is a complete attach failure is never "cut": it is held to the full form like every other
+    /// line, so another errno or the process's own id is not retried; nor is a cut line still showing the
+    /// process's own id.
     /// </summary>
     /// <param name="message">The dump writer's error text.</param>
     private static bool NamesOnlyThreadsGoneBeforeAttach(string message)
@@ -142,8 +158,11 @@ internal sealed class BlockedThreadStacks(string? dacPath = null, Action<string>
             GoneBeforeAttach.Match(line) is { Success: true } m
             && int.TryParse(m.Groups["tid"].Value, out var tid) && tid != Environment.ProcessId;
         bool IsCutAttachLine(string line) =>
-            line.StartsWith(AttachFailurePrefix, StringComparison.Ordinal)
-            || AttachFailurePrefix.StartsWith(line, StringComparison.Ordinal);
+            (line.StartsWith(AttachFailurePrefix, StringComparison.Ordinal)
+                || AttachFailurePrefix.StartsWith(line, StringComparison.Ordinal))
+            && !CompleteAttachFailure.IsMatch(line)
+            && !(VisibleAttachTid.Match(line) is { Success: true } m
+                && int.TryParse(m.Groups["tid"].Value, out var tid) && tid == Environment.ProcessId);
         var complete = lines[..^1];
         var last = lines[^1];
         return complete.Length > 0
