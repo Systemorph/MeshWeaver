@@ -242,6 +242,16 @@ one* at the moment it is first called. `ConfigurationFeatureFlags` is a mesh-sco
 its state on an instance field, re-read by a `ChangeToken.OnChange` **push** from the configuration
 provider: no timer, no poller, no watchdog.
 
+🚨 **The current reading is replayed outside any lock that subscribers share** (MeshWeaver#8438). The reader
+used to be a `BehaviorSubject`, and that type delivers its current value to a new subscriber while holding its own
+lock. The whole synchronous downstream of that first value therefore ran under a lock every other reader
+needed. A default-install pass or a sync decision subscribes a long pipeline to that value, so one slow first
+delivery held every other reader in the process out of `Subscribe`. Measured on a portal: the
+install pass's 5-second composition read timed out with no GC pause and no thread-pool backlog.
+The pass then logged *"NOTHING this environment declares is asserted this boot"*. The reader is now a
+`ReplaySubject` of one. When nothing contends, the replay still arrives inside `Subscribe`. A slow
+subscriber delays only itself. `FeatureFlagReplayOutsideTheLockTest` pins both directions.
+
 ## Package parameters — routed from the environment's service graph
 
 A package declares what it needs; the **environment** decides where it comes from. That is the
