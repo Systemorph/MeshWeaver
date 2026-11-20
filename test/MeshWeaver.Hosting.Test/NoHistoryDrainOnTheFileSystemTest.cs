@@ -39,7 +39,31 @@ public sealed class NoHistoryDrainOnTheFileSystemTest : IDisposable
     }
 
     private static VersionHistoryDrain Drain(int maxRows) =>
-        new(ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, StatusType), maxRows);
+        new(ImmutableDictionary.CreateRange(StringComparer.OrdinalIgnoreCase,
+            [KeyValuePair.Create(StatusType, VersionHistoryDrain.KeepsNone)]), maxRows);
+
+    [Fact]
+    public void A_windowed_rule_removes_only_versions_past_the_cutoff_never_the_newest_nor_an_undated_one()
+    {
+        var cutoff = new DateTimeOffset(2026, 11, 13, 0, 0, 0, TimeSpan.Zero);
+        var drain = new VersionHistoryDrain(ImmutableDictionary.CreateRange(StringComparer.OrdinalIgnoreCase,
+            [KeyValuePair.Create(StatusType, cutoff)]), 100);
+        var rows = new[]
+        {
+            new VersionHistoryRow("Hosting/Triage/Status", 1, cutoff.AddDays(-3)),
+            new VersionHistoryRow("Hosting/Triage/Status", 2, default),
+            new VersionHistoryRow("Hosting/Triage/Status", 3, cutoff.AddDays(-1)),
+            new VersionHistoryRow("Hosting/Triage/Status", 4, cutoff.AddDays(1)),
+            new VersionHistoryRow("Hosting/Triage/Status", 5, cutoff.AddDays(2)) { NodeType = StatusType },
+            // Every version past the cutoff, the newest included: the newest stays.
+            new VersionHistoryRow("Hosting/Stale", 1, cutoff.AddDays(-9)),
+            new VersionHistoryRow("Hosting/Stale", 2, cutoff.AddDays(-8)) { NodeType = StatusType },
+        };
+
+        drain.Select(rows).Select(r => (r.Path, r.Version)).Should().Equal(
+            [("Hosting/Stale", 1L), ("Hosting/Triage/Status", 1L), ("Hosting/Triage/Status", 3L)],
+            "past the cutoff go regardless of any keep-newest floor; inside it, the undated row and each node's newest stay");
+    }
 
     private async Task Write(string path, string nodeType, int count)
     {
@@ -71,7 +95,7 @@ public sealed class NoHistoryDrainOnTheFileSystemTest : IDisposable
             "every version but the newest of a node whose newest version is a drained type (compared ignoring case)");
         Drain(1).Select(rows).Should().ContainSingle("the bound holds");
         Drain(0).Select(rows).Should().BeEmpty("a zero bound removes nothing");
-        new VersionHistoryDrain(ImmutableHashSet<string>.Empty, 100).Select(rows).Should().BeEmpty("no type, no drain");
+        new VersionHistoryDrain(ImmutableDictionary<string, DateTimeOffset>.Empty, 100).Select(rows).Should().BeEmpty("no type, no drain");
     }
 
     [Fact]

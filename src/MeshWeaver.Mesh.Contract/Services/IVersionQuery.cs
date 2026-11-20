@@ -142,11 +142,12 @@ public interface IVersionQuery
 
     /// <summary>
     /// Removes the recorded versions of <paramref name="partition"/> that <paramref name="drain"/>
-    /// selects — every version but the newest of each node whose newest version carries one of the
-    /// drained node types (see <see cref="VersionHistoryDrain"/>) — at most
+    /// selects — for each node whose newest version carries a declared node type, every OTHER version
+    /// written before that type's cutoff (see <see cref="VersionHistoryDrain"/>) — at most
     /// <see cref="VersionHistoryDrain.MaxRows"/> of them, then emits once and completes. Cold. Called by
-    /// the data-retention sweep for the NodeTypes that declare <c>KeepsHistory = false</c>
-    /// (<c>Doc/Architecture/DataRetention</c>).
+    /// the data-retention sweep for the NodeTypes that declare a short history window
+    /// (<c>NodeTypeDefinition.HistoryMaxAge</c>) or none at all (<c>KeepsHistory = false</c>)
+    /// (<c>Doc/Architecture/DataRetention</c> → "Short-lived history").
     ///
     /// <para>A separate member from <see cref="PruneHistory"/> on purpose: a store that does not know
     /// this rule must never be handed it in a shape it would read as an ordinary prune. The default
