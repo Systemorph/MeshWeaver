@@ -261,7 +261,9 @@ public sealed class NodeTypeAdoptionRegistry
     // ---- The BOOT-SEEDING hold: "a boot bundle pass may still adopt ANY type" (#8440) ------------
 
     private int bootSeeding;
-    private readonly Subject<Unit> bootSeedingReleased = new();
+    // Synchronized: two passes' holds can be disposed on different threads at once, and a plain
+    // subject's OnNext is not safe to call concurrently (#8440 review).
+    private readonly ISubject<Unit> bootSeedingReleased = Subject.Synchronize(new Subject<Unit>());
 
     /// <summary>
     /// Marks the boot bundle seeding as in flight until the returned handle is disposed.

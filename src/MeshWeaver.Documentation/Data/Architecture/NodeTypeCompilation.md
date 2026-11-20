@@ -1422,13 +1422,15 @@ the bake read the park; `Essentials/ActionLinkDefinition` went UpstreamFailed an
 regression; every new pod replayed it and the roll stayed on the old image. A per-type reservation
 (`NodeTypeAdoptionRegistry.Reserve`) covers a type only from the moment ITS seed starts, and a pass
 reaches its types one after the other. So the warm-up now HOLDS the whole seeding
-(`NodeTypeAdoptionRegistry.HoldBootSeeding`, from subscription until the image shelf, the published root
-and every `IBootBundleSource` have been offered), and the gate waits on that hold, then on the type's
+(`NodeTypeAdoptionRegistry.HoldBootSeeding`, taken when the warm-up service is CONSTRUCTED — the host
+resolves every hosted service before it starts any, so before the silo or the HTTP server admit an
+activation — until the image shelf, the published root and every `IBootBundleSource` have been offered,
+or the host stops), and the gate waits on that hold, then on the type's
 own reservation, then re-reads the record (`NodeTypeCompilationHelpers.AfterInFlightAdoptions`): a type
 this process's ledger covers, or whose record is `Ok` with a usable build, is not judged at all. The waits
 are bounded (`BootSeedingWaitBudget`, 10 min; the reservation budget) and a timeout judges as before,
 named. A type nothing adopted still parks once the pass is done. Pinned by
-`TheGateDoesNotParkAheadOfAnInFlightAdoptionTest`.
+`TheGateDoesNotParkAheadOfAnInFlightAdoptionTest` and `TheWarmUpHoldsTheBootSeedingFromConstructionTest`.
 
 **The hold says why, on the record** (#6832). A type that still holds a build is not parked but
 HELD — `Ok`, `BuildProvenance: StaleAdopted` (or `Unavailable` + `AdoptionRefused` past the
