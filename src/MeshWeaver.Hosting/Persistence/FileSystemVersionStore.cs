@@ -218,7 +218,7 @@ public class FileSystemVersionStore : IVersionQuery
                     var id = name[..underscore];
                     if (!accept(id))
                         continue;
-                    var relativeDir = Path.GetRelativePath(_versionsDirectory, Path.GetDirectoryName(file)!)
+                    var relativeDir = Path.GetRelativePath(_versionsDirectory, Path.GetDirectoryName(file) ?? throw new InvalidOperationException($"Could not determine the directory of '{file}'."))
                         .Replace(Path.DirectorySeparatorChar, '/');
                     var nodeNs = relativeDir == "." ? ns : relativeDir;
                     var path = string.IsNullOrEmpty(nodeNs) ? id : $"{nodeNs}/{id}";
