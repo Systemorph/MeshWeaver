@@ -1390,10 +1390,23 @@ already in hand there:
    Partition Sync administration page, so the page and the gate cannot disagree. A mesh with no
    implementation registered — a local mesh, CI's disposable meshes, the bake host — has no notion of
    tracking and compiles as before.
+   **A partition the running image materializes is tracked too** (#6930, 2026-11-20): when a
+   registered `IStaticRepoSource` names the partition (`Doc` on every portal), the static-repo import
+   rewrites it from the image on every boot, so its live source is exactly what the image ships —
+   never an install's leftover copy. Measured on the company instance right after its roll to
+   platform 4: the shelf held the documentation's bundles only from a NEWER platform build
+   (4.0.13721 over the running 4.0.13719, declined on their platform range), four `Doc` example
+   types held only a platform-3 build that does not load on platform 4, and the gate parked each at
+   Error with "partition 'Doc' tracks no source". The answer comes from
+   `NodeTypeCompilationHelpers.IsMaterializedFromTheImage`. Pinned by
+   `AnImageShippedPartitionIsTrackedTest`.
 
 Module content **and** an untracked partition → the type PARKS with
 `PrebuiltAssemblySeeder.UntrackedPartitionParkReason`: deterministic, the attempt counter at zero,
-the reason naming the partition, whether a bundle was declined or simply absent, and the two fixes —
+the reason naming the partition, whether a bundle was declined or simply absent (a decline names no
+cause in the reason — the seeder's own `Prebuilt assembly … DECLINED` line does: a source
+fingerprint, a platform range, a dependency; #6930 measured a platform-range decline reported as a
+fingerprint one), and the two fixes —
 add a sync source for the partition and sync it, or publish/rebake the package for this identity —
 "then request a release to retry". It lifts through the same doors as every other park: a source
 change (the sync that was missing) re-drives it, and a release request after the rebake re-runs the
