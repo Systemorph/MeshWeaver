@@ -91,6 +91,12 @@ on:
       stage-executors:
         description: "Per declared stage, who carries its verdict, as JSON — {\"<stage>\": \"host\" | \"host-forced\"} (policy per-stage-ci-equivalence). Read `fromJSON(stage-executors)['<stage>'] || executor`: `{}` (the default) is today's behaviour for every stage."
         value: ${{ jobs.executor.outputs.stage-executors }}
+      line:
+        description: The delivery line the run belongs to (its pull request's base, or its own branch), with line-channels; empty otherwise.
+        value: ${{ jobs.executor.outputs.line }}
+      verdict-sources:
+        description: "Per declared stage, WHO PRODUCES its verdict in this run, as JSON — {\"<stage>\": {\"executor\": \"host\" | \"actions\", \"fallback\": bool, \"line\", \"channel\", \"why\"}} (policy ci-routes-by-line). A required context prints `fromJSON(verdict-sources)['<stage>'].why`; `{}` when nothing is declared."
+        value: ${{ jobs.executor.outputs.verdict-sources }}
 
 jobs:
   executor:
@@ -104,6 +110,8 @@ jobs:
       api-url: ${{ steps.decide.outputs.api-url }}
       stage-executors: ${{ steps.decide.outputs.stage-executors || '{}' }}
       channel: ${{ steps.decide.outputs.channel || 'latest' }}
+      line: ${{ steps.decide.outputs.line }}
+      verdict-sources: ${{ steps.decide.outputs.verdict-sources || '{}' }}
     steps:
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - name: The repository's stage declaration (head)
