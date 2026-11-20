@@ -799,7 +799,7 @@
   "ui.generate": "Erzeugen",
   "ui.regenerate": "Neu erzeugen",
   "ui.recompile": "Neu kompilieren",
-  "ui.compileNotPermitted": "Sie können diesen NodeType weder kompilieren noch veröffentlichen: Dafür ist die Berechtigung Compile auf ihm nötig, die Sie nicht haben. Die Rollen Editor und Admin der Partition '{0}' enthalten sie — bitten Sie eine Administratorin oder einen Administrator von '{0}', Ihnen eine davon zuzuweisen.",
+  "ui.compileNotPermitted": "Sie können diesen NodeType weder kompilieren noch veröffentlichen: Dafür ist die Berechtigung Compile auf ihm nötig, die Sie nicht haben. Bitten Sie eine Administratorin oder einen Administrator der Partition '{0}', Ihnen eine Rolle zuzuweisen, die Compile enthält — in der Standard-Rollenkonfiguration sind das Editor und Admin.",
   "ui.invite": "Einladen",
   "ui.invitePersonalMessage": "Persönliche Nachricht (optional)",
   "ui.invitePersonalMessageHint": "Ein paar Worte für die Einladungs-E-Mail",
