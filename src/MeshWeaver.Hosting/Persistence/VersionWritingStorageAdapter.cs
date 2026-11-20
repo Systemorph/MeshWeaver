@@ -23,10 +23,13 @@ namespace MeshWeaver.Hosting.Persistence;
 ///
 /// <para><b>Types that keep no history.</b> A node whose NodeType declares
 /// <see cref="NodeTypeDefinition.KeepsHistory"/> = <c>false</c> gets NO snapshot from this
-/// decorator; instead its history is PURGED (<see cref="IVersionQuery.PurgeVersions"/>) after
-/// every write — a store that snapshots on its own, the Postgres
-/// <c>mesh_node_copy_to_history</c> trigger, has already recorded one by then — and after the
-/// node is deleted. The type's definition is read HERE, off the storage this decorator wraps
+/// decorator. After every write its newest <see cref="DiscardPerWrite"/> recorded versions are
+/// DISCARDED (<see cref="IVersionQuery.DiscardNewestVersions"/>) — a store that snapshots on its own,
+/// the Postgres <c>mesh_node_copy_to_history</c> trigger, has recorded this write's by then — and
+/// after the node is deleted its whole history is PURGED (<see cref="IVersionQuery.PurgeVersions"/>).
+/// The per-write discard is bounded so a write stays cheap on a node that accumulated a large
+/// history before its type opted out; that backlog is drained by the data-retention sweep
+/// (<see cref="IVersionQuery.DrainHistory"/>, <c>Doc/Architecture/DataRetention</c>). The type's definition is read HERE, off the storage this decorator wraps
 /// (an in-mesh NodeType is a row like any other) or the host's static nodes (a C#-registered
 /// type), so the decision needs no hub and no routing. A definition that cannot be read keeps
 /// history: the failure mode is a retained snapshot, never a destroyed one. See
@@ -50,6 +53,17 @@ internal class VersionWritingStorageAdapter(
     /// <summary>How long reading a NodeType definition may take before the decision falls back to
     /// keeping history.</summary>
     private static readonly TimeSpan DefinitionReadTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How many of a no-history node's newest recorded versions each write discards. One is the
+    /// snapshot a store records on its own for this write (the Postgres trigger); the rest covers
+    /// snapshots recorded while another replica had not yet seen the type's opt-out (see
+    /// <c>verdicts</c>) and chips at an older backlog. Bounded, never "all": a node that recorded
+    /// hundreds of thousands of versions before its type opted out would otherwise delete them all
+    /// inside its next write — one statement holding the write for as long as that takes. The
+    /// backlog belongs to the retention sweep, which deletes it in bounded batches.
+    /// </summary>
+    internal const int DiscardPerWrite = 8;
 
     private static readonly JsonSerializerOptions FallbackReadOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -140,7 +154,7 @@ internal class VersionWritingStorageAdapter(
             : KeepsHistory(saved.NodeType, options)
                 .SelectMany(keeps => keeps
                     ? WriteVersionAndReturn(saved, options)
-                    : Purge(saved.Path).Select(_ => (MeshNode?)saved)));
+                    : Discard(saved.Path).Select(_ => (MeshNode?)saved)));
     }
 
     private IObservable<MeshNode?> WriteVersionAndReturn(MeshNode saved, JsonSerializerOptions options) =>
@@ -172,7 +186,7 @@ internal class VersionWritingStorageAdapter(
                         .DefaultIfEmpty(node)
                         .LastAsync()
                         .Select(_ => applied)
-                    : Purge(node.Path).Select(_ => applied))
+                    : Discard(node.Path).Select(_ => applied))
             : Observable.Return(applied));
     }
 
@@ -458,6 +472,25 @@ internal class VersionWritingStorageAdapter(
     /// <remarks>Only reached when a version store exists: <see cref="Write"/> and
     /// <see cref="WriteIfVersion"/> return the bare inner write when <c>versionQuery</c> is null,
     /// and the three deletes do the same.</remarks>
+    private IObservable<bool> Discard(string path)
+        // Deferred and best-effort exactly like Purge below: a store that throws when called, faults,
+        // or cannot discard never fails the committed write — it is logged.
+        => Observable.Defer(() => versionQuery!.DiscardNewestVersions(path, DiscardPerWrite))
+            .Catch<bool, Exception>(ex =>
+            {
+                logger?.LogWarning(ex, "Discarding the newest recorded versions of {Path} faulted — they are retained", path);
+                return Observable.Return(false);
+            })
+            .DefaultIfEmpty(false)
+            .LastAsync()
+            .Do(discarded =>
+            {
+                if (!discarded)
+                    logger?.LogWarning(
+                        "The version store {Store} cannot discard the recorded versions of {Path}, whose NodeType keeps no history — its snapshots are retained",
+                        versionQuery!.GetType().Name, path);
+            });
+
     private IObservable<bool> Purge(string path)
         // Deferred: a version store that throws while the purge is being CALLED is the same
         // best-effort failure as one that faults on subscription — logged, history retained, the
