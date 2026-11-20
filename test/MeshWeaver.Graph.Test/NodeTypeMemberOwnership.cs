@@ -112,6 +112,7 @@ internal static class NodeTypeMemberOwnership
         nameof(NodeTypeDefinition.StaticTypeName),
         nameof(NodeTypeDefinition.StorageTable),
         nameof(NodeTypeDefinition.KeepsHistory),
+        nameof(NodeTypeDefinition.ListView),
         nameof(NodeTypeDefinition.StampedFields),
         nameof(NodeTypeDefinition.Tests),
     ];
