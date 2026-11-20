@@ -189,6 +189,64 @@ public class FileSystemVersionStore : IVersionQuery
             return true;
         }));
 
+    /// <inheritdoc />
+    /// <remarks>Walks the partition's snapshot folder (<c>.versions/{partition}/**</c>, plus the
+    /// partition root's own <c>{partition}_{version}.json</c> files at the top of
+    /// <c>.versions</c>) on the <c>FileSystem</c> pool, reads each snapshot's write time as its
+    /// <see cref="VersionHistoryRow.LastModified"/> (the same clock <see cref="GetVersions"/>
+    /// reports), and deletes exactly the files <see cref="VersionHistoryPrune.Select"/> selects.</remarks>
+    public IObservable<VersionHistoryPruneOutcome> PruneHistory(string partition, VersionHistoryPrune prune)
+        // Cold (Defer): a prune is a destructive act and must happen on Subscribe, never on call.
+        => Observable.Defer(() => _ioPool.RunBlocking(ct =>
+        {
+            var root = partition.Trim().Trim('/');
+            if (root.Length == 0 || root.Contains('/'))
+                return VersionHistoryPruneOutcome.Pruned(0);
+
+            var rows = new List<(VersionHistoryRow Row, string File)>();
+            void Collect(string dir, string ns, SearchOption option, Func<string, bool> accept)
+            {
+                if (!Directory.Exists(dir))
+                    return;
+                foreach (var file in Directory.EnumerateFiles(dir, "*.json", option))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var name = Path.GetFileNameWithoutExtension(file);
+                    var underscore = name.LastIndexOf('_');
+                    if (underscore <= 0 || !long.TryParse(name[(underscore + 1)..], out var version))
+                        continue;
+                    var id = name[..underscore];
+                    if (!accept(id))
+                        continue;
+                    var relativeDir = Path.GetRelativePath(_versionsDirectory, Path.GetDirectoryName(file)!)
+                        .Replace(Path.DirectorySeparatorChar, '/');
+                    var nodeNs = relativeDir == "." ? ns : relativeDir;
+                    var path = string.IsNullOrEmpty(nodeNs) ? id : $"{nodeNs}/{id}";
+                    rows.Add((new VersionHistoryRow(path, version, File.GetLastWriteTimeUtc(file)), file));
+                }
+            }
+
+            // The partition root node itself (namespace "") and everything below it.
+            Collect(_versionsDirectory, "", SearchOption.TopDirectoryOnly,
+                id => string.Equals(id, root, StringComparison.OrdinalIgnoreCase));
+            Collect(Path.Combine(_versionsDirectory, root), root, SearchOption.AllDirectories, _ => true);
+
+            var files = rows.ToLookup(r => (r.Row.Path, r.Row.Version), r => r.File);
+            var removed = 0;
+            foreach (var row in prune.Select(rows.Select(r => r.Row)))
+            {
+                ct.ThrowIfCancellationRequested();
+                foreach (var file in files[(row.Path, row.Version)])
+                {
+                    if (!File.Exists(file))
+                        continue;
+                    File.Delete(file);
+                    removed++;
+                }
+            }
+            return VersionHistoryPruneOutcome.Pruned(removed);
+        }));
+
     private string? GetVersionFilePath(string path, long version)
     {
         var (ns, id) = SplitPath(path);
