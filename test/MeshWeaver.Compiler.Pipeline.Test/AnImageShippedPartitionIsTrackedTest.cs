@@ -42,6 +42,7 @@ public class AnImageShippedPartitionIsTrackedTest(ITestOutputHelper output)
 {
     private const string StaleMvid = "0000bbbb0000bbbb";
     private const string ShippedPartition = "shipped";
+    private const string AdditivePartition = "additive";
 
     /// <summary>A static repo the image ships for <see cref="ShippedPartition"/>. It lists no nodes:
     /// the gate reads only the partition it materializes, and no import runs in this mesh.</summary>
@@ -53,6 +54,17 @@ public class AnImageShippedPartitionIsTrackedTest(ITestOutputHelper output)
         public MeshNode? PartitionRoot => null;
     }
 
+    /// <summary>An image-shipped source that keeps nodes it did not write (the AI catalogs' mode):
+    /// a leftover in its partition survives every boot, so it must stay gated.</summary>
+    private sealed class AdditiveRepo : IStaticRepoSource
+    {
+        public string Partition => AdditivePartition;
+        public bool Versioned => false;
+        public PartitionSyncMode SyncMode => PartitionSyncMode.Additive;
+        public IReadOnlyList<MeshNode> EnumerateSourceNodes() => [];
+        public MeshNode? PartitionRoot => null;
+    }
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddGitHubSyncTypes()
@@ -60,6 +72,7 @@ public class AnImageShippedPartitionIsTrackedTest(ITestOutputHelper output)
             {
                 services.AddGitHubSyncServices();
                 services.AddSingleton<IStaticRepoSource, ShippedRepo>();
+                services.AddSingleton<IStaticRepoSource, AdditiveRepo>();
                 return services;
             });
 
@@ -139,6 +152,12 @@ public class AnImageShippedPartitionIsTrackedTest(ITestOutputHelper output)
 
         NodeTypeCompilationHelpers.IsMaterializedFromTheImage(Mesh, "SHIPPED")
             .Should().BeTrue("partitions compare case-insensitively");
+
+        var additive = await NodeTypeCompilationHelpers.PartitionTracksSources(Mesh, $"{AdditivePartition}/Widget")
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the seam answers once, promptly", cancellationToken: TestContext.Current.CancellationToken);
+        additive.Should().BeFalse(
+            "an Additive import keeps nodes the image does not ship, so a leftover there is still a leftover");
     }
 
     [Fact]

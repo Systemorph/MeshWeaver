@@ -1391,8 +1391,9 @@ already in hand there:
    implementation registered — a local mesh, CI's disposable meshes, the bake host — has no notion of
    tracking and compiles as before.
    **A partition the running image materializes is tracked too** (#6930, 2026-11-20): when a
-   registered `IStaticRepoSource` names the partition (`Doc` on every portal), the static-repo import
-   rewrites it from the image on every boot, so its live source is exactly what the image ships —
+   registered `IStaticRepoSource` with `SyncMode` `FullReplace` names the partition (`Doc` on every
+   portal), the static-repo import rewrites it from the image on every boot and prunes what the image
+   does not ship (an `Additive` source keeps foreign nodes, so its partition stays gated), so its live source is exactly what the image ships —
    never an install's leftover copy. Measured on the company instance right after its roll to
    platform 4: the shelf held the documentation's bundles only from a NEWER platform build
    (4.0.13721 over the running 4.0.13719, declined on their platform range), four `Doc` example
