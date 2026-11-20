@@ -70,7 +70,7 @@ public sealed record ResolvedDataRetention(
 {
     /// <summary>The no-history class in force. Always the instance policy's: no rule speaks for it,
     /// because it is no window a plan could vary — it drains history a type declared worthless.</summary>
-    public NoHistoryRetention NoHistory { get; init; } = new();
+    public ShortLivedHistoryRetention ShortLivedHistory { get; init; } = new();
 }
 
 /// <summary>
@@ -151,7 +151,7 @@ public sealed class DataRetentionResolver
             versions, versionAnswer?.Source ?? InstanceSource,
             logAnswer?.LogEntries ?? Instance.LogEntries, logAnswer?.Source ?? InstanceSource)
         {
-            NoHistory = Instance.NoHistory,
+            ShortLivedHistory = Instance.ShortLivedHistory,
         };
     }
 }

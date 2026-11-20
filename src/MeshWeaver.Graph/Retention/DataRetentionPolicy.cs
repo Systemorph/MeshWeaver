@@ -115,24 +115,42 @@ public sealed record VersionRetention
 }
 
 /// <summary>
-/// The history of NodeTypes that keep NONE (<see cref="NodeTypeDefinition.KeepsHistory"/> =
-/// <c>false</c>): high-churn status, ledger and heartbeat nodes whose every write would otherwise be
-/// a full copy in the version store. Such a type records nothing new once it declares so (the
-/// storage layer discards each write's snapshot); this class drains what it recorded BEFORE, through
-/// <see cref="IVersionQuery.DrainHistory"/> and the rule <see cref="VersionHistoryDrain"/>: every
-/// recorded version of such a node but its newest. No age window applies — the type declared that
-/// its history has no value. One retention class of <see cref="DataRetentionPolicy"/>.
+/// SHORT-LIVED history: the versions of NodeTypes that declare their own, short version retention —
+/// <see cref="NodeTypeDefinition.HistoryMaxAge"/> (high-churn status, ledger and heartbeat nodes,
+/// whose every write is a full copy in the version store), or none at all
+/// (<see cref="NodeTypeDefinition.KeepsHistory"/> = <c>false</c>). Writes of such a type still
+/// record history (unless it keeps none); this class removes every version older than the type's
+/// window REGARDLESS of the version class's keep-newest floor, through
+/// <see cref="IVersionQuery.DrainHistory"/> and the rule <see cref="VersionHistoryDrain"/>. The newest
+/// recorded version is never removed. One retention class of <see cref="DataRetentionPolicy"/>.
 ///
 /// <para>The class has its OWN cap, larger than the version class's, because its backlog is
-/// measured in millions of rows per partition (see <c>Doc/Architecture/DataRetention</c> → "Types
-/// that keep no history" for the measurement the default is derived from). It is spent in
+/// measured in millions of rows per partition (see <c>Doc/Architecture/DataRetention</c> →
+/// "Short-lived history" for the measurement the default is derived from). It is spent in
 /// statements of at most <see cref="BatchSize"/> rows, one after another, so no single statement
 /// deletes more than the version class already does in one.</para>
 /// </summary>
-public sealed record NoHistoryRetention
+public sealed record ShortLivedHistoryRetention
 {
+    /// <summary>The floor every window — declared or configured — is clamped to.</summary>
+    public static readonly TimeSpan MinimumMaxAge = TimeSpan.FromDays(1);
+
     /// <summary>Whether this class removes anything.</summary>
     public bool Enabled { get; init; } = true;
+
+    /// <summary>The instance's replacement for EVERY declared window (<c>Retention:ShortLivedHistory:MaxAge</c>),
+    /// or null to use each type's own <see cref="NodeTypeDefinition.HistoryMaxAge"/>. Never applies to a
+    /// type that keeps no history.</summary>
+    public TimeSpan? MaxAge { get; init; }
+
+    /// <summary>The window in force for a type declaring <paramref name="declared"/>: the instance's
+    /// <see cref="MaxAge"/> when set, else the declaration — clamped to <see cref="MinimumMaxAge"/>.</summary>
+    /// <param name="declared">The type's declared window.</param>
+    public TimeSpan WindowFor(TimeSpan declared)
+    {
+        var window = MaxAge ?? declared;
+        return window < MinimumMaxAge ? MinimumMaxAge : window;
+    }
 
     /// <summary>The most recorded versions one pass removes from one partition. Shipped: 200 000.</summary>
     public int MaxDeletionsPerRun { get; init; } = 200_000;
@@ -221,8 +239,8 @@ public sealed record DataRetentionPolicy
     /// <summary>Config prefix of the log-entry class (<c>:Enabled</c>, <c>:MaxAge</c>, <c>:NodeType</c>, <c>:MaxDeletionsPerRun</c>).</summary>
     public const string LogEntriesSection = Section + ":LogEntries";
 
-    /// <summary>Config prefix of the no-history class (<c>:Enabled</c>, <c>:MaxDeletionsPerRun</c>, <c>:BatchSize</c>).</summary>
-    public const string NoHistorySection = Section + ":NoHistory";
+    /// <summary>Config prefix of the short-lived-history class (<c>:Enabled</c>, <c>:MaxAge</c>, <c>:MaxDeletionsPerRun</c>, <c>:BatchSize</c>).</summary>
+    public const string ShortLivedHistorySection = Section + ":ShortLivedHistory";
 
     /// <summary>The smallest interval a configured value may set.</summary>
     public static readonly TimeSpan MinimumInterval = TimeSpan.FromMinutes(10);
@@ -248,8 +266,8 @@ public sealed record DataRetentionPolicy
     /// <summary>Log-entry rows.</summary>
     public LogEntryRetention LogEntries { get; init; } = new();
 
-    /// <summary>The history of NodeTypes that keep none.</summary>
-    public NoHistoryRetention NoHistory { get; init; } = new();
+    /// <summary>The history of NodeTypes that declare a short window (or keep none).</summary>
+    public ShortLivedHistoryRetention ShortLivedHistory { get; init; } = new();
 
     /// <summary>
     /// Reads the policy from configuration. Every key falls back to its default when absent or
@@ -289,12 +307,13 @@ public sealed record DataRetentionPolicy
             l = l with { NodeType = nodeType.Trim() };
         if (Count(configuration, LogEntriesSection + ":MaxDeletionsPerRun") is { } lMax) l = l with { MaxDeletionsPerRun = lMax };
 
-        var h = policy.NoHistory;
-        if (Bool(configuration, NoHistorySection + ":Enabled") is { } hOn) h = h with { Enabled = hOn };
-        if (Count(configuration, NoHistorySection + ":MaxDeletionsPerRun") is { } hMax) h = h with { MaxDeletionsPerRun = hMax };
-        if (Count(configuration, NoHistorySection + ":BatchSize") is { } hBatch) h = h with { BatchSize = hBatch };
+        var h = policy.ShortLivedHistory;
+        if (Bool(configuration, ShortLivedHistorySection + ":Enabled") is { } hOn) h = h with { Enabled = hOn };
+        if (Span(configuration, ShortLivedHistorySection + ":MaxAge") is { } hAge) h = h with { MaxAge = Max(hAge, ShortLivedHistoryRetention.MinimumMaxAge) };
+        if (Count(configuration, ShortLivedHistorySection + ":MaxDeletionsPerRun") is { } hMax) h = h with { MaxDeletionsPerRun = hMax };
+        if (Count(configuration, ShortLivedHistorySection + ":BatchSize") is { } hBatch) h = h with { BatchSize = hBatch };
 
-        return policy with { Activities = a, Versions = v, LogEntries = l, NoHistory = h };
+        return policy with { Activities = a, Versions = v, LogEntries = l, ShortLivedHistory = h };
     }
 
     private static TimeSpan Max(TimeSpan value, TimeSpan floor) => value < floor ? floor : value;

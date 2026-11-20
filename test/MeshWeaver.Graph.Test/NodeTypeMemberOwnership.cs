@@ -112,6 +112,8 @@ internal static class NodeTypeMemberOwnership
         nameof(NodeTypeDefinition.StaticTypeName),
         nameof(NodeTypeDefinition.StorageTable),
         nameof(NodeTypeDefinition.KeepsHistory),
+        // The type's short version-retention window (Doc/Architecture/DataRetention → "Short-lived history").
+        nameof(NodeTypeDefinition.HistoryMaxAge),
         nameof(NodeTypeDefinition.ListView),
         nameof(NodeTypeDefinition.StampedFields),
         nameof(NodeTypeDefinition.Tests),

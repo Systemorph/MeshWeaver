@@ -84,6 +84,23 @@ public class NodeTypeOffSwitchesSurviveTheWireTest(ITestOutputHelper output) : M
         Assert.False(back.ContentAs<NodeTypeDefinition>(options)!.KeepsHistory);
     }
 
+    /// <summary>The short history window as a node repo's JSON declares it (<c>"historyMaxAge": "7.00:00:00"</c>)
+    /// reads back through the mesh serializer, inside a polymorphic NodeType node; absent reads null.</summary>
+    [Fact]
+    public void HistoryMaxAge_declared_in_json_survives_the_mesh_serializer()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var node = JsonSerializer.Deserialize<MeshNode>(
+            """{ "id": "TriageStatus", "namespace": "Hosting", "nodeType": "NodeType", "content": { "$type": "NodeTypeDefinition", "historyMaxAge": "7.00:00:00" } }""",
+            options)!;
+        var definition = node.ContentAs<NodeTypeDefinition>(options)!;
+        Assert.Equal(TimeSpan.FromDays(7), definition.HistoryMaxAge);
+
+        var back = JsonSerializer.Deserialize<MeshNode>(JsonSerializer.Serialize(node, options), options)!;
+        Assert.Equal(TimeSpan.FromDays(7), back.ContentAs<NodeTypeDefinition>(options)!.HistoryMaxAge);
+        Assert.Null(JsonSerializer.Deserialize<NodeTypeDefinition>("{}", options)!.HistoryMaxAge);
+    }
+
     [Fact]
     public void KeepsHistory_absent_still_reads_true_and_true_serialises_as_before()
     {
