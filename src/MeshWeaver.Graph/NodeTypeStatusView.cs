@@ -81,6 +81,12 @@ public sealed record NodeTypeStatusView(
     /// <summary>The <see cref="CompileDeniedHint"/> line's style — hidden unless the viewer was denied.</summary>
     public string CompileDeniedHintStyle { get; init; } = Hidden;
 
+    /// <summary>The partition a NodeType path lives in — its first segment, or the path itself when it
+    /// has none. The ONE derivation behind the compile-denied hint on every page that shows it.</summary>
+    /// <param name="nodeTypePath">The type's path.</param>
+    internal static string PartitionOf(string nodeTypePath)
+        => nodeTypePath.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? nodeTypePath;
+
     /// <summary>
     /// Folds the VIEWER's <see cref="MeshWeaver.Mesh.Security.Permission.Compile"/> verdict into the
     /// projection (MeshWeaver#8412): a viewer the release request would refuse is not offered an
@@ -102,13 +108,11 @@ public sealed record NodeTypeStatusView(
     {
         if (compile is null || compile.IsGranted || compile.IsUndetermined)
             return this;
-        var partition = nodeTypePath.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
-                        ?? nodeTypePath;
         return this with
         {
             CompileDisabled = true,
             ReleaseDisabled = true,
-            CompileDeniedHint = LocalizationCatalog.Get("ui.compileNotPermitted", locale, partition),
+            CompileDeniedHint = LocalizationCatalog.Get("ui.compileNotPermitted", locale, PartitionOf(nodeTypePath)),
             CompileDeniedHintStyle = "color: var(--neutral-foreground-hint); font-size: 12px;",
         };
     }

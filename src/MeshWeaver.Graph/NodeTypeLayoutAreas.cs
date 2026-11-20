@@ -223,8 +223,7 @@ public static class NodeTypeLayoutAreas
                     stack = AppendCompileErrorSources(stack, def);
                     stack = compile is { IsGranted: false, IsUndetermined: false }
                         ? stack.WithView(Controls.Body(host.Localize("ui.compileNotPermitted",
-                                nodeTypePath.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
-                                ?? nodeTypePath))
+                                NodeTypeStatusView.PartitionOf(nodeTypePath)))
                             .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px;"))
                         : stack.WithView(Controls.Button(host.Localize("ui.recompile"))
                             .WithAppearance(Appearance.Accent)
