@@ -210,7 +210,7 @@ public class FileSystemVersionStore : IVersionQuery
         => Observable.Defer(() => _ioPool.RunBlocking(ct =>
         {
             var rows = CollectPartitionRows(partition, ct);
-            if (drain.MaxRows <= 0 || drain.NodeTypes.IsEmpty)
+            if (drain.MaxRows <= 0 || drain.CutoffByType.IsEmpty)
                 return VersionHistoryPruneOutcome.Pruned(0);
             var typed = rows
                 .GroupBy(r => r.Row.Path, StringComparer.Ordinal)
