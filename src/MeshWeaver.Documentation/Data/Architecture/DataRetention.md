@@ -168,6 +168,19 @@ override, is the lever.
 > space reusable, so the database stops growing, but the files do not shrink. Returning the disk to
 > the server needs `VACUUM FULL` (which holds an exclusive lock for as long as it runs) or `pg_repack`.
 > That is a separate maintenance step run by the owner, and this sweep never performs it.
+>
+> **The governed way to reclaim the space is the `ReclaimDatabaseSpace` instance action**
+> (MeshWeaver.Plugins `Hosting/AksOperationsViaActions`). Run its dry run once the sweep's
+> short-lived backlog has drained, meaning the pass line reports 0 short-lived versions. The dry run
+> reads, for each of the largest `mesh_node_history` tables:
+> - the reclaimable bytes;
+> - the method it would use (`pg_repack` when the extension and client are present, otherwise
+>   `VACUUM FULL` table by table);
+> - the free storage, because each rewrite needs room for a copy of the live data.
+>
+> The real run needs an approval bound to that plan. `VACUUM FULL` blocks the partition's history
+> reads and writes, and every node write in that schema, for as long as each table is being rewritten.
+> The provisioned server size never shrinks; only the space in use comes back.
 
 **What is NOT short-lived.** Anything whose history is an audit trail keeps its history and is pruned
 only by the age-windowed version class above: `Deployments/*` records, `Hosting/InstanceAction`
