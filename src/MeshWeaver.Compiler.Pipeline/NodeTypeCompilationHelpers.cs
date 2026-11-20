@@ -1204,25 +1204,22 @@ internal static class NodeTypeCompilationHelpers
                 && IsSettledOnAStaleBuild(def, guards)
                 && !IsStaticOnlyNodeType(node, def)
                 && parkRegistry?.IsParked(hubPath) != true)
-            .Take(1)
             // 🚨 THE PLATFORM-ROLL RACE (see AfterThisProcessAdoption). On a roll every record is
             // framework-stale, and a boot adoption's own activation arms THIS kickoff: without the
             // interlock it probed the store before the seeder uploaded, flipped Pending, and the
             // untracked-module gate parked the type the adoption was about to cover. Waiting for the
-            // reservation puts the store probe below AFTER the upload; a provisional adoption the
-            // record does not show yet spends the kickoff without a flip.
-            .SelectMany(_ => AfterThisProcessAdoption(
-                hub, adoptionRegistry, hubPath, ownStream, "Framework-stale kickoff", logger,
-                onCovered: () => Volatile.Write(ref staleBuildKickoffSpent, 1)))
-            // Re-judged on the CURRENT record: an admitted adoption that landed during the wait left
-            // nothing stale, and this one-shot kickoff has then acted (#6195 review: spent).
-            .Where(node =>
-            {
-                if (DefinitionOf(hub, node) is { } current && IsSettledOnAStaleBuild(current, guards))
-                    return true;
-                Volatile.Write(ref staleBuildKickoffSpent, 1);
-                return false;
-            })
+            // reservation puts the store probe below AFTER the upload. The one-shot (Take(1)) is
+            // taken only AFTER the interlock, on the CURRENT record: a covered or no-longer-stale
+            // arming consumes nothing, so the kickoff stays armed for the record's next change — a
+            // record that later moves past the adoption is still rebuilt, and the spent flag (#6195)
+            // is written only by a kickoff that actually acted.
+            .Select(_ => AfterThisProcessAdoption(
+                    hub, adoptionRegistry, hubPath, ownStream, "Framework-stale kickoff", logger)
+                .Where(node => DefinitionOf(hub, node) is { } current
+                               && IsSettledOnAStaleBuild(current, guards)
+                               && parkRegistry?.IsParked(hubPath) != true))
+            .Concat()
+            .Take(1)
             .SelectMany(node => MeetsDependencyFloorHere(hub, hubPath, "framework-stale kickoff", logger)
                 .Where(eligible => eligible)
                 .Select(_ => node))
@@ -4388,7 +4385,9 @@ internal static class NodeTypeCompilationHelpers
     /// is newer evidence and the kickoff runs on it.</para>
     ///
     /// <para>Emits the CURRENT node once the type is free to be kicked, or completes empty when this
-    /// process's adoption covers it (calling <paramref name="onCovered"/>) or the hub is going away.
+    /// process's adoption covers it or the hub is going away. A covered skip consumes nothing: a
+    /// one-shot kickoff stays armed for the record's next change, so a record that later moves past
+    /// the adoption (an owner refusal) is still kicked.
     /// With no registry (a host that never composed <c>AddGraph</c>) it emits the current node at
     /// once — the behaviour before the interlock existed.</para>
     /// </summary>
@@ -4398,15 +4397,13 @@ internal static class NodeTypeCompilationHelpers
     /// <param name="ownStream">The hub's own node stream.</param>
     /// <param name="kickoff">What the log line calls the kickoff.</param>
     /// <param name="logger">Diagnostics.</param>
-    /// <param name="onCovered">Called when the kickoff is skipped because the adoption covers it.</param>
     internal static IObservable<MeshNode> AfterThisProcessAdoption(
         IMessageHub hub,
         NodeTypeAdoptionRegistry? registry,
         string hubPath,
         IObservable<MeshNode?> ownStream,
         string kickoff,
-        ILogger? logger,
-        Action? onCovered = null)
+        ILogger? logger)
     {
         var cleared = registry is null
             ? Observable.Return(Unit.Default)
@@ -4428,10 +4425,10 @@ internal static class NodeTypeCompilationHelpers
             .Where(_ => !hub.IsShuttingDown)
             // The CURRENT record, not the emission that armed the kickoff: the adoption may have
             // landed (admitted) or been recorded (provisional) while the kickoff waited.
-            .SelectMany(_ => ownStream.Where(node => node is not null).Take(1))
+            .SelectMany(_ => ownStream.OfType<MeshNode>().Take(1))
             .Where(current =>
             {
-                if (registry?.StampSuperseding(hubPath, current!.Version) is not { } stamp)
+                if (registry?.StampSuperseding(hubPath, current.Version) is not { } stamp)
                     return true;
                 logger?.LogInformation(
                     "{Kickoff}: {HubPath} is covered by this process's own prebuilt adoption (stamped over "
@@ -4439,10 +4436,8 @@ internal static class NodeTypeCompilationHelpers
                     + "shared stamp is held until this process passes its readiness validation, and the "
                     + "sweep counts the adoption from the same ledger",
                     kickoff, hubPath, stamp.ObservedVersion, current.Version);
-                onCovered?.Invoke();
                 return false;
-            })
-            .Select(current => current!);
+            });
     }
 
     /// <summary>

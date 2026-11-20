@@ -48,7 +48,8 @@ public class AnInFlightAdoptionWinsOverTheFrameworkStaleKickoffTest(ITestOutputH
     private NodeTypeAdoptionRegistry Adoptions => Mesh.ServiceProvider.GetRequiredService<NodeTypeAdoptionRegistry>();
 
     private NodeTypeDefinition Definition(MeshNode node) =>
-        node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+        node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
+        ?? throw new InvalidOperationException($"{node.Path} does not carry a NodeTypeDefinition");
 
     private Task<MeshNode> Settled(string typePath, Func<NodeTypeDefinition, bool> predicate, string because) =>
         Mesh.GetMeshNodeStream(typePath)
@@ -59,11 +60,11 @@ public class AnInFlightAdoptionWinsOverTheFrameworkStaleKickoffTest(ITestOutputH
     /// <summary>What the unguarded kickoff does to the record: flips it, or has already rebuilt it.</summary>
     private IObservable<MeshNode> KickedOrRebuilt(string typePath) =>
         Mesh.GetMeshNodeStream(typePath)
-            .Where(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
+            .OfType<MeshNode>()
+            .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && (d.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling
                             || string.Equals(d.CompiledFrameworkVersion, NodeTypeCompilationHelpers.FrameworkVersion,
-                                StringComparison.Ordinal)))
-            .Select(n => n!);
+                                StringComparison.Ordinal)));
 
     private async Task<NodeTypeDefinition> BuiltType(string typePath, string name)
     {
@@ -98,7 +99,7 @@ public class AnInFlightAdoptionWinsOverTheFrameworkStaleKickoffTest(ITestOutputH
 
     /// <summary>The platform roll, as the seeder's activation finds the record: settled on a build
     /// the live framework cannot run, with nothing in the store under the recorded version.</summary>
-    private async Task<MeshNode> TurnFrameworkStale(string typePath)
+    private async Task<MeshNode> TurnFrameworkStale(string typePath, long recordedVersion = 987_654_321)
     {
         await Mesh.ServiceProvider.GetRequiredService<AccessService>()
             .RunAsSystem(() => Mesh.GetMeshNodeStream(typePath).Update(current =>
@@ -107,7 +108,7 @@ public class AnInFlightAdoptionWinsOverTheFrameworkStaleKickoffTest(ITestOutputH
                     Content = Definition(current) with
                     {
                         CompiledFrameworkVersion = OtherFramework,
-                        LastCompiledVersion = 987_654_321,
+                        LastCompiledVersion = recordedVersion,
                     },
                 }))
             .Take(1)
@@ -147,6 +148,42 @@ public class AnInFlightAdoptionWinsOverTheFrameworkStaleKickoffTest(ITestOutputH
             + "running adoption and (in an untracked partition) parked the type, which the sweep then "
             + "judged a CompileError and the bake gate a regression",
             TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// A covered skip consumes nothing: when the record later moves PAST the adoption (an owner
+    /// refusal, a source change — newer evidence than the ledger), the one-shot framework-stale
+    /// kickoff is still armed and rebuilds the stale build.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ARecordThatMovesPastTheAdoption_IsStillRebuilt()
+    {
+        const string typePath = "type/MovedPastAdoption";
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        await BuiltType(typePath, "MovedPastAdoption");
+
+        var reservation = Adoptions.Reserve(typePath);
+        try
+        {
+            var stale = await TurnFrameworkStale(typePath);
+            Adoptions.RecordAdopted(typePath, stale.Version,
+                Definition(stale) with { CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion });
+        }
+        finally
+        {
+            reservation.Dispose();
+        }
+
+        // The record moves past the version the adoption read, still naming the stale build.
+        await TurnFrameworkStale(typePath, recordedVersion: 987_654_322);
+
+        var rebuilt = Definition(await Settled(typePath,
+            d => d.CompilationStatus == CompilationStatus.Ok
+                 && string.Equals(d.CompiledFrameworkVersion, NodeTypeCompilationHelpers.FrameworkVersion,
+                     StringComparison.Ordinal),
+            "🚨 a record newer than this process's adoption is the better evidence — the kickoff the covered "
+            + "skip left armed rebuilds it"));
+        rebuilt.LatestAssemblyPath.Should().NotBeNullOrEmpty();
     }
 
     /// <summary>

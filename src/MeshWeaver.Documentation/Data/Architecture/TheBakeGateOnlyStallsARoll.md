@@ -438,7 +438,9 @@ both:
   version). On a provisional pod the shared stamp is held, so the record still names the old build.
   The kickoff is skipped. The sweep counts the adoption from the same ledger, and admission releases
   the stamp. A record that moved past the adoption (an owner refusal, a source change) is newer
-  evidence, and the kickoff runs on it.
+  evidence, and the kickoff runs on it. A covered skip consumes nothing: the one-shot
+  framework-stale kickoff takes its single shot only after the interlock, so it stays armed for the
+  record's next change.
 
 Nothing about the gates changes. The bake gate, the publication gate and the untracked-module gate
 are untouched. A type that no adoption covers is still kicked, parked and judged, and a genuine
@@ -451,6 +453,8 @@ finishes. Two cases are pinned:
 
 - A provisional adoption (recorded, stamp held) must leave the record alone. Without the fix it is
   flipped at once.
+- A record that then moves PAST that adoption is still rebuilt, because the covered skip left the
+  kickoff armed.
 - The negative control: a declined adoption (nothing recorded) must not flip while it is in flight,
   and the type must still be rebuilt for the live framework once the reservation clears.
 
