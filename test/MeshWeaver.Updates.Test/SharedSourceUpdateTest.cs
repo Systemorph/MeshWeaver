@@ -62,9 +62,9 @@ public class SharedSourceUpdateTest(ITestOutputHelper output) : UpdateScenarioBa
     private async Task UpdateShared(string sharedPath, string code)
     {
         var current = await Mesh.GetWorkspace().GetMeshNodeStream(sharedPath)
-            .Where(n => n is not null).Take(1)
+            .OfType<MeshNode>().Take(1)
             .Should().Within(Step).Emit(cancellationToken: TestContext.Current.CancellationToken);
-        await NodeFactory.UpdateNode(current! with
+        await NodeFactory.UpdateNode(current with
         {
             Content = new CodeConfiguration { Code = code, Language = "csharp" },
         }).Should().Within(Step).Emit(cancellationToken: TestContext.Current.CancellationToken);
