@@ -223,7 +223,11 @@ def channel_unserved(i: Inputs, answer: object) -> str:
     """Why no build host serves this run's channel, or '' when the instance DECLARES that one does (`channelServed: true`
     on its queue answer: the control record names a host for the channel). This is declared, never derived from who
     happened to claim last. An instance that does not say is read as NOT serving: a stage whose verdict the host is to
-    carry must never be followed into a queue no host takes from, which would hold its required context until the cap."""
+    carry must never be followed into a queue no host takes from, which would hold its required context until the cap.
+    `latest` is always served, exactly as channel_unroutable treats it: an instance that predates `channelServed` keeps
+    its latest runs (review of #8418 — decide_forced read it without the exemption _decide_on_channel had)."""
+    if i.channel == "latest":
+        return ""
     if isinstance(answer, dict) and answer.get("channelServed") is True:
         return ""
     if isinstance(answer, dict) and answer.get("channelServed") is False:
@@ -402,6 +406,11 @@ def evidence_problem(evidence: object) -> str:
     return ""
 
 
+def _evidence_shaped(v: object) -> bool:
+    """A value of the per-REPOSITORY shape of before ({stage: evidence}): an object whose keys are all evidence fields."""
+    return isinstance(v, dict) and bool(v) and all(k in ("comparable", "disagreements", "report") for k in v)
+
+
 def equivalent_stages(doc: Optional[dict], repo_name: str, names: list, withholds: Optional[dict] = None,
                       line: str = "") -> tuple[list, list]:
     """(the declared stages whose verdict the HOST carries on this run's LINE, notes on every declaration that was NOT
@@ -421,12 +430,21 @@ def equivalent_stages(doc: Optional[dict], repo_name: str, names: list, withhold
     if not isinstance(per_line, dict):
         return [], [f"equivalentStages.{repo_name} is not an object — no stage is routed"]
     # the per-REPOSITORY shape of before route by line ({stage: evidence}) names no line, so it routes nothing — said
+    # (a key is that shape when it is a declared stage, or when its value is evidence-shaped — so a legacy entry for a
+    # stage build-stages.json does not declare is said too, never silently dropped)
+    legacy = [k for k, v in per_line.items() if k in names or _evidence_shaped(v)]
     notes = [f"equivalentStages.{repo_name}.{k} is a stage where a line belongs — equivalence is declared per line "
-             f"(equivalentStages.{repo_name}.<line>.{k}) — ignored" for k in per_line if k in names]
+             f"(equivalentStages.{repo_name}.<line>.{k}) — ignored" for k in legacy]
     if not line:
         if per_line:
             notes.append(f"equivalentStages.{repo_name} declares the line(s) {', '.join(sorted(per_line))}, but this run names "
                          f"no delivery line (no LINES_FILE, or a branch that is not a line) — route by line: no stage is routed")
+        return [], notes
+    if line not in per_line:
+        lines_declared = sorted(k for k in per_line if k not in legacy)
+        if lines_declared:
+            notes.append(f"equivalentStages.{repo_name} declares the line(s) {', '.join(lines_declared)}, but none for this "
+                         f"run's line {line} — route by line: no stage is routed on {line}")
         return [], notes
     entries = per_line.get(line, {})
     if not isinstance(entries, dict):
@@ -563,7 +581,7 @@ def _decide_on_channel(i: Inputs, get: Get, post: Post, routing: Optional[Routin
         return actions(unroutable)
     # 🧵 a LINE's channel is followed only where the instance declares a host serves it (route by line): a run no host
     # takes would hold every required context until the job cap — that is the fallback to Actions, said
-    if i.channel != "latest" and (unserved := channel_unserved(i, answer)):
+    if unserved := channel_unserved(i, answer):
         return actions(unserved)
     if not i.secret or not i.queue_url:
         return actions("the instance says host, but this context has no webhook pair (BUILD_WEBHOOK_URL / BUILD_WEBHOOK_SECRET) to queue the run with")
@@ -1248,6 +1266,22 @@ def self_test() -> int:
           d.executor == HOST and d.page_url.endswith("a" * 40 + "-latest3") and d.fallbacks == {}, (d.executor, d.page_url))
     d = decide(with_(stages_file=stages), host_q, ok_post)
     check("line-route/negative control: a latest run needs no channelServed (an instance of before is unchanged)", d.executor == HOST, d)
+    # review of #8418: the FORCED path exempts `latest` too — a line whose host channel is latest keeps its honoured
+    # stages on an instance that predates channelServed (the same rule _decide_on_channel applies)
+    latest_lines = os.path.join(tmp, "latest-delivery-lines.json")
+    with open(latest_lines, "w") as fh:
+        json.dump({"lines": [{"branch": "main3", "buildHostChannel": "latest"}]}, fh)
+    d = decide(L(lines_file=latest_lines), host_q, ok_post, v3_only)
+    check("line-route/a host-forced line on channel latest needs no channelServed: its proven stages stay on the host",
+          d.channel == "latest" and d.stages == {"compile-check": HOST, "gate": HOST} and d.fallbacks == {}, (d.channel, d.stages, d.fallbacks))
+    check("line-route/... and channel_unserved exempts latest, as channel_unroutable does",
+          channel_unserved(with_(channel="latest"), {}) == "" and channel_unserved(with_(channel="latest3"), {}) != "", "")
+    d = decide(L(base_ref="main"), v4_q, ok_post, v3_only)
+    check("line-route/a run whose line has NO declaration while others do routes nothing, and NAMES its line",
+          all(v == HOST_FORCED for v in d.stages.values()) and any("none for this run's line main" in l for l in d.lines), d.lines)
+    d = decide(L(), served_q, ok_post, route_raw({"MeshWeaver.Plugins": {"portal-hosts": proven}}))
+    check("line-route/NEGATIVE: a per-repository entry for a stage build-stages.json does not declare is said, never silently dropped",
+          all(v == HOST_FORCED for v in d.stages.values()) and any("portal-hosts is a stage where a line belongs" in l for l in d.lines), d.lines)
     # The committed routing decision itself holds the bar (no entry that the executor would refuse).
     committed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "build-routing.json")
     if os.path.isfile(committed):
