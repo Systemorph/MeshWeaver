@@ -691,9 +691,12 @@ jobs:
                   || { echo "::error::could not fetch Directory.Build.props at $SCRIPTS_REF"; exit 1; }
                 line_major=$(python3 "$CDLINE" platform-major "$PROPS") \
                   || { echo "$line_major"; echo "::error::the platform major of the line at $SCRIPTS_REF cannot be read — never guessed"; exit 1; }
+                case "$line_major" in
+                  ''|*[!0-9]*) echo "::error::cd-line.py platform-major answered '${line_major}' for the line at $SCRIPTS_REF, which is not a major — never guessed"; exit 1 ;;
+                esac
                 if [ "$wake_major" != "$line_major" ]; then
                   { echo "run=false"; echo "ceiling="; } >> "$GITHUB_OUTPUT"
-                  echo "::notice title=Wake for another line — nothing baked::${EVENT_ACTION:-repository_dispatch} names platform ${WAKE_VERSION} (major ${wake_major}); this call serves the major-${line_major} line at scripts-ref ${SCRIPTS_REF}. Baking this tree against that image would publish it under a framework its own floors refuse. The major-${wake_major} line's own branch bakes for it (policy major-lines-run-separately)."
+                  echo "::notice title=Wake for another line — nothing baked::${EVENT_ACTION:-repository_dispatch} names platform ${WAKE_VERSION} (major ${wake_major}); this call serves the major-${line_major} line at scripts-ref ${SCRIPTS_REF}. Baking this tree against that image would publish it under a framework its own floors refuse, so the wake is skipped and NOTHING bakes it here — no run on the major-${wake_major} line's branch is started by this dispatch (policy major-lines-run-separately)."
                   echo "### epoch leg: current — wake for platform ${WAKE_VERSION} (major ${wake_major}) is another line's; this call serves major ${line_major} at \`${SCRIPTS_REF}\`. Nothing baked." >> "$GITHUB_STEP_SUMMARY"
                   exit 0
                 fi

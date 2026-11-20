@@ -48,14 +48,17 @@ def props(version: str | None) -> str:
 
 
 def run(body: str, *, event: str, version: str = "", line_props: str | None = props("4.0.0"),
-        scripts_ref: str = "main", leg: str = "current", serve_cdline: bool = True) -> dict:
+        scripts_ref: str = "main", leg: str = "current", serve_cdline: bool = True,
+        cdline_text: str | None = None) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         temp = work / "runner-temp"
         served = work / "served"
         temp.mkdir()
         (served / ".github/scripts").mkdir(parents=True)
-        if serve_cdline:
+        if cdline_text is not None:
+            (served / ".github/scripts/cd-line.py").write_text(cdline_text, encoding="utf-8")
+        elif serve_cdline:
             shutil.copy2(CDLINE, served / ".github/scripts/cd-line.py")
         if line_props is not None:
             (served / "Directory.Build.props").write_text(line_props, encoding="utf-8")
@@ -143,6 +146,15 @@ def main() -> int:
     expect("an unfetchable cd-line.py is RED",
            run(body, event="repository_dispatch", version="3.1.13703", serve_cdline=False),
            code=1, contains="could not fetch cd-line.py")
+    expect("a cd-line.py that answers an empty major is RED, never a silent skip",
+           run(body, event="repository_dispatch", version="3.1.13703", cdline_text="print('')\n"),
+           code=1, contains="which is not a major")
+    expect("a cd-line.py that answers a non-number is RED",
+           run(body, event="repository_dispatch", version="3.1.13703", cdline_text="print('four')\n"),
+           code=1, contains="which is not a major")
+    expect("the notice says nothing bakes the other line here",
+           run(body, event="repository_dispatch", version="3.1.13703"),
+           code=0, run_value="false", contains="NOTHING bakes it here")
     expect("an empty scripts-ref is RED on a versioned wake",
            run(body, event="repository_dispatch", version="3.1.13703", scripts_ref=""),
            code=1, contains="cannot be read")

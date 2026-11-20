@@ -149,8 +149,9 @@ The ci-main-red ledgers of all five satellites alternated red and green with the
 (`client_payload.version`) with the major the caller's line declares: `<PlatformVersion>` in core's
 `Directory.Build.props` at the caller's `scripts-ref`, read by `cd-line.py platform-major`. On a
 mismatch it answers `run=false` with a `Wake for another line — nothing baked` notice, and
-`publish-bake` does not run. A version that is not a platform version, an empty `scripts-ref`, or a
-major that cannot be read is RED. Pushes, schedules and a dispatch without a version are not judged
+`publish-bake` does not run: the wake is skipped and nothing bakes it there. A version that is not a
+platform version, an empty `scripts-ref`, or a major that cannot be read (including an empty or
+non-numeric answer from `cd-line.py`) is RED. Pushes, schedules and a dispatch without a version are not judged
 here. `.github/scripts/test-epoch-leg-line.py` executes the real step, with a falsification arm.
 
 What this does not do: it does not bake the other line. A satellite's `main3` tree is baked for the
