@@ -99,7 +99,8 @@ must be positive.
 | `?counts=` | `true` | Show the per-section item counts |
 | `?collapsible=` | `true` | Allow sections to collapse (`false` keeps everything expanded) |
 | `?reactive=` | `true` | Live-update on data changes (moves, renames, new children) without a reload |
-| `?limit=N` | `50` | Items shown per section |
+| `?pageSize=N` | `50` | Hits per **store-side page** — the catalog asks the store for one page and offers *Load more* for the next. Every catalog pages; none loads an unbounded set. Wins over a type's declared page size |
+| `?limit=N` | *(none)* | An extra client-side cap per section (the page is what bounds the list without it) |
 | `?maxRows=N` | `3` | Collapsed rows per section before "show more" |
 | `?maxColumns=N` | `3` | Grid columns |
 | `?title=…` | `Catalog` | Section title shown next to the search bar |
@@ -190,6 +191,58 @@ the whole card.
 Refine with any `With…` of the control (`WithCreateNodeType`/`WithCreateNamespace` for the "+",
 `WithMaxColumns` for a grid). A view that has to COMPUTE something across the set (a total, a KPI)
 computes it beside the catalog, never instead of it.
+
+## A type declares its list
+
+A catalog of hundreds of records is no use as cards. A **NodeType declares how its instances are
+listed** — once, on the type — and every children catalog that lists them honours it:
+
+```json
+"content": {
+  "$type": "NodeTypeDefinition",
+  "listView": {
+    "mode": "Table",
+    "columns": [
+      { "title": "Model",    "field": "content.model" },
+      { "title": "Outcome",  "field": "content.outcome" },
+      { "title": "Wall s",   "field": "content.wallSeconds", "format": "N0" },
+      { "title": "Finished", "field": "content.finishedAt",  "format": "yyyy-MM-dd HH:mm" }
+    ],
+    "pageSize": 50,
+    "sort": "content.finishedAt-desc"
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `mode` | `Cards` (the default — the same as declaring nothing), `List` (one row per instance) or `Table` |
+| `columns` | The table's columns — exactly the `MeshSearchColumn`s of [Table mode](#table-mode--columns-and-a-header-that-sorts): a title and the query selector each cell reads |
+| `pageSize` | Hits per store-side page for a list of this type; `?pageSize=` in the URL wins |
+| `sort` | The default order, a query sort selector applied in the store; a header click replaces it |
+
+Where it applies:
+
+- **Every child of one type.** The `Search` area of a node whose children are ALL of a declaring
+  type renders the whole list that way — a page embedding `@@("area/Search")` over benchmark runs
+  shows a paged table of runs, not a wall of cards.
+- **The type's own catalog.** A NodeType definition's `Search` page (its instances) uses the
+  declaration.
+- **Grouped by type.** With `?groupBy=type`, each declaring type's **section** renders per its
+  declaration while the other sections stay cards — the control carries one
+  `MeshSearchTypeView` per declaring type (`MeshSearchControl.TypeViews`).
+- **The URL still wins.** An explicit `?groupBy=` chooses the shape over a declaration (the section
+  entries still ride along), and an explicit `?pageSize=` beats the declared one.
+
+**How the catalog decides — without reading the children.** An ordinary node's `Search` page is a
+template: the breadcrumbs and a `CatalogList` slot with the skeleton loading shape. The slot asks
+the store WHICH types the catalog lists — one `select:path,nodeType limit:1` probe per distinct type,
+each excluding the types already found (at most eight; past that the listing counts as mixed) — and
+reads each found type's DEFINITION for its `listView`. No child's content is read to decide; the list
+itself is still a query the GUI runs, and the slot re-renders only when the listed types or their
+declarations change. The decision is the pure `MeshNodeLayoutAreas.ApplyTypeViews`.
+
+---
 
 ## Table mode — columns and a header that sorts
 

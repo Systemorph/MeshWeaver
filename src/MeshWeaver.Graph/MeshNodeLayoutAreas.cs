@@ -138,6 +138,12 @@ public static class MeshNodeLayoutAreas
     /// definition; the page around it renders at once.
     /// </summary>
     public const string NodeTypeInstancesArea = "NodeTypeInstances";
+    /// <summary>
+    /// Area name for the slot an ordinary node's <see cref="SearchArea"/> renders its catalog in
+    /// (<see cref="CatalogList"/>) — deferred because how the list renders depends on which NodeTypes
+    /// the catalog lists and what each of them DECLARES (<see cref="NodeTypeDefinition.ListView"/>).
+    /// </summary>
+    public const string CatalogListArea = "CatalogList";
     /// <summary>Area name for the node Files layout area.</summary>
     public const string FilesArea = "Files";
     /// <summary>Area name for the NodeTypes layout area.</summary>
@@ -257,6 +263,7 @@ public static class MeshNodeLayoutAreas
             .WithView(SettingsArea, SettingsLayoutArea.Settings)
             .WithView(SearchArea, Search)
             .WithView(NodeTypeInstancesArea, NodeTypeInstances)
+            .WithView(CatalogListArea, CatalogList)
             .WithView(FilesArea, Files)
             .WithView(ThreadsArea, Threads)
             .WithView(ChatArea, Chat)
@@ -1638,7 +1645,8 @@ public static class MeshNodeLayoutAreas
         // are templates emitted at once: a definition's instance list — whose query is computed
         // from the definition — renders into its own skeleton slot (NodeTypeInstances).
         if (!IsNodeTypeCatalog(host.Hub.Configuration))
-            return Observable.Return<UiControl?>(InstanceCatalog(host, hubPath));
+            return Observable.Return<UiControl?>(
+                CatalogTemplate(host.Hub.Address, hubPath, host.Reference.Id?.ToString()));
         return Observable.Return<UiControl?>(
             NodeTypeCatalogTemplate(host.Hub.Address, hubPath, host.Reference.Id?.ToString()));
     }
@@ -1653,16 +1661,212 @@ public static class MeshNodeLayoutAreas
            || configuration.Get<NodeTypePathHolder>()?.Path == MeshNode.NodeTypePath;
 
     /// <summary>
-    /// The instance-node catalog: this node's own content. Defaults to the re-rooting graph
-    /// navigator: the next populated level below (skipping empty namespace segments) + the
-    /// ancestors above, navigable along the graph's edges. Every knob is still ?param-overridable —
-    /// ?groupBy=tree restores the lazy namespace tree, ?groupBy=flat the grid, etc. (The Space
-    /// "Children" catalog stays on the namespace tree.) A template: the GUI runs the query.
+    /// An ordinary node's catalog page — a TEMPLATE that reads nothing: the breadcrumb trail and a
+    /// <see cref="CatalogListArea"/> slot with the skeleton loading shape. The slot carries the
+    /// page's own query string, so every catalog knob still reaches the list.
     /// </summary>
-    private static UiControl InstanceCatalog(LayoutAreaHost host, string hubPath)
+    /// <param name="address">The node hub's address — the slot renders on the same hub.</param>
+    /// <param name="hubPath">The node's path (the breadcrumb trail).</param>
+    /// <param name="queryString">The Search area's reference id: its query string, forwarded.</param>
+    internal static UiControl CatalogTemplate(object address, string hubPath, string? queryString)
         => WithBreadcrumbs(
-            BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.GraphNavigator)),
+            Controls.LayoutArea(address, CatalogListArea, queryString)
+                .WithSpinnerType(SpinnerType.Skeleton),
             hubPath);
+
+    /// <summary>
+    /// The <see cref="CatalogListArea"/> slot: this node's own content. Defaults to the re-rooting
+    /// graph navigator: the next populated level below (skipping empty namespace segments) + the
+    /// ancestors above, navigable along the graph's edges. Every knob is still ?param-overridable —
+    /// ?groupBy=tree restores the lazy namespace tree, ?groupBy=flat the grid, etc.
+    ///
+    /// <para><b>A type declares its list.</b> Before the control is built, the slot asks WHICH
+    /// NodeTypes the catalog lists — one <c>limit:1 select:path,nodeType</c> probe per distinct type
+    /// (<see cref="TypeProbeQuery"/>), never a read of the children's content — and reads each
+    /// type's <see cref="NodeTypeDefinition.ListView"/> (a structure read of the DEFINITION, the
+    /// way <see cref="NodeTypeInstances"/> reads its own). When every child is of ONE type that
+    /// declares a list, the whole catalog renders that way (a paged table, say); otherwise each
+    /// declaring type's entry rides on the control (<see cref="MeshSearchControl.TypeViews"/>), so a
+    /// catalog grouped by type renders that type's section per its declaration. An explicit
+    /// <c>?groupBy=</c> wins over a declaration. The list itself is still a query the GUI runs.</para>
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="_">The rendering context (unused).</param>
+    /// <returns>The catalog, re-rendered only when the listed types or their declarations change.</returns>
+    [Browsable(false)]
+    public static IObservable<UiControl?> CatalogList(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var options = ReadCatalogOptions(host, MeshSearchRenderMode.GraphNavigator);
+        var catalog = BuildCatalog(hubPath, options);
+        return ObserveListedTypeViews(host, CatalogHiddenQuery(hubPath, options))
+            // The slot sits inside the page's breadcrumb frame (CatalogTemplate): the list alone.
+            .Select(listed => (UiControl?)ApplyTypeViews(catalog, options, listed));
+    }
+
+    /// <summary>The most distinct NodeTypes a catalog probes for; past it the listing counts as mixed.</summary>
+    internal const int MaxProbedTypes = 8;
+
+    /// <summary>
+    /// What a catalog lists, by TYPE: the distinct NodeTypes found (in probe order), whether more
+    /// types may exist past <see cref="MaxProbedTypes"/>, and the declared list view of each type
+    /// that has one.
+    /// </summary>
+    /// <param name="Types">The distinct NodeTypes the catalog's query returns.</param>
+    /// <param name="Truncated">True when the probe stopped at <see cref="MaxProbedTypes"/>.</param>
+    /// <param name="Views">The declared list views, keyed by NodeType (declaring types only).</param>
+    internal sealed record ListedTypes(
+        ImmutableList<string> Types,
+        bool Truncated,
+        ImmutableDictionary<string, NodeTypeListView> Views)
+    {
+        /// <summary>Nothing listed — the catalog renders as it always did.</summary>
+        public static readonly ListedTypes None = new(ImmutableList<string>.Empty, false,
+            ImmutableDictionary<string, NodeTypeListView>.Empty);
+
+        /// <summary>The ONE type every listed node shares, or null when the listing is empty or mixed.</summary>
+        public string? SoleType => Types.Count == 1 && !Truncated ? Types[0] : null;
+
+        /// <summary>Value equality over the collections, so an unchanged probe re-renders nothing.</summary>
+        public bool Equals(ListedTypes? other)
+            => other is not null && Truncated == other.Truncated
+               && Types.SequenceEqual(other.Types, StringComparer.Ordinal)
+               && Views.Count == other.Views.Count
+               && Views.All(kv => other.Views.TryGetValue(kv.Key, out var v) && SameView(kv.Value, v));
+
+        /// <inheritdoc />
+        public override int GetHashCode() => HashCode.Combine(Truncated, Types.Count, Views.Count);
+
+        private static bool SameView(NodeTypeListView a, NodeTypeListView b)
+            => a.Mode == b.Mode && a.PageSize == b.PageSize && a.Sort == b.Sort
+               && (a.Columns ?? []).SequenceEqual(b.Columns ?? []);
+    }
+
+    /// <summary>
+    /// The query that finds the NEXT distinct NodeType of a listing: the catalog's own hidden query,
+    /// every type already found excluded, one row, row columns only (no content). Pure.
+    /// </summary>
+    /// <param name="hiddenQuery">The catalog's hidden query.</param>
+    /// <param name="found">The types already found.</param>
+    internal static string TypeProbeQuery(string hiddenQuery, IEnumerable<string> found)
+        => string.Join(" ", new[] { hiddenQuery }
+            .Concat(found.Select(t => $"-nodeType:{t}"))
+            .Append("select:path,nodeType limit:1"));
+
+    /// <summary>
+    /// Live: the distinct NodeTypes <paramref name="hiddenQuery"/> lists, and each one's declared list
+    /// view. One tiny probe per distinct type (<see cref="TypeProbeQuery"/>), then one read of each
+    /// type's DEFINITION — never of the listed nodes' content.
+    /// </summary>
+    private static IObservable<ListedTypes> ObserveListedTypeViews(LayoutAreaHost host, string hiddenQuery)
+        => ProbeTypes(host, hiddenQuery, ImmutableList<string>.Empty)
+            .Select(probe => probe.Types.Count == 0
+                ? Observable.Return(ListedTypes.None)
+                : probe.Types
+                    .Select(type => ObserveDeclaredListView(host, type).Select(view => (type, view)))
+                    .CombineLatest()
+                    .Select(pairs => new ListedTypes(probe.Types, probe.Truncated,
+                        pairs.SelectMany(p => p.view is { IsDeclared: true } declared
+                                ? [KeyValuePair.Create(p.type, declared)]
+                                : Array.Empty<KeyValuePair<string, NodeTypeListView>>())
+                            .ToImmutableDictionary(StringComparer.Ordinal))))
+            .Switch()
+            .DistinctUntilChanged();
+
+    private static IObservable<(ImmutableList<string> Types, bool Truncated)> ProbeTypes(
+        LayoutAreaHost host, string hiddenQuery, ImmutableList<string> found)
+    {
+        if (found.Count >= MaxProbedTypes)
+            return Observable.Return((found, true));
+        var query = TypeProbeQuery(hiddenQuery, found);
+        return host.Workspace.GetQuery(query, query)
+            .Select(nodes => nodes.Select(n => n.NodeType).FirstOrDefault(t => !string.IsNullOrEmpty(t)))
+            .DistinctUntilChanged()
+            .Select(next => next is null
+                ? Observable.Return((found, false))
+                // A type path that is not one query token cannot be excluded from the next probe
+                // without changing its meaning: stop, and count the listing as mixed.
+                : !IsQueryToken(next)
+                    ? Observable.Return((found, true))
+                    : ProbeTypes(host, hiddenQuery, found.Add(next)))
+            .Switch();
+    }
+
+    /// <summary>
+    /// A NodeType's declared list view: the static registration's when the type is built in, else
+    /// the definition node's — live, so a later edit of the declaration reaches an open catalog.
+    /// Null when the type declares nothing or its definition cannot be read.
+    /// </summary>
+    private static IObservable<NodeTypeListView?> ObserveDeclaredListView(LayoutAreaHost host, string nodeType)
+    {
+        if (!IsQueryToken(nodeType))
+            return Observable.Return<NodeTypeListView?>(null);
+        if (host.Hub.ServiceProvider.FindStaticNode(nodeType)?.Content is NodeTypeDefinition staticDefinition)
+            return Observable.Return(staticDefinition.ListView);
+        var options = host.Hub.JsonSerializerOptions;
+        var query = $"path:{nodeType} nodeType:{MeshNode.NodeTypePath}";
+        return host.Workspace.GetQuery($"listView:{query}", query)
+            .Select(nodes => nodes.FirstOrDefault()?.ContentAs<NodeTypeDefinition>(options)?.ListView);
+    }
+
+    /// <summary>
+    /// Applies what the listed types declare to a catalog. Pure.
+    /// <list type="bullet">
+    ///   <item>An explicit <c>?groupBy=</c> chose the shape: only the per-type section entries ride along.</item>
+    ///   <item>Every listed node of ONE declaring type: the whole catalog takes that type's list view.</item>
+    ///   <item>Otherwise: each declaring type's entry rides on <see cref="MeshSearchControl.TypeViews"/>.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="catalog">The catalog as the URL shaped it.</param>
+    /// <param name="o">The catalog knobs (which of them the URL set explicitly).</param>
+    /// <param name="listed">What the catalog lists, by type.</param>
+    internal static MeshSearchControl ApplyTypeViews(MeshSearchControl catalog, CatalogOptions o, ListedTypes listed)
+    {
+        if (!o.ShapeExplicit && listed.SoleType is { } sole && listed.Views.TryGetValue(sole, out var view))
+            return ApplyListView(catalog, o, view);
+        return listed.Views.IsEmpty
+            ? catalog
+            : catalog.WithTypeViews(listed.Types
+                .Where(listed.Views.ContainsKey)
+                .Select(t => ToTypeView(t, listed.Views[t])));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="value"/> is ONE query token — a path or selector made of letters,
+    /// digits, <c>/ . _ -</c> and nothing else. Authored text (a declared sort, a listed type path)
+    /// is spliced into a query only when it is one, so it can never add clauses of its own. Pure.
+    /// </summary>
+    internal static bool IsQueryToken(string? value)
+        => !string.IsNullOrEmpty(value) && value.All(c => char.IsLetterOrDigit(c) || c is '/' or '.' or '_' or '-');
+
+    /// <summary>A declaration as the per-section entry the view renders a type's section by. Pure.</summary>
+    internal static MeshSearchTypeView ToTypeView(string nodeType, NodeTypeListView view)
+        => new(nodeType, view.RenderMode) { Columns = view.Columns };
+
+    /// <summary>
+    /// The whole catalog in a type's declared list view: its render mode and columns, its page size
+    /// (unless the URL set one), and its default sort appended to the hidden query (the parser keeps
+    /// the LAST <c>sort:</c>, so a header click still wins). Pure.
+    /// </summary>
+    internal static MeshSearchControl ApplyListView(MeshSearchControl catalog, CatalogOptions o, NodeTypeListView view)
+    {
+        var shaped = catalog with
+        {
+            RenderMode = view.RenderMode,
+            Columns = view.Columns is { Count: > 0 } columns ? ImmutableArray.CreateRange(columns) : catalog.Columns,
+            PageSize = o.PageSizeExplicit ? o.PageSize : view.PageSize is > 0 ? view.PageSize : o.PageSize,
+            // Rows and table rows are not a card grid: the collapsed-rows cap (?maxRows × columns)
+            // would show nine of a page and hide the rest behind "Show all". The page bounds them.
+            Sections = view.Mode == NodeTypeListMode.Cards || catalog.Sections is null
+                ? catalog.Sections
+                : catalog.Sections with { MaxRows = null },
+        };
+        // A declared sort that is not one selector token is ignored rather than spliced in: it is
+        // authored text, and anything else would add clauses to every viewer's catalog of the type.
+        return view.Sort?.Trim() is { } sort && IsQueryToken(sort) && catalog.HiddenQuery is string hidden
+            ? shaped with { HiddenQuery = $"{hidden} sort:{sort}" }
+            : shaped;
+    }
 
     /// <summary>
     /// A NodeType definition's catalog page — a TEMPLATE that reads nothing: the breadcrumb trail
@@ -1704,9 +1908,9 @@ public static class MeshNodeLayoutAreas
             .Select(query => (UiControl?)(query is null
                 // No definition to read (yet): the ordinary catalog, as before.
                 ? BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.GraphNavigator))
-                // Instances of a NodeType default to a hierarchical list; every knob is still
-                // ?param-overridable (?groupBy ?searchBar ?maxColumns ?emptyMessage ?title …).
-                : BuildNodeTypeSearch(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.Hierarchical), query)));
+                // Instances of a NodeType default to a hierarchical list — or to the list view the
+                // definition DECLARES; every knob is still ?param-overridable (?groupBy ?searchBar …).
+                : BuildNodeTypeCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.Hierarchical), query)));
     }
 
     /// <summary>
@@ -1715,7 +1919,8 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     /// <param name="HiddenQuery">The query listing the type's instances.</param>
     /// <param name="CreateHref">The create link, pre-filled with the type and its namespaces.</param>
-    internal sealed record NodeTypeCatalogQuery(string HiddenQuery, string CreateHref)
+    /// <param name="ListView">The list view the definition declares for its instances, if any.</param>
+    internal sealed record NodeTypeCatalogQuery(string HiddenQuery, string CreateHref, NodeTypeListView? ListView = null)
     {
         /// <summary>The query and create link for the definition at <paramref name="nodeTypePath"/>.</summary>
         /// <param name="nodeTypePath">The definition node's path.</param>
@@ -1748,8 +1953,24 @@ public static class MeshNodeLayoutAreas
                 createQs += $"&namespace={Uri.EscapeDataString(defaultNs)}";
             if (definition?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
                 createQs += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
-            return new NodeTypeCatalogQuery(hiddenQuery, $"/create?{createQs}");
+            return new NodeTypeCatalogQuery(hiddenQuery, $"/create?{createQs}",
+                definition?.ListView is { IsDeclared: true } declared ? declared : null);
         }
+    }
+
+    /// <summary>
+    /// A NodeType's instance list as the definition declares it (<see cref="NodeTypeCatalogQuery.ListView"/>),
+    /// unless the URL chose the shape. Pure.
+    /// </summary>
+    /// <param name="hubPath">The definition's hub path.</param>
+    /// <param name="typeOpts">The catalog knobs read from the page's query string.</param>
+    /// <param name="query">The definition's query, create link and declared list view.</param>
+    internal static MeshSearchControl BuildNodeTypeCatalog(string hubPath, CatalogOptions typeOpts, NodeTypeCatalogQuery query)
+    {
+        var search = BuildNodeTypeSearch(hubPath, typeOpts, query);
+        return query.ListView is { } view && !typeOpts.ShapeExplicit
+            ? ApplyListView(search, typeOpts, view)
+            : search;
     }
 
     /// <summary>The instance list of a NodeType — a query the GUI runs. Pure.</summary>
@@ -1768,7 +1989,10 @@ public static class MeshNodeLayoutAreas
             .WithShowSearchBox(typeOpts.ShowSearchBox)
             .WithShowEmptyMessage(typeOpts.ShowEmptyMessage)
             .WithMaxColumns(typeOpts.MaxColumns)
+            .WithPageSize(typeOpts.PageSize)
             .WithCreateHref(query.CreateHref);
+        if (typeOpts.ItemLimit is int limit)
+            typeSearch = typeSearch.WithItemLimit(limit);
         if (!string.IsNullOrEmpty(typeOpts.GroupByProperty))
             typeSearch = typeSearch.WithGroupBy(typeOpts.GroupByProperty);
         return typeSearch;
@@ -1828,8 +2052,17 @@ public static class MeshNodeLayoutAreas
         public bool ShowLoadingIndicator { get; init; }
         /// <summary><c>?counts=false</c> hides the per-section counts.</summary>
         public bool SectionCounts { get; init; } = true;
-        /// <summary><c>?limit=N</c> — items per section.</summary>
-        public int ItemLimit { get; init; } = 50;
+        /// <summary><c>?limit=N</c> — a client-side cap on items per section. Null (the default):
+        /// no cap — the store-side page (<see cref="PageSize"/>) is what bounds the list.</summary>
+        public int? ItemLimit { get; init; }
+        /// <summary><c>?pageSize=N</c> — hits per STORE-SIDE page (a "Load more" fetches the next).
+        /// Every catalog pages: none ever loads an unbounded set.</summary>
+        public int PageSize { get; init; } = DefaultCatalogPageSize;
+        /// <summary>Whether the URL set <c>?pageSize=</c> — then it wins over a type's declared page size.</summary>
+        public bool PageSizeExplicit { get; init; }
+        /// <summary>Whether the URL chose the shape (<c>?groupBy=</c>) — then it wins over a type's
+        /// declared list view.</summary>
+        public bool ShapeExplicit { get; init; }
         /// <summary><c>?maxRows=N</c> — collapsed rows per section.</summary>
         public int MaxRows { get; init; } = 3;
         /// <summary><c>?maxColumns=N</c> — grid columns.</summary>
@@ -1865,11 +2098,16 @@ public static class MeshNodeLayoutAreas
     internal static bool DefaultIncludeSubtree(MeshSearchRenderMode mode)
         => mode == MeshSearchRenderMode.NamespaceTree;
 
+    /// <summary>The store-side page size of a catalog when neither the URL nor a type declares one.</summary>
+    public const int DefaultCatalogPageSize = 50;
+
     /// <summary>Reads every catalog knob from the layout area's query string (see <see cref="CatalogOptions"/>).
     /// Booleans accept <c>true/1/yes/on</c> (and their negation by absence); ints must be positive.</summary>
     private static CatalogOptions ReadCatalogOptions(LayoutAreaHost host, MeshSearchRenderMode fallbackMode)
     {
-        var (mode, groupProp) = ResolveCatalogView(host.GetQueryStringParamValue("groupBy")?.Trim(), fallbackMode);
+        var groupBy = host.GetQueryStringParamValue("groupBy")?.Trim();
+        var (mode, groupProp) = ResolveCatalogView(groupBy, fallbackMode);
+        var explicitPageSize = int.TryParse(host.GetQueryStringParamValue("pageSize"), out var ps) && ps > 0;
         return new CatalogOptions
         {
             Mode = mode,
@@ -1890,7 +2128,10 @@ public static class MeshNodeLayoutAreas
             ShowEmptyMessage = ReadBool(host, "emptyMessage", false),
             ShowLoadingIndicator = ReadBool(host, "loading", false),
             SectionCounts = ReadBool(host, "counts", true),
-            ItemLimit = ReadInt(host, "limit", 50),
+            ItemLimit = int.TryParse(host.GetQueryStringParamValue("limit"), out var lim) && lim > 0 ? lim : null,
+            PageSize = explicitPageSize ? ps : DefaultCatalogPageSize,
+            PageSizeExplicit = explicitPageSize,
+            ShapeExplicit = !string.IsNullOrEmpty(groupBy),
             MaxRows = ReadInt(host, "maxRows", 3),
             MaxColumns = ReadInt(host, "maxColumns", 3),
             Collapsible = ReadBool(host, "collapsible", true),
@@ -1926,14 +2167,9 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     internal static MeshSearchControl BuildCatalog(string nodePath, CatalogOptions o)
     {
-        var scope = o.IncludeSubtree ? " scope:subtree" : "";
         var search = Controls.MeshSearch
             .WithTitle(o.Title)
-            // Exclude NodeType definitions — they belong to type admin, not the instance catalog.
-            // is:content, not context:search — this lists a node's children for a person to browse.
-            // It said "search" only to borrow that context's registration filtering, and then still
-            // needed `-nodeType:NodeType` on top because borrowing does not say what you mean.
-            .WithHiddenQuery($"namespace:{nodePath}{scope} is:main is:content")
+            .WithHiddenQuery(CatalogHiddenQuery(nodePath, o))
             .WithVisibleQuery(o.SearchTerm ?? "")
             .WithNamespace(nodePath)
             .WithPlaceholder(o.Placeholder)
@@ -1943,7 +2179,8 @@ public static class MeshNodeLayoutAreas
             .WithShowLoadingIndicator(o.ShowLoadingIndicator)
             .WithRenderMode(o.Mode)
             .WithSectionCounts(o.SectionCounts)
-            .WithItemLimit(o.ItemLimit)
+            // STORE-SIDE paging, always: a catalog never loads an unbounded set (?pageSize=N).
+            .WithPageSize(o.PageSize)
             .WithMaxRows(o.MaxRows)
             .WithMaxColumns(o.MaxColumns)
             .WithCollapsibleSections(o.Collapsible)
@@ -1955,8 +2192,23 @@ public static class MeshNodeLayoutAreas
             .WithIncludeHidden(o.IncludeHidden)
             .WithDrillDownArea(SearchArea)
             .WithCreateHref($"/{nodePath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(nodePath)}");
+        if (o.ItemLimit is int limit)
+            search = search.WithItemLimit(limit);
         return string.IsNullOrEmpty(o.GroupByProperty) ? search : search.WithGroupBy(o.GroupByProperty);
     }
+
+    /// <summary>
+    /// The hidden query of a node's content catalog: its direct children — or its whole subtree
+    /// (<see cref="CatalogOptions.IncludeSubtree"/>) — main content nodes only. Pure.
+    /// </summary>
+    /// <param name="nodePath">The node whose content is listed.</param>
+    /// <param name="o">The catalog knobs.</param>
+    internal static string CatalogHiddenQuery(string nodePath, CatalogOptions o)
+        // Exclude NodeType definitions — they belong to type admin, not the instance catalog.
+        // is:content, not context:search — this lists a node's children for a person to browse.
+        // It said "search" only to borrow that context's registration filtering, and then still
+        // needed `-nodeType:NodeType` on top because borrowing does not say what you mean.
+        => $"namespace:{nodePath}{(o.IncludeSubtree ? " scope:subtree" : "")} is:main is:content";
 
     /// <summary>
     /// Builds a breadcrumb trail for <paramref name="nodePath"/>: each ANCESTOR

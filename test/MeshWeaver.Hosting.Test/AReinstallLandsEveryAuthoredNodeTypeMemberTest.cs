@@ -86,6 +86,12 @@ public sealed class AReinstallLandsEveryAuthoredNodeTypeMemberTest
                 SubjectProperty = ((MeshWeaver.Mesh.Security.PointReadDeclaration?)current)?.SubjectProperty + "-changed",
                 Namespace = "changed",
             };
+        if (type == typeof(NodeTypeListView))
+            return new NodeTypeListView
+            {
+                Mode = NodeTypeListMode.Table,
+                Columns = [new MeshWeaver.Layout.MeshSearchColumn("Changed", "content.changed")],
+            };
         if (type.IsEnum) return Enum.GetValues(type).Cast<object>().First(v => !v.Equals(current ?? Activator.CreateInstance(type)));
         return null;
     }

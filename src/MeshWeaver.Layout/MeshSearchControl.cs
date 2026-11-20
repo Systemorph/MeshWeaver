@@ -268,6 +268,15 @@ public record MeshSearchControl()
     public IReadOnlyList<MeshSearchColumn>? Columns { get; init; }
 
     /// <summary>
+    /// Per-NodeType presentation of a catalog grouped by type: each entry names a type that DECLARES
+    /// its instance list (<c>NodeTypeDefinition.ListView</c>) and how its section renders (see
+    /// <see cref="MeshSearchTypeView"/>). Computed by the catalog from the types it actually lists —
+    /// never from the results' content. Types without an entry keep the control's own presentation.
+    /// Null or empty: every section renders the control's way, as before.
+    /// </summary>
+    public IReadOnlyList<MeshSearchTypeView>? TypeViews { get; init; }
+
+    /// <summary>
     /// Scope tabs rendered as a strip above the search header (see
     /// <see cref="MeshSearchScopeTab"/>): switching swaps the hidden query and (optionally) the
     /// sort choices while the typed search text stays — the scopes SHARE one search bar. Null or
@@ -532,6 +541,11 @@ public record MeshSearchControl()
         // A snapshot, never the caller's array: replacing an element afterwards must not reach
         // back into a control value that has already been built.
         this with { Columns = System.Collections.Immutable.ImmutableArray.Create(columns) };
+
+    /// <summary>Returns a copy with the per-type section presentations set (see <see cref="TypeViews"/>).</summary>
+    /// <param name="views">One entry per NodeType that declares its instance list.</param>
+    public MeshSearchControl WithTypeViews(IEnumerable<MeshSearchTypeView> views) =>
+        this with { TypeViews = System.Collections.Immutable.ImmutableArray.CreateRange(views) };
 
     /// <summary>Returns a copy with the scope-tab strip set (see <see cref="ScopeTabs"/>).</summary>
     /// <param name="tabs">The scopes; the first is initially active and should match <see cref="HiddenQuery"/>.</param>
