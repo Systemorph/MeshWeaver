@@ -256,6 +256,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Communication Hub](CommunicationHub) — one participant registry, one message-type family (approvals, notifications, information requests) and the master-plus-copies fan-out that keeps every inbox query anchored to one schema
 - [Notifications](Notifications)
 - [Notification Retention](NotificationRetention) — the platform's first data-retention pass, and why it is a logon action
+- [Data Retention](DataRetention) — the configurable retention of activities, version history and log-entry rows: per-instance config keys, per-partition rules (pricing tiers), and the bounded sweep that applies them
 - [Agentic AI](AgenticAI)
 - [Script Execution](ScriptExecution)
 - [Agent Framework Stores — mesh nodes behind Microsoft's abstractions](AgentFrameworkStores)
