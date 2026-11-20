@@ -3807,13 +3807,21 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
-    /// Whether a registered <see cref="IStaticRepoSource"/> materializes
-    /// <paramref name="partition"/> from the running image (case-insensitive, as partitions are).
-    /// Reads only each source's <see cref="IStaticRepoSource.Partition"/>; never enumerates nodes.
+    /// Whether a registered <see cref="IStaticRepoSource"/> MIRRORS <paramref name="partition"/>
+    /// from the running image (case-insensitive, as partitions are). Reads only each source's
+    /// <see cref="IStaticRepoSource.Partition"/> and <see cref="IStaticRepoSource.SyncMode"/>; never
+    /// enumerates nodes.
+    ///
+    /// <para>🚨 Only a <see cref="PartitionSyncMode.FullReplace"/> source counts. Its import prunes
+    /// every node the image does not ship, so nothing left behind by an install survives a boot.
+    /// An <see cref="PartitionSyncMode.Additive"/> source (the AI catalogs) keeps nodes it did not
+    /// write, so a leftover module type in such a partition is exactly what the gate exists for, and
+    /// it stays gated.</para>
     /// </summary>
     internal static bool IsMaterializedFromTheImage(IMessageHub hub, string partition) =>
         hub.ServiceProvider.GetServices<IStaticRepoSource>()
-            .Any(source => string.Equals(source.Partition, partition, StringComparison.OrdinalIgnoreCase));
+            .Any(source => source.SyncMode == PartitionSyncMode.FullReplace
+                           && string.Equals(source.Partition, partition, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The partition that holds the install records — one <c>Package</c> node per installed
     /// package at <c>Plugins/{id}</c>, written by the platform installer after the content lands and
