@@ -2618,8 +2618,7 @@ internal static class NodeTypeCompilationHelpers
                         // boot path, and — decisively — NO window in which the node carries a
                         // published CurrentSourceVersions against an unstamped adopted build, which
                         // is the state a release request reads as dirty and recompiles.
-                        var pendingStamp = def.RequestedSourceStampAt is not null;
-
+                        //
                         // 🚨 #2813 — the live CONTENT fingerprint, computed HERE because this is
                         // the one place that already holds the live source nodes, and written in
                         // the SAME update as the tick snapshot so a reader can never see one
@@ -2648,56 +2647,17 @@ internal static class NodeTypeCompilationHelpers
                         // 🚨 #2948 — it is now resolved UPSTREAM (the include closure needs mesh
                         // reads, which cannot happen inside this pure lambda), and it can be NULL:
                         // null means the closure could not be established, NOT that there is
-                        // nothing to hash. The previous value stands in that case — inventing one
-                        // from a short closure is a false refusal.
+                        // nothing to hash. Inventing one from a short closure is a false refusal;
+                        // keeping the previous one beside a MOVED snapshot is the opposite lie
+                        // (#8413) — see PublishSourceSnapshot.
                         var fingerprint = published.Fingerprint;
 
-                        // Idempotent: no-op when CurrentSourceVersions already
-                        // matches the just-computed snapshot. IsDirty is a
-                        // computed property — derives from CurrentSourceVersions
-                        // vs CompiledSources — so no separate flag to write.
-                        // (A pending stamp still has to be consumed, so it never no-ops.)
-                        //
-                        // 🚨 The fingerprint is part of the equality. Without it a node persisted
-                        // before this field existed — snapshot already current, fingerprint null —
-                        // would no-op forever and never acquire one, so the type could never be
-                        // judged again. The condition is what makes the field SELF-HEALING on the
-                        // first activation after an upgrade. An INCONCLUSIVE emission (fingerprint
-                        // null) drops out of the comparison entirely: it has nothing to say about
-                        // the field, so it must neither force a write nor block the snapshot's.
-                        var moduleVersion = published.ModuleVersion;
-                        // #4280 — the include list is part of the equality for the same reason the
-                        // fingerprint is: a node persisted before the field existed must acquire
-                        // it on its first activation, and an inconclusive emission (null) drops out.
-                        var includes = published.Includes;
-                        if (!pendingStamp
-                            && def.CurrentSourceVersions is not null
-                            && DictEquals(def.CurrentSourceVersions, snapshot)
-                            && (fingerprint is null
-                                || string.Equals(
-                                    def.CurrentSourceFingerprint, fingerprint,
-                                    StringComparison.Ordinal))
-                            && (includes is null
-                                || (def.CurrentSourceIncludes is not null
-                                    && def.CurrentSourceIncludes.SequenceEqual(includes, StringComparer.Ordinal)))
-                            && (!moduleVersion.Established
-                                || string.Equals(
-                                    def.CurrentModuleVersion, moduleVersion.Version,
-                                    StringComparison.Ordinal)))
+                        // The equality, the generation rule and the stamp: PublishSourceSnapshot.
+                        var updated = PublishSourceSnapshot(
+                            def, snapshot, fingerprint, published.Includes, published.ModuleVersion,
+                            (d, live) => ApplyAdoptedSourceStampAndReport(d, live, hub, hubPath, logger));
+                        if (updated is null)
                             return curr;
-
-                        var updated = def with
-                        {
-                            CurrentSourceVersions = snapshot,
-                            CurrentSourceFingerprint = fingerprint ?? def.CurrentSourceFingerprint,
-                            CurrentSourceIncludes = includes ?? def.CurrentSourceIncludes,
-                            CurrentModuleVersion = moduleVersion.Established
-                                ? moduleVersion.Version
-                                : def.CurrentModuleVersion,
-                        };
-
-                        if (pendingStamp)
-                            updated = ApplyAdoptedSourceStampAndReport(updated, snapshot, hub, hubPath, logger);
 
                         return curr with { Content = updated };
                     }).Subscribe(
@@ -2708,6 +2668,87 @@ internal static class NodeTypeCompilationHelpers
                 },
             logger,
             "Sources watcher");
+    }
+
+    /// <summary>
+    /// One publication of the sources watcher, as a PURE function: the record the watcher writes
+    /// for a freshly discovered source <paramref name="snapshot"/>, or <c>null</c> when nothing
+    /// changed (a no-op write). A pending adopted-build stamp is fulfilled through
+    /// <paramref name="applyStamp"/> in the same write (#1834).
+    ///
+    /// <para>🚨 <b>One source generation per record</b> (#8413). The fingerprint can be
+    /// INCONCLUSIVE for an emission (<paramref name="fingerprint"/> null: the <c>@@</c>-include
+    /// closure could not be read, #2948). The previous value used to stand beside the NEW
+    /// snapshot, so the record paired today's <see cref="NodeTypeDefinition.CurrentSourceVersions"/>
+    /// with yesterday's <see cref="NodeTypeDefinition.CurrentSourceFingerprint"/>. Every adoption
+    /// judge reads that pair: a bundle baked from the PREVIOUS sources matched the stale
+    /// fingerprint, was stamped <see cref="BuildProvenance.AdoptedVerified"/>, and
+    /// <c>CompiledSources</c> became the new snapshot. The record then read "Up to date" over bytes
+    /// built from the previous source. Now a moved snapshot with an inconclusive fingerprint CLEARS
+    /// the fingerprint (nothing was measured for this generation), and a pending stamp is LEFT
+    /// STANDING. Every judge treats an absent live fingerprint as "cannot judge yet"
+    /// (<see cref="CanJudgeAdoption(NodeTypeDefinition, IReadOnlyDictionary{string, long})"/>), so
+    /// the next conclusive publication decides it. An unchanged snapshot keeps its fingerprint, as
+    /// before, because that value still describes it.</para>
+    /// </summary>
+    /// <param name="def">The owner's current definition.</param>
+    /// <param name="snapshot">The source snapshot just discovered.</param>
+    /// <param name="fingerprint">Its content fingerprint, or null when inconclusive.</param>
+    /// <param name="includes">The resolved include paths, or null when inconclusive.</param>
+    /// <param name="moduleVersion">The partition root's module version reading.</param>
+    /// <param name="applyStamp">The adopted-build stamp judgement.</param>
+    /// <returns>The definition to write, or null for a no-op.</returns>
+    internal static NodeTypeDefinition? PublishSourceSnapshot(
+        NodeTypeDefinition def,
+        IReadOnlyDictionary<string, long> snapshot,
+        string? fingerprint,
+        System.Collections.Immutable.ImmutableList<string>? includes,
+        (string? Version, bool Established) moduleVersion,
+        Func<NodeTypeDefinition, IReadOnlyDictionary<string, long>, NodeTypeDefinition> applyStamp)
+    {
+        var pendingStamp = def.RequestedSourceStampAt is not null;
+        var snapshotMoved = def.CurrentSourceVersions is null
+                            || !DictEquals(def.CurrentSourceVersions, snapshot);
+
+        // Idempotent: no-op when CurrentSourceVersions already matches the just-computed snapshot.
+        // IsDirty is a computed property, so no separate flag to write. (A pending stamp still has
+        // to be consumed, so it never no-ops.)
+        //
+        // The fingerprint is part of the equality: a node persisted before the field existed —
+        // snapshot current, fingerprint null — must acquire one on its first activation. An
+        // INCONCLUSIVE emission (fingerprint null) drops out of the comparison: it has nothing to
+        // say about the field. #4280 — the include list, likewise.
+        if (!pendingStamp
+            && !snapshotMoved
+            && (fingerprint is null
+                || string.Equals(def.CurrentSourceFingerprint, fingerprint, StringComparison.Ordinal))
+            && (includes is null
+                || (def.CurrentSourceIncludes is not null
+                    && def.CurrentSourceIncludes.SequenceEqual(includes, StringComparer.Ordinal)))
+            && (!moduleVersion.Established
+                || string.Equals(def.CurrentModuleVersion, moduleVersion.Version, StringComparison.Ordinal)))
+            return null;
+
+        // 🚨 #8413 — a fingerprint is kept only for the snapshot it was measured over.
+        var inconclusiveMove = fingerprint is null && snapshotMoved;
+        var updated = def with
+        {
+            CurrentSourceVersions = snapshot,
+            CurrentSourceFingerprint = fingerprint
+                ?? (inconclusiveMove ? null : def.CurrentSourceFingerprint),
+            CurrentSourceIncludes = includes
+                ?? (inconclusiveMove ? null : def.CurrentSourceIncludes),
+            CurrentModuleVersion = moduleVersion.Established
+                ? moduleVersion.Version
+                : def.CurrentModuleVersion,
+        };
+
+        // 🚨 #8413 — and a stamp is never judged against a generation nobody measured: it stays
+        // standing for the next conclusive publication (the #4208 deferral, one cause further).
+        if (pendingStamp && !(inconclusiveMove && def.AdoptedSourceFingerprint is { Length: > 0 }))
+            updated = applyStamp(updated, snapshot);
+
+        return updated;
     }
 
     /// <summary>
