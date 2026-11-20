@@ -112,17 +112,17 @@ public class SharedSourcePackageUpdateTest(ITestOutputHelper output) : UpdateSce
             "the installed type must compile from its shared source");
     }
 
-    private async Task<NodeTypeDefinition> AssertRebuilt(NodeTypeDefinition n, string instance)
+    private async Task AssertRebuilt(NodeTypeDefinition n, string instance, string expectedMarker)
     {
-        var n1 = await DefinitionWhere(TypePath,
+        // The wait IS the assertion: it emits only once the record names a build other than N's.
+        await DefinitionWhere(TypePath,
             d => d.CompilationStatus == CompilationStatus.Ok
                  && !d.IsDirty
                  && !string.Equals(d.LatestAssemblyPath, n.LatestAssemblyPath, StringComparison.Ordinal),
             "the update of the shared folder must produce a NEW build of the consumer");
-        n1.LatestAssemblyPath.Should().NotBe(n.LatestAssemblyPath);
         await Recycle(instance);
-        await AssertServes(instance, "N1", "after the dispose the build of the updated shared source serves");
-        return n1;
+        await AssertServes(instance, expectedMarker,
+            "after the dispose the build of the updated shared source serves");
     }
 
     /// <summary>The reported delta: the shared folder AND the type's own Test folder changed.</summary>
@@ -142,7 +142,7 @@ public class SharedSourcePackageUpdateTest(ITestOutputHelper output) : UpdateSce
             .Should().Within(Step + Step).Emit("the delta update must complete",
                 cancellationToken: TestContext.Current.CancellationToken);
 
-        await AssertRebuilt(n, instance);
+        await AssertRebuilt(n, instance, "N1");
     }
 
     /// <summary>A delta that changes ONLY the shared folder — no file under the consumer at all.</summary>
@@ -162,7 +162,7 @@ public class SharedSourcePackageUpdateTest(ITestOutputHelper output) : UpdateSce
             .Should().Within(Step + Step).Emit("the delta update must complete",
                 cancellationToken: TestContext.Current.CancellationToken);
 
-        await AssertRebuilt(n, instance);
+        await AssertRebuilt(n, instance, "N1");
     }
 
     /// <summary>The full re-install of the same change (the fallback the delta takes when it cannot
@@ -181,6 +181,6 @@ public class SharedSourcePackageUpdateTest(ITestOutputHelper output) : UpdateSce
             .Should().Within(Step + Step).Emit("the full update must complete",
                 cancellationToken: TestContext.Current.CancellationToken);
 
-        await AssertRebuilt(n, instance);
+        await AssertRebuilt(n, instance, "N1");
     }
 }
