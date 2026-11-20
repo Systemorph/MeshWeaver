@@ -7,7 +7,12 @@ namespace MeshWeaver.Mesh.Services;
 /// <param name="Path">The node path the version belongs to.</param>
 /// <param name="Version">The version number.</param>
 /// <param name="LastModified">When the version was written.</param>
-public sealed record VersionHistoryRow(string Path, long Version, DateTimeOffset LastModified);
+public sealed record VersionHistoryRow(string Path, long Version, DateTimeOffset LastModified)
+{
+    /// <summary>The node type the version was recorded with, when the store reads it (null when it
+    /// does not). Only <see cref="VersionHistoryDrain"/> consults it.</summary>
+    public string? NodeType { get; init; }
+}
 
 /// <summary>
 /// What a history prune of ONE partition removes. This record is the rule itself, so every store
@@ -90,6 +95,75 @@ public sealed record VersionHistoryPrune(DateTimeOffset Cutoff, int KeepLast, in
             .OrderBy(r => r.LastModified)
             .ThenBy(r => r.Path, StringComparer.Ordinal)
             .ThenBy(r => r.Version)
+            .Take(MaxRows)
+            .ToImmutableList();
+    }
+}
+
+/// <summary>
+/// What a history DRAIN of ONE partition removes: the recorded versions of nodes whose NodeType
+/// declares its OWN version retention — a short window (<c>NodeTypeDefinition.HistoryMaxAge</c>, the
+/// high-churn status types) or none at all (<c>NodeTypeDefinition.KeepsHistory = false</c>). Each such
+/// type maps to a cutoff: versions written before it go. Like <see cref="VersionHistoryPrune"/> this
+/// record is the rule itself, with no clock and no store, so every store drains to the same rule:
+/// <c>FileSystemVersionStore</c> applies <see cref="Select"/> directly and the Postgres store in
+/// MeshWeaver.Plugins states it in SQL. See <c>Doc/Architecture/DataRetention</c> → "Short-lived history".
+///
+/// <para><b>A node is drained by the type of its NEWEST recorded version</b> (matched ordinal, ignoring
+/// case). Every OTHER recorded version of that node written before that type's cutoff goes, whatever
+/// type it was recorded with — the ordinary class's keep-newest floor does not apply. The newest
+/// recorded version always stays, so the current version is never removed, and a node whose newest
+/// version is of an undeclared type is not touched. A version with no timestamp is kept unless the
+/// cutoff is <see cref="KeepsNone"/>: an age that cannot be read is never called old.</para>
+///
+/// <para>At most <see cref="MaxRows"/> rows go per call, so a backlog drains over successive calls
+/// instead of one call becoming a mass delete. WHICH rows go first under the bound is the store's
+/// choice (this rule takes them node by node, oldest version first); the set that has gone once the
+/// backlog is drained is not.</para>
+/// </summary>
+/// <param name="CutoffByType">Each declared node type and the instant before which its versions go.
+/// Empty drains nothing.</param>
+/// <param name="MaxRows">The most rows one call removes.</param>
+public sealed record VersionHistoryDrain(ImmutableDictionary<string, DateTimeOffset> CutoffByType, int MaxRows)
+{
+    /// <summary>The cutoff of a type that keeps no history: every version but the newest goes.</summary>
+    public static readonly DateTimeOffset KeepsNone = DateTimeOffset.MaxValue;
+
+    /// <summary>The cutoff declared for <paramref name="nodeType"/> (ordinal, ignoring case), or null
+    /// when the type declares none.</summary>
+    /// <param name="nodeType">A recorded node type, or null.</param>
+    public DateTimeOffset? CutoffFor(string? nodeType)
+    {
+        if (string.IsNullOrEmpty(nodeType))
+            return null;
+        foreach (var (type, cutoff) in CutoffByType)
+            if (string.Equals(type, nodeType, StringComparison.OrdinalIgnoreCase))
+                return cutoff;
+        return null;
+    }
+
+    /// <summary>
+    /// The rows among <paramref name="rows"/> this drain removes, at most <see cref="MaxRows"/>,
+    /// node by node (ordinal path order), oldest version first within a node. Pure.
+    /// </summary>
+    /// <param name="rows">Recorded versions holding whole nodes. The newest row of each node must
+    /// carry its <see cref="VersionHistoryRow.NodeType"/>; older rows need not.</param>
+    public ImmutableList<VersionHistoryRow> Select(IEnumerable<VersionHistoryRow> rows)
+    {
+        if (MaxRows <= 0 || CutoffByType.IsEmpty)
+            return ImmutableList<VersionHistoryRow>.Empty;
+        return rows
+            .GroupBy(r => r.Path, StringComparer.Ordinal)
+            .OrderBy(node => node.Key, StringComparer.Ordinal)
+            .SelectMany(node =>
+            {
+                var newestFirst = node.OrderByDescending(r => r.Version).ToList();
+                return CutoffFor(newestFirst[0].NodeType) is { } cutoff
+                    ? newestFirst.Skip(1)
+                        .Where(r => cutoff == KeepsNone || (r.LastModified != default && r.LastModified < cutoff))
+                        .OrderBy(r => r.Version)
+                    : Enumerable.Empty<VersionHistoryRow>();
+            })
             .Take(MaxRows)
             .ToImmutableList();
     }

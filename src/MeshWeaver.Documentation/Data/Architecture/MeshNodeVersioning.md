@@ -324,7 +324,7 @@ What the storage layer then does for a node of that type:
 
 | Event | Behaviour |
 |---|---|
-| Write | **No snapshot** is written, and the node's history is **purged** (`IVersionQuery.PurgeVersions`) right after the write — a store that snapshots on its own (the Postgres trigger) has recorded one by then, and a type that opted out *after* history accumulated loses it on its next write. |
+| Write | **No snapshot** is written, and the node's newest `DiscardPerWrite` (8) recorded versions are **discarded** (`IVersionQuery.DiscardNewestVersions`) right after the write — a store that snapshots on its own (the Postgres trigger) has recorded this write's by then. The discard is bounded: a type that opted out *after* history accumulated keeps that backlog until the data-retention sweep drains it (every version but the newest, in bounded batches — [Data Retention → Short-lived history](../DataRetention)), never inside one write. |
 | Delete (`Delete`, `DeleteIfExists`, `DeleteMany`) | The node is read first (its type decides), deleted, then its history is purged. |
 | An ordinary type | Unchanged: every write snapshots, a delete keeps the history (point-in-time restore depends on it). |
 

@@ -66,7 +66,13 @@ public sealed record ResolvedDataRetention(
     string Partition,
     ActivityRetention Activities, string ActivitiesSource,
     VersionRetention Versions, string VersionsSource,
-    LogEntryRetention LogEntries, string LogEntriesSource);
+    LogEntryRetention LogEntries, string LogEntriesSource)
+{
+    /// <summary>The short-lived-history class in force. Always the instance policy's: no rule speaks for
+    /// it, because its windows are declared by the NodeTypes themselves (the instance may override them
+    /// with <c>Retention:ShortLivedHistory:MaxAge</c>), not by a partition's plan.</summary>
+    public ShortLivedHistoryRetention ShortLivedHistory { get; init; } = new();
+}
 
 /// <summary>
 /// Resolves the retention of one partition: the rule chain first, then the instance policy.
@@ -144,6 +150,9 @@ public sealed class DataRetentionResolver
             partition,
             activities, activityAnswer?.Source ?? InstanceSource,
             versions, versionAnswer?.Source ?? InstanceSource,
-            logAnswer?.LogEntries ?? Instance.LogEntries, logAnswer?.Source ?? InstanceSource);
+            logAnswer?.LogEntries ?? Instance.LogEntries, logAnswer?.Source ?? InstanceSource)
+        {
+            ShortLivedHistory = Instance.ShortLivedHistory,
+        };
     }
 }
