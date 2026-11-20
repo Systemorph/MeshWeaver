@@ -1270,6 +1270,27 @@ public sealed record HostingOperatorSpec
         System.Collections.Immutable.ImmutableList<string>.Empty;
 
     /// <summary>
+    /// 🔐 The Key Vault objects a GUEST may write for this record through a setup intake on another installation
+    /// (<c>instance-secret-write</c> with <c>guest: true</c>; MeshWeaver.Plugins <c>InstanceSecretWrites</c> → guest intake): object
+    /// names, each under this record's <see cref="DeploymentContent.KeyVaultSecretPrefix"/>. The control plane refuses a guest
+    /// write for any object not listed here, and PARKS every admitted one for a global administrator's approval: a guest is
+    /// no administrator anywhere. <b>Empty by default</b>: until a record opts in, nothing changes for it. Read by the control
+    /// plane from the record; never rendered into the portal's configuration.
+    /// </summary>
+    [Description("Intake secrets: the vault objects a guest may write for this record through a setup intake")]
+    public System.Collections.Immutable.ImmutableList<string> IntakeSecrets { get; init; } =
+        System.Collections.Immutable.ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// 🔐 The record ids of the installations whose setup intakes may file a guest's write for this record
+    /// (<see cref="IntakeSecrets"/>). The speaking installation is established by its OWN announcement key, and must be listed
+    /// here. <b>Empty by default.</b> Read by the control plane from the record; never rendered into the portal's configuration.
+    /// </summary>
+    [Description("Intake from: the installations whose setup intakes may file a guest's secret write for this record")]
+    public System.Collections.Immutable.ImmutableList<string> IntakeFrom { get; init; } =
+        System.Collections.Immutable.ImmutableList<string>.Empty;
+
+    /// <summary>
     /// THE executor rule, shared by <see cref="DeploymentRecordExtensions.WithOperatorExecutor"/>
     /// and <see cref="DeploymentPortalConfig.PortalConfig"/> (so by both renderers): trimmed and
     /// case-folded to <c>Job</c> or <c>Actions</c>; null for blank, which the portal and the chart

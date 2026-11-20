@@ -59,7 +59,8 @@ public static class DeploymentRecordJson
     /// this deployment's pipelines as — and it never belongs in the described portal's configuration:
     /// a client portal handed the ops client id would advertise, in its own environment, the App that
     /// can start its infrastructure. So the portal-bound projection drops it, and likewise
-    /// <see cref="HostingOperatorSpec.SelfServiceSecrets"/>. Everything else is the
+    /// <see cref="HostingOperatorSpec.SelfServiceSecrets"/> (and the guest-intake lists <see cref="HostingOperatorSpec.IntakeSecrets"/> /
+    /// <see cref="HostingOperatorSpec.IntakeFrom"/>). Everything else is the
     /// record unchanged, and <see cref="Write"/> (the control-side, round-tripping form) keeps the
     /// block — the two are different audiences, not two serialisations of one.
     /// </summary>
@@ -69,7 +70,8 @@ public static class DeploymentRecordJson
             OpsGitHubApp = null,
             // Same audience rule: the self-service secret allow-list is read by the control plane ABOUT this
             // deployment, so its vault object names never travel to the described portal either.
-            Operator = record.Operator is { } op ? op with { SelfServiceSecrets = [] } : null,
+            // The guest-intake allow-lists likewise (they name another installation and vault objects).
+            Operator = record.Operator is { } op ? op with { SelfServiceSecrets = [], IntakeSecrets = [], IntakeFrom = [] } : null,
         };
 
     /// <summary>The <c>Deployment__Record</c> payload handed to the described portal — <see cref="Write"/> over <see cref="ForPortal"/>.</summary>
