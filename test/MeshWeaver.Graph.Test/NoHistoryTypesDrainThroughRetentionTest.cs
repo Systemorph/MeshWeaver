@@ -47,7 +47,7 @@ public class NoHistoryTypesDrainThroughRetentionTest(ITestOutputHelper output) :
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddMeshNodes(new MeshNode(StatusType)
         {
-            NodeType = MeshNode.NodeTypePath,
+            // No NodeType stamp, the shape ThreadSupervisor and DependencyEdgeSet register: the typed content is the declaration.
             Name = "Retention test status",
             Content = new NodeTypeDefinition { KeepsHistory = false },
             HubConfiguration = config => config,

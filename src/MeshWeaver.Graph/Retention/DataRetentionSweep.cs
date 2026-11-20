@@ -218,7 +218,9 @@ public static class DataRetentionSweep
         var access = hub.ServiceProvider.GetService<AccessService>();
         var options = hub.JsonSerializerOptions;
         var builtIn = hub.ServiceProvider.EnumerateStaticNodes()
-            .Where(n => DeclaresNoHistory(n, options))
+            // A C#-registered definition need not stamp NodeType = "NodeType" (the version writer's
+            // own lookup never asks it to); its typed content is the declaration.
+            .Where(n => n.Content is NodeTypeDefinition { KeepsHistory: false } || DeclaresNoHistory(n, options))
             .Select(n => n.Path)
             .ToImmutableList();
         return partitions
