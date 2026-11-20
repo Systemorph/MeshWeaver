@@ -30,8 +30,8 @@ namespace MeshWeaver.Hosting.Test;
 /// </summary>
 public class DeclaredDisabledFlagCompositionTest
 {
-    /// <summary>The reader's current composition — its flags are a BehaviorSubject, so the replay
-    /// arrives inside Subscribe; no blocking bridge.</summary>
+    /// <summary>The reader's current composition — its flags replay their current reading, so the
+    /// replay arrives inside Subscribe; no blocking bridge.</summary>
     internal static FeatureComposition Composed(IFeatureFlags flags)
     {
         FeatureComposition? composition = null;
