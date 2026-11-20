@@ -3780,6 +3780,16 @@ internal static class NodeTypeCompilationHelpers
     /// any registered <see cref="IPartitionSourceTracking"/> answering true. ONE emission. A mesh
     /// with no implementation registered has no notion of tracking (a local mesh, CI's disposable
     /// meshes, the bake host) and answers true: compiling stays legal there, exactly as it was.
+    ///
+    /// <para>🚨 <b>A partition a registered <see cref="IStaticRepoSource"/> materializes is TRACKED</b>
+    /// (MeshWeaver#6930, 2026-11-20). The static-repo import rewrites such a partition from the
+    /// RUNNING image on every boot (<c>Doc</c> above all), so its live source is not an install's
+    /// leftover copy — it is exactly the source the running image ships, which is the one case the
+    /// gate's "a local build would serve old code as if it were current" does not describe. Before
+    /// this, the image's own documentation NodeTypes read "partition 'Doc' tracks no source", and on
+    /// a pod whose shelf held only a bundle from a NEWER platform build (declined on its platform
+    /// range) four of them parked at Error with nothing to serve, measured on the company instance
+    /// right after its roll to platform 4.</para>
     /// </summary>
     internal static IObservable<bool> PartitionTracksSources(IMessageHub hub, string nodeTypePath)
     {
@@ -3787,12 +3797,31 @@ internal static class NodeTypeCompilationHelpers
         if (providers.Length == 0)
             return Observable.Return(true);
         var partition = PartitionOf(nodeTypePath);
+        if (IsMaterializedFromTheImage(hub, partition))
+            return Observable.Return(true);
         return providers
             .Select(p => p.IsTracked(partition).Take(1))
             .CombineLatest()
             .Select(answers => answers.Any(tracked => tracked))
             .Take(1);
     }
+
+    /// <summary>
+    /// Whether a registered <see cref="IStaticRepoSource"/> MIRRORS <paramref name="partition"/>
+    /// from the running image (case-insensitive, as partitions are). Reads only each source's
+    /// <see cref="IStaticRepoSource.Partition"/> and <see cref="IStaticRepoSource.SyncMode"/>; never
+    /// enumerates nodes.
+    ///
+    /// <para>🚨 Only a <see cref="PartitionSyncMode.FullReplace"/> source counts. Its import prunes
+    /// every node the image does not ship, so nothing left behind by an install survives a boot.
+    /// An <see cref="PartitionSyncMode.Additive"/> source (the AI catalogs) keeps nodes it did not
+    /// write, so a leftover module type in such a partition is exactly what the gate exists for, and
+    /// it stays gated.</para>
+    /// </summary>
+    internal static bool IsMaterializedFromTheImage(IMessageHub hub, string partition) =>
+        hub.ServiceProvider.GetServices<IStaticRepoSource>()
+            .Any(source => source.SyncMode == PartitionSyncMode.FullReplace
+                           && string.Equals(source.Partition, partition, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The partition that holds the install records — one <c>Package</c> node per installed
     /// package at <c>Plugins/{id}</c>, written by the platform installer after the content lands and
