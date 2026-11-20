@@ -41,6 +41,9 @@ public class ShortLivedHistoryThroughRetentionTest(ITestOutputHelper output) : M
     /// <summary>A static type that keeps no history at all.</summary>
     private const string EphemeralType = "RetentionTestEphemeral";
 
+    /// <summary>A static type declaring a zero window — a window (clamped to a day), never "keeps none".</summary>
+    private const string ZeroWindowType = "RetentionTestZeroWindow";
+
     private static readonly TimeSpan Week = TimeSpan.FromDays(7);
 
     private readonly string root = Path.Combine(Path.GetTempPath(), $"mw-shortlived-{Guid.NewGuid():N}");
@@ -56,6 +59,13 @@ public class ShortLivedHistoryThroughRetentionTest(ITestOutputHelper output) : M
                 // No NodeType stamp, the shape ThreadSupervisor and DependencyEdgeSet register: the typed content is the declaration.
                 Name = "Retention test status",
                 Content = new NodeTypeDefinition { HistoryMaxAge = Week },
+                HubConfiguration = config => config,
+            },
+            new MeshNode(ZeroWindowType)
+            {
+                NodeType = MeshNode.NodeTypePath,
+                Name = "Retention test zero window",
+                Content = new NodeTypeDefinition { HistoryMaxAge = TimeSpan.Zero },
                 HubConfiguration = config => config,
             },
             new MeshNode(EphemeralType)
@@ -108,6 +118,8 @@ public class ShortLivedHistoryThroughRetentionTest(ITestOutputHelper output) : M
         windows.Should().ContainKey(EphemeralType);
         windows[EphemeralType].Should().Be(DataRetentionSweep.KeepsNoHistory, "keepsHistory:false declares no window at all");
         windows.Should().NotContainKey("Markdown", "an ordinary type declares no window");
+        windows.GetValueOrDefault(ZeroWindowType).Should().Be(ShortLivedHistoryRetention.MinimumMaxAge,
+            "a declared zero is a window clamped to a day — it must never collide with the keeps-none sentinel");
 
         // 7 per pass, in statements of 3: the cap and the batch both hold.
         var resolver = new DataRetentionResolver(Quiet with
@@ -133,7 +145,8 @@ public class ShortLivedHistoryThroughRetentionTest(ITestOutputHelper output) : M
         var now = DateTimeOffset.UtcNow;
         var hub = Mesh.NodeOperationIssuingHub();
         var status = Unique("Override");
-        await Plant(status, StatusType, Enumerable.Range(1, 5).Select(v => (v, now.AddDays(-6 + v))), ct); // 5..1 days old
+        // 4.5, 3.5, 2.5, 1.5 and 0.5 days old: half a day from the 2-day cutoff either side, never on it.
+        await Plant(status, StatusType, Enumerable.Range(1, 5).Select(v => (v, now.AddDays(-5.5 + v))), ct);
         var ephemeral = Unique("Ephemeral");
         await Plant(ephemeral, EphemeralType, Enumerable.Range(1, 4).Select(v => (v, now.AddMinutes(-v))), ct);
         var windows = ImmutableDictionary.CreateRange(StringComparer.OrdinalIgnoreCase, new[]

@@ -68,8 +68,9 @@ public sealed record ResolvedDataRetention(
     VersionRetention Versions, string VersionsSource,
     LogEntryRetention LogEntries, string LogEntriesSource)
 {
-    /// <summary>The no-history class in force. Always the instance policy's: no rule speaks for it,
-    /// because it is no window a plan could vary — it drains history a type declared worthless.</summary>
+    /// <summary>The short-lived-history class in force. Always the instance policy's: no rule speaks for
+    /// it, because its windows are declared by the NodeTypes themselves (the instance may override them
+    /// with <c>Retention:ShortLivedHistory:MaxAge</c>), not by a partition's plan.</summary>
     public ShortLivedHistoryRetention ShortLivedHistory { get; init; } = new();
 }
 

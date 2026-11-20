@@ -202,8 +202,10 @@ public static class DataRetentionSweep
     public const int TypeListLimit = 2000;
 
     /// <summary>The declared window of a type that keeps no history at all
-    /// (<see cref="NodeTypeDefinition.KeepsHistory"/> = <c>false</c>): every version but the newest goes.</summary>
-    public static readonly TimeSpan KeepsNoHistory = TimeSpan.Zero;
+    /// (<see cref="NodeTypeDefinition.KeepsHistory"/> = <c>false</c>): every version but the newest goes.
+    /// A sentinel no declaration produces: a DECLARED <see cref="NodeTypeDefinition.HistoryMaxAge"/> of
+    /// zero or less is a window, clamped to <see cref="ShortLivedHistoryRetention.MinimumMaxAge"/>, never this.</summary>
+    public static readonly TimeSpan KeepsNoHistory = TimeSpan.MinValue;
 
     /// <summary>
     /// The NodeTypes whose definition declares its own version retention, with the declared window:
@@ -284,7 +286,11 @@ public static class DataRetentionSweep
             return definition switch
             {
                 { KeepsHistory: false } => KeepsNoHistory,
-                { HistoryMaxAge: { } window } => window,
+                // Clamped here, so a declared zero (or negative) window can never collide with the
+                // keeps-none sentinel and drain a windowed type to its newest version.
+                { HistoryMaxAge: { } window } => window < ShortLivedHistoryRetention.MinimumMaxAge
+                    ? ShortLivedHistoryRetention.MinimumMaxAge
+                    : window,
                 _ => null,
             };
         }
