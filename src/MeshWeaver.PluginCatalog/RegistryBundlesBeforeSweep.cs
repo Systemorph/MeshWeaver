@@ -131,8 +131,15 @@ public sealed class RegistryBundlesBeforeSweep : IBootBundleSource
                 return Observable.Return(0);
             });
 
-    /// <summary>The ids of the packages whose partition no tracking provider tracks. An unreadable
-    /// answer reads TRACKED — the gate's own rule — so such a package is left to compile as before.</summary>
+    /// <summary>How long the WHOLE tracking-read stage may take, every install record together.
+    /// The reads run in parallel under this one bound, so a hung provider costs boot this much once,
+    /// never once per installed package.</summary>
+    internal static readonly TimeSpan TrackingBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>The ids of the packages whose partition no tracking provider tracks. The records are
+    /// asked in PARALLEL under ONE overall budget (<see cref="TrackingBudget"/>); a record whose answer
+    /// did not arrive inside it, or could not be read, reads TRACKED — the gate's own rule — so its
+    /// package is left to compile as before. Never faults.</summary>
     private IObservable<ImmutableArray<string>> UntrackedOnly(
         ImmutableArray<PackageManifest> records, IPartitionSourceTracking[] tracking)
     {
@@ -144,8 +151,6 @@ public sealed class RegistryBundlesBeforeSweep : IBootBundleSource
                 .CombineLatest()
                 .Select(answers => answers.Any(tracked => tracked))
                 .Take(1)
-                .Timeout(ListingBudget)
-                .DefaultIfEmpty(true)
                 .Catch<bool, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
@@ -154,10 +159,27 @@ public sealed class RegistryBundlesBeforeSweep : IBootBundleSource
                     return Observable.Return(true);
                 })
                 .Select(tracked => (record.Id, Tracked: tracked)))
-            .Concat()
-            .Where(answer => !answer.Tracked)
-            .Select(answer => answer.Id)
+            .Merge()
+            // ONE bound over the whole stage: what answered in time is kept, the rest reads tracked.
+            .TakeUntil(Observable.Timer(TrackingBudget))
             .ToList()
-            .Select(ids => ids.ToImmutableArray());
+            .Do(answers =>
+            {
+                if (answers.Count < records.Length)
+                    logger?.LogWarning(
+                        "Boot bundle adoption: {Missing} of {Total} install record(s) got no tracking answer "
+                        + "within {Budget}s — read as tracked, so those packages are not offered before the sweep",
+                        records.Length - answers.Count, records.Length, TrackingBudget.TotalSeconds);
+            })
+            .Select(answers => answers
+                .Where(answer => !answer.Tracked)
+                .Select(answer => answer.Id)
+                .ToImmutableArray())
+            .Catch<ImmutableArray<string>, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "Boot bundle adoption: the tracking read failed — nothing is offered before the sweep");
+                return Observable.Return(ImmutableArray<string>.Empty);
+            });
     }
 }

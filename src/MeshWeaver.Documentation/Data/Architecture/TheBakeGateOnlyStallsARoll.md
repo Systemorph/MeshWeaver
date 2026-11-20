@@ -364,7 +364,9 @@ Nothing is relaxed:
   counts the type as baked. A pod that regresses on anything else still discards the held stamps.
 - A type that no declared source covers is still parked and still regresses.
 - The pass is bounded per package (`RegistryUpdateReconciler.PerPackageAdoptBudget`) and never
-  faults the warm-up. A registry that cannot be reached adopts nothing, and the sweep judges as
+  faults the warm-up. The tracking read asks every install record in parallel under ONE overall
+  bound (`RegistryBundlesBeforeSweep.TrackingBudget`), so a hung provider costs boot that bound
+  once, never once per package; a record that did not answer in time reads as tracked. A registry that cannot be reached adopts nothing, and the sweep judges as
   before.
 
 A partition that a sync source tracks compiles from that source, so the pass skips it. A first

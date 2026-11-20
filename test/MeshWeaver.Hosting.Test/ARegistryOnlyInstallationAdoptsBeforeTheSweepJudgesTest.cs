@@ -181,12 +181,15 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
             Mesh.ServiceProvider.GetRequiredService<ILogger<DynamicTypePreWarmerHostedService>>());
         await service.StartAsync(ct);
         lifetime.Start();
-        return await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+        var gate = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
             .Select(_ => Gate)
             .Where(g => g.Phase is BakePhase.Complete or BakePhase.Regressed or BakePhase.Faulted)
             .Take(1)
             .Should().Within(TestTimeouts.CrossSilo * 3)
             .Emit("the warm-up reaches a terminal verdict", ct);
+        lifetime.StopRequested.Should().BeFalse(
+            "a refused or admitted warm-up keeps the pod up — no verdict here may ask the host to stop");
+        return gate;
     }
 
     [Fact(Timeout = 300_000)]
@@ -196,7 +199,7 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
         registry.Package = package;
         registry.Bundle = Bundle();
         await SeedInstallation(ct);
-        var bundleMvid = ServedBuildIdentity.OfBytes(AssemblyBytes())!;
+        var bundleMvid = ServedBuildIdentity.OfBytes(AssemblyBytes());
 
         var gate = await WarmUp(ct);
 
@@ -250,7 +253,7 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var path = request.RequestUri!.AbsolutePath;
+            var path = request.RequestUri?.AbsolutePath ?? "";
             if (path.EndsWith("/index.json", StringComparison.Ordinal))
             {
                 var bundles = Package is null
@@ -291,7 +294,17 @@ public class ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest(ITestOutput
         public CancellationToken ApplicationStarted => started.Token;
         public CancellationToken ApplicationStopping => stopping.Token;
         public CancellationToken ApplicationStopped => stopped.Token;
-        public void StopApplication() { }
+        private int stopRequested;
+
+        /// <summary>Whether anything asked the host to stop — the warm-up never may.</summary>
+        public bool StopRequested => Volatile.Read(ref stopRequested) == 1;
+
+        public void StopApplication()
+        {
+            Interlocked.Exchange(ref stopRequested, 1);
+            stopping.Cancel();
+        }
+
         public void Start() => started.Cancel();
 
         public void Dispose()
