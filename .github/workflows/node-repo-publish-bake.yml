@@ -642,6 +642,16 @@ jobs:
   # DECLARATION (core's platform-compatibility.json at scripts-ref), never derived from a replica's
   # report. A `previous` leg with nothing to bake ends here, by name, and `publish-bake` does not run;
   # an unreadable declaration or a break with no ceiling is RED, never "nothing to bake".
+  #
+  # 🚨 A WAKE FOR ANOTHER LINE IS NOT THIS CALL'S TO BAKE (policy `major-lines-run-separately`).
+  # A repository_dispatch always runs the caller's DEFAULT branch, and the control instance routes a
+  # publication to every declared dependent whatever line it was sealed on. So a `main3` (3.x)
+  # publication woke the satellites' `main` (4.x) trees, which baked against the 3.x image and
+  # failed at install on their own 4.x floors (`PackagePlatformFloorException`, every satellite's
+  # ci-main-red ledger, 2026-11-18 → 11-20). The wake's MAJOR (`client_payload.version`) is
+  # compared with the major the caller's line declares (`<PlatformVersion>` in core's
+  # Directory.Build.props at `scripts-ref`, read by `cd-line.py platform-major`); a mismatch ends
+  # here by name, and `publish-bake` does not run. An unreadable version or major is RED.
   epoch-leg:
     name: "Which live framework identity this call bakes for"
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
@@ -662,10 +672,33 @@ jobs:
           PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
           ALLOW_UNPINNED: ${{ inputs.allow-unpinned }}
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          WAKE_VERSION: ${{ github.event.client_payload.version }}
         run: |
           set -euo pipefail
           case "$LEG" in
             current)
+              if [ "${EVENT_NAME:-}" = "repository_dispatch" ] && [ -n "${WAKE_VERSION:-}" ]; then
+                wake_major="${WAKE_VERSION%%.*}"
+                case "$wake_major" in
+                  ''|*[!0-9]*) echo "::error::the ${EVENT_ACTION:-repository_dispatch} payload's client_payload.version '${WAKE_VERSION}' is not a platform version — its line cannot be told, so nothing is baked against it"; exit 1 ;;
+                esac
+                [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the line this call serves cannot be read, so a ${WAKE_VERSION} wake cannot be matched to it"; exit 1; }
+                CDLINE="$RUNNER_TEMP/cd-line.py"; PROPS="$RUNNER_TEMP/Directory.Build.props"
+                "$RUNNER_TEMP/mw-core-file" "$SCRIPTS_REF" ".github/scripts/cd-line.py" > "$CDLINE" \
+                  || { echo "::error::could not fetch cd-line.py at $SCRIPTS_REF"; exit 1; }
+                "$RUNNER_TEMP/mw-core-file" "$SCRIPTS_REF" "Directory.Build.props" > "$PROPS" \
+                  || { echo "::error::could not fetch Directory.Build.props at $SCRIPTS_REF"; exit 1; }
+                line_major=$(python3 "$CDLINE" platform-major "$PROPS") \
+                  || { echo "$line_major"; echo "::error::the platform major of the line at $SCRIPTS_REF cannot be read — never guessed"; exit 1; }
+                if [ "$wake_major" != "$line_major" ]; then
+                  { echo "run=false"; echo "ceiling="; } >> "$GITHUB_OUTPUT"
+                  echo "::notice title=Wake for another line — nothing baked::${EVENT_ACTION:-repository_dispatch} names platform ${WAKE_VERSION} (major ${wake_major}); this call serves the major-${line_major} line at scripts-ref ${SCRIPTS_REF}. Baking this tree against that image would publish it under a framework its own floors refuse. The major-${wake_major} line's own branch bakes for it (policy major-lines-run-separately)."
+                  echo "### epoch leg: current — wake for platform ${WAKE_VERSION} (major ${wake_major}) is another line's; this call serves major ${line_major} at \`${SCRIPTS_REF}\`. Nothing baked." >> "$GITHUB_STEP_SUMMARY"
+                  exit 0
+                fi
+                echo "wake for platform ${WAKE_VERSION} is this line's (major ${line_major} at ${SCRIPTS_REF})"
+              fi
               { echo "run=true"; echo "ceiling="; } >> "$GITHUB_OUTPUT"
               echo "### epoch leg: current — the newest sealed set (or the caller's pin), as always" >> "$GITHUB_STEP_SUMMARY"
               exit 0 ;;
