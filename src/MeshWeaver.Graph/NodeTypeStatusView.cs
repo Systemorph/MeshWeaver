@@ -69,6 +69,54 @@ public sealed record NodeTypeStatusView(
     /// written by the mesh), or empty.</summary>
     public string HoldDetail { get; init; } = "";
 
+    /// <summary>Whether the Create Release button is disabled — true only when the viewer was
+    /// DENIED <see cref="MeshWeaver.Mesh.Security.Permission.Compile"/> on the type (MeshWeaver#8412).
+    /// See <see cref="ForViewer"/>.</summary>
+    public bool ReleaseDisabled { get; init; }
+
+    /// <summary>Why the compile and release buttons are disabled for this viewer, or empty when the
+    /// viewer may compile (or the check has not answered yet).</summary>
+    public string CompileDeniedHint { get; init; } = "";
+
+    /// <summary>The <see cref="CompileDeniedHint"/> line's style — hidden unless the viewer was denied.</summary>
+    public string CompileDeniedHintStyle { get; init; } = Hidden;
+
+    /// <summary>The partition a NodeType path lives in — its first segment, or the path itself when it
+    /// has none. The ONE derivation behind the compile-denied hint on every page that shows it.</summary>
+    /// <param name="nodeTypePath">The type's path.</param>
+    internal static string PartitionOf(string nodeTypePath)
+        => nodeTypePath.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? nodeTypePath;
+
+    /// <summary>
+    /// Folds the VIEWER's <see cref="MeshWeaver.Mesh.Security.Permission.Compile"/> verdict into the
+    /// projection (MeshWeaver#8412): a viewer the release request would refuse is not offered an
+    /// enabled compile or release button — both are disabled and the line under them says why. Pure.
+    ///
+    /// <para>The verdict is the one the release request itself enforces
+    /// (<see cref="NodeTypeReleaseExtensions.ObserveCompilePermission"/>), so the button and the
+    /// click can never disagree. Only a DENIAL disables: while the check has not answered
+    /// (<paramref name="compile"/> is <c>null</c>) or answered no verdict
+    /// (<see cref="MeshWeaver.Mesh.Security.PermissionCheckOutcome.IsUndetermined"/>) the buttons stay
+    /// as the compile state decides, and a click re-checks and reports that honestly — a degraded
+    /// fold must not read as "you may not compile this" (#974).</para>
+    /// </summary>
+    /// <param name="compile">The viewer's Compile verdict on the type, or <c>null</c> while pending.</param>
+    /// <param name="nodeTypePath">The type's path — its first segment names the partition the hint points to.</param>
+    /// <param name="locale">The viewer's locale.</param>
+    public NodeTypeStatusView ForViewer(
+        MeshWeaver.Mesh.Security.PermissionCheckOutcome? compile, string nodeTypePath, string? locale)
+    {
+        if (compile is null || compile.IsGranted || compile.IsUndetermined)
+            return this;
+        return this with
+        {
+            CompileDisabled = true,
+            ReleaseDisabled = true,
+            CompileDeniedHint = LocalizationCatalog.Get("ui.compileNotPermitted", locale, PartitionOf(nodeTypePath)),
+            CompileDeniedHintStyle = "color: var(--neutral-foreground-hint); font-size: 12px;",
+        };
+    }
+
     /// <summary>The id under the layout area's <c>/data</c> the projection is published at.</summary>
     public const string DataId = "nodeTypeStatus";
 

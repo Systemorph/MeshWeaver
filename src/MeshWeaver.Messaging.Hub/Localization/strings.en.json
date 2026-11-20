@@ -799,6 +799,7 @@
   "ui.generate": "Generate",
   "ui.regenerate": "Regenerate",
   "ui.recompile": "Recompile",
+  "ui.compileNotPermitted": "You cannot compile or release this NodeType: that needs the Compile permission on it, which you do not hold. Ask an administrator of the partition '{0}' to assign you a role that carries Compile — in the default role setup, Editor and Admin do.",
   "ui.invite": "Invite",
   "ui.invitePersonalMessage": "Personal message (optional)",
   "ui.invitePersonalMessageHint": "A few words for the invitation email",
