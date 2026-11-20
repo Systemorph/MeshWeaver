@@ -492,11 +492,20 @@ public sealed class DynamicTypePreWarmerHostedService(
         // kept the adoptions. Re-run, the sweep would overlay those retained adoptions, classify the
         // types as baked, and admit the pod with the shared records still naming the old builds.
         // Seeding again re-offers the stamps, held until the re-run's verdict exactly as at boot.
+        // 🚨 THIRD STAGE — every bundle source the deployment DECLARES beyond the two on disk (the
+        // plugin catalog's registries: IBootBundleSource). The sweep below judges an untracked
+        // module type by whether a bundle names it; a source that is offered only AFTER the bake
+        // (the default install, sequenced on PreWarmCompletion) answered "no" for every type it
+        // carries, the sweep refused readiness on them, and the publication gate then refused the
+        // late adoption because readiness was refused — a deadlock no restart could leave. Offered
+        // here, the adoption is held (provisional) or written (admitted) like the two above.
         IObservable<int> SeedBundles() =>
             (closedTypeSet ? Observable.Return(0)
                 : ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
             .SelectMany(_ => closedTypeSet ? Observable.Return(0)
-                : ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger));
+                : ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger))
+            .SelectMany(_ => closedTypeSet ? Observable.Return(0)
+                : BootBundleSources.SeedAll(mesh, logger));
         var seeded = (importSettled?.Settled ?? Observable.Return(Unit.Default))
             .Do(_ => progress?.Invoke(closedTypeSet
                 ? $"{ClosedTypeSet.ConfigKey}=true — no prebuilt bundle is adopted onto a database NodeType"

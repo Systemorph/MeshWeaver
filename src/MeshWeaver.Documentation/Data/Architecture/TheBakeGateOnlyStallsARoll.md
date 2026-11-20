@@ -1,7 +1,7 @@
 ---
 Name: The Bake Gate Only Stalls a Roll
 Category: Architecture
-Description: Why the NodeType bake readiness gate took the control instance fully down, the two rules that now make a refusal possible only on an image that is newer than the build it would be protecting, why its verdict is read by readiness alone and never by the startup probe, and how a sweep a store outage faulted is re-run on the same pod.
+Description: Why the NodeType bake readiness gate took the control instance fully down, the two rules that now make a refusal possible only on an image that is newer than the build it would be protecting, why its verdict is read by readiness alone and never by the startup probe, how a sweep a store outage faulted is re-run on the same pod, and why every declared bundle source is offered before the sweep judges a type.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>
 ---
 
@@ -313,6 +313,76 @@ same mesh passes. A third case shows a non-transient fault is not re-run.
 The host's readiness message (`NodeTypeBakeHealthCheck`, in the MeshWeaver.Plugins host) still
 ends "A restart re-runs the sweep". For a transient fault the gate's own detail, which that
 message carries, now names the re-run that is actually pending.
+
+## A registry-only installation adopts before the sweep judges
+
+On 2026-11-20 the dev instance's first platform-4 pod never became Ready. This instance installs
+its packages from a plugin registry only (`PluginCatalog:Registries`). Its record carries no
+`bundles` block, so no `bundle-fetch` init container fills a published root
+([Plugin Bundles in the Registry](../PluginBundlesInTheRegistry)). It syncs none of the
+packages' partitions. Its Loki lines show the sequence:
+
+1. 08:30:30Z: the warm-up starts.
+2. During the sweep, every module type in those partitions is parked by the untracked-module gate
+   ([#3583](https://github.com/Systemorph/MeshWeaver/issues/3583)) with
+   `no prebuilt bundle for framework c004e001/linux-x64 names this type`. Its dependents read
+   `UpstreamFailed`.
+3. 08:42:10Z: `warm-up complete … compileErrors=30`, then
+   `REFUSING READINESS — 53 NodeType(s) regressed on this image`.
+4. From 08:42:39Z: the default install's bundle client adopts, `Bundle for Store: adopted 0/25`.
+   Every stamp is refused: `MeshPublicationGate: REFUSING to publish 'prebuilt adoption stamp …' —
+   this process FAILED its own validation`.
+
+The registry held a sealed publication for that identity the whole time.
+
+**Why the adoption came last.** The boot seeding offers two bundle sources before the sweep
+enumerates: the image's `prebuilt/` shelf and a registry-fed published root. A registry the
+deployment declares only in `PluginCatalog:Registries` is read by `PluginBundleClient`, and the
+only boot pass that called it is the default install. That pass is sequenced after the bake on
+purpose (`PreWarmCompletion`, #1114), because it writes package roots through per-node hubs. So the
+sweep asked "does a bundle name this type?" before the one source that had the bundle was asked.
+It counted every such type as a regression. The publication gate then refused the late adoption
+because readiness had been refused, and readiness could never recover without that adoption. Each
+step was correct alone.
+
+**The fix: every declared bundle source is offered before the sweep.** `IBootBundleSource`
+(MeshWeaver.Hosting) is the third stage of the boot seeding, after the image's bundles and the
+published root (`DynamicTypePreWarmerHostedService.SeedBundles`). The plugin catalog registers
+`RegistryBundlesBeforeSweep`. For every installed package (`Plugins/<id>` install record) whose
+partition no `IPartitionSourceTracking` provider tracks, it calls `PluginBundleClient.Adopt` once
+per declared registry. That is the set the untracked-module gate would otherwise park.
+
+The invariant this restores: **the sweep judges a type only after every bundle source the
+deployment declares has been offered for it.**
+
+Nothing is relaxed:
+
+- The adoption is an ordinary `PrebuiltAssemblySeeder` adoption with the same framework-identity,
+  platform-range and source-fingerprint checks. Bytes from a newer platform are still declined.
+- On a provisional pod the shared stamp is held by the publication gate and released only when the
+  bake passes. This process's own `NodeTypeAdoptionRegistry` carries the adoption, so the sweep
+  counts the type as baked. A pod that regresses on anything else still discards the held stamps.
+- A type that no declared source covers is still parked and still regresses.
+- The pass is bounded per package (`RegistryUpdateReconciler.PerPackageAdoptBudget`) and never
+  faults the warm-up. A registry that cannot be reached adopts nothing, and the sweep judges as
+  before.
+
+A partition that a sync source tracks compiles from that source, so the pass skips it. A first
+boot has no install record yet, so the pass adopts nothing and the default install adopts after
+the bake, as before. A mesh with no tracking seam never parks, so the pass does not run there.
+
+The regression test is `ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest`
+(MeshWeaver.Hosting.Test). It runs the real hosted warm-up with an armed gate, a real install
+record, an untracked partition and the plugin catalog's own registration. The registry's HTTP
+endpoint serves a `BundleWriter` bundle for the live identity. The positive case asserts the gate
+lands on `Complete`, and that the held stamp is released on admission. The negative control serves
+an index that names no bundle for the package, and the gate must still regress on the type.
+
+**Still open.** If the registry cannot be reached while the pod boots, the same deadlock forms. The
+types regress, and a later adoption is refused because the pod was refused. Recovering from that
+needs a governed `Restart` once the registry answers. Adopting sealed bytes on a refused pod whose
+only regressions are those very types would close it, but that is a change to the admission rule,
+and this fix does not make it.
 
 ## What this does not cover
 
