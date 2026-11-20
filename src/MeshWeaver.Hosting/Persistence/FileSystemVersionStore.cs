@@ -198,66 +198,157 @@ public class FileSystemVersionStore : IVersionQuery
     public IObservable<VersionHistoryPruneOutcome> PruneHistory(string partition, VersionHistoryPrune prune)
         // Cold (Defer): a prune is a destructive act and must happen on Subscribe, never on call.
         => Observable.Defer(() => _ioPool.RunBlocking(ct =>
+            DeleteSelected(CollectPartitionRows(partition, ct), prune.Select, ct)));
+
+    /// <inheritdoc />
+    /// <remarks>Walks the partition's snapshots exactly like <see cref="PruneHistory"/>, reads the
+    /// node type of each node's NEWEST snapshot (the only row <see cref="VersionHistoryDrain"/>
+    /// classifies a node by — one file read per node, not per version), and deletes exactly the
+    /// files <see cref="VersionHistoryDrain.Select"/> selects.</remarks>
+    public IObservable<VersionHistoryPruneOutcome> DrainHistory(string partition, VersionHistoryDrain drain)
+        // Cold (Defer): a drain is a destructive act and must happen on Subscribe, never on call.
+        => Observable.Defer(() => _ioPool.RunBlocking(ct =>
         {
-            var root = partition.Trim();
-            // A single path token only: '.', '..', separators and query grammar would walk (and
-            // delete under) a directory that is not this partition's.
-            if (!VersionHistoryPrune.IsPartitionToken(root))
-                throw new ArgumentException(
-                    $"'{partition}' is not a single partition token; refusing to prune its history", nameof(partition));
-            var partitionDirectory = Path.GetFullPath(Path.Combine(_versionsDirectory, root));
-            var versionsRoot = Path.GetFullPath(_versionsDirectory);
-            if (!partitionDirectory.StartsWith(versionsRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-                throw new ArgumentException(
-                    $"'{partition}' resolves outside the version store; refusing to prune its history", nameof(partition));
-
-            var rows = new List<(VersionHistoryRow Row, string File)>();
-            void Collect(string dir, string ns, SearchOption option, Func<string, bool> accept)
-            {
-                if (!Directory.Exists(dir))
-                    return;
-                foreach (var file in Directory.EnumerateFiles(dir, "*.json", option))
+            var rows = CollectPartitionRows(partition, ct);
+            if (drain.MaxRows <= 0 || drain.NodeTypes.IsEmpty)
+                return VersionHistoryPruneOutcome.Pruned(0);
+            var typed = rows
+                .GroupBy(r => r.Row.Path, StringComparer.Ordinal)
+                .SelectMany(node =>
                 {
-                    ct.ThrowIfCancellationRequested();
-                    var name = Path.GetFileNameWithoutExtension(file);
-                    var underscore = name.LastIndexOf('_');
-                    if (underscore <= 0 || !long.TryParse(name[(underscore + 1)..], out var version))
-                        continue;
-                    var id = name[..underscore];
-                    if (!accept(id))
-                        continue;
-                    // A file EnumerateFiles yields always has a directory; a null here is a file
-                    // we cannot place under a node, so it is not a row this prune may touch.
-                    if (Path.GetDirectoryName(file) is not { } fileDirectory)
-                        continue;
-                    var relativeDir = Path.GetRelativePath(_versionsDirectory, fileDirectory)
-                        .Replace(Path.DirectorySeparatorChar, '/');
-                    var nodeNs = relativeDir == "." ? ns : relativeDir;
-                    var path = string.IsNullOrEmpty(nodeNs) ? id : $"{nodeNs}/{id}";
-                    rows.Add((new VersionHistoryRow(path, version, File.GetLastWriteTimeUtc(file)), file));
-                }
-            }
+                    var newest = node.MaxBy(r => r.Row.Version);
+                    return node.Select(r => ReferenceEquals(r.File, newest.File)
+                        ? (r.Row with { NodeType = ReadNodeType(r.File) }, r.File)
+                        : r);
+                })
+                .ToList();
+            return DeleteSelected(typed, drain.Select, ct);
+        }));
 
-            // The partition root node itself (namespace "") and everything below it.
-            Collect(_versionsDirectory, "", SearchOption.TopDirectoryOnly,
-                id => string.Equals(id, root, StringComparison.OrdinalIgnoreCase));
-            Collect(partitionDirectory, root, SearchOption.AllDirectories, _ => true);
+    /// <inheritdoc />
+    /// <remarks>Deletes the node's <paramref name="maxRows"/> highest-numbered
+    /// <c>{id}_{version}.json</c> snapshots, matched like <see cref="PurgeVersions"/> (a sibling whose
+    /// id merely starts with this one is never touched).</remarks>
+    public IObservable<bool> DiscardNewestVersions(string path, int maxRows)
+        // Cold (Defer): a discard is a destructive act and must happen on Subscribe, never on call.
+        => Observable.Defer(() => _ioPool.RunBlocking(ct =>
+        {
+            var (ns, id) = SplitPath(path);
+            var dir = string.IsNullOrEmpty(ns)
+                ? _versionsDirectory
+                : Path.Combine(_versionsDirectory, ns.Replace('/', Path.DirectorySeparatorChar));
+            if (maxRows <= 0 || !Directory.Exists(dir))
+                return true;
 
-            var files = rows.ToLookup(r => (r.Row.Path, r.Row.Version), r => r.File);
-            var removed = 0;
-            foreach (var row in prune.Select(rows.Select(r => r.Row)))
+            var newest = Directory.GetFiles(dir, $"{id}_*.json")
+                .Select(file => (File: file, Parsed: long.TryParse(Path.GetFileNameWithoutExtension(file)[(id.Length + 1)..], out var v), Version: v))
+                .Where(f => f.Parsed)
+                .OrderByDescending(f => f.Version)
+                .Take(maxRows);
+            foreach (var file in newest)
             {
                 ct.ThrowIfCancellationRequested();
-                foreach (var file in files[(row.Path, row.Version)])
-                {
-                    if (!File.Exists(file))
-                        continue;
-                    File.Delete(file);
-                    removed++;
-                }
+                File.Delete(file.File);
             }
-            return VersionHistoryPruneOutcome.Pruned(removed);
+            return true;
         }));
+
+    /// <summary>The node type recorded in one snapshot file, or null when it cannot be read (a
+    /// node whose newest snapshot is unreadable is then not drained: fail closed).</summary>
+    private static string? ReadNodeType(string file)
+    {
+        try
+        {
+            using var stream = File.OpenRead(file);
+            using var document = JsonDocument.Parse(stream);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                   && document.RootElement.EnumerateObject()
+                       .FirstOrDefault(p => string.Equals(p.Name, "nodeType", StringComparison.OrdinalIgnoreCase))
+                       .Value is { ValueKind: JsonValueKind.String } nodeType
+                ? nodeType.GetString()
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Deletes the files of the rows <paramref name="select"/> picks; emits how many went.</summary>
+    private static VersionHistoryPruneOutcome DeleteSelected(
+        IReadOnlyList<(VersionHistoryRow Row, string File)> rows,
+        Func<IEnumerable<VersionHistoryRow>, System.Collections.Immutable.ImmutableList<VersionHistoryRow>> select,
+        CancellationToken ct)
+    {
+        var files = rows.ToLookup(r => (r.Row.Path, r.Row.Version), r => r.File);
+        var removed = 0;
+        foreach (var row in select(rows.Select(r => r.Row)))
+        {
+            ct.ThrowIfCancellationRequested();
+            foreach (var file in files[(row.Path, row.Version)])
+            {
+                if (!File.Exists(file))
+                    continue;
+                File.Delete(file);
+                removed++;
+            }
+        }
+        return VersionHistoryPruneOutcome.Pruned(removed);
+    }
+
+    /// <summary>
+    /// Every snapshot of <paramref name="partition"/> with its file: <c>.versions/{partition}/**</c>,
+    /// plus the partition root's own <c>{partition}_{version}.json</c> files at the top of
+    /// <c>.versions</c>. Refuses a name that is not one partition token or that resolves outside the
+    /// store, because the caller deletes under what this walks.
+    /// </summary>
+    private List<(VersionHistoryRow Row, string File)> CollectPartitionRows(string partition, CancellationToken ct)
+    {
+        var root = partition.Trim();
+        // A single path token only: '.', '..', separators and query grammar would walk (and
+        // delete under) a directory that is not this partition's.
+        if (!VersionHistoryPrune.IsPartitionToken(root))
+            throw new ArgumentException(
+                $"'{partition}' is not a single partition token; refusing to prune its history", nameof(partition));
+        var partitionDirectory = Path.GetFullPath(Path.Combine(_versionsDirectory, root));
+        var versionsRoot = Path.GetFullPath(_versionsDirectory);
+        if (!partitionDirectory.StartsWith(versionsRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            throw new ArgumentException(
+                $"'{partition}' resolves outside the version store; refusing to prune its history", nameof(partition));
+
+        var rows = new List<(VersionHistoryRow Row, string File)>();
+        void Collect(string dir, string ns, SearchOption option, Func<string, bool> accept)
+        {
+            if (!Directory.Exists(dir))
+                return;
+            foreach (var file in Directory.EnumerateFiles(dir, "*.json", option))
+            {
+                ct.ThrowIfCancellationRequested();
+                var name = Path.GetFileNameWithoutExtension(file);
+                var underscore = name.LastIndexOf('_');
+                if (underscore <= 0 || !long.TryParse(name[(underscore + 1)..], out var version))
+                    continue;
+                var id = name[..underscore];
+                if (!accept(id))
+                    continue;
+                // A file EnumerateFiles yields always has a directory; a null here is a file
+                // we cannot place under a node, so it is not a row this prune may touch.
+                if (Path.GetDirectoryName(file) is not { } fileDirectory)
+                    continue;
+                var relativeDir = Path.GetRelativePath(_versionsDirectory, fileDirectory)
+                    .Replace(Path.DirectorySeparatorChar, '/');
+                var nodeNs = relativeDir == "." ? ns : relativeDir;
+                var path = string.IsNullOrEmpty(nodeNs) ? id : $"{nodeNs}/{id}";
+                rows.Add((new VersionHistoryRow(path, version, File.GetLastWriteTimeUtc(file)), file));
+            }
+        }
+
+        // The partition root node itself (namespace "") and everything below it.
+        Collect(_versionsDirectory, "", SearchOption.TopDirectoryOnly,
+            id => string.Equals(id, root, StringComparison.OrdinalIgnoreCase));
+        Collect(partitionDirectory, root, SearchOption.AllDirectories, _ => true);
+        return rows;
+    }
 
     private string? GetVersionFilePath(string path, long version)
     {

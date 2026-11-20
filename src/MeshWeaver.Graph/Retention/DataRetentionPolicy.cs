@@ -115,6 +115,37 @@ public sealed record VersionRetention
 }
 
 /// <summary>
+/// The history of NodeTypes that keep NONE (<see cref="NodeTypeDefinition.KeepsHistory"/> =
+/// <c>false</c>): high-churn status, ledger and heartbeat nodes whose every write would otherwise be
+/// a full copy in the version store. Such a type records nothing new once it declares so (the
+/// storage layer discards each write's snapshot); this class drains what it recorded BEFORE, through
+/// <see cref="IVersionQuery.DrainHistory"/> and the rule <see cref="VersionHistoryDrain"/>: every
+/// recorded version of such a node but its newest. No age window applies — the type declared that
+/// its history has no value. One retention class of <see cref="DataRetentionPolicy"/>.
+///
+/// <para>The class has its OWN cap, larger than the version class's, because its backlog is
+/// measured in millions of rows per partition (see <c>Doc/Architecture/DataRetention</c> → "Types
+/// that keep no history" for the measurement the default is derived from). It is spent in
+/// statements of at most <see cref="BatchSize"/> rows, one after another, so no single statement
+/// deletes more than the version class already does in one.</para>
+/// </summary>
+public sealed record NoHistoryRetention
+{
+    /// <summary>Whether this class removes anything.</summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>The most recorded versions one pass removes from one partition. Shipped: 200 000.</summary>
+    public int MaxDeletionsPerRun { get; init; } = 200_000;
+
+    /// <summary>The most rows one store call (one statement) removes. Shipped: 5 000, the version
+    /// class's per-pass cap.</summary>
+    public int BatchSize { get; init; } = 5_000;
+
+    /// <summary>The batch actually used: never above <see cref="MaxDeletionsPerRun"/>, never below 1.</summary>
+    public int EffectiveBatchSize => Math.Max(1, Math.Min(BatchSize, MaxDeletionsPerRun));
+}
+
+/// <summary>
 /// How long LOG ENTRY rows are kept: the rows a Logs instance action writes (node type
 /// <c>Hosting/LogEntry</c> by default, under <c>Ops/Logs</c> and <c>Ops/Actions/*/rows-*</c>). Each
 /// is the output of one log query, read when the query is run; nothing links to it later. One
@@ -190,6 +221,9 @@ public sealed record DataRetentionPolicy
     /// <summary>Config prefix of the log-entry class (<c>:Enabled</c>, <c>:MaxAge</c>, <c>:NodeType</c>, <c>:MaxDeletionsPerRun</c>).</summary>
     public const string LogEntriesSection = Section + ":LogEntries";
 
+    /// <summary>Config prefix of the no-history class (<c>:Enabled</c>, <c>:MaxDeletionsPerRun</c>, <c>:BatchSize</c>).</summary>
+    public const string NoHistorySection = Section + ":NoHistory";
+
     /// <summary>The smallest interval a configured value may set.</summary>
     public static readonly TimeSpan MinimumInterval = TimeSpan.FromMinutes(10);
 
@@ -213,6 +247,9 @@ public sealed record DataRetentionPolicy
 
     /// <summary>Log-entry rows.</summary>
     public LogEntryRetention LogEntries { get; init; } = new();
+
+    /// <summary>The history of NodeTypes that keep none.</summary>
+    public NoHistoryRetention NoHistory { get; init; } = new();
 
     /// <summary>
     /// Reads the policy from configuration. Every key falls back to its default when absent or
@@ -252,7 +289,12 @@ public sealed record DataRetentionPolicy
             l = l with { NodeType = nodeType.Trim() };
         if (Count(configuration, LogEntriesSection + ":MaxDeletionsPerRun") is { } lMax) l = l with { MaxDeletionsPerRun = lMax };
 
-        return policy with { Activities = a, Versions = v, LogEntries = l };
+        var h = policy.NoHistory;
+        if (Bool(configuration, NoHistorySection + ":Enabled") is { } hOn) h = h with { Enabled = hOn };
+        if (Count(configuration, NoHistorySection + ":MaxDeletionsPerRun") is { } hMax) h = h with { MaxDeletionsPerRun = hMax };
+        if (Count(configuration, NoHistorySection + ":BatchSize") is { } hBatch) h = h with { BatchSize = hBatch };
+
+        return policy with { Activities = a, Versions = v, LogEntries = l, NoHistory = h };
     }
 
     private static TimeSpan Max(TimeSpan value, TimeSpan floor) => value < floor ? floor : value;
