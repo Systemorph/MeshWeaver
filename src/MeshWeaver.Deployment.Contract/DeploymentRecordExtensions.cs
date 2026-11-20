@@ -298,6 +298,18 @@ public static class DeploymentRecordExtensions
         };
 
     /// <summary>
+    /// Where this host is declared to stand (<see cref="DeploymentContent.Site"/>); null declares no site. The observed
+    /// location of its heartbeat is the control instance's reading, never set here (Plugins Hosting/MacStudioFleet §2c).
+    /// </summary>
+    public static DeploymentContent WithSite(this DeploymentContent d, HostSite? site) => d with { Site = site };
+
+    /// <summary>
+    /// The record-level fleet-jobs switch (<see cref="DeploymentContent.AcceptsFleetJobs"/>): <c>false</c> makes the control
+    /// instance hand this host no fleet build job whatever its heartbeat opt-in says; null states nothing.
+    /// </summary>
+    public static DeploymentContent WithFleetJobs(this DeploymentContent d, bool? accepts) => d with { AcceptsFleetJobs = accepts };
+
+    /// <summary>
     /// Pull the sealed NodeType publications of <paramref name="sources"/> from
     /// <paramref name="registry"/> before the portal starts (the chart's <c>bundles</c> section). The
     /// framework identity is read from the running image; <paramref name="identity"/> is only the
