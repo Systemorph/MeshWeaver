@@ -126,7 +126,10 @@ and from then on a write records nothing: the storage layer's version writer wri
 after each write, discards the node's newest `DiscardPerWrite` (8) recorded versions — the one a
 store records on its own (the Postgres trigger) plus any written while another replica had not yet
 seen the opt-out. That per-write discard is **bounded on purpose**: the measured triage status node
-would otherwise delete 373 802 rows inside its next write.
+would otherwise delete 373 802 rows inside its next write. A store that has not implemented the
+bounded discard gets the interface default, which purges a history of at most 8 versions and
+declines a longer one — so no skew between the platform and a store's implementation can turn a
+write into a mass delete.
 
 **The backlog drains through this sweep** — the fourth class, `NoHistory`. Each pass reads the
 types that declare `KeepsHistory = false` (the host's static definitions and every listed
@@ -225,7 +228,7 @@ last list: its history is untouched, and the line says so rather than reporting 
 | `NoOpVersionQuery` (core) | retains nothing: pruned, 0 removed | retains nothing |
 | `RoutingVersionQuery` (core) | forwards to the partition's provider | forwards |
 | Postgres (MeshWeaver.Plugins) | the same rule as one bounded `DELETE` over the partition schema's `mesh_node_history` | the same rules as bounded `DELETE`s driven by the `(path, version)` index |
-| Cosmos, Snowflake (MeshWeaver.Plugins) | not implemented: reported as not prunable | drain not implemented (reported as not prunable); the discard falls back to the full `PurgeVersions` |
+| Cosmos, Snowflake (MeshWeaver.Plugins) | not implemented: reported as not prunable | drain not implemented (reported as not prunable); the default discard purges a history of at most 8 versions and declines a longer one, so it never deletes in bulk |
 
 **Deleting rows does not shrink Postgres files.** A `DELETE` frees space that later writes reuse,
 so the database stops growing; returning the space to the server is a separate maintenance step

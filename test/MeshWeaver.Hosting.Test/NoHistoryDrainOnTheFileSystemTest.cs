@@ -139,4 +139,34 @@ public sealed class NoHistoryDrainOnTheFileSystemTest : IDisposable
             Enumerable.Range(1, backlog - VersionWritingStorageAdapter.DiscardPerWrite).Select(v => (long)v),
             "the write records no snapshot and discards only the newest DiscardPerWrite versions");
     }
+
+    /// <summary>
+    /// The interface default, for a store that implemented only the UNBOUNDED purge (the shape the
+    /// Postgres store had before it implemented the bounded discard): it purges a short history — a
+    /// mail copy still leaves none — and DECLINES a long one, so no platform/store version skew can
+    /// turn a write into a mass delete.
+    /// </summary>
+    [Fact]
+    public async Task The_default_discard_purges_a_short_history_and_declines_a_long_one()
+    {
+        IVersionQuery purgeOnly = new PurgeOnly(versions);
+        await Write("Hosting/Short", StatusType, 3);
+        await Write("Hosting/Long", StatusType, 30);
+
+        (await purgeOnly.DiscardNewestVersions("Hosting/Short", 8).Timeout(Budget).Await()).Should().BeTrue();
+        (await Remaining("Hosting/Short")).Should().BeEmpty("3 rows are within the bound, so the purge runs");
+
+        (await purgeOnly.DiscardNewestVersions("Hosting/Long", 8).Timeout(Budget).Await()).Should().BeFalse(
+            "30 rows exceed the bound: the default says it did not discard");
+        (await Remaining("Hosting/Long")).Should().HaveCount(30, "and deletes nothing — the backlog is the sweep's");
+    }
+
+    /// <summary>A real store seen through only the members an older store implemented.</summary>
+    private sealed class PurgeOnly(IVersionQuery inner) : IVersionQuery
+    {
+        public IObservable<MeshNodeVersion> GetVersions(string path) => inner.GetVersions(path);
+        public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options) => inner.GetVersion(path, version, options);
+        public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options) => inner.GetVersionBefore(path, beforeVersion, options);
+        public IObservable<bool> PurgeVersions(string path) => inner.PurgeVersions(path);
+    }
 }

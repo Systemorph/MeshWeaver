@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Text.Json;
 
 namespace MeshWeaver.Mesh.Services;
@@ -123,16 +124,21 @@ public interface IVersionQuery
     /// (<see cref="DrainHistory"/>), never inside a write.
     ///
     /// <para>🚨 The emitted value is a STATEMENT, as on <see cref="PurgeVersions"/>: <c>true</c> means
-    /// this store removed them (or retains no history at all), <c>false</c> that it cannot. The default
-    /// is the unbounded <see cref="PurgeVersions"/> — what the version writer called before this member
-    /// existed — so a store that has not implemented the bounded form keeps its earlier behaviour and is
-    /// never reported as having discarded what it did not.</para>
+    /// this store removed them (or retains no history at all), <c>false</c> that it did not. The default
+    /// never deletes more than <paramref name="maxRows"/>: when the node holds at most that many recorded
+    /// versions it calls <see cref="PurgeVersions"/> (what the version writer called before this member
+    /// existed, so a type with a short history — a mail copy — still leaves none), and when it holds more
+    /// it DECLINES with <c>false</c>, leaving the rows to the retention sweep. A store that implemented
+    /// only the unbounded purge can therefore never be driven into a mass delete inside a write.</para>
     /// </summary>
     /// <param name="path">The node path whose newest recorded versions are removed.</param>
     /// <param name="maxRows">The most rows removed.</param>
     /// <returns>Whether the store removed them (or holds no history).</returns>
     IObservable<bool> DiscardNewestVersions(string path, int maxRows)
-        => PurgeVersions(path);
+        => GetVersions(path)
+            .Take(maxRows + 1)
+            .Count()
+            .SelectMany(count => count <= maxRows ? PurgeVersions(path) : Observable.Return(false));
 
     /// <summary>
     /// Removes the recorded versions of <paramref name="partition"/> that <paramref name="drain"/>
