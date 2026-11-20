@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Threading;
 using MeshWeaver.Mesh.Features;
@@ -38,40 +39,50 @@ public class FeatureFlagReplayOutsideTheLockTest
     public void ASubscriberParkedInItsFirstDelivery_DoesNotHoldAnotherReaderOut()
     {
         using var flags = Flags();
-        using var holderInside = new ManualResetEventSlim(false);
-        using var releaseHolder = new ManualResetEventSlim(false);
-        using var readerDone = new ManualResetEventSlim(false);
-        FeatureComposition? read = null;
-
+        // The release INTO the parked holder is a volatile int it polls under a bounded spin,
+        // written in the finally, so a red run never strands it (HandWovenGateRatchetGuard).
+        var holderInside = 0;
+        var release = 0;
+        var holderDone = 0;
         var holder = new Thread(() =>
         {
-            using (flags.All.Take(1).Subscribe(_ =>
+            try
             {
-                holderInside.Set();
-                releaseHolder.Wait(TimeSpan.FromSeconds(30));
-            }))
-            {
+                using (flags.All.Take(1).Subscribe(_ =>
+                {
+                    Volatile.Write(ref holderInside, 1);
+                    SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TimeSpan.FromSeconds(15));
+                }))
+                {
+                }
             }
-        });
+            finally { Volatile.Write(ref holderDone, 1); }
+        }) { IsBackground = true, Name = "flags-holder" };
+
+        FeatureComposition? read = null;
+        TimeSpan readTook;
         holder.Start();
-        Assert.True(holderInside.Wait(TimeSpan.FromSeconds(10)), "the holder never received its first delivery");
-
-        var reader = new Thread(() =>
+        try
         {
+            Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref holderInside) == 1, TimeSpan.FromSeconds(10)),
+                "the holder never received its first delivery");
+
+            // The reader runs on THIS thread: with the replay under the subject's lock it would sit in
+            // Subscribe until the holder's spin budget ran out.
+            var clock = Stopwatch.StartNew();
             using (flags.Composition.Take(1).Subscribe(c => read = c)) { }
-            readerDone.Set();
-        });
-        reader.Start();
-        var answered = readerDone.Wait(TimeSpan.FromSeconds(10));
+            readTook = clock.Elapsed;
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+            SpinWait.SpinUntil(() => Volatile.Read(ref holderDone) == 1, TimeSpan.FromSeconds(20));
+        }
 
-        releaseHolder.Set();
-        holder.Join();
-        reader.Join();
-
-        Assert.True(answered,
-            "a reader must get the flags while another subscriber is still inside its first delivery — "
-            + "a BehaviorSubject held it out of Subscribe until the holder returned (#8438)");
         Assert.NotNull(read);
+        Assert.True(readTook < TimeSpan.FromSeconds(5),
+            $"a reader must get the flags while another subscriber is still inside its first delivery; it took "
+            + $"{readTook.TotalSeconds:F1} s — a BehaviorSubject held it out of Subscribe until the holder returned (#8438)");
         Assert.Contains(read.Excluded, p => p.Package == "Plugins/Games");
     }
 
