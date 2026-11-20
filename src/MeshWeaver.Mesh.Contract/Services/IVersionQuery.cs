@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Text.Json;
 
 namespace MeshWeaver.Mesh.Services;
@@ -94,10 +95,9 @@ public interface IVersionQuery
     /// <summary>
     /// Removes EVERY recorded version of the node at <paramref name="path"/>, then emits once and
     /// completes. Called by the storage layer's version writer for a node whose NodeType declares
-    /// <c>NodeTypeDefinition.KeepsHistory = false</c>: after each write (a store that snapshots on
-    /// its own — the Postgres <c>mesh_node_copy_to_history</c> trigger — has already recorded one)
-    /// and after the node is deleted. See <c>Doc/Architecture/MeshNodeVersioning</c> →
-    /// "Types That Keep No History".
+    /// <c>NodeTypeDefinition.KeepsHistory = false</c> after the node is DELETED (each WRITE calls the
+    /// bounded <see cref="DiscardNewestVersions"/> instead). See
+    /// <c>Doc/Architecture/MeshNodeVersioning</c> → "Types That Keep No History".
     ///
     /// <para>🚨 The emitted value is a STATEMENT, never a guess: <c>true</c> means this store holds
     /// no history for the path any more (it purged it, or it never retains any); <c>false</c> means
@@ -111,6 +111,55 @@ public interface IVersionQuery
     /// <returns>Whether no history remains in this store for <paramref name="path"/>.</returns>
     IObservable<bool> PurgeVersions(string path)
         => System.Reactive.Linq.Observable.Return(!RetainsHistory);
+
+    /// <summary>
+    /// Removes at most <paramref name="maxRows"/> of the recorded versions of the node at
+    /// <paramref name="path"/>, NEWEST first, then emits once and completes. Cold: the delete runs on
+    /// Subscribe. Called by the storage layer's version writer after EACH write of a node whose
+    /// NodeType declares <c>NodeTypeDefinition.KeepsHistory = false</c>: the newest rows are the
+    /// snapshot the store recorded on its own for this write (the Postgres
+    /// <c>mesh_node_copy_to_history</c> trigger) and any recorded during a cross-replica opt-out
+    /// window. The bound is what keeps a write cheap on a node that accumulated a large history
+    /// before its type opted out: that backlog is drained by the data-retention sweep
+    /// (<see cref="DrainHistory"/>), never inside a write.
+    ///
+    /// <para>🚨 The emitted value is a STATEMENT, as on <see cref="PurgeVersions"/>: <c>true</c> means
+    /// this store removed them (or retains no history at all), <c>false</c> that it did not. The default
+    /// never deletes more than <paramref name="maxRows"/>: when the node holds at most that many recorded
+    /// versions it calls <see cref="PurgeVersions"/> (what the version writer called before this member
+    /// existed, so a type with a short history — a mail copy — still leaves none), and when it holds more
+    /// it DECLINES with <c>false</c>, leaving the rows to the retention sweep. A store that implemented
+    /// only the unbounded purge can therefore never be driven into a mass delete inside a write.</para>
+    /// </summary>
+    /// <param name="path">The node path whose newest recorded versions are removed.</param>
+    /// <param name="maxRows">The most rows removed.</param>
+    /// <returns>Whether the store removed them (or holds no history).</returns>
+    IObservable<bool> DiscardNewestVersions(string path, int maxRows)
+        => GetVersions(path)
+            .Take(maxRows + 1)
+            .Count()
+            .SelectMany(count => count <= maxRows ? PurgeVersions(path) : Observable.Return(false));
+
+    /// <summary>
+    /// Removes the recorded versions of <paramref name="partition"/> that <paramref name="drain"/>
+    /// selects — every version but the newest of each node whose newest version carries one of the
+    /// drained node types (see <see cref="VersionHistoryDrain"/>) — at most
+    /// <see cref="VersionHistoryDrain.MaxRows"/> of them, then emits once and completes. Cold. Called by
+    /// the data-retention sweep for the NodeTypes that declare <c>KeepsHistory = false</c>
+    /// (<c>Doc/Architecture/DataRetention</c>).
+    ///
+    /// <para>A separate member from <see cref="PruneHistory"/> on purpose: a store that does not know
+    /// this rule must never be handed it in a shape it would read as an ordinary prune. The default
+    /// answers <see cref="VersionHistoryPruneOutcome.NotSupported"/> for a store that retains history
+    /// and "pruned, nothing removed" for one that retains none, so adding the member obliges no
+    /// implementer and a retaining store is never reported as drained when it was not.</para>
+    /// </summary>
+    /// <param name="partition">The partition (first path segment) whose history is drained.</param>
+    /// <param name="drain">The node types and the bound.</param>
+    /// <returns>Whether the store could drain, and how many rows it removed.</returns>
+    IObservable<VersionHistoryPruneOutcome> DrainHistory(string partition, VersionHistoryDrain drain)
+        => System.Reactive.Linq.Observable.Return(
+            RetainsHistory ? VersionHistoryPruneOutcome.NotSupported : VersionHistoryPruneOutcome.Pruned(0));
 
     /// <summary>
     /// Removes the recorded versions of <paramref name="partition"/> that <paramref name="prune"/>

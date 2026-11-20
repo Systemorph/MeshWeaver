@@ -22,13 +22,14 @@ modified in one day. Activities, versions and `Hosting/LogEntry` rows all accumu
 
 ## What is pruned
 
-Three classes, each switched and sized on its own:
+Four classes, each switched and sized on its own:
 
 | class | what is removed | never removed |
 |---|---|---|
 | **Activities** | `Activity` nodes (`{node}/_Activity/{id}`) whose status is a stamped terminal one (`Succeeded`, `Warning`, `Failed`, `Cancelled`) and which have not been written for `MaxAge`. Removal is recursive, so the activity's `_Log` segments go with it. | any status that is not one of those four (`Running`, the default, or a value this build does not know); a **compile** activity (category `Compilation`, owned by `CompileActivityRetention`); a **failed** activity shown in the inbox (it is someone's open item); content that does not read as an `ActivityLog`; an undated row |
 | **Versions** | recorded versions in the version store that are older than `MaxAge` **and** not among the node's newest `KeepLast` | the current version; every version inside the window; the newest version written before the window opened |
 | **Log entries** | nodes of `NodeType` (default `Hosting/LogEntry`) not written for `MaxAge` | any other node type, including the `Ops/Logs/…` node a query's rows sit under; an undated row |
+| **No-history types** | every recorded version of a node whose NodeType declares `KeepsHistory = false`, whatever its age (see "Types that keep no history" below) | the node's newest recorded version; any node whose newest recorded version is of another type |
 
 **The version rule keeps every state inside the window rebuildable.** Undo reads the version just
 before a change (`GetVersionBefore`), and a point-in-time restore reads the newest version at or
@@ -68,6 +69,9 @@ what is deleted.
 | `Retention:LogEntries:MaxAge` | `30.00:00:00` | 1 day |
 | `Retention:LogEntries:NodeType` | `Hosting/LogEntry` | — |
 | `Retention:LogEntries:MaxDeletionsPerRun` | `1000` | 1 |
+| `Retention:NoHistory:Enabled` | `true` | — |
+| `Retention:NoHistory:MaxDeletionsPerRun` | `200000` (per partition per pass) | 1 |
+| `Retention:NoHistory:BatchSize` | `5000` (rows per store call) | 1 |
 
 The defaults are deliberately conservative; an owner who wants activities kept 30 days sets
 `Retention__Activities__MaxAge: "30.00:00:00"` on that instance's record. Because of the floor
@@ -94,6 +98,72 @@ that decides them lives.
 `Store/Tier` node at `Admin/Tiers/{id}` declares on its content, and resolves a partition to the
 tier of the subscription that owns it. Until it lands, every partition resolves to the instance
 policy.
+
+## Types that keep no history
+
+A **status, ledger or heartbeat** node is rewritten on every tick of the loop that owns it, and
+every rewrite stored a full copy of the node in the version store. Nobody restores a triage ledger
+to last Tuesday: the history of such a node has no reader, and it was almost the whole database.
+
+**Measured on the control instance (2026-11-20, `Ops/Database/control-20261120T1309`):** 464 GB in
+total, of which `mesh_node_history` was 459 GB. The `hosting` schema's history alone was 445 GB in
+8.70 M rows (5 GB of table, 2.8 GB of index, the rest TOAST — full JSON copies), and the `admin`
+schema's 10.3 GB in 1.93 M rows. The node versions behind it (a node's version bounds the rows it
+can have recorded):
+
+| NodeType | nodes | versions |
+|---|---|---|
+| `ThreadSupervisor` (`Admin/Threads`) | 1 | 1 886 047 |
+| `Hosting/TriageStatus` (`Hosting/Triage/Status`) | 1 | 373 802 |
+| `Hosting/PrWatch` (`Hosting/Babysitter`) | 1 | 267 414 |
+| `Hosting/Queue` (`Hosting/Queues/instances/*`, `…/operator/*`) | 14 | 102 804 |
+| `Hosting/TriageItem` (`Hosting/Triage/*`) | ≥ 800 | ≥ 693 302 (the 800 highest; a tail below v120 not counted) |
+| `Hosting/Build` (`Hosting/Builds/<repo>/<sha>`) | ≥ 600 | ≥ 856 689 (the 600 highest; a tail around v300 not counted) |
+
+**The fix is a declaration, not a prune.** Such a type declares `KeepsHistory = false` on its
+`NodeTypeDefinition` ([Mesh Node Versioning → Types That Keep No History](../MeshNodeVersioning)),
+and from then on a write records nothing: the storage layer's version writer writes no snapshot and,
+after each write, discards the node's newest `DiscardPerWrite` (8) recorded versions — the one a
+store records on its own (the Postgres trigger) plus any written while another replica had not yet
+seen the opt-out. That per-write discard is **bounded on purpose**: the measured triage status node
+would otherwise delete 373 802 rows inside its next write. A store that has not implemented the
+bounded discard gets the interface default, which purges a history of at most 8 versions and
+declines a longer one — so no skew between the platform and a store's implementation can turn a
+write into a mass delete.
+
+**The backlog drains through this sweep** — the fourth class, `NoHistory`. Each pass reads the
+types that declare `KeepsHistory = false` (the host's static definitions and every listed
+partition's `nodeType:NodeType` nodes, read as System; a partition whose definitions cannot be read
+contributes none, so the failure mode is history kept), then asks each partition's store to drain
+them (`IVersionQuery.DrainHistory`, rule `VersionHistoryDrain`): every recorded version of a node
+whose newest recorded version is of one of those types, except that newest one. No age window
+applies. The class spends at most `MaxDeletionsPerRun` rows per partition per pass, in store calls of
+at most `BatchSize` rows each, one after another, and stops early when a call removes fewer than it
+was allowed.
+
+**Why its own cap, and why 200 000.** At the version class's 5 000 rows per partition per pass and
+the shipped 6-hour interval, the `hosting` backlog (at most its 8.70 M rows) would take 1 740 passes
+— well over a year. The cap is chosen from that measurement: 200 000 rows per pass is 800 000 a day
+per partition, so `hosting` drains in at most 44 passes (**≤ 11 days**, the whole table as the upper
+bound; the four status types alone, ≥ 1.44 M rows, in about 2 days) and `admin`'s 1.89 M rows in 10
+passes (**2.5 days**). Each store call stays at 5 000 rows, the size the version class already runs.
+At `hosting`'s average row (445 GB / 8.70 M ≈ 51 KB) a pass removes about 10 GB of row data in 40
+such calls (about 256 MB each); `admin`'s rows average 5.3 KB, about 1 GB per pass. An instance whose
+database cannot absorb that sets `Retention__NoHistory__MaxDeletionsPerRun` lower on its record.
+
+> 🚨 **Postgres does not give the space back.** A `DELETE` marks rows dead; autovacuum makes the
+> space reusable, so the database stops growing, but the files do not shrink. Returning the disk to
+> the server needs `VACUUM FULL` (an exclusive lock for its duration) or `pg_repack`, a separate,
+> owner-run maintenance step that this sweep never performs.
+
+**What is NOT a no-history type.** Anything whose history is an audit trail — `Deployments/*`
+records, `Hosting/InstanceAction` nodes under `Ops/Actions`, governed activities, documents — keeps
+its history and is pruned only by the age-windowed version class above.
+
+**A delete still purges in one call.** Deleting a node of a no-history type removes its whole
+history (`IVersionQuery.PurgeVersions`) — the privacy guarantee mail copies depend on. Until the
+backlog has drained, deleting a node that accumulated thousands of versions does that in one
+statement.
 
 ## The sweep
 
@@ -152,13 +222,13 @@ last list: its history is untouched, and the line says so rather than reporting 
 
 ### Stores
 
-| store | `PruneHistory` |
-|---|---|
-| `FileSystemVersionStore` (core) | applies `VersionHistoryPrune.Select` over `.versions/{partition}/**`; a snapshot's age is its file's write time |
-| `NoOpVersionQuery` (core) | retains nothing: pruned, 0 removed |
-| `RoutingVersionQuery` (core) | forwards to the partition's provider |
-| Postgres (MeshWeaver.Plugins) | the same rule as one bounded `DELETE` over the partition schema's `mesh_node_history` |
-| Cosmos, Snowflake (MeshWeaver.Plugins) | not implemented: reported as not prunable |
+| store | `PruneHistory` | `DrainHistory` / `DiscardNewestVersions` |
+|---|---|---|
+| `FileSystemVersionStore` (core) | applies `VersionHistoryPrune.Select` over `.versions/{partition}/**`; a snapshot's age is its file's write time | applies `VersionHistoryDrain.Select`, reading the node type of each node's newest snapshot / deletes the node's newest snapshot files |
+| `NoOpVersionQuery` (core) | retains nothing: pruned, 0 removed | retains nothing |
+| `RoutingVersionQuery` (core) | forwards to the partition's provider | forwards |
+| Postgres (MeshWeaver.Plugins) | the same rule as one bounded `DELETE` over the partition schema's `mesh_node_history` | the same rules as bounded `DELETE`s driven by the `(path, version)` index |
+| Cosmos, Snowflake (MeshWeaver.Plugins) | not implemented: reported as not prunable | drain not implemented (reported as not prunable); the default discard purges a history of at most 8 versions and declines a longer one, so it never deletes in bulk |
 
 **Deleting rows does not shrink Postgres files.** A `DELETE` frees space that later writes reuse,
 so the database stops growing; returning the space to the server is a separate maintenance step
@@ -173,7 +243,9 @@ partition and capped per class:
   per partition per pass);
 - recorded versions older than **90 days**, except each node's newest 20 and the version in force
   90 days ago (up to 5000 per partition per pass, on a store that implements the prune);
-- `Hosting/LogEntry` rows not written in the last **30 days** (up to 1000 per partition per pass).
+- `Hosting/LogEntry` rows not written in the last **30 days** (up to 1000 per partition per pass);
+- every recorded version but the newest of each node whose NodeType declares `KeepsHistory = false`
+  (up to 200 000 per partition per pass, in calls of 5 000).
 
 Nothing inside those windows, no running activity, no compile activity and no current version is
 touched. Set `Retention__Enabled: "false"` on the record before rolling to opt out entirely.

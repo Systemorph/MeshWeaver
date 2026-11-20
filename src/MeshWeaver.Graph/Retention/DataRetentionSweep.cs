@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -32,6 +33,12 @@ public sealed record PartitionRetentionOutcome(
     /// <param name="reason">Why.</param>
     public static PartitionRetentionOutcome Skipped(string partition, string reason)
         => new(partition, 0, 0, true, 0, 0, ImmutableList<string>.Empty, reason);
+
+    /// <summary>Recorded versions removed from nodes whose NodeType keeps no history (the no-history class).</summary>
+    public int UnretainedVersions { get; init; }
+
+    /// <summary>False when the version store cannot drain the no-history class (nothing was removed there).</summary>
+    public bool UnretainedSupported { get; init; } = true;
 }
 
 /// <summary>What one class removed in one partition: rows deleted, and rows whose delete failed.</summary>
@@ -98,7 +105,9 @@ public static class DataRetentionSweep
             })
             .SelectMany(partitions => RunPass(hub, resolver, partitions, now, logger));
 
-    /// <summary>One pass over the given partitions, with its outcome line.</summary>
+    /// <summary>One pass over the given partitions, with its outcome line. The NodeTypes that keep no
+    /// history are read first (<see cref="ListTypesWithoutHistory"/>), from those partitions and the
+    /// host's static nodes.</summary>
     /// <param name="hub">An off-router hub.</param>
     /// <param name="resolver">The per-partition policy resolver.</param>
     /// <param name="partitions">The partitions to sweep.</param>
@@ -107,11 +116,26 @@ public static class DataRetentionSweep
     public static IObservable<ImmutableList<PartitionRetentionOutcome>> RunPass(
         IMessageHub hub, DataRetentionResolver resolver, IReadOnlyList<RetentionPartition> partitions,
         DateTimeOffset now, ILogger? logger)
+        => (resolver.Instance.NoHistory.Enabled
+                ? ListTypesWithoutHistory(hub, partitions, logger)
+                : Observable.Return(ImmutableHashSet<string>.Empty))
+            .SelectMany(types => RunPass(hub, resolver, partitions, types, now, logger));
+
+    /// <summary>One pass over the given partitions with the given no-history NodeTypes, with its outcome line.</summary>
+    /// <param name="hub">An off-router hub.</param>
+    /// <param name="resolver">The per-partition policy resolver.</param>
+    /// <param name="partitions">The partitions to sweep.</param>
+    /// <param name="typesWithoutHistory">The NodeTypes declaring <c>KeepsHistory = false</c>; empty drains nothing.</param>
+    /// <param name="now">The instant every cutoff is taken from.</param>
+    /// <param name="logger">Where the lines go.</param>
+    public static IObservable<ImmutableList<PartitionRetentionOutcome>> RunPass(
+        IMessageHub hub, DataRetentionResolver resolver, IReadOnlyList<RetentionPartition> partitions,
+        ImmutableHashSet<string> typesWithoutHistory, DateTimeOffset now, ILogger? logger)
         => partitions
             .Select(p => !VersionHistoryPrune.IsPartitionToken(p.Name)
                 ? RefuseName(p.Name, logger)
                 : resolver.Resolve(p.Name)
-                .SelectMany(policy => SweepPartition(hub, policy, p.Versioned, now, logger))
+                .SelectMany(policy => SweepPartition(hub, policy, p.Versioned, typesWithoutHistory, now, logger))
                 .Catch<PartitionRetentionOutcome, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
@@ -125,7 +149,7 @@ public static class DataRetentionSweep
             .Select(outcomes =>
             {
                 var list = outcomes.ToImmutableList();
-                Report(list, logger);
+                Report(list, typesWithoutHistory, logger);
                 return list;
             });
 
@@ -173,9 +197,77 @@ public static class DataRetentionSweep
                 .ToImmutableList());
     }
 
+    /// <summary>The most NodeType definitions read from one partition when listing the types that keep no history.</summary>
+    public const int TypeListLimit = 2000;
+
     /// <summary>
-    /// Sweeps one partition under its resolved policy. Emits one outcome, then completes; never errors
-    /// (each class's failure is in <see cref="PartitionRetentionOutcome.Failures"/>).
+    /// The NodeTypes whose definition declares <see cref="NodeTypeDefinition.KeepsHistory"/> =
+    /// <c>false</c>: the host's static (C#-registered) definitions, and the in-mesh definitions of
+    /// every listed partition (<c>path:{partition} scope:descendants nodeType:NodeType</c>, read as
+    /// System). Declared, never derived: a type is drained only because its own definition says so.
+    /// Emits once, then completes; never errors. A partition whose definitions cannot be read is
+    /// logged and contributes nothing, so the failure mode is history KEPT, never history removed.
+    /// </summary>
+    /// <param name="hub">An off-router hub.</param>
+    /// <param name="partitions">The partitions whose in-mesh definitions are read.</param>
+    /// <param name="logger">Where a failed read is logged.</param>
+    public static IObservable<ImmutableHashSet<string>> ListTypesWithoutHistory(
+        IMessageHub hub, IReadOnlyList<RetentionPartition> partitions, ILogger? logger)
+    {
+        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var options = hub.JsonSerializerOptions;
+        var builtIn = hub.ServiceProvider.EnumerateStaticNodes()
+            // A C#-registered definition need not stamp NodeType = "NodeType" (the version writer's
+            // own lookup never asks it to); its typed content is the declaration.
+            .Where(n => n.Content is NodeTypeDefinition { KeepsHistory: false } || DeclaresNoHistory(n, options))
+            .Select(n => n.Path)
+            .ToImmutableList();
+        return partitions
+            .Select(p => p.Name)
+            .Where(VersionHistoryPrune.IsPartitionToken)
+            .Select(partition => access.RunAsSystem(() => mesh
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                        $"path:{partition} scope:descendants nodeType:{MeshNode.NodeTypePath} limit:{TypeListLimit}"))
+                    .Where(change => change.ChangeType == QueryChangeType.Initial)
+                    .Take(1)
+                    .Timeout(QueryBound))
+                .Select(change => change.Items
+                    .Where(n => DeclaresNoHistory(n, options))
+                    .Select(n => n.Path)
+                    .ToImmutableList())
+                .DefaultIfEmpty(ImmutableList<string>.Empty)
+                .Catch<ImmutableList<string>, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "Data retention: the NodeType definitions of {Partition} could not be read, so no type of it is "
+                        + "drained as keeping no history this pass", partition);
+                    return Observable.Return(ImmutableList<string>.Empty);
+                }))
+            .Concat()
+            .Aggregate(builtIn, (all, found) => all.AddRange(found))
+            .Select(all => all.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Whether <paramref name="node"/> is a NodeType definition declaring <c>KeepsHistory = false</c>.
+    /// Total: content of any shape answers false (the type keeps its history).</summary>
+    private static bool DeclaresNoHistory(MeshNode node, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (!string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal) || node.Content is null)
+            return false;
+        try
+        {
+            return node.ContentAs<NodeTypeDefinition>(options) is { KeepsHistory: false };
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Sweeps one partition under its resolved policy, draining no no-history type (the overload
+    /// naming <c>typesWithoutHistory</c> does). Emits one outcome, then completes; never errors.
     /// </summary>
     /// <param name="hub">An off-router hub.</param>
     /// <param name="policy">The policy in force for the partition.</param>
@@ -184,6 +276,22 @@ public static class DataRetentionSweep
     /// <param name="logger">Where the lines go.</param>
     public static IObservable<PartitionRetentionOutcome> SweepPartition(
         IMessageHub hub, ResolvedDataRetention policy, bool versioned, DateTimeOffset now, ILogger? logger)
+        => SweepPartition(hub, policy, versioned, ImmutableHashSet<string>.Empty, now, logger);
+
+    /// <summary>
+    /// Sweeps one partition under its resolved policy. Emits one outcome, then completes; never errors
+    /// (each class's failure is in <see cref="PartitionRetentionOutcome.Failures"/>).
+    /// </summary>
+    /// <param name="hub">An off-router hub.</param>
+    /// <param name="policy">The policy in force for the partition.</param>
+    /// <param name="versioned">Whether the partition records history.</param>
+    /// <param name="typesWithoutHistory">The NodeTypes declaring <c>KeepsHistory = false</c>, whose
+    /// recorded versions the no-history class drains; empty drains nothing.</param>
+    /// <param name="now">The instant every cutoff is taken from.</param>
+    /// <param name="logger">Where the lines go.</param>
+    public static IObservable<PartitionRetentionOutcome> SweepPartition(
+        IMessageHub hub, ResolvedDataRetention policy, bool versioned, ImmutableHashSet<string> typesWithoutHistory,
+        DateTimeOffset now, ILogger? logger)
     {
         var partition = policy.Partition;
         var options = hub.JsonSerializerOptions;
@@ -199,30 +307,85 @@ public static class DataRetentionSweep
         var versions = policy.Versions.Enabled && versioned
             ? PruneVersions(hub, partition, policy.Versions.ToPrune(now), logger)
             : Observable.Return<VersionHistoryPruneOutcome?>(VersionHistoryPruneOutcome.Pruned(0));
+        var unretained = policy.NoHistory.Enabled && versioned && !typesWithoutHistory.IsEmpty
+            ? DrainUnretained(hub, partition, policy.NoHistory, typesWithoutHistory, logger)
+            : Observable.Return<VersionHistoryPruneOutcome?>(VersionHistoryPruneOutcome.Pruned(0));
 
-        return activities.SelectMany(a => versions.SelectMany(v => logEntries.Select(l =>
+        return activities.SelectMany(a => versions.SelectMany(v => unretained.SelectMany(u => logEntries.Select(l =>
         {
             var failures = ImmutableList<string>.Empty;
             if (a is null) failures = failures.Add("activities");
             if (v is null) failures = failures.Add("versions");
+            if (u is null) failures = failures.Add("no-history versions");
             if (l is null) failures = failures.Add("log entries");
             var outcome = new PartitionRetentionOutcome(
                 partition, a?.Removed ?? 0, v?.Removed ?? 0, v?.Supported ?? true, l?.Removed ?? 0,
-                (a?.Failed ?? 0) + (l?.Failed ?? 0), failures);
-            if (outcome.Activities + outcome.Versions + outcome.LogEntries > 0)
+                (a?.Failed ?? 0) + (l?.Failed ?? 0), failures)
+            {
+                UnretainedVersions = u?.Removed ?? 0,
+                UnretainedSupported = u?.Supported ?? true,
+            };
+            if (outcome.Activities + outcome.Versions + outcome.LogEntries + outcome.UnretainedVersions > 0)
                 // Information, deliberately: this records the platform removing rows, and an
                 // operator must be able to find it. One line per partition per pass, and only when
                 // something was removed.
                 logger?.LogInformation(
                     "Data retention: pruned {Partition} — {Activities} finished activities older than {ActivityMaxAge} ({ActivitySource}), "
                     + "{Versions} versions older than {VersionMaxAge} beyond the newest {KeepLast} ({VersionSource}), "
+                    + "{Unretained} versions of NodeTypes that keep no history (at most {UnretainedMax} per pass), "
                     + "{LogEntries} {LogEntryType} rows older than {LogEntryMaxAge} ({LogEntrySource})",
                     partition,
                     outcome.Activities, policy.Activities.MaxAge, policy.ActivitiesSource,
                     outcome.Versions, policy.Versions.MaxAge, policy.Versions.KeepLast, policy.VersionsSource,
+                    outcome.UnretainedVersions, policy.NoHistory.MaxDeletionsPerRun,
                     outcome.LogEntries, policy.LogEntries.NodeType, policy.LogEntries.MaxAge, policy.LogEntriesSource);
             return outcome;
-        })));
+        }))));
+    }
+
+    /// <summary>
+    /// Drains the recorded versions of the no-history types in <paramref name="partition"/>: store
+    /// calls (<see cref="IVersionQuery.DrainHistory"/>) of at most <see cref="NoHistoryRetention.EffectiveBatchSize"/>
+    /// rows each, one after another, until a call removes fewer than it was allowed (the backlog is
+    /// gone) or the class's <see cref="NoHistoryRetention.MaxDeletionsPerRun"/> is spent. Emits the
+    /// total, <see cref="VersionHistoryPruneOutcome.NotSupported"/> when the store cannot drain, or
+    /// null when the FIRST call failed; a later call that fails keeps what was already removed and is
+    /// logged.
+    /// </summary>
+    private static IObservable<VersionHistoryPruneOutcome?> DrainUnretained(
+        IMessageHub hub, string partition, NoHistoryRetention retention, ImmutableHashSet<string> types, ILogger? logger)
+    {
+        var versions = hub.ServiceProvider.GetService<IVersionQuery>();
+        if (versions is null)
+            return Observable.Return<VersionHistoryPruneOutcome?>(VersionHistoryPruneOutcome.Pruned(0));
+
+        IObservable<VersionHistoryPruneOutcome?> From(int removed)
+        {
+            var allowed = Math.Min(retention.EffectiveBatchSize, retention.MaxDeletionsPerRun - removed);
+            if (allowed <= 0)
+                return Observable.Return<VersionHistoryPruneOutcome?>(VersionHistoryPruneOutcome.Pruned(removed));
+            return Observable.Defer(() => versions.DrainHistory(partition, new VersionHistoryDrain(types, allowed)))
+                .Take(1)
+                .Timeout(VersionPruneBound)
+                .DefaultIfEmpty(VersionHistoryPruneOutcome.NotSupported)
+                .SelectMany(batch => !batch.Supported
+                    ? Observable.Return<VersionHistoryPruneOutcome?>(removed == 0
+                        ? VersionHistoryPruneOutcome.NotSupported
+                        : VersionHistoryPruneOutcome.Pruned(removed))
+                    : batch.Removed < allowed
+                        ? Observable.Return<VersionHistoryPruneOutcome?>(VersionHistoryPruneOutcome.Pruned(removed + batch.Removed))
+                        : From(removed + batch.Removed))
+                .Catch<VersionHistoryPruneOutcome?, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "Data retention: draining the history of the NodeTypes that keep none in {Partition} failed after {Removed} "
+                        + "rows; the rest stays for the next pass", partition, removed);
+                    return Observable.Return<VersionHistoryPruneOutcome?>(
+                        removed == 0 ? null : VersionHistoryPruneOutcome.Pruned(removed));
+                });
+        }
+
+        return From(0);
     }
 
     /// <summary>
@@ -299,24 +462,30 @@ public static class DataRetentionSweep
     }
 
     /// <summary>Writes the pass's one outcome line: what was pruned, over how many partitions, and what could not be.</summary>
-    private static void Report(ImmutableList<PartitionRetentionOutcome> outcomes, ILogger? logger)
+    private static void Report(
+        ImmutableList<PartitionRetentionOutcome> outcomes, ImmutableHashSet<string> typesWithoutHistory, ILogger? logger)
     {
         var ledger = new PassLedger(PassName, logger);
         var skipped = outcomes.Where(o => o.SkipReason is not null).Select(o => o.Partition).ToImmutableList();
         var failed = outcomes.Where(o => !o.Failures.IsEmpty)
             .Select(o => $"{o.Partition} ({string.Join(", ", o.Failures)})").ToImmutableList();
-        var unsupported = outcomes.Where(o => !o.VersionsSupported).Select(o => o.Partition).ToImmutableList();
+        var unsupported = outcomes.Where(o => !o.VersionsSupported || !o.UnretainedSupported)
+            .Select(o => o.Partition).ToImmutableList();
         if (outcomes.IsEmpty)
         {
             ledger.Record(PassOutcome.Skipped, ": no partition was listed, so nothing was pruned");
             return;
         }
         ledger.Record(PassOutcome.Collected,
-            ": what was pruned — {Activities} finished activities, {Versions} recorded versions, {LogEntries} log entries, "
-            + "over {Partitions} partitions; {DeleteFailures} selected rows whose delete failed (kept for the next pass); "
-            + "skipped (unusable name or policy unresolved): [{Skipped}]; failed classes: [{Failed}]; "
+            ": what was pruned — {Activities} finished activities, {Versions} recorded versions, "
+            + "{Unretained} recorded versions of the {NoHistoryTypes} NodeTypes that keep no history ([{NoHistoryTypeNames}]), "
+            + "{LogEntries} log entries, over {Partitions} partitions; {DeleteFailures} selected rows whose delete failed "
+            + "(kept for the next pass); skipped (unusable name or policy unresolved): [{Skipped}]; failed classes: [{Failed}]; "
             + "version history not prunable by this store: [{Unsupported}]",
-            outcomes.Sum(o => o.Activities), outcomes.Sum(o => o.Versions), outcomes.Sum(o => o.LogEntries),
+            outcomes.Sum(o => o.Activities), outcomes.Sum(o => o.Versions),
+            outcomes.Sum(o => o.UnretainedVersions), typesWithoutHistory.Count,
+            string.Join(", ", typesWithoutHistory.Order(StringComparer.Ordinal)),
+            outcomes.Sum(o => o.LogEntries),
             outcomes.Count, outcomes.Sum(o => o.DeleteFailures), string.Join(", ", skipped), string.Join(", ", failed), string.Join(", ", unsupported));
     }
 }

@@ -7,7 +7,12 @@ namespace MeshWeaver.Mesh.Services;
 /// <param name="Path">The node path the version belongs to.</param>
 /// <param name="Version">The version number.</param>
 /// <param name="LastModified">When the version was written.</param>
-public sealed record VersionHistoryRow(string Path, long Version, DateTimeOffset LastModified);
+public sealed record VersionHistoryRow(string Path, long Version, DateTimeOffset LastModified)
+{
+    /// <summary>The node type the version was recorded with, when the store reads it (null when it
+    /// does not). Only <see cref="VersionHistoryDrain"/> consults it.</summary>
+    public string? NodeType { get; init; }
+}
 
 /// <summary>
 /// What a history prune of ONE partition removes. This record is the rule itself, so every store
@@ -90,6 +95,63 @@ public sealed record VersionHistoryPrune(DateTimeOffset Cutoff, int KeepLast, in
             .OrderBy(r => r.LastModified)
             .ThenBy(r => r.Path, StringComparer.Ordinal)
             .ThenBy(r => r.Version)
+            .Take(MaxRows)
+            .ToImmutableList();
+    }
+}
+
+/// <summary>
+/// What a history DRAIN of ONE partition removes: the recorded versions of nodes whose NodeType
+/// declares <c>NodeTypeDefinition.KeepsHistory = false</c>. Such a type records no history from the
+/// moment it declares so (the storage layer's version writer discards each write's snapshot); this
+/// rule removes what it recorded before. Like <see cref="VersionHistoryPrune"/> it is the rule
+/// itself, with no clock and no store, so every store drains to the same rule:
+/// <c>FileSystemVersionStore</c> applies <see cref="Select"/> directly and the Postgres store in
+/// MeshWeaver.Plugins states it in SQL. See <c>Doc/Architecture/DataRetention</c> → "Types that
+/// keep no history".
+///
+/// <para><b>A node is drained when its NEWEST recorded version carries one of
+/// <see cref="NodeTypes"/></b> (ordinal, ignoring case): every other recorded version of that node
+/// goes, whatever its age and whatever type it was recorded with. The newest recorded version
+/// always stays, so the current version is never removed, and a node whose newest version is of
+/// any other type is not touched. No age window applies: these types declared that their history
+/// has no value, so there is no state inside a window to keep rebuildable.</para>
+///
+/// <para>At most <see cref="MaxRows"/> rows go per call, so a backlog drains over successive calls
+/// instead of one call becoming a mass delete. WHICH rows go first under the bound is the store's
+/// choice (this rule takes them node by node, oldest version first); the set that has gone once
+/// the backlog is drained is not.</para>
+/// </summary>
+/// <param name="NodeTypes">The node types whose history is drained. Empty drains nothing.</param>
+/// <param name="MaxRows">The most rows one call removes.</param>
+public sealed record VersionHistoryDrain(ImmutableHashSet<string> NodeTypes, int MaxRows)
+{
+    /// <summary>Whether <paramref name="nodeType"/> is one of <see cref="NodeTypes"/> (ordinal, ignoring case).</summary>
+    /// <param name="nodeType">A recorded node type, or null.</param>
+    public bool Drains(string? nodeType)
+        => !string.IsNullOrEmpty(nodeType)
+           && NodeTypes.Any(t => string.Equals(t, nodeType, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The rows among <paramref name="rows"/> this drain removes, at most <see cref="MaxRows"/>,
+    /// node by node (ordinal path order), oldest version first within a node. Pure.
+    /// </summary>
+    /// <param name="rows">Recorded versions holding whole nodes. The newest row of each node must
+    /// carry its <see cref="VersionHistoryRow.NodeType"/>; older rows need not.</param>
+    public ImmutableList<VersionHistoryRow> Select(IEnumerable<VersionHistoryRow> rows)
+    {
+        if (MaxRows <= 0 || NodeTypes.IsEmpty)
+            return ImmutableList<VersionHistoryRow>.Empty;
+        return rows
+            .GroupBy(r => r.Path, StringComparer.Ordinal)
+            .OrderBy(node => node.Key, StringComparer.Ordinal)
+            .SelectMany(node =>
+            {
+                var newestFirst = node.OrderByDescending(r => r.Version).ToList();
+                return Drains(newestFirst[0].NodeType)
+                    ? newestFirst.Skip(1).OrderBy(r => r.Version)
+                    : Enumerable.Empty<VersionHistoryRow>();
+            })
             .Take(MaxRows)
             .ToImmutableList();
     }
