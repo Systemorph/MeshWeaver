@@ -63,6 +63,13 @@ public class RoutingVersionQuery : IVersionQuery
     /// nothing remains — <c>true</c>.</remarks>
     public IObservable<bool> PurgeVersions(string path)
         => GetQuery(path)?.PurgeVersions(path) ?? Observable.Return(true);
+
+    /// <inheritdoc />
+    /// <remarks>Forwards to the provider registered for the partition. A partition no provider
+    /// claims has no store holding its history: pruned, nothing removed.</remarks>
+    public IObservable<VersionHistoryPruneOutcome> PruneHistory(string partition, VersionHistoryPrune prune)
+        => GetQuery(partition)?.PruneHistory(partition, prune)
+           ?? Observable.Return(VersionHistoryPruneOutcome.Pruned(0));
 }
 
 /// <summary>
@@ -98,4 +105,9 @@ public class NoOpVersionQuery : IVersionQuery
     /// <inheritdoc />
     /// <remarks>Nothing is ever recorded here, so nothing remains.</remarks>
     public IObservable<bool> PurgeVersions(string path) => Observable.Return(true);
+
+    /// <inheritdoc />
+    /// <remarks>Nothing is ever recorded here, so there is nothing to prune.</remarks>
+    public IObservable<VersionHistoryPruneOutcome> PruneHistory(string partition, VersionHistoryPrune prune)
+        => Observable.Return(VersionHistoryPruneOutcome.Pruned(0));
 }

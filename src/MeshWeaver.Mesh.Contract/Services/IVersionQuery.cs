@@ -111,4 +111,24 @@ public interface IVersionQuery
     /// <returns>Whether no history remains in this store for <paramref name="path"/>.</returns>
     IObservable<bool> PurgeVersions(string path)
         => System.Reactive.Linq.Observable.Return(!RetainsHistory);
+
+    /// <summary>
+    /// Removes the recorded versions of <paramref name="partition"/> that <paramref name="prune"/>
+    /// selects (see <see cref="VersionHistoryPrune"/> for the rule: never the current version,
+    /// never a version inside the window, never the state at the window's opening), at most
+    /// <see cref="VersionHistoryPrune.MaxRows"/> of them, then emits once and completes. Cold: the
+    /// delete runs on Subscribe. Called by the data-retention sweep
+    /// (<c>Doc/Architecture/DataRetention</c>).
+    ///
+    /// <para>The default answers <see cref="VersionHistoryPruneOutcome.NotSupported"/> for a store that
+    /// retains history and has not implemented the prune, and "pruned, nothing removed" for one that
+    /// retains none. A retaining store is never reported as having pruned when it did not. Because
+    /// the member has a default, adding it obliges no implementer.</para>
+    /// </summary>
+    /// <param name="partition">The partition (first path segment) whose history is pruned.</param>
+    /// <param name="prune">The rule and its bounds.</param>
+    /// <returns>Whether the store could prune, and how many rows it removed.</returns>
+    IObservable<VersionHistoryPruneOutcome> PruneHistory(string partition, VersionHistoryPrune prune)
+        => System.Reactive.Linq.Observable.Return(
+            RetainsHistory ? VersionHistoryPruneOutcome.NotSupported : VersionHistoryPruneOutcome.Pruned(0));
 }
