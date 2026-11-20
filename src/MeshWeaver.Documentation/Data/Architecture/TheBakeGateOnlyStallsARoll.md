@@ -1,7 +1,7 @@
 ---
 Name: The Bake Gate Only Stalls a Roll
 Category: Architecture
-Description: Why the NodeType bake readiness gate took the control instance fully down, the two rules that now make a refusal possible only on an image that is newer than the build it would be protecting, why its verdict is read by readiness alone and never by the startup probe, how a sweep a store outage faulted is re-run on the same pod, and why every declared bundle source is offered before the sweep judges a type.
+Description: Why the NodeType bake readiness gate took the control instance fully down, the two rules that now make a refusal possible only on an image that is newer than the build it would be protecting, why its verdict is read by readiness alone and never by the startup probe, how a sweep a store outage faulted is re-run on the same pod, why every declared bundle source is offered before the sweep judges a type, and why no automatic compile kickoff may race the process's own adoption.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>
 ---
 
@@ -385,6 +385,74 @@ types regress, and a later adoption is refused because the pod was refused. Reco
 needs a governed `Restart` once the registry answers. Adopting sealed bytes on a refused pod whose
 only regressions are those very types would close it, but that is a change to the admission rule,
 and this fix does not make it.
+
+### The kickoff that raced the adoption
+
+The fix above was not sufficient. The next platform-4 pod on the same instance (image 4.0.13730,
+which carries it) still never became Ready, on ONE regression:
+`REFUSING READINESS — 1 NodeType(s) regressed on this image: Essentials/ActionLinkDefinition`.
+The boot source had done its job. Its log lines, in order:
+
+1. 14:06:42.9Z: `Bundle for Essentials@4.0.1: 8198704 byte(s) over HTTP` (the boot pass).
+2. 14:06:44.508Z: `Compile watcher: Essentials/ActionLink is a module's content … no prebuilt build
+   for it landed — PARKING with a named refusal instead of compiling (offered by a bundle: False)`.
+3. 14:06:44.586Z: `Prebuilt assembly ADOPTED for Essentials/ActionLink at version 71 … the shared
+   record's stamp is HELD`, then `Bundle for Essentials: adopted 10/10`.
+4. 14:09:32Z: the sweep judges `Essentials/ActionLink → CompileError (Untracked module content …)`.
+   `Essentials/ActionLinkDefinition` shares its sources and had a working build on the previous
+   image, so it reads as a regression. The publication gate discards 308 held publications.
+5. Later, every Essentials adoption stamp is refused: `adopted only 0/10 — declined: not seeded×10`.
+
+The park in step 2 landed 78 ms BEFORE the adoption it was racing (step 3). `Essentials/Email` and
+`Essentials/CouponJourneyPublishers` show the same order.
+
+**The defect.** The seeder activates each type's hub to stamp it. It takes the adoption reservation
+first (`NodeTypeAdoptionRegistry.Reserve`, #1763), so the activation cannot start a compile. Only the
+FIRST-BUILD kickoff (`CompilationStatus is null`) ever read that reservation. On a platform roll
+every record still names the previous framework, so the kickoff that fires is the FRAMEWORK-STALE
+kickoff. It ignored the reservation:
+
+- it probed the assembly store before the seeder had uploaded the bytes;
+- it flipped the type to Pending;
+- the compile watcher's on-demand pass found no offer, and the untracked-module gate (#3583) parked
+  the type.
+
+The park's write moved the record past version 71, the version the adoption had read. The sweep's
+overlay (`StampSuperseding`) correctly prefers a record that moved on, so it judged the park.
+
+So the sweep did not judge too early. The bundle was in, and this process had adopted it. A second
+decider on the same process overruled it. Neither "wait for the declared set" nor "treat the park as
+pending" would have helped. The adoption had ARRIVED, and a park that formed under a running
+adoption is wrong in itself.
+
+**The fix: this process's own adoption wins over every automatic kickoff.**
+`NodeTypeCompilationHelpers.AfterThisProcessAdoption` is the one interlock now used by all four
+kickoffs that flip Pending with no request from a person: first-build, compile recovery,
+framework-stale and the failed-verdict re-drive. It reads two facts, and the process already records
+both:
+
+- **An adoption in flight** (`IsReserved`). The kickoff waits for it to clear, within
+  `ReservationWaitBudget`. It is delayed and never cancelled, so a declined adoption still builds.
+  The framework-stale kickoff therefore probes the store AFTER the upload.
+- **An adoption recorded over the record as it stands now** (`StampSuperseding` on the CURRENT
+  version). On a provisional pod the shared stamp is held, so the record still names the old build.
+  The kickoff is skipped. The sweep counts the adoption from the same ledger, and admission releases
+  the stamp. A record that moved past the adoption (an owner refusal, a source change) is newer
+  evidence, and the kickoff runs on it.
+
+Nothing about the gates changes. The bake gate, the publication gate and the untracked-module gate
+are untouched. A type that no adoption covers is still kicked, parked and judged, and a genuine
+regression still refuses readiness.
+
+The regression test is `AnInFlightAdoptionWinsOverTheFrameworkStaleKickoffTest`
+(MeshWeaver.Compiler.Pipeline.Test). It reproduces the order through the seeder's own seam: the
+reservation is taken, the record turns framework-stale while it is held, and then the adoption
+finishes. Two cases are pinned:
+
+- A provisional adoption (recorded, stamp held) must leave the record alone. Without the fix it is
+  flipped at once.
+- The negative control: a declined adoption (nothing recorded) must not flip while it is in flight,
+  and the type must still be rebuilt for the live framework once the reservation clears.
 
 ## What this does not cover
 
