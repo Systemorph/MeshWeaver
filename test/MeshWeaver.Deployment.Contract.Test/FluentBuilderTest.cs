@@ -380,6 +380,35 @@ public class FluentBuilderTest
     }
 
     [Fact]
+    public void IntakeAllowLists_AreEmptyByDefault_SurviveTheContract_AndNeverReachThePortal()
+    {
+        // A guest's setup-intake write (MeshWeaver.Plugins InstanceSecretWrites → guest intake) is admitted on these two lists;
+        // a typed round trip that dropped them would silently revoke the record's opt-in.
+        var plain = DeploymentRecordJson.Read("{\"operator\":{\"maintainer\":\"rbuergi\"}}")!;
+        Assert.Empty(plain.Operator!.IntakeSecrets);
+        Assert.Empty(plain.Operator!.IntakeFrom);
+        var optedIn = new DeploymentContent
+        {
+            KeyVault = "vault",
+            KeyVaultSecretPrefix = "acme-",
+            Operator = new HostingOperatorSpec { Maintainer = "rbuergi", IntakeSecrets = ["acme-GitHub-Webhook-Secret"], IntakeFrom = ["portal-a"] },
+        };
+        var json = DeploymentRecordJson.Write(optedIn);
+        Assert.Contains("\"intakeSecrets\":[\"acme-GitHub-Webhook-Secret\"]", json);
+        Assert.Contains("\"intakeFrom\":[\"portal-a\"]", json);
+        var back = DeploymentRecordJson.Read(json)!.Operator!;
+        Assert.Equal(["acme-GitHub-Webhook-Secret"], back.IntakeSecrets);
+        Assert.Equal(["portal-a"], back.IntakeFrom);
+        var portal = DeploymentRecordJson.WritePortal(optedIn);
+        Assert.DoesNotContain("acme-GitHub-Webhook-Secret", portal);
+        Assert.DoesNotContain("portal-a", portal);
+        Assert.Equal("rbuergi", DeploymentRecordJson.Read(portal)!.Operator!.Maintainer);
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+            Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(optedIn, options).Keys,
+                k => k.Contains("Intake", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void ACustomerGovernedRecordThatNamesModels_RendersTheSeedAndCeilingReading_OnBothRenderers()
     {
         // Policy model-settings-seed-and-ceiling (Plugins#2604): on a customer-governed record that
