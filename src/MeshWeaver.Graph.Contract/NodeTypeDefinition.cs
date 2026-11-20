@@ -275,6 +275,20 @@ public record NodeTypeDefinition
     public bool KeepsHistory { get; init; } = true;
 
     /// <summary>
+    /// How long version history of this type's nodes is kept — a SHORT window for high-churn status,
+    /// ledger and heartbeat types whose every write is a full copy in the version store. Null (the
+    /// default) means the type's history follows the instance's ordinary version retention.
+    ///
+    /// <para>When set, the data-retention sweep removes every recorded version of such a node written
+    /// longer ago than this, REGARDLESS of the ordinary class's keep-newest floor; the node's newest
+    /// recorded version is never removed. Writes still record history, so recent states stay
+    /// restorable. An instance may replace every declared window at once with
+    /// <c>Retention:ShortLivedHistory:MaxAge</c>; a window below one day is clamped to one day. See
+    /// <c>Doc/Architecture/DataRetention</c> → "Short-lived history".</para>
+    /// </summary>
+    public TimeSpan? HistoryMaxAge { get; init; }
+
+    /// <summary>
     /// Locations of the Code nodes to compile with this NodeType's
     /// <see cref="Configuration"/> lambda. Each entry is either:
     /// <list type="bullet">
