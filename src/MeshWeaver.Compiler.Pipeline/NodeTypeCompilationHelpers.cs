@@ -1033,19 +1033,10 @@ internal static class NodeTypeCompilationHelpers
             // then re-evaluates (the Update below still refuses to move a non-null status), so a
             // DECLINED adoption compiles exactly as before. The wait is bounded — a leaked
             // reservation must cost a delay, never an unbuilt type.
-            .SelectMany(node =>
-                (adoptionRegistry?.WhenClear(hubPath) ?? Observable.Return(Unit.Default))
-                    .Timeout(NodeTypeAdoptionRegistry.ReservationWaitBudget)
-                    .Catch((TimeoutException _) =>
-                    {
-                        logger?.LogWarning(
-                            "First-build kickoff: {HubPath} waited {Budget}s for an in-flight "
-                            + "prebuilt adoption that never released its reservation — building "
-                            + "anyway (a stranded type is worse than a redundant compile)",
-                            hubPath, NodeTypeAdoptionRegistry.ReservationWaitBudget.TotalSeconds);
-                        return Observable.Return(Unit.Default);
-                    })
-                    .Select(_ => node))
+            // The same interlock now guards every automatic kickoff — see AfterThisProcessAdoption,
+            // which also skips a type this process adopted PROVISIONALLY (stamp held, record unmoved).
+            .SelectMany(_ => AfterThisProcessAdoption(
+                hub, adoptionRegistry, hubPath, ownStream, "First-build kickoff", logger))
             .Subscribe(node =>
             {
                 // 🚨 GATED ON TEARDOWN, and it is not defensive padding.
@@ -1137,6 +1128,9 @@ internal static class NodeTypeCompilationHelpers
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus == CompilationStatus.Compiling
                 && !IsStaticOnlyNodeType(node, def))
+            // An adoption this process has in flight or recorded wins here too (AfterThisProcessAdoption).
+            .SelectMany(_ => AfterThisProcessAdoption(
+                hub, adoptionRegistry, hubPath, ownStream, "Compile recovery", logger))
             .Subscribe(node =>
             {
                 // Same gate, same reason as the first-build kickoff above: a DI resolve inside a
@@ -1211,6 +1205,24 @@ internal static class NodeTypeCompilationHelpers
                 && !IsStaticOnlyNodeType(node, def)
                 && parkRegistry?.IsParked(hubPath) != true)
             .Take(1)
+            // 🚨 THE PLATFORM-ROLL RACE (see AfterThisProcessAdoption). On a roll every record is
+            // framework-stale, and a boot adoption's own activation arms THIS kickoff: without the
+            // interlock it probed the store before the seeder uploaded, flipped Pending, and the
+            // untracked-module gate parked the type the adoption was about to cover. Waiting for the
+            // reservation puts the store probe below AFTER the upload; a provisional adoption the
+            // record does not show yet spends the kickoff without a flip.
+            .SelectMany(_ => AfterThisProcessAdoption(
+                hub, adoptionRegistry, hubPath, ownStream, "Framework-stale kickoff", logger,
+                onCovered: () => Volatile.Write(ref staleBuildKickoffSpent, 1)))
+            // Re-judged on the CURRENT record: an admitted adoption that landed during the wait left
+            // nothing stale, and this one-shot kickoff has then acted (#6195 review: spent).
+            .Where(node =>
+            {
+                if (DefinitionOf(hub, node) is { } current && IsSettledOnAStaleBuild(current, guards))
+                    return true;
+                Volatile.Write(ref staleBuildKickoffSpent, 1);
+                return false;
+            })
             .SelectMany(node => MeetsDependencyFloorHere(hub, hubPath, "framework-stale kickoff", logger)
                 .Where(eligible => eligible)
                 .Select(_ => node))
@@ -1368,17 +1380,27 @@ internal static class NodeTypeCompilationHelpers
         // it (#6627); see HasFailureFromOlderPlatform.
         var redriveClosedTypeSet = hub.ServiceProvider.IsClosedTypeSet();
         var redriveGivenUp = false;
+        bool FailedVerdictWantsRedrive(MeshNode? node) => node?.Content is NodeTypeDefinition def
+            && (HasStaleFailureVerdict(def, guards.ModulesHash, hubPath, guards,
+                    Volatile.Read(ref staleBuildKickoffSpent) == 1)
+                || HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath, redriveClosedTypeSet))
+            && !IsStaticOnlyNodeType(node, def);
         var failedVerdictKickoffSub = ownStream
-            .Where(node => node?.Content is NodeTypeDefinition def
-                && (HasStaleFailureVerdict(def, guards.ModulesHash, hubPath, guards,
-                        Volatile.Read(ref staleBuildKickoffSpent) == 1)
-                    || HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath, redriveClosedTypeSet))
-                && !IsStaticOnlyNodeType(node, def))
+            .Where(FailedVerdictWantsRedrive)
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
             //
             // 🚨 #6195 review — the key carries the ATTEMPT, not only the state: see RedriveDedupeKey.
             .DistinctUntilChanged(node => RedriveDedupeKey((NodeTypeDefinition)node!.Content!, guards.ModulesHash))
+            // An adoption this process has in flight or recorded wins (AfterThisProcessAdoption): on
+            // a platform roll a failure from the previous image is an older-platform trigger, and a
+            // flip here while the boot adoption is stamping the type parks it in an untracked
+            // partition exactly as the framework-stale kickoff did. In order (Concat), re-judged on
+            // the current record, so the body never logs a flip the record no longer asks for.
+            .Select(_ => AfterThisProcessAdoption(
+                    hub, adoptionRegistry, hubPath, ownStream, "Failed-verdict re-drive", logger)
+                .Where(FailedVerdictWantsRedrive))
+            .Concat()
             .Subscribe(
                 node =>
                 {
@@ -4332,6 +4354,96 @@ internal static class NodeTypeCompilationHelpers
     /// <summary>The node's content as a <see cref="NodeTypeDefinition"/>, or null.</summary>
     private static NodeTypeDefinition? DefinitionOf(IMessageHub hub, MeshNode? node) =>
         node?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+
+    /// <summary>
+    /// 🚨 <b>THIS PROCESS'S OWN ADOPTION WINS OVER EVERY AUTOMATIC KICKOFF</b> — the interlock that
+    /// #1763 gave the first-build kickoff alone, for every kickoff that flips a type to
+    /// <see cref="CompilationStatus.Pending"/> without a person asking (first-build, recovery,
+    /// framework-stale, failed-verdict re-drive).
+    ///
+    /// <para><b>The deadlock it ends</b> (the dev instance's platform-4 pod, 2026-11-20). A boot
+    /// bundle source adopts a package's prebuilt NodeTypes BEFORE the sweep judges them, and the
+    /// seeder ACTIVATES each type's hub to stamp it. On a platform roll every record names the
+    /// previous framework, so the activation armed the FRAMEWORK-STALE kickoff, which — unlike the
+    /// first-build one — never looked at the reservation: it probed the store before the seeder had
+    /// uploaded, flipped Pending, and the compile watcher's untracked-module gate (#3583) parked the
+    /// type "no prebuilt build for it landed" 78 ms before the adoption it was racing logged
+    /// ADOPTED. The park's write moved the record past the version the adoption had read, so the
+    /// sweep's overlay (<see cref="NodeTypeAdoptionRegistry.StampSuperseding"/>) rightly preferred
+    /// the newer record — the park — and judged the type a CompileError; a type sharing its sources
+    /// that had a working build on the previous image read as a REGRESSION, readiness was refused,
+    /// and the publication gate then discarded the very adoption stamps that would have healed it.
+    /// The pod could never become Ready.</para>
+    ///
+    /// <para><b>Two facts, both this process's own, both already recorded.</b> (1) An adoption IN
+    /// FLIGHT (<see cref="NodeTypeAdoptionRegistry.IsReserved"/>): the kickoff waits for it to clear,
+    /// bounded by <see cref="NodeTypeAdoptionRegistry.ReservationWaitBudget"/> — it DELAYS, it never
+    /// cancels, so a declined adoption still builds. (2) An adoption RECORDED over the record as it
+    /// stands now (<see cref="NodeTypeAdoptionRegistry.StampSuperseding"/> on the CURRENT version):
+    /// on a provisional process the stamp is HELD by the publication gate, so the shared record still
+    /// names the old build, and a kickoff reading it would rebuild — or, in an untracked partition,
+    /// park — a type this process has already adopted. That kickoff is skipped; the sweep counts the
+    /// adoption from the same ledger, and admission releases the stamp. The ordering rule is the
+    /// ledger's, unchanged: a record that moved PAST the adoption (an owner refusal, a source change)
+    /// is newer evidence and the kickoff runs on it.</para>
+    ///
+    /// <para>Emits the CURRENT node once the type is free to be kicked, or completes empty when this
+    /// process's adoption covers it (calling <paramref name="onCovered"/>) or the hub is going away.
+    /// With no registry (a host that never composed <c>AddGraph</c>) it emits the current node at
+    /// once — the behaviour before the interlock existed.</para>
+    /// </summary>
+    /// <param name="hub">The NodeType's own hub.</param>
+    /// <param name="registry">The process's adoption registry, or null.</param>
+    /// <param name="hubPath">The NodeType's path.</param>
+    /// <param name="ownStream">The hub's own node stream.</param>
+    /// <param name="kickoff">What the log line calls the kickoff.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="onCovered">Called when the kickoff is skipped because the adoption covers it.</param>
+    internal static IObservable<MeshNode> AfterThisProcessAdoption(
+        IMessageHub hub,
+        NodeTypeAdoptionRegistry? registry,
+        string hubPath,
+        IObservable<MeshNode?> ownStream,
+        string kickoff,
+        ILogger? logger,
+        Action? onCovered = null)
+    {
+        var cleared = registry is null
+            ? Observable.Return(Unit.Default)
+            : registry.WhenClear(hubPath)
+                .Timeout(NodeTypeAdoptionRegistry.ReservationWaitBudget)
+                .Catch((TimeoutException _) =>
+                {
+                    logger?.LogWarning(
+                        "{Kickoff}: {HubPath} waited {Budget}s for an in-flight prebuilt adoption that "
+                        + "never released its reservation — proceeding anyway (a stranded type is worse "
+                        + "than a redundant compile)",
+                        kickoff, hubPath, NodeTypeAdoptionRegistry.ReservationWaitBudget.TotalSeconds);
+                    return Observable.Return(Unit.Default);
+                });
+        return cleared
+            // 🚨 Gated on teardown, as the first-build kickoff's body is: the wait above can deliver
+            // on a timer thread seconds later, and every kickoff body resolves from the hub's
+            // services inside a single-argument Subscribe.
+            .Where(_ => !hub.IsShuttingDown)
+            // The CURRENT record, not the emission that armed the kickoff: the adoption may have
+            // landed (admitted) or been recorded (provisional) while the kickoff waited.
+            .SelectMany(_ => ownStream.Where(node => node is not null).Take(1))
+            .Where(current =>
+            {
+                if (registry?.StampSuperseding(hubPath, current!.Version) is not { } stamp)
+                    return true;
+                logger?.LogInformation(
+                    "{Kickoff}: {HubPath} is covered by this process's own prebuilt adoption (stamped over "
+                    + "version {Observed}, the record is at {Version}) — NOT flipping it to Pending: the "
+                    + "shared stamp is held until this process passes its readiness validation, and the "
+                    + "sweep counts the adoption from the same ledger",
+                    kickoff, hubPath, stamp.ObservedVersion, current.Version);
+                onCovered?.Invoke();
+                return false;
+            })
+            .Select(current => current!);
+    }
 
     /// <summary>
     /// 🚨 The framework-stale kickoff's state predicate: a SETTLED record whose recorded build is
