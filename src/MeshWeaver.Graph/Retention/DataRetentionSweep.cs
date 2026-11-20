@@ -20,18 +20,24 @@ public sealed record RetentionPartition(string Name, bool Versioned);
 /// <param name="Versions">Recorded versions removed.</param>
 /// <param name="VersionsSupported">False when the version store cannot prune (nothing was removed there).</param>
 /// <param name="LogEntries">Log-entry rows removed.</param>
+/// <param name="DeleteFailures">Rows the policy selected whose delete failed or timed out; they stay for the next pass.</param>
 /// <param name="Failures">Classes that failed in this partition this run (each named), empty when none did.</param>
 /// <param name="SkipReason">Set when the partition was skipped entirely (its policy could not be resolved).</param>
 public sealed record PartitionRetentionOutcome(
-    string Partition, int Activities, int Versions, bool VersionsSupported, int LogEntries,
+    string Partition, int Activities, int Versions, bool VersionsSupported, int LogEntries, int DeleteFailures,
     ImmutableList<string> Failures, string? SkipReason = null)
 {
     /// <summary>A partition skipped for <paramref name="reason"/>.</summary>
     /// <param name="partition">The partition.</param>
     /// <param name="reason">Why.</param>
     public static PartitionRetentionOutcome Skipped(string partition, string reason)
-        => new(partition, 0, 0, true, 0, ImmutableList<string>.Empty, reason);
+        => new(partition, 0, 0, true, 0, 0, ImmutableList<string>.Empty, reason);
 }
+
+/// <summary>What one class removed in one partition: rows deleted, and rows whose delete failed.</summary>
+/// <param name="Removed">Rows deleted.</param>
+/// <param name="Failed">Selected rows whose delete failed or timed out.</param>
+public sealed record RetentionClassResult(int Removed, int Failed);
 
 /// <summary>
 /// One pass of the data-retention sweep (<c>Doc/Architecture/DataRetention</c>): for each partition,
@@ -102,7 +108,9 @@ public static class DataRetentionSweep
         IMessageHub hub, DataRetentionResolver resolver, IReadOnlyList<RetentionPartition> partitions,
         DateTimeOffset now, ILogger? logger)
         => partitions
-            .Select(p => resolver.Resolve(p.Name)
+            .Select(p => !VersionHistoryPrune.IsPartitionToken(p.Name)
+                ? RefuseName(p.Name, logger)
+                : resolver.Resolve(p.Name)
                 .SelectMany(policy => SweepPartition(hub, policy, p.Versioned, now, logger))
                 .Catch<PartitionRetentionOutcome, Exception>(ex =>
                 {
@@ -120,6 +128,19 @@ public static class DataRetentionSweep
                 Report(list, logger);
                 return list;
             });
+
+    /// <summary>
+    /// A partition whose name is not a single path token (<see cref="VersionHistoryPrune.IsPartitionToken"/>)
+    /// is skipped: its name goes into queries and store walks run as System, where whitespace, query
+    /// grammar or a traversal name would change what they select.
+    /// </summary>
+    private static IObservable<PartitionRetentionOutcome> RefuseName(string partition, ILogger? logger)
+    {
+        logger?.LogWarning(
+            "Data retention: skipped partition {Partition} — its name is not a single path token (letters, digits, "
+            + "_ - . @; no leading - or .), so no query or store walk is built from it", partition);
+        return Observable.Return(PartitionRetentionOutcome.Skipped(partition, "not a single path token"));
+    }
 
     /// <summary>
     /// The partitions to sweep, read as System from <c>Admin/Partition</c>. A record whose content
@@ -144,7 +165,9 @@ public static class DataRetentionSweep
                     var name = definition?.Namespace is { Length: > 0 } ns ? ns : node.Id;
                     return new RetentionPartition(name.Trim().Trim('/'), definition?.Versioned ?? true);
                 })
-                .Where(p => p.Name.Length > 0 && !p.Name.Contains('/'))
+                // Only empty names are dropped here; any other unusable name reaches RunPass, which
+                // skips it with a Warning, so a malformed record is visible rather than silently absent.
+                .Where(p => p.Name.Length > 0)
                 .DistinctBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
                 .OrderBy(p => p.Name, StringComparer.Ordinal)
                 .ToImmutableList());
@@ -168,11 +191,11 @@ public static class DataRetentionSweep
         var activities = policy.Activities.Enabled
             ? RemoveExpired(hub, policy.Activities.WindowQuery(partition), policy.Activities.MaxDeletionsPerRun,
                 node => policy.Activities.IsExpired(node, now, options), "activities", partition, logger)
-            : Observable.Return<int?>(0);
+            : Observable.Return<RetentionClassResult?>(new RetentionClassResult(0, 0));
         var logEntries = policy.LogEntries.Enabled
             ? RemoveExpired(hub, policy.LogEntries.WindowQuery(partition), policy.LogEntries.MaxDeletionsPerRun,
                 node => policy.LogEntries.IsExpired(node, now), "log entries", partition, logger)
-            : Observable.Return<int?>(0);
+            : Observable.Return<RetentionClassResult?>(new RetentionClassResult(0, 0));
         var versions = policy.Versions.Enabled && versioned
             ? PruneVersions(hub, partition, policy.Versions.ToPrune(now), logger)
             : Observable.Return<VersionHistoryPruneOutcome?>(VersionHistoryPruneOutcome.Pruned(0));
@@ -184,7 +207,8 @@ public static class DataRetentionSweep
             if (v is null) failures = failures.Add("versions");
             if (l is null) failures = failures.Add("log entries");
             var outcome = new PartitionRetentionOutcome(
-                partition, a ?? 0, v?.Removed ?? 0, v?.Supported ?? true, l ?? 0, failures);
+                partition, a?.Removed ?? 0, v?.Removed ?? 0, v?.Supported ?? true, l?.Removed ?? 0,
+                (a?.Failed ?? 0) + (l?.Failed ?? 0), failures);
             if (outcome.Activities + outcome.Versions + outcome.LogEntries > 0)
                 // Information, deliberately: this records the platform removing rows, and an
                 // operator must be able to find it. One line per partition per pass, and only when
@@ -204,11 +228,11 @@ public static class DataRetentionSweep
     /// <summary>
     /// Reads the oldest window of <paramref name="query"/>, keeps the rows <paramref name="isExpired"/>
     /// calls expired (at most <paramref name="max"/>), and deletes them one at a time. Emits the
-    /// number removed, or null when the window could not be read.
+    /// number removed and the number whose delete failed, or null when the window could not be read.
     /// <para>The query bounds the work; the predicate decides. A backend that ignored the sort would
     /// only drain slower, never delete a row the policy has not called expired.</para>
     /// </summary>
-    private static IObservable<int?> RemoveExpired(
+    private static IObservable<RetentionClassResult?> RemoveExpired(
         IMessageHub hub, string query, int max, Func<MeshNode, bool> isExpired,
         string what, string partition, ILogger? logger)
     {
@@ -226,27 +250,31 @@ public static class DataRetentionSweep
                 .Take(max)
                 .ToImmutableList())
             .SelectMany(paths => paths.IsEmpty
-                ? Observable.Return(0)
+                ? Observable.Return(new RetentionClassResult(0, 0))
                 : paths
                     .Select(path => access.RunAsSystem(() => mesh.DeleteNode(path))
                         .Take(1)
                         .Timeout(DeleteBound)
-                        .Select(removed => removed ? 1 : 0)
-                        .DefaultIfEmpty(0)
-                        .Catch<int, Exception>(ex =>
+                        // false = already gone (an idempotent delete): neither removed nor failed.
+                        .Select(removed => new RetentionClassResult(removed ? 1 : 0, 0))
+                        .DefaultIfEmpty(new RetentionClassResult(0, 0))
+                        .Catch<RetentionClassResult, Exception>(ex =>
                         {
-                            logger?.LogDebug(ex, "Data retention: {Path} was not removed; the next pass retries it", path);
-                            return Observable.Return(0);
+                            logger?.LogWarning(ex,
+                                "Data retention: {Path} ({What}) was selected but its delete failed or timed out; it stays, "
+                                + "and the next pass retries it", path, what);
+                            return Observable.Return(new RetentionClassResult(0, 1));
                         }))
                     .Concat()
-                    .Sum())
-            .Select(n => (int?)n)
-            .Catch<int?, Exception>(ex =>
+                    .Aggregate(new RetentionClassResult(0, 0),
+                        (sum, r) => new RetentionClassResult(sum.Removed + r.Removed, sum.Failed + r.Failed)))
+            .Select(r => (RetentionClassResult?)r)
+            .Catch<RetentionClassResult?, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
                     "Data retention: the {What} window of {Partition} could not be read; nothing of it was removed this pass",
                     what, partition);
-                return Observable.Return<int?>(null);
+                return Observable.Return<RetentionClassResult?>(null);
             });
     }
 
@@ -285,9 +313,10 @@ public static class DataRetentionSweep
         }
         ledger.Record(PassOutcome.Collected,
             ": what was pruned — {Activities} finished activities, {Versions} recorded versions, {LogEntries} log entries, "
-            + "over {Partitions} partitions; skipped (policy unresolved): [{Skipped}]; failed classes: [{Failed}]; "
+            + "over {Partitions} partitions; {DeleteFailures} selected rows whose delete failed (kept for the next pass); "
+            + "skipped (unusable name or policy unresolved): [{Skipped}]; failed classes: [{Failed}]; "
             + "version history not prunable by this store: [{Unsupported}]",
             outcomes.Sum(o => o.Activities), outcomes.Sum(o => o.Versions), outcomes.Sum(o => o.LogEntries),
-            outcomes.Count, string.Join(", ", skipped), string.Join(", ", failed), string.Join(", ", unsupported));
+            outcomes.Count, outcomes.Sum(o => o.DeleteFailures), string.Join(", ", skipped), string.Join(", ", failed), string.Join(", ", unsupported));
     }
 }

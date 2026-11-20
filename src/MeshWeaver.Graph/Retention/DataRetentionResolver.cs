@@ -130,7 +130,7 @@ public sealed class DataRetentionResolver
     /// <param name="overrides">The rule answers, in chain order; nulls are rules that did not speak.</param>
     public ResolvedDataRetention Fold(string partition, IEnumerable<DataRetentionOverride?> overrides)
     {
-        var answers = overrides.Where(o => o is not null).Select(o => o!).ToImmutableArray();
+        var answers = overrides.OfType<DataRetentionOverride>().ToImmutableArray();
         var activityAnswer = answers.FirstOrDefault(o => o.Activities is not null);
         var versionAnswer = answers.FirstOrDefault(o => o.Versions is not null);
         var logAnswer = answers.FirstOrDefault(o => o.LogEntries is not null);

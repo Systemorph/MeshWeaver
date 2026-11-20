@@ -199,9 +199,17 @@ public class FileSystemVersionStore : IVersionQuery
         // Cold (Defer): a prune is a destructive act and must happen on Subscribe, never on call.
         => Observable.Defer(() => _ioPool.RunBlocking(ct =>
         {
-            var root = partition.Trim().Trim('/');
-            if (root.Length == 0 || root.Contains('/'))
-                return VersionHistoryPruneOutcome.Pruned(0);
+            var root = partition.Trim();
+            // A single path token only: '.', '..', separators and query grammar would walk (and
+            // delete under) a directory that is not this partition's.
+            if (!VersionHistoryPrune.IsPartitionToken(root))
+                throw new ArgumentException(
+                    $"'{partition}' is not a single partition token; refusing to prune its history", nameof(partition));
+            var partitionDirectory = Path.GetFullPath(Path.Combine(_versionsDirectory, root));
+            var versionsRoot = Path.GetFullPath(_versionsDirectory);
+            if (!partitionDirectory.StartsWith(versionsRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                throw new ArgumentException(
+                    $"'{partition}' resolves outside the version store; refusing to prune its history", nameof(partition));
 
             var rows = new List<(VersionHistoryRow Row, string File)>();
             void Collect(string dir, string ns, SearchOption option, Func<string, bool> accept)
@@ -218,7 +226,11 @@ public class FileSystemVersionStore : IVersionQuery
                     var id = name[..underscore];
                     if (!accept(id))
                         continue;
-                    var relativeDir = Path.GetRelativePath(_versionsDirectory, Path.GetDirectoryName(file)!)
+                    // A file EnumerateFiles yields always has a directory; a null here is a file
+                    // we cannot place under a node, so it is not a row this prune may touch.
+                    if (Path.GetDirectoryName(file) is not { } fileDirectory)
+                        continue;
+                    var relativeDir = Path.GetRelativePath(_versionsDirectory, fileDirectory)
                         .Replace(Path.DirectorySeparatorChar, '/');
                     var nodeNs = relativeDir == "." ? ns : relativeDir;
                     var path = string.IsNullOrEmpty(nodeNs) ? id : $"{nodeNs}/{id}";
@@ -229,7 +241,7 @@ public class FileSystemVersionStore : IVersionQuery
             // The partition root node itself (namespace "") and everything below it.
             Collect(_versionsDirectory, "", SearchOption.TopDirectoryOnly,
                 id => string.Equals(id, root, StringComparison.OrdinalIgnoreCase));
-            Collect(Path.Combine(_versionsDirectory, root), root, SearchOption.AllDirectories, _ => true);
+            Collect(partitionDirectory, root, SearchOption.AllDirectories, _ => true);
 
             var files = rows.ToLookup(r => (r.Row.Path, r.Row.Version), r => r.File);
             var removed = 0;

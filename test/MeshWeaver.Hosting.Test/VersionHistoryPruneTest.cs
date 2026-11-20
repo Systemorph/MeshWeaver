@@ -81,6 +81,26 @@ public sealed class VersionHistoryPruneTest : IDisposable
             "the current version stays, whatever its age");
     }
 
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("Acme/..")]
+    [InlineData("a b")]
+    public async Task A_name_that_is_not_one_partition_is_refused_and_deletes_nothing(string partition)
+    {
+        var now = DateTime.UtcNow;
+        await Write("Acme/n", 10, now.AddDays(-100));
+        var prune = new VersionHistoryPrune(now.AddDays(-30), KeepLast: 1, MaxRows: 1000);
+
+        var refused = await versions.PruneHistory(partition, prune)
+            .Select(_ => (Exception?)null)
+            .Catch<Exception?, ArgumentException>(ex => Observable.Return<Exception?>(ex))
+            .Timeout(Budget).Await();
+
+        refused.Should().NotBeNull("'{0}' would walk outside one partition's snapshots", partition);
+        (await Remaining("Acme/n")).Should().HaveCount(10, "a refused prune deletes nothing anywhere");
+    }
+
     [Fact]
     public async Task Negative_control_another_partition_and_a_history_inside_the_window_are_untouched()
     {

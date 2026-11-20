@@ -59,6 +59,11 @@ public class DataRetentionTest(ITestOutputHelper output) : MonolithMeshTestBase(
             .Should().BeFalse("inside the window");
         policy.IsExpired(Activity("a/_Activity", "running", old, ActivityStatus.Running), Now, PlainOptions)
             .Should().BeFalse("an unfinished activity is never removed, however old");
+        foreach (var terminal in new[] { ActivityStatus.Succeeded, ActivityStatus.Warning, ActivityStatus.Failed, ActivityStatus.Cancelled })
+            policy.IsExpired(Activity("a/_Activity", $"t-{terminal}", old, terminal), Now, PlainOptions)
+                .Should().BeTrue("{0} is a stamped terminal status", terminal);
+        policy.IsExpired(Activity("a/_Activity", "unknown", old, (ActivityStatus)99), Now, PlainOptions)
+            .Should().BeFalse("only a positively terminal status is removable; a value this build does not know is kept");
         policy.IsExpired(Activity("a/_Activity", "compile", old, ActivityStatus.Succeeded, ActivityCategory.Compilation), Now, PlainOptions)
             .Should().BeFalse("compile activities belong to CompileActivityRetention");
         policy.IsExpired(Activity("a/_Activity", "needs-you", old, ActivityStatus.Failed, inbox: true), Now, PlainOptions)
@@ -138,6 +143,27 @@ public class DataRetentionTest(ITestOutputHelper output) : MonolithMeshTestBase(
         => new VersionHistoryPrune(Now.AddDays(-90), KeepLast: 1, MaxRows: 1000)
             .Select(NodeHistory("p/hot", 2564, Now, TimeSpan.FromMinutes(5)))
             .Should().BeEmpty("2564 versions written over nine days are all inside a 90-day window");
+
+    // ------------------------------------------------------------------ the partition name
+
+    [Theory]
+    [InlineData("Admin", true)]
+    [InlineData("rbuergi@example.com", true)]
+    [InlineData("acme_2-prod", true)]
+    [InlineData("", false)]
+    [InlineData(".", false)]
+    [InlineData("..", false)]
+    [InlineData("-secret", false)]
+    [InlineData("a b", false)]
+    [InlineData("a path:Other", false)]
+    [InlineData("Other scope:descendants", false)]
+    [InlineData("a/b", false)]
+    [InlineData("a\\b", false)]
+    [InlineData("a|b", false)]
+    [InlineData("a*", false)]
+    [InlineData("a\"b", false)]
+    public void Only_a_single_path_token_is_a_partition_name(string name, bool accepted)
+        => VersionHistoryPrune.IsPartitionToken(name).Should().Be(accepted);
 
     // ------------------------------------------------------------------ the configuration edge
 
@@ -318,6 +344,30 @@ public class DataRetentionTest(ITestOutputHelper output) : MonolithMeshTestBase(
             .FirstAsync().Timeout(Bound).Await(ct);
         partitions.Should().NotBeEmpty("the sweep visits what Admin/Partition lists");
         partitions.Should().OnlyContain(p => p.Name.Length > 0 && !p.Name.Contains('/'));
+    }
+
+    [Fact(Timeout = 180000)]
+    public async Task A_hostile_partition_name_is_skipped_and_never_reaches_a_query()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = DateTimeOffset.UtcNow;
+        var ns = $"{TestPartition}/Target/_Activity";
+        await SeedAsync(new MeshNode("Target", TestPartition) { NodeType = "Markdown", Name = "Target", State = MeshNodeState.Active }, ct);
+        await SeedAsync(Activity(ns, "old-done", now.AddDays(-45), ActivityStatus.Succeeded), ct);
+        (await SettleAsync($"namespace:{ns}", rows => rows.Count == 1, ct)).Should().HaveCount(1);
+
+        // A record whose name carries a second path term would retarget the window onto TestData.
+        var hostile = $"Nowhere path:{TestPartition}";
+        var resolver = new DataRetentionResolver(
+            DataRetentionPolicy.Default with { Activities = new ActivityRetention { MaxAge = TimeSpan.FromDays(30) } }, []);
+
+        var outcomes = await DataRetentionSweep
+            .RunPass(Mesh.NodeOperationIssuingHub(), resolver, [new RetentionPartition(hostile, true)], now, logger: null)
+            .FirstAsync().Timeout(Bound).Await(ct);
+
+        outcomes.Should().ContainSingle().Which.SkipReason.Should().Be("not a single path token");
+        (await SnapshotAsync($"namespace:{ns}", ct)).Should().HaveCount(1,
+            "the hostile name built no query, so the activity it would have reached is still there");
     }
 
     // ------------------------------------------------------------------------------ plumbing

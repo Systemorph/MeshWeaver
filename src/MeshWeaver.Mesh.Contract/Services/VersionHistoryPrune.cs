@@ -34,6 +34,34 @@ public sealed record VersionHistoryRow(string Path, long Version, DateTimeOffset
 /// <param name="MaxRows">The most rows one call removes.</param>
 public sealed record VersionHistoryPrune(DateTimeOffset Cutoff, int KeepLast, int MaxRows)
 {
+    /// <summary>The longest partition name <see cref="IsPartitionToken"/> accepts.</summary>
+    public const int MaxPartitionTokenLength = 128;
+
+    /// <summary>
+    /// Whether <paramref name="partition"/> is safe to use as a SINGLE path token: in a query
+    /// (<c>path:{partition} …</c>), as a store directory name and as a schema key. Only letters,
+    /// digits and <c>_ - . @</c> are accepted (a user partition may be named by an email address),
+    /// never whitespace, <c>:</c>, <c>/</c>, <c>\</c> or any other query grammar; never a leading
+    /// <c>-</c> (a query negation) or a leading <c>.</c> (which covers <c>.</c> and <c>..</c>, the
+    /// path-traversal names). A retention prune refuses any other name, because it runs as System
+    /// and a name that changes the meaning of its query or its walk would retarget a delete.
+    /// </summary>
+    /// <param name="partition">The candidate partition name.</param>
+    public static bool IsPartitionToken(string? partition)
+    {
+        if (string.IsNullOrEmpty(partition) || partition.Length > MaxPartitionTokenLength)
+            return false;
+        if (partition[0] is '-' or '.')
+            return false;
+        foreach (var c in partition)
+        {
+            if (char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.' or '@')
+                continue;
+            return false;
+        }
+        return true;
+    }
+
     /// <summary>The newest-versions floor actually applied: never below 1, so the current version stays.</summary>
     public int EffectiveKeepLast => Math.Max(1, KeepLast);
 

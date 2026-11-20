@@ -69,7 +69,10 @@ public sealed record ActivityRetention
             return false;
         if (string.Equals(log.Category, ActivityCategory.Compilation, StringComparison.Ordinal))
             return false;
-        if (log.Status is ActivityStatus.Running)
+        // Positively TERMINAL, the same set the window query matches: Running (the enum default)
+        // and any value this build does not know are kept.
+        if (log.Status is not (ActivityStatus.Succeeded or ActivityStatus.Warning
+                or ActivityStatus.Failed or ActivityStatus.Cancelled))
             return false;
         if (log.Status is ActivityStatus.Failed && log.ShowInInbox)
             return false;
