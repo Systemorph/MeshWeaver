@@ -153,6 +153,36 @@ public class TypeDeclaredListViewTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact]
+    public void AHeaderSort_StillWinsOverTheDeclaredSort()
+    {
+        var o = new MeshNodeLayoutAreas.CatalogOptions();
+        var hidden = (string)MeshNodeLayoutAreas.ApplyTypeViews(
+            MeshNodeLayoutAreas.BuildCatalog(RunsPath, o), o, Listed([RunType], RunTable)).HiddenQuery!;
+        var parser = new MeshWeaver.Mesh.QueryParser();
+
+        parser.Parse(hidden).OrderBy.Should().Be(new MeshWeaver.Mesh.OrderByClause("content.finishedAt", Descending: true));
+        // The view appends a header click's term after the hidden query (MeshSearchColumnSort.Apply).
+        parser.Parse($"{hidden} {new MeshSearchColumnSort("content.model").Term}").OrderBy
+            .Should().Be(new MeshWeaver.Mesh.OrderByClause("content.model"),
+                "the parser keeps the LAST sort:, so the header's order replaces the declared one");
+    }
+
+    [Theory]
+    [InlineData("content.finishedAt -desc")]
+    [InlineData("name namespace:Other")]
+    [InlineData("")]
+    public void ADeclaredSortThatIsNotOneToken_IsIgnored(string sort)
+    {
+        var o = new MeshNodeLayoutAreas.CatalogOptions();
+        var catalog = MeshNodeLayoutAreas.BuildCatalog(RunsPath, o);
+        var shaped = MeshNodeLayoutAreas.ApplyTypeViews(catalog, o, Listed([RunType], RunTable with { Sort = sort }));
+
+        shaped.HiddenQuery.Should().Be(catalog.HiddenQuery, "authored text never adds clauses to a shared query");
+        MeshNodeLayoutAreas.IsQueryToken("Benchmarks/BenchmarkRun").Should().BeTrue();
+        MeshNodeLayoutAreas.IsQueryToken("A Type").Should().BeFalse();
+    }
+
+    [Fact]
     public void AnExplicitPageSize_WinsOverTheDeclaration()
     {
         var o = new MeshNodeLayoutAreas.CatalogOptions { PageSize = 10, PageSizeExplicit = true };

@@ -1766,8 +1766,10 @@ public static class MeshNodeLayoutAreas
                     .Select(type => ObserveDeclaredListView(host, type).Select(view => (type, view)))
                     .CombineLatest()
                     .Select(pairs => new ListedTypes(probe.Types, probe.Truncated,
-                        pairs.Where(p => p.view is { IsDeclared: true })
-                            .ToImmutableDictionary(p => p.type, p => p.view!, StringComparer.Ordinal))))
+                        pairs.SelectMany(p => p.view is { IsDeclared: true } declared
+                                ? [KeyValuePair.Create(p.type, declared)]
+                                : Array.Empty<KeyValuePair<string, NodeTypeListView>>())
+                            .ToImmutableDictionary(StringComparer.Ordinal))))
             .Switch()
             .DistinctUntilChanged();
 
@@ -1782,7 +1784,11 @@ public static class MeshNodeLayoutAreas
             .DistinctUntilChanged()
             .Select(next => next is null
                 ? Observable.Return((found, false))
-                : ProbeTypes(host, hiddenQuery, found.Add(next)))
+                // A type path that is not one query token cannot be excluded from the next probe
+                // without changing its meaning: stop, and count the listing as mixed.
+                : !IsQueryToken(next)
+                    ? Observable.Return((found, true))
+                    : ProbeTypes(host, hiddenQuery, found.Add(next)))
             .Switch();
     }
 
@@ -1793,6 +1799,8 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     private static IObservable<NodeTypeListView?> ObserveDeclaredListView(LayoutAreaHost host, string nodeType)
     {
+        if (!IsQueryToken(nodeType))
+            return Observable.Return<NodeTypeListView?>(null);
         if (host.Hub.ServiceProvider.FindStaticNode(nodeType)?.Content is NodeTypeDefinition staticDefinition)
             return Observable.Return(staticDefinition.ListView);
         var options = host.Hub.JsonSerializerOptions;
@@ -1823,6 +1831,14 @@ public static class MeshNodeLayoutAreas
                 .Select(t => ToTypeView(t, listed.Views[t])));
     }
 
+    /// <summary>
+    /// Whether <paramref name="value"/> is ONE query token — a path or selector made of letters,
+    /// digits, <c>/ . _ -</c> and nothing else. Authored text (a declared sort, a listed type path)
+    /// is spliced into a query only when it is one, so it can never add clauses of its own. Pure.
+    /// </summary>
+    internal static bool IsQueryToken(string? value)
+        => !string.IsNullOrEmpty(value) && value.All(c => char.IsLetterOrDigit(c) || c is '/' or '.' or '_' or '-');
+
     /// <summary>A declaration as the per-section entry the view renders a type's section by. Pure.</summary>
     internal static MeshSearchTypeView ToTypeView(string nodeType, NodeTypeListView view)
         => new(nodeType, view.RenderMode) { Columns = view.Columns };
@@ -1845,9 +1861,11 @@ public static class MeshNodeLayoutAreas
                 ? catalog.Sections
                 : catalog.Sections with { MaxRows = null },
         };
-        return string.IsNullOrWhiteSpace(view.Sort) || catalog.HiddenQuery is not string hidden
-            ? shaped
-            : shaped with { HiddenQuery = $"{hidden} sort:{view.Sort.Trim()}" };
+        // A declared sort that is not one selector token is ignored rather than spliced in: it is
+        // authored text, and anything else would add clauses to every viewer's catalog of the type.
+        return view.Sort?.Trim() is { } sort && IsQueryToken(sort) && catalog.HiddenQuery is string hidden
+            ? shaped with { HiddenQuery = $"{hidden} sort:{sort}" }
+            : shaped;
     }
 
     /// <summary>
