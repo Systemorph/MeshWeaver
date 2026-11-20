@@ -156,6 +156,15 @@ public record NodeTypeDefinition
     public string? PageMaxWidth { get; init; }
 
     /// <summary>
+    /// How lists of this type's instances render — cards (the default when null), list rows, or a
+    /// table with declared columns, plus an optional page size and default sort. Every children
+    /// catalog honours it: a node's <c>Search</c> area whose children are all of this type, this
+    /// type's own instance catalog, and its section of a catalog grouped by type. See
+    /// <see cref="NodeTypeListView"/> and Doc/GUI/MeshSearch → "A type declares its list".
+    /// </summary>
+    public NodeTypeListView? ListView { get; init; }
+
+    /// <summary>
     /// Default namespace where instances of this type should be created.
     /// Empty string means root (top-level). Null means no default.
     /// Pre-selects the namespace in the Create form but does not restrict choices.

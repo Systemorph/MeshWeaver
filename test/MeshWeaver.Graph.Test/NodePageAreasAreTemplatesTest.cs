@@ -327,7 +327,13 @@ public class NodePageAreasAreTemplatesTest(ITestOutputHelper output) : MonolithM
     [Fact]
     public async Task SearchOnAnInstance_IsTheOrdinaryCatalog()
     {
-        var (stream, area) = Open(PagePath, MeshNodeLayoutAreas.SearchArea);
+        // The page is the frame with the catalog slot (how the list renders depends on the types it
+        // lists — TypeDeclaredListViewTest); the slot holds the catalog itself.
+        var (page, pageArea) = Open(PagePath, MeshNodeLayoutAreas.SearchArea);
+        await page.WalkTree(pageArea).Should().Within(TestTimeouts.Convergence).Match(
+            c => c is LayoutAreaControl { Reference.Area: MeshNodeLayoutAreas.CatalogListArea },
+            "an ordinary node's Search page is the frame with the catalog slot");
+        var (stream, area) = Open(PagePath, MeshNodeLayoutAreas.CatalogListArea);
         var search = await CatalogOf(stream, area);
 
         search!.HiddenQuery!.ToString().Should().NotContain("-nodeType:NodeType",
