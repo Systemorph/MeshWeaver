@@ -258,6 +258,64 @@ public sealed class NodeTypeAdoptionRegistry
             [.. applied.Order(StringComparer.OrdinalIgnoreCase)]);
     }
 
+    // ---- The BOOT-SEEDING hold: "a boot bundle pass may still adopt ANY type" (#8440) ------------
+
+    private int bootSeeding;
+    private readonly Subject<Unit> bootSeedingReleased = new();
+
+    /// <summary>
+    /// Marks the boot bundle seeding as in flight until the returned handle is disposed.
+    ///
+    /// <para>🚨 <b>Why a path reservation is not enough</b> (MeshWeaver#8440). <see cref="Reserve"/>
+    /// covers one type from the moment ITS seed starts. A boot pass (the image's shelf, the published
+    /// root, the declared registries) reaches its types one after the other, minutes apart, and a
+    /// type whose seed has not started yet holds no reservation. Measured on the build instance's
+    /// platform-4 roll pod, 2026-11-20 14:06:44: the compile watcher parked <c>Essentials/ActionLink</c>
+    /// at the untracked-module gate ("no prebuilt build for it landed") 78 ms before the registry pass
+    /// ADOPTED it. The park wrote Error, the bake read it, the dependent type went UpstreamFailed, and
+    /// readiness was refused on every pod of the roll. Held for the whole pass, the gate waits for the
+    /// pass and judges the type after every declared source has been offered for it.</para>
+    /// </summary>
+    public IDisposable HoldBootSeeding()
+    {
+        Interlocked.Increment(ref bootSeeding);
+        return new BootSeedingHold(this);
+    }
+
+    /// <summary>Whether a boot bundle seeding pass is in flight right now.</summary>
+    public bool IsBootSeeding => Volatile.Read(ref bootSeeding) > 0;
+
+    /// <summary>
+    /// Emits once no boot bundle seeding pass is in flight — immediately when none is. Cold. Same
+    /// subscribe-then-re-check ordering as <see cref="WhenClear"/>, for the same reason.
+    /// </summary>
+    public IObservable<Unit> WhenBootSeedingClear() =>
+        Observable.Defer(() => Observable
+            .Merge(
+                bootSeedingReleased.Where(_ => !IsBootSeeding),
+                Observable.Defer(() => IsBootSeeding
+                    ? Observable.Empty<Unit>()
+                    : Observable.Return(Unit.Default)))
+            .Take(1)
+            .ObserveOn(TaskPoolScheduler.Default));
+
+    private void ReleaseBootSeeding()
+    {
+        Interlocked.Decrement(ref bootSeeding);
+        bootSeedingReleased.OnNext(Unit.Default);
+    }
+
+    private sealed class BootSeedingHold(NodeTypeAdoptionRegistry owner) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                owner.ReleaseBootSeeding();
+        }
+    }
+
     private void Release(string nodeTypePath)
     {
         // Remove at zero rather than leaving a 0 entry behind: IsReserved reads the count, and a

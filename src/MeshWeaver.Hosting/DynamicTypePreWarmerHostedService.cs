@@ -506,11 +506,22 @@ public sealed class DynamicTypePreWarmerHostedService(
                 : ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger))
             .SelectMany(_ => closedTypeSet ? Observable.Return(0)
                 : BootBundleSources.SeedAll(mesh, logger));
-        var seeded = (importSettled?.Settled ?? Observable.Return(Unit.Default))
-            .Do(_ => progress?.Invoke(closedTypeSet
-                ? $"{ClosedTypeSet.ConfigKey}=true — no prebuilt bundle is adopted onto a database NodeType"
-                : "adopting the prebuilt bundles shipped for this framework before enumerating"))
-            .SelectMany(_ => SeedBundles());
+        // 🚨 #8440 — the boot seeding is HELD on the adoption registry from the moment this warm-up
+        // is subscribed until the three stages above have offered every bundle. The compile
+        // watcher's untracked-module gate waits on that hold before it parks anything, so a type a
+        // bundle names cannot be parked at Error in the window before its seed starts (measured:
+        // Essentials/ActionLink parked 78 ms before the registry pass adopted it, and the park held
+        // the whole roll). The hold ends when the stages complete — or fault, or are disposed.
+        var adoptionRegistry = services.GetService<NodeTypeAdoptionRegistry>();
+        var seeded = Observable.Using(
+            () => adoptionRegistry?.HoldBootSeeding() ?? Disposable.Empty,
+            _ => (importSettled?.Settled ?? Observable.Return(Unit.Default))
+                .Take(1)
+                .Do(_ => progress?.Invoke(closedTypeSet
+                    ? $"{ClosedTypeSet.ConfigKey}=true — no prebuilt bundle is adopted onto a database NodeType"
+                    : "adopting the prebuilt bundles shipped for this framework before enumerating"))
+                .SelectMany(_ => SeedBundles())
+                .Take(1));
 
         if (!sweepEnabled)
         {
