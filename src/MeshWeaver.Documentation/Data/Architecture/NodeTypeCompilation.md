@@ -1414,6 +1414,24 @@ change (the sync that was missing) re-drives it, and a release request after the
 adoption pass, which now adopts. `RequestedReleaseForce` does NOT bypass it: a force means "build
 the live source", and on such a partition the live source is the problem.
 
+**The gate judges after the boot bundle seeding, never during it** (#8440). On the build instance's
+platform-4 roll pod (2026-11-20 14:06:44.508) the watcher parked `Essentials/ActionLink` — "no prebuilt
+build for it landed" — and 78 ms later the registry pass logged `Prebuilt assembly ADOPTED` for it. The
+park wrote Error; the adoption's stamp was held until readiness (#5544); readiness waited on the bake;
+the bake read the park; `Essentials/ActionLinkDefinition` went UpstreamFailed and counted as a
+regression; every new pod replayed it and the roll stayed on the old image. A per-type reservation
+(`NodeTypeAdoptionRegistry.Reserve`) covers a type only from the moment ITS seed starts, and a pass
+reaches its types one after the other. So the warm-up now HOLDS the whole seeding
+(`NodeTypeAdoptionRegistry.HoldBootSeeding`, taken when the warm-up service is CONSTRUCTED — the host
+resolves every hosted service before it starts any, so before the silo or the HTTP server admit an
+activation — until the image shelf, the published root and every `IBootBundleSource` have been offered,
+or the host stops), and the gate waits on that hold, then on the type's
+own reservation, then re-reads the record (`NodeTypeCompilationHelpers.AfterInFlightAdoptions`): a type
+this process's ledger covers, or whose record is `Ok` with a usable build, is not judged at all. The waits
+are bounded (`BootSeedingWaitBudget`, 10 min; the reservation budget) and a timeout judges as before,
+named. A type nothing adopted still parks once the pass is done. Pinned by
+`TheGateDoesNotParkAheadOfAnInFlightAdoptionTest` and `TheWarmUpHoldsTheBootSeedingFromConstructionTest`.
+
 **The hold says why, on the record** (#6832). A type that still holds a build is not parked but
 HELD — `Ok`, `BuildProvenance: StaleAdopted` (or `Unavailable` + `AdoptionRefused` past the
 stale-adoption bound or across a MAJOR) — and an `Ok` record carries no `compilationError`. The gate's

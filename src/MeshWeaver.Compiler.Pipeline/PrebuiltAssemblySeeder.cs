@@ -197,7 +197,7 @@ public static class PrebuiltAssemblySeeder
             ? $"the prebuilt bundle for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
               + "names this type but was DECLINED (the 'Prebuilt assembly … DECLINED' log line "
               + "names why: its source fingerprint disagrees with the files this mesh holds, or "
-              + "a newer platform build produced it than the one running here), and nothing "
+              + "a platform build newer than the one running here produced it), and nothing "
               + "syncs those files"
             : $"no prebuilt bundle for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
               + "names this type";
