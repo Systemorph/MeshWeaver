@@ -13,7 +13,9 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// The home's <b>type sections</b>, below the Apps band (policy <c>home-is-composer-apps-types</c>,
+/// The home's <b>type sections</b> — since 2026-11-21 no longer on the DEFAULT home (policy
+/// <c>home-is-apps-and-chat</c>: the Spaces and My files apps replaced them); the area stays registered
+/// for an authored home Body that embeds it. Formerly below the Apps band (policy <c>home-is-composer-apps-types</c>,
 /// Doc/Architecture/AppsHome → "Type sections"): ONE section per node type the viewer has content
 /// of — the spaces they can reach, the things in their own home, what was shared with them — and
 /// only those, so an empty section never renders and no section carries another one's copy.
