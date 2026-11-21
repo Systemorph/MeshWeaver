@@ -859,8 +859,15 @@ internal static class NodeTypeCompilationHelpers
 
                         var tracking = new SingleAssignmentDisposable();
                         onDemandAdoptionSubs.Add(tracking);
-                        tracking.Disposable = PartitionTracksSources(hub, hubPath)
-                            .Timeout(OnDemandAdoptionBudget)
+                        // 🚨 #8440 — the gate judges only AFTER every adoption this process has in
+                        // flight for the type, and the boot bundle seeding pass, have finished. A
+                        // park written while a bundle that names the type is still being adopted
+                        // is an Error the adoption cannot undo (its stamp is held until readiness,
+                        // and readiness reads the park).
+                        tracking.Disposable = AfterInFlightAdoptions(
+                                hub, adoptionRegistry, hubPath, ownStream, guards, logger)
+                            .SelectMany(_ => PartitionTracksSources(hub, hubPath)
+                                .Timeout(OnDemandAdoptionBudget))
                             // The install-record read is asked only where it can change the verdict:
                             // an untracked partition, a type that is module content by its declared
                             // version alone. Unreadable reads null, and null compiles (below).
@@ -3863,6 +3870,75 @@ internal static class NodeTypeCompilationHelpers
             .Select(p => p.IsTracked(partition).Take(1))
             .CombineLatest()
             .Select(answers => answers.Any(tracked => tracked))
+            .Take(1);
+    }
+
+    /// <summary>How long the untracked-module gate waits for the boot bundle seeding pass before it
+    /// judges a type anyway (#8440). Generous: a roll pod is not ready while the pass runs, and a
+    /// type left Pending a little longer costs nothing, while a park written before the pass
+    /// adopted the type costs the whole roll. A pass that never releases costs this delay once.</summary>
+    internal static readonly TimeSpan BootSeedingWaitBudget = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// 🚨 THE ORDERING the untracked-module gate needs (MeshWeaver#8440): emits ONCE when the gate
+    /// may judge <paramref name="hubPath"/> — no boot bundle seeding pass is in flight, no adoption
+    /// of this path is in flight, and the type's CURRENT record is not covered by an adoption — and
+    /// completes EMPTY when an adoption covered it, so nothing is parked over a build that landed.
+    ///
+    /// <para>Measured on the build instance's platform-4 roll pod, 2026-11-20 14:06:44.508: the
+    /// watcher parked <c>Essentials/ActionLink</c> ("no prebuilt build for it landed"), and at .586
+    /// the registry pass ADOPTED it. The park wrote Error; the adoption's stamp was held until
+    /// readiness; readiness read the bake; the bake read the park; every pod of the roll replayed it.
+    /// Waiting here makes that order impossible inside one process: the park decision is taken after
+    /// the pass, against the record (and this process's adoption ledger) as the pass left them.</para>
+    ///
+    /// <para>"Covered" is read the way the first-build kickoff reads it
+    /// (<see cref="AfterThisProcessAdoption"/>): this process's own stamp supersedes the snapshot
+    /// (a provisional pod, whose shared stamp is held), or the record itself is <c>Ok</c> with a
+    /// usable build (an admitted one). Both waits are bounded; a wait that times out judges as
+    /// before, named in the log.</para>
+    /// </summary>
+    internal static IObservable<Unit> AfterInFlightAdoptions(
+        IMessageHub hub,
+        NodeTypeAdoptionRegistry? registry,
+        string hubPath,
+        IObservable<MeshNode?> ownStream,
+        BuildGuards guards,
+        ILogger? logger)
+    {
+        if (registry is null)
+            return Observable.Return(Unit.Default);
+        var seedingClear = registry.WhenBootSeedingClear()
+            .Timeout(BootSeedingWaitBudget)
+            .Catch((TimeoutException _) =>
+            {
+                logger?.LogWarning(
+                    "Compile watcher: {HubPath} waited {Budget} min for the boot bundle seeding pass, which "
+                    + "never finished — judging it at the untracked-module gate anyway (MeshWeaver#8440)",
+                    hubPath, BootSeedingWaitBudget.TotalMinutes);
+                return Observable.Return(Unit.Default);
+            });
+        var pathClear = registry.WhenClear(hubPath)
+            .Timeout(NodeTypeAdoptionRegistry.ReservationWaitBudget)
+            .Catch((TimeoutException _) => Observable.Return(Unit.Default));
+        return seedingClear
+            .SelectMany(_ => pathClear)
+            .Where(_ => !hub.IsShuttingDown)
+            .SelectMany(_ => ownStream.OfType<MeshNode>().Take(1))
+            .Where(current =>
+            {
+                var definition = current.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger);
+                var covered = registry.StampSuperseding(hubPath, current.Version) is not null
+                              || (definition is { CompilationStatus: CompilationStatus.Ok }
+                                  && HasUsableBuild(current, definition, guards));
+                if (covered)
+                    logger?.LogInformation(
+                        "Compile watcher: {HubPath} was adopted from a prebuilt bundle while it waited for the "
+                        + "untracked-module gate — NOT parking it: the adoption is the build (MeshWeaver#8440)",
+                        hubPath);
+                return !covered;
+            })
+            .Select(_ => Unit.Default)
             .Take(1);
     }
 
