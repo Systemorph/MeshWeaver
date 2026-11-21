@@ -109,7 +109,8 @@ public class ProgressiveQueryRequestTest(ITestOutputHelper output) : HubTestBase
     public async Task TypedSurface_ForwardsTheEarlyInitial_ThenTheAdded()
     {
         var slow = new ReplaySubject<MeshNode>(1);
-        var mesh = new MeshQuery([new PartitionedProvider(slow, [])], hub: Mesh, Ladder);
+        var seen = new List<bool>();
+        var mesh = new MeshQuery([new PartitionedProvider(slow, seen)], hub: Mesh, Ladder);
         var stream = mesh.Query<MeshNode>(Request(progressive: true)).Replay();
         using var connection = stream.Connect();
 
@@ -121,6 +122,8 @@ public class ProgressiveQueryRequestTest(ITestOutputHelper output) : HubTestBase
         var added = await stream.Where(c => c.ChangeType == QueryChangeType.Added).Should()
             .Within(TestTimeouts.Convergence).Emit("the late partition's rows", TestContext.Current.CancellationToken);
         added.Items.Select(n => n.Path).Should().Equal("globex/alpha-two");
+        lock (seen)
+            seen.Should().OnlyContain(p => p, "the opt-in must reach the provider unchanged on the typed surface too");
     }
 
     /// <summary>The control: a caller that did NOT opt in gets one complete Initial, so taking the
