@@ -118,8 +118,9 @@ public static class UserActivityLayoutAreas
             .WithView(HomeCardsArea, HomeCardsAreaView)
             // The getting-started guide below the message box (policy home-getting-started-guide).
             .WithView(HomeGettingStarted.AreaName, HomeGettingStarted.View)
-            // The type sections below the Apps band, and the owner's page to arrange them
-            // (policy home-is-composer-apps-types).
+            // The type sections and the owner's page to arrange them. The DEFAULT home no longer
+            // embeds them (policy home-is-apps-and-chat — the Spaces and My files apps replaced them);
+            // they stay registered so an authored home Body that embeds @@("area/HomeSections") keeps working.
             .WithView(HomeTypeSections.AreaName, HomeTypeSections.SectionsView)
             .WithView(HomeTypeSections.CustomizeArea, HomeTypeSections.CustomizeView)
             // "/{user}/Chat" (ChatArea) is a well-known URL (thread-catalog Create-New, chat menu
@@ -307,10 +308,10 @@ public static class UserActivityLayoutAreas
     /// The default home page shown until the owner authors their own <see cref="User.Body"/> — and
     /// nothing else: a heading welcoming the owner by first name, the message box (start a thread right
     /// away), the <b>Getting started</b> guide until the owner hides it (<see cref="HomeGettingStarted"/>,
-    /// policy <c>home-getting-started-guide</c>), then the <b>Apps</b> grid, then the <b>type sections</b>
-    /// (policy <c>home-is-composer-apps-types</c>).
+    /// policy <c>home-getting-started-guide</c>), then the <b>Apps</b> grid — and nothing below it
+    /// (policy <c>home-is-apps-and-chat</c>: spaces and the viewer's own content are apps, Spaces and My files).
     /// No contributed cards, no content list, no footer note. The regions that are no longer on it
-    /// (<c>area/HomeCards</c>, <c>area/Threads</c>) stay registered, so an authored body embedding them
+    /// (<c>area/HomeCards</c>, <c>area/Threads</c>, <c>area/HomeSections</c>) stay registered, so an authored body embedding them
     /// keeps working. This is the single source of truth for "the default", shared by the render path
     /// and the unit tests.
     /// </summary>
@@ -947,17 +948,18 @@ public static class UserActivityLayoutAreas
         if (cfg.Style == HomeStyle.Catalog)
             return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy, spacePaths);
 
-        // The Apps grid, fixed at the top, then the TYPE SECTIONS (policy home-is-composer-apps-types):
-        // one section per node type the viewer has content of that no installed app catalogs —
-        // spaces are one such type, not a band of their own. The sections are their own area
-        // (HomeTypeSections) so their discovery never holds up the Apps grid's first paint, and so
-        // a section exists only once its type is known to have content.
+        // The Apps grid and NOTHING below it (policy home-is-apps-and-chat, owner 2026-11-21: "then we
+        // only have apps on start page. plus chat window."). The content that used to follow — one
+        // section per node type, spaces among them — moved into apps of its own: Spaces (every space
+        // the viewer reaches) and My files (the viewer's own home as an explorer), both packages in
+        // MeshWeaver.Plugins. The HomeTypeSections area stays registered for an authored home Body
+        // that embeds it, exactly like HomeCards and Threads before it. `userAddress` is kept on the
+        // signature for those callers; the default home no longer embeds an area of its own.
+        _ = userAddress;
         return Controls.Stack
             .WithWidth("100%")
             .WithStyle("gap: 24px; width: 100%;")
-            .WithView(BuildAppsBand(nodeOwnerId, locale, appsFromDirectory))
-            .WithView(Controls.LayoutArea(userAddress ?? new Address(nodeOwnerId), HomeTypeSections.AreaName)
-                .WithShowProgress(false), "TypeSections");
+            .WithView(BuildAppsBand(nodeOwnerId, locale, appsFromDirectory));
     }
 
     /// <summary>
