@@ -274,6 +274,25 @@ public record MeshQueryRequest
     public bool ReportPartialReads { get; init; }
 
     /// <summary>
+    /// Declares that the caller accepts a PROGRESSIVE answer: a provider that reads several
+    /// partitions MAY emit its <see cref="QueryChangeType.Initial"/> before it has read all of them,
+    /// and then deliver the rows of the remaining partitions as <see cref="QueryChangeType.Added"/>
+    /// changes as each partition answers (Doc/Architecture/ProgressiveQueries).
+    ///
+    /// <para>🚨 Opt-in because many callers take the first <see cref="QueryChangeType.Initial"/> as
+    /// the complete answer (<c>.Where(c =&gt; c.ChangeType == Initial).Take(1)</c>). Under a
+    /// progressive answer that Initial is a SUBSET, so only a caller that keeps consuming the stream
+    /// and treats every frame as "the answer so far" may set it — the search bar's suggestions, a
+    /// live listing. A provider that does not honour it answers exactly as without it.</para>
+    ///
+    /// <para>What stays the same under it: the same partitions are read, under the same access
+    /// rules, and an early frame is never EMPTY — a provider emits a progressive Initial only once
+    /// it has a row, or once every partition has answered. So an empty frame still means "the
+    /// answer is empty", never "not yet" (MeshWeaver#6827).</para>
+    /// </summary>
+    public bool Progressive { get; init; }
+
+    /// <summary>
     /// Serve this read from the PLATFORM's providers only — never from a module's
     /// <see cref="IMeshQueryProvider"/>. For a platform read that must hold for the process's lifetime
     /// over platform-owned data, such as the account-lock register (<c>AccountLockCatalog</c>).
