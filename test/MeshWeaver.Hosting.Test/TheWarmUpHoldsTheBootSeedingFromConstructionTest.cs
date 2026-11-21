@@ -1,11 +1,11 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -45,8 +45,9 @@ public class TheWarmUpHoldsTheBootSeedingFromConstructionTest(ITestOutputHelper 
         lifetime.Start();
         await Adoptions.WhenBootSeedingClear()
             .Timeout(TestTimeouts.CrossSilo)
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .ObserveCompletion(
+                ex => FileOutput.WriteLine($"late fault on the boot-seeding release: {ex}"),
+                TestContext.Current.CancellationToken);
         Adoptions.IsBootSeeding.Should().BeFalse("the seeding stages ran to their end and released the hold");
     }
 

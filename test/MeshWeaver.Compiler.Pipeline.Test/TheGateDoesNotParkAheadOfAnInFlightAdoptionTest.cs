@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
@@ -9,6 +8,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -117,8 +117,9 @@ public class TheGateDoesNotParkAheadOfAnInFlightAdoptionTest(ITestOutputHelper o
             .Take(1)
             .Timeout(window)
             .Catch((TimeoutException _) => Observable.Return(false))
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .ObserveCompletion(
+                ex => FileOutput.WriteLine($"late fault reading {path}: {ex}"),
+                TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task AnAdoptionThatLandsDuringTheBootSeeding_IsNeverParked_WhileAnUnadoptedTypeStillParks()
