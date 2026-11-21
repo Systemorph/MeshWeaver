@@ -286,8 +286,11 @@ public record MeshQueryRequest
     /// live listing. A provider that does not honour it answers exactly as without it.</para>
     ///
     /// <para>What stays the same under it: the same partitions are read, under the same access
-    /// rules, and an early frame is never EMPTY — a provider emits a progressive Initial only once
-    /// it has a row, or once every partition has answered. So an empty frame still means "the
+    /// rules, and once every partition has answered the result is the answer the request gets
+    /// without the flag. Under a limit an early row may be withdrawn on the way there — a
+    /// <see cref="QueryChangeType.Removed"/> when a better-ranked row from a later partition
+    /// displaces it. An early frame is never EMPTY: a provider emits a progressive Initial only
+    /// once it has a row, or once every partition has answered, so an empty frame still means "the
     /// answer is empty", never "not yet" (MeshWeaver#6827).</para>
     /// </summary>
     public bool Progressive { get; init; }

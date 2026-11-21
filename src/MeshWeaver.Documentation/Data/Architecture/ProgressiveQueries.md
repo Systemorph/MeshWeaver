@@ -27,8 +27,11 @@ partitions answer in tens of milliseconds (MeshWeaver.Plugins `Hosting/SearchSug
   first `Initial` as the complete answer — `.Where(c => c.ChangeType == Initial).Take(1)` — and under a
   progressive answer that `Initial` is a subset. Only a caller that keeps consuming the stream and
   treats every frame as "the answer so far" may set it.
-- **Same rows, same rules.** A progressive answer reads the same partitions under the same access rules
-  as the non-progressive one. Only the order in which rows arrive changes.
+- **Same rows in the end, same rules throughout.** A progressive answer reads the same partitions
+  under the same access rules as the non-progressive one, and once every partition has answered its
+  result IS the non-progressive answer. Under a limit an early row may be withdrawn on the way there:
+  a `Removed` change, when a better-ranked row from a later partition displaces it from the top
+  `limit`.
 - **Never an early empty frame.** A provider emits a progressive `Initial` only once it has a row, or
   once every partition has answered. So an empty frame still means "the answer is empty" and never
   "not yet" (MeshWeaver#6827 — the search dropdown closed on an empty seed).
