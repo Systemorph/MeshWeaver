@@ -41,10 +41,12 @@ directory — `CiRestBudgetGuard` holds every `node-repo-*.yml` lane to that.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -67,16 +69,101 @@ def die(headline: str, lines: list[str]) -> NoReturn:
 
 # ───────────────────────────────────────── `gh` CLI ──────────────────────────────────────────
 
-def gh_cli(path: str, paginate: bool = False, jq: str | None = None) -> tuple[int, str, str]:
-    """`gh api` GET → (returncode, stdout, stderr). With `paginate` + `jq`, gh applies the filter to
-    every page — `--paginate` alone emits one JSON document PER PAGE, which no splitter recovers."""
+# ─────────────────────────── the installation's rate limit (NO VERDICT, never a finding) ───────────
+#
+# Every App installation owns ONE budget (5,000 requests an hour on this organisation's plan) that every
+# job and every repository minting a token from it spends together — the read-only fleet-reader's is
+# drawn on by combo-verify (its preflight AND each of its verify slots), review-answered,
+# stage-advance, the nightly locks and more. When it is empty, `gh` answers "API rate limit exceeded
+# for installation ID <n>" and, before this, every caller turned that into a verdict about the thing it
+# was reading ("its deployment overlays were NEVER READ" — a finding about the fleet that was a finding
+# about the budget). The refusal is TRANSIENT and says when it ends, so the one client:
+#   * WAITS for the reset when the reset is inside the budget (`MW_GH_RATE_WAIT_SECONDS`, default 300,
+#     shared by every call of one process), then retries — `GET /rate_limit` is free;
+#   * otherwise returns the failure with `RATE_LIMITED_MARKER` appended, naming the reset, so a caller
+#     can say "NO VERDICT — rate-limited until <t>" and the retry steward can re-run it.
+RATE_LIMITED_MARKER = "GITHUB-API-RATE-LIMITED until "
+_RATE_LIMIT_TEXT = "api rate limit exceeded"
+DEFAULT_RATE_WAIT_SECONDS = 300
+_rate_wait_spent = [0.0]          # seconds this process has already slept for a reset (one budget per process)
+
+
+def is_rate_limited_text(text: str) -> bool:
+    """True when `gh`'s stderr/stdout says the API refused for capacity. Pure."""
+    return _RATE_LIMIT_TEXT in (text or "").lower()
+
+
+def format_reset(epoch: int) -> str:
+    return datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def rate_limited_until(text: str) -> str | None:
+    """The reset stamp a `gh_cli` failure was annotated with, else None. Pure."""
+    i = (text or "").find(RATE_LIMITED_MARKER)
+    if i < 0:
+        return None
+    return (text[i + len(RATE_LIMITED_MARKER):].split() or [""])[0] or None
+
+
+def rate_limit_snapshot(run=subprocess.run) -> dict | None:
+    """`GET /rate_limit` (never counted against any budget) -> the `resources` object, or None."""
+    try:
+        proc = run(["gh", "api", "-H", f"X-GitHub-Api-Version: {API_VERSION}", "rate_limit"],
+                   capture_output=True, text=True, timeout=30)
+        if proc.returncode != 0:
+            return None
+        resources = json.loads(proc.stdout).get("resources")
+        return resources if isinstance(resources, dict) else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def rate_budget_line(label: str, run=subprocess.run) -> str:
+    """One log line with this token's budget - the instrument that makes a saturated hour visible in
+    the log of every job that reads, BEFORE anything reds. Never raises; adds a ::warning at 80 %."""
+    res = rate_limit_snapshot(run)
+    core = res.get("core") if res else None
+    if not isinstance(core, dict) or "limit" not in core:
+        return f"REST budget ({label}): not readable"
+    limit, remaining = int(core["limit"]), int(core.get("remaining", 0))
+    used = limit - remaining
+    line = (f"REST budget ({label}): {used} of {limit} used, {remaining} remaining, resets "
+            f"{format_reset(int(core.get('reset', 0)))}")
+    if limit and used * 5 >= limit * 4:
+        line += f"\n::warning title=REST budget nearly spent::{line}"
+    return line
+
+
+def gh_cli(path: str, paginate: bool = False, jq: str | None = None, *,
+           run=subprocess.run, sleep=time.sleep, now=time.time) -> tuple[int, str, str]:
+    """`gh api` GET -> (returncode, stdout, stderr). With `paginate` + `jq`, gh applies the filter to
+    every page - `--paginate` alone emits one JSON document PER PAGE, which no splitter recovers.
+
+    A rate-limit refusal is waited out when its reset is inside this process's wait budget and retried
+    (a few times at most); a wait the budget cannot cover returns the failure annotated with
+    `RATE_LIMITED_MARKER` + the reset, so no caller can mistake a spent budget for an absence."""
     cmd = ["gh", "api", "-H", f"X-GitHub-Api-Version: {API_VERSION}", path]
     if jq:
         cmd += ["--jq", jq]
     if paginate:
         cmd.insert(2, "--paginate")
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    return proc.returncode, proc.stdout, proc.stderr
+    budget = float(os.environ.get("MW_GH_RATE_WAIT_SECONDS", DEFAULT_RATE_WAIT_SECONDS))
+    proc = None
+    for _attempt in range(4):
+        proc = run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0 or not is_rate_limited_text(proc.stderr + proc.stdout):
+            return proc.returncode, proc.stdout, proc.stderr
+        res = rate_limit_snapshot(run)
+        reset = int(((res or {}).get("core") or {}).get("reset") or 0)
+        wait = max(1.0, reset - now() + 2) if reset else 30.0
+        if not reset or _rate_wait_spent[0] + wait > budget:
+            stamp = format_reset(reset) if reset else "unknown"
+            return proc.returncode, proc.stdout, proc.stderr + f"\n{RATE_LIMITED_MARKER}{stamp}"
+        _rate_wait_spent[0] += wait
+        print(f"ghrest: API rate limit exceeded; waiting {int(wait)}s for the reset at {format_reset(reset)}",
+              flush=True)
+        sleep(wait)
+    return proc.returncode, proc.stdout, proc.stderr + f"\n{RATE_LIMITED_MARKER}unknown"
 
 
 # 🚨 A PRIVATE REPOSITORY'S NAME IS PRIVATE TEXT (policy `issue-text-name-scan`, Plugins#4364).
@@ -546,6 +633,61 @@ def self_test() -> int:
         storage.shutdown()
         api.server_close()
         storage.server_close()
+    # -- the installation's rate limit: wait for a reset that fits, annotate one that does not --
+    class _P:
+        def __init__(self, rc, out="", err=""):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    refusal = "gh: API rate limit exceeded for installation ID 1. Request ID X"
+    reset_at = 1_000_000
+
+    def scripted(answers, snapshot_reset=reset_at):
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            if cmd[-1] == "rate_limit":
+                return _P(0, json.dumps({"resources": {"core": {"limit": 5000, "remaining": 0,
+                                                                "reset": snapshot_reset}}}))
+            return answers.pop(0)
+        return run, calls
+
+    slept: list[float] = []
+    saved_env = os.environ.get("MW_GH_RATE_WAIT_SECONDS")
+    try:
+        os.environ["MW_GH_RATE_WAIT_SECONDS"] = "300"
+        _rate_wait_spent[0] = 0.0
+        run, calls = scripted([_P(1, "", refusal), _P(0, "{}", "")])
+        rc, out, err = gh_cli("repos/a/b", run=run, sleep=slept.append, now=lambda: reset_at - 60)
+        check("a rate limit whose reset fits the budget is waited out and retried",
+              rc == 0 and out == "{}" and slept == [62.0])
+        _rate_wait_spent[0] = 0.0
+        run, calls = scripted([_P(1, "", refusal)])
+        rc, out, err = gh_cli("repos/a/b", run=run, sleep=slept.append, now=lambda: reset_at - 3000)
+        check("a reset beyond the budget is NOT slept: the failure names the reset",
+              rc == 1 and rate_limited_until(err) == format_reset(reset_at) and is_rate_limited_text(err))
+        _rate_wait_spent[0] = 0.0
+        run, calls = scripted([_P(1, "", "gh: Not Found (HTTP 404)")])
+        rc, out, err = gh_cli("repos/a/b", run=run, sleep=slept.append, now=lambda: reset_at)
+        check("a 404 is returned untouched (no marker, no /rate_limit read)",
+              rc == 1 and rate_limited_until(err) is None and len(calls) == 1)
+        _rate_wait_spent[0] = 0.0
+        run, calls = scripted([_P(1, "", refusal)], snapshot_reset=0)
+        rc, out, err = gh_cli("repos/a/b", run=run, sleep=slept.append, now=lambda: reset_at)
+        check("an unreadable reset is annotated `unknown`, never silently retried forever",
+              rate_limited_until(err) == "unknown")
+    finally:
+        _rate_wait_spent[0] = 0.0
+        if saved_env is None:
+            os.environ.pop("MW_GH_RATE_WAIT_SECONDS", None)
+        else:
+            os.environ["MW_GH_RATE_WAIT_SECONDS"] = saved_env
+    run, _ = scripted([])
+    line = rate_budget_line("reader", run=run)
+    check("the budget line prints used/limit, the reset and warns at 80 %",
+          "5000 of 5000 used" in line and format_reset(reset_at) in line and "::warning" in line)
+    check("an unreadable budget is said, not guessed",
+          rate_budget_line("x", run=lambda *a, **k: _P(1)) == "REST budget (x): not readable")
     print(f"ghrest: {'FAILED: ' + '; '.join(failures) if failures else 'all cases passed'}")
     return 1 if failures else 0
 
@@ -553,5 +695,8 @@ def self_test() -> int:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--self-test"]:
         sys.exit(self_test())
+    if len(sys.argv) == 3 and sys.argv[1] == "--rate-budget":
+        print(rate_budget_line(sys.argv[2]))
+        sys.exit(0)
     print(__doc__)
     sys.exit(2)

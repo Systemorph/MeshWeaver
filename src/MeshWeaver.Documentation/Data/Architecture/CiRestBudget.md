@@ -203,6 +203,20 @@ On 2026-11-08 the Plugins job-token bucket (5,000 calls per hour) ran out at abo
 
 The App must never be the one that merges or pushes (`meshweaver-cloud`), because that App's bucket carries those paths. The read App, `meshweaver-reader` (id 4919171, org-wide), has exactly the permissions the lanes need: `pull-requests: read`, `issues: read`, `checks: read`, `actions: write`. Its key is `FLEET_READER_APP_ID` / `FLEET_READER_APP_PRIVATE_KEY`, which is provisioned for core's CD. A caller repository needs those two secrets before its caller can pass them.
 
+## The fleet-reader installation's own budget (2026-11-22)
+
+Moving the review lanes onto `meshweaver-reader` (above) did not remove the limit, it moved it: that installation (id 161095771, org-wide, `repository_selection: all`) now carries ONE 5,000-an-hour budget that every repository's `Review answered`, `Stage advance` and `Request review` runs, combo-verification, the nightly locks, `control-always-latest`, the shared-rules sibling reads and the satellite compat checkouts spend together. On 2026-11-22 it ran out three times (combo-verify runs 45029369221, 45034137352, 45045279093 at 13:55Z, 14:51Z, 16:50Z) and the roster step reported *"its deployment overlays were NEVER READ"* — a finding about the fleet that was a finding about the budget. Review-lane jobs on Plugins #5784 and #5793 went red with the capacity refusal in the same window; the maintainer's user token, a different bucket, was not limited.
+
+What was changed:
+
+1. **`ghrest.gh_cli` waits out a reset that fits and names one that does not.** A refusal containing *API rate limit exceeded* reads `GET /rate_limit` (free), sleeps until the reset when the wait fits this process's budget (`MW_GH_RATE_WAIT_SECONDS`, default 300, one budget per process) and retries; a reset beyond it returns the failure annotated `GITHUB-API-RATE-LIMITED until <stamp>`. No caller can take a spent budget for an absence any more.
+2. **combo-verify says "NO VERDICT", not "NEVER READ".** `derive-combo-instances.py` turns a derivation stopped only by that annotation into `combo-verify: NO VERDICT — GitHub API rate-limited until <reset> … re-run after it (infra)`, and `retry-known-transients.py` carries the line as a signature, so the run is re-run instead of staying content-red. A genuine blocker beside a rate limit is still reported as content.
+3. **The instrument.** `derive-combo-instances.py` (before the derivation and after a refusal) and `check-review-answered.py` (start and end of every real run, which covers review-answered, stage-advance, request-review and arm) print `REST budget (<label>): N of 5000 used, M remaining, resets <t>`, with a warning at 80 %. `python3 .github/scripts/ghrest.py --rate-budget <label>` prints the same for any step. Read the ladder across the runs of an hour to see who was running when it filled.
+
+Estimated spend, from the code and the runs in the 20 hours before (floors; not read from the installation): combo-verify ~400 calls a run (the preflight AND each of its seven verify slots re-derive the roster: 1 + ~34 tree reads + ~15 overlay reads each) at ~1.6 runs an hour; review lanes ~10 calls a run at ~45 runs an hour on core and Plugins together plus the other satellites'.
+
+NOT done: the slot jobs still re-derive the roster. Handing it over encrypted (artifact, key = the digest secret) would take ~350 calls out of every combo-verify run, but the roster carries private names and the masks must travel with it; that needs a live token to prove and is left as a follow-up. A second read-only App for the review lanes (the lanes already accept `api-app-id`) would give them a bucket of their own; creating an App is an owner action.
+
 ## What was NOT measured
 
 - **The limit itself was not read.** No job in the window printed `/rate_limit`; 1,000/hour is
