@@ -112,6 +112,32 @@ def _no_probe(host: str):
 RATE_LIMITED_SENTENCE = "combo-verify: NO VERDICT — GitHub API rate-limited until"
 
 
+# A finding of the form "the roster names X and no overlay in the fleet names it" is a claim about
+# EVERY repository. While any repository's overlays were never read it cannot be established: the
+# overlay may be exactly in the unread one. Such findings are tagged and, when the unread cause is a
+# rate limit, carry its stamp so they fold into NO VERDICT instead of a content red.
+MISSING_OVERLAY_PHRASE = "and no overlay in the fleet names it"
+UNVERIFIABLE_TAG = " [UNVERIFIABLE: "
+
+
+def defer_unverifiable(blockers: list[str], scans) -> list[str]:
+    """Pure. Tag every missing-overlay blocker as unverifiable when any scan was never read.
+
+    Rate-limited unread -> the tag carries the reset stamp (rate_limit_verdict then yields NO VERDICT);
+    another unread cause -> tagged only, and the NEVER READ blocker keeps the run red as content."""
+    unread = [s.unreadable for s in scans if getattr(s, "unreadable", None)]
+    if not unread:
+        return blockers
+    stamps = sorted(x for x in (ghrest.rate_limited_until(u) for u in unread) if x)
+    out = []
+    for b in blockers:
+        if MISSING_OVERLAY_PHRASE in b and UNVERIFIABLE_TAG not in b:
+            marker = f"{ghrest.RATE_LIMITED_MARKER}{stamps[-1]}" if stamps else "a repository was never read"
+            b = f"{b}{UNVERIFIABLE_TAG}{marker}]"
+        out.append(b)
+    return out
+
+
 def rate_limit_verdict(blockers: list[str]) -> str | None:
     """The `::error::` text when the derivation was stopped by the installation's rate limit, else None.
 
@@ -126,13 +152,17 @@ def rate_limit_verdict(blockers: list[str]) -> str | None:
     if other:
         return None
     reset = sorted(stamps)[-1]
+    unchecked = [b.split(UNVERIFIABLE_TAG, 1)[0].strip() for b in blockers if UNVERIFIABLE_TAG in b]
+    tail = (" Could not be checked (they depend on repositories that were never read): "
+            + " | ".join(unchecked) + ".") if unchecked else ""
     return (f"{RATE_LIMITED_SENTENCE} {reset} (the fleet-reader installation's hourly budget is spent; "
-            "nothing was concluded about the fleet); re-run after it (infra).")
+            f"nothing was concluded about the fleet); re-run after it (infra).{tail}")
 
 
 def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, str]], list[str]]:
     """(rows, excluded, blockers) — the roster, what was deliberately left out, and why not."""
     instances, blockers = lock.build_instances(scans, roster, probe=_no_probe)
+    blockers = defer_unverifiable(blockers, scans)
 
     for scan in scans:
         if scan.unreadable:
@@ -784,6 +814,21 @@ def self_test() -> int:
           and rate_limit_verdict(limited_blockers + ["ZERO LIVE installations"]) is None,
           "a genuine blocker next to a rate limit is still reported as content, never hidden by it")
     check(rate_limit_verdict([]) is None, "no blockers, no verdict")
+
+    # A "no overlay in the fleet names it" finding needs EVERY repository read.
+    _, _, partial = derive(TWO_LIVE + [limited], {"ghost": ("not-installed", "gone", "")})
+    pv = rate_limit_verdict(partial)
+    check(pv is not None and pv.startswith(RATE_LIMITED_SENTENCE) and "ghost" in pv,
+          "partial read + missing-overlay finding is NO VERDICT, listing what could not be checked")
+    _, _, full = derive(TWO_LIVE, {"ghost": ("not-installed", "gone", "")})
+    check(any(MISSING_OVERLAY_PHRASE in b for b in full) and rate_limit_verdict(full) is None
+          and not any(UNVERIFIABLE_TAG in b for b in full),
+          "full read + missing-overlay finding stays a content red")
+    # A malformed roster is not about unread repositories: it stays red beside a limit.
+    check(rate_limit_verdict(["instances.json is malformed"] + partial) is None,
+          "partial read + malformed roster stays content-red")
+    check(rate_limit_verdict(["two live installations are both named `x`"] + partial) is None,
+          "partial read + a duplicate-name defect stays content-red")
 
     # A live installation with no ingress host cannot be reached, so it cannot be verified.
     rows, _, blockers = derive([_scan("Systemorph/Memex", [
