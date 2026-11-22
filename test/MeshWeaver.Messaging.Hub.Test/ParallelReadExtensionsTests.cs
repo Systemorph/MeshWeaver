@@ -13,7 +13,8 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// <summary>
 /// Pins <see cref="ParallelReadExtensions"/> and the Rx 7.0.0 <c>Zip</c> hazard it exists for (Doc/Architecture/AsynchronousCalls,
 /// "Combining reads"). The hostile source below models what a serialising hub read does: its delivery runs under a lock, and
-/// disposing it needs that same lock.
+/// disposing it needs that same lock. Signals between the test's threads are volatile flags polled under a bounded
+/// <see cref="SpinWait.SpinUntil(Func{bool}, TimeSpan)"/> — no event, no semaphore, no blocking Rx wait (the repo's two ratchets).
 /// </summary>
 public class ParallelReadExtensionsTests
 {
@@ -33,7 +34,36 @@ public class ParallelReadExtensionsTests
         }
     }
 
+    private sealed class Flag
+    {
+        private volatile bool _set;
+        public void Set() => _set = true;
+        public bool Raised() => SpinWait.SpinUntil(() => _set, Bound);
+    }
+
+    /// <summary>All parties arrive before any proceeds (a barrier without a barrier object).</summary>
+    private sealed class Rendezvous(int parties)
+    {
+        private int _arrived;
+        public void Arrive()
+        {
+            Interlocked.Increment(ref _arrived);
+            SpinWait.SpinUntil(() => Volatile.Read(ref _arrived) >= parties, Bound);
+        }
+    }
+
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
+
+    /// <summary>The single value of a source that answers synchronously inside Subscribe.</summary>
+    private static T Sync<T>(IObservable<T> source)
+    {
+        var values = new List<T>();
+        Exception? error = null;
+        source.Subscribe(values.Add, e => error = e);
+        if (error is not null)
+            throw error;
+        return values.Single();
+    }
 
     // ───────────── the mechanism ─────────────
 
@@ -47,20 +77,20 @@ public class ParallelReadExtensionsTests
     {
         var s1 = new LockedSource<int>();
         var s2 = new LockedSource<int>();
-        var inGate = new ManualResetEventSlim();
-        var bHoldsLock = new ManualResetEventSlim();
-        s1.Zip(s2, (a, b) => a + b).Take(1).Subscribe(_ => inGate.Set());
+        var inGate = new Flag();
+        var bHoldsLock = new Flag();
+        s1.Zip(s2, (a, b) => a + b).Take(1).Subscribe(_ => inGate.Set(), _ => { });
         s2.Deliver(o => o.OnNext(2)); // queued in Zip
 
         var b = new Thread(() => s2.Deliver(o =>
         {
             bHoldsLock.Set();
-            inGate.Wait();            // A is now inside Zip's gate...
+            inGate.Raised();            // A is now inside Zip's gate...
             o.OnCompleted();          // ...so this blocks on it while holding s2's lock
         })) { IsBackground = true };
         var a = new Thread(() =>
         {
-            bHoldsLock.Wait();
+            bHoldsLock.Raised();
             s1.Deliver(o => o.OnNext(1)); // inside the gate: pair → Take(1) → dispose s2 → needs s2.Lock
         }) { IsBackground = true };
         b.Start(); a.Start();
@@ -73,21 +103,21 @@ public class ParallelReadExtensionsTests
     {
         var s1 = new LockedSource<int>();
         var s2 = new LockedSource<int>();
-        var inDownstream = new ManualResetEventSlim();
-        var bHoldsLock = new ManualResetEventSlim();
+        var inDownstream = new Flag();
+        var bHoldsLock = new Flag();
+        var completed = new Flag();
         var results = new List<int>();
-        var completed = new ManualResetEventSlim();
-        s1.WhenBoth(s2, (a, b) => a + b).Take(1).Subscribe(v => { lock (results) results.Add(v); inDownstream.Set(); }, () => completed.Set());
+        s1.WhenBoth(s2, (a, b) => a + b).Take(1).Subscribe(v => { lock (results) results.Add(v); inDownstream.Set(); }, _ => { }, completed.Set);
         s2.Deliver(o => o.OnNext(2));
 
-        var b = new Thread(() => s2.Deliver(o => { bHoldsLock.Set(); inDownstream.Wait(); o.OnCompleted(); })) { IsBackground = true };
-        var a = new Thread(() => { bHoldsLock.Wait(); s1.Deliver(o => o.OnNext(1)); }) { IsBackground = true };
+        var b = new Thread(() => s2.Deliver(o => { bHoldsLock.Set(); inDownstream.Raised(); o.OnCompleted(); })) { IsBackground = true };
+        var a = new Thread(() => { bHoldsLock.Raised(); s1.Deliver(o => o.OnNext(1)); }) { IsBackground = true };
         b.Start(); a.Start();
 
         a.Join(Bound).Should().BeTrue();
         b.Join(Bound).Should().BeTrue();
-        completed.Wait(Bound).Should().BeTrue();
-        results.Should().Equal(3);
+        completed.Raised().Should().BeTrue();
+        lock (results) results.Should().Equal(3);
     }
 
     // ───────────── stress ─────────────
@@ -99,13 +129,13 @@ public class ParallelReadExtensionsTests
         {
             var s1 = new LockedSource<int>();
             var s2 = new LockedSource<int>();
-            var done = new ManualResetEventSlim();
+            var done = new Flag();
             var seen = new List<int>();
-            s1.WhenBoth(s2, (a, b) => a * 10 + b).Take(1).Subscribe(v => { lock (seen) seen.Add(v); }, () => done.Set());
-            var barrier = new Barrier(2);
-            Task.Run(() => { barrier.SignalAndWait(); s1.Deliver(o => { o.OnNext(1); o.OnCompleted(); }); });
-            Task.Run(() => { barrier.SignalAndWait(); s2.Deliver(o => { o.OnNext(2); o.OnCompleted(); }); });
-            done.Wait(Bound).Should().BeTrue($"iteration {i} wedged");
+            s1.WhenBoth(s2, (a, b) => a * 10 + b).Take(1).Subscribe(v => { lock (seen) seen.Add(v); }, _ => { }, done.Set);
+            var start = new Rendezvous(2);
+            Task.Run(() => { start.Arrive(); s1.Deliver(o => { o.OnNext(1); o.OnCompleted(); }); });
+            Task.Run(() => { start.Arrive(); s2.Deliver(o => { o.OnNext(2); o.OnCompleted(); }); });
+            done.Raised().Should().BeTrue($"iteration {i} wedged");
             lock (seen) seen.Should().Equal(12);
         }
     }
@@ -116,18 +146,18 @@ public class ParallelReadExtensionsTests
         for (var i = 0; i < 300; i++)
         {
             var sources = Enumerable.Range(0, 5).Select(_ => new LockedSource<int>()).ToArray();
-            var done = new ManualResetEventSlim();
+            var done = new Flag();
             var count = 0;
             IReadOnlyList<int>? got = null;
-            sources.Select(s => (IObservable<int>)s).WhenAll().Subscribe(v => { Interlocked.Increment(ref count); got = v; }, () => done.Set());
-            var barrier = new Barrier(5);
+            sources.Select(s => (IObservable<int>)s).WhenAll().Subscribe(v => { Interlocked.Increment(ref count); got = v; }, _ => { }, done.Set);
+            var start = new Rendezvous(5);
             for (var k = 0; k < 5; k++)
             {
                 var (s, v) = (sources[k], k);
-                Task.Run(() => { barrier.SignalAndWait(); s.Deliver(o => { o.OnNext(v); o.OnCompleted(); }); });
+                Task.Run(() => { start.Arrive(); s.Deliver(o => { o.OnNext(v); o.OnCompleted(); }); });
             }
-            done.Wait(Bound).Should().BeTrue($"iteration {i} wedged");
-            count.Should().Be(1);
+            done.Raised().Should().BeTrue($"iteration {i} wedged");
+            Volatile.Read(ref count).Should().Be(1);
             got.Should().Equal(0, 1, 2, 3, 4);
         }
     }
@@ -141,7 +171,7 @@ public class ParallelReadExtensionsTests
         var b = new Subject<string>();
         var got = new List<(int, string)>();
         var completed = false;
-        a.WhenBoth(b).Subscribe(got.Add, () => completed = true);
+        a.WhenBoth(b).Subscribe(got.Add, _ => { }, () => completed = true);
         a.OnNext(1); a.OnNext(99);
         got.Should().BeEmpty();
         b.OnNext("x");
@@ -169,7 +199,7 @@ public class ParallelReadExtensionsTests
         var b = new Subject<int>();
         var values = 0;
         var completed = false;
-        Observable.Empty<int>().WhenBoth(b, (x, y) => x + y).Subscribe(_ => values++, () => completed = true);
+        Observable.Empty<int>().WhenBoth(b, (x, y) => x + y).Subscribe(_ => values++, _ => { }, () => completed = true);
         completed.Should().BeTrue();
         values.Should().Be(0);
     }
@@ -189,7 +219,7 @@ public class ParallelReadExtensionsTests
         var a = new Subject<int>();
         var b = new Subject<int>();
         var values = 0;
-        var sub = a.WhenBoth(b, (x, y) => x + y).Subscribe(_ => values++);
+        var sub = a.WhenBoth(b, (x, y) => x + y).Subscribe(_ => values++, _ => { });
         a.HasObservers.Should().BeTrue();
         b.HasObservers.Should().BeTrue();
         sub.Dispose();
@@ -215,40 +245,41 @@ public class ParallelReadExtensionsTests
         var subscriptions = 0;
         var src = Observable.Defer(() => { subscriptions++; return Observable.Return(1); });
         var both = src.WhenBoth(src, (x, y) => x + y);
-        both.Subscribe(_ => { });
-        both.Subscribe(_ => { });
+        both.Subscribe(_ => { }, _ => { });
+        both.Subscribe(_ => { }, _ => { });
         subscriptions.Should().Be(4);
     }
 
     [Fact]
     public void WhenAll_ThreeAndFour_CombineInOrder()
     {
-        ParallelReadExtensions.WhenAll(Observable.Return(1), Observable.Return("b"), Observable.Return(3.0), (x, y, z) => $"{x}{y}{z}")
-            .Wait().Should().Be("1b3");
-        ParallelReadExtensions.WhenAll(Observable.Return(1), Observable.Return(2), Observable.Return(3), Observable.Return(4), (a, b, c, d) => a + b + c + d)
-            .Wait().Should().Be(10);
+        Sync(ParallelReadExtensions.WhenAll(Observable.Return(1), Observable.Return("b"), Observable.Return(3.0), (x, y, z) => $"{x}{y}{z}"))
+            .Should().Be("1b3");
+        Sync(ParallelReadExtensions.WhenAll(Observable.Return(1), Observable.Return(2), Observable.Return(3), Observable.Return(4), (a, b, c, d) => a + b + c + d))
+            .Should().Be(10);
     }
 
     [Fact]
     public void WhenAll_FiveToEight_CombineInOrder()
     {
         IObservable<int> R(int v) => Observable.Return(v);
-        R(1).WhenAll(R(2), R(3), R(4), R(5), (a, b, c, d, e) => $"{a}{b}{c}{d}{e}").Wait().Should().Be("12345");
-        R(1).WhenAll(R(2), R(3), R(4), R(5), R(6), (a, b, c, d, e, f) => $"{a}{b}{c}{d}{e}{f}").Wait().Should().Be("123456");
-        R(1).WhenAll(R(2), R(3), R(4), R(5), R(6), R(7), (a, b, c, d, e, f, g) => $"{a}{b}{c}{d}{e}{f}{g}").Wait().Should().Be("1234567");
-        R(1).WhenAll(R(2), R(3), R(4), R(5), R(6), R(7), R(8), (a, b, c, d, e, f, g, h) => $"{a}{b}{c}{d}{e}{f}{g}{h}").Wait().Should().Be("12345678");
+        Sync(R(1).WhenAll(R(2), R(3), R(4), R(5), (a, b, c, d, e) => $"{a}{b}{c}{d}{e}")).Should().Be("12345");
+        Sync(R(1).WhenAll(R(2), R(3), R(4), R(5), R(6), (a, b, c, d, e, f) => $"{a}{b}{c}{d}{e}{f}")).Should().Be("123456");
+        Sync(R(1).WhenAll(R(2), R(3), R(4), R(5), R(6), R(7), (a, b, c, d, e, f, g) => $"{a}{b}{c}{d}{e}{f}{g}")).Should().Be("1234567");
+        Sync(R(1).WhenAll(R(2), R(3), R(4), R(5), R(6), R(7), R(8), (a, b, c, d, e, f, g, h) => $"{a}{b}{c}{d}{e}{f}{g}{h}")).Should().Be("12345678");
     }
 
     [Fact]
     public void WhenBoth_ANullReadResult_IsDelivered_NotDropped()
     {
-        Observable.Return<string?>(null).WhenBoth(Observable.Return<string?>("x"), (a, b) => (a, b)).Wait().Should().Be(((string?)null, (string?)"x"));
+        Sync(Observable.Return<string?>(null).WhenBoth(Observable.Return<string?>("x"), (a, b) => (a, b)))
+            .Should().Be(((string?)null, (string?)"x"));
     }
 
     [Fact]
     public void WhenAll_EmptyList_EmitsOneEmptyList()
     {
-        Enumerable.Empty<IObservable<int>>().WhenAll().Wait().Should().BeEmpty();
+        Sync(Enumerable.Empty<IObservable<int>>().WhenAll()).Should().BeEmpty();
     }
 
     [Fact]
@@ -265,10 +296,13 @@ public class ParallelReadExtensionsTests
     {
         var delay = TimeSpan.FromMilliseconds(500);
         IObservable<int> Slow(int v) => Observable.Timer(delay).Select(_ => v);
+        var done = new Flag();
+        var result = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var r = Slow(1).WhenBoth(Slow(2), (a, b) => a + b).Wait();
+        Slow(1).WhenBoth(Slow(2), (a, b) => a + b).Subscribe(v => result = v, _ => { }, done.Set);
+        done.Raised().Should().BeTrue();
         sw.Stop();
-        r.Should().Be(3);
+        result.Should().Be(3);
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(950), "two 500 ms reads must overlap");
     }
 
