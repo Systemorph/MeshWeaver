@@ -5734,6 +5734,22 @@ def self_test() -> int:
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
 
+    class _Budget:
+        def __init__(self, out, rc=0):
+            self.stdout, self.returncode = out, rc
+    for name, run, want in [
+        ("budget line: a normal reading prints used/limit and the reset, no warning",
+         lambda *a, **k: _Budget("5000 4000 1000000"), lambda t: "1000 of 5000 used" in t and "::warning" not in t),
+        ("budget line: at 80 % it warns",
+         lambda *a, **k: _Budget("5000 900 1000000"), lambda t: "4100 of 5000 used" in t and "::warning" in t),
+        ("budget line: an unreadable answer is said, never raised",
+         lambda *a, **k: _Budget("", 1), lambda t: t.endswith("not readable")),
+    ]:
+        got = budget_line("t", run=run)
+        ok = want(got)
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60}")
+
     if failures:
         print(f"::error::check-review-answered.py self-test: {failures} case(s) did not behave — the check is not proven")
         return 1
@@ -6822,11 +6838,39 @@ def report_outage(e: ApiOutage) -> int:
     return OUTAGE_EXIT
 
 
+def budget_line(label: str, run=subprocess.run) -> str:
+    """This token's REST budget as ONE log line (`GET /rate_limit` is not counted against it).
+
+    The fleet-reader installation's hourly budget is shared by every repository's review-answered and
+    stage-advance runs, combo-verify and the nightly locks; when it is spent the gates go red with no
+    verdict. Printed at the start and the end of every real run so the saturated hour — and who was
+    running in it — is readable from the logs BEFORE anything reds. Never raises. Self-contained on
+    purpose: the lanes fetch this one script, not its neighbours."""
+    try:
+        proc = run(["gh", "api", "rate_limit", "--jq", ".resources.core | \"\\(.limit) \\(.remaining) \\(.reset)\""],
+                   capture_output=True, text=True, timeout=30)
+        limit, remaining, reset = (int(x) for x in proc.stdout.split())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return f"REST budget ({label}): not readable"
+    stamp = datetime.datetime.fromtimestamp(reset, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    used = limit - remaining
+    line = f"REST budget ({label}): {used} of {limit} used, {remaining} remaining, resets {stamp}"
+    if limit and used * 5 >= limit * 4:
+        line += f"\n::warning title=REST budget nearly spent::{line}"
+    return line
+
+
 def main(argv=None) -> int:
+    instrument = os.environ.get("GITHUB_ACTIONS") == "true" and "--self-test" not in (argv or sys.argv[1:])
+    if instrument:
+        print(budget_line("review-answered, start"), flush=True)
     try:
         return _main(argv)
     except ApiOutage as e:
         return report_outage(e)
+    finally:
+        if instrument:
+            print(budget_line("review-answered, end"), flush=True)
 
 
 def _main(argv=None) -> int:

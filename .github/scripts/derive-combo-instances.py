@@ -89,6 +89,7 @@ def _load(name: str, filename: str):
 
 
 lock = _load("mw_lock_pinned_digests", "lock-pinned-digests.py")
+ghrest = _load("mw_ghrest", "ghrest.py")
 
 # The registry argument only narrows which image PINS the overlay scan extracts; this script reads
 # the `Hosting__Deployment`/`ingress.host` pair, which no registry scopes. Named rather than passed
@@ -103,6 +104,30 @@ def _no_probe(host: str):
     preflight free of an HTTPS call to every portal in the fleet — the verify job contacts them
     immediately afterwards, with a credential, and says so by name when one does not answer."""
     return None, None, ""
+
+
+# The line the retry steward (`retry-known-transients.py`) matches. Emitted when EVERY reason the
+# derivation could not finish is the installation's own spent budget: that is a fact about the budget,
+# not about the fleet, so it is NO VERDICT (infra, re-run after the reset) and never a content red.
+RATE_LIMITED_SENTENCE = "combo-verify: NO VERDICT — GitHub API rate-limited until"
+
+
+def rate_limit_verdict(blockers: list[str]) -> str | None:
+    """The `::error::` text when the derivation was stopped by the installation's rate limit, else None.
+
+    Pure. Fires only when at least one blocker carries the rate-limit annotation `ghrest.gh_cli` adds
+    AND no blocker is about anything else that is not itself an unread-repository consequence — a
+    genuine content blocker (an ambiguous declaration, a retired fleet) must still be reported as one."""
+    stamps = [ghrest.rate_limited_until(b) for b in blockers]
+    stamps = [x for x in stamps if x]
+    if not stamps:
+        return None
+    other = [b for b, x in zip(blockers, (ghrest.rate_limited_until(b) for b in blockers)) if not x]
+    if other:
+        return None
+    reset = sorted(stamps)[-1]
+    return (f"{RATE_LIMITED_SENTENCE} {reset} (the fleet-reader installation's hourly budget is spent; "
+            "nothing was concluded about the fleet); re-run after it (infra).")
 
 
 def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, str]], list[str]]:
@@ -747,6 +772,19 @@ def self_test() -> int:
     check(any("NEVER READ" in b for b in blockers),
           "an unreadable repository blocks, rather than shortening the roster")
 
+    # An installation whose rate limit stopped the read is NO VERDICT, never "never read".
+    limited = _scan("Systemorph/Private", [], unreadable="gh: API rate limit exceeded for installation "
+                    f"ID 1\n{ghrest.RATE_LIMITED_MARKER}2026-11-22T17:28:50Z")
+    _, _, limited_blockers = derive(TWO_LIVE + [limited], {})
+    verdict = rate_limit_verdict(limited_blockers)
+    check(verdict is not None and "2026-11-22T17:28:50Z" in verdict
+          and verdict.startswith(RATE_LIMITED_SENTENCE),
+          "a rate-limited read is NO VERDICT naming the reset (the retry steward's signature)")
+    check(rate_limit_verdict(blockers + ["some other blocker"]) is None
+          and rate_limit_verdict(limited_blockers + ["ZERO LIVE installations"]) is None,
+          "a genuine blocker next to a rate limit is still reported as content, never hidden by it")
+    check(rate_limit_verdict([]) is None, "no blockers, no verdict")
+
     # A live installation with no ingress host cannot be reached, so it cannot be verified.
     rows, _, blockers = derive([_scan("Systemorph/Memex", [
         ("memex", None, "deployments/aks/memex/values.memex.public.yaml")])], {})
@@ -1225,6 +1263,8 @@ def main() -> int:
             print(f"  • {problem}")
         return 1
 
+    if os.environ.get("GITHUB_ACTIONS") == "true" and not args.root:
+        print(ghrest.rate_budget_line("fleet-reader installation, before the derivation"), flush=True)
     public_repos = committed_repositories(args.root or ".")
     print(f"deriving the combo-verification roster from {len(repos)} repository(ies): "
           + ", ".join(repo if repo.lower() in public_repos else "<private>" for repo in repos))
@@ -1241,6 +1281,12 @@ def main() -> int:
     rows, excluded, blockers = derive(scans, roster)
     sources, source_blockers = derive_sources(scans)
     all_blockers = roster_problems + blockers + source_blockers
+    spent = rate_limit_verdict(all_blockers)
+    if spent:
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(ghrest.rate_budget_line("fleet-reader installation, after the refusal"), flush=True)
+        print(f"::error::{spent}")
+        return 1
     if os.environ.get("GITHUB_ACTIONS") == "true" and not os.environ.get(DIGEST_KEY_ENV, "").strip():
         all_blockers.append(
             f"{DIGEST_KEY_ENV} is empty. The roster digest that crosses the job boundary is an "
