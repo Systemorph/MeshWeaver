@@ -1157,6 +1157,16 @@ public partial class MeshQuery : IMeshQueryCore
                     SilentProviders = silentProviders.Count == 0 ? null : silentProviders.ToArray(),
                     Degradations = degradations.Count == 0 ? null : degradations.ToArray(),
                 });
+                // The per-provider hits were a buffer for THIS frame (and for deltas folded in before it).
+                // Held for the life of the query they keep every row the providers returned — and the
+                // content objects those carry — reachable from a long-lived subscription, which roots a
+                // module generation that has since been swapped out. After the merged Initial a delta
+                // goes through the live dedup, which tracks paths, never rows.
+                for (var p = 0; p < providerHits.Length; p++)
+                {
+                    providerHits[p].Clear();
+                    providerHits[p].TrimExcess();
+                }
             }
 
             for (var i = 0; i < observables.Count; i++)
