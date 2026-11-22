@@ -78,9 +78,13 @@ public class TopBarUpdateButtonTest(ITestOutputHelper output) : UpdateScenarioBa
         await AssertServes(pressed, "N", "the offer never recycles by itself (auto-recycle is off here)");
 
         // ── PRESS: what the portal shell runs for the button. The hub is asked at the press. ──
-        var recycled = await Press(pressed);
-        recycled.Should().BeTrue("the hub still serves N, so the press recycles it");
+        // Two OVERLAPPING presses (two viewers on one page): the hub claims its offer once, so
+        // exactly one press recycles and the other is answered "not stale" with nothing torn down.
+        var presses = await Task.WhenAll(Press(pressed), Press(pressed));
+        presses.Count(p => p).Should().Be(1,
+            "exactly one of two overlapping presses recycles; the second must not tear down the fresh activation");
         await AssertServes(pressed, "N1", "the activation after the press binds the newest build");
+        var fresh = HostedHub(pressed);
         var after = await UpdateMenu(pressed).Take(1)
             .Should().Within(Step).Emit(cancellationToken: TestContext.Current.CancellationToken);
         after.Should().BeEmpty("the fresh activation is on the newest build, so the button is gone");
@@ -88,10 +92,9 @@ public class TopBarUpdateButtonTest(ITestOutputHelper output) : UpdateScenarioBa
         // ── A SECOND press on the now-current hub (a button left on screen) recycles NOTHING: the
         // hub answers "not stale" at the press, so no DisposeRequest is posted. Proven by the
         // activation INSTANCE surviving a round trip that would queue behind any teardown. ──
-        var activation = HostedHub(pressed);
         (await Press(pressed)).Should().BeFalse("a current hub is not recycled by a stale button");
         await AssertServes(pressed, "N1", "a read after the press is answered");
-        HostedHub(pressed).Should().BeSameAs(activation,
+        HostedHub(pressed).Should().BeSameAs(fresh,
             "the same activation still serves: a press on a current hub must not tear it down");
 
         // ── EXACTLY that address: the sibling was not recycled and still serves N. ──

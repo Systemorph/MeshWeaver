@@ -589,12 +589,16 @@ top bar renders ONE button from it and from the node menu:
 
 Both run from the CIRCUIT's hub and end in ONE page reload once the fresh activation answers.
 **Recycle** is the existing page-level flow (`PortalLayoutBase.RunRecycleAsync`, `hub.RecycleNode`).
-**Update** goes through `hub.UpdateToNewestBuild(path, reason)` (`MeshWeaver.Mesh.Contract`): it
-first asks the hub, **at the press**, `NewerBuildAvailableRequest`, which the hub answers from its
-own offer (`StaleBuildBanner.HandleNewerBuildAvailable`), and it posts the `DisposeRequest` only on
-a `true` answer. A button still on screen after the hub reached the current build (another
-viewer's press, the automatic recycle) therefore recycles nothing. Its `Reason` names the viewer, the
-page and *"pressed Update in the top bar"*. The node menu's ⋯ Recycle entry stays
+**Update** goes through `hub.UpdateToNewestBuild(path, reason)` (`MeshWeaver.Mesh.Contract`), which
+sends `UpdateToNewestBuildRequest` to the page hub, and **the hub decides at the press**
+(`StaleBuildBanner.HandleUpdateToNewestBuild`). In one turn of its single-threaded action block it
+CLAIMS its offer (sets it to null, which clears the button and the banner), answers, and posts its
+own `DisposeRequest`. With no offer it answers `false` and tears nothing down. So a button still on
+screen after the hub became current recycles nothing, and of two overlapping presses exactly one
+recycles. The answer goes out before the dispose, and the caller's follow-up read can only arrive
+after both, so the read is answered by the fresh activation. The `Reason` names the viewer, the page,
+*"pressed Update in the top bar"*, the NodeType and both builds. A press does not wait for a step in
+flight, the same as the node menu's Recycle: the viewer asked for it. The node menu's ⋯ Recycle entry stays
 for the general case, and the banner stays for clients that have no top bar.
 
 **Why a reader may press Update but not Recycle.** In the stale state the recycle does nothing a
@@ -603,9 +607,10 @@ published, compiled `Ok` under the type's own authority. It is exactly what the 
 itself where `Modules:AutoRecycleOnStaleBuild` is on. And it limits itself: the fresh activation
 binds the newest build, its offer is null, and the button is gone, so viewers can trigger at most one
 recycle per publication, the same bound as the automatic recycle's `Take(1)`. That bound is
-enforced at the press, by the hub, never by the rendered menu: a menu is a snapshot, and the
-review of the first draft (MeshWeaver#8458) found that a snapshot-only gate let a button left on
-screen tear down a hub that had meanwhile become current. Recycling a CURRENT hub is a different
+enforced at the press, by the hub, never by the rendered menu. Two review findings on
+MeshWeaver#8458 shaped this: a snapshot-only gate let a button left on screen tear down a hub that
+had meanwhile become current, and a check-then-dispose by the caller let two overlapping presses both
+read "stale". Recycling a CURRENT hub is a different
 act: it interrupts everyone else on the page and gains no build, so it stays behind `Update`.
 
 **Not closed by this change:** a `DisposeRequest` is not permission-checked at its target, so a
@@ -615,11 +620,12 @@ recycle surface as a whole, older than this button, and the button neither widen
 **Proven by** `TopBarUpdateButtonTest` (`test/MeshWeaver.Updates.Test`, a real N → N+1 compile):
 no entry while the instance runs N (read only after the hub's Node menu has rendered, so an absent
 slot cannot pass for an empty one); one `recycle` action for exactly that address once N+1 is
-published, while the page still serves N; the press (`UpdateToNewestBuild`) answers `true` and the
-address then serves N+1 with the entry gone; a SECOND press on the now-current hub answers `false`
-and the same activation instance keeps serving; and a sibling instance of the same type that nobody
-pressed still serves N. Two mutations each turn it red: removing the `$Menu:Update` registration
-(the positive half), and a hub that always answers "newer build available" (the second press). `StaleBuildUpdateMenuTest`
+published, while the page still serves N; two OVERLAPPING presses (`UpdateToNewestBuild`) yield
+exactly one `true`, and the address then serves N+1 with the entry gone; a further press on the
+now-current hub answers `false` and the same activation instance keeps serving; and a sibling
+instance of the same type that nobody pressed still serves N. Two mutations each turn it red:
+removing the `$Menu:Update` registration (the positive half), and a handler that answers without
+claiming the offer (both overlapping presses then report `true`, measured twice in a row). `StaleBuildUpdateMenuTest`
 (`test/MeshWeaver.Graph.Test`) pins the projection: no offer and `ServedBuildIsNotPublished` give
 nothing, `NewerBuildAvailable` gives one Read-level entry. The shell's choice of button is
 `TopBarUpdatePolicy` in MeshWeaver.Plugins, with its own tests.

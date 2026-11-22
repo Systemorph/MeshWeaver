@@ -178,16 +178,39 @@ public static class StaleBuildBanner
     }
 
     /// <summary>
-    /// Answers <see cref="NewerBuildAvailableRequest"/> from the hub's CURRENT offer — the
-    /// execution-time half of the Update button (<see cref="UpdateToNewestBuildExtensions"/>). The
-    /// menu entry is a render-time snapshot; this is the decision at the press.
+    /// The execution-time half of the Update button (<see cref="UpdateToNewestBuildExtensions"/>):
+    /// the hub recycles ITSELF, and only while its CURRENT offer is
+    /// <see cref="StaleBuildKind.NewerBuildAvailable"/>. The menu entry is a render-time snapshot;
+    /// this is the decision at the press.
+    ///
+    /// <para>🚨 <b>Claim, answer, dispose — in that order, in one handler turn.</b> The handler runs
+    /// on the hub's single-threaded action block, so claiming the offer (setting it to null) is
+    /// atomic: of two overlapping presses exactly one finds the offer, and the other is answered
+    /// <c>false</c> with nothing torn down. The answer is posted before the
+    /// <see cref="DisposeRequest"/>, and both are posted before the caller can send its follow-up
+    /// read, so that read queues behind the dispose and is answered by the fresh activation.
+    /// Clearing the offer also clears the button and the banner as the recycle begins.</para>
+    ///
+    /// <para>The dispose is posted directly rather than through
+    /// <c>RecycleSelfAfterAcceptedWork</c>: a handler runs only on a hub whose initialization gates
+    /// have opened, which is the case that helper exists for, and a deferred post would lose the
+    /// ordering above. Like the node menu's Recycle, a press does not wait for a step in flight; the
+    /// viewer asked for it.</para>
     /// </summary>
-    internal static IMessageDelivery HandleNewerBuildAvailable(
-        IMessageHub hub, IMessageDelivery<NewerBuildAvailableRequest> request)
+    internal static IMessageDelivery HandleUpdateToNewestBuild(
+        IMessageHub hub, IMessageDelivery<UpdateToNewestBuildRequest> request)
     {
-        var offer = hub.Get<BehaviorSubject<StaleBuildOffer?>>()?.Value;
-        hub.Post(new NewerBuildAvailableResponse(offer is { Kind: StaleBuildKind.NewerBuildAvailable }),
-            o => o.ResponseFor(request));
+        var offers = hub.Get<BehaviorSubject<StaleBuildOffer?>>();
+        var claimed = offers?.Value is { Kind: StaleBuildKind.NewerBuildAvailable } offer ? offer : null;
+        if (claimed is not null)
+            offers?.OnNext(null);
+        hub.Post(new UpdateToNewestBuildResponse(claimed is not null), o => o.ResponseFor(request));
+        if (claimed is not null)
+            hub.Post(new DisposeRequest
+            {
+                Reason = $"{request.Message.Reason} (NodeType '{claimed.NodeType}' published build "
+                         + $"'{claimed.PublishedAssemblyPath}', superseding the bound '{claimed.BoundAssemblyPath}')",
+            }, o => o.WithTarget(hub.Address));
         return request.Processed();
     }
 
@@ -209,10 +232,11 @@ public static class StaleBuildBanner
     /// itself: the fresh activation binds the newest build, its offer is null, and the entry is
     /// gone, so viewers can trigger at most one recycle per publication, the same bound as the
     /// automatic recycle's <c>Take(1)</c>. The bound is enforced at the PRESS, not at render: the
-    /// portal runs <see cref="UpdateToNewestBuildExtensions.UpdateToNewestBuild"/>, which asks this
-    /// hub (<see cref="HandleNewerBuildAvailable"/>) and recycles only on a <c>true</c> answer, so a
-    /// button left on screen after the hub reached the current build recycles nothing. Recycling a CURRENT hub is a different act (it
-    /// interrupts other viewers and gains no build) and stays behind Update in the node menu.</para>
+    /// portal runs <see cref="UpdateToNewestBuildExtensions.UpdateToNewestBuild"/>, and this hub
+    /// (<see cref="HandleUpdateToNewestBuild"/>) claims its offer and recycles itself only while it
+    /// is stale, so a button left on screen, or a second overlapping press, recycles nothing.
+    /// Recycling a CURRENT hub is a different act (it interrupts other viewers and gains no build)
+    /// and stays behind Update in the node menu.</para>
     /// </summary>
     /// <param name="nodePath">The instance the entry recycles.</param>
     /// <param name="offer">The hub's current offer, or null.</param>
