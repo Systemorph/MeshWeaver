@@ -39,7 +39,7 @@ So production was the first place a build ran under real load. That is the prope
 > `stable` for line N advances only after the canary of line N ran it for the soak window with a
 > green verdict.**
 
-Four properties follow from the rule and are pinned by tests:
+Five properties follow from the rule and are pinned by tests (property 5 by `LinePromotionTests` in `Hosting/PlatformBuildInbox`, Systemorph/MeshWeaver.Plugins#5811):
 
 1. **An unpromoted build never reaches a follower.** A follower's roll is capped at the line's
    promoted build. If nothing is promoted, it holds.
@@ -55,7 +55,7 @@ Four properties follow from the rule and are pinned by tests:
    2026-11-22: three builds in six hours, no promotion). A same-image restart (a module wave) is held
    by the same rule, since it would restart the soak too. A candidate that FAILS (the canary is red,
    was red inside the soak, or is over its issue budget) releases the hold at once, because the newest
-   build is what carries the fix; the pointer records it as `failedTag`, and the release applies only
+   build is what carries the fix; the promoter writes it on the pointer `Ops/Promotion/v{N}` as `failedTag` (a field of the pointer, never of the declaration), and the release applies only
    while the canary still runs exactly that build. An unread pointer or an unorderable pair holds. A
    line that is disabled holds nothing, since nothing would ever decide the build. For an urgent fix,
    declare `holdOverride: true` on the line declaration: the canary then follows `latest` as before,
