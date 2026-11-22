@@ -411,7 +411,7 @@ older build than the one its type now publishes, and nothing otherwise. The port
 as a prominent **Update** button for every signed-in viewer of the page; when the page is current,
 the same button slot shows a subtle **Recycle** for viewers whose node menu carries the Recycle entry
 (`Update` permission). One button, never two. Why a reader may press Update but not Recycle, and how
-it is tested: [Stale State Until a Recycle → The Update button](../Architecture/StaleStateUntilRecycle).
+it is tested: [Stale State Until a Recycle → The Update button](../../Architecture/StaleStateUntilRecycle).
 
 ---
 
