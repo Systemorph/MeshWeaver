@@ -2646,6 +2646,13 @@ internal static class NodeTypeEnrichmentHelpers
                 // page that takes its content away. Writes the sidecar area $Banner; see
                 // StaleBuildBanner for why a wrapper is impossible here.
                 .AddLayout(layout => layout.WithRenderer(_ => true, StaleBuildBanner.Render))
+                // The same offer as a ONE-ENTRY menu ($Menu:Update): the portal's top-bar Update
+                // button. Present iff a newer build is available; see StaleBuildBanner.UpdateMenuItems.
+                .AddNodeMenuItems(StaleBuildBanner.UpdateMenuContext, StaleBuildBanner.UpdateMenuProvider)
+                // …and the press is decided HERE, by the hub, at the moment it arrives
+                // (UpdateToNewestBuildExtensions): it claims the offer and recycles itself only while
+                // stale, so a stale snapshot or a second overlapping press recycles nothing.
+                .WithHandler<UpdateToNewestBuildRequest>(StaleBuildBanner.HandleUpdateToNewestBuild)
                 .WithInitialization(instanceHub =>
                 {
                     // Fire-and-forget, exactly as the overlay watcher: a watcher that cannot be
@@ -2798,8 +2805,10 @@ internal static class NodeTypeEnrichmentHelpers
                         // 🚨 Named (#3510) — see the rebind watcher: the three self-posting
                         // recyclers were indistinguishable in the victim's own log.
                         // Queued behind the instance's own initialization gates, like the
-                        // overlay self-heal (#5356): the work it already accepted runs first.
-                        instanceHub.RecycleSelfAfterAcceptedWork(
+                        // overlay self-heal (#5356): the work it already accepted runs first —
+                        // and, like the module swap wave (#7324), never in the middle of a step
+                        // the hub has in flight.
+                        RecycleSelfWhenNoStepInFlight(instanceHub,
                             $"Stale-build convergence ({AutoRecycleConfigKey}=true): "
                             + $"NodeType '{nodeType}' published build '{published}', "
                             + $"superseding the bound '{boundAssemblyPath}'",
@@ -2836,6 +2845,38 @@ internal static class NodeTypeEnrichmentHelpers
                 ex => logger?.LogWarning(ex,
                     "Stale-assembly self-heal watcher for NodeType '{NodeType}' (instance '{InstancePath}') faulted — falling back to manual Recycle",
                     nodeType, instanceHub.Address));
+
+    /// <summary>
+    /// The stale-build convergence recycle, held while the hub has a STEP in flight
+    /// (<see cref="HubStepsInFlight"/>, MeshWeaver#7324) and posted the moment the last one ends.
+    /// The same rule the live module swap wave applies (<c>ModuleLiveUpdater</c>): a long step (an
+    /// agent round, a reload request's landing) is never torn down in its middle because a newer
+    /// build was published. Idle — the common case — recycles at once, exactly as before.
+    ///
+    /// <para>A hub that starts to shut down for another reason first ends the wait at that instant
+    /// (<see cref="IMessageHub.ShuttingDown"/>): its next activation binds the newest build anyway,
+    /// so posting into the teardown would only add a delivery to account for. No poll, no clock.</para>
+    /// </summary>
+    internal static void RecycleSelfWhenNoStepInFlight(IMessageHub instanceHub, string reason, ILogger? logger)
+    {
+        var steps = instanceHub.Get<HubStepsInFlight>();
+        if (steps is not { Count: > 0 })
+        {
+            instanceHub.RecycleSelfAfterAcceptedWork(reason, logger);
+            return;
+        }
+        logger?.LogInformation(
+            "Stale-build convergence: '{InstancePath}' has {Steps} step(s) in flight — its recycle is deferred until they end ({Reason})",
+            instanceHub.Address, steps.Count, reason);
+        instanceHub.RegisterForDisposal(steps.Idle()
+            .TakeUntil(instanceHub.ShuttingDown)
+            .Subscribe(
+                _ => instanceHub.RecycleSelfAfterAcceptedWork(
+                    reason + " (deferred until its in-flight step ended)", logger),
+                ex => logger?.LogWarning(ex,
+                    "Stale-build convergence: the deferred recycle of '{InstancePath}' could not be issued — it keeps the previous build until its next recycle",
+                    instanceHub.Address)));
+    }
 
     /// <summary>
     /// Watcher core of <see cref="WithOverlaySelfHeal"/>, split out so the
