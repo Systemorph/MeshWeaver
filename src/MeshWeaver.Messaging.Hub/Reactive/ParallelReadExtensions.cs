@@ -83,6 +83,76 @@ public static class ParallelReadExtensions
             v => combine(Unbox<TA>(v[0]), Unbox<TB>(v[1]), Unbox<TC>(v[2]), Unbox<TD>(v[3])));
     }
 
+    /// <summary>The first value of each of 5 reads, subscribed at once.</summary>
+    public static IObservable<TResult> WhenAll<T1, T2, T3, T4, T5, TResult>(
+        this IObservable<T1> first, IObservable<T2> second, IObservable<T3> third, IObservable<T4> fourth, IObservable<T5> fifth,
+        Func<T1, T2, T3, T4, T5, TResult> combine)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+        ArgumentNullException.ThrowIfNull(third);
+        ArgumentNullException.ThrowIfNull(fourth);
+        ArgumentNullException.ThrowIfNull(fifth);
+        ArgumentNullException.ThrowIfNull(combine);
+        return Run(
+            [Boxed(first), Boxed(second), Boxed(third), Boxed(fourth), Boxed(fifth)],
+            v => combine(Unbox<T1>(v[0]), Unbox<T2>(v[1]), Unbox<T3>(v[2]), Unbox<T4>(v[3]), Unbox<T5>(v[4])));
+    }
+
+    /// <summary>The first value of each of 6 reads, subscribed at once.</summary>
+    public static IObservable<TResult> WhenAll<T1, T2, T3, T4, T5, T6, TResult>(
+        this IObservable<T1> first, IObservable<T2> second, IObservable<T3> third, IObservable<T4> fourth, IObservable<T5> fifth, IObservable<T6> sixth,
+        Func<T1, T2, T3, T4, T5, T6, TResult> combine)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+        ArgumentNullException.ThrowIfNull(third);
+        ArgumentNullException.ThrowIfNull(fourth);
+        ArgumentNullException.ThrowIfNull(fifth);
+        ArgumentNullException.ThrowIfNull(sixth);
+        ArgumentNullException.ThrowIfNull(combine);
+        return Run(
+            [Boxed(first), Boxed(second), Boxed(third), Boxed(fourth), Boxed(fifth), Boxed(sixth)],
+            v => combine(Unbox<T1>(v[0]), Unbox<T2>(v[1]), Unbox<T3>(v[2]), Unbox<T4>(v[3]), Unbox<T5>(v[4]), Unbox<T6>(v[5])));
+    }
+
+    /// <summary>The first value of each of 7 reads, subscribed at once.</summary>
+    public static IObservable<TResult> WhenAll<T1, T2, T3, T4, T5, T6, T7, TResult>(
+        this IObservable<T1> first, IObservable<T2> second, IObservable<T3> third, IObservable<T4> fourth, IObservable<T5> fifth, IObservable<T6> sixth, IObservable<T7> seventh,
+        Func<T1, T2, T3, T4, T5, T6, T7, TResult> combine)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+        ArgumentNullException.ThrowIfNull(third);
+        ArgumentNullException.ThrowIfNull(fourth);
+        ArgumentNullException.ThrowIfNull(fifth);
+        ArgumentNullException.ThrowIfNull(sixth);
+        ArgumentNullException.ThrowIfNull(seventh);
+        ArgumentNullException.ThrowIfNull(combine);
+        return Run(
+            [Boxed(first), Boxed(second), Boxed(third), Boxed(fourth), Boxed(fifth), Boxed(sixth), Boxed(seventh)],
+            v => combine(Unbox<T1>(v[0]), Unbox<T2>(v[1]), Unbox<T3>(v[2]), Unbox<T4>(v[3]), Unbox<T5>(v[4]), Unbox<T6>(v[5]), Unbox<T7>(v[6])));
+    }
+
+    /// <summary>The first value of each of 8 reads, subscribed at once.</summary>
+    public static IObservable<TResult> WhenAll<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(
+        this IObservable<T1> first, IObservable<T2> second, IObservable<T3> third, IObservable<T4> fourth, IObservable<T5> fifth, IObservable<T6> sixth, IObservable<T7> seventh, IObservable<T8> eighth,
+        Func<T1, T2, T3, T4, T5, T6, T7, T8, TResult> combine)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+        ArgumentNullException.ThrowIfNull(third);
+        ArgumentNullException.ThrowIfNull(fourth);
+        ArgumentNullException.ThrowIfNull(fifth);
+        ArgumentNullException.ThrowIfNull(sixth);
+        ArgumentNullException.ThrowIfNull(seventh);
+        ArgumentNullException.ThrowIfNull(eighth);
+        ArgumentNullException.ThrowIfNull(combine);
+        return Run(
+            [Boxed(first), Boxed(second), Boxed(third), Boxed(fourth), Boxed(fifth), Boxed(sixth), Boxed(seventh), Boxed(eighth)],
+            v => combine(Unbox<T1>(v[0]), Unbox<T2>(v[1]), Unbox<T3>(v[2]), Unbox<T4>(v[3]), Unbox<T5>(v[4]), Unbox<T6>(v[5]), Unbox<T7>(v[6]), Unbox<T8>(v[7])));
+    }
+
     /// <summary>
     /// The first value of each of N same-typed reads, in source order — the replacement for the N-ary
     /// <c>Observable.Zip(IEnumerable&lt;IObservable&lt;T&gt;&gt;)</c> over reads. The sources are enumerated once, at subscription.

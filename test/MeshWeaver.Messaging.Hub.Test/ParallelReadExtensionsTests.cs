@@ -230,6 +230,22 @@ public class ParallelReadExtensionsTests
     }
 
     [Fact]
+    public void WhenAll_FiveToEight_CombineInOrder()
+    {
+        IObservable<int> R(int v) => Observable.Return(v);
+        R(1).WhenAll(R(2), R(3), R(4), R(5), (a, b, c, d, e) => $"{a}{b}{c}{d}{e}").Wait().Should().Be("12345");
+        R(1).WhenAll(R(2), R(3), R(4), R(5), R(6), (a, b, c, d, e, f) => $"{a}{b}{c}{d}{e}{f}").Wait().Should().Be("123456");
+        R(1).WhenAll(R(2), R(3), R(4), R(5), R(6), R(7), (a, b, c, d, e, f, g) => $"{a}{b}{c}{d}{e}{f}{g}").Wait().Should().Be("1234567");
+        R(1).WhenAll(R(2), R(3), R(4), R(5), R(6), R(7), R(8), (a, b, c, d, e, f, g, h) => $"{a}{b}{c}{d}{e}{f}{g}{h}").Wait().Should().Be("12345678");
+    }
+
+    [Fact]
+    public void WhenBoth_ANullReadResult_IsDelivered_NotDropped()
+    {
+        Observable.Return<string?>(null).WhenBoth(Observable.Return<string?>("x"), (a, b) => (a, b)).Wait().Should().Be(((string?)null, (string?)"x"));
+    }
+
+    [Fact]
     public void WhenAll_EmptyList_EmitsOneEmptyList()
     {
         Enumerable.Empty<IObservable<int>>().WhenAll().Wait().Should().BeEmpty();
