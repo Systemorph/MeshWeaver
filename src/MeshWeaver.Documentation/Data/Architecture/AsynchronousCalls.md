@@ -576,6 +576,32 @@ return Observable.CombineLatest(cellLookups)
 
 ---
 
+## 🚨 Combining reads: `WhenBoth` / `WhenAll`, never `Zip`
+
+**To combine two or more independent cold reads (hub reads, mesh reads, HTTP asks) in parallel, use `MeshWeaver.Reactive.ParallelReadExtensions` — never `Observable.Zip` / `a.Zip(b, f)`.**
+
+```csharp
+using MeshWeaver.Reactive;
+
+hub.GetMeshNode(a).WhenBoth(hub.GetMeshNode(b), (x, y) => (x, y));      // two reads, one pair
+readA.WhenAll(readB, readC, (a, b, c) => …);                    // three / four (…, readD, (a, b, c, d) => …)
+sources.WhenAll();                                                       // N same-typed reads → IReadOnlyList<T>, in order
+```
+
+**The mechanism (Rx.NET 7.0.0, `Linq/Observable/Zip.cs`, the version the platform ships).** Binary `Zip` has ONE gate, `_gate`, and holds it across the downstream call: `OnNext` runs `ForwardOnNext` inside `lock (_gate)`, and `OnCompleted` runs `ForwardOnCompleted` or `_firstDisposable.Dispose()` inside it. Anything a downstream does from that callback therefore runs under the gate — and a downstream that ends the pipeline (`Take(1)`, a completing `SelectMany`, a hub post that disposes the subscription) disposes **both** sources there. Deadlock needs a second lock: a source whose `Dispose` takes a lock that its own delivering thread holds while delivering (a serialising gate, a scheduler or hub queue lock). Thread A sits in Zip's gate disposing source 2 and waits for source 2's lock; thread B holds source 2's lock delivering `OnCompleted` and waits for Zip's gate. Hosting#1785: dotnet-stack showed one thread in `Zip.FirstObserver.OnCompleted` (waiting on the gate) and another in `Zip.Dispose` (waiting on the other side).
+
+**How reachable is it?** For any two sources whose delivery can overlap on two threads and whose `Dispose` is serialised with their delivery — the common shape of an async hub read — and NOT only for one particular `Take(1)`/`OnCompleted` ordering. The ordering only decides whether a given run hits the window. Sources that complete synchronously (an in-process cached stream, `Observable.Return`) cannot form the cycle, because delivery and disposal then happen on one thread. `ParallelReadExtensionsTests.Zip_WedgesWhen…` reproduces it deterministically (two barriers, no timing luck); the same shape with `WhenBoth` completes.
+
+**What the combinator does instead.** Every source is subscribed at once and writes only a private slot under one private lock that is never held across a callback or a disposal; the thread that fills the last slot (or sees the first error, or the first source that ends empty) claims the single emission under that lock and delivers OUTSIDE it, then releases the other subscriptions. Semantics are `Zip(a.Take(1), b.Take(1))`: first value of each, emit once, complete; first error wins; a source that ends empty completes the output without a value (immediately, where Zip would wait); disposal unsubscribes everything; a throwing selector faults the output; an empty source list emits one empty list (Rx's N-ary `Zip` over an empty list subscribes nothing and never emits or completes — a latent hang this fixes). Arities 2-8 are provided as typed overloads; beyond that, nest or use the same-typed list form. It is cold, and it adds no timeout — bound a read that can stall with `Timeout`, as always.
+
+**When the reads need not overlap**, chain them (`a.SelectMany(x => b.Select(y => (x, y)))`) — simplest, and no combinator at all. Use `WhenBoth`/`WhenAll` when the budget needs the reads to run alongside each other.
+
+**Not for streams.** `WhenBoth` takes each source's FIRST value. A pairing of two LIVE streams is `CombineLatest` (whose gate also spans delivery — keep its downstream free of disposal and blocking). `Zip` over in-memory sequences (`Enumerable.Zip`) is not Rx and is unaffected.
+
+**The Plugins repo ratchets the class** with `scripts/check-rx-zip.py` against `scripts/rx-zip.allow`: an Rx `Zip` over reads in `Source/` or `src/` non-test code that is not in the allow file fails the PR, and the file may only shrink.
+
+---
+
 ## Streams are reactive — subscribe, don't snapshot
 
 `ISynchronizationStream<T>` is consumed via `.Select(...)` / `.Where(...)` / `.Subscribe(...)`. The framework's snapshot accessor is `internal` — application code can't see it, so the temptation to `.Current?.Value` doesn't exist. If a sync handler needs a value it can't subscribe for, the handler is wrong: derive it from the request payload, or defer the work to a follow-up message posted from inside `Subscribe`.
