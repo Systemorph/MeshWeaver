@@ -584,7 +584,7 @@ return Observable.CombineLatest(cellLookups)
 using MeshWeaver.Reactive;
 
 hub.GetMeshNode(a).WhenBoth(hub.GetMeshNode(b), (x, y) => (x, y));      // two reads, one pair
-ParallelReadExtensions.WhenAll(readA, readB, readC, (a, b, c) => …);    // three / four
+readA.WhenAll(readB, readC, (a, b, c) => …);                    // three / four (…, readD, (a, b, c, d) => …)
 sources.WhenAll();                                                       // N same-typed reads → IReadOnlyList<T>, in order
 ```
 

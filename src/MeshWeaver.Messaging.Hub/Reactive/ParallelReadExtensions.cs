@@ -55,9 +55,9 @@ public static class ParallelReadExtensions
         this IObservable<TA> first, IObservable<TB> second)
         => first.WhenBoth(second, (a, b) => (a, b));
 
-    /// <summary>The first value of each of three reads, subscribed at once.</summary>
+    /// <summary>The first value of each of three reads, subscribed at once (<c>a.WhenAll(b, c, (x, y, z) =&gt; …)</c>).</summary>
     public static IObservable<TResult> WhenAll<TA, TB, TC, TResult>(
-        IObservable<TA> first, IObservable<TB> second, IObservable<TC> third, Func<TA, TB, TC, TResult> combine)
+        this IObservable<TA> first, IObservable<TB> second, IObservable<TC> third, Func<TA, TB, TC, TResult> combine)
     {
         ArgumentNullException.ThrowIfNull(first);
         ArgumentNullException.ThrowIfNull(second);
@@ -70,7 +70,7 @@ public static class ParallelReadExtensions
 
     /// <summary>The first value of each of four reads, subscribed at once.</summary>
     public static IObservable<TResult> WhenAll<TA, TB, TC, TD, TResult>(
-        IObservable<TA> first, IObservable<TB> second, IObservable<TC> third, IObservable<TD> fourth,
+        this IObservable<TA> first, IObservable<TB> second, IObservable<TC> third, IObservable<TD> fourth,
         Func<TA, TB, TC, TD, TResult> combine)
     {
         ArgumentNullException.ThrowIfNull(first);
