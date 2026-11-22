@@ -275,6 +275,18 @@ public partial record MeshBuilder
     public MeshBuilder InstallModules(IReadOnlyList<ModuleInstallCandidate> modules)
     {
         ArgumentNullException.ThrowIfNull(modules);
+        // 🚨 Dependencies first, for EVERY host: a module's builder hook runs at install, and one that
+        // names a sibling module's type needs that sibling installed already (ModuleInstallOrder).
+        return InstallModulesAsListed(ModuleInstallOrder.DependenciesFirst(modules));
+    }
+
+    /// <summary>
+    /// Installs the candidates in exactly the order given — no dependency ordering. Reserved for tests
+    /// that need the name-ordered negative control; every host goes through <see cref="InstallModules"/>.
+    /// </summary>
+    public MeshBuilder InstallModulesAsListed(IReadOnlyList<ModuleInstallCandidate> modules)
+    {
+        ArgumentNullException.ThrowIfNull(modules);
         // A module's NATIVE payload is unreachable without this (#1728): Assembly.LoadFrom never
         // consults the module's deps.json, so nothing probes modules/<Name>/runtimes/<rid>/native/.
         // Subscribed here — before anything from a module folder is loaded — and idempotent.
