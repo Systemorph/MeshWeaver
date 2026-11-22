@@ -376,7 +376,114 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
     /// </remarks>
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
-        // Static nodes are purely in-memory (no I/O) and never change.
+        if (_modules is null || typeof(T) != typeof(MeshNode))
+            return QueryOnce<T>(request, options);
+        // T is MeshNode here: the cast only restates that for the compiler.
+        return (IObservable<QueryResultChange<T>>)(object)FollowModuleSwaps(request, options);
+    }
+
+    /// <summary>
+    /// 🚨 <b>An open query follows a live module swap.</b> The declared rows are in memory and change in
+    /// exactly one way: a module generation is replaced, and the rows its providers contribute are then
+    /// built from the NEW generation (<see cref="catalog"/> is dropped on
+    /// <see cref="MeshWeaver.Mesh.ModuleContexts.VersionChanged"/>). A query used to emit its Initial and
+    /// say nothing more, so every live consumer — a synced query's replay cache, the aggregator's last
+    /// result, a resolver's snapshot — kept the rows, and the content objects they carry, of the
+    /// generation that had just retired, for as long as it stayed subscribed. That roots the retired
+    /// generation's load context for the life of the process: MeshWeaver.AI swapped live as the primary
+    /// of its swap was unloaded and never collected.
+    /// <para>Each swap ENDS the running read and starts a fresh one (a read in flight holds the rows it
+    /// collected, and an access follow re-filters them on every grant change), and the fresh Initial is
+    /// diffed against what the reader holds: <see cref="QueryChangeType.Updated"/> for a row whose
+    /// content was rebuilt, <see cref="QueryChangeType.Added"/> / <see cref="QueryChangeType.Removed"/>
+    /// for membership — so the reader's copy is replaced. A swap that changes nothing for this reader
+    /// emits nothing. The stream no longer completes after its Initial; every other provider's already
+    /// does not complete.</para>
+    /// </summary>
+    private IObservable<QueryResultChange<MeshNode>> FollowModuleSwaps(
+        MeshQueryRequest request, JsonSerializerOptions options)
+    {
+        var modules = _modules!;
+        return Observable.Create<QueryResultChange<MeshNode>>(observer =>
+        {
+            var gate = new object();
+            Dictionary<string, MeshNode>? held = null;
+            var version = 0L;
+            var disposables = new System.Reactive.Disposables.CompositeDisposable();
+
+            // Subscribed BEFORE the first read, so a swap that lands while it runs is never missed.
+            var swaps = new System.Reactive.Subjects.Subject<long>();
+            disposables.Add(modules.VersionChanged.Subscribe(swaps));
+            disposables.Add(swaps
+                .StartWith(0L)
+                .Select(_ => QueryOnce<MeshNode>(request, options))
+                .Switch()
+                .Subscribe(change =>
+                {
+                    var frames = new List<QueryResultChange<MeshNode>>(3);
+                    lock (gate)
+                    {
+                        if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                        {
+                            var now = new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
+                            foreach (var node in change.Items ?? [])
+                                if (!string.IsNullOrEmpty(node.Path)) now[node.Path] = node;
+                            if (held is null)
+                            {
+                                held = now;
+                                frames.Add(change);
+                            }
+                            else
+                            {
+                                var removed = held.Where(h => !now.ContainsKey(h.Key)).Select(h => h.Value).ToList();
+                                var added = now.Where(n => !held.ContainsKey(n.Key)).Select(n => n.Value).ToList();
+                                var updated = now.Where(n => held.TryGetValue(n.Key, out var was) && !ReferenceEquals(was, n.Value))
+                                    .Select(n => n.Value).ToList();
+                                held = now;
+                                foreach (var (type, items) in new[]
+                                         {
+                                             (QueryChangeType.Removed, removed),
+                                             (QueryChangeType.Added, added),
+                                             (QueryChangeType.Updated, updated),
+                                         })
+                                {
+                                    if (items.Count == 0) continue;
+                                    frames.Add(new QueryResultChange<MeshNode>
+                                    {
+                                        ChangeType = type,
+                                        Items = items,
+                                        Scores = type == QueryChangeType.Removed ? null : ComputeScores(items, change.Query),
+                                        Query = change.Query,
+                                        Version = ++version,
+                                        Timestamp = DateTimeOffset.UtcNow,
+                                    });
+                                }
+                            }
+                        }
+                        else
+                        {
+                            held ??= new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
+                            foreach (var node in change.Items ?? [])
+                            {
+                                if (string.IsNullOrEmpty(node.Path)) continue;
+                                if (change.ChangeType == QueryChangeType.Removed) held.Remove(node.Path);
+                                else held[node.Path] = node;
+                            }
+                            frames.Add(change);
+                        }
+                    }
+                    foreach (var frame in frames)
+                        observer.OnNext(frame);
+                },
+                observer.OnError,
+                () => { /* the stream stays open: a later module swap still has to reach the reader */ }));
+            return disposables;
+        });
+    }
+
+    private IObservable<QueryResultChange<T>> QueryOnce<T>(MeshQueryRequest request, JsonSerializerOptions options)
+    {
+        // Static nodes are purely in-memory (no I/O) and, between module swaps, never change.
         // Collect synchronously and return a completed Observable.Return — no async, no scheduler.
         var effective = request.EffectiveQueries;
         // The FIRST query owns sort / paging / scoring for the whole union — the documented
