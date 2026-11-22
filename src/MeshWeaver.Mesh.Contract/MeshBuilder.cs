@@ -270,7 +270,8 @@ public partial record MeshBuilder
     /// probe's case, the whole of #3649 and #3735. That shape is named on stderr when an image
     /// copy exists, so nobody reads the absent module as "the image had nothing".</para>
     /// </summary>
-    /// <param name="modules">The candidates, in install order.</param>
+    /// <param name="modules">The candidates, in any order — they are installed dependencies-first
+    /// (<see cref="ModuleInstallOrder"/>), ties keeping the listed order.</param>
     /// <returns>The builder for method chaining.</returns>
     public MeshBuilder InstallModules(IReadOnlyList<ModuleInstallCandidate> modules)
     {

@@ -30,8 +30,7 @@ public sealed class ModuleInstallOrderTest : IDisposable
 
         var builder = Boot(b => b.InstallModules([new ModuleInstallCandidate(dependent), new ModuleInstallCandidate(lib)]));
 
-        builder.ModuleContexts.Current(Dependent).Should().NotBeNull();
-        builder.ModuleContexts.Current(Dependent)!.Contributions!.LiveUpdateBlockers().Should().BeEmpty(
+        BlockersOf(builder).Should().BeEmpty(
             "the dependency's generation was installed first, so the hook's type resolved");
         builder.ModuleContexts.DependentsOf(Lib).Select(d => d.Name).Should().Contain(Dependent);
     }
@@ -43,7 +42,7 @@ public sealed class ModuleInstallOrderTest : IDisposable
 
         var builder = Boot(b => b.InstallModulesAsListed([new ModuleInstallCandidate(dependent), new ModuleInstallCandidate(lib)]));
 
-        builder.ModuleContexts.Current(Dependent)!.Contributions!.LiveUpdateBlockers().Should().Contain(
+        BlockersOf(builder).Should().Contain(
             blocker => blocker.Contains("could not be decomposed", StringComparison.Ordinal),
             "in name order the hook runs before its dependency exists");
     }
@@ -66,6 +65,15 @@ public sealed class ModuleInstallOrderTest : IDisposable
         Sorted(cPath, bPath, aPath).Should().Equal(cPath, aPath, bPath);
         Sorted(aPath, bPath, cPath).Should().Equal(aPath, bPath, cPath);
         Sorted(missing, aPath, cPath).Should().Equal(missing, aPath, cPath);
+    }
+
+    private static IReadOnlyList<string> BlockersOf(MeshBuilder builder)
+    {
+        var generation = builder.ModuleContexts.Current(Dependent);
+        generation.Should().NotBeNull($"{Dependent} must be held in its own load context");
+        var contributions = generation?.Contributions;
+        contributions.Should().NotBeNull("its contributions must have been recorded");
+        return contributions?.LiveUpdateBlockers() ?? [];
     }
 
     private (string Lib, string Dependent) Pair()
