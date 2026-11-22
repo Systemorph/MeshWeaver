@@ -477,18 +477,34 @@ jobs:
       # happened to create. So this asks the run itself which per-instance jobs it has, by the exact
       # name the `verify` job declares, and the step below holds both numbers to the preflight's
       # count. No `continue-on-error:`: if the run cannot be read, this job is red and says so.
+      # 🚨 THE LISTING LAGS A RE-RUN (run 45066775860, 2026-11-22). The retry steward re-ran the failed
+      # VERDICT job of a run whose seven verify jobs had all succeeded; a re-run COPIES the passed jobs
+      # into the new attempt lazily, and for a few seconds `filter=latest` listed five of seven (the
+      # other two arrived with fresh job ids). The count read 5 and the verdict went red over a fully
+      # verified fleet. So the count is read until it reaches the preflight's roster size, bounded
+      # (8 reads, 15 s apart); a listing that stays short is STILL red — the denominator is never
+      # lowered, only the read is given time to settle.
       - name: Count the per-instance jobs this run created
         id: jobs
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECT_COUNT: ${{ needs.preflight.outputs.count }}
         run: |
           set -euo pipefail
-          gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
-            --jq '.jobs[] | select(.name | test("^Verify instance slot [0-9]+ against its roll target$")) | (.conclusion // "none")' \
-            >verify-jobs.txt
-          started=$(awk 'END { print NR + 0 }' verify-jobs.txt)
-          passed=$(awk '$0 == "success" { n++ } END { print n + 0 }' verify-jobs.txt)
+          expect="${EXPECT_COUNT:-0}"
+          for attempt in 1 2 3 4 5 6 7 8; do
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+              --jq '.jobs[] | select(.name | test("^Verify instance slot [0-9]+ against its roll target$")) | (.conclusion // "none")' \
+              >verify-jobs.txt
+            started=$(awk 'END { print NR + 0 }' verify-jobs.txt)
+            passed=$(awk '$0 == "success" { n++ } END { print n + 0 }' verify-jobs.txt)
+            if [ "$started" -ge "$expect" ]; then break; fi
+            if [ "$attempt" -lt 8 ]; then
+              echo "read $attempt: $started of $expect verify job(s) listed; reading again in 15 s"
+              sleep 15
+            fi
+          done
           {
             echo "started=$started"
             echo "passed=$passed"

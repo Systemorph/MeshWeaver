@@ -646,6 +646,11 @@ def handover_problems(doc: dict) -> list[str]:
     elif "if" in counter or counter.get("continue-on-error"):
         problems.append("the job-count step is conditional or continue-on-error — a verdict "
                         "whose numerator could not be read must be red.")
+    elif (counter.get("env", {}).get("EXPECT_COUNT") != "${{ needs.preflight.outputs.count }}"
+          or '-ge "$expect"' not in counter.get("run", "") or "sleep" not in counter.get("run", "")):
+        problems.append("the job-count step must re-read the run's jobs until it lists the "
+                        "preflight's COUNT (bounded): a re-run copies passed jobs into the new "
+                        "attempt lazily, and a single read counted 5 of 7 on run 45066775860.")
     venv = verdict_step.get("env", {})
     if (venv.get("STARTED") != "${{ steps.jobs.outputs.started }}"
             or venv.get("PASSED") != "${{ steps.jobs.outputs.passed }}"):
@@ -1119,6 +1124,10 @@ def self_test(root: Path) -> int:
         return handover_problems(copy)
 
     mutations = {
+        "the job count read once, with no settle loop (run 45066775860)":
+            lambda jobs: [step.update({"run": "gh api repos/x/actions/runs/1/jobs?filter=latest "
+                                              "'^Verify instance slot [0-9]+ against its roll target$'"})
+                          for step in jobs["verdict"]["steps"] if step.get("id") == "jobs"],
         "the roster re-published as a job output":
             lambda jobs: jobs["preflight"]["outputs"].update(
                 instances="${{ steps.roster.outputs.instances }}"),
