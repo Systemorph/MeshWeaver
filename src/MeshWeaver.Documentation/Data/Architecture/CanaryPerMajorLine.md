@@ -55,12 +55,12 @@ Four properties follow from the rule and are pinned by tests:
  core CD ── arm ──► {N}-latest ──► canary of N (Continuous N.*, modules Auto)
                                         │  runs build T, soaks
                                         ▼
-                     control: FleetWatch pass → Ops/Status/<canary>, Ops/Issue/*
-                                        │
-                                        ▼
-                     LinePromotion (every 5 min, per declared line)
+                     control: FleetWatch (its own pass) WRITES Ops/Status/<canary>, Ops/Issue/*
+                                        ┆  data only: the promoter READS these samples
+                                        ┆  on its own schedule; it is not a step of FleetWatch
+                     LinePromotion (own self-clocking pass, every 5 min, per declared line)
                         verdict: Promoted T | Held (reasons) | CouldNotEvaluate (reasons)
-                        writes Ops/Promotion/v{N}            (the pointer, CAS, monotonic)
+                        writes Ops/Promotion/v{N}            (the pointer; one serialised writer, never backwards)
                                Ops/Promotion/v{N}/<T>        (the record, keyed by set, never mutated)
                                         │
                                         ▼
