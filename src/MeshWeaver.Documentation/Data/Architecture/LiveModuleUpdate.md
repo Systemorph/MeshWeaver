@@ -990,11 +990,11 @@ a heap dump (`dotnet-dump` `gcroot`, ClrMD for the referrers):**
      difference against what the reader holds (`Updated` for a rebuilt row, `Added`/`Removed` for
      membership; a swap that rebuilt nothing for this reader emits nothing), and the aggregator clears its
      hit buffer once the merged Initial is out. The stream therefore no longer completes after its Initial
-     (it already did not whenever a storage provider answered the same query). Tests:
+     (it already did not whenever a storage provider answered the same query); it ends only when the module registry is disposed, which drops the rows it held. An `Updated` row is detected by reference inequality, so a provider must hand back a fresh node for rebuilt content. Tests:
      `StaticNodeQueryFollowsAModuleSwapTest` (with its no-change negative control).
    - A singleton of one module that captures a service LIST of another module — `DefaultChatClientProvider`
      took `IEnumerable<IChatClientFactory>` at construction — pins the other module's generation and goes on
-     using the retired code. **Read a service list on use, never capture it.** Plugins:
+     using the retired code. **Read a service list on use, never capture it.** The fix and its test ship in the paired MeshWeaver.Plugins change that declares this PR as its `Core-ref` (it needs this platform addition first), so until that lands this bullet's pin is still open in the AI module. Plugins:
      `AiLiveUpdateTest` (collection assertions for AI and for the provider, and a negative control that
      holds the provider's factories across the swap and must see N reported retained by name).
 

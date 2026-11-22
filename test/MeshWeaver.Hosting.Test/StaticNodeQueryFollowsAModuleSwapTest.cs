@@ -91,6 +91,24 @@ public class StaticNodeQueryFollowsAModuleSwapTest
         frames.Should().ContainSingle("the same rows are not announced again");
     }
 
+    /// <summary>The registry's disposal completes <c>VersionChanged</c> to release subscribers that did not end
+    /// their own subscription: an open query ends with it (and drops the rows it held) rather than outliving it.</summary>
+    [Fact]
+    public void AnOpenQuery_Completes_WhenTheModuleRegistryIsDisposed()
+    {
+        var registry = new ModuleContexts();
+        var provider = new StaticNodeQueryProvider([new RebuildingProvider()], _ => true, null, null, registry, null, null);
+        var completed = false;
+        using var subscription = provider
+            .Query<MeshNode>(new MeshQueryRequest { Query = Query }, new JsonSerializerOptions())
+            .Subscribe(_ => { }, () => completed = true);
+        completed.Should().BeFalse("an open query stays open while the registry lives");
+
+        registry.Dispose();
+
+        completed.Should().BeTrue("the registry's completion of VersionChanged is forwarded, not swallowed");
+    }
+
     [Fact]
     public void AnEndedQuery_HearsNothing_OfALaterSwap()
     {

@@ -376,10 +376,11 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
     /// </remarks>
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
-        if (_modules is null || typeof(T) != typeof(MeshNode))
+        var modules = _modules;
+        if (modules is null || typeof(T) != typeof(MeshNode))
             return QueryOnce<T>(request, options);
         // T is MeshNode here: the cast only restates that for the compiler.
-        return (IObservable<QueryResultChange<T>>)(object)FollowModuleSwaps(request, options);
+        return (IObservable<QueryResultChange<T>>)(object)FollowModuleSwaps(modules, request, options);
     }
 
     /// <summary>
@@ -398,12 +399,13 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
     /// content was rebuilt, <see cref="QueryChangeType.Added"/> / <see cref="QueryChangeType.Removed"/>
     /// for membership — so the reader's copy is replaced. A swap that changes nothing for this reader
     /// emits nothing. The stream no longer completes after its Initial; every other provider's already
-    /// does not complete.</para>
+    /// does not complete. It ends only when the module registry itself is disposed.</para>
+    /// <para>"Updated" is detected by reference inequality: the provider model hands back a FRESH node for a
+    /// rebuilt row, so a provider that returned the same instance with rebuilt content would emit nothing.</para>
     /// </summary>
     private IObservable<QueryResultChange<MeshNode>> FollowModuleSwaps(
-        MeshQueryRequest request, JsonSerializerOptions options)
+        MeshWeaver.Mesh.ModuleContexts modules, MeshQueryRequest request, JsonSerializerOptions options)
     {
-        var modules = _modules!;
         return Observable.Create<QueryResultChange<MeshNode>>(observer =>
         {
             var gate = new object();
@@ -476,7 +478,14 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
                         observer.OnNext(frame);
                 },
                 observer.OnError,
-                () => { /* the stream stays open: a later module swap still has to reach the reader */ }));
+                () =>
+                {
+                    // The module registry was disposed (ModuleContexts completes VersionChanged): no swap can
+                    // follow, so release the rows the reader holds and end the stream instead of keeping the
+                    // last generation reachable until the reader itself disposes.
+                    lock (gate) held = null;
+                    observer.OnCompleted();
+                }));
             return disposables;
         });
     }
