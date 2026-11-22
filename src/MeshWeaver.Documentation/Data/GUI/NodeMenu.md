@@ -403,6 +403,16 @@ config.AddNodeMenuItems("SidePanel",
 
 Named contexts are stored at `$Menu:{context}` and rendered independently from the main menu.
 
+### `Update` — the top bar's one-click update
+
+`$Menu:Update` (`StaleBuildBanner.UpdateMenuContext`) is written by every instance hub of a compiled
+NodeType. It holds ONE `MenuActions.Recycle` entry (`menu.update`) exactly while the hub serves an
+older build than the one its type now publishes, and nothing otherwise. The portal top bar renders it
+as a prominent **Update** button for every signed-in viewer of the page; when the page is current,
+the same button slot shows a subtle **Recycle** for viewers whose node menu carries the Recycle entry
+(`Update` permission). One button, never two. Why a reader may press Update but not Recycle, and how
+it is tested: [Stale State Until a Recycle → The Update button](../Architecture/StaleStateUntilRecycle).
+
 ---
 
 ## Node Operations

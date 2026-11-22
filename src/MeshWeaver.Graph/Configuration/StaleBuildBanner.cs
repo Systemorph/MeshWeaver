@@ -3,6 +3,8 @@ using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -151,6 +153,67 @@ public static class StaleBuildBanner
 
         return unchanged;
     }
+
+    /// <summary>
+    /// The menu context the portal top bar's <b>Update</b> button reads (<c>$Menu:Update</c>),
+    /// registered on every instance hub that arms the stale-build watcher. It holds ONE entry
+    /// exactly while the hub's offer is <see cref="StaleBuildKind.NewerBuildAvailable"/>, and
+    /// nothing otherwise, so the button shows iff pressing it would bind a newer build.
+    /// </summary>
+    public const string UpdateMenuContext = "Update";
+
+    /// <summary>
+    /// The <see cref="UpdateMenuContext"/> provider: the hub's live offer, projected through
+    /// <see cref="UpdateMenuItems"/>. Emits an empty slice (never <c>Observable.Empty</c>) on a hub
+    /// with no watcher armed, so the menu aggregator never stalls on it.
+    /// </summary>
+    public static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> UpdateMenuProvider(
+        LayoutAreaHost host, RenderingContext context)
+    {
+        var nodePath = host.Hub.Address.Path;
+        var offers = host.Hub.Get<BehaviorSubject<StaleBuildOffer?>>();
+        return offers is null
+            ? Observable.Return(UpdateMenuItems(nodePath, null))
+            : offers.DistinctUntilChanged().Select(offer => UpdateMenuItems(nodePath, offer));
+    }
+
+    /// <summary>
+    /// The top bar's Update entry for <paramref name="offer"/>. Pure, so the "iff stale" rule is
+    /// testable without a hub.
+    ///
+    /// <para><b>One entry only for <see cref="StaleBuildKind.NewerBuildAvailable"/>.</b> No offer:
+    /// there is nothing to update to. <see cref="StaleBuildKind.ServedBuildIsNotPublished"/>: a
+    /// recycle re-binds the same local copy (#2471), so the button would be measured to change
+    /// nothing; the banner says so instead.</para>
+    ///
+    /// <para>🚨 <b>No Update permission is required, deliberately.</b> The entry runs the same
+    /// <see cref="MenuActions.Recycle"/> command as the node menu's Recycle, which DOES require
+    /// Update, but in this one state the recycle does nothing a reader could object to. It writes
+    /// no data. It rebinds this one address to a build the type has ALREADY published (compiled
+    /// <c>Ok</c> under the type's own authority). It is exactly what the platform does by itself
+    /// where <see cref="NodeTypeEnrichmentHelpers.AutoRecycleConfigKey"/> is on. And it limits
+    /// itself: the fresh activation binds the newest build, its offer is null, and the entry is
+    /// gone, so viewers can trigger at most one recycle per publication, the same bound as the
+    /// automatic recycle's <c>Take(1)</c>. Recycling a CURRENT hub is a different act (it
+    /// interrupts other viewers and gains no build) and stays behind Update in the node menu.</para>
+    /// </summary>
+    /// <param name="nodePath">The instance the entry recycles.</param>
+    /// <param name="offer">The hub's current offer, or null.</param>
+    public static IReadOnlyCollection<NodeMenuItemDefinition> UpdateMenuItems(
+        string nodePath, StaleBuildOffer? offer)
+        => offer is { Kind: StaleBuildKind.NewerBuildAvailable }
+            ?
+            [
+                new NodeMenuItemDefinition("Update", MeshNodeLayoutAreas.RecycleArea,
+                    RequiredPermission: Permission.Read, Order: 0,
+                    Href: RecycleLayoutArea.LandingHref(nodePath))
+                {
+                    LabelKey = "menu.update",
+                    TooltipKey = "menu.updateTooltip",
+                    Action = MenuActions.Recycle,
+                },
+            ]
+            : [];
 
     /// <summary>
     /// The banner itself, or an EMPTY control when there is no offer — the empty control is how the

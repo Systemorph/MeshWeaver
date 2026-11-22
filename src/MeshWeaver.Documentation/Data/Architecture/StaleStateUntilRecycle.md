@@ -546,6 +546,102 @@ A same-key byte change now MOVES the path (the store is content-addressed), so i
 any other new build. A path that did not move while the MVIDs disagree is a LEGACY record (stamped
 before 2026-10-03) — a build *mismatch* to report, not one to converge on (#2471).
 
+🚨 **The convergence recycle waits for a step in flight** (2026-11-22). Like the module swap wave
+(*A module swap's recycle wave waits for an in-flight step*, above), the stale-build convergence
+reads the hub's `HubStepsInFlight`: an idle hub recycles at once, and a hub with a step in flight
+(an agent round, a reload request's landing) recycles itself the moment the step ends, with
+*"(deferred until its in-flight step ended)"* appended to its `Reason`. A hub that starts to shut
+down for another reason first gets nothing, because its next activation binds the newest build
+anyway. Proven by `StaleAssemblySelfHealWatcherTest.AutoRecycle_DefersWhileAStepIsInFlight_AndRecyclesWhenItEnds`,
+whose negative control is the idle case in the same class.
+
+## The Update button — the manual form of the same convergence
+
+Maintainer, 2026-11-22: *"Give an easy recycle button on top to press."* The direction is that a
+server never restarts for a module or NodeType update; ONE grain is recycled, and its next activation
+binds the newest build. The person looking at a page needs one click to do that for the page.
+
+**What existed before.** Measured in the code, not on a live portal:
+
+- The offer was a **banner in the page body**, written by `StaleBuildBanner` into the `$Banner`
+  sidecar and rendered by `LayoutAreaView` above EVERY area of the page, so a page with several
+  areas could show it several times.
+- It existed only on instances of a **compiled NodeType** (the watcher is armed by
+  `WithStaleAssemblySelfHeal`) and only while the offer was `NewerBuildAvailable`.
+  `ServedBuildIsNotPublished` shows text with no link (#2471).
+- Its link went to `/{node}/Recycle`, the URL door, which checks `Update`. A viewer without `Update`
+  who clicked it was refused with nothing but a log line (*"the viewer lacks Update on it"*) and was
+  left on the passive *Recycling…* card.
+- Where `Modules:AutoRecycleOnStaleBuild` is true (the AKS chart, and deployment records such as
+  `autoRecycleOnStaleBuild: true`), the offer is never published at all, because the hub recycles
+  itself. So on those portals there is normally nothing to press.
+
+**What it is now.** The same offer is also a one-entry menu, `$Menu:Update`
+(`StaleBuildBanner.UpdateMenuContext`), registered on every hub that arms the watcher. The portal
+top bar renders ONE button from it and from the node menu:
+
+| State of the page's hub | Top bar shows | Who sees it | Runs |
+|---|---|---|---|
+| `NewerBuildAvailable` | **Update** (accent, labelled) | every signed-in viewer of the page | the `recycle` action on that address, no confirmation |
+| current build, viewer holds `Update` | **Recycle** (subtle icon) | viewers with `Update` (the node menu's Recycle entry exists) | the same action, after the usual confirmation |
+| current build, viewer lacks `Update` | nothing | | |
+| `ServedBuildIsNotPublished` | nothing (the banner explains) | | |
+
+Both run the portal's one page-level flow (`PortalLayoutBase.RunRecycleAsync`): `hub.RecycleNode`
+from the CIRCUIT's hub, with a `Reason` naming the viewer and *"viewer pressed Update in the top
+bar"*, then ONE page reload once the fresh activation answers. The node menu's ⋯ Recycle entry stays
+for the general case, and the banner stays for clients that have no top bar.
+
+**Why a reader may press Update but not Recycle.** In the stale state the recycle does nothing a
+reader could object to. It writes no data. It rebinds one address to a build the type has ALREADY
+published, compiled `Ok` under the type's own authority. It is exactly what the platform does by
+itself where `Modules:AutoRecycleOnStaleBuild` is on. And it limits itself: the fresh activation
+binds the newest build, its offer is null, and the button is gone, so viewers can trigger at most one
+recycle per publication, the same bound as the automatic recycle's `Take(1)`. Recycling a CURRENT
+hub is a different act: it interrupts everyone else on the page and gains no build, so it stays
+behind `Update`. (The `DisposeRequest` itself is not permission-checked at the target; the gate is
+which surface offers it, which is why the rule is written here.)
+
+**Proven by** `TopBarUpdateButtonTest` (`test/MeshWeaver.Updates.Test`, a real N → N+1 compile):
+no entry while the instance runs N (read only after the hub's Node menu has rendered, so an absent
+slot cannot pass for an empty one); one `recycle` action for exactly that address once N+1 is
+published, while the page still serves N; after the press the address serves N+1 and the entry is
+gone; and a sibling instance of the same type that nobody pressed still serves N. Removing the
+`$Menu:Update` registration turns the positive half red. `StaleBuildUpdateMenuTest`
+(`test/MeshWeaver.Graph.Test`) pins the projection: no offer and `ServedBuildIsNotPublished` give
+nothing, `NewerBuildAvailable` gives one Read-level entry. The shell's choice of button is
+`TopBarUpdatePolicy` in MeshWeaver.Plugins, with its own tests.
+
+### The setting: recycle the grain automatically
+
+*"Let's create a setting for just recycling the grain — when any of the modules loaded into this
+grain have changed"* (maintainer, 2026-11-22). Measured against what is already there, the grain's
+loaded set has three parts, and only one of them waits for anyone:
+
+| What changed | What recycles the grain | Setting |
+|---|---|---|
+| A **module** (`content.module`) bound into the grain | `ModuleLiveUpdater`'s wave disposes every hub of this process bound to the swapped generation (or every per-node hub when the generation configures them all), deferred per step (#7324) | none: live module update is the platform default (`Doc/Architecture/LiveModuleUpdate`) |
+| The grain's **NodeType build**, including a rebuild forced by a shared-source or module dependency (the type's `LatestAssemblyPath` advances) | `ArmStaleAssemblySelfHeal` | **`Modules:AutoRecycleOnStaleBuild`**; off = the Update button is offered |
+| Anything else | nothing recycles; use the button or the ⋯ menu | |
+
+So the setting already exists, per instance, on the deployment record: **`autoRecycleOnStaleBuild`**
+(`DeploymentContent.AutoRecycleOnStaleBuild`, *"Auto-recycle on a stale NodeType build"*), rendered
+to the pod as `Modules__AutoRecycleOnStaleBuild`. Off, the watcher offers the Update button; on, it
+recycles only that grain, never the process and never an unrelated grain, with a `Reason` naming the
+NodeType and both builds, and now deferred while a step is in flight. A new key would have been a
+second name for the same switch.
+
+**No per-viewer preference, deliberately.** The automatic recycle happens on the HUB, when a build
+publishes, and at that moment there is no viewer whose preference could be read. A per-viewer
+"recycle automatically when I look at a stale page" would let one person's setting tear down a grain
+other people are working in without anyone pressing anything. The button is that person's one
+click; the instance setting is the operator's decision for everyone.
+
+**Not established here.** That the button appears on memex.meshweaver.cloud: its deployment
+record sets `autoRecycleOnStaleBuild: true`, so a stale offer there lasts only the 10 s settle window
+before the hub recycles itself. The Update state is visible on a portal that leaves the setting off
+(a local mesh, the code default).
+
 ## Where this bites, and what to do about it
 
 **Finishing a change set.** A pull request that changes something a per-node hub serves — a
