@@ -39,7 +39,7 @@ So production was the first place a build ran under real load. That is the prope
 > `stable` for line N advances only after the canary of line N ran it for the soak window with a
 > green verdict.**
 
-Four properties follow from the rule and are pinned by tests:
+Five properties follow from the rule and are pinned by tests (property 5 by `LinePromotionTests` in `Hosting/PlatformBuildInbox`, Systemorph/MeshWeaver.Plugins#5811):
 
 1. **An unpromoted build never reaches a follower.** A follower's roll is capped at the line's
    promoted build. If nothing is promoted, it holds.
@@ -48,6 +48,18 @@ Four properties follow from the rule and are pinned by tests:
 3. **Lines are independent.** The v3 canary promotes only v3, and the v4 canary only v4. A
    declaration for one line never reads or writes another.
 4. **Promotion is monotonic.** `stable` never moves backwards. A follower is never downgraded by it.
+5. **The canary soaks in BATCHES.** The canary HOLDS the build it runs until that build's verdict,
+   `Promoted` or failed, and only then takes the newest sealed build. Without the hold, a canary that
+   follows `latest` rolls on every merge, each roll restarts the soak, and with a build every 3 hours
+   against a 240-minute soak nothing is ever promoted: production starves (measured on line 4,
+   2026-11-22: three builds in six hours, no promotion). A same-image restart (a module wave) is held
+   by the same rule, since it would restart the soak too. A candidate that FAILS (the canary is red,
+   was red inside the soak, or is over its issue budget) releases the hold at once, because the newest
+   build is what carries the fix; the promoter writes it on the pointer `Ops/Promotion/v{N}` as `failedTag` (a field of the pointer, never of the declaration), and the release applies only
+   while the canary still runs exactly that build. An unread pointer or an unorderable pair holds. A
+   line that is disabled holds nothing, since nothing would ever decide the build. For an urgent fix,
+   declare `holdOverride: true` on the line declaration: the canary then follows `latest` as before,
+   until the declaration drops it.
 
 ## The pieces
 
@@ -83,6 +95,7 @@ canary and promotes nothing.
 | `soakMinutes` | How long the canary must run a build before it promotes. Default 240 (4 h). |
 | `issueBudget` | How many non-holding issues of the canary may be open in the soak window. Default 0. |
 | `enabled` | `false` keeps the declaration but promotes nothing, and followers then hold. |
+| `holdOverride` | `true` lets the canary take every newer build at once instead of holding its current candidate until its verdict. The declared way to rush an urgent fix. Default `false`. |
 
 The deployment records themselves keep `updatePolicy: Continuous` and their line pattern, so the
 Memex no-pins gate is untouched. A follower is not pinned. The declaration decides WHEN it takes a
