@@ -1095,6 +1095,24 @@ swaps live: the service answers from N+1, the node is served from N+1, the runni
 registry maps the name to N+1's type, and N is collected; the negative control: a hook that adds a
 query routing rule is a blocker the guard names.
 
+### The boot batch installs dependencies first (every host)
+
+`MeshBuilder.InstallModules` orders its batch **leaves-first** by the entry assemblies' references to the
+OTHER modules of the batch (`ModuleInstallOrder.DependenciesFirst`, read from assembly METADATA — nothing is
+loaded or run). Installing materialises each module, which runs its builder hook, and a hook that names a
+sibling module's type needs that sibling's generation installed already. The persisted boot list is
+name-sorted, so `MeshWeaver.Mail.Gmail` ran before `MeshWeaver.Mail.MicrosoftGraph`:
+`FileNotFoundException`, the capture recorded "its builder hook could not be decomposed" as a blocker, and
+every later update of Mail.MicrosoftGraph answered `RestartRequired … its dependent MeshWeaver.Mail.Gmail`
+(memex.meshweaver.cloud, 2026-11-21). It was first fixed in the Plugins portal's composition root only;
+the ordering lives in core so LocalMesh, the tester and any other host get it. The sort is stable (the
+listed order, name order at boot, breaks ties, so an edge-free batch is unchanged); an unreadable DLL keeps
+its place; the members of a reference cycle are installed in listed order and named on stderr
+(`[MeshWeaver.Mesh.ModuleInstallOrder]`). `InstallModulesAsListed` is the unordered form, reserved for the
+negative control. Pinned by `ModuleInstallOrderTest` (`MeshWeaver.Compiler.Pipeline.Test`): a dependent
+whose hook touches its dependency's type, listed BEFORE it, decomposes; the same batch as listed reproduces
+the blocker.
+
 ## What is shipped (slice 6 — endpoints, views, platform independence)
 
 | Piece | What it does |
