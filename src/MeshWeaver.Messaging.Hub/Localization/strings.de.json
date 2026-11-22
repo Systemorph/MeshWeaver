@@ -258,6 +258,8 @@
   "menu.versions": "Versionen",
   "menu.recycle": "Neustart",
   "menu.recycleTooltip": "Beendet den Hub dieses Knotens, sodass er beim nächsten Aufruf mit dem zuletzt kompilierten Build neu startet. Es wird nichts gelöscht.",
+  "menu.update": "Aktualisieren",
+  "menu.updateTooltip": "Für diese Seite liegt ein neuerer Build vor. Startet den Hub dieser Seite neu, damit er den neuen Build lädt. Es wird nichts gelöscht.",
   "menu.reloadModule": "Modul neu laden",
   "menu.reloadModuleTooltip": "Die neueste kompatible veröffentlichte Version dieses Moduls holen und auf dieser Instanz aktivieren",
   "moduleReload.title": "{0} neu laden",

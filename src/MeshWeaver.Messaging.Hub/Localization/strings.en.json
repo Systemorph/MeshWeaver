@@ -258,6 +258,8 @@
   "menu.versions": "Versions",
   "menu.recycle": "Recycle",
   "menu.recycleTooltip": "Tear down this node's hub so the next visit re-activates it against the latest compiled build. Nothing is deleted.",
+  "menu.update": "Update",
+  "menu.updateTooltip": "A newer build of this page is available. Restarts this page's hub so it loads the new build. Nothing is deleted.",
   "menu.reloadModule": "Reload module",
   "menu.reloadModuleTooltip": "Fetch the newest compatible published version of this module and activate it on this instance",
   "moduleReload.title": "Reload {0}",

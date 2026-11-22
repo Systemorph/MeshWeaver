@@ -123,6 +123,9 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(CreateReleaseResponse), nameof(CreateReleaseResponse));
         config.TypeRegistry.WithType(typeof(RunTestsRequest), nameof(RunTestsRequest));
         config.TypeRegistry.WithType(typeof(RunTestsResponse), nameof(RunTestsResponse));
+        // The top bar's Update asks the page hub to recycle itself if, at the press, a newer build is available.
+        config.TypeRegistry.WithType(typeof(UpdateToNewestBuildRequest), nameof(UpdateToNewestBuildRequest));
+        config.TypeRegistry.WithType(typeof(UpdateToNewestBuildResponse), nameof(UpdateToNewestBuildResponse));
 
         // Import/Delete types
         config.TypeRegistry.WithType(typeof(ImportNodesRequest), nameof(ImportNodesRequest));
