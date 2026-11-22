@@ -956,7 +956,7 @@ providers' contributions, not the retiring ones'. A sealed stage answers nothing
 list, so from the commit on every lookup is the current generations, and no stage pins a generation
 a later swap retires.
 
-**Three pins found and fixed on the way — each caught by the collection assertion failing, then read off
+**Four pins found and fixed on the way — each caught by the collection assertion failing, then read off
 a heap dump (`dotnet-dump` `gcroot`, ClrMD for the referrers):**
 
 1. A CHILD scope of the root under the container then in use (Autofac, since removed — MeshWeaver#7145)
@@ -977,6 +977,26 @@ a heap dump (`dotnet-dump` `gcroot`, ClrMD for the referrers):**
    `StaticNodeQueryProviderEndsWithItsContainerTest`). The registry also completes `VersionChanged` when it
    is disposed, releasing any subscriber that did not end its own subscription. The other root subscriber,
    `ModuleEndpointDataSource`, already ended its subscription with the host.
+4. **A live reader keeps the rows — and the content objects — of the generation that retired.** Found when
+   the real MeshWeaver.AI, and separately MeshWeaver.AI.Anthropic, were swapped as the PRIMARY of their swap:
+   unloaded with 0 leases, never collected (a Markdown.Collaboration swap in the same process was, because it
+   declares no nodes and nothing caches its services). A heap dump shows only allocator-internal roots when
+   read with `gcroot`; walking it from the roots with ClrMD, recording every path that reaches an object whose
+   type is defined in N, found the two external ones:
+   - `StaticNodeQueryProvider` emitted its Initial and said nothing more, so every live consumer of a query
+     over declared nodes — a synced query's replay cache, the aggregator's per-provider hit buffer
+     (`MeshQuery`), the credential resolver's snapshot — kept the previous generation's nodes. The provider
+     now **follows `ModuleContexts.VersionChanged`**: each swap ends the running read, re-reads, and emits the
+     difference against what the reader holds (`Updated` for a rebuilt row, `Added`/`Removed` for
+     membership; a swap that rebuilt nothing for this reader emits nothing), and the aggregator clears its
+     hit buffer once the merged Initial is out. The stream therefore no longer completes after its Initial
+     (it already did not whenever a storage provider answered the same query); it ends only when the module registry is disposed, which drops the rows it held. An `Updated` row is detected by reference inequality, so a provider must hand back a fresh node for rebuilt content. Tests:
+     `StaticNodeQueryFollowsAModuleSwapTest` (with its no-change negative control).
+   - A singleton of one module that captures a service LIST of another module — `DefaultChatClientProvider`
+     took `IEnumerable<IChatClientFactory>` at construction — pins the other module's generation and goes on
+     using the retired code. **Read a service list on use, never capture it.** The fix and its test ship in the paired MeshWeaver.Plugins change that declares this PR as its `Core-ref` (it needs this platform addition first), so until that lands this bullet's pin is still open in the AI module. Plugins:
+     `AiLiveUpdateTest` (collection assertions for AI and for the provider, and a negative control that
+     holds the provider's factories across the swap and must see N reported retained by name).
 
 **Only boot-time infrastructure may be restart-required.** `[ModuleRestartRequired(category, reason)]`
 takes a `ModuleBootCategory` — `StorageDriver`, `Orleans`, `Authentication`, `Host` — a deliberately
