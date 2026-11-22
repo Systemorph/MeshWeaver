@@ -111,6 +111,11 @@ Evidence, not time. A set is promoted when all three hold:
 3. **The canary is clean** — the canary lane reports today and gates nothing; here it becomes a
    signal.
 
+For DEPLOYMENTS, the canary is a running portal: one per major line, following `latest`, whose soak
+verdict is the only thing that advances `stable` for the rest of that line. See
+[Canary Per Major Line](/Doc/Architecture/CanaryPerMajorLine) for the declaration, the promoter and
+how followers take a promoted build as one wave.
+
 🚨 **The promoter's verdict must distinguish "computed and empty" from "NOT COMPUTED".** These are
 opposite facts that look identical in a count, and the fleet has now been bitten by that twice in the
 same job: a ten-minute lane that keeps the set each satellite's main last passed reported `pinned=0`
@@ -302,6 +307,8 @@ refusal applies to the legacy-shaped `3.0.0-stable` above, so the stable pointer
 
 ## See also
 
+- [Canary Per Major Line](/Doc/Architecture/CanaryPerMajorLine) — the per-line canary deployment
+  whose soak verdict promotes `stable` for that line's other deployments.
 - [Candidate Release Protocol](/Doc/Architecture/CandidateReleaseProtocol) — the states a version
   moves through, and why the deploy boundary is where the framework's gate belongs.
 - [Module Adoption Policy](/Doc/Architecture/ModuleAdoptionPolicy) — what an installation runs, and
