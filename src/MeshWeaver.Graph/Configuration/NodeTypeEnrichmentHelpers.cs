@@ -2649,6 +2649,10 @@ internal static class NodeTypeEnrichmentHelpers
                 // The same offer as a ONE-ENTRY menu ($Menu:Update): the portal's top-bar Update
                 // button. Present iff a newer build is available; see StaleBuildBanner.UpdateMenuItems.
                 .AddNodeMenuItems(StaleBuildBanner.UpdateMenuContext, StaleBuildBanner.UpdateMenuProvider)
+                // …and the hub answers, at the moment of a press, whether that is still true
+                // (UpdateToNewestBuildExtensions): a button rendered from a stale snapshot must not
+                // recycle a hub that has meanwhile reached the current build.
+                .WithHandler<NewerBuildAvailableRequest>(StaleBuildBanner.HandleNewerBuildAvailable)
                 .WithInitialization(instanceHub =>
                 {
                     // Fire-and-forget, exactly as the overlay watcher: a watcher that cannot be

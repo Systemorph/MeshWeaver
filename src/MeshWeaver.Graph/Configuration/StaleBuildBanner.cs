@@ -178,6 +178,20 @@ public static class StaleBuildBanner
     }
 
     /// <summary>
+    /// Answers <see cref="NewerBuildAvailableRequest"/> from the hub's CURRENT offer — the
+    /// execution-time half of the Update button (<see cref="UpdateToNewestBuildExtensions"/>). The
+    /// menu entry is a render-time snapshot; this is the decision at the press.
+    /// </summary>
+    internal static IMessageDelivery HandleNewerBuildAvailable(
+        IMessageHub hub, IMessageDelivery<NewerBuildAvailableRequest> request)
+    {
+        var offer = hub.Get<BehaviorSubject<StaleBuildOffer?>>()?.Value;
+        hub.Post(new NewerBuildAvailableResponse(offer is { Kind: StaleBuildKind.NewerBuildAvailable }),
+            o => o.ResponseFor(request));
+        return request.Processed();
+    }
+
+    /// <summary>
     /// The top bar's Update entry for <paramref name="offer"/>. Pure, so the "iff stale" rule is
     /// testable without a hub.
     ///
@@ -194,7 +208,10 @@ public static class StaleBuildBanner
     /// where <see cref="NodeTypeEnrichmentHelpers.AutoRecycleConfigKey"/> is on. And it limits
     /// itself: the fresh activation binds the newest build, its offer is null, and the entry is
     /// gone, so viewers can trigger at most one recycle per publication, the same bound as the
-    /// automatic recycle's <c>Take(1)</c>. Recycling a CURRENT hub is a different act (it
+    /// automatic recycle's <c>Take(1)</c>. The bound is enforced at the PRESS, not at render: the
+    /// portal runs <see cref="UpdateToNewestBuildExtensions.UpdateToNewestBuild"/>, which asks this
+    /// hub (<see cref="HandleNewerBuildAvailable"/>) and recycles only on a <c>true</c> answer, so a
+    /// button left on screen after the hub reached the current build recycles nothing. Recycling a CURRENT hub is a different act (it
     /// interrupts other viewers and gains no build) and stays behind Update in the node menu.</para>
     /// </summary>
     /// <param name="nodePath">The instance the entry recycles.</param>

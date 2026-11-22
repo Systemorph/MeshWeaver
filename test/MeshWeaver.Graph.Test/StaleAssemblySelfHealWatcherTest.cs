@@ -394,9 +394,9 @@ public class StaleAssemblySelfHealWatcherTest(ITestOutputHelper output) : HubTes
             typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler,
             autoRecycle: true);
 
-        var steps = hub.Get<HubStepsInFlight>();
-        steps.Should().NotBeNull("every hub carries its in-flight marker");
-        var step = steps!.Begin();
+        var steps = hub.Get<HubStepsInFlight>()
+            ?? throw new InvalidOperationException("every hub carries its in-flight marker");
+        var step = steps.Begin();
 
         typeStream.OnNext(TypeNode(version: 12, assemblyPath: "TestData_StaleAssemblyType/v12-abc-222222222222.dll"));
         Settle(scheduler);

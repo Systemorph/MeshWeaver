@@ -587,9 +587,14 @@ top bar renders ONE button from it and from the node menu:
 | current build, viewer lacks `Update` | nothing | | |
 | `ServedBuildIsNotPublished` | nothing (the banner explains) | | |
 
-Both run the portal's one page-level flow (`PortalLayoutBase.RunRecycleAsync`): `hub.RecycleNode`
-from the CIRCUIT's hub, with a `Reason` naming the viewer and *"viewer pressed Update in the top
-bar"*, then ONE page reload once the fresh activation answers. The node menu's ⋯ Recycle entry stays
+Both run from the CIRCUIT's hub and end in ONE page reload once the fresh activation answers.
+**Recycle** is the existing page-level flow (`PortalLayoutBase.RunRecycleAsync`, `hub.RecycleNode`).
+**Update** goes through `hub.UpdateToNewestBuild(path, reason)` (`MeshWeaver.Mesh.Contract`): it
+first asks the hub, **at the press**, `NewerBuildAvailableRequest`, which the hub answers from its
+own offer (`StaleBuildBanner.HandleNewerBuildAvailable`), and it posts the `DisposeRequest` only on
+a `true` answer. A button still on screen after the hub reached the current build (another
+viewer's press, the automatic recycle) therefore recycles nothing. Its `Reason` names the viewer, the
+page and *"pressed Update in the top bar"*. The node menu's ⋯ Recycle entry stays
 for the general case, and the banner stays for clients that have no top bar.
 
 **Why a reader may press Update but not Recycle.** In the stale state the recycle does nothing a
@@ -597,17 +602,24 @@ reader could object to. It writes no data. It rebinds one address to a build the
 published, compiled `Ok` under the type's own authority. It is exactly what the platform does by
 itself where `Modules:AutoRecycleOnStaleBuild` is on. And it limits itself: the fresh activation
 binds the newest build, its offer is null, and the button is gone, so viewers can trigger at most one
-recycle per publication, the same bound as the automatic recycle's `Take(1)`. Recycling a CURRENT
-hub is a different act: it interrupts everyone else on the page and gains no build, so it stays
-behind `Update`. (The `DisposeRequest` itself is not permission-checked at the target; the gate is
-which surface offers it, which is why the rule is written here.)
+recycle per publication, the same bound as the automatic recycle's `Take(1)`. That bound is
+enforced at the press, by the hub, never by the rendered menu: a menu is a snapshot, and the
+review of the first draft (MeshWeaver#8458) found that a snapshot-only gate let a button left on
+screen tear down a hub that had meanwhile become current. Recycling a CURRENT hub is a different
+act: it interrupts everyone else on the page and gains no build, so it stays behind `Update`.
+
+**Not closed by this change:** a `DisposeRequest` is not permission-checked at its target, so a
+client that does not go through these surfaces can post one. That is a property of the platform's
+recycle surface as a whole, older than this button, and the button neither widens nor narrows it.
 
 **Proven by** `TopBarUpdateButtonTest` (`test/MeshWeaver.Updates.Test`, a real N → N+1 compile):
 no entry while the instance runs N (read only after the hub's Node menu has rendered, so an absent
 slot cannot pass for an empty one); one `recycle` action for exactly that address once N+1 is
-published, while the page still serves N; after the press the address serves N+1 and the entry is
-gone; and a sibling instance of the same type that nobody pressed still serves N. Removing the
-`$Menu:Update` registration turns the positive half red. `StaleBuildUpdateMenuTest`
+published, while the page still serves N; the press (`UpdateToNewestBuild`) answers `true` and the
+address then serves N+1 with the entry gone; a SECOND press on the now-current hub answers `false`
+and the same activation instance keeps serving; and a sibling instance of the same type that nobody
+pressed still serves N. Two mutations each turn it red: removing the `$Menu:Update` registration
+(the positive half), and a hub that always answers "newer build available" (the second press). `StaleBuildUpdateMenuTest`
 (`test/MeshWeaver.Graph.Test`) pins the projection: no offer and `ServedBuildIsNotPublished` give
 nothing, `NewerBuildAvailable` gives one Read-level entry. The shell's choice of button is
 `TopBarUpdatePolicy` in MeshWeaver.Plugins, with its own tests.
