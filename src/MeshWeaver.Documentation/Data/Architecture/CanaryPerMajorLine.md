@@ -58,7 +58,7 @@ Four properties follow from the rule and are pinned by tests:
                      control: FleetWatch pass → Ops/Status/<canary>, Ops/Issue/*
                                         │
                                         ▼
-                     LinePromotion (once per pass, per declared line)
+                     LinePromotion (every 5 min, per declared line)
                         verdict: Promoted T | Held (reasons) | CouldNotEvaluate (reasons)
                         writes Ops/Promotion/v{N}            (the pointer, CAS, monotonic)
                                Ops/Promotion/v{N}/<T>        (the record, keyed by set, never mutated)
@@ -71,7 +71,7 @@ Four properties follow from the rule and are pinned by tests:
 ### 1. The line declaration — DECLARED, not derived
 
 A line, its canary and its followers are **committed content**: one `Hosting/ReleaseLine` node per line
-beside the deployment records (`Deployments/Lines/v4`, `Deployments/Lines/v3`). This follows policy
+beside the deployment records (`Deployments/Lines/v4`, …). This follows policy
 `declared-not-derived`: an absent contributor is never a removal, and a line nobody declared has no
 canary and promotes nothing.
 
@@ -100,22 +100,28 @@ The canary is a working portal, not a test fixture. It exercises what production
 - **Real use**, so the error-signature budget has something to measure.
 
 Choice for the current major: **the staff development instance.** It is already Continuous on `4.*`,
-runs three replicas, installs every package, and carries no fleet role and no client data. Staff use
-it every day. Reusing it costs nothing, and its users are the people who should see a regression
-first. The alternative, a new idle instance, would cost a namespace, a database and secrets, and its
-verdict would rest on synthetic traffic only.
+runs three replicas, installs every package, and carries no fleet role and no client data. Reusing
+it costs nothing. Its user traffic is light: one user was indexed when this was measured on
+2026-11-22. So its verdict rests on what every boot exercises, as FleetWatch samples it: the roll,
+the NodeType bake, module adoption and the health checks. It does not rest on load. A synthetic smoke
+over the canary's own `Tests` areas is OWED, so that the "real use" bullet above is met by more than a
+handful of people. A new idle instance would cost a namespace, a database and secrets and would
+measure no more.
 
 Choice for the previous major: **a dedicated small canary instance is OWED.** Only one customer
 portal remains on the previous major, and no non-production instance runs that line. Until the canary
-is provisioned (a governed Provision `Hosting/InstanceAction`, smallest envelope with two replicas),
-the previous line's declaration lists **no followers**, so that portal keeps following `latest`.
-Declaring it a follower of a line that has no canary would freeze it with no way to receive a fix.
+is provisioned, the previous line is **not declared at all**, so that portal keeps following
+`latest`. Declaring it a follower of a line that has no canary would freeze it with no way to receive
+a fix. Provisioning goes through a governed Provision `Hosting/InstanceAction`. The smallest envelope
+still keeps three replicas, because the records repository's two-legs rule holds every serving
+instance to a floor of three.
 
 ### 3. Promotion — computed once, on the control instance
 
-`LinePromotion` runs on the control instance's resident hub, once after every FleetWatch pass. That
-is the same cadence that writes the `Ops/Status` samples it reads, so a fresh sample is always
-judged. It runs once per declared, enabled line. It is a single writer, and that serialises it.
+`LinePromotion` runs on the control instance's resident platform-build inbox hub. It is a
+self-clocking pass at FleetWatch's own cadence (5 min), the cadence that writes the `Ops/Status`
+samples it reads. Each pass evaluates every declared line. One activation per address and a schedule
+that starts the next pass only after the last one finished make it a single, serialised writer.
 
 **The platform evidence.** Candidate T is promoted when every item below holds. The readings are
 the same ones `RollGates` already trusts, and each unanswered reading is a reason to WAIT, named:
@@ -217,8 +223,8 @@ restarts are still in scope for §5, under the same instance-side channel.
 | # | Slice | Where | State |
 |---|---|---|---|
 | 0 | This page | core `Doc/Architecture/CanaryPerMajorLine` | landed with this page |
-| 1 | `Hosting/ReleaseLine` declaration type + `LinePromotion` promoter + follower routing + tests | MeshWeaver.Plugins `Hosting/` | see the pull request linked from `Hosting/CanaryPerMajorLine` |
-| 2 | `Deployments/Lines/v4` (canary: the staff development instance; followers: the working portals) and `Deployments/Lines/v3` (no followers until its canary exists) | the deployment-records repository, `mesh/Deployments/Lines/` | after slice 1 is live on the control instance |
+| 1 | `Hosting/ReleaseLine` declaration type + `LinePromotion` promoter + follower routing + tests | MeshWeaver.Plugins `Hosting/` | Systemorph/MeshWeaver.Plugins#5782 |
+| 2 | `Deployments/Lines/v4` (canary: the staff development instance; followers: the working portals) (the previous line is declared with its canary) | the deployment-records repository, `mesh/Deployments/Lines/` | after slice 1 is live on the control instance |
 | 3 | The previous major's canary: record + governed Provision | records repository + control instance | owed: cost and sign-in decision |
 | 4 | Instance-side module channel (§5) | core `MeshWeaver.PluginCatalog` + registry | owed |
 | 5 | The control instance follows the canary (§6) | core CD policies | owed: maintainer decision |
