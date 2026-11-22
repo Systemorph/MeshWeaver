@@ -46,8 +46,8 @@ public static class ParallelReadExtensions
         ArgumentNullException.ThrowIfNull(second);
         ArgumentNullException.ThrowIfNull(combine);
         return Run(
-            [first.Select(v => (object?)v), second.Select(v => (object?)v)],
-            v => combine((TA)v[0]!, (TB)v[1]!));
+            [Boxed(first), Boxed(second)],
+            v => combine(Unbox<TA>(v[0]), Unbox<TB>(v[1])));
     }
 
     /// <summary>The first value of each of two reads as a tuple.</summary>
@@ -64,8 +64,8 @@ public static class ParallelReadExtensions
         ArgumentNullException.ThrowIfNull(third);
         ArgumentNullException.ThrowIfNull(combine);
         return Run(
-            [first.Select(v => (object?)v), second.Select(v => (object?)v), third.Select(v => (object?)v)],
-            v => combine((TA)v[0]!, (TB)v[1]!, (TC)v[2]!));
+            [Boxed(first), Boxed(second), Boxed(third)],
+            v => combine(Unbox<TA>(v[0]), Unbox<TB>(v[1]), Unbox<TC>(v[2])));
     }
 
     /// <summary>The first value of each of four reads, subscribed at once.</summary>
@@ -79,8 +79,8 @@ public static class ParallelReadExtensions
         ArgumentNullException.ThrowIfNull(fourth);
         ArgumentNullException.ThrowIfNull(combine);
         return Run(
-            [first.Select(v => (object?)v), second.Select(v => (object?)v), third.Select(v => (object?)v), fourth.Select(v => (object?)v)],
-            v => combine((TA)v[0]!, (TB)v[1]!, (TC)v[2]!, (TD)v[3]!));
+            [Boxed(first), Boxed(second), Boxed(third), Boxed(fourth)],
+            v => combine(Unbox<TA>(v[0]), Unbox<TB>(v[1]), Unbox<TC>(v[2]), Unbox<TD>(v[3])));
     }
 
     /// <summary>
@@ -92,17 +92,25 @@ public static class ParallelReadExtensions
         ArgumentNullException.ThrowIfNull(sources);
         return Observable.Defer(() =>
         {
-            var list = sources.Select(s => s.Select(v => (object?)v)).ToImmutableArray();
-            return Run(list, v => (IReadOnlyList<T>)v.Select(x => (T)x!).ToImmutableArray());
+            var list = sources.Select(s => Boxed(s)).ToImmutableArray();
+            return Run(list, v => (IReadOnlyList<T>)v.Select(Unbox<T>).ToImmutableArray());
         });
     }
 
+    // A value travels in a Box so a legitimately-null read result (a nullable reference type) is still a non-null
+    // object in the slot array — no null-forgiving operator anywhere.
+    private sealed record Box<T>(T Value);
+
+    private static IObservable<object> Boxed<T>(IObservable<T> source) => source.Select(v => (object)new Box<T>(v));
+
+    private static T Unbox<T>(object boxed) => ((Box<T>)boxed).Value;
+
     private static IObservable<TResult> Run<TResult>(
-        IReadOnlyList<IObservable<object?>> sources, Func<object?[], TResult> project)
+        IReadOnlyList<IObservable<object>> sources, Func<object[], TResult> project)
         => Observable.Create<TResult>(observer =>
         {
             var n = sources.Count;
-            var slots = new object?[n];
+            var slots = new object[n];
             var has = new bool[n];
             var filled = 0;
             var finished = false;
@@ -125,7 +133,7 @@ public static class ParallelReadExtensions
                     else if (complete)
                     {
                         finished = true;
-                        var snapshot = (object?[])slots.Clone();
+                        var snapshot = (object[])slots.Clone();
                         deliver = () =>
                         {
                             TResult result;

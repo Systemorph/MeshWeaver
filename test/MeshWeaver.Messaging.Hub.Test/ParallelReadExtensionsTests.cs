@@ -27,7 +27,10 @@ public class ParallelReadExtensionsTests
             Observer = observer;
             return System.Reactive.Disposables.Disposable.Create(() => { lock (Lock) { } });
         }
-        public void Deliver(Action<IObserver<T>> what) { lock (Lock) what(Observer!); }
+        public void Deliver(Action<IObserver<T>> what)
+        {
+            lock (Lock) what(Observer ?? throw new InvalidOperationException("not subscribed"));
+        }
     }
 
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
@@ -256,9 +259,17 @@ public class ParallelReadExtensionsTests
     [Fact]
     public void NullArguments_Throw()
     {
-        IObservable<int> nil = null!;
-        ((Action)(() => nil.WhenBoth(Observable.Return(1), (a, b) => a))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => Observable.Return(1).WhenBoth(Observable.Return(1), (Func<int, int, int>)null!))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => ((IEnumerable<IObservable<int>>)null!).WhenAll())).Should().Throw<ArgumentNullException>();
+        // Null is passed through reflection so no null-forgiving operator is needed to compile the call.
+        static void Throws(string method, params object?[] args)
+        {
+            var m = typeof(ParallelReadExtensions).GetMethods().First(x => x.Name == method && x.GetParameters().Length == args.Length)
+                .MakeGenericMethod(Enumerable.Repeat(typeof(int), args.Length == 1 ? 1 : 3).ToArray());
+            Action act = () => m.Invoke(null, args);
+            act.Should().Throw<System.Reflection.TargetInvocationException>().WithInnerException<ArgumentNullException>();
+        }
+
+        Throws(nameof(ParallelReadExtensions.WhenBoth), null, Observable.Return(1), (Func<int, int, int>)((a, b) => a));
+        Throws(nameof(ParallelReadExtensions.WhenBoth), Observable.Return(1), Observable.Return(1), null);
+        Throws(nameof(ParallelReadExtensions.WhenAll), new object?[] { null });
     }
 }
