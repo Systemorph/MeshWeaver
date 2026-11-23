@@ -1096,7 +1096,7 @@ public sealed class ModuleLandingService : IDisposable
                         + "The mesh stays on the set it runs until a wave lands a dependency that satisfies "
                         + "every floor (MeshWeaver#6067).");
                 }
-                holdBack = unmet.Select(u => u.DependentModule).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase)
+                holdBack = unmet.Select(u => u.DependentModule ?? throw new InvalidOperationException("Unmet dependency module name must not be null.")).Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToImmutableList();
                 // Transitive: a held-back module is not what the proposed set loads, so whatever
                 // declares a requirement on its package is held back too (its floor was judged
