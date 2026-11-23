@@ -19,7 +19,7 @@ namespace MeshWeaver.Layout.Test;
 public class ASecondSubscriberOfOneControlStreamTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private const string Area = "TwoAreaProbe";
-    private static readonly Subject<UiControl> Dynamic = new();
+    private readonly Subject<UiControl> Dynamic = new();
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
