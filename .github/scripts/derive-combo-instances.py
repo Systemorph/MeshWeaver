@@ -141,12 +141,14 @@ def defer_unverifiable(blockers: list[str], scans) -> list[str]:
     if not unread:
         return blockers
     stamps = sorted(x for x in (rate_stamp(u) for u in unread) if x)
+    known = [x for x in stamps if x != "unknown"]   # prefer a real reset over "unknown"
     out = []
     for b in blockers:
         if MISSING_OVERLAY_PHRASE in b and UNVERIFIABLE_TAG not in b:
-            marker = (f"{ghrest.RATE_LIMITED_MARKER}{stamps[-1]}" if stamps
-                      else "a repository was never read")
-            b = f"{b}{UNVERIFIABLE_TAG}{marker}]"
+            # The space before "]" matters: `rate_limited_until` takes the first WORD after the marker.
+            marker = (f"{ghrest.RATE_LIMITED_MARKER}{known[-1] if known else 'unknown'}"
+                      if stamps else "a repository was never read")
+            b = f"{b}{UNVERIFIABLE_TAG}{marker} ]"
         out.append(b)
     return out
 
@@ -851,7 +853,8 @@ def self_test() -> int:
     sv = rate_limit_verdict(shaped)
     check(ghrest.rate_limited_until(clipped[0].unreadable) is None
           and sv is not None and sv.startswith(RATE_LIMITED_SENTENCE)
-          and "ghost" in sv and "unknown" in sv,
+          and "ghost" in sv and "until unknown (re-run after the hourly budget resets) (" in sv
+          and "unknown]" not in sv,
           "marker-less clipped refusals (incl. the repository-itself variant) are NO VERDICT, reset unknown")
     check(rate_limit_verdict(shaped + ["instances.json is malformed"]) is None,
           "…and a roster defect beside them stays content-red")
