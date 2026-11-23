@@ -38,6 +38,124 @@ public static class NodeCompileShaping
     internal static readonly Regex CodeIncludePattern = new(@"@@([\w][\w\-./]*)", RegexOptions.Compiled);
 
     /// <summary>
+    /// The <c>@@</c> include DIRECTIVES in <paramref name="code"/>: the <see cref="CodeIncludePattern"/>
+    /// matches that sit in CODE — never inside a <c>//</c> or <c>///</c> comment, a <c>/* */</c>
+    /// comment, or a string or character literal (regular, verbatim, interpolated, raw).
+    ///
+    /// <para>🚨 The pattern alone cannot tell a directive from prose that cites one: a doc comment
+    /// such as <c>/// … (&lt;c&gt;@@path/area/Scenarios&lt;/c&gt;)</c> matched, was read from the mesh
+    /// (a read that cannot succeed), warned, and stayed verbatim — and the same text, replaced by value,
+    /// would also have been rewritten wherever else it occurred. The resolver and the fingerprint both
+    /// scan through THIS method, so what resolves and what is hashed cannot fork on which text counts.</para>
+    /// </summary>
+    internal static IReadOnlyList<Match> FindCodeIncludes(string code)
+    {
+        var matches = CodeIncludePattern.Matches(code);
+        if (matches.Count == 0)
+            return [];
+        var skipped = NonCodeRanges(code);
+        var result = new List<Match>(matches.Count);
+        var r = 0;
+        foreach (Match match in matches)
+        {
+            while (r < skipped.Count && skipped[r].End <= match.Index)
+                r++;
+            if (r < skipped.Count && skipped[r].Start <= match.Index)
+                continue;
+            result.Add(match);
+        }
+        return result;
+    }
+
+    /// <summary>The sorted, non-overlapping [Start, End) ranges of comments and literals in C# source.</summary>
+    private static List<(int Start, int End)> NonCodeRanges(string code)
+    {
+        var ranges = new List<(int Start, int End)>();
+        var n = code.Length;
+        var i = 0;
+        while (i < n)
+        {
+            var c = code[i];
+            var next = i + 1 < n ? code[i + 1] : '\0';
+            int end;
+            if (c == '/' && next == '/')
+            {
+                end = code.IndexOf('\n', i);
+                end = end < 0 ? n : end;
+            }
+            else if (c == '/' && next == '*')
+            {
+                end = code.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                end = end < 0 ? n : end + 2;
+            }
+            else if (c == '"')
+            {
+                var quotes = 1;
+                while (i + quotes < n && code[i + quotes] == '"')
+                    quotes++;
+                if (quotes >= 3)
+                {
+                    // Raw string literal: ends at a run of at least as many quotes.
+                    end = code.IndexOf(new string('"', quotes), i + quotes, StringComparison.Ordinal);
+                    end = end < 0 ? n : end + quotes;
+                }
+                else if (quotes == 2)
+                    end = i + 2; // the empty string
+                else
+                {
+                    // An @ prefix (verbatim) changes the escape rule; a $ does not matter here.
+                    var verbatim = i > 0 && (code[i - 1] == '@' || (i > 1 && code[i - 1] == '$' && code[i - 2] == '@'));
+                    end = i + 1;
+                    while (end < n)
+                    {
+                        if (verbatim && code[end] == '"')
+                        {
+                            if (end + 1 < n && code[end + 1] == '"') { end += 2; continue; }
+                            end++;
+                            break;
+                        }
+                        if (!verbatim && code[end] == '\\') { end += 2; continue; }
+                        if (!verbatim && code[end] == '"') { end++; break; }
+                        if (!verbatim && code[end] == '\n') break;
+                        end++;
+                    }
+                    end = Math.Min(end, n);
+                }
+            }
+            else if (c == '\'' && CharLiteralEnd(code, i) is var charEnd and > 0)
+                end = charEnd;
+            else
+            {
+                i++;
+                continue;
+            }
+            ranges.Add((i, end));
+            i = Math.Max(end, i + 1);
+        }
+        return ranges;
+    }
+
+    /// <summary>The exclusive end of a character literal starting at <paramref name="i"/>, or -1 when it is no literal.</summary>
+    private static int CharLiteralEnd(string code, int i)
+    {
+        // 'x', '\n', '\'', 'A' — closes within a handful of characters on the same line.
+        var limit = Math.Min(code.Length, i + 10);
+        var j = i + 1;
+        if (j < limit && code[j] == '\\')
+            j += 2;
+        else
+            j++;
+        for (; j < limit; j++)
+        {
+            if (code[j] == '\'')
+                return j + 1;
+            if (code[j] == '\n')
+                return -1;
+        }
+        return -1;
+    }
+
+    /// <summary>
     /// Rebases a mount-relative <c>@@</c> include path onto the prefix the INCLUDING node lives
     /// under, so the same content resolves from whichever mount point it is served.
     ///
@@ -110,24 +228,31 @@ public static class NodeCompileShaping
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
             return Observable.Return(code);
 
-        var matches = CodeIncludePattern.Matches(code);
+        var matches = FindCodeIncludes(code);
         if (matches.Count == 0)
             return Observable.Return(code);
 
-        // For each @@ match, fetch the referenced node via the caller's reader (NEVER await —
-        // that's a 100% deadlock). Each result feeds the recursive resolution; the final
-        // substituted string is built up in left-to-right order by serially aggregating the
-        // per-match observables.
-        IObservable<string> chain = Observable.Return(code);
-        foreach (Match match in matches)
+        // For each @@ DIRECTIVE, fetch the referenced node via the caller's reader (NEVER await —
+        // that's a 100% deadlock). Each result feeds the recursive resolution, serially and
+        // left-to-right. The substitution is POSITIONAL (the match's own span), never a replace by
+        // value: the same text can occur in a comment or literal that must stay as it is.
+        // `substitutions` maps an authored path to the text its FIRST directive resolved to, so a
+        // repeated directive of one path takes the same text (as the by-value replace did) while the
+        // cycle brake still empties a path another visit already consumed.
+        var substitutions = new Dictionary<string, string>(StringComparer.Ordinal);
+        IObservable<ImmutableList<(Match Match, string Text)>> chain =
+            Observable.Return(ImmutableList<(Match Match, string Text)>.Empty);
+        foreach (var match in matches)
         {
             var authored = match.Groups[1].Value;
             var anchored = AnchorIncludePath(authored, anchorPath);
-            var matchValue = match.Value;
-            chain = chain.SelectMany(current =>
+            var directive = match;
+            chain = chain.SelectMany(done =>
             {
+                if (substitutions.TryGetValue(authored, out var already))
+                    return Observable.Return(done.Add((directive, already)));
                 if (!resolved.Add(anchored))
-                    return Observable.Return(current.Replace(matchValue, string.Empty));
+                    return Observable.Return(done.Add((directive, string.Empty)));
 
                 // The anchored candidate is tried FIRST and the authored path only as a fallback:
                 // on a root mount the two are identical (one read, unchanged behaviour), and the
@@ -149,19 +274,33 @@ public static class NodeCompileShaping
                             // mount-relative includes stays inside the same mount.
                             return ResolveCodeIncludes(
                                     cf.Code, resolved, hit.Path, readInclude, logger, closure)
-                                .Select(resolvedInner => current.Replace(matchValue, resolvedInner));
+                                .Select(resolvedInner =>
+                                {
+                                    substitutions[authored] = resolvedInner;
+                                    return done.Add((directive, resolvedInner));
+                                });
                         }
                         logger.LogWarning(
                             "Could not resolve code include @@{Path} referenced from {Anchor} "
                             + "— it stays VERBATIM in the source, so the compiler will report "
                             + "errors on the @@ line itself",
                             authored, anchorPath ?? "(no anchor)");
-                        return Observable.Return(current);
+                        return Observable.Return(done.Add((directive, directive.Value)));
                     });
             });
         }
 
-        return chain;
+        return chain.Select(done =>
+        {
+            var sb = new System.Text.StringBuilder(code.Length);
+            var cursor = 0;
+            foreach (var (m, text) in done)
+            {
+                sb.Append(code, cursor, m.Index - cursor).Append(text);
+                cursor = m.Index + m.Length;
+            }
+            return sb.Append(code, cursor, code.Length - cursor).ToString();
+        });
     }
 
     /// <summary>
