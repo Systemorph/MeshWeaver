@@ -166,55 +166,12 @@ internal static class NodeTypeEnrichmentHelpers
         var queryCore = meshHub.ServiceProvider.GetService<IMeshQueryCore>();
         if (queryCore != null)
         {
-            var probeRequest = MeshQueryRequest.FromQuery($"path:{nodeType}") with
-            {
-                UserId = WellKnownUsers.System,
-            };
-            // 🚨 RunAsSystem, never `Observable.Using(access.ImpersonateAsSystem, …)` (#1790).
-            // Impersonation is an AsyncLocal store/restore pair, and Rx runs the resource factory
-            // on the SUBSCRIBING thread while disposing it when the inner observable TERMINATES —
-            // the owning hub's response thread for a cross-hub query. The subscriber was therefore
-            // left latched as `system-security`, and this probe is subscribed from an activation
-            // that continues doing work afterwards. RunAsSystem seals both ends inside the one
-            // Subscribe, and delivers every notification under the subscriber's OWN identity.
-            // This was the last site on ImpersonationScopeSites.allow for this file — the line is
-            // deleted rather than lowered, which is the only direction that ratchet may move.
-            return meshHub.ServiceProvider.GetService<AccessService>()
-                .RunAsSystem(() => queryCore.Query<MeshNode>(probeRequest, meshHub.JsonSerializerOptions))
-                .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-                .Take(1)
-                .Timeout(NodeTypeProbeTimeout)
-                // 🚨 The probe's question is "is a NodeType REGISTERED at that path", not "does
-                // ANY node live there" — and those diverge the moment two things want the same
-                // name. A Store plugin installs its root at the bare path `Feedback` while its
-                // NodeType is `Feedback/Feedback`, so an instance that named the bare `Feedback`
-                // passed this gate on the PLUGIN ROOT and then bound to the plugin's own hub
-                // configuration, leaving only a lone
-                // `As<NodeTypeDefinition> for Feedback: value is PluginContent` line behind
-                // (Systemorph/MeshWeaver#2230/#2231). Counting the occupant as a registration is
-                // the defect; see ProbeCollision for why the test is deliberately one-sided.
-                .Select(probe =>
-                {
-                    var collision = ProbeCollision(probe.Items, meshHub.JsonSerializerOptions);
-                    return (
-                        Outcome: probe.Items.Count == 0 || collision is not null
-                            ? ProbeOutcome.Missing
-                            : ProbeOutcome.Registered,
-                        Collision: collision);
-                })
-                // 🚨 A FAULTED probe is NOT the same answer as an EMPTY one. Folding
-                // both into "missing" made a ~3s lookup timeout (busy mesh hub, slow
-                // storage, restart in progress) render the genuine-compile-failure
-                // overlay — "There was a compilation error… Please correct the code" —
-                // for a type whose source was never even read (#641). Keep the two
-                // apart and say which one happened.
-                .Catch<(ProbeOutcome Outcome, string? Collision), Exception>(ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "EnrichWithNodeType probe for NodeType '{NodeType}' faulted ({ExceptionType}) — registration is INDETERMINATE, not missing",
-                        nodeType, ex.GetType().Name);
-                    return Observable.Return((ProbeOutcome.Indeterminate, (string?)null));
-                })
+            // 🚨 ONE probe per NodeType, shared by every waiter (memex 2026-11-23: a burst of
+            // Benchmarks/BenchmarkRun activations cost 700 probes, each a 3 s timeout, which starved
+            // the silo thread pool). The cache is keyed by the query core so it dies with the mesh.
+            return NodeTypeProbeCache.For(queryCore).GetOrProbe(
+                nodeType,
+                () => ProbeOnce(meshHub, queryCore, nodeType, logger))
                 .SelectMany(result =>
                 {
                     var (outcome, collision) = result;
@@ -307,6 +264,137 @@ internal static class NodeTypeEnrichmentHelpers
     /// </summary>
     private static readonly TimeSpan NodeTypeProbeTimeout = TimeSpan.FromSeconds(3);
 
+    /// <summary>The single uncoalesced probe. Callers go through <see cref="NodeTypeProbeCache"/>.</summary>
+    private static IObservable<(ProbeOutcome Outcome, string? Collision)> ProbeOnce(
+        IMessageHub meshHub, IMeshQueryCore queryCore, string nodeType, ILogger? logger)
+    {
+        var probeRequest = MeshQueryRequest.FromQuery($"path:{nodeType}") with
+        {
+            UserId = WellKnownUsers.System,
+        };
+        // RunAsSystem, never Observable.Using(ImpersonateAsSystem) — see #1790.
+        return meshHub.ServiceProvider.GetService<AccessService>()
+            .RunAsSystem(() => queryCore.Query<MeshNode>(probeRequest, meshHub.JsonSerializerOptions))
+            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Take(1)
+            .Timeout(NodeTypeProbeTimeout)
+            // The probe asks "is a NodeType REGISTERED at that path", not "does ANY node live there"
+            // (Systemorph/MeshWeaver#2230/#2231) — see ProbeCollision.
+            .Select(probe =>
+            {
+                var collision = ProbeCollision(probe.Items, meshHub.JsonSerializerOptions);
+                return (
+                    Outcome: probe.Items.Count == 0 || collision is not null
+                        ? ProbeOutcome.Missing
+                        : ProbeOutcome.Registered,
+                    Collision: collision);
+            })
+            // A FAULTED probe is NOT an EMPTY one (#641): keep INDETERMINATE apart from Missing.
+            // Logged ONCE per shared probe, not once per waiter.
+            .Catch<(ProbeOutcome Outcome, string? Collision), Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "EnrichWithNodeType probe for NodeType '{NodeType}' faulted ({ExceptionType}) — registration is INDETERMINATE, not missing",
+                    nodeType, ex.GetType().Name);
+                return Observable.Return((ProbeOutcome.Indeterminate, (string?)null));
+            });
+    }
+
+    /// <summary>
+    /// Coalesces the existence probe: one in-flight probe per NodeType, shared by all waiters.
+    /// A <see cref="ProbeOutcome.Registered"/> answer is kept for the life of the query core (a
+    /// registered type does not become unregistered under a running mesh); Missing and
+    /// Indeterminate are kept only for <see cref="NegativeTtlMs"/> so a burst of activations
+    /// shares ONE answer (a faulted probe must not fan out into N timeouts) while a type that
+    /// gets registered a moment later is still found. Scoped to the query core instance, so
+    /// there is no process-wide mutable state.
+    /// </summary>
+    internal sealed class NodeTypeProbeCache
+    {
+        internal const long NegativeTtlMs = 5000;
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, NodeTypeProbeCache> Scopes = new();
+
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Entry> entries
+            = new(StringComparer.OrdinalIgnoreCase);
+
+        internal static NodeTypeProbeCache For(object core) => Scopes.GetValue(core, _ => new());
+
+        private readonly Func<long> clock;
+
+        internal NodeTypeProbeCache() : this(() => Environment.TickCount64) { }
+
+        /// <summary>Seam for tests: an injectable millisecond clock.</summary>
+        internal NodeTypeProbeCache(Func<long> clock) => this.clock = clock;
+
+        private sealed class Entry
+        {
+            public readonly System.Reactive.Subjects.AsyncSubject<(ProbeOutcome Outcome, string? Collision)> Result = new();
+            public volatile bool Done;
+            public volatile bool Keep = true;
+            public long CompletedAt;
+        }
+
+        internal IObservable<(ProbeOutcome Outcome, string? Collision)> GetOrProbe(
+            string nodeType, Func<IObservable<(ProbeOutcome Outcome, string? Collision)>> probe)
+        {
+            while (true)
+            {
+                var fresh = new Entry();
+                var entry = entries.GetOrAdd(nodeType, fresh);
+                if (!ReferenceEquals(entry, fresh))
+                {
+                    var expired = entry.Done && !entry.Keep
+                        && clock() - entry.CompletedAt > NegativeTtlMs;
+                    if (!expired)
+                        return entry.Result.AsObservable();
+                    if (!entries.TryUpdate(nodeType, fresh, entry))
+                        continue;
+                }
+                // We own the new entry: run the one probe and publish to every waiter.
+                var owner = fresh;
+                IObservable<(ProbeOutcome Outcome, string? Collision)> source;
+                try
+                {
+                    source = probe();
+                }
+                catch (Exception ex)
+                {
+                    // Construction threw: never leave a half-built entry that waiters would hang on.
+                    entries.TryRemove(new KeyValuePair<string, Entry>(nodeType, owner));
+                    owner.Keep = false;
+                    owner.Done = true;
+                    owner.Result.OnError(ex);
+                    throw;
+                }
+                source.Subscribe(
+                    r =>
+                    {
+                        owner.Keep = r.Outcome == ProbeOutcome.Registered;
+                        owner.CompletedAt = clock();
+                        owner.Done = true;
+                        owner.Result.OnNext(r);
+                        owner.Result.OnCompleted();
+                    },
+                    ex =>
+                    {
+                        owner.Keep = false;
+                        owner.CompletedAt = clock();
+                        owner.Done = true;
+                        owner.Result.OnError(ex);
+                    },
+                    () =>
+                    {
+                        if (owner.Done) return;
+                        owner.Keep = false;
+                        owner.CompletedAt = clock();
+                        owner.Done = true;
+                        owner.Result.OnCompleted();
+                    });
+                return owner.Result.AsObservable();
+            }
+        }
+    }
+
     /// <summary>
     /// What the type-existence probe actually established. The three answers are
     /// deliberately distinct: "the type is not registered" (the author's problem)
@@ -314,7 +402,7 @@ internal static class NodeTypeEnrichmentHelpers
     /// remedies, and collapsing them is what made a lookup timeout read as a
     /// compile failure.
     /// </summary>
-    private enum ProbeOutcome
+    internal enum ProbeOutcome
     {
         /// <summary>A node exists at the NodeType path — proceed with enrichment.</summary>
         Registered,
