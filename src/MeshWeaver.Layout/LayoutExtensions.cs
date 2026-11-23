@@ -293,7 +293,6 @@ public static class LayoutExtensions
         if (stream.TryGetHub() is not { } hub)
             return TerminalOf<T>(stream);
 
-        var first = true;
         var collection = referencePointer.GetSegment(0).Decode();
         // RFC 6901 unescape in ONE pass (JsonPointerSegment.Decode) — two Replace calls decode
         // "~01" to "/" instead of "~1".
@@ -304,6 +303,15 @@ public static class LayoutExtensions
                 unescapedIdString == string.Empty ? string.Empty
                 : JsonSerializer.Deserialize<string>(unescapedIdString, hub.JsonSerializerOptions);
 
+        // 🚨 `first` is PER SUBSCRIPTION. Declared outside the returned observable it was shared by
+        // every subscriber of one GetStream call: the first subscriber consumed it, and a LATER
+        // subscriber of the same observable (a test or view that waits on it twice) got only
+        // Fulls and matching updates — a replayed Patch frame with no update for this pointer was
+        // dropped, so the second wait on a settled page saw "nothing at all" until the timeout
+        // (TypedPageIndexRailTest, 2 PRs in 4 days).
+        return Observable.Defer(() =>
+        {
+        var first = true;
         return stream
             .Synchronize() // Ensure thread-safety for the 'first' closure variable
             .Where(i =>
@@ -364,6 +372,7 @@ public static class LayoutExtensions
                     }
                 }
             );
+        });
     }
 
     /// <summary>
