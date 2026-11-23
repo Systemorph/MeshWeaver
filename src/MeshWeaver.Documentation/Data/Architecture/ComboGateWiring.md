@@ -309,6 +309,32 @@ The durable half is not optional. A log line depends on a per-category log level
 never have set — which is exactly how an install sat three builds behind for seven hours with
 nothing in the product able to say so (#2553). A node write does not.
 
+### 🚨 A run of NotVerifiable is an alarm — it still never holds a roll or a promotion
+
+One `NotVerifiable` is an incident of one candidate. A RUN of them for the same release line is a
+different fact: the gate has stopped examining anything while every roll proceeds on zero evidence.
+That was the state after the compose FATAL fixed in #8492 — every run ended green because a landed
+`NotVerifiable` is a green slot, so nothing said the lane had verified nothing for days.
+
+The decision (maintainer, 2026-11-23, bug-triage item *"combo-verify: a lane that verified nothing is
+green and the roll proceeds"*): **allowed, but loud** — not a hold.
+
+- **Not a hold on the roll** — the fail-closed reading above still applies.
+- **Not a hold on promotion to stable** — and it never was one. Stable advances only through the
+  canary soak ([Canary per Major Line](../CanaryPerMajorLine)); the combo verdict is not an input of
+  the promotion rule, so the soak keeps running and prod stays stable because the canary soaked,
+  not because the gate was blind.
+- **The alarm** — the instance counts the consecutive `NotVerifiable` verdicts recorded for the
+  candidate's release line (the major of its tag; newest first by `VerifiedAt`, from its own
+  `ComboVerifications`). Any Green or Red ends the streak, and another line's verdicts are not
+  counted. At `ComboNotVerifiableStreak.DefaultAlarmAfter` = 3 the instance logs an Error and answers
+  the verdict POST with `alarm: true` (`line`, `notVerifiableStreak`, `alarmAfter`).
+- **The audience** — `combo-verify-instance.sh` lands the verdict first, then fails the slot
+  (`COMBO GATE BLIND …`) on `alarm: true`. The red `verdict` job reaches the existing `combo-red`
+  reporter: one `ci-combo-unverified` ledger issue (sev:M) and one signed event to control triage. The
+  first landed verdict that examined something clears the streak and the next green run closes the
+  ledger.
+
 `NotVerifiable` and *no verdict at all* behave identically and read differently, on purpose: "the
 gate ran and could not answer" and "nothing has ever asked" are different incidents with different
 fixes, and an operator has to be able to tell them apart from the recorded sentence alone.
