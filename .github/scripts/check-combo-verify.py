@@ -840,6 +840,23 @@ LANDING_SCENARIOS = [
      "Red", "504,200", '{"recorded":true}', 1, "HTTP 504", None),
     ("a verdict kind this lane cannot classify ⇒ RED even though it landed",
      "Purple", "200", '{"recorded":true}', 1, "unknown verdict kind", None),
+    # The NotVerifiable STREAK: one is advisory, the run of them is a blind gate (answer field `alarm`).
+    ("the 3rd consecutive NotVerifiable of a line (alarm) ⇒ RED naming the blind gate, verdict still landed",
+     "NotVerifiable", "200",
+     '{"recorded":true,"line":"4","notVerifiableStreak":3,"alarmAfter":3,"alarm":true}',
+     1, "COMBO GATE BLIND", "→ **NotVerifiable**"),
+    ("a NotVerifiable below the threshold (alarm false) ⇒ still green (negative control)",
+     "NotVerifiable", "200",
+     '{"recorded":true,"line":"4","notVerifiableStreak":2,"alarmAfter":3,"alarm":false}',
+     0, "verdict is NotVerifiable", "→ **NotVerifiable**"),
+    ("a Green that examined something ⇒ green even if the answer carried an alarm flag (negative control)",
+     "Green", "200",
+     '{"recorded":true,"line":"4","notVerifiableStreak":0,"alarmAfter":3,"alarm":true}',
+     0, "GREEN", "→ **Green**"),
+    ("a Red that examined something ⇒ green even if the answer carried an alarm flag (negative control)",
+     "Red", "200",
+     '{"recorded":true,"line":"4","notVerifiableStreak":0,"alarmAfter":3,"alarm":true}',
+     0, "::warning::", "→ **Red**"),
 ]
 
 
@@ -1276,6 +1293,11 @@ def self_test(root: Path) -> int:
             landing.replace('-ge "${LAND_RETRIES:-3}"', '-ge 0', 1),
         "a 4xx re-posted blindly (#4413)":
             landing.replace('[ "$land_code" = "504" ] && jq', '[ "$land_code" != "200" ] && jq', 1),
+        "a NotVerifiable streak never alarmed (a blind gate stays green)":
+            landing.replace("jq -e '.alarm == true'", "jq -e '.alarm == \"never\"'", 1),
+        "the alarm applied to every kind (a Green or Red reds the slot)":
+            landing.replace('[ "$KIND" = "NotVerifiable" ] && jq -e \'.alarm == true\'',
+                            'jq -e \'.alarm == true\'', 1),
         "an unknown verdict kind accepted":
             landing.replace('  *) fail "the verifier wrote an unknown verdict kind',
                             '  *) note "the verifier wrote an unknown verdict kind', 1),

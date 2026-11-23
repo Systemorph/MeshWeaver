@@ -33,6 +33,8 @@ This is non-negotiable, for three reasons:
 2. **Live updates.** The GUI subscription stays open for the lifetime of the component. Backend-loaded values freeze on first render; cache-subscribed views never go stale.
 3. **CQRS-correct reads.** `Hub.GetMeshNodeStream(path)` (backed by the process-wide `IMeshNodeStreamCache`) is the **authoritative** read path — it goes to the owning hub's workspace, never through the lagged read-side index. See [CQRS — Queries, Reads, Writes, Operations](/Doc/Architecture/CqrsAndContentAccess).
 
+**The same rule holds for a view of data: raw data + LINQ + bound controls, never numbers baked into the page.** The raw rows live in the mesh (typed node content or a data collection); the layout area shapes them with LINQ (`SliceBy(...).ToLineChart(...)`, `Controls.DataGrid(rows)`) and streams them to the client, and every selector (`Controls.Select`/`Combobox`, checkboxes) is data-bound so the client redraws — values typed into a code cell or a Markdown table, a table built by string concatenation, or a page built outside the platform to show mesh data are all forbidden. Worked shapes: [Chart Gallery](../ChartGallery), [Pivot Tricks](../PivotTricks), [DataGrid](../DataGrid).
+
 ## Responsibility split
 
 | Side | Responsibility |

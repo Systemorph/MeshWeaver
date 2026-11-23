@@ -98,6 +98,14 @@ If you are reaching for any of these to build a UI feature, STOP and find the co
    PATHS through; downstream loads the node (`StartThread` takes a model PATH and loads the model
    from its mesh-node stream — don't pre-resolve an id). The full surface is in
    [/mesh-data](../mesh-data/SKILL.md); it lives with the AI engine in MeshWeaver.Plugins (#2276).
+8. **Numbers baked into a view of data** — values typed into a code cell or a Markdown table as a
+   chart's or table's data, a table built by string concatenation, or a page built outside the
+   platform (hand-written HTML/JS, an external dashboard) to show mesh data. → store the raw rows in
+   the mesh, shape them with LINQ in the layout area (`SliceBy(...).ToLineChart(...)`,
+   `Controls.DataGrid(rows)`), and data-bind every selector so the client redraws — see
+   [ChartGallery.md](../../../src/MeshWeaver.Documentation/Data/GUI/ChartGallery.md),
+   [PivotTricks.md](../../../src/MeshWeaver.Documentation/Data/GUI/PivotTricks.md) and
+   [DataGrid.md](../../../src/MeshWeaver.Documentation/Data/GUI/DataGrid.md).
 
 Before writing ANY UI/binding/persistence code, FIND the existing framework area / control / macro /
 extension and use it. If you're reaching for `GetDataStream` / `Subscribe` / `Update` /
