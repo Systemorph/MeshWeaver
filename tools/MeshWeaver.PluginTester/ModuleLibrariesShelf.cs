@@ -31,6 +31,19 @@ public sealed class ModuleLibrariesShelf
     /// <summary>The directory, beside the builder, that carries the shelf.</summary>
     public const string DirectoryName = "module-libs";
 
+    /// <summary>
+    /// Where a shelf publish lays its packages' STATIC WEB ASSETS: <c>wwwroot/_content/&lt;PackageId&gt;/…</c>,
+    /// the path a host serves them at and the path a module bundle carries them at
+    /// (<c>Doc/Architecture/ModuleStaticAssets</c>). Only a shelf published through the Razor SDK has
+    /// one: a plain <c>Microsoft.NET.Sdk</c> publish imports a package's static-web-asset props and
+    /// copies nothing, which is how a container-built Radzen view pack shipped without
+    /// <c>Radzen.Blazor.js</c> and drew every chart empty.
+    /// </summary>
+    public const string StaticWebAssetRoot = "wwwroot/" + ContentFolder;
+
+    /// <summary>The <c>_content</c> segment a package's static web assets are namespaced under.</summary>
+    public const string ContentFolder = "_content";
+
     private readonly ImmutableDictionary<string, ImmutableArray<string>> _assembliesByPackage;
     private readonly ImmutableDictionary<string, ImmutableArray<string>> _dependenciesByPackage;
     private readonly ImmutableDictionary<string, string> _versionsByPackage;
@@ -174,8 +187,71 @@ public sealed class ModuleLibrariesShelf
             versions.ToImmutable(), files, natives.ToImmutable(), uncarried.ToImmutable())
         {
             NotTargetedByPackage = notTargeted.ToImmutable(),
+            StaticWebAssetsByPackage = ReadStaticWebAssets(full),
+            HasStaticWebAssetPipeline =
+                System.IO.Directory.GetFiles(full, "*.staticwebassets.endpoints.json").Length > 0
+                || System.IO.Directory.Exists(Path.Combine(full, StaticWebAssetRoot)),
         };
     }
+
+    /// <summary>
+    /// Every package's static web assets on the shelf, keyed by the package id its
+    /// <c>wwwroot/_content/&lt;PackageId&gt;/</c> folder names, as '/'-separated paths relative to
+    /// that folder.
+    /// </summary>
+    private static ImmutableDictionary<string, ImmutableArray<string>> ReadStaticWebAssets(string shelf)
+    {
+        var root = Path.Combine(shelf, StaticWebAssetRoot);
+        var byPackage = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
+        if (!System.IO.Directory.Exists(root))
+            return byPackage.ToImmutable();
+        foreach (var packageDirectory in System.IO.Directory.GetDirectories(root))
+        {
+            var relative = System.IO.Directory.GetFiles(packageDirectory, "*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(packageDirectory, f).Replace(Path.DirectorySeparatorChar, '/'))
+                .Order(StringComparer.Ordinal)
+                .ToImmutableArray();
+            if (!relative.IsEmpty)
+                byPackage[Path.GetFileName(packageDirectory)] = relative;
+        }
+        return byPackage.ToImmutable();
+    }
+
+    private ImmutableDictionary<string, ImmutableArray<string>> StaticWebAssetsByPackage { get; init; } =
+        ImmutableDictionary<string, ImmutableArray<string>>.Empty;
+
+    /// <summary>
+    /// Whether this shelf was published through the static-web-assets pipeline (the Razor SDK): it
+    /// carries a <c>*.staticwebassets.endpoints.json</c> or a <see cref="StaticWebAssetRoot"/>. When
+    /// false the shelf cannot say whether a package ships assets at all, so a view pack resolving a
+    /// package from it is NAMED in the build log rather than assumed asset-free.
+    /// </summary>
+    public bool HasStaticWebAssetPipeline { get; private init; }
+
+    /// <summary>
+    /// Every <c>wwwroot/_content/&lt;X&gt;/</c> folder on the shelf whose X no package in the shelf's
+    /// deps record is named. The folder name is the package's static-web-assets <c>BasePath</c>
+    /// segment, which defaults to the package id (<c>Radzen.Blazor</c>); a package that overrides it
+    /// cannot be attributed, so its assets ride no module — and this names them instead.
+    /// </summary>
+    public ImmutableArray<string> UnclaimedStaticWebAssetFolders =>
+        [.. StaticWebAssetsByPackage.Keys
+            .Where(folder => !_versionsByPackage.ContainsKey(folder))
+            .Order(StringComparer.Ordinal)];
+
+    /// <summary>The static web assets a shelf package ships, relative to its
+    /// <c>wwwroot/_content/&lt;PackageId&gt;/</c> folder; empty when it ships none.</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The relative paths, in ordinal order.</returns>
+    public ImmutableArray<string> StaticWebAssetsOf(string packageId) =>
+        StaticWebAssetsByPackage.TryGetValue(packageId, out var assets) ? assets : [];
+
+    /// <summary>The file on the shelf backing one package static web asset.</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <param name="relativePath">The path relative to the package's <c>_content</c> folder.</param>
+    /// <returns>The absolute path.</returns>
+    public string StaticWebAssetFileFor(string packageId, string relativePath) =>
+        Path.Combine(Directory, StaticWebAssetRoot, packageId, relativePath);
 
     /// <summary>Whether the shelf carries this package at all (its deps record names it).</summary>
     /// <param name="packageId">The package id.</param>
@@ -264,7 +340,18 @@ public sealed class ModuleLibrariesShelf
     public sealed record Resolution(
         string PackageId, string Version,
         ImmutableArray<string> ReferenceFiles,
-        ImmutableArray<string> RideFiles);
+        ImmutableArray<string> RideFiles)
+    {
+        /// <summary>
+        /// The packages of this resolution's closure whose STATIC WEB ASSETS ride the bundle: every
+        /// package walked whose <c>wwwroot/_content/&lt;PackageId&gt;/</c> the shelf carries, minus a
+        /// package the landing image supplies (its host serves that package's assets itself, and the
+        /// host lane never lets a module shadow them). The SDK lane's <c>dotnet publish</c> lays
+        /// exactly these at <c>wwwroot/_content/&lt;PackageId&gt;/</c>; the container lane has to
+        /// reproduce them, or the module loads and 404s every one.
+        /// </summary>
+        public ImmutableArray<string> StaticAssetPackages { get; init; } = [];
+    }
 
     /// <summary>
     /// Resolves one package from the shelf, or null when the shelf does not carry it.
@@ -290,12 +377,19 @@ public sealed class ModuleLibrariesShelf
         var rides = ImmutableArray.CreateBuilder<string>();
         var seenPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var assetPackages = ImmutableArray.CreateBuilder<string>();
         var pending = new Stack<string>();
         pending.Push(packageId);
         while (pending.Count > 0)
         {
             var current = pending.Pop();
             if (!seenPackages.Add(current)) continue;
+            // A package whose assemblies the landing image supplies is served by the HOST — its
+            // assets never ride (and the host lane would refuse to mount them over its own).
+            if (StaticWebAssetsByPackage.ContainsKey(current)
+                && !(_assembliesByPackage.TryGetValue(current, out var ownNames)
+                     && !ownNames.IsEmpty && ownNames.All(suppliedByContainer)))
+                assetPackages.Add(current);
             if (_assembliesByPackage.TryGetValue(current, out var names))
                 foreach (var name in names)
                 {
@@ -317,6 +411,9 @@ public sealed class ModuleLibrariesShelf
             packageId,
             _versionsByPackage.GetValueOrDefault(packageId, "unknown"),
             closure,
-            closure);
+            closure)
+        {
+            StaticAssetPackages = [.. assetPackages.Order(StringComparer.OrdinalIgnoreCase)],
+        };
     }
 }

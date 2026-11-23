@@ -1519,7 +1519,8 @@ public static class ProjectBuild
                     $"{warnings} warning(s) under the no-warn policy");
             }
             NameTheDocumentationFile(outputDirectory, model);
-            var staticAssets = EmitStaticAssets(outputDirectory, model, options.LoadedExtensions, sink, name);
+            var staticAssets = EmitStaticAssets(
+                outputDirectory, model, options.LoadedExtensions, shelf, shelfResolutions, sink, name);
             if (staticAssets.Refusal is { } assetRefusal)
             {
                 // 🚨 RED, not a warning. The SDK makes this an ERROR (BLAZOR106) and the reason is
@@ -1648,9 +1649,20 @@ public static class ProjectBuild
     /// <c>wwwroot/</c>, so a directory walk cannot see them and every producer of a module bundle has
     /// to reproduce them — a missing one is a pack that loads and renders unstyled or 404s in a
     /// browser (#2221, #2384). An extension's refusal is therefore RED, never a warning.</para>
+    ///
+    /// <para>🚨 <b>And a PACKAGE's assets are a fourth producer obligation.</b> A
+    /// <c>PackageReference</c> to a Razor class library (<c>Radzen.Blazor</c>) carries its own
+    /// <c>_content/&lt;PackageId&gt;/…</c>, which <c>dotnet publish</c> lays at
+    /// <c>wwwroot/_content/&lt;PackageId&gt;/</c> and the host lane serves from there when the host does
+    /// not provide the package. This builder runs no NuGet: a package resolved from the
+    /// module-libraries shelf brings its assets from the shelf's own
+    /// <see cref="ModuleLibrariesShelf.StaticWebAssetRoot"/>, and they are copied here beside the
+    /// package's assemblies that ride. Without that, the Radzen view pack loaded, self-requested
+    /// <c>_content/Radzen.Blazor/Radzen.Blazor.js</c>, got a 404 and drew every chart empty.</para>
     /// </summary>
     private static StaticAssetResult EmitStaticAssets(
         string outputDirectory, ProjectFile.Model model, ImmutableArray<LoadedBuildExtension> extensions,
+        ModuleLibrariesShelf? shelf, IReadOnlyList<ModuleLibrariesShelf.Resolution> shelfResolutions,
         Sink sink, string name)
     {
         var projectDirectory = Path.GetDirectoryName(model.ProjectPath)!;
@@ -1678,6 +1690,76 @@ public static class ProjectBuild
                 return new StaticAssetResult([], outcome.Refusal);
             if (outcome.Summary.Length > 0)
                 summaries.Add(outcome.Summary);
+        }
+
+        // The PACKAGES' assets: every shelf package of this module's closure that ships
+        // `_content/<PackageId>/…`, copied to the path the SDK's publish would have laid it at.
+        if (shelf is not null && shelfResolutions.Count > 0)
+        {
+            var packageFiles = 0;
+            var packages = shelfResolutions
+                .SelectMany(r => r.StaticAssetPackages)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToImmutableArray();
+            // 🚨 The PROJECT wins a conflict, as it does under `dotnet publish` (an app's own
+            // wwwroot file takes precedence over a library's asset at the same route): a file the
+            // project's own wwwroot put at wwwroot/_content/<Package>/… is never replaced here.
+            var projectOwned = Directory.Exists(wwwroot)
+                ? Directory.GetFiles(wwwroot, "*", SearchOption.AllDirectories)
+                    .Select(f => Path.GetFullPath(Path.Combine(target, Path.GetRelativePath(wwwroot, f))))
+                    .ToHashSet(StringComparer.Ordinal)
+                : [];
+            foreach (var package in packages)
+            {
+                var assets = shelf.StaticWebAssetsOf(package);
+                var copied = 0;
+                foreach (var relative in assets)
+                {
+                    var destination = Path.GetFullPath(Path.Combine(
+                        target, ModuleLibrariesShelf.ContentFolder, package, relative.Replace('/', Path.DirectorySeparatorChar)));
+                    if (projectOwned.Contains(destination))
+                    {
+                        sink.Info($"[{name}] static assets: _content/{package}/{relative} is the project's own "
+                            + "file — it takes precedence over the package's, as under dotnet publish");
+                        continue;
+                    }
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                    // overwrite: a rebuild into the same output directory replaces the previous copy.
+                    File.Copy(shelf.StaticWebAssetFileFor(package, relative), destination, overwrite: true);
+                    copied++;
+                }
+                packageFiles += copied;
+                sink.Info($"[{name}] static assets: _content/{package}/ from the module-libraries shelf "
+                    + $"({copied} file(s))");
+            }
+            if (packageFiles > 0)
+                summaries.Add($"{packageFiles} package asset(s) of {packages.Length} package(s)");
+            // 🚨 A shelf `_content/<X>/` folder no shelf package is named X: the package overrode its
+            // static-web-assets BasePath, so its assets cannot be attributed to the package that
+            // owns them and would not ride. Named, never silently dropped.
+            foreach (var orphan in shelf.UnclaimedStaticWebAssetFolders)
+                sink.Warn($"[{name}] static assets: the module-libraries shelf carries "
+                    + $"{ModuleLibrariesShelf.StaticWebAssetRoot}/{orphan}/, but no package on the shelf is named "
+                    + $"'{orphan}' (a package that overrides its static-web-assets BasePath) — those assets "
+                    + "cannot be attributed to a package and ride no module.");
+            // 🚨 NAMED, never assumed: a shelf published without the static-web-assets pipeline
+            // (a plain Microsoft.NET.Sdk project) cannot say whether a package ships assets at all,
+            // and a view pack resolving a package from it is exactly the shape that shipped the
+            // Radzen pack without Radzen.Blazor.js. A view pack is a Razor/Web-SDK project or one
+            // that ships assets of its own — a pack whose ONLY assets would be its packages' is the
+            // first case, so the SDK, not the presence of assets, is what decides.
+            var viewPack = model.Sdk.StartsWith("Microsoft.NET.Sdk.Razor", StringComparison.OrdinalIgnoreCase)
+                || model.Sdk.StartsWith("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase)
+                || Directory.Exists(target);
+            if (packageFiles == 0 && !shelf.HasStaticWebAssetPipeline && viewPack)
+                sink.Warn($"[{name}] static assets: this view pack resolves "
+                    + string.Join(", ", shelfResolutions.Select(r => r.PackageId))
+                    + $" from the module-libraries shelf at {shelf.Directory}, which was published WITHOUT the "
+                    + "static-web-assets pipeline (no *.staticwebassets.endpoints.json, no "
+                    + $"{ModuleLibrariesShelf.StaticWebAssetRoot}/) — any _content/<Package>/ those packages ship "
+                    + "cannot ride this bundle and will 404 in the browser. Publish the shelf project with "
+                    + "Sdk=\"Microsoft.NET.Sdk.Razor\" (Doc/Architecture/ModuleStaticAssets).");
         }
         return new StaticAssetResult(summaries.ToImmutable(), null);
     }

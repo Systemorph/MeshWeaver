@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: A Module's Static Web Assets
 category: Architecture
-description: A module's CSS/JS ride the bundle in their own folder and must land MODULE-RELATIVE beside the entry assembly, or the module loads perfectly and 404s every asset it ships behind one Debug line. The three asset kinds (two of which no directory walk can see), the four hops, the four landing sites, and the measured denominator.
+description: A module's CSS/JS ride the bundle in their own folder and must land MODULE-RELATIVE beside the entry assembly, or the module loads perfectly and 404s every asset it ships behind one Debug line. The three asset kinds (two of which no directory walk can see), a package's own assets and the shelf they ride from, the four hops, the four landing sites, and the measured denominator.
 icon: /static/NodeTypeIcons/code.svg
 ---
 
@@ -105,6 +105,62 @@ for a file under `wwwroot/` exactly as for one beside a component. `ProjectBuild
 reproduces that refusal, because the shape that reaches production is a component renamed away from
 its JS, and passing that silently is the same 404 arriving from the other direction.
 
+## The fourth kind: a PACKAGE's assets, and the shelf they come from
+
+A view pack's `PackageReference` to a Razor class library carries that package's own static web
+assets — `Radzen.Blazor` ships 39 files under `staticwebassets/`, declared to the SDK by its
+`build/Microsoft.AspNetCore.StaticWebAssets.props` with `BasePath` `_content/Radzen.Blazor`.
+`dotnet publish` of the view pack lays them at `publish/wwwroot/_content/Radzen.Blazor/…`, hop 1
+sweeps them, and hop 4 serves them at `_content/Radzen.Blazor/…` because the host does not
+reference `Radzen.Blazor` (MeshWeaver.Plugins#1974 removed it from the portal on purpose).
+
+**The container lane dropped this kind entirely**, and the Radzen pack is how it showed: measured
+on memex.systemorph.com (2026-11-23, image `memex-portal-ai:4.0.13978`), every chart drew empty,
+the Radzen gallery included, while `/health` listed `MeshWeaver.Blazor.Radzen:ChartControl→RadzenChartView`.
+
+| request | answer |
+|---|---|
+| `_content/Radzen.Blazor/Radzen.Blazor.js` | **404** |
+| `_content/Radzen.Blazor/css/material-base.css` | **404** |
+| `_content/MeshWeaver.Blazor.Radzen/css/radzen-grid.css` (the pack's OWN asset) | 200 |
+| `_content/MeshWeaver.Blazor.Chat/ChatMessageList.razor.js` (another container-built pack) | 200 |
+
+So the module landed, its own assets were mounted, and hop 4 worked; the bundle simply did not
+carry the package's files. The pack lane's own line on that run said so in numbers nobody read as
+a defect: `MeshWeaver.Blazor.Radzen: 1 asset(s) owed (1 wwwroot file(s) in the source tree, 0
+emitted by the build), 1 declared by the bundle, 0 missing` (MeshWeaver.Plugins run `45263559835`).
+`RadzenViewBase` gates rendering on its self-loaded assets, and a failed load is a logged warning,
+so the symptom is an empty chart with no error on the page.
+
+**Why.** The in-image builder runs no NuGet. A package the image does not supply resolves from the
+module repository's **module-libraries shelf** (MeshWeaver.Plugins `src/MeshWeaver.ModuleLibraries`,
+published per run by `node-repo-module-pack.yml`), and `ProjectBuild.EmitStaticAssets` copied only
+the project's own `wwwroot/` and its extensions' assets. The shelf could not have supplied the
+package's files anyway: it was a plain `Microsoft.NET.Sdk` project, and a plain-SDK publish imports
+a package's static-web-asset props and copies nothing. Measured with SDK 11.0.100 and
+`Radzen.Blazor` 13.0.0: the same project published with `Microsoft.NET.Sdk.Razor` lays 39 files
+under `wwwroot/_content/Radzen.Blazor/` (plus `<Shelf>.staticwebassets.endpoints.json`); with
+`Microsoft.NET.Sdk` it lays none. The assembly closure is identical either way (83 assemblies).
+
+**The fix has two halves, and neither works alone:**
+
+1. The shelf project is a Razor-SDK project, so its publish carries every package's
+   `wwwroot/_content/<PackageId>/` (MeshWeaver.Plugins).
+2. The builder copies `wwwroot/_content/<PackageId>/**` from the shelf into the module's
+   `wwwroot/_content/<PackageId>/` for every shelf package of the module's closure
+   (`ModuleLibrariesShelf.Resolution.StaticAssetPackages`) — minus a package the landing image
+   supplies, whose host serves those assets itself. When the shelf was published WITHOUT the
+   pipeline (no `*.staticwebassets.endpoints.json`, no `wwwroot/_content/`), a view pack resolving
+   a package from it is NAMED in the build log, because such a shelf cannot say whether the
+   package ships assets at all.
+
+`check-bundle-static-assets.py` now owes the build output's `_content/<Package>/` files too (it
+used to skip them as "dependencies' assets"), so a pack that drops what the builder emitted is red
+by name. Pinned by `PackageStaticAssetTest` (`test/MeshWeaver.PluginTester.Test`): it runs the real
+`ProjectBuild` against a real shelf directory and reads the emitted tree, with two negative
+controls — a shelf package that ships no assets contributes none, and a package the image
+supplies rides no assets.
+
 ## The invariant, in one line
 
 > **A landing copies `meshweaver/moduleassets/` MODULE-RELATIVE into the same directory it copied
@@ -168,7 +224,7 @@ build; call the shared lane.
 | Hop | Gate | Proven by |
 |---|---|---|
 | 1 — the PRODUCER emits all three kinds | the Razor build extension's own tests in MeshWeaver.Plugins (`src/MeshWeaver.PluginTester.Razor.Test`: `CollocatedJsModuleTest`, `ScopedCssTest`) — they RUN `ProjectBuild` with the extension and read the emitted tree | reverting the emitter turns its cases red and leaves the assetless control green |
-| 1 — the BUNDLE declares what the tree holds and the build emitted | `.github/scripts/check-bundle-static-assets.py`, in every satellite's pack lane, per file, both compilers, no precondition — the source tree's `wwwroot/**` plus every file under the build output's `wwwroot/` (no source kind's convention is encoded in core) | its `--self-test`: 16 cases, 9 of which MUST fail the gate |
+| 1 — the BUNDLE declares what the tree holds and the build emitted | `.github/scripts/check-bundle-static-assets.py`, in every satellite's pack lane, per file, both compilers, no precondition — the source tree's `wwwroot/**` plus every file under the build output's `wwwroot/` (no source kind's convention is encoded in core) | its `--self-test`, whose failing cases include a bundle that dropped a package's `_content/` |
 | 3 — the LANE lands what the bundle ships | `.github/scripts/test-module-asset-landing.py` | two falsification arms per lane, each mutating the real step |
 | 4 — the HOST serves what landed | `PluginBundlePublishAssetsTest` (`test/Memex.Portal.Shared.Test`) | a bundle with no assets lands no `wwwroot` |
 
@@ -278,6 +334,8 @@ Anything that compiles a view pack outside `dotnet publish` owes hop 1 all three
    REFUSE an unpaired one by name, as the SDK does.
 3. Emit `wwwroot/<AssemblyName>.styles.css` when the project has any `*.razor.css`, under the same
    scope the generator stamped into the markup.
+4. Emit each referenced package's static web assets at `wwwroot/_content/<PackageId>/…`, unless the
+   host supplies the package (see *The fourth kind* above).
 
 `ProjectBuild.EmitStaticAssets` is the reference implementation. **Do not reach for the SDK's
 `*.staticwebassets.*.json` instead** — a builder that is not the SDK writes none, and one that is
