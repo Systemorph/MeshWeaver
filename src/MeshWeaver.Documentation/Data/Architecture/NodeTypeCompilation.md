@@ -3635,6 +3635,16 @@ protocol lives in the `/code` skill.
 
 ---
 
+## The existence probe is shared, one per NodeType
+
+`EnrichWithNodeType` starts every per-node activation with a one-shot `path:{nodeType}` probe. That probe
+is **coalesced**: one in-flight probe per NodeType, shared by every waiter (`NodeTypeProbeCache`, scoped to
+the mesh query core). A `Registered` answer is kept for the life of the mesh; `Missing` and `Indeterminate`
+are kept for 5 s so a burst shares one answer, then re-asked so a type registered a moment later is found.
+Before this, a burst of activations of one type (memex 2026-11-23: about 700 activations of one benchmark
+NodeType) issued 700 probes, each waiting out the 3 s budget on the same stalled partition query, and the
+parked continuations starved the silo thread pool. A faulted probe is logged once, not once per waiter.
+
 ## Quick reference
 
 | I want to… | Do this |
