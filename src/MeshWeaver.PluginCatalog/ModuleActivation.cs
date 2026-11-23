@@ -2264,6 +2264,11 @@ public static class ModuleActivationSidecar
                 continue;
             try
             {
+                // Re-read at the moment of deletion: a landing refused on THIS platform may have
+                // rewritten the same path since the snapshot, and that marker is current.
+                if (ReadRefused(baseDirectory, name) is not { } fresh
+                    || IsCurrentRefusal(fresh, livePlatform) || fresh.RefusedAt > cutoffUtc)
+                    continue;
                 File.Delete(RefusedMarkerPath(baseDirectory, name));
                 removed++;
                 onRemoved?.Invoke($"module '{name}': retired a refusal marker keyed to platform "
@@ -2367,7 +2372,7 @@ public static class ModuleActivationSidecar
             var name = Path.GetFileName(file);
             name = name[..^RefusedMarkerSuffix.Length];
             if (ReadRefused(baseDirectory, name) is { } refusal
-                && (string.IsNullOrWhiteSpace(livePlatform) || IsCurrentRefusal(refusal, livePlatform)))
+                && IsCurrentRefusal(refusal, livePlatform))
                 builder[name] = refusal;
         }
         return builder.ToImmutable();
