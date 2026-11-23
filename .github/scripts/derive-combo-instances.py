@@ -370,6 +370,66 @@ def read_scans(repos: list[str], root: str | None):
     return [lock.scan_overlays_remote(repo, REGISTRY_FOR_SCAN) for repo in repos]
 
 
+# 🚨 THE SCANS CROSS THE JOB BOUNDARY, ENCRYPTED — THE ROSTER STILL NEVER DOES.
+# Every verify slot used to re-read the whole fleet (1 + ~34 tree reads + ~15 overlay reads) to learn a
+# roster the preflight had already derived: eight derivations per run on the fleet-reader installation's
+# ONE org-wide budget (measured 2026-11-23: ~950 calls inside 45 s right after each combo-verify start,
+# the installation at 3,700-4,300 of 6,100 by the end of its window). The roster itself still cannot be
+# a job output (a masked name drops the output, #3848). An ARTIFACT can carry the scans, but a public
+# repository's artifacts are downloadable, so the workflow encrypts the file with the digest key before
+# upload and the slot decrypts it. Integrity needs no new mechanism: the slot still derives the roster
+# from these scans LOCALLY and must reproduce the preflight's count and HMAC digest.
+def _jsonable(value):
+    if isinstance(value, (frozenset, set)):
+        return {"__frozenset__": sorted(value)}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _tupled(value):
+    if isinstance(value, dict) and set(value) == {"__frozenset__"}:
+        return frozenset(value["__frozenset__"])
+    if isinstance(value, list):
+        return tuple(_tupled(item) for item in value)
+    return value
+
+
+def dump_scans(scans, repos: list[str]) -> str:
+    """The scans as JSON text. Pure; the caller writes (and encrypts) it."""
+    import dataclasses
+    for scan in scans:
+        for f in dataclasses.fields(scan):
+            value = getattr(scan, f.name)
+            if f.name != "gh_repo" and not isinstance(value, (list, str, int, bool)) and value is not None:
+                # The codec restores list-of-tuple fields (and str/None); anything else would come back
+                # as a different type and silently change what a slot derives.
+                raise ValueError(f"OverlayScan.{f.name} is a {type(value).__name__}; the scans codec "
+                                 "only round-trips lists and scalars")
+    return json.dumps({"version": 1, "repos": repos,
+                       "scans": [{f.name: _jsonable(getattr(scan, f.name)) for f in dataclasses.fields(scan)}
+                                 for scan in scans]}, sort_keys=True)
+
+
+def load_scans(text: str):
+    """(repos, scans) from `dump_scans` text. Anything else is a ValueError, never a partial roster."""
+    import dataclasses
+    data = json.loads(text)
+    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("scans"), list):
+        raise ValueError("not a combo scans file (version 1)")
+    names = {f.name for f in dataclasses.fields(lock.OverlayScan)}
+    scans = []
+    for raw in data["scans"]:
+        if not isinstance(raw, dict) or set(raw) != names:
+            raise ValueError("a scan entry does not match the OverlayScan fields")
+        scan = lock.OverlayScan(gh_repo=raw["gh_repo"])
+        for name, value in raw.items():
+            if name != "gh_repo":
+                setattr(scan, name, list(_tupled(value)) if isinstance(value, list) else value)
+        scans.append(scan)
+    return list(data.get("repos") or []), scans
+
+
 # 2**256 has 78 decimal digits; the digest is zero-padded to that, so its length is a constant.
 DIGEST_DIGITS = 78
 # The HMAC key of the roster digest. Any high-entropy secret both jobs receive identically.
@@ -1295,6 +1355,49 @@ def self_test() -> int:
           "…and the control: the SAME 3000 digests with the separators removed do contain `1234`, "
           "so the search above can find what it is looking for")
 
+    # 🚨 THE SCANS HANDED TO A SLOT MUST DERIVE THE SAME ROSTER AS THE ONES THE PREFLIGHT READ — the
+    # slot's digest check is only as good as this round trip, so drive it with every field populated
+    # (tuples, a frozenset inside a tuple, a None host) and compare the derivation, not the bytes.
+    full = _scan("Systemorph/Memex", TWO_LIVE[0].instances + [("memex-x", None, "deployments/x.yaml")],
+                 sources=SOURCE_SCANS[0].sources, source_errors=[("a", "b")])
+    full.pins = [("r", "t", "w")]
+    full.records = [("rec.json", True, frozenset({"a", "b"}))]
+    full.withheld_paths = ["p"]
+    text = dump_scans([full, SOURCE_SCANS[1]], ["Systemorph/Memex", "Systemorph/Umbrella.Memex"])
+    back_repos, back = load_scans(text)
+    for label, bad_scan in (("a frozenset field", {"pins": frozenset({"x"})}),):
+        broken = _scan("Systemorph/Memex", [])
+        for name, value in bad_scan.items():
+            setattr(broken, name, value)
+        try:
+            dump_scans([broken], [])
+            raised = False
+        except ValueError:
+            raised = True
+        check(raised, f"the codec refuses {label} it could not restore, instead of round-tripping a dict")
+    try:
+        load_scans('{"version": 1, "scans": [{"gh_repo": "a/b"}]}')
+        raised = False
+    except ValueError:
+        raised = True
+    check(raised, "a scan entry with fields missing is refused, never filled with defaults")
+    check(back_repos == ["Systemorph/Memex", "Systemorph/Umbrella.Memex"] and len(back) == 2
+          and back[0].records == full.records and back[0].instances == full.instances
+          and isinstance(back[0].instances[0], tuple) and back[0].source_errors == [("a", "b")],
+          "scans round-trip through the encrypted hand-over with tuples and frozensets intact")
+    check(derive_sources(back) == derive_sources([full, SOURCE_SCANS[1]])
+          and derive(back, [])[0] == derive([full, SOURCE_SCANS[1]], [])[0],
+          "a slot deriving from the handed-over scans gets the preflight's roster and source map")
+    for label, bad in (("not JSON", "{"), ("another version", '{"version": 2, "scans": []}'),
+                       ("an unknown field", '{"version": 1, "scans": [{"gh_repo": "a/b", "evil": 1}]}'),
+                       ("no scans list", '{"version": 1}')):
+        try:
+            load_scans(bad)
+            raised = False
+        except ValueError:
+            raised = True
+        check(raised, f"a scans file that is {label} is refused, never a partial roster")
+
     if failures:
         print(f"::error::--self-test: {failures} arm(s) did not behave as documented.")
         return 1
@@ -1312,6 +1415,10 @@ def main() -> int:
                         help="prove every refusal fires; no network")
     parser.add_argument("--slot", help="resolve ONE row of the roster (a verify job's matrix slot) "
                                        "into $GITHUB_ENV instead of reporting the whole roster")
+    parser.add_argument("--save-scans", help="write the fleet scans (JSON, PLAINTEXT — the workflow "
+                                             "encrypts it before it leaves the job) to this path")
+    parser.add_argument("--load-scans", help="read the fleet scans from this path instead of the "
+                                             "GitHub API (a verify slot's copy of the preflight's)")
     parser.add_argument("--expect-count", default="",
                         help="with --slot: the instance count the preflight derived")
     parser.add_argument("--expect-digest", default="",
@@ -1327,7 +1434,18 @@ def main() -> int:
     # print had already put in the public log. Not under --self-test (its fixtures are not secrets).
     lock.mask_private_roster()      # public log: the private roster's identifiers stay private
 
-    if args.root:
+    loaded_scans = None
+    if args.load_scans and (args.discover or args.repos or args.root):
+        parser.error("--load-scans replaces --discover/--repos/--root; give only one source of scans")
+    if args.load_scans:
+        # The file names the repositories the preflight read; a failure is a red naming it, never a
+        # fall back to the API, which would hide the artifact going missing.
+        try:
+            repos, loaded_scans = load_scans(Path(args.load_scans).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            print(f"::error::--load-scans {args.load_scans}: {e}")
+            return 1
+    elif args.root:
         repos = [args.repos or "local"]
     elif bool(args.repos) == bool(args.discover):
         parser.error("give exactly one of --repos, --discover or --root")
@@ -1349,7 +1467,12 @@ def main() -> int:
     print(f"deriving the combo-verification roster from {len(repos)} repository(ies): "
           + ", ".join(repo if repo.lower() in public_repos else "<private>" for repo in repos))
     roster, roster_problems = lock.read_instance_roster(args.root or ".")
-    scans = read_scans(repos, args.root)
+    scans = loaded_scans if loaded_scans is not None else read_scans(repos, args.root)
+    if args.save_scans:
+        if any(scan.unreadable for scan in scans):
+            print("::notice::a repository was unreadable; the scans are not saved (the run is NO VERDICT or red).")
+        else:
+            Path(args.save_scans).write_text(dump_scans(scans, repos), encoding="utf-8")
     # 🚨 PRIVACY BEFORE ANY LINE ABOUT AN INSTALLATION. Which rows are private is decided here, and
     # every derived identifier of a private installation is masked here — before `derive` builds a
     # blocker naming one, and before `report` or `resolve_slot` prints anything.
