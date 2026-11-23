@@ -40,7 +40,8 @@ public static class NodeCompileShaping
     /// <summary>
     /// The <c>@@</c> include DIRECTIVES in <paramref name="code"/>: the <see cref="CodeIncludePattern"/>
     /// matches that sit in CODE — never inside a <c>//</c> or <c>///</c> comment, a <c>/* */</c>
-    /// comment, or a string or character literal (regular, verbatim, interpolated, raw).
+    /// comment, or a string or character literal (regular, verbatim, raw). An interpolated string is
+    /// scanned as a plain one: a string literal NESTED in an interpolation hole is not parsed.
     ///
     /// <para>🚨 The pattern alone cannot tell a directive from prose that cites one: a doc comment
     /// such as <c>/// … (&lt;c&gt;@@path/area/Scenarios&lt;/c&gt;)</c> matched, was read from the mesh

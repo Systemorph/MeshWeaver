@@ -372,13 +372,13 @@ internal class TypeRegistry : ITypeRegistry
         // sent `MeshWeaver.Layout.Chart.ChartControl` where every other control says `ChartControl`.
         // The platform owns the canonical name: when the chain holds the type under nothing but its full
         // name, the nameless registration binds the SHORT name (the full name stays a read alias), unless
-        // that short name already belongs to another type.
+        // that short name already resolves to another type — as a canonical name OR as an alias.
         if (!type.IsGenericType
             && ChainByType(type, out var registered) is not null
             && registered is not null && registered == FullNameOf(type))
         {
             var shortName = type.Name;
-            if (shortName != registered && ChainByName(shortName, canonicalOnly: true) is null)
+            if (shortName != registered && (ChainByName(shortName) is not { } holder || holder.Type == type))
                 return WithType(type, shortName);
         }
         return WithType(type, FormatType(type));
