@@ -257,7 +257,7 @@ public static class NodeTypeSourceFingerprint
         for (var i = 0; i < sources.Count; i++)
         {
             if (sources[i].Code is { Length: > 0 } code
-                && NodeCompileShaping.CodeIncludePattern.IsMatch(code))
+                && NodeCompileShaping.FindCodeIncludes(code).Count > 0)
                 throw new InvalidOperationException(
                     $"'{paths[i]}' declares an @@ include, so the source fingerprint for "
                     + $"'{nodeTypePath}' cannot be computed from the matched sources alone (#2948). "
