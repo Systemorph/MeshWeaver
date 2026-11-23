@@ -721,6 +721,30 @@ def build_once_problems(doc: dict) -> list[str]:
                    if "bash .github/scripts/combo-verify-instance.sh" in str(step.get("run", ""))), {})
     if (lander.get("env") or {}).get("COMBO_VERIFIER") != COMBO_VERIFIER_ENV:
         problems.append(f"the lander step must set COMBO_VERIFIER to {COMBO_VERIFIER_ENV}.")
+    # 🚨 THE FLEET IS READ ONCE PER RUN (fleet-reader installation budget): the preflight saves the scans,
+    # ENCRYPTS them before the only upload that carries them (a public repository's artifacts are
+    # downloadable and the scans name a client estate's installations), and each slot loads them.
+    pre_steps = [step for step in (doc.get("jobs", {}).get("preflight", {}) or {}).get("steps", [])
+                 if isinstance(step, dict)]
+    saves = [i for i, step in enumerate(pre_steps) if "--save-scans" in str(step.get("run", ""))]
+    encrypts = [i for i, step in enumerate(pre_steps)
+                if "openssl enc -aes-256-cbc" in str(step.get("run", ""))
+                and "rm -f" in str(step.get("run", ""))]
+    scan_uploads = [i for i, step in enumerate(pre_steps)
+                    if "upload-artifact" in str(step.get("uses", ""))
+                    and (step.get("with") or {}).get("name") == "combo-scans"]
+    if not (saves and encrypts and scan_uploads and saves[0] < encrypts[0] < scan_uploads[0]):
+        problems.append("jobs.preflight must save the scans, encrypt them (deleting the plaintext) and "
+                        "only then upload the `combo-scans` artifact, in that order.")
+    elif not str((pre_steps[scan_uploads[0]].get("with") or {}).get("path", "")).endswith(".enc"):
+        problems.append("the `combo-scans` artifact must be the ENCRYPTED file (*.enc); a plaintext scan "
+                        "names a client estate's installations in a downloadable artifact.")
+    slot = next((step for step in verify_steps if "--slot" in str(step.get("run", ""))), {})
+    if "--load-scans" not in str(slot.get("run", "")) or not any(
+            "download-artifact" in str(step.get("uses", ""))
+            and (step.get("with") or {}).get("name") == "combo-scans" for step in verify_steps):
+        problems.append("jobs.verify must download `combo-scans` and resolve its slot with --load-scans — "
+                        "eight fleet reads per run is what spent the installation's budget.")
     return problems
 
 
