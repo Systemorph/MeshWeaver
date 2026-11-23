@@ -293,7 +293,6 @@ public static class LayoutExtensions
         if (stream.TryGetHub() is not { } hub)
             return TerminalOf<T>(stream);
 
-        var first = true;
         var collection = referencePointer.GetSegment(0).Decode();
         // RFC 6901 unescape in ONE pass (JsonPointerSegment.Decode) — two Replace calls decode
         // "~01" to "/" instead of "~1".
@@ -304,66 +303,76 @@ public static class LayoutExtensions
                 unescapedIdString == string.Empty ? string.Empty
                 : JsonSerializer.Deserialize<string>(unescapedIdString, hub.JsonSerializerOptions);
 
-        return stream
-            .Synchronize() // Ensure thread-safety for the 'first' closure variable
-            .Where(i =>
-                first
-                // 🚨 A Full is a COMPLETE snapshot, never a delta — it carries no
-                // per-area Updates (the client materialises a Full as a ChangeItem
-                // with empty Updates, see SynchronizationStream.UpdateStream). Always
-                // re-evaluate the pointer against a Full so content that arrives in a
-                // (re-)snapshot reaches this stream regardless of whether this
-                // subscription already consumed its first frame. Without this, a
-                // control-stream subscription that caught an early frame where its
-                // area was not yet present would consume `first` on that empty frame
-                // and then never see the area delivered by a later Full (the area's
-                // content rides the snapshot, not an Update) — the layout render path
-                // delivers initial/observable-generator content as Fulls.
-                || i.ChangeType == ChangeType.Full
-                || i.Updates.Any(
-                    p => p.Collection == collection && (p.Id == null || id == null || MatchesId(p.Id, id)))
-                )
-            .Select(i =>
-                {
-                    first = false;
-                    var evaluated = referencePointer
-                        .Evaluate(i.Value);
-                    if (evaluated is null) return default!;
-                    // Re-read the hub per emission rather than capturing the one resolved above:
-                    // capturing would pin the hub's whole resolved graph for the lifetime of every
-                    // subscription, which is the retention #3321 exists to release. A replayed
-                    // frame can reach a late subscriber after teardown, and `default!` is this
-                    // lambda's existing absent answer (the line above and the catch below both
-                    // use it), so the pipeline keeps flowing instead of NRE'ing in the circuit.
-                    if (stream.TryGetHub() is not { } liveHub) return default!;
-                    try
+        // 🚨 `first` is PER SUBSCRIPTION. Declared outside the returned observable it was shared by
+        // every subscriber of one GetStream call: the first subscriber consumed it, and a LATER
+        // subscriber of the same observable (a test or view that waits on it twice) got only
+        // Fulls and matching updates — a replayed Patch frame with no update for this pointer was
+        // dropped, so the second wait on a settled page saw "nothing at all" until the timeout
+        // (TypedPageIndexRailTest, 2 PRs in 4 days).
+        return Observable.Defer(() =>
+        {
+            var first = true;
+            return stream
+                .Synchronize() // Ensure thread-safety for the 'first' closure variable
+                .Where(i =>
+                    first
+                    // 🚨 A Full is a COMPLETE snapshot, never a delta — it carries no
+                    // per-area Updates (the client materialises a Full as a ChangeItem
+                    // with empty Updates, see SynchronizationStream.UpdateStream). Always
+                    // re-evaluate the pointer against a Full so content that arrives in a
+                    // (re-)snapshot reaches this stream regardless of whether this
+                    // subscription already consumed its first frame. Without this, a
+                    // control-stream subscription that caught an early frame where its
+                    // area was not yet present would consume `first` on that empty frame
+                    // and then never see the area delivered by a later Full (the area's
+                    // content rides the snapshot, not an Update) — the layout render path
+                    // delivers initial/observable-generator content as Fulls.
+                    || i.ChangeType == ChangeType.Full
+                    || i.Updates.Any(
+                        p => p.Collection == collection && (p.Id == null || id == null || MatchesId(p.Id, id)))
+                    )
+                .Select(i =>
                     {
-                        return evaluated.Value.Deserialize<T>(liveHub.JsonSerializerOptions)!;
+                        first = false;
+                        var evaluated = referencePointer
+                            .Evaluate(i.Value);
+                        if (evaluated is null) return default!;
+                        // Re-read the hub per emission rather than capturing the one resolved above:
+                        // capturing would pin the hub's whole resolved graph for the lifetime of every
+                        // subscription, which is the retention #3321 exists to release. A replayed
+                        // frame can reach a late subscriber after teardown, and `default!` is this
+                        // lambda's existing absent answer (the line above and the catch below both
+                        // use it), so the pipeline keeps flowing instead of NRE'ing in the circuit.
+                        if (stream.TryGetHub() is not { } liveHub) return default!;
+                        try
+                        {
+                            return evaluated.Value.Deserialize<T>(liveHub.JsonSerializerOptions)!;
+                        }
+                        catch (Exception ex) when (ex is NotSupportedException || ex is JsonException)
+                        {
+                            // Most common cause: the incoming JSON carries a polymorphic $type
+                            // discriminator the local hub's TypeRegistry doesn't know about. Surface
+                            // the failure via the hub logger and yield default(T) so the observable
+                            // pipeline keeps flowing instead of crashing the circuit on decode.
+                            var logger = liveHub.ServiceProvider.GetService<ILoggerFactory>()
+                                ?.CreateLogger("LayoutExtensions.GetStream");
+                            var rawPreview = evaluated.Value.ValueKind == JsonValueKind.Undefined
+                                ? "<undefined>"
+                                : evaluated.Value.GetRawText().Length > 200
+                                    ? evaluated.Value.GetRawText()[..200] + "…"
+                                    : evaluated.Value.GetRawText();
+                            logger?.LogError(ex,
+                                "Failed to deserialize layout-stream entry as {Type} at pointer {Pointer}. " +
+                                "ValueKind={ValueKind}, Length={Length}, Preview: {Raw}",
+                                typeof(T).Name, referencePointer,
+                                evaluated.Value.ValueKind,
+                                evaluated.Value.ValueKind == JsonValueKind.Undefined ? 0 : evaluated.Value.GetRawText().Length,
+                                rawPreview);
+                            return default!;
+                        }
                     }
-                    catch (Exception ex) when (ex is NotSupportedException || ex is JsonException)
-                    {
-                        // Most common cause: the incoming JSON carries a polymorphic $type
-                        // discriminator the local hub's TypeRegistry doesn't know about. Surface
-                        // the failure via the hub logger and yield default(T) so the observable
-                        // pipeline keeps flowing instead of crashing the circuit on decode.
-                        var logger = liveHub.ServiceProvider.GetService<ILoggerFactory>()
-                            ?.CreateLogger("LayoutExtensions.GetStream");
-                        var rawPreview = evaluated.Value.ValueKind == JsonValueKind.Undefined
-                            ? "<undefined>"
-                            : evaluated.Value.GetRawText().Length > 200
-                                ? evaluated.Value.GetRawText()[..200] + "…"
-                                : evaluated.Value.GetRawText();
-                        logger?.LogError(ex,
-                            "Failed to deserialize layout-stream entry as {Type} at pointer {Pointer}. " +
-                            "ValueKind={ValueKind}, Length={Length}, Preview: {Raw}",
-                            typeof(T).Name, referencePointer,
-                            evaluated.Value.ValueKind,
-                            evaluated.Value.ValueKind == JsonValueKind.Undefined ? 0 : evaluated.Value.GetRawText().Length,
-                            rawPreview);
-                        return default!;
-                    }
-                }
-            );
+                );
+        });
     }
 
     /// <summary>
