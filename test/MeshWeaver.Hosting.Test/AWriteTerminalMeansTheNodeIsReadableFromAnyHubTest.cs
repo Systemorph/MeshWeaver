@@ -65,6 +65,56 @@ public class AWriteTerminalMeansTheNodeIsReadableFromAnyHubTest(ITestOutputHelpe
         return terminal;
     }
 
+    /// <summary>The owner's shared read view of the node — the stream every read is answered from.</summary>
+    private async Task<ISynchronizationStream<MeshNode>> OwnerReadView(
+        string path, CancellationToken ct)
+    {
+        var owner = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never)
+            ?? throw new InvalidOperationException("precondition: the read activated the owner");
+        var readView = owner.GetWorkspace().GetNullableStream(new MeshNodeReference())
+            ?? throw new InvalidOperationException("precondition: the owner has a read view");
+        await readView.Should().Within(TestTimeouts.Convergence).Match(c => c.Value?.Name == "before");
+        return readView;
+    }
+
+    /// <summary>
+    /// Writes queued on ONE path while its read view is stuck must not cost a read-view bound each:
+    /// the first write waits the bound out and marks the view degraded, the next is acknowledged at
+    /// once. (Writes to different nodes never stack — each owner has its own read view and the legs
+    /// run concurrently.)
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AStuckReadView_CostsOneBound_NotOnePerQueuedWrite()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = await Create(NewPath(), "before");
+        await ReadName(path, TestTimeouts.Convergence).Should().Within(TestTimeouts.Convergence).Emit("warm read", ct);
+        var readView = await OwnerReadView(path, ct);
+
+        var entered = new AsyncSubject<Unit>();
+        var release = 0;
+        readView.Hub.InvokeAsync(() =>
+        {
+            entered.OnNext(Unit.Default);
+            entered.OnCompleted();
+            SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TimeSpan.FromSeconds(60));
+        });
+        try
+        {
+            await entered.Should().Within(TestTimeouts.Quick).Emit("the read view's turn is held", ct);
+            var first = Write(path, "one");
+            await first.Should().Within(TimeSpan.FromSeconds(5) + TestTimeouts.Convergence)
+                .Emit("the first write leaves once the read-view bound elapsed", ct);
+            var second = Write(path, "two");
+            await second.Should().Within(TimeSpan.FromSeconds(3))
+                .Emit("the second write skips the wait: the view is degraded, one bound was already paid", ct);
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+    }
+
     [Fact(Timeout = 240_000)]
     public async Task AWriteIsNotAcknowledged_WhileTheReadViewStillHoldsTheOldNode()
     {
@@ -73,10 +123,7 @@ public class AWriteTerminalMeansTheNodeIsReadableFromAnyHubTest(ITestOutputHelpe
         (await ReadName(path, TestTimeouts.Convergence).Should().Within(TestTimeouts.Convergence).Emit("warm read", ct))
             .Should().Be("before");
 
-        var owner = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
-        owner.Should().NotBeNull("precondition: the read activated the owner");
-        var readView = owner!.GetWorkspace().GetNullableStream(new MeshNodeReference());
-        await readView.Should().Within(TestTimeouts.Convergence).Match(c => c.Value?.Name == "before");
+        var readView = await OwnerReadView(path, ct);
 
         var entered = new AsyncSubject<Unit>();
         var release = 0;

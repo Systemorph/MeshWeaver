@@ -27,6 +27,13 @@ They are separate since #3432 (a read used to mint a permanent hub per call). Th
 
 Pinned by `AWriteTerminalMeansTheNodeIsReadableFromAnyHubTest`: with the read view's turn held, the terminal must not be delivered (red before the fix); a negative control with nothing held shows terminal and read agree.
 
+## Can the 5 s wait stack under load?
+
+- **Across nodes: no.** Each owner has its own read view and the leg runs off the action block, concurrently with the flush. A hub patching N nodes in one turn waits for the slowest read view, not the sum.
+- **On one path: it could**, because the writer's per-path queue releases the next write on the ack. N writes queued on a path whose read view is stuck would cost N bounds in series. A read view that outlives the bound is therefore marked degraded for 30 s and later writes of that owner skip the wait (`ReadViewDegradedWindow`). Pinned by `AStuckReadView_CostsOneBound_NotOnePerQueuedWrite`.
+- **Subscriptions on one node:** each pending patch adds one read-view subscription evaluating the same O(1) `ChangeContainsStampedWrite` predicate as the echo watcher; the burst cost is the same shape as the existing K(K+1)/2 note on that predicate.
+- Every degradation is logged at Warning: `READ_VIEW_OUTLIVED_BOUND`, `READ_VIEW_FAULTED`, `READ_VIEW_UNAVAILABLE`.
+
 ## What this does NOT cover
 
 - **A read issued before the terminal** (fire-and-forget write, then read). Unordered by design; subscribe to the terminal.
