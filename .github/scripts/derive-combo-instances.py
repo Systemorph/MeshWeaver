@@ -120,6 +120,18 @@ MISSING_OVERLAY_PHRASE = "and no overlay in the fleet names it"
 UNVERIFIABLE_TAG = " [UNVERIFIABLE: "
 
 
+def rate_stamp(text: str) -> str | None:
+    """The reset stamp of a rate-limit refusal, or None when `text` is not one. Pure.
+
+    🚨 The marker `ghrest.gh_cli` appends sits at the END of the failure, and the overlay scanner
+    CLIPS what it keeps (`[:300]`, `[:200]`) — run 45083834717 lost it that way and every NEVER READ
+    blocker read as content. So the refusal's own sentence also counts, with the reset `unknown`."""
+    stamp = ghrest.rate_limited_until(text)
+    if stamp:
+        return stamp
+    return "unknown" if ghrest.is_rate_limited_text(text) else None
+
+
 def defer_unverifiable(blockers: list[str], scans) -> list[str]:
     """Pure. Tag every missing-overlay blocker as unverifiable when any scan was never read.
 
@@ -128,12 +140,15 @@ def defer_unverifiable(blockers: list[str], scans) -> list[str]:
     unread = [s.unreadable for s in scans if getattr(s, "unreadable", None)]
     if not unread:
         return blockers
-    stamps = sorted(x for x in (ghrest.rate_limited_until(u) for u in unread) if x)
+    stamps = sorted(x for x in (rate_stamp(u) for u in unread) if x)
+    known = [x for x in stamps if x != "unknown"]   # prefer a real reset over "unknown"
     out = []
     for b in blockers:
         if MISSING_OVERLAY_PHRASE in b and UNVERIFIABLE_TAG not in b:
-            marker = f"{ghrest.RATE_LIMITED_MARKER}{stamps[-1]}" if stamps else "a repository was never read"
-            b = f"{b}{UNVERIFIABLE_TAG}{marker}]"
+            # The space before "]" matters: `rate_limited_until` takes the first WORD after the marker.
+            marker = (f"{ghrest.RATE_LIMITED_MARKER}{known[-1] if known else 'unknown'}"
+                      if stamps else "a repository was never read")
+            b = f"{b}{UNVERIFIABLE_TAG}{marker} ]"
         out.append(b)
     return out
 
@@ -144,14 +159,15 @@ def rate_limit_verdict(blockers: list[str]) -> str | None:
     Pure. Fires only when at least one blocker carries the rate-limit annotation `ghrest.gh_cli` adds
     AND no blocker is about anything else that is not itself an unread-repository consequence — a
     genuine content blocker (an ambiguous declaration, a retired fleet) must still be reported as one."""
-    stamps = [ghrest.rate_limited_until(b) for b in blockers]
+    stamps = [rate_stamp(b) for b in blockers]
     stamps = [x for x in stamps if x]
     if not stamps:
         return None
-    other = [b for b, x in zip(blockers, (ghrest.rate_limited_until(b) for b in blockers)) if not x]
+    other = [b for b in blockers if not rate_stamp(b)]
     if other:
         return None
-    reset = sorted(stamps)[-1]
+    real = [x for x in stamps if x != "unknown"]
+    reset = sorted(real)[-1] if real else "unknown (re-run after the hourly budget resets)"
     unchecked = [b.split(UNVERIFIABLE_TAG, 1)[0].strip() for b in blockers if UNVERIFIABLE_TAG in b]
     tail = (" Could not be checked (they depend on repositories that were never read): "
             + " | ".join(unchecked) + ".") if unchecked else ""
@@ -824,6 +840,25 @@ def self_test() -> int:
     check(any(MISSING_OVERLAY_PHRASE in b for b in full) and rate_limit_verdict(full) is None
           and not any(UNVERIFIABLE_TAG in b for b in full),
           "full read + missing-overlay finding stays a content red")
+    # The exact shape of run 45083834717: the scanner CLIPS the failure, so the marker is gone and only
+    # the refusal's own sentence is left — direct, and inside "the repository itself could not be read".
+    refusal = ("gh: API rate limit exceeded for installation ID 161095771. If you reach out to GitHub "
+               "Support for help, please include the request ID 0402:E8 and timestamp 2026-11-22 "
+               "23:45:49 UTC. For more on scraping GitHub and how it may affect your rights, please")
+    clipped = [_scan("Systemorph/Private", [], unreadable=refusal[:300]),
+               _scan("Systemorph/Other", [], unreadable="the repository itself could not be read, so its "
+                     "overlays were never looked for. gh said: " + refusal[:200])]
+    _, _, shaped = derive(TWO_LIVE + clipped, {"ghost": ("not-installed", "gone", ""),
+                                               "build": ("live", "", "")})
+    sv = rate_limit_verdict(shaped)
+    check(ghrest.rate_limited_until(clipped[0].unreadable) is None
+          and sv is not None and sv.startswith(RATE_LIMITED_SENTENCE)
+          and "ghost" in sv and "until unknown (re-run after the hourly budget resets) (" in sv
+          and "unknown]" not in sv,
+          "marker-less clipped refusals (incl. the repository-itself variant) are NO VERDICT, reset unknown")
+    check(rate_limit_verdict(shaped + ["instances.json is malformed"]) is None,
+          "…and a roster defect beside them stays content-red")
+
     # A malformed roster is not about unread repositories: it stays red beside a limit.
     check(rate_limit_verdict(["instances.json is malformed"] + partial) is None,
           "partial read + malformed roster stays content-red")
