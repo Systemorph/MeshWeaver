@@ -36,6 +36,13 @@ internal static class HeartbeatSchedule
     /// percent of it is extra steady-state heartbeat traffic.</summary>
     internal const double PeriodSpread = 0.25;
 
+    /// <summary>The schedule a stream beats on: the configured first tick (never later than the
+    /// interval, so a short test cadence is not delayed) and the configured period, each spread.
+    /// The ONE call the heartbeat timer makes.</summary>
+    internal static (TimeSpan First, TimeSpan Period) For(string streamId, TimeSpan interval, TimeSpan firstHeartbeat)
+        => (Spread(streamId, interval < firstHeartbeat ? interval : firstHeartbeat, FirstTickSpread),
+            Spread(streamId, interval, PeriodSpread));
+
     /// <summary>The tick for <paramref name="streamId"/>: <paramref name="tick"/> pulled earlier
     /// by up to <paramref name="spread"/> of itself. Never later than <paramref name="tick"/>.</summary>
     internal static TimeSpan Spread(string streamId, TimeSpan tick, double spread)

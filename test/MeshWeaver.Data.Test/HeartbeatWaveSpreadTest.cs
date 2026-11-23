@@ -23,7 +23,22 @@ public class HeartbeatWaveSpreadTest
     private static readonly TimeSpan FirstHeartbeat = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(45);
 
-    private static string[] StreamIds(int n) => Enumerable.Range(0, n).Select(_ => Guid.NewGuid().ToString("N")).ToArray();
+    // FIXED ids (a deterministic Guid per index), so the bound is a replayable pin, never a lottery.
+    private static string[] StreamIds(int n) => Enumerable.Range(0, n)
+        .Select(i => new Guid(i, 0x5532, 0x1a2b, 1, 2, 3, 4, 5, 6, 7, 8).ToString("N")).ToArray();
+
+    /// <summary>The ONE call the heartbeat timer makes keeps the floor-lowering: a short cadence is
+    /// never delayed to the first-beat floor, and a long one gets the early first tick.</summary>
+    [Fact]
+    public void For_KeepsTheFloorLoweringAndSpreadsBoth()
+    {
+        var (first, period) = HeartbeatSchedule.For("s1", TimeSpan.FromMilliseconds(200), FirstHeartbeat);
+        Assert.True(first <= TimeSpan.FromMilliseconds(200) && period <= TimeSpan.FromMilliseconds(200));
+        var (longFirst, longPeriod) = HeartbeatSchedule.For("s1", Interval, FirstHeartbeat);
+        Assert.True(longFirst <= FirstHeartbeat && longPeriod <= Interval);
+        Assert.Equal(HeartbeatSchedule.Spread("s1", FirstHeartbeat, HeartbeatSchedule.FirstTickSpread), longFirst);
+        Assert.Equal(HeartbeatSchedule.Spread("s1", Interval, HeartbeatSchedule.PeriodSpread), longPeriod);
+    }
 
     /// <summary>The most beats any one <see cref="Window"/> of the mesh hub receives from the wave,
     /// counting the first beats and the first <paramref name="cycles"/> periodic beats.</summary>

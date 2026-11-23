@@ -1374,14 +1374,14 @@ public static class JsonSynchronizationStream
             // (HeartbeatFireAndForgetTest) must still get its first tick at 200ms. The early tick is
             // a floor-lowering for LONG intervals, not a delay imposed on short ones — taking the
             // sooner of the two keeps every existing cadence exactly as it was.
-            var firstTick = heartbeatInterval < firstHeartbeat ? heartbeatInterval : firstHeartbeat;
             // 🚨 SPREAD, never delay (#5532): a wave of mirrors opened in one second would otherwise
             // beat in lock-step forever, 2N messages (the beat and the owner's StreamEnded answer)
             // through the mesh hub's queue in one turn window. Each stream is pulled EARLIER by a
-            // stable per-stream fraction, so the cadence is never longer than configured.
-            firstTick = HeartbeatSchedule.Spread(reduced.StreamId, firstTick, HeartbeatSchedule.FirstTickSpread);
-            heartbeatInterval = HeartbeatSchedule.Spread(reduced.StreamId, heartbeatInterval, HeartbeatSchedule.PeriodSpread);
-            sub.Disposable = Observable.Timer(firstTick, heartbeatInterval)
+            // stable per-stream fraction, so the cadence is never longer than configured; the
+            // floor-lowering above lives inside HeartbeatSchedule.For. Pinned end to end by
+            // HeartbeatWaveSpreadTest.AMirrorBeatsOnItsOwnSpreadSchedule.
+            var (firstTick, period) = HeartbeatSchedule.For(reduced.StreamId, heartbeatInterval, firstHeartbeat);
+            sub.Disposable = Observable.Timer(firstTick, period)
                 .Subscribe(_ =>
                 {
                     if (!weakHub.TryGetTarget(out var h)
