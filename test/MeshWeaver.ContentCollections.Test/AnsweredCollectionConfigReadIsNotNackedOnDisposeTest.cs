@@ -28,7 +28,7 @@ namespace MeshWeaver.ContentCollections.Test;
 /// disposal, so each read leaked one zombie that "NACKed" an already-answered request when the hub
 /// went (three or nine per hub: one per read).</para>
 /// </summary>
-public class AnsweredCollectionConfigReadIsNotNackedOnDisposeTest : HubTestBase
+public class AnsweredCollectionConfigReadIsNotNackedOnDisposeTest : HubTestBase, IDisposable
 {
     private readonly string path = Path.Combine(
         AppContext.BaseDirectory, "Files", "ConfigRead", Guid.NewGuid().ToString("N"));
@@ -38,6 +38,13 @@ public class AnsweredCollectionConfigReadIsNotNackedOnDisposeTest : HubTestBase
     public AnsweredCollectionConfigReadIsNotNackedOnDisposeTest(ITestOutputHelper output) : base(output)
     {
         Services.AddSingleton<ILoggerProvider>(warnings);
+    }
+
+    /// <summary>Removes the per-run directory the collection was rooted at.</summary>
+    void IDisposable.Dispose()
+    {
+        try { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
+        catch (IOException) { /* best effort: the output tree is disposable */ }
     }
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
