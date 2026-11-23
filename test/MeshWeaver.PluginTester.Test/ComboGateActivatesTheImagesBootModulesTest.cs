@@ -97,6 +97,18 @@ public sealed class ComboGateActivatesTheImagesBootModulesTest : IDisposable
         Assert.Contains("closure", set.Describe());
     }
 
+    /// <summary>An entry present BOTH under <c>modules/{name}/</c> and at the host root is composed
+    /// from <c>modules/</c> — the portal's own precedence — and not named as shipped by the host.</summary>
+    [Fact]
+    public void Resolve_PrefersTheModulesFolderOverTheHostRoot()
+    {
+        File.WriteAllText(Path.Combine(HostDir, FleetControl + ".dll"), "");
+        var set = ImageBootModules.Resolve(HostDir, [$"{FleetControl}.dll"], [], "/host");
+
+        Assert.Equal(new[] { $"/host/modules/{FleetControl}/{FleetControl}.dll" }, set.Paths.ToArray());
+        Assert.Empty(set.ShippedByHost);
+    }
+
     /// <summary>An image whose environment cannot be read is an INSTRUMENT failure: no container
     /// runs, and the run says why instead of gating without the image's modules.</summary>
     [Fact]
