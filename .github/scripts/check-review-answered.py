@@ -4024,7 +4024,9 @@ def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_
     run that did not fail."""
     head = f"#{number} ({'draft' if pr.get('draft') else pr.get('state')}) head {str((pr.get('head') or {}).get('sha'))[:10]}"
     pending = reported is not None and reported.state == "pending"
-    state = (f"PENDING — {reported.title}" if pending else
+    draft_pending = pending and reported.kind == "draft"
+    state = ("DRAFT — no review owed (pending, not red: a draft is the author's hold)" if draft_pending else
+             f"PENDING — {reported.title}" if pending else
              f"RED — {reported.title}" if reported is not None and reported.state == "failure" else
              "DRAFT — no review owed (neither red nor answered: a draft is the author's hold)" if verdict.green and verdict.draft else
              "GREEN" if verdict.green else
@@ -6064,6 +6066,9 @@ def pending_self_test(HEAD: str) -> int:
     dr = reported_state(dv, LATE, T0)
     check("a DRAFT with no review -> PENDING 'draft', never failure, even past the review deadline",
           dv.green and dv.draft and dr.state == "pending" and dr.kind == "draft" and "draft, no review owed" in dr.title, f"{dv} {dr}")
+    rendered = render(1, dict(_pr(0), head={"sha": HEAD}, draft=True), dv, None, None, dr)
+    check("a reported draft renders as DRAFT, with no doubled 'PENDING — Pending' prefix",
+          "— DRAFT — no review owed" in rendered and "PENDING — Pending" not in rendered, rendered.splitlines()[0])
     nv = draft_of([], draft=False)
     check("NEG: the same pull request NOT a draft still owes its review (pending, then red past the deadline)",
           not nv.green and not nv.draft and reported_state(nv, LATE, T0).kind == "review-overdue", f"{nv}")
