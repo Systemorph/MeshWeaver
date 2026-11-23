@@ -75,6 +75,9 @@ public class ADependentWhoseFloorIsUnmetHoldsItselfBackNotTheWaveTest : IDisposa
         landing.ProposeCheckedModuleSet(records)
             .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
+    private async Task<ModuleSet> Written(ModuleLandingService landing, params PackageManifest[] records) =>
+        await Propose(landing, records) ?? throw new InvalidOperationException("the wave proposed nothing");
+
     [Fact]
     public async Task AnUnmetDependent_IsHeldAtItsRunningGeneration_AndTheRestOfTheWaveStillProposes()
     {
@@ -88,20 +91,20 @@ public class ADependentWhoseFloorIsUnmetHoldsItselfBackNotTheWaveTest : IDisposa
         await Land(landing, AiModule, "AI", "4.0.13");
         await Land(landing, OpenAiModule, "OpenAI", "4.0.13");
         await Land(landing, AnthropicModule, "Anthropic", "4.0.13");
-        var running = await Propose(landing);
+        var running = await Written(landing);
         running.Should().NotBeNull();
-        var runningOpenAi = running!.Generations[OpenAiModule];
+        var runningOpenAi = running.Generations[OpenAiModule];
         var runningAnthropic = running.Generations[AnthropicModule];
 
         // The next wave: OpenAI 4.0.14 and Anthropic 4.0.14 land, AI does NOT (4.1.0 is not out).
         await Land(landing, OpenAiModule, "OpenAI", "4.0.14");
         await Land(landing, AnthropicModule, "Anthropic", "4.0.14");
 
-        var proposed = await Propose(landing, ai, openAi, anthropic);
+        var proposed = await Written(landing, ai, openAi, anthropic);
 
         proposed.Should().NotBeNull(
             "the unrelated provider that landed in the wave must reach the mesh — the unmet floor is OpenAI's alone");
-        proposed!.Generations[AnthropicModule].Should().NotBe(runningAnthropic,
+        proposed.Generations[AnthropicModule].Should().NotBe(runningAnthropic,
             "Anthropic's new generation is proposed");
         proposed.Generations[OpenAiModule].Should().Be(runningOpenAi,
             "OpenAI keeps the generation the mesh runs until AI@^4.1.0 is landed");
@@ -112,9 +115,9 @@ public class ADependentWhoseFloorIsUnmetHoldsItselfBackNotTheWaveTest : IDisposa
 
         // The dependency lands: the next proposal carries OpenAI's new generation too.
         await Land(landing, AiModule, "AI", "4.1.0");
-        var converged = await Propose(landing, ai, openAi, anthropic);
+        var converged = await Written(landing, ai, openAi, anthropic);
         converged.Should().NotBeNull();
-        converged!.Generations[OpenAiModule].Should().NotBe(runningOpenAi,
+        converged.Generations[OpenAiModule].Should().NotBe(runningOpenAi,
             "the floor is met now — the held dependent joins the set");
         converged.Generations[AiModule].Should().NotBe(running.Generations[AiModule]);
     }
@@ -127,11 +130,11 @@ public class ADependentWhoseFloorIsUnmetHoldsItselfBackNotTheWaveTest : IDisposa
         await Land(landing, AnthropicModule, "Anthropic", "4.0.13");
         await Land(landing, OpenAiModule, "OpenAI", "4.0.14");
 
-        var proposed = await Propose(landing,
+        var proposed = await Written(landing,
             Record("AI", AiModule), Record("Anthropic", AnthropicModule), Record("OpenAI", OpenAiModule, "AI@^4.1.0"));
 
         proposed.Should().NotBeNull();
-        proposed!.Generations.Keys.Should().Contain([AiModule, AnthropicModule]);
+        proposed.Generations.Keys.Should().Contain([AiModule, AnthropicModule]);
         proposed.Generations.Keys.Should().NotContain(OpenAiModule,
             "no generation of it is proposed yet, and the new one must not reach a boot below its floor");
     }
@@ -146,11 +149,11 @@ public class ADependentWhoseFloorIsUnmetHoldsItselfBackNotTheWaveTest : IDisposa
         await Land(landing, Y, "Other", "4.0.14");
 
         // Other requires OpenAI@^4.0.14, which the LANDED set meets — but OpenAI is held back.
-        var proposed = await Propose(landing,
+        var proposed = await Written(landing,
             Record("AI", AiModule), Record("OpenAI", OpenAiModule, "AI@^4.1.0"), Record("Other", Y, "OpenAI@^4.0.14"));
 
         proposed.Should().NotBeNull();
-        proposed!.Generations.Keys.Should().Contain(AiModule);
+        proposed.Generations.Keys.Should().Contain(AiModule);
         proposed.Generations.Keys.Should().NotContain([OpenAiModule, Y],
             "a module whose floor is met only by a held-back module's landed version is not proposed either");
     }
