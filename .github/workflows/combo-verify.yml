@@ -205,7 +205,35 @@ jobs:
           MW_COMBO_DIGEST_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/derive-combo-instances.py --discover
+          python3 .github/scripts/derive-combo-instances.py --discover \
+            --save-scans "$RUNNER_TEMP/combo-scans.json"
+
+      # 🚨 THE FLEET IS READ ONCE PER RUN, NOT ONCE PER SLOT (the fleet-reader installation's budget,
+      # Doc/Architecture/CiRestBudget). The scans — not the roster, which cannot cross a job boundary —
+      # go to the slots as an artifact ENCRYPTED with the digest key, because a public repository's
+      # artifacts are downloadable and the scans name a client estate's installations. The plaintext
+      # is deleted in the same step; the slot still derives the roster from the scans and must
+      # reproduce this job's count and HMAC digest.
+      - name: Hand the encrypted fleet scans to the slots
+        env:
+          MW_COMBO_DIGEST_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/combo-scans.json" || { echo "::error::the derivation saved no scans to hand over"; exit 1; }
+          # A purpose-bound subkey, never the App key itself: HMAC-SHA256(key, "combo-scans-v1").
+          MW_COMBO_SCANS_KEY=$(python3 -c 'import hmac,hashlib,os;print(hmac.new(os.environ["MW_COMBO_DIGEST_KEY"].encode(),b"combo-scans-v1",hashlib.sha256).hexdigest())')
+          export MW_COMBO_SCANS_KEY
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MW_COMBO_SCANS_KEY \
+            -in "$RUNNER_TEMP/combo-scans.json" -out "$RUNNER_TEMP/combo-scans.enc"
+          rm -f "$RUNNER_TEMP/combo-scans.json"
+          test -s "$RUNNER_TEMP/combo-scans.enc"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: combo-scans
+          path: ${{ runner.temp }}/combo-scans.enc
+          if-no-files-found: error
+          retention-days: 1
 
       # STEP TWO OF TWO. The roster now exists, so this asks whether it is a real, non-empty roster
       # and whether the source map derived from DeploymentContent.PluginRepos reached this step
@@ -355,6 +383,12 @@ jobs:
       # installation than the one counted. It registers the private roster's masks before it prints
       # anything, and writes INSTANCE_NAME / BASE_URL / SOURCES to $GITHUB_ENV for the steps below.
       # No `continue-on-error:` and no `if:` — a slot that cannot be resolved is a red verify job.
+      # The fleet scans the preflight read ONCE, encrypted (see its "Hand the encrypted fleet scans" step).
+      - uses: actions/download-artifact@v8
+        with:
+          name: combo-scans
+          path: ${{ runner.temp }}/combo-scans
+
       - name: "Which installation slot ${{ matrix.slot }} is"
         env:
           GH_TOKEN: ${{ steps.repo-token.outputs.token }}
@@ -368,7 +402,14 @@ jobs:
           EXPECT_DIGEST: ${{ needs.preflight.outputs.digest }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/derive-combo-instances.py --discover \
+          # A purpose-bound subkey, never the App key itself: HMAC-SHA256(key, "combo-scans-v1").
+          MW_COMBO_SCANS_KEY=$(python3 -c 'import hmac,hashlib,os;print(hmac.new(os.environ["MW_COMBO_DIGEST_KEY"].encode(),b"combo-scans-v1",hashlib.sha256).hexdigest())')
+          export MW_COMBO_SCANS_KEY
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:MW_COMBO_SCANS_KEY \
+            -in "$RUNNER_TEMP/combo-scans/combo-scans.enc" -out "$RUNNER_TEMP/combo-scans.json"
+          trap 'rm -f "$RUNNER_TEMP/combo-scans.json"' EXIT
+          python3 .github/scripts/derive-combo-instances.py \
+            --load-scans "$RUNNER_TEMP/combo-scans.json" \
             --slot "$SLOT" --expect-count "$EXPECT_COUNT" --expect-digest "$EXPECT_DIGEST"
 
       - uses: actions/setup-dotnet@v6
