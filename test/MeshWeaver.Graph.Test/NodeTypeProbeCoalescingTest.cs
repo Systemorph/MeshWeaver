@@ -71,14 +71,31 @@ public class NodeTypeProbeCoalescingTest
     [Fact]
     public void NegativeAnswer_ExpiresAfterTtl_SoALaterRegistrationIsFound()
     {
-        var cache = NewCache();
+        long now = 1000;
+        var cache = new Probe(() => now);
         var probes = 0;
         IObservable<(Outcome, string?)> P() { probes++; return Observable.Return((Outcome.Missing, (string?)null)); }
         cache.GetOrProbe("A/X", P).Subscribe();
+        now += Probe.NegativeTtlMs - 1;
         cache.GetOrProbe("A/X", P).Subscribe();
         probes.Should().Be(1);
-        Thread.Sleep((int)Probe.NegativeTtlMs + 200);
+        now += 2;
         cache.GetOrProbe("A/X", P).Subscribe();
         probes.Should().Be(2);
+    }
+
+    [Fact]
+    public void ProbeConstructionThatThrows_DoesNotLeaveAHangingEntry()
+    {
+        var cache = NewCache();
+        IObservable<(Outcome, string?)> Boom() => throw new InvalidOperationException("boom");
+        var thrown = false;
+        try { cache.GetOrProbe("A/X", Boom); } catch (InvalidOperationException) { thrown = true; }
+        thrown.Should().BeTrue();
+
+        var answer = default(Outcome?);
+        cache.GetOrProbe("A/X", () => Observable.Return((Outcome.Registered, (string?)null)))
+            .Subscribe(r => answer = r.Outcome);
+        answer.Should().Be(Outcome.Registered, "the next activation probes afresh instead of waiting on a dead entry");
     }
 }

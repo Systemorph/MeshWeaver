@@ -319,6 +319,13 @@ internal static class NodeTypeEnrichmentHelpers
 
         internal static NodeTypeProbeCache For(object core) => Scopes.GetValue(core, _ => new());
 
+        private readonly Func<long> clock;
+
+        internal NodeTypeProbeCache() : this(() => Environment.TickCount64) { }
+
+        /// <summary>Seam for tests: an injectable millisecond clock.</summary>
+        internal NodeTypeProbeCache(Func<long> clock) => this.clock = clock;
+
         private sealed class Entry
         {
             public readonly System.Reactive.Subjects.AsyncSubject<(ProbeOutcome Outcome, string? Collision)> Result = new();
@@ -337,7 +344,7 @@ internal static class NodeTypeEnrichmentHelpers
                 if (!ReferenceEquals(entry, fresh))
                 {
                     var expired = entry.Done && !entry.Keep
-                        && Environment.TickCount64 - entry.CompletedAt > NegativeTtlMs;
+                        && clock() - entry.CompletedAt > NegativeTtlMs;
                     if (!expired)
                         return entry.Result.AsObservable();
                     if (!entries.TryUpdate(nodeType, fresh, entry))
@@ -345,11 +352,25 @@ internal static class NodeTypeEnrichmentHelpers
                 }
                 // We own the new entry: run the one probe and publish to every waiter.
                 var owner = fresh;
-                probe().Subscribe(
+                IObservable<(ProbeOutcome Outcome, string? Collision)> source;
+                try
+                {
+                    source = probe();
+                }
+                catch (Exception ex)
+                {
+                    // Construction threw: never leave a half-built entry that waiters would hang on.
+                    entries.TryRemove(new KeyValuePair<string, Entry>(nodeType, owner));
+                    owner.Keep = false;
+                    owner.Done = true;
+                    owner.Result.OnError(ex);
+                    throw;
+                }
+                source.Subscribe(
                     r =>
                     {
                         owner.Keep = r.Outcome == ProbeOutcome.Registered;
-                        owner.CompletedAt = Environment.TickCount64;
+                        owner.CompletedAt = clock();
                         owner.Done = true;
                         owner.Result.OnNext(r);
                         owner.Result.OnCompleted();
@@ -357,7 +378,7 @@ internal static class NodeTypeEnrichmentHelpers
                     ex =>
                     {
                         owner.Keep = false;
-                        owner.CompletedAt = Environment.TickCount64;
+                        owner.CompletedAt = clock();
                         owner.Done = true;
                         owner.Result.OnError(ex);
                     },
@@ -365,7 +386,7 @@ internal static class NodeTypeEnrichmentHelpers
                     {
                         if (owner.Done) return;
                         owner.Keep = false;
-                        owner.CompletedAt = Environment.TickCount64;
+                        owner.CompletedAt = clock();
                         owner.Done = true;
                         owner.Result.OnCompleted();
                     });
