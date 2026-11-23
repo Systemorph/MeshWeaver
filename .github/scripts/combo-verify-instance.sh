@@ -229,6 +229,14 @@ land_verdict() {
 # patch with a global admin's token. 🚨 The route answers 200 only AFTER Admin/UpdatePolicy carries
 # this exact verdict, so a 200 here IS the landing. The policy mode (including None) is preserved.
 landed=$out_dir/combo-landed-$tag.json
+# 🚨 A 504 whose body says "phase":"confirm" means the portal's WRITE completed but its own read-back
+# of Admin/UpdatePolicy did not show the verdict within its window (the node is large, so the
+# confirmation is slow). The route is an upsert by candidate tag, so re-posting is idempotent: it is
+# re-posted with bounded backoff (LAND_RETRIES re-posts, LAND_BACKOFF_SECONDS * n apart; default 3
+# over ~2 min) and each answer is read. ONLY that shape is retried — a 4xx, a 401, a non-confirm 5xx
+# or an unreachable instance keeps failing at once, as before.
+land_attempt=0
+while :; do
 mint_token
 land_code=$(curl -sS -o "$landed" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
   -X POST "$BASE_URL/api/plugins/combo-verification" \
@@ -236,6 +244,17 @@ land_code=$(curl -sS -o "$landed" -w '%{http_code}' --connect-timeout 15 --max-t
   --data-binary "@$verdict") || land_code=000
 [ "$land_code" != "401" ] \
   || fail "POST $where/api/plugins/combo-verification -> HTTP 401: the $KIND verdict for $CANDIDATE was NOT landed. $unauthorized_hint"
+if [ "$land_code" = "504" ] && jq -e '.phase == "confirm"' >/dev/null 2>&1 <"$landed"; then
+  if [ "$land_attempt" -ge "${LAND_RETRIES:-3}" ]; then
+    fail "POST $where/api/plugins/combo-verification -> HTTP 504 (phase confirm): the $KIND verdict for $CANDIDATE was NOT CONFIRMED after $land_attempt re-posts to $where: $(body_of 400 "$landed")"
+  fi
+  land_attempt=$((land_attempt + 1))
+  note "HTTP 504 (phase confirm): the write completed but the instance did not confirm it in time; re-posting (idempotent upsert) $land_attempt of ${LAND_RETRIES:-3}"
+  sleep $(( ${LAND_BACKOFF_SECONDS:-20} * land_attempt ))
+  continue
+fi
+break
+done
 [ "$land_code" = "200" ] \
   || fail "POST $where/api/plugins/combo-verification -> HTTP $land_code: the $KIND verdict for $CANDIDATE was NOT landed: $(body_of 400 "$landed")"
 jq -e '.recorded == true' >/dev/null <"$landed" \
