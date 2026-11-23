@@ -260,6 +260,19 @@ Watched failing under five mutations:
 
 The first bullet has since been answered, and the answer was a defect: see the next section.
 
+### A draft owes no review — pending, never red (policy `draft-owes-no-review`)
+
+The internal reviewer does not review a draft, so a draft's missing review used to read **red** after
+the review deadline (measured 2026-11-20 on Memex: 13 open pull requests red, all drafts — a deliberate
+hold read as a failure). Now a draft whose ONLY open condition is the missing review (or a head that owes
+its own review) is excused (`Verdict.draft`) and reported **pending** as kind `draft`: "Pending — draft,
+no review owed". It is `in_progress` with no conclusion, like every pending verdict, so the check can
+never be satisfied by a draft; marking it ready for review re-judges it (and the verdict sweep re-judges
+a `draft` verdict whose event was missed). Controls: a non-draft still owes its review and goes red
+past the deadline; an unread `draft` flag fails closed; a draft with an unanswered reviewer thread is
+NOT excused. The other half — nobody noticing a draft whose hold expired — is the triage ledger's
+`expired-draft-hold` finding (MeshWeaver.Plugins `Hosting/Triage`).
+
 ### Which suite holds the verdict
 
 A check-run is not free-standing. GitHub files every check-run into a **check suite**, and for GitHub
