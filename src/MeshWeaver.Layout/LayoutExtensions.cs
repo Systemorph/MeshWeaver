@@ -244,6 +244,13 @@ public static class LayoutExtensions
                 // GetOrAddType). Measured: 37 fallbacks in one bulk plugin run.
                 typeof(MeshWeaver.Domain.Icon)
             )
+            // A chart's series ride inside ChartControl.Series (object-typed) and bound /data entries, so
+            // the IUiControl sweep misses them. Unregistered, each hub that serialised one auto-registered
+            // it on first write (the "Unregistered type ...LineSeries" warning class) — and an in-mesh hub
+            // did so under a different name than the portal. The platform registers them, once.
+            .WithTypes(typeof(MeshWeaver.Layout.Chart.ChartSeries)
+                .Assembly.GetTypes()
+                .Where(t => typeof(MeshWeaver.Layout.Chart.ChartSeries).IsAssignableFrom(t)))
             .WithHandler<GetLayoutAreasRequest>(HandleGetLayoutAreasRequest);
 
     /// <summary>
