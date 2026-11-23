@@ -85,8 +85,12 @@ served only them (`await-dependent-verdict.py`, `check-plugins-break-declaration
   ([Combo Gate Wiring](../ComboGateWiring)) is advisory under policy
   `platform-rolls-independently-of-packages`: a Red is named among the roll's advisories and the
   failing modules keep their previous generation, while the platform still rolls; `NotVerifiable`
-  and an absent verdict roll unverified. So nothing on the deploy side replaces the removed
-  pull-request wait — the dependent's own runs are the compatibility signal.
+  and an absent verdict roll unverified, but a RUN of three consecutive `NotVerifiable` verdicts for
+  one release line is an alarm (the gate has examined nothing — see *A run of NotVerifiable is an
+  alarm* in [Combo Gate Wiring](../ComboGateWiring)). Promotion to stable is never decided by the
+  combo verdict: it is the canary soak ([Canary per Major Line](../CanaryPerMajorLine)). So nothing
+  on the deploy side replaces the removed pull-request wait — the dependent's own runs are the
+  compatibility signal.
 
 Measure the required set through the ruleset endpoint —
 `gh api repos/Systemorph/MeshWeaver/rules/branches/main` — never the classic protection endpoint,

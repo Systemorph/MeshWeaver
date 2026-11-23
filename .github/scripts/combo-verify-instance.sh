@@ -281,6 +281,20 @@ note "landed: $(body_of 200 "$landed")"
 # stopped a verdict from being produced or landed — every `fail` above, and the 401/non-200/
 # not-recorded checks of the landing itself. The kind is in the step summary (written above) and as
 # a warning annotation on the run, so it is reported, never swallowed.
+#
+# 🚨 ONE EXCEPTION, and it is not about the candidate: a RUN of NotVerifiable verdicts. A single
+# NotVerifiable is advisory (it neither clears nor refuses — Doc/Architecture/ComboGateWiring), but the
+# instance counts the consecutive ones of this candidate's line (answer field `alarm`, true from the
+# 3rd) and a gate that has examined NOTHING for several candidates in a row is a broken producer, not a
+# run of bad luck: every roll of that line proceeds on zero evidence while each run ends green (the
+# state after the compose FATAL of core #8492). The verdict is ALREADY landed above, so failing here
+# loses nothing; the red reaches the `combo-red` reporter (one ledger issue + one signed event to
+# control triage, sev:M), and the first landed verdict that examined something ends the streak and the
+# next green run closes the ledger. It never holds a roll and never holds a promotion — the canary soak
+# is still the only gate on stable.
+if [ "$KIND" = "NotVerifiable" ] && jq -e '.alarm == true' >/dev/null 2>&1 <"$landed"; then
+  fail "COMBO GATE BLIND: $(jq -r '.notVerifiableStreak' <"$landed") consecutive NotVerifiable verdicts for release line $(jq -r '.line' <"$landed") (alarm at $(jq -r '.alarmAfter' <"$landed")) — the gate has verified nothing for this line while its rolls proceed. The verdict for $CANDIDATE IS landed; fix the verification lane (read the NotVerifiable reasons in the step summary), and the next verdict that examines something clears this."
+fi
 case "$KIND" in
   Green) note "GREEN — verdict landed" ;;
   Red|NotVerifiable)
