@@ -522,8 +522,9 @@ public sealed class ModulePlatformSurface
     }
 
     private static bool IsDefaultContext(Assembly assembly) =>
-        AssemblyLoadContext.GetLoadContext(assembly) is not { } context
-        || ReferenceEquals(context, AssemblyLoadContext.Default);
+        // A null context (a byte-array load into a hidden context) is NOT the platform's: the
+        // platform's copies are bound by the default context, which GetLoadContext reports as Default.
+        ReferenceEquals(AssemblyLoadContext.GetLoadContext(assembly), AssemblyLoadContext.Default);
 
     /// <summary>
     /// Which copy this surface reads <paramref name="assemblyName"/> from — path, load context,
@@ -540,7 +541,7 @@ public sealed class ModulePlatformSurface
             : _files.GetValueOrDefault(assemblyName);
         var context = assembly is null ? "not loaded"
             : IsDefaultContext(assembly) ? "default context"
-            : "SECONDARY context " + AssemblyLoadContext.GetLoadContext(assembly)?.Name;
+            : "SECONDARY context " + (AssemblyLoadContext.GetLoadContext(assembly)?.Name ?? "(unnamed)");
         var mvid = assembly is { IsDynamic: false } ? assembly.ManifestModule.ModuleVersionId.ToString("N")[..8] : "?";
         return $"{path ?? "(no file)"} ({context}, mvid {mvid}, "
                + $"{TypesOf(assemblyName)?.Count.ToString() ?? "unreadable"} types)";
