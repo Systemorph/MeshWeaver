@@ -5,30 +5,23 @@
 #         `<seconds> <project>#<k>/<parts>` for one measured part of a split project.
 # A unit's weight is the MAX of its newest three exit=0 observations. Change a project's parts
 # count by hand (the SPLIT RULE in shard-assign.sh), then refresh once the new parts have run.
-# measured-at: 2026-11-15T22:28:45Z
-# source-runs (main3): 43766090656 43761638961 43760776025 43744639315 43742278568 43742263098 43739660010 43662791235 43653113507 43650529755 43647460985 43644001173 43636370621 43634455486 43633906678 43630632835 43628117631 43627842080 43625208531 43623442665 43620493807 43591655541 43585742303 43576587638
-959 MeshWeaver.Graph.Test 4
-164 MeshWeaver.Graph.Test#1/4
-361 MeshWeaver.Graph.Test#2/4
-185 MeshWeaver.Graph.Test#3/4
-249 MeshWeaver.Graph.Test#4/4
-707 MeshWeaver.Hosting.Test 3
-534 MeshWeaver.Messaging.Hub.Test 3
-363 MeshWeaver.Messaging.Hub.Test#1/3
-63 MeshWeaver.Messaging.Hub.Test#2/3
-108 MeshWeaver.Messaging.Hub.Test#3/3
-497 MeshWeaver.Compiler.Pipeline.Test 3
-263 MeshWeaver.Compiler.Pipeline.Test#1/3
-112 MeshWeaver.Compiler.Pipeline.Test#2/3
-122 MeshWeaver.Compiler.Pipeline.Test#3/3
-291 MeshWeaver.Hosting.Orleans.Test 2
+# measured-at: 2026-11-23T07:21:49Z
+# source-runs (main3): 44750707005 44724273817 44723901055 44721878710 44692156444 44689813755 44689741961 44689007569 44549287440 44389116600 44265336395 44262699735 44251994417 44216089545 44214090907 44140883476 44117382392 44117122798 44091356873 44046708259 44044121214 44042111414 44037712845 43957913727 43956331557 43955378395 43952087980 43951925281 43947019465
+937 MeshWeaver.Graph.Test 5
+713 MeshWeaver.Hosting.Test 4
+654 MeshWeaver.Compiler.Pipeline.Test 3
+262 MeshWeaver.Compiler.Pipeline.Test#1/3
+282 MeshWeaver.Compiler.Pipeline.Test#2/3
+110 MeshWeaver.Compiler.Pipeline.Test#3/3
+533 MeshWeaver.Messaging.Hub.Test 4
+344 MeshWeaver.Hosting.Orleans.Test 3
 206 MeshWeaver.Data.Test
-177 MeshWeaver.FaultInjection.Test
-82 MeshWeaver.Documentation.Test
-76 MeshWeaver.Layout.Test
-73 MeshWeaver.PluginTester.Test
-25 MeshWeaver.Updates.Test
-12 MeshWeaver.Testing.InMesh.Test
+173 MeshWeaver.FaultInjection.Test
+91 MeshWeaver.PluginTester.Test
+83 MeshWeaver.Documentation.Test
+78 MeshWeaver.Layout.Test
+24 MeshWeaver.Updates.Test
+13 MeshWeaver.Testing.InMesh.Test
 8 MeshWeaver.ContentCollections.Test
 2 MeshWeaver.ContentCollections.Indexing.Test
 2 MeshWeaver.Markdown.Collaboration.Test

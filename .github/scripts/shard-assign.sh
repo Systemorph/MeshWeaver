@@ -137,6 +137,10 @@
 #      and was killed at 480 s exit=124, still progressing. Measured total ~600 s; it runs in
 #      three parts since.
 #
+#      main3 line, shard-weights refresh 2026-11-23 (#8471): parts past 288 s were split further -
+#      Graph.Test 4->5 (part 4 334 s), Hosting.Test 3->4 (334 s), Messaging.Hub.Test 3->4 (363 s),
+#      Hosting.Orleans.Test 2->3 (298 s); their part rows await a fresh measurement (1/N meanwhile).
+#
 #      MeshWeaver.Graph.Test was the one after that: listed at 64 s, it measured 406 s solo on
 #      run 37158590539 (85% of the cap) and was killed at 480 s exit=124 on run 37159733607,
 #      still progressing through its classes (no TEST START without its TEST END). It runs in
