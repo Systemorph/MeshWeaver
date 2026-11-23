@@ -398,6 +398,10 @@ class Verdict:
     review_missing: str = ""
     #: How many threads the automatic reviewer opened (condition 2's denominator, "N of M unanswered").
     threads: int = 0
+    #: Policy `draft-owes-no-review`: set when this verdict is green ONLY because the pull request is a DRAFT — a draft is
+    #: the author's own hold, the reviewer does not review it, and the review is requested on `ready_for_review`. The
+    #: verdict writer reports it PENDING ("draft — no review owed"), never red and never "answered".
+    draft: bool = False
 
 
 def newest_landed_copilot_review(reviews, as_of: str | None = None) -> dict | None:
@@ -558,6 +562,11 @@ def internal_chain_carry(head: str, run: dict, new_cmp: dict, runs_of, reviews, 
                         "(policies internal-code-review, review-on-real-change)"), root, run)
 
 
+#: Policy draft-owes-no-review: the note a draft's missing review is excused with.
+DRAFT_NOTE = ("draft — no review owed: the reviewer does not review a draft, and the review is requested when the pull "
+              "request is marked ready for review (a draft is the author's own hold; it cannot merge)")
+
+
 def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str | None = None,
              check_runs: list | tuple = (), files: list | None = None, commits: list | None = None,
              copilot_carry: Carry | None = None, internal_chain: Carry | None = None) -> Verdict:
@@ -571,6 +580,9 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
     refused: list[str] = []
     owes_review = ""
     review_missing = ""
+    # Policy draft-owes-no-review: ONLY an explicit `draft: true` excuses a missing review — an unread flag fails closed.
+    is_draft = pr.get("draft") is True
+    draft_excused = False
 
     # 3 (checked first: an incomplete listing makes every other statement unreliable)
     incomplete = listing_incomplete(pr, comments)
@@ -664,6 +676,9 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
                     notes.append(f"NOT OWED: {stale}. {generated_why} — nothing to review (generated_only)")
                 elif granted:
                     notes.append(f"WAIVED: {stale}. {message}")
+                elif is_draft:
+                    draft_excused = True
+                    notes.append(f"NOT OWED: {stale}. {DRAFT_NOTE}")
                 else:
                     reasons.append(stale)
                     owes_review = stale
@@ -717,6 +732,9 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
                 notes.append(f"NOT OWED: {why}. {generated_why} — nothing to review (generated_only)")
             elif granted:
                 notes.append(f"WAIVED: {why}. {message}")
+            elif is_draft:
+                draft_excused = True
+                notes.append(f"NOT OWED: {why}. {DRAFT_NOTE}")
             else:
                 reasons.append(why + (f". {message}" if message else ""))
                 review_missing = reasons[-1]
@@ -735,7 +753,8 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
 
     return Verdict(green=not reasons, reasons=tuple(reasons), notes=tuple(notes), unanswered=unanswered,
                    refused=tuple(refused), stale=owes_review,
-                   incomplete=incomplete or "", review_missing=review_missing, threads=len(roots))
+                   incomplete=incomplete or "", review_missing=review_missing, threads=len(roots),
+                   draft=draft_excused and not reasons)
 
 
 def listing_incomplete(pr: dict, comments: list) -> str | None:
@@ -3593,7 +3612,7 @@ REVIEW_DEADLINE_HOURS = 6
 #: event) and an unmeasured one (the next read can complete). Every other kind changes only on an event.
 #: `review-overdue` and `refused` are swept too (#7653 review): a late review or a maintainer's re-request
 #: clears them and raises no event here, so without the sweep their red would outlive its cause.
-SWEEP_KINDS = frozenset({"answering", "awaiting-review", "unmeasurable", "review-overdue", "refused"})
+SWEEP_KINDS = frozenset({"answering", "awaiting-review", "unmeasurable", "review-overdue", "refused", "draft"})
 #: run_verdict's exit when the verdict could NOT be published (a failed write, or a failed read whose failure
 #: could not be written either) — distinct from 1, a red verdict that WAS published (#7653 review).
 VERDICT_UNPUBLISHED_EXIT = 4
@@ -3622,6 +3641,9 @@ def reported_state(verdict: Verdict, now: str, first_seen: str,
     the gate first judged this head) are ISO-8601 UTC. Fails CLOSED: an unparseable clock, an incomplete
     read, a refusal, or a red reason this function does not recognise is `failure`, never `pending`."""
     roots = len(verdict.unanswered)
+    if verdict.green and verdict.draft:
+        # Policy draft-owes-no-review: neutral, never red and never "answered" — nothing was reviewed or answered.
+        return Reported("pending", "draft", "Pending — draft, no review owed; the review is requested when it is marked ready for review")
     if verdict.green:
         return Reported("success", "answered", "Answered — every thread the automatic reviewer opened has a person's reply")
     if verdict.incomplete:
@@ -3667,7 +3689,11 @@ def verdict_summary(number: int, verdict: Verdict, reported: Reported) -> str:
     step summary (reasons, notes, guidance)."""
     icon = {"success": "✅", "pending": "⏳"}.get(reported.state, "❌")
     out = [f"### {icon} {reported.title}", ""]
-    if reported.state == "pending":
+    if reported.kind == "draft":
+        out += ["This pull request is a **draft**: no review is owed, so this check is **pending, not red** — it is a hold, not a failure. "
+                "Marking it ready for review requests the review and re-judges this check. A draft that stays a draft is surfaced "
+                "by the triage ledger once its stated hold has expired. Policy `draft-owes-no-review`.", ""]
+    elif reported.state == "pending":
         out += ["This check is **pending, not red**: it still blocks the merge (a required context with no conclusion is "
                 "never satisfied), and it turns green the moment the last thread has a reply. Policy "
                 "`review-pending-while-answering`; deadlines: policy `review-answer-deadline`.", ""]
@@ -3998,8 +4024,11 @@ def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_
     run that did not fail."""
     head = f"#{number} ({'draft' if pr.get('draft') else pr.get('state')}) head {str((pr.get('head') or {}).get('sha'))[:10]}"
     pending = reported is not None and reported.state == "pending"
-    state = (f"PENDING — {reported.title}" if pending else
+    draft_pending = pending and reported.kind == "draft"
+    state = ("DRAFT — no review owed (pending, not red: a draft is the author's hold)" if draft_pending else
+             f"PENDING — {reported.title}" if pending else
              f"RED — {reported.title}" if reported is not None and reported.state == "failure" else
+             "DRAFT — no review owed (neither red nor answered: a draft is the author's hold)" if verdict.green and verdict.draft else
              "GREEN" if verdict.green else
              "RED — UNREVIEWABLE (the reviewer REFUSED to review this pull request)" if verdict.refused else
              "RED — THIS HEAD OWES A REVIEW (its own diff changed since Copilot's last review)"
@@ -6029,6 +6058,27 @@ def pending_self_test(HEAD: str) -> int:
     r2 = reported_state(owes, FRESH, T0)
     check("NEG: when the head's review is due first, the title names THAT deadline",
           r2.state == "pending" and "review has not landed (6 h" in r2.title and r2.red_at == "2026-10-30T16:00:00Z", r2.title)
+    # Policy draft-owes-no-review: a draft owes no review — PENDING, never red (and never "answered").
+    def draft_of(comments, reviews=(), draft=True):
+        pr = dict(_pr(len(comments)), head={"sha": HEAD}, draft=draft)
+        return evaluate(pr, list(reviews), comments, NO_WAIVER)
+    dv = draft_of([])
+    dr = reported_state(dv, LATE, T0)
+    check("a DRAFT with no review -> PENDING 'draft', never failure, even past the review deadline",
+          dv.green and dv.draft and dr.state == "pending" and dr.kind == "draft" and "draft, no review owed" in dr.title, f"{dv} {dr}")
+    rendered = render(1, dict(_pr(0), head={"sha": HEAD}, draft=True), dv, None, None, dr)
+    check("a reported draft renders as DRAFT, with no doubled 'PENDING — Pending' prefix",
+          "— DRAFT — no review owed" in rendered and "PENDING — Pending" not in rendered, rendered.splitlines()[0])
+    nv = draft_of([], draft=False)
+    check("NEG: the same pull request NOT a draft still owes its review (pending, then red past the deadline)",
+          not nv.green and not nv.draft and reported_state(nv, LATE, T0).kind == "review-overdue", f"{nv}")
+    check("NEG: an unread draft flag fails closed (review still owed)",
+          not evaluate({k: v for k, v in dict(_pr(0), head={"sha": HEAD}).items() if k != "draft"}, [], [], NO_WAIVER).green)
+    du = draft_of([ONE])
+    check("NEG: a draft with an unanswered reviewer thread is NOT excused (threads still need a reply)",
+          not du.green and not du.draft and reported_state(du, FRESH, T0).kind == "answering", f"{du}")
+    check("a draft with a landed review and every thread answered is plain success, not 'draft'",
+          (lambda v: v.green and not v.draft and reported_state(v, FRESH, T0).state == "success")(draft_of([ONE, ANSWER], reviews=(review,))))
     # Policy app-marked-answer-counts: the App's MARKED reply answers its own thread; nothing else a bot posts does.
     APP = {"login": "systemorph-com[bot]", "type": "Bot", "id": APP_ANSWER_ACCOUNT_ID}
     APP_RENAMED = {"login": "systemorph[bot]", "type": "Bot", "id": APP_ANSWER_ACCOUNT_ID}
