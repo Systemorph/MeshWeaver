@@ -2229,14 +2229,15 @@ public static class ModuleActivationSidecar
     /// (<c>YamlDotNet 18.1.0.0</c>); null when not measured that way.</param>
     /// <param name="Provides">What this platform provides for it (<c>16.3.0.0</c>); null for a
     /// refusal that is not a binding conflict.</param>
-    /// <param name="Platform">The platform build (live framework identity) that refused the
-    /// landing. A refusal is a statement about THAT platform: once the instance runs another
-    /// build the marker describes nothing current, and <see cref="IsCurrentRefusal"/> says so.
-    /// Null on a marker written before this field existed — its platform is unknown, so it cannot
-    /// be shown to describe the running one.</param>
     public sealed record RefusedLanding(
         string? Version, string? PackagePath, string Reason, DateTimeOffset RefusedAt,
-        string? Needs = null, string? Provides = null, string? Platform = null);
+        string? Needs = null, string? Provides = null)
+    {
+        /// <summary>The platform build that refused. An init property, NOT a constructor
+        /// parameter: widening a public record's primary constructor breaks every assembly built
+        /// against the old shape. Null on a marker from an older writer.</summary>
+        public string? Platform { get; init; }
+    }
 
     /// <summary>
     /// Whether <paramref name="refusal"/> still describes the platform this process runs. True only

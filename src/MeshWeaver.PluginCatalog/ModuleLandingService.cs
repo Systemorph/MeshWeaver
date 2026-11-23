@@ -1487,7 +1487,8 @@ public sealed class ModuleLandingService : IDisposable
             {
                 ModuleActivationSidecar.SetRefused(baseDirectory, name, new ModuleActivationSidecar.RefusedLanding(
                     version, packagePath, linkVerdict.HoldSummary()!, DateTimeOffset.UtcNow,
-                    linkVerdict.Needs(), linkVerdict.Provides(), ModuleActivationSidecar.LivePlatform()));
+                    linkVerdict.Needs(), linkVerdict.Provides())
+                    { Platform = ModuleActivationSidecar.LivePlatform() });
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {

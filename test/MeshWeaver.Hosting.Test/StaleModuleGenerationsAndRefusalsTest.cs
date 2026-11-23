@@ -106,11 +106,11 @@ public class StaleModuleGenerationsAndRefusalsTest : IDisposable
     {
         var at = DateTimeOffset.UtcNow.AddHours(-1);
         ModuleActivationSidecar.SetRefused(root, "Stale.Module", new(
-            "1.0", null, "held: references X 1.0.0.0, platform provides 3.1.0.0", at, "X 1.0.0.0", "3.1.0.0", Old));
+            "1.0", null, "held: references X 1.0.0.0, platform provides 3.1.0.0", at, "X 1.0.0.0", "3.1.0.0") { Platform = Old });
         ModuleActivationSidecar.SetRefused(root, "Legacy.Module", new(
             "1.0", null, "held: legacy", at));
         ModuleActivationSidecar.SetRefused(root, "Current.Module", new(
-            "1.0", null, "held: current", at, Platform: Live));
+            "1.0", null, "held: current", at) { Platform = Live });
 
         var read = ModuleActivationSidecar.ReadCurrentRefusals(root, Live);
         Assert.Equal(["Current.Module"], read.Keys.ToArray());
@@ -127,7 +127,7 @@ public class StaleModuleGenerationsAndRefusalsTest : IDisposable
     public void AFreshStaleMarker_WithinTheGraceWindow_IsLeftAlone()
     {
         ModuleActivationSidecar.SetRefused(root, "Fresh.Module", new(
-            "1.0", null, "held", DateTimeOffset.UtcNow, Platform: Old));
+            "1.0", null, "held", DateTimeOffset.UtcNow) { Platform = Old });
 
         Assert.Equal(0, ModuleActivationSidecar.RetireStaleRefusals(
             root, Live, DateTimeOffset.UtcNow.AddMinutes(-5)));
@@ -138,7 +138,7 @@ public class StaleModuleGenerationsAndRefusalsTest : IDisposable
     public void WhenTheLivePlatformIsUnknown_NothingIsJudged()
     {
         ModuleActivationSidecar.SetRefused(root, "Any.Module", new(
-            "1.0", null, "held", DateTimeOffset.UtcNow.AddHours(-1), Platform: Old));
+            "1.0", null, "held", DateTimeOffset.UtcNow.AddHours(-1)) { Platform = Old });
 
         Assert.Single(ModuleActivationSidecar.ReadCurrentRefusals(root, null));
         Assert.Equal(0, ModuleActivationSidecar.RetireStaleRefusals(root, null, DateTimeOffset.UtcNow));
