@@ -382,6 +382,10 @@ public sealed class ModuleLandingService : IDisposable
                     msg => logger?.LogInformation("Modules GC: {Message}", msg));
             }
             retired += ModuleActivationSidecar.PruneLandingTemps(baseDirectory, cutoff);
+            // A refusal marker is keyed to the platform that refused; one naming a build this
+            // process does not run is retired here (readers already ignore it).
+            retired += ModuleActivationSidecar.RetireStaleRefusals(baseDirectory, own, cutoff,
+                msg => logger?.LogInformation("Modules GC: {Message}", msg));
             if (retired > 0)
                 logger?.LogInformation(
                     "Modules GC: retired {Count} landing record file(s) the derived activation no "
@@ -1483,7 +1487,7 @@ public sealed class ModuleLandingService : IDisposable
             {
                 ModuleActivationSidecar.SetRefused(baseDirectory, name, new ModuleActivationSidecar.RefusedLanding(
                     version, packagePath, linkVerdict.HoldSummary()!, DateTimeOffset.UtcNow,
-                    linkVerdict.Needs(), linkVerdict.Provides()));
+                    linkVerdict.Needs(), linkVerdict.Provides(), ModuleActivationSidecar.LivePlatform()));
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {

@@ -1673,8 +1673,19 @@ public static class ModuleActivationSidecar
             if (!KeepsHead(head, incoming, present))
                 head = incoming;
 
+        // 🚨 A fallback is the generation boot runs when the HEAD does not load. On a platform that
+        // MEASURED the head as loading, a generation it measured as NOT loading is no fallback at all
+        // — it could only be tried, probed and parked — yet naming it protected dead bytes from the
+        // modules GC (memex, 2026-11-23: older Markdown.Collaboration generations referencing Fluent
+        // UI types the v4 platform no longer carries, retained as "previous"). Unmeasured stays
+        // eligible on every platform, and so does everything while the head itself is unmeasured or
+        // does not load (a shelved landing built for a newer platform keeps the generation that runs
+        // today). The null "no verdicts" platform the GC always protects measures nothing, so it
+        // still keeps ONE fallback: retention stays bounded and rollback-safe by construction.
+        var headLoadsHere = linkable(head.Directory) == true;
         var fallback = arrival
-            .Where(r => !SameGeneration(r.Directory, head.Directory))
+            .Where(r => !SameGeneration(r.Directory, head.Directory)
+                && !(headLoadsHere && linkable(r.Directory) == false))
             .OrderByDescending(r => present(r.Directory))
             .ThenByDescending(r => linkable(r.Directory) switch { true => 2, null => 1, false => 0 })
             .ThenByDescending(r => r.Version, VersionRank.Instance)
@@ -2218,9 +2229,53 @@ public static class ModuleActivationSidecar
     /// (<c>YamlDotNet 18.1.0.0</c>); null when not measured that way.</param>
     /// <param name="Provides">What this platform provides for it (<c>16.3.0.0</c>); null for a
     /// refusal that is not a binding conflict.</param>
+    /// <param name="Platform">The platform build (live framework identity) that refused the
+    /// landing. A refusal is a statement about THAT platform: once the instance runs another
+    /// build the marker describes nothing current, and <see cref="IsCurrentRefusal"/> says so.
+    /// Null on a marker written before this field existed — its platform is unknown, so it cannot
+    /// be shown to describe the running one.</param>
     public sealed record RefusedLanding(
         string? Version, string? PackagePath, string Reason, DateTimeOffset RefusedAt,
-        string? Needs = null, string? Provides = null);
+        string? Needs = null, string? Provides = null, string? Platform = null);
+
+    /// <summary>
+    /// Whether <paramref name="refusal"/> still describes the platform this process runs. True only
+    /// when the marker names exactly <paramref name="livePlatform"/>. A marker with no platform
+    /// (older writer) or one naming another build is superseded: a refusal keyed to a platform
+    /// the instance no longer runs neither blocks nor explains anything, and the next landing that
+    /// is refused here writes a fresh, correctly keyed marker. When the live platform itself cannot
+    /// be resolved nothing can be judged, so the marker stands.
+    /// </summary>
+    public static bool IsCurrentRefusal(RefusedLanding refusal, string? livePlatform) =>
+        string.IsNullOrWhiteSpace(livePlatform)
+        || string.Equals(refusal.Platform, livePlatform, StringComparison.Ordinal);
+
+    /// <summary>Deletes every refusal marker that no longer describes <paramref name="livePlatform"/>
+    /// (<see cref="IsCurrentRefusal"/>) and is older than <paramref name="cutoffUtc"/> (the modules
+    /// GC's grace window, so a marker another replica just wrote is left alone). Returns how many
+    /// were removed.</summary>
+    internal static int RetireStaleRefusals(
+        string baseDirectory, string? livePlatform, DateTimeOffset cutoffUtc, Action<string>? onRemoved = null)
+    {
+        var removed = 0;
+        foreach (var (name, refusal) in ReadRefusalsObservingToken(baseDirectory, CancellationToken.None, livePlatform: null))
+        {
+            if (IsCurrentRefusal(refusal, livePlatform) || refusal.RefusedAt > cutoffUtc)
+                continue;
+            try
+            {
+                File.Delete(RefusedMarkerPath(baseDirectory, name));
+                removed++;
+                onRemoved?.Invoke($"module '{name}': retired a refusal marker keyed to platform "
+                    + $"'{refusal.Platform ?? "(unrecorded)"}' — this process runs '{livePlatform}'.");
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Held open or a read-only volume: readers already ignore it; a later pass retires it.
+            }
+        }
+        return removed;
+    }
 
     /// <summary>The per-module refusal marker's file suffix inside <see cref="EntriesDirectoryName"/>
     /// — like <see cref="UnloadableMarkerSuffix"/>, deliberately not <c>.json</c>.</summary>
@@ -2278,11 +2333,17 @@ public static class ModuleActivationSidecar
     public static ImmutableSortedDictionary<string, RefusedLanding> ReadRefusals(string baseDirectory)
         => ReadRefusalsObservingToken(baseDirectory, CancellationToken.None);
 
+    /// <summary><see cref="ReadRefusals"/> restricted to the refusals that still describe
+    /// <paramref name="livePlatform"/> (<see cref="IsCurrentRefusal"/>).</summary>
+    public static ImmutableSortedDictionary<string, RefusedLanding> ReadCurrentRefusals(
+        string baseDirectory, string? livePlatform)
+        => ReadRefusalsObservingToken(baseDirectory, CancellationToken.None, livePlatform);
+
     /// <summary><see cref="ReadRefusals"/> from a pooled leaf: checks <paramref name="cancellationToken"/>
     /// before the listing, per listed marker while the listing is collected, and before each marker
     /// read. A DISTINCT name, so the bare <c>ReadRefusals</c> <c>cref</c>s stay unambiguous.</summary>
     internal static ImmutableSortedDictionary<string, RefusedLanding> ReadRefusalsObservingToken(
-        string baseDirectory, CancellationToken cancellationToken)
+        string baseDirectory, CancellationToken cancellationToken, string? livePlatform = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var builder = ImmutableSortedDictionary.CreateBuilder<string, RefusedLanding>(StringComparer.OrdinalIgnoreCase);
@@ -2305,7 +2366,8 @@ public static class ModuleActivationSidecar
             cancellationToken.ThrowIfCancellationRequested();
             var name = Path.GetFileName(file);
             name = name[..^RefusedMarkerSuffix.Length];
-            if (ReadRefused(baseDirectory, name) is { } refusal)
+            if (ReadRefused(baseDirectory, name) is { } refusal
+                && (string.IsNullOrWhiteSpace(livePlatform) || IsCurrentRefusal(refusal, livePlatform)))
                 builder[name] = refusal;
         }
         return builder.ToImmutable();
