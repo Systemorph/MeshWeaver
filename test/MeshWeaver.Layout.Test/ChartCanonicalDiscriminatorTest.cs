@@ -49,6 +49,20 @@ public class ChartCanonicalDiscriminatorTest(ITestOutputHelper output) : HubTest
         var json = JsonSerializer.Serialize<UiControl>(new ChartControl(), hub.JsonSerializerOptions);
         json.Should().Contain("\"$type\":\"ChartControl\"");
     }
+
+    [Fact]
+    public void The_full_name_discriminator_still_resolves_as_a_read_alias()
+    {
+        // Persisted $type values written under the namespace-qualified name must still RESOLVE by name
+        // (the registry's read alias), while the canonical output name stays the short one. (Reading a
+        // full-name payload through the polymorphic UiControl base has never worked for ANY layout
+        // control, which is registered under its short name only — see the PR notes.)
+        var registry = GetClient().Configuration.TypeRegistry;
+        registry.GetTypeDefinition("MeshWeaver.Layout.Chart.ChartControl")!.Type.Should().Be(typeof(ChartControl));
+        registry.GetTypeDefinition("ChartControl")!.Type.Should().Be(typeof(ChartControl));
+        registry.TryGetCollectionName(typeof(ChartControl), out var name).Should().BeTrue();
+        name.Should().Be("ChartControl");
+    }
 }
 
 /// <summary>
@@ -68,5 +82,19 @@ public class ChartFullNameFirstTest(ITestOutputHelper output) : HubTestBase(outp
         var json = JsonSerializer.Serialize<UiControl>(new ChartControl(), GetClient().JsonSerializerOptions);
         Output.WriteLine(json);
         json.Should().Contain("\"$type\":\"ChartControl\"");
+    }
+
+    [Fact]
+    public void The_full_name_discriminator_still_resolves_as_a_read_alias()
+    {
+        // Persisted $type values written under the namespace-qualified name must still RESOLVE by name
+        // (the registry's read alias), while the canonical output name stays the short one. (Reading a
+        // full-name payload through the polymorphic UiControl base has never worked for ANY layout
+        // control, which is registered under its short name only — see the PR notes.)
+        var registry = GetClient().Configuration.TypeRegistry;
+        registry.GetTypeDefinition("MeshWeaver.Layout.Chart.ChartControl")!.Type.Should().Be(typeof(ChartControl));
+        registry.GetTypeDefinition("ChartControl")!.Type.Should().Be(typeof(ChartControl));
+        registry.TryGetCollectionName(typeof(ChartControl), out var name).Should().BeTrue();
+        name.Should().Be("ChartControl");
     }
 }
