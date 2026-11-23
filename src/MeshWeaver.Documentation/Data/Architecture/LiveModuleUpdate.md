@@ -309,6 +309,17 @@ monolith mesh, the framework's own `RecycleCascade` seam as the instrument):
   generation, and is reported `Failed` itself. With the fault left to escape, both modules are reported
   `Failed` and the probe is never recycled.
 
+### The link probe measures the DEFAULT context's copy (2026-11-23)
+
+A module's `ModuleLoadContext` asks the default context for every assembly before it looks in its own
+directory, so the copy a module binds is the platform's. `ModulePlatformSurface` therefore lists the
+default context's assemblies ahead of any same-named copy in a secondary context (a superseded or staged
+generation, a collectible context awaiting unload), whatever order `AppDomain` lists them in. Before this,
+the first listed copy won (the suspected cause of the following, not yet observed on the pod): memex 4.0.13914 refused `MeshWeaver.AI` and `Essentials` at 03:20 for lacking
+`MeshWeaver.Reactive.ParallelReadExtensions`, a type the running `MeshWeaver.Messaging.Hub` defines, and the
+retry minutes later passed. A refusal for a missing type now also carries an advisory naming the copy it
+read (path, load context, mvid, type count). Tests: `ModuleLinkProbePlatformStaticClassTest`.
+
 ### A hub with a step in flight is recycled when the step ends (MeshWeaver#7324)
 
 **The wave never tears a hub down in the middle of a step it owns.** A step is any work a hub's
