@@ -830,6 +830,14 @@ LANDING_SCENARIOS = [
      "Red", "200", '{"recorded":false}', 1, "did not confirm", None),
     ("an unreachable instance (curl failed) ⇒ RED",
      "Green", "CURLFAIL", "", 1, "HTTP 000", None),
+    ("a confirm-phase 504 then a landed 200 ⇒ green after one re-post",
+     "Red", "504c,200", '{"recorded":true}', 0, "re-posting", "→ **Red**"),
+    ("a confirm-phase 504 on every attempt ⇒ RED naming NOT CONFIRMED after 3 re-posts",
+     "Red", "504c,504c,504c,504c", "", 1, "NOT CONFIRMED after 3 re-posts", None),
+    ("a 400 (even with a confirm-shaped body) ⇒ RED at once, never re-posted (negative control)",
+     "Red", "400c,200", '{"recorded":true}', 1, "HTTP 400", None),
+    ("a 504 that is not the confirm phase ⇒ RED at once, never re-posted",
+     "Red", "504,200", '{"recorded":true}', 1, "HTTP 504", None),
     ("a verdict kind this lane cannot classify ⇒ RED even though it landed",
      "Purple", "200", '{"recorded":true}', 1, "unknown verdict kind", None),
 ]
@@ -859,12 +867,24 @@ fail() {{ echo "::error::[slot-0] $*"; exit 1; }}
 note() {{ echo "[slot-0] $*"; }}
 body_of() {{ head -c "$1" "$2" 2>/dev/null || true; }}
 mint_token() {{ TOKEN=stand-in; }}
+sleep() {{ :; }}
+POSTS={tmp}/posts
+: >"$POSTS"
 curl() {{
   local out="" prev=""
   for a in "$@"; do [ "$prev" = "-o" ] && out=$a; prev=$a; done
   [ "$STAND_CODE" != "CURLFAIL" ] || return 7
-  printf '%s' "$STAND_BODY" >"$out"
-  printf '%s' "$STAND_CODE"
+  # STAND_CODE is a comma list answered in order (the last one repeats); "504c" is a 504 whose body
+  # names the confirm phase, exactly as the portal's own timeout answers.
+  local n; n=$(($(wc -l <"$POSTS") + 1)); echo x >>"$POSTS"
+  local code; code=$(printf '%s' "$STAND_CODE" | cut -d, -f"$n")
+  [ -n "$code" ] || code=$(printf '%s' "$STAND_CODE" | awk -F, '{{print $NF}}')
+  if [ "${{code%c}}" != "$code" ]; then code=${{code%c}}
+    printf '%s' '{{"error":"Timed out","phase":"confirm","candidateTag":"9.9.9"}}' >"$out"
+  else
+    printf '%s' "$STAND_BODY" >"$out"
+  fi
+  printf '%s' "$code"
 }}
 shown=slot-0
 where="this instance"
@@ -1252,6 +1272,10 @@ def self_test(root: Path) -> int:
             landing.replace("jq -e '.recorded == true' >/dev/null <\"$landed\"", "true", 1),
         "a refused POST accepted as landed":
             landing.replace('[ "$land_code" = "200" ] \\\n', 'true \\\n', 1),
+        "a confirm-phase 504 never re-posted (#4413)":
+            landing.replace('-ge "${LAND_RETRIES:-3}"', '-ge 0', 1),
+        "a 4xx re-posted blindly (#4413)":
+            landing.replace('[ "$land_code" = "504" ] && jq', '[ "$land_code" != "200" ] && jq', 1),
         "an unknown verdict kind accepted":
             landing.replace('  *) fail "the verifier wrote an unknown verdict kind',
                             '  *) note "the verifier wrote an unknown verdict kind', 1),
