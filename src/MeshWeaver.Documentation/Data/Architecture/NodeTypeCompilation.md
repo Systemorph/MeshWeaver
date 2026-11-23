@@ -1622,6 +1622,14 @@ differently, and `assert-bake-consumption.sh` fails on it by name.
 > per-type verdict is green. Only the log says anything — and only because the refusal logs at
 > `Error`, above the gate's default level.
 
+#### An `@@` is a directive only in CODE
+
+`NodeCompileShaping.FindCodeIncludes` is the one scan the resolver and the fingerprint share: an `@@path`
+inside a `//` or `///` comment, a `/* */` comment or a string/character literal (regular, verbatim,
+interpolated, raw) is prose, is never read from the mesh, and is left as authored. Substitution is
+positional, so the same text in a comment next to a real directive is not rewritten. Pinned by
+`IncludesInCommentsTest`.
+
 #### 🚨 The fingerprint covers the `@@`-include closure — both sides resolve before hashing
 
 An `@@` include pulls a Code node that **no source query matches**. It reaches the emitted assembly

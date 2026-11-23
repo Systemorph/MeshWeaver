@@ -79,6 +79,16 @@ definition, type → name, full-name alias → definition). A write replaces it 
 Readers never lock and writers never block. When two writers race to add the same new type, the first
 one wins. A registry that adds nothing holds the shared empty snapshot.
 
+**A platform type has one canonical name, owned by the platform.** The nameless `WithType(type)` (what
+`AddLayoutTypes` sweeps with) asks for the canonical name, which is the SHORT name. If an earlier caller
+registered the type under its full name — `MessageHubConfiguration.WithType(type)` defaults to
+`type.FullName`, which is what the portal's `AddRadzenCharts` and a compiled NodeType's `WithTypes` do —
+the nameless registration rebinds the short name (the full name stays a read alias) instead of echoing the
+full name back. Before this, a hub that registered `ChartControl` by full name first sent
+`MeshWeaver.Layout.Chart.ChartControl` where every other control says `ChartControl`; and the chart series
+(`ChartSeries` and subtypes) are registered by `AddLayoutTypes` rather than auto-registered on first write.
+Pinned by `ChartCanonicalDiscriminatorTest`.
+
 ## Key functions
 
 The `[Dimension]`-tuple key is a **convention** of every `KeyFunctionBuilder`, after `[Key]`, `Id` and
