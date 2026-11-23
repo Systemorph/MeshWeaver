@@ -398,6 +398,14 @@ def _tupled(value):
 def dump_scans(scans, repos: list[str]) -> str:
     """The scans as JSON text. Pure; the caller writes (and encrypts) it."""
     import dataclasses
+    for scan in scans:
+        for f in dataclasses.fields(scan):
+            value = getattr(scan, f.name)
+            if f.name != "gh_repo" and not isinstance(value, (list, str, int, bool)) and value is not None:
+                # The codec restores list-of-tuple fields (and str/None); anything else would come back
+                # as a different type and silently change what a slot derives.
+                raise ValueError(f"OverlayScan.{f.name} is a {type(value).__name__}; the scans codec "
+                                 "only round-trips lists and scalars")
     return json.dumps({"version": 1, "repos": repos,
                        "scans": [{f.name: _jsonable(getattr(scan, f.name)) for f in dataclasses.fields(scan)}
                                  for scan in scans]}, sort_keys=True)
@@ -412,7 +420,7 @@ def load_scans(text: str):
     names = {f.name for f in dataclasses.fields(lock.OverlayScan)}
     scans = []
     for raw in data["scans"]:
-        if not isinstance(raw, dict) or set(raw) - names or "gh_repo" not in raw:
+        if not isinstance(raw, dict) or set(raw) != names:
             raise ValueError("a scan entry does not match the OverlayScan fields")
         scan = lock.OverlayScan(gh_repo=raw["gh_repo"])
         for name, value in raw.items():
@@ -1357,6 +1365,22 @@ def self_test() -> int:
     full.withheld_paths = ["p"]
     text = dump_scans([full, SOURCE_SCANS[1]], ["Systemorph/Memex", "Systemorph/Umbrella.Memex"])
     back_repos, back = load_scans(text)
+    for label, bad_scan in (("a frozenset field", {"pins": frozenset({"x"})}),):
+        broken = _scan("Systemorph/Memex", [])
+        for name, value in bad_scan.items():
+            setattr(broken, name, value)
+        try:
+            dump_scans([broken], [])
+            raised = False
+        except ValueError:
+            raised = True
+        check(raised, f"the codec refuses {label} it could not restore, instead of round-tripping a dict")
+    try:
+        load_scans('{"version": 1, "scans": [{"gh_repo": "a/b"}]}')
+        raised = False
+    except ValueError:
+        raised = True
+    check(raised, "a scan entry with fields missing is refused, never filled with defaults")
     check(back_repos == ["Systemorph/Memex", "Systemorph/Umbrella.Memex"] and len(back) == 2
           and back[0].records == full.records and back[0].instances == full.instances
           and isinstance(back[0].instances[0], tuple) and back[0].source_errors == [("a", "b")],
@@ -1411,6 +1435,8 @@ def main() -> int:
     lock.mask_private_roster()      # public log: the private roster's identifiers stay private
 
     loaded_scans = None
+    if args.load_scans and (args.discover or args.repos or args.root):
+        parser.error("--load-scans replaces --discover/--repos/--root; give only one source of scans")
     if args.load_scans:
         # The file names the repositories the preflight read; a failure is a red naming it, never a
         # fall back to the API, which would hide the artifact going missing.

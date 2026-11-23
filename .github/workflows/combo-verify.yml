@@ -220,7 +220,10 @@ jobs:
         run: |
           set -euo pipefail
           test -s "$RUNNER_TEMP/combo-scans.json" || { echo "::error::the derivation saved no scans to hand over"; exit 1; }
-          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MW_COMBO_DIGEST_KEY \
+          # A purpose-bound subkey, never the App key itself: HMAC-SHA256(key, "combo-scans-v1").
+          MW_COMBO_SCANS_KEY=$(python3 -c 'import hmac,hashlib,os;print(hmac.new(os.environ["MW_COMBO_DIGEST_KEY"].encode(),b"combo-scans-v1",hashlib.sha256).hexdigest())')
+          export MW_COMBO_SCANS_KEY
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MW_COMBO_SCANS_KEY \
             -in "$RUNNER_TEMP/combo-scans.json" -out "$RUNNER_TEMP/combo-scans.enc"
           rm -f "$RUNNER_TEMP/combo-scans.json"
           test -s "$RUNNER_TEMP/combo-scans.enc"
@@ -399,10 +402,13 @@ jobs:
           EXPECT_DIGEST: ${{ needs.preflight.outputs.digest }}
         run: |
           set -euo pipefail
-          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:MW_COMBO_DIGEST_KEY \
+          # A purpose-bound subkey, never the App key itself: HMAC-SHA256(key, "combo-scans-v1").
+          MW_COMBO_SCANS_KEY=$(python3 -c 'import hmac,hashlib,os;print(hmac.new(os.environ["MW_COMBO_DIGEST_KEY"].encode(),b"combo-scans-v1",hashlib.sha256).hexdigest())')
+          export MW_COMBO_SCANS_KEY
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:MW_COMBO_SCANS_KEY \
             -in "$RUNNER_TEMP/combo-scans/combo-scans.enc" -out "$RUNNER_TEMP/combo-scans.json"
           trap 'rm -f "$RUNNER_TEMP/combo-scans.json"' EXIT
-          python3 .github/scripts/derive-combo-instances.py --discover \
+          python3 .github/scripts/derive-combo-instances.py \
             --load-scans "$RUNNER_TEMP/combo-scans.json" \
             --slot "$SLOT" --expect-count "$EXPECT_COUNT" --expect-digest "$EXPECT_DIGEST"
 

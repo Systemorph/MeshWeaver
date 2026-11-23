@@ -575,14 +575,15 @@ def handover_problems(doc: dict) -> list[str]:
                             "contains a masked name.")
     verify_steps = [step for step in verify.get("steps", []) if isinstance(step, dict)]
     resolve_at = next((i for i, step in enumerate(verify_steps)
-                       if "derive-combo-instances.py --discover" in step.get("run", "")
+                       if "derive-combo-instances.py" in step.get("run", "")
+                       and ("--discover" in step.get("run", "") or "--load-scans" in step.get("run", ""))
                        and "--slot" in step.get("run", "")), None)
     lander_at = next((i for i, step in enumerate(verify_steps)
                       if "bash .github/scripts/combo-verify-instance.sh" in step.get("run", "")),
                      None)
     if resolve_at is None or lander_at is None or resolve_at > lander_at:
         problems.append(
-            "jobs.verify must resolve its slot with `derive-combo-instances.py --discover --slot` "
+            "jobs.verify must resolve its slot with `derive-combo-instances.py --load-scans … --slot` "
             "BEFORE it runs the lander; otherwise the lander has no installation to verify.")
     else:
         resolve = verify_steps[resolve_at]
@@ -729,6 +730,7 @@ def build_once_problems(doc: dict) -> list[str]:
     saves = [i for i, step in enumerate(pre_steps) if "--save-scans" in str(step.get("run", ""))]
     encrypts = [i for i, step in enumerate(pre_steps)
                 if "openssl enc -aes-256-cbc" in str(step.get("run", ""))
+                and "MW_COMBO_SCANS_KEY" in str(step.get("run", ""))
                 and "rm -f" in str(step.get("run", ""))]
     scan_uploads = [i for i, step in enumerate(pre_steps)
                     if "upload-artifact" in str(step.get("uses", ""))
