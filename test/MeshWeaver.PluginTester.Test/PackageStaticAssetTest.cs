@@ -113,16 +113,82 @@ public class PackageStaticAssetTest : IDisposable
         </Project>
         """;
 
-    private Task<ProjectBuild.Report> Build(string project, string shelf) =>
+    private Task<ProjectBuild.Report> Build(string project, string shelf, TextWriter? log = null) =>
         ProjectBuild.Run(new ProjectBuild.Options
         {
             EntryProjects = [project],
             AppDirectory = AppDirectory(),
             OutputDirectory = Path.Combine(_root, "out"),
-            Output = TextWriter.Null,
+            Output = log ?? TextWriter.Null,
             MaxParallel = 1,
             ModuleLibrariesDirectory = shelf,
         }).Await(TestContext.Current.CancellationToken);
+
+    private static string RazorProject(string assemblyName, string package) =>
+        Project(assemblyName, package).Replace("""Sdk="Microsoft.NET.Sdk">""", """Sdk="Microsoft.NET.Sdk.Razor">""");
+
+    [Fact]
+    public async Task AViewPackWithNoAssetsOfItsOwn_onAPipelineLessShelf_isNamedInTheLog()
+    {
+        // The shape the review asked about: a Razor pack whose ONLY assets would be its package's,
+        // so no wwwroot of its own exists — the SDK, not the presence of assets, makes it a view pack.
+        var shelf = Shelf(withAssets: false);
+        var project = Write("Bare/Bare.csproj", RazorProject("Pack.Bare", "Acme.Charts"));
+        Write("Bare/View.cs", "namespace Pack; public static class View { public static int V => Acme.Charts.Marker.Value; }");
+        var log = new StringWriter();
+
+        var report = await Build(project, shelf, log);
+
+        report.ExitCode.Should().Be(0);
+        log.ToString().Should().Contain("published WITHOUT the static-web-assets pipeline",
+            "a view pack resolving a package from a shelf that cannot carry its assets ships the 404 "
+            + "this fixes, so the build must say so");
+    }
+
+    [Fact]
+    public async Task NegativeControl_aPlainLibraryOnAPipelineLessShelf_isNotWarned()
+    {
+        var shelf = Shelf(withAssets: false);
+        var project = Write("Lib/Lib.csproj", Project("Pack.Lib", "Acme.Plain"));
+        Write("Lib/View.cs", "namespace Pack; public static class View { public static int V => Acme.Plain.Marker.Value; }");
+        var log = new StringWriter();
+
+        var report = await Build(project, shelf, log);
+
+        report.ExitCode.Should().Be(0);
+        log.ToString().Should().NotContain("static-web-assets pipeline",
+            "a non-UI module with no assets is not a view pack; warning there would be noise");
+    }
+
+    [Fact]
+    public async Task TheProjectsOwnFile_atAPackagesContentPath_winsAsUnderDotnetPublish()
+    {
+        var shelf = Shelf();
+        var project = Write("Own/Own.csproj", Project("Pack.Own", "Acme.Charts"));
+        Write("Own/View.cs", "namespace Pack; public static class View { public static int V => Acme.Charts.Marker.Value; }");
+        Write("Own/wwwroot/_content/Acme.Charts/css/material-base.css", ".project-override { }");
+
+        var report = await Build(project, shelf);
+
+        report.ExitCode.Should().Be(0);
+        File.ReadAllText(Out("Pack.Own", "wwwroot/_content/Acme.Charts/css/material-base.css"))
+            .Should().Be(".project-override { }", "the app's own wwwroot file wins over a library's asset");
+        File.Exists(Out("Pack.Own", "wwwroot/_content/Acme.Charts/Acme.Charts.js")).Should().BeTrue(
+            "the package's other assets still ride");
+    }
+
+    [Fact]
+    public void AShelfContentFolderNoPackageClaims_isNamed()
+    {
+        Shelf();
+        Write("_shelf/wwwroot/_content/acme-renamed/x.js", "//");
+
+        var shelf = ModuleLibrariesShelf.Read(Path.Combine(_root, "_shelf"));
+
+        shelf.UnclaimedStaticWebAssetFolders.Should().Equal(["acme-renamed"]);
+        shelf.Resolve("Acme.Charts", _ => false)!.StaticAssetPackages.Should().Equal(["Acme.Charts"],
+            "an unclaimed folder never attaches itself to an unrelated package");
+    }
 
     private string Out(string assemblyName, string relative) =>
         Path.Combine(_root, "out", assemblyName, relative.Replace('/', Path.DirectorySeparatorChar));

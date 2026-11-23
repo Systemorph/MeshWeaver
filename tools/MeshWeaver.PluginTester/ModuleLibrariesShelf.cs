@@ -228,6 +228,17 @@ public sealed class ModuleLibrariesShelf
     /// </summary>
     public bool HasStaticWebAssetPipeline { get; private init; }
 
+    /// <summary>
+    /// Every <c>wwwroot/_content/&lt;X&gt;/</c> folder on the shelf whose X no package in the shelf's
+    /// deps record is named. The folder name is the package's static-web-assets <c>BasePath</c>
+    /// segment, which defaults to the package id (<c>Radzen.Blazor</c>); a package that overrides it
+    /// cannot be attributed, so its assets ride no module — and this names them instead.
+    /// </summary>
+    public ImmutableArray<string> UnclaimedStaticWebAssetFolders =>
+        [.. StaticWebAssetsByPackage.Keys
+            .Where(folder => !_versionsByPackage.ContainsKey(folder))
+            .Order(StringComparer.Ordinal)];
+
     /// <summary>The static web assets a shelf package ships, relative to its
     /// <c>wwwroot/_content/&lt;PackageId&gt;/</c> folder; empty when it ships none.</summary>
     /// <param name="packageId">The package id.</param>
