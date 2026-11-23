@@ -182,6 +182,12 @@ def render_table(measured: dict[str, int], current_parts: dict[str, int], runs: 
 
 def gh(path: str) -> str:
     p = subprocess.run(["gh", "api", path], capture_output=True, text=True)
+    if p.returncode != 0 and "escape sequences" in p.stderr:
+        # A job log carries the runner's ANSI colour codes, which a newer gh refuses to print without
+        # --allow-escape-sequences (#8471: the weekly check died here, naming no drift). The parser
+        # only matches marker lines, so the codes are harmless; an older gh lacks the flag and never
+        # refuses, so it never reaches this branch.
+        p = subprocess.run(["gh", "api", "--allow-escape-sequences", path], capture_output=True, text=True)
     if p.returncode != 0:
         raise SystemExit(f"shard-weights: gh api {path} failed (exit {p.returncode}): {p.stderr.strip()[-300:]}")
     return p.stdout
