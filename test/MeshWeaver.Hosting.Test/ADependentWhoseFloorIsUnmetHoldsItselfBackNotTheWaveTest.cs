@@ -137,6 +137,25 @@ public class ADependentWhoseFloorIsUnmetHoldsItselfBackNotTheWaveTest : IDisposa
     }
 
     [Fact]
+    public async Task ADependentOfAHeldBackModule_IsHeldBackToo()
+    {
+        using var landing = new ModuleLandingService(baseDirectory: root);
+        const string Y = "MeshWeaver.AI.Other";
+        await Land(landing, AiModule, "AI", "4.0.13");
+        await Land(landing, OpenAiModule, "OpenAI", "4.0.14");
+        await Land(landing, Y, "Other", "4.0.14");
+
+        // Other requires OpenAI@^4.0.14, which the LANDED set meets — but OpenAI is held back.
+        var proposed = await Propose(landing,
+            Record("AI", AiModule), Record("OpenAI", OpenAiModule, "AI@^4.1.0"), Record("Other", Y, "OpenAI@^4.0.14"));
+
+        proposed.Should().NotBeNull();
+        proposed!.Generations.Keys.Should().Contain(AiModule);
+        proposed.Generations.Keys.Should().NotContain([OpenAiModule, Y],
+            "a module whose floor is met only by a held-back module's landed version is not proposed either");
+    }
+
+    [Fact]
     public async Task AnUnmetFloor_WithNoModuleToHoldBack_StillRefusesTheSet()
     {
         using var landing = new ModuleLandingService(baseDirectory: root);

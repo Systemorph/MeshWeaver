@@ -1098,6 +1098,31 @@ public sealed class ModuleLandingService : IDisposable
                 }
                 holdBack = unmet.Select(u => u.DependentModule!).Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToImmutableList();
+                // Transitive: a held-back module is not what the proposed set loads, so whatever
+                // declares a requirement on its package is held back too (its floor was judged
+                // against the LANDED version, which the set no longer carries). A content-only
+                // dependent has no module in the set and is skipped.
+                var heldPackages = unmet.Select(u => u.Dependent).ToHashSet(StringComparer.Ordinal);
+                var grew = true;
+                while (grew)
+                {
+                    grew = false;
+                    foreach (var record in installed ?? [])
+                    {
+                        if (string.IsNullOrWhiteSpace(record.Id) || heldPackages.Contains(record.Id)
+                            || !record.Requires.Any(r =>
+                                heldPackages.Contains(PackageDependencyGraph.DependencyId(r))))
+                            continue;
+                        if (string.IsNullOrWhiteSpace(record.Module))
+                            continue; // content-only: nothing of it loads in the set
+                        heldPackages.Add(record.Id);
+                        holdBack = holdBack.Add(record.Module);
+                        logger?.LogWarning(
+                            "[ModuleSet] HOLDING BACK module '{Module}' too — it requires a held-back package.",
+                            record.Module);
+                        grew = true;
+                    }
+                }
                 foreach (var floor in unmet)
                     logger?.LogWarning(
                         "[ModuleSet] HOLDING BACK module '{Module}' from the proposed set — its floor is not "
