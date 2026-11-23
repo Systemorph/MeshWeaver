@@ -5,34 +5,34 @@
 #         `<seconds> <project>#<k>/<parts>` for one measured part of a split project.
 # A unit's weight is the MAX of its newest three exit=0 observations. Change a project's parts
 # count by hand (the SPLIT RULE in shard-assign.sh), then refresh once the new parts have run.
-# measured-at: 2026-11-15T22:27:58Z
-# source-runs (main): 43763454915 43761709615 43760773041 43757047001 43747627270 43745563056 43744433668 43742571208 43742487081 43742266731 43742180918 43740448372 43712291787 43699285530 43691882286 43663269078 43660424557 43656993766 43655463343 43653111820 43652216372 43651801582 43650527412 43650277112 43649887442 43649714875
-753 MeshWeaver.Graph.Test 4
-114 MeshWeaver.Graph.Test#1/4
-323 MeshWeaver.Graph.Test#2/4
-130 MeshWeaver.Graph.Test#3/4
-186 MeshWeaver.Graph.Test#4/4
-702 MeshWeaver.Hosting.Test 3
-238 MeshWeaver.Messaging.Hub.Test 3
-111 MeshWeaver.Messaging.Hub.Test#1/3
-57 MeshWeaver.Messaging.Hub.Test#2/3
-70 MeshWeaver.Messaging.Hub.Test#3/3
-231 MeshWeaver.Compiler.Pipeline.Test 3
-93 MeshWeaver.Compiler.Pipeline.Test#1/3
-55 MeshWeaver.Compiler.Pipeline.Test#2/3
-83 MeshWeaver.Compiler.Pipeline.Test#3/3
-163 MeshWeaver.FaultInjection.Test
-96 MeshWeaver.Hosting.Orleans.Test
-95 MeshWeaver.Data.Test
-70 MeshWeaver.Layout.Test
-64 MeshWeaver.Documentation.Test
-63 MeshWeaver.PluginTester.Test
-24 MeshWeaver.Updates.Test
+# measured-at: 2026-11-23T05:49:39Z
+# source-runs (main): 45109899979 45087056640 45077532804 45075761434 45075661001 45072057111 45069956448 45066773262 45066721034 45049439906 45047588065 45043601365 45035193859 45025689296 45023756814 45023745643 45022348335 45020221739 44889235754 44882864380 44881187674 44880952234 44821069087 44784294827 44774628858 44771827345
+778 MeshWeaver.Graph.Test 4
+180 MeshWeaver.Graph.Test#1/4
+160 MeshWeaver.Graph.Test#2/4
+225 MeshWeaver.Graph.Test#3/4
+213 MeshWeaver.Graph.Test#4/4
+659 MeshWeaver.Hosting.Test 4
+244 MeshWeaver.Messaging.Hub.Test 3
+43 MeshWeaver.Messaging.Hub.Test#1/3
+118 MeshWeaver.Messaging.Hub.Test#2/3
+83 MeshWeaver.Messaging.Hub.Test#3/3
+240 MeshWeaver.Compiler.Pipeline.Test 3
+89 MeshWeaver.Compiler.Pipeline.Test#1/3
+65 MeshWeaver.Compiler.Pipeline.Test#2/3
+86 MeshWeaver.Compiler.Pipeline.Test#3/3
+157 MeshWeaver.FaultInjection.Test
+95 MeshWeaver.Hosting.Orleans.Test
+91 MeshWeaver.Data.Test
+82 MeshWeaver.PluginTester.Test
+77 MeshWeaver.Documentation.Test
+76 MeshWeaver.Layout.Test
+42 MeshWeaver.Updates.Test
 12 MeshWeaver.Testing.InMesh.Test
 8 MeshWeaver.ContentCollections.Test
 2 MeshWeaver.ContentCollections.Indexing.Test
 2 MeshWeaver.Markdown.Collaboration.Test
+1 MeshWeaver.Data.TestDomain
 1 MeshWeaver.Deployment.Contract.Test
 1 MeshWeaver.Testing.Xunit
 1 MeshWeaver.Testing.Xunit.Test
-0 MeshWeaver.Data.TestDomain
