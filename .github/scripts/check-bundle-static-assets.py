@@ -39,9 +39,11 @@ BUILD time an input whose asset cannot be produced, and its own repository tests
 gate owns is the step after: the bundle must declare every asset the tree holds and the build
 emitted, because a pack that drops one ships a 404 with every other gate green.
 
-CONTAINMENT, never equality: an SDK-lane publish also materialises the module's DEPENDENCIES'
-assets under `wwwroot/_content/<Dep>/…` and precompressed `.br`/`.gz` siblings; those are neither
-demanded from the build output nor refused when declared.
+CONTAINMENT, never equality: an SDK-lane publish also materialises precompressed `.br`/`.gz`
+siblings; those are neither demanded from the build output nor refused when declared. The
+module's DEPENDENCIES' assets under `wwwroot/_content/<Dep>/…` ARE owed when the build output
+holds them — a package script the view self-loads is as much a 404 when dropped as the view's own
+(the Radzen view pack, `_content/Radzen.Blazor/Radzen.Blazor.js`).
 
 🚨 IT RUNS FOR BOTH LANES AND HAS NO PRECONDITION. The property is about the BUNDLE, not about
 which compiler produced it. A project that implies nothing prints `0 expected` and passes — that
@@ -103,8 +105,10 @@ def expected_assets(project: Path, module: str, build_output: Path | None = None
                 continue
             implied[f"wwwroot/{relative.as_posix()}"] = f"wwwroot/{relative.as_posix()} in the source tree"
 
-    # Kind 2 — what the BUILD emitted (a build extension's assets). Its dependencies' _content and
-    # the precompressed siblings an SDK publish adds are not the module's own assets.
+    # Kind 2 — what the BUILD emitted: a build extension's assets AND the module's packages'
+    # `_content/<Package>/` (the container builder lays a shelf package's static web assets there,
+    # exactly where `dotnet publish` lays them — the Radzen view pack 404'd Radzen.Blazor.js while
+    # they were missing). Only the precompressed siblings an SDK publish adds are not owed.
     if build_output is not None:
         if not build_output.is_dir():
             raise CannotCompute(
@@ -117,7 +121,7 @@ def expected_assets(project: Path, module: str, build_output: Path | None = None
                 if not file.is_file():
                     continue
                 relative = file.relative_to(built)
-                if relative.parts[0] == "_content" or file.suffix in (".br", ".gz"):
+                if file.suffix in (".br", ".gz"):
                     continue
                 key = f"wwwroot/{relative.as_posix()}"
                 implied.setdefault(key, f"{key} was emitted by the build ({built})")
@@ -259,11 +263,22 @@ _CASES: list[tuple[str, dict[str, str], dict[str, str] | None, list[str] | None,
      {"Plain.csproj": "<Project/>", "Thing.cs": "class T{}"}, {}, None, 0, "0 asset(s) owed"),
     ("no build output given — only the source tree is owed (negative control of the build kind)",
      _APPLE_TREE, None, None, 0, "0 emitted by the build"),
-    ("an SDK-lane bundle declaring MORE than owed (deps' _content, .br/.gz) passes, and those are not demanded",
+    ("an SDK-lane bundle declaring MORE than owed (.br/.gz siblings) passes, and those are not demanded",
      _APPLE_TREE, {**_APPLE_BUILT, "wwwroot/_content/MeshWeaver.Dep/x.css": "//",
                    "wwwroot/Apple.styles.css.br": "//"},
      ["wwwroot/AppleMapView.module.js", "wwwroot/Apple.styles.css", "wwwroot/AppleMapView.module.js.br",
       "wwwroot/_content/MeshWeaver.Dep/x.css"], 0, "0 missing"),
+    ("a package's _content the build emitted but the bundle dropped — the Radzen view pack's 404",
+     {"Radzen.csproj": "<Project/>", "wwwroot/css/radzen-grid.css": ".g{}"},
+     {"wwwroot/css/radzen-grid.css": ".g{}", "wwwroot/_content/Radzen.Blazor/Radzen.Blazor.js": "//r",
+      "wwwroot/_content/Radzen.Blazor/css/material-base.css": ".m{}"},
+     ["wwwroot/css/radzen-grid.css"], 1, "_content/Radzen.Blazor/Radzen.Blazor.js"),
+    ("a package's _content declared by the bundle passes",
+     {"Radzen.csproj": "<Project/>", "wwwroot/css/radzen-grid.css": ".g{}"},
+     {"wwwroot/css/radzen-grid.css": ".g{}", "wwwroot/_content/Radzen.Blazor/Radzen.Blazor.js": "//r",
+      "wwwroot/_content/Radzen.Blazor/css/material-base.css": ".m{}"},
+     ["wwwroot/css/radzen-grid.css", "wwwroot/_content/Radzen.Blazor/Radzen.Blazor.js",
+      "wwwroot/_content/Radzen.Blazor/css/material-base.css"], 0, "0 missing"),
     ("EnableDefaultItems=false — the walk would be a guess, so the gate REFUSES",
      {"NoGlob.csproj": "<Project><PropertyGroup><EnableDefaultItems>false</EnableDefaultItems></PropertyGroup></Project>",
       "wwwroot/x.js": "//"}, {}, ["wwwroot/x.js"], 1, "cannot state what the bundle owes"),
