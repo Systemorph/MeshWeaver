@@ -3886,6 +3886,20 @@ public static class DataExtensions
     /// </summary>
     private static IMessageDelivery HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request)
     {
+        // 🚨 A request an EARLIER handler already served is not ours to serve a second time. Handlers
+        // for one message type ALL run, in order, each seeing the delivery's state so far — and a
+        // dedicated handler (the content collections' HandleCollectionConfigRequest, the layout
+        // areas', the node type's) answers and marks the delivery Processed. Serving it here too
+        // opened a second workspace stream for the same reference and registered it for this hub's
+        // disposal; for a reference whose generic stream never emits (a collection-config read)
+        // that registration stayed outstanding for the hub's whole life and NACKed an
+        // ALREADY-ANSWERED request when the hub was retired — 330 warnings a day on memex, ~900 on
+        // memex-cloud, after every daily content-index backfill (one per read, in bursts at the
+        // read-stream sweep's per-minute tick). Pinned by
+        // AnsweredCollectionConfigReadIsNotNackedOnDisposeTest.
+        if (request.State == MessageDeliveryState.Processed)
+            return request;
+
         // ONE request, ONE answer — enforced by a single CAS'd state rather than two flags, so a
         // disposal landing concurrently with an emission can never produce both a response and a
         // NACK (the "two failure answers, one request" class).
