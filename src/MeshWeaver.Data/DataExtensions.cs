@@ -2808,6 +2808,19 @@ public static class DataExtensions
         // The writes on this store that are waiting for it to load, in arrival order (#6594).
         // Resolved on the handler's turn for the same reason as the two services above.
         var coldLane = hub.ServiceProvider.GetRequiredService<ColdStoreWriteLanes>().For(primary);
+        // The stream reads of this node are answered from (HandleGetDataRequest). Resolved on the
+        // handler's turn like the services above; null when the reference is not typed for T.
+        ISynchronizationStream<T>? readStream = null;
+        try
+        {
+            if (request.Message.Reference is WorkspaceReference<T> typedReference)
+                readStream = hub.GetWorkspace().GetNullableStream(typedReference);
+        }
+        catch (Exception ex)
+        {
+            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck")
+                ?.LogDebug(ex, "[PatchAck] {HubPath}: the shared read view is unavailable; acking on the commit echo alone", hubPath);
+        }
         var ackPosted = 0;
         // Detaches the owner-disposing NACK once the gate is claimed here (#3432) — see
         // RegisterOwnerDisposingNack's return value.
@@ -2931,12 +2944,27 @@ public static class DataExtensions
                     admission?.Dispose();
                     throw;
                 }
+                // 🚨 READ-YOUR-OWN-WRITE ACROSS HUBS: the ack is not posted until the SHARED READ VIEW
+                // (the stream every GetDataRequest is answered from) holds this write too. The commit
+                // echo above is observed on `stream` — the plain reduce — while a read is answered from
+                // GetNullableStream(reference), a SECOND reduced stream with its own sync hub and turn
+                // queue (#3432 split them). The ack used to leave while that read view still held the
+                // node as it stood BEFORE the write, so a read issued from another hub after the
+                // writer's own terminal (portal/reads-{meshId}) could answer the pre-write node
+                // (Plugins#5816 / the cross-hub read-after-write triage item).
+                var readView = ReadViewHoldsTheWrite(
+                    readStream, System.Threading.Volatile.Read(ref stampedId),
+                    System.Threading.Interlocked.Read(ref stampedVersion),
+                    idKey, versionKey, jsonOpts, ackLogger, hubPath);
                 if (durable is null)
                 {
                     admission?.Dispose();
-                    return null;
+                    return readView;
                 }
-                return admission is null ? durable : durable.Finally(admission.Dispose);
+                var flushed = admission is null ? durable : durable.Finally(admission.Dispose);
+                // Both legs run concurrently; the ack waits for the later one.
+                return Observable.Zip(
+                    flushed.Take(1).DefaultIfEmpty(true), readView, (ok, _) => ok);
             },
             TimeSpan.FromSeconds(10),
             AckOnce,
@@ -3375,6 +3403,46 @@ public static class DataExtensions
     /// document. The full-serialisation path below survives only for a value whose contract
     /// cannot be resolved from these options.</para>
     /// </summary>
+    /// <summary>How long an ack waits for the shared read view to hold a committed write before
+    /// answering anyway (the commit is the verdict, #3112; a stuck read view must not hold a writer).</summary>
+    internal static readonly TimeSpan ReadViewBound = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Emits once the shared read view <paramref name="readStream"/> holds the stamped write (same
+    /// entity, Version at-or-past the stamp), so a read answered from it can no longer see the node as
+    /// it stood before the write. Total: a missing stream, a stream that ends, or the
+    /// <see cref="ReadViewBound"/> elapsing all emit too — the write COMMITTED, so this only decides
+    /// when the ack leaves, never whether it does (the bound is logged).
+    /// </summary>
+    internal static IObservable<bool> ReadViewHoldsTheWrite<T>(
+        ISynchronizationStream<T>? readStream,
+        string? stampedId,
+        long stampedVersion,
+        string idKey,
+        string versionKey,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        if (readStream is null)
+            return Observable.Return(true);
+        bool Holds(object? value) =>
+            ChangeContainsStampedWrite(value, stampedId, stampedVersion, idKey, versionKey, jsonOpts);
+        return Observable.Defer(() => readStream.Current is { } current && Holds(current.Value)
+                ? Observable.Return(true)
+                : readStream.Where(c => Holds(c.Value)).Take(1).Select(_ => true))
+            .DefaultIfEmpty(true)
+            .Timeout(ReadViewBound, Observable.Defer(() =>
+            {
+                logger?.LogWarning(
+                    "[PatchAck] READ_VIEW_OUTLIVED_BOUND path={Path} bound={BoundMs}ms — the write committed; the shared "
+                    + "read view did not hold it in time, so the ack leaves anyway",
+                    hubPath, ReadViewBound.TotalMilliseconds);
+                return Observable.Return(true);
+            }))
+            .Catch<bool, Exception>(_ => Observable.Return(true));
+    }
+
     internal static bool ChangeContainsStampedWrite(
         object? value,
         string? stampedId,

@@ -185,6 +185,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Import-Side Content Degradation](ImportSideContentDegradation) — a typed file whose own parser is absent on the importing host lands as Markdown with its configuration discarded, and the read-side degradation instrument is blind to it by construction, because the content it wrote types perfectly (#4319)
 - [Vector Search](VectorSearch)
 - [Durable But Unreadable](DurableButUnreadable) — a write that is acknowledged, versioned and invisible
+- [Read After Write Across Hubs](ReadAfterWriteAcrossHubs) — a write's terminal means the node is readable from any hub; why it was not (two owner streams)
 - [Instance-Key Resolution](InstanceKeyResolution) — the registry reads an instance key through live mirrors, never a per-request point read
 - [Cross-Schema Fan-Out Elimination](CrossSchemaFanOutElimination) — an unanchored query is a lock bomb; the census and the per-caller plan
 - [Addressed Notifications](AddressedNotifications) — plan 1 worked out: deliver a notification to its addressee so the bell reads two schemas, not 199
