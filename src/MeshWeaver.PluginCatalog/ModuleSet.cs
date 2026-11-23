@@ -475,17 +475,32 @@ public static class ModuleSetStore
     /// <param name="landed">The activation record as the wave left it.</param>
     /// <param name="proposedBy">Diagnostics — which process completed the wave.</param>
     /// <param name="onCorrupt">The loud channel for unreadable existing records.</param>
+    /// <param name="holdBack">Module names whose landed generation must NOT be proposed yet (a
+    /// dependent whose declared floor the landed set does not meet): each keeps the generation the
+    /// newest proposal names, or is left out when none does.</param>
     /// <returns>The set that was written, or null when nothing changed.</returns>
     public static ModuleSet? Propose(
         string baseDirectory,
         ModuleActivationList landed,
         string? proposedBy = null,
-        Action<string>? onCorrupt = null)
+        Action<string>? onCorrupt = null,
+        IReadOnlyCollection<string>? holdBack = null)
     {
         ArgumentNullException.ThrowIfNull(landed);
         var generations = GenerationsOf(landed);
-        var id = IdOf(generations);
         var index = Read(baseDirectory, onCorrupt);
+        // A HELD-BACK module keeps the generation the newest proposal already names for it (the
+        // set the mesh runs), and is left out when no proposal names it: its dependency has not
+        // landed, so the new build must not reach a boot yet, while everything else that landed in
+        // the wave still does. The next wave whose floors are met proposes it.
+        foreach (var name in holdBack ?? [])
+        {
+            if (index.Proposed?.Generations.TryGetValue(name, out var running) == true)
+                generations = generations.SetItem(name, running);
+            else
+                generations = generations.Remove(name);
+        }
+        var id = IdOf(generations);
         if (index.Proposed is { } newest && string.Equals(newest.Id, id, StringComparison.Ordinal))
             return null;
 

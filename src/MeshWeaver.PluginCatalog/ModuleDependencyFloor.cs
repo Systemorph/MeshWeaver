@@ -117,7 +117,10 @@ public static class ModuleDependencyFloor
                 if (Satisfies(range, entry.Version!) == false)
                     unmet.Add(new UnmetDependencyFloor(
                         dependent.Id, dependent.ReleasedVersion, requirement.Trim(),
-                        dependencyId, entry.Name, entry.Version!));
+                        dependencyId, entry.Name, entry.Version!)
+                    {
+                        DependentModule = LandedModuleOf(dependent.Id, installed, landed)?.Name,
+                    });
             }
         }
         return unmet.ToImmutable();
@@ -250,6 +253,11 @@ public sealed record UnmetDependencyFloor(
     string Dependent, string? DependentVersion, string Requirement,
     string Dependency, string Module, string LoadedVersion)
 {
+    /// <summary>The dependent package's own landed module (entry-assembly name), or null when it
+    /// lands none (a content-only package). The module a proposal HOLDS BACK while this floor is
+    /// unmet (<see cref="ModuleLandingService.ProposeCheckedModuleSet"/>).</summary>
+    public string? DependentModule { get; init; }
+
     /// <summary>The one sentence every surface prints for it — both packages, both versions.</summary>
     public string Describe() =>
         $"'{Dependent}'{(DependentVersion is { Length: > 0 } v ? $" {v}" : "")} requires {Requirement}, "
