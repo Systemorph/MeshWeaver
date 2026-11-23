@@ -586,7 +586,7 @@ jobs:
             exit 1
           fi
           if [ "$VERIFY" != "success" ]; then
-            echo "::error::the combo CHECK is broken for at least one instance (result: $VERIFY; $PASSED of $STARTED per-instance job(s) produced and landed a verdict). A per-instance job is red only when no verdict was produced or it did not land on its instance — a Red or NotVerifiable verdict that landed is green there and reported as a warning (advisory, policy platform-rolls-independently-of-packages). Read the red per-instance job for what stopped it."
+            echo "::error::the combo CHECK is broken for at least one instance (result: $VERIFY; $PASSED of $STARTED per-instance job(s) produced and landed a verdict). A per-instance job is red only when no verdict was produced or it did not land on its instance, or when the instance reports a BLIND GATE (the 3rd consecutive NotVerifiable verdict for one release line) — a single Red or NotVerifiable verdict that landed is green there and reported as a warning (advisory, policy platform-rolls-independently-of-packages). Read the red per-instance job for what stopped it."
             exit 1
           fi
           # 🚨 THE LAST BACKSTOP, AND IT SURVIVED THE MOVE TO A DERIVED ROSTER ON PURPOSE (#3848).
