@@ -324,7 +324,7 @@ public static class UserActivityLayoutAreas
 
         @@("area/Composer")
 
-        @@("area/GettingStarted")
+        @@("area/HomeGettingStarted")
 
         @@("area/Catalog")
         """;

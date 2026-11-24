@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// The <b>Getting started</b> guide on the default user home (<c>@@("area/GettingStarted")</c>,
+/// The <b>Getting started</b> guide on the default user home (<c>@@("area/HomeGettingStarted")</c>,
 /// policy <c>home-getting-started-guide</c>): five steps a new user takes — ask the assistant,
 /// open or create a space, install an app from the Store, pin what you use, browse the docs —
 /// with a <b>Hide</b> button that stores the choice on the owner's own <see cref="User"/> node
@@ -37,8 +37,8 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class HomeGettingStarted
 {
-    /// <summary>The area name the default home embeds with <c>@@("area/GettingStarted")</c>.</summary>
-    public const string AreaName = "GettingStarted";
+    /// <summary>The area name the default home embeds with <c>@@("area/HomeGettingStarted")</c>.</summary>
+    public const string AreaName = "HomeGettingStarted";
 
     /// <summary>The number of steps; each is the catalog key <c>home.gettingStarted.step{n}</c>.</summary>
     public const int StepCount = 5;
