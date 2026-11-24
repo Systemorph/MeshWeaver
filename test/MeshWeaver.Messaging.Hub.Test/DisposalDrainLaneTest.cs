@@ -5,6 +5,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Messaging.Hub.Test;
@@ -24,8 +26,15 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// the back of that queue during the test), then a started hub is disposed. Its shutdown must still run
 /// — on a lane thread — while every one of those items is still queued or spinning.</para>
 /// </summary>
-public class DisposalDrainLaneTest(ITestOutputHelper output) : HubTestBase(output)
+public class DisposalDrainLaneTest : HubTestBase
 {
+    public DisposalDrainLaneTest(ITestOutputHelper output) : base(output)
+    {
+        // The mesh's teardown services — including the disposal lane — on the root container, where
+        // MeshBuilder puts them; hosted hubs resolve it from there.
+        Services.AddIoPools();
+    }
+
     private record Ping : IRequest<Pong>;
 
     private record Pong;
@@ -84,31 +93,14 @@ public class DisposalDrainLaneTest(ITestOutputHelper output) : HubTestBase(outpu
     }
 
     [Fact]
-    public async Task ATaskQueuedAfterDispose_StillRuns_AndParkedThreadsAreCountedOnlyWhileWaiting()
-    {
-        var lane = new DisposalDrainLane();
-        // Park a few lane threads, then run waves so wake-ups are consumed and recounted.
-        for (var wave = 0; wave < 5; wave++)
-        {
-            var batch = Enumerable.Range(0, 4).Select(_ => Task.Factory.StartNew(() => 1,
-                CancellationToken.None, TaskCreationOptions.DenyChildAttach, lane)).ToArray();
-            await Task.WhenAll(batch).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        }
-        lane.Dispose();
-        var late = Task.Factory.StartNew(() => 42, CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach, lane);
-        (await late.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Should().Be(42);
-    }
-
-    [Fact]
     public async Task TheLane_RunsTasksOnItsOwnNamedThreads_NotThePool()
     {
         using var lane = new DisposalDrainLane();
         var task = Task.Factory.StartNew(
             () => (Thread.CurrentThread.IsThreadPoolThread, Thread.CurrentThread.Name),
-            CancellationToken.None, TaskCreationOptions.DenyChildAttach, lane);
+            CancellationToken.None, TaskCreationOptions.DenyChildAttach, lane.Scheduler);
         var (isPool, name) = await task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         isPool.Should().BeFalse();
-        name.Should().Be("mw-disposal-lane");
+        name.Should().Be(DisposalDrainLane.ThreadName);
     }
 }

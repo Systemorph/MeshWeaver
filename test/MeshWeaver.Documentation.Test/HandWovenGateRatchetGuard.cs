@@ -84,15 +84,6 @@ public class HandWovenGateRatchetGuard
             + "kept rather than started per burst because a thread EXIT triggers the CoreCLR "
             + "collectible thread-static defect (#4654, Doc/Architecture/CollectibleThreadStatic"
             + "HandleReuse); IoPool's disposal releases it through Complete()."),
-
-        ("src/MeshWeaver.Messaging.Hub/DisposalDrainLane.cs",
-            "The dedicated scheduler a hub's teardown drains run on (#5799), so a ShutdownRequest never "
-            + "waits behind the thread pool's queue. Its one Monitor.Wait is where an idle lane thread "
-            + "(a thread this scheduler started itself — never a hub turn, a grain turn or a ThreadPool "
-            + "worker) waits for its next drain. It lives in Messaging.Hub because MessageService must "
-            + "reach it and that assembly cannot reference Mesh.Contract's internal lane scheduler; the "
-            + "park is the same shape and the same justification, and the threads are kept for the same "
-            + "reason (a thread EXIT triggers #4654). Dispose() releases them."),
     ];
 
     [Fact]

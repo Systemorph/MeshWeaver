@@ -1823,7 +1823,7 @@ public class MessageService : IMessageService
     // 🚨 #5799 — teardown must not depend on the thread pool's queue. A hosted hub's pump drains on
     // TaskScheduler.Default, so a ShutdownRequest posted by Dispose() waited behind every item the pool
     // had queued: on a backlogged pool the drain sat unstarted for the whole stall budget. From the
-    // moment a hub begins disposing, its drains run on the mesh's DisposalDrainLane instead — dedicated
+    // moment a hub begins disposing, its drains run on the mesh's disposal lane instead — dedicated
     // threads. A drain ALREADY queued on the pool (the latch was held by earlier traffic, so the
     // ShutdownRequest rode behind it) is superseded: a fresh drain is scheduled on the lane and the pool
     // item becomes a no-op (DrainOne sees the new generation). Orleans grain hubs keep their activation
@@ -1832,10 +1832,10 @@ public class MessageService : IMessageService
     {
         if (!ReferenceEquals(turnScheduler, TaskScheduler.Default))
             return;
-        DisposalDrainLane? lane;
+        IDisposalDrainScheduler? lane;
         try
         {
-            lane = hub.ServiceProvider.GetService(typeof(DisposalDrainLane)) as DisposalDrainLane;
+            lane = hub.ServiceProvider.GetService(typeof(IDisposalDrainScheduler)) as IDisposalDrainScheduler;
         }
         catch (ObjectDisposedException)
         {
@@ -1848,7 +1848,7 @@ public class MessageService : IMessageService
         bool reschedule;
         lock (turnGate)
         {
-            disposalLane = lane;
+            disposalLane = lane.Scheduler;
             reschedule = draining
                          && Interlocked.Read(ref drainsScheduled) - Interlocked.Read(ref drainsStarted) > 0;
             if (reschedule)

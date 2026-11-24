@@ -288,8 +288,8 @@ because the drain was still a pool work item: it waits behind everything queued 
 heartbeat read `poolThreads=34 poolPending=2865`), whatever put that backlog there.
 
 From the moment `Dispose()` begins, a hub on `TaskScheduler.Default` now drains on the mesh's
-`DisposalDrainLane` (dedicated threads, one lane per mesh registered on the root hub, at most 16 threads,
-kept parked). A drain already queued on the pool when disposal began is superseded: a new drain is
+`DisposalDrainLane` (dedicated threads, one lane per mesh registered by `AddIoPools`, at most 16 threads,
+kept parked, built on the sanctioned `LimitedConcurrencyLevelTaskScheduler`). A drain already queued on the pool when disposal began is superseded: a new drain is
 scheduled on the lane and the pool item becomes a no-op (generation check in `MessageService.DrainOne`).
 Orleans grain hubs keep their activation scheduler. Pinned by `DisposalDrainLaneTest`. So a
 `THE PUMP IS NOT TURNING` verdict on a hosted hub after this change is no longer "the pool is busy"; read
