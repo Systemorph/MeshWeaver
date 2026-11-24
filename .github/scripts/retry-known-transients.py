@@ -709,7 +709,7 @@ def decide(repo: str, run_id: str, fetch, attempt: int | None = None,
         scope = RERUN_ALL
     return Decision(True, (f"all {len(failed)} failed job(s) are proven ({transients} transient, "
                            f"{consequential} consequential) — one retry ({scope})."),
-                    scope=scope, logless=logless, runner_loss_only=losses == transients)
+                    scope=scope, logless=logless, runner_loss_only=transients > 0 and losses == transients)
 
 
 PULL_REQUEST_EVENTS = frozenset({"pull_request", "pull_request_target"})
@@ -804,8 +804,9 @@ def run(repo: str, run_id: str, fetch, dry_run: bool, attempt: int | None = None
     # The classification is on the record: an infrastructure verdict, never a code verdict.
     kind = "INFRA — a lost runner (spot preemption / node loss)" if decision.runner_loss_only \
         else "INFRA — a named transient"
-    classification = (f"classification: {kind}; says nothing about the code. Retry "
-                      f"{(attempt or 1)} of {MAX_JUDGED_ATTEMPT if decision.runner_loss_only else 1}.")
+    budget = MAX_JUDGED_ATTEMPT if decision.runner_loss_only else 1
+    classification = (f"classification: {kind}; says nothing about the code."
+                      + (f" Retry {attempt} of {budget}." if attempt is not None else ""))
     print(classification)
     summarize([classification])
     endpoint = "rerun" if decision.scope == RERUN_ALL else "rerun-failed-jobs"
