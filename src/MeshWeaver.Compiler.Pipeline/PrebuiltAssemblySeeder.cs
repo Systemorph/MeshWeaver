@@ -524,6 +524,17 @@ public static class PrebuiltAssemblySeeder
                 liveDependencyIdOf, liveToolchainId) is not BakeState.Baked)
             return null;
 
+        // 🚨 MeshWeaver#4413 — "kept" means the record is SETTLED on these bytes, and only an Ok
+        // record is. A record that names a usable build but sits at Pending (a release request
+        // flipped it after the install-time stamp) has nobody left to settle it: this branch
+        // writes nothing, the compile watcher's on-demand adoption waits for status Ok, gives up
+        // after its stamp budget and compiles — the whole Hosting package, a second time, in the
+        // combo gate (run 45320319170: 69 of 69 recompiled types had logged "NOT re-stamped" in
+        // the bake and read status=Pending coordinates=True usable=True dirty=False). Writing the
+        // stamp once is what settles it; the next seed finds Ok and keeps, so this cannot churn.
+        if (observed.CompilationStatus is not CompilationStatus.Ok)
+            return null;
+
         if (incomingMvid is { Length: > 0 }
             && string.Equals(incomingMvid, observed.LatestAssemblyMvid, StringComparison.Ordinal)
             && StampWouldMatch(observed.CompiledDependencies, dependencies)
