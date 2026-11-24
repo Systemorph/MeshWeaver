@@ -22,9 +22,18 @@ internal static class OwnedSubscriptionExtensions
     {
         var inner = new SingleAssignmentDisposable();
         var handle = hub.OwnUntilIoDrain(inner, owner);
-        inner.Disposable = source
-            .Finally(handle.Dispose)
-            .Subscribe(onNext, onError);
+        try
+        {
+            inner.Disposable = source
+                .Finally(handle.Dispose)
+                .Subscribe(onNext, onError);
+        }
+        catch
+        {
+            // A synchronous throw while wiring must not leave the registration lingering until the drain.
+            handle.Dispose();
+            throw;
+        }
         return handle;
     }
 }
