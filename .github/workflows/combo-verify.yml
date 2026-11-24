@@ -86,7 +86,16 @@ env:
   # Comfortably under the job's timeout-minutes, so the tool's own budget fires FIRST and says what
   # did not complete. The tool defaults to 45 minutes, which is exactly the fleet's hard job cap —
   # i.e. the default can only ever be pre-empted by the runner, with no diagnosis.
-  GATE_TIMEOUT: "1500"
+  #
+  # 🚨 2100, not 1500 (#4413): the clock covers the bake AND the gate. On the 84-module slot of run
+  # 45320319170 the bake took ~10 min and the gate was killed at 25 min total, 15 min in, with the
+  # Hosting types half done: no per-module result is written for a killed gate, so every module read
+  # "not verified" and the slot said NotVerifiable although the candidate compiled (181/181) and the
+  # tests were passing. The gate recompiles every Hosting type (see ComboGateWiring, "the gate
+  # compiles the large package a second time"), which is what a bigger budget pays for until that
+  # is fixed at its root. 2100 is the most the 45-minute job cap leaves (about 8 min of setup before the
+  # tool starts, about 2 after it): a bigger budget needs the second compile gone, not a longer job.
+  GATE_TIMEOUT: "2100"
 
 jobs:
   preflight:
@@ -354,7 +363,7 @@ jobs:
     # verifier or went red; this job never asks a second time.
     needs: [preflight, build-verifier]
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
