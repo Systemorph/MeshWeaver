@@ -919,15 +919,19 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
     private static IReadOnlyList<string> MergeNamespaceCandidates(ParsedQuery parsed)
     {
         var fromFilter = parsed.ExtractNamespaces();
-        var firstSegment = string.IsNullOrEmpty(parsed.Path) ? null : parsed.Path.Split('/', 2)[0];
-        if (string.IsNullOrEmpty(firstSegment))
+        var fromPath = parsed.PathPartitions();
+        // A non-concrete anchor (path:*) still contributes its literal first segment, as before.
+        if (fromPath.Count == 0 && !string.IsNullOrEmpty(parsed.Path))
+            fromPath = new[] { parsed.Path.Split('/', 2)[0] };
+        if (fromPath.Count == 0)
             return fromFilter;
         if (fromFilter.Count == 0)
-            return new[] { firstSegment };
-        var combined = new List<string>(fromFilter.Count + 1);
+            return fromPath;
+        var combined = new List<string>(fromFilter.Count + fromPath.Count);
         combined.AddRange(fromFilter);
-        if (!combined.Contains(firstSegment, StringComparer.OrdinalIgnoreCase))
-            combined.Add(firstSegment);
+        foreach (var seg in fromPath)
+            if (!combined.Contains(seg, StringComparer.OrdinalIgnoreCase))
+                combined.Add(seg);
         return combined;
     }
 

@@ -426,6 +426,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     {
         if (parsed.Source is QuerySource.Activity or QuerySource.Accessed) return true;
         if (SatelliteTableMapping.IsSatellitePath(parsed.Path)) return true;
+        if (parsed.Paths is { Count: > 1 } alternatives && alternatives.Any(p => SatelliteTableMapping.IsSatellitePath(p))) return true;
         var nodeType = parsed.ExtractNodeType();
         return !string.IsNullOrEmpty(nodeType) && PartitionDefinition.IsSatelliteNodeType(nodeType);
     }
