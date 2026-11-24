@@ -386,50 +386,66 @@ internal static class NodeTypeEnrichmentHelpers
             {
                 var subscription = entry.Result.Subscribe(observer);
                 SingleAssignmentDisposable? link = null;
+                IObservable<(ProbeOutcome Outcome, string? Collision)>? source = null;
                 lock (entry.Gate)
                 {
                     entry.Waiters++;
-                    if (!entry.Done && entry.Connection is null && entry.Source is not null)
+                    if (!entry.Done && entry.Connection is null && entry.Source is { } built)
+                    {
+                        source = built;
                         entry.Connection = link = new SingleAssignmentDisposable();
+                    }
                 }
-                if (link is not null)
-                    link.Disposable = entry.Source!.Subscribe(
+                if (link is not null && source is not null)
+                    link.Disposable = source.Subscribe(
                         r =>
                         {
-                            entry.Keep = r.Outcome == ProbeOutcome.Registered;
-                            entry.CompletedAt = clock();
-                            entry.Done = true;
+                            lock (entry.Gate)
+                            {
+                                entry.Keep = r.Outcome == ProbeOutcome.Registered;
+                                entry.CompletedAt = clock();
+                                entry.Done = true;
+                                entry.Connection = null;
+                            }
                             entry.Result.OnNext(r);
                             entry.Result.OnCompleted();
                         },
                         ex =>
                         {
-                            entry.Keep = false;
-                            entry.CompletedAt = clock();
-                            entry.Done = true;
+                            lock (entry.Gate)
+                            {
+                                entry.Keep = false;
+                                entry.CompletedAt = clock();
+                                entry.Done = true;
+                                entry.Connection = null;
+                            }
                             entry.Result.OnError(ex);
                         },
                         () =>
                         {
-                            if (entry.Done) return;
-                            entry.Keep = false;
-                            entry.CompletedAt = clock();
-                            entry.Done = true;
+                            lock (entry.Gate)
+                            {
+                                if (entry.Done) return;
+                                entry.Keep = false;
+                                entry.CompletedAt = clock();
+                                entry.Done = true;
+                                entry.Connection = null;
+                            }
                             entry.Result.OnCompleted();
                         });
                 return Disposable.Create(() =>
                 {
                     subscription.Dispose();
-                    IDisposable? release = null;
+                    // Disposed INSIDE the gate, before Connection becomes null-visible, so a new waiter
+                    // can never start a second subscription while the old one is still being torn down.
                     lock (entry.Gate)
                     {
                         if (--entry.Waiters == 0 && !entry.Done)
                         {
-                            release = entry.Connection;
+                            entry.Connection?.Dispose();
                             entry.Connection = null;
                         }
                     }
-                    release?.Dispose();
                 });
             });
     }
