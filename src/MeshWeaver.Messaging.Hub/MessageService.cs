@@ -1832,7 +1832,17 @@ public class MessageService : IMessageService
     {
         if (!ReferenceEquals(turnScheduler, TaskScheduler.Default))
             return;
-        var lane = hub.ServiceProvider.GetService(typeof(DisposalDrainLane)) as DisposalDrainLane;
+        DisposalDrainLane? lane;
+        try
+        {
+            lane = hub.ServiceProvider.GetService(typeof(DisposalDrainLane)) as DisposalDrainLane;
+        }
+        catch (ObjectDisposedException)
+        {
+            // The hub's scope was disposed out of band (initialisation terminated by a scope
+            // disposal): nothing to resolve, and the teardown is already past needing a lane.
+            return;
+        }
         if (lane is null)
             return;
         bool reschedule;
