@@ -157,3 +157,20 @@ Sequencing: export phase 2 is **done**; phase 3 (the import split) still owns th
 type-shaped question answered — after phase 3 the parser is the last one, which is what would let
 `SlideContent`/`SlideNodeType` leave the platform entirely (they stayed behind when #1589 phase 2
 retired the built-in Slide/Deck node types, *because of* this parser and the export gates).
+
+## A Skill or Agent file is never stored as plain markdown (fb-1fa1722b)
+
+`Skill` and `Agent` files are read by parsers the AI module contributes (`SkillFileParser`,
+`AgentFileParser`). On a host where those are not in the parser chain, `MarkdownFileParser`
+swallows the file, types it `Skill`/`Agent` and fills it with `MarkdownContent` — the front matter
+(`action`, `invocation`, `requires`, …) is dropped and nothing throws. On 2026-11-17 an import did
+exactly that to ~32 package skills and the package agents on the public instance.
+
+Two guards now close it. `GitHubSyncService` resolves the contributed parsers when it imports
+(`LateBoundParserRegistries`), not once at construction, so a module whose services appear after the
+service was built still counts. And `ParserBoundNodeTypes.Describe` names a Skill/Agent file that
+only reached the catch-all parser: GitSync **refuses the whole snapshot** (loud, no commit
+acknowledged, retried when the AI module is active) and the package installer **does not install
+the file** (counted as unreadable on the install record). Plain `.md` files and other typed markdown
+nodes are untouched. Nodes already stored wrongly are not repaired by this change: re-import the
+affected packages on a host with AI active (a changed commit, or the source's re-sync).
