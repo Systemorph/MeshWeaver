@@ -20,9 +20,10 @@ them nothing to read and they declined every time (MeshWeaver.Manufacturing#84).
      CONSEQUENTIAL/verdict job that failed only because those did. One failed job without proof —
      a compile error, a test failure, anything — and it does nothing: a real red must stay red,
      and retrying it would be the investigate-the-red rule's forbidden shape.
-  2. ONE attempt, ever: only the event's run_attempt 1 is judged (`--attempt`, which also pins the
-     job listing to THAT attempt), so a transient that persists through the retry surfaces as the
-     durable failure it is.
+  2. BOUNDED: the event's run_attempt 1 is judged, and attempt 2 is judged ONLY when every proof is a
+     lost runner (Spot preemption / node loss, which is independent between attempts); any other
+     transient keeps ONE retry, and attempt 3 stands (`--attempt` also pins the job listing to THAT
+     attempt), so a transient that persists surfaces as the durable failure it is.
   3. Every decision is printed: which jobs failed, which signature matched, or which job refused
      the retry — so a rerun in the history is never a mystery.
   4. 🚨 A log this steward cannot READ is a LOUD, NAMED FAILURE (exit 1), never a decline.
@@ -239,11 +240,33 @@ def github_fetch_with(token: str):
 
 # ────────────────────────────────────────── Decisions ──────────────────────────────────────────
 
+# 🚨 THE ATTEMPT BUDGET (2026-11-24, Plugins#1785). The one-retry rule was written for registry blips,
+# where a second failure means the transient persists. A SPOT node pool is a different animal: a
+# preemption kills whatever legs sit on the node, and a retry that lands on the next preempted node
+# dies the same way (Plugins run 45447430321: attempt 1 and attempt 2 both lost legs to two eviction
+# notices 19 minutes apart, and the run stayed red). So a run may be retried TWICE — but the SECOND
+# retry is spent ONLY on a run whose every proof is a lost runner (RUNNER_LOSS_MARKERS), the one
+# failure that says nothing about the code AND is independent between attempts. Any other named
+# transient keeps the single retry. Judged attempts: 1 and 2; attempt 3 is the last and stands.
+MAX_JUDGED_ATTEMPT = 2
+# The `meaning` text of the two annotation signatures and the mid-step form that mean "the runner
+# went away" — the single place `runner_loss_only` reads, asserted against the real strings in the
+# self-test so a reworded signature cannot silently drop out of the second retry.
+RUNNER_LOSS_MARKERS = ("runner death —", "runner shutdown —", "runner gone mid-step")
+
+
+def is_runner_loss(reason: str) -> bool:
+    return any(marker in reason for marker in RUNNER_LOSS_MARKERS)
+
+
 class Decision:
     def __init__(self, retry: bool, reason: str, scope: str = "failed-jobs",
-                 logless: list[str] | None = None) -> None:
+                 logless: list[str] | None = None, runner_loss_only: bool = False) -> None:
         self.retry = retry
         self.reason = reason
+        # True when EVERY transient proof of this decision is a lost runner (no log signature, no
+        # budget refusal, no lost completion): the only shape the second retry is spent on.
+        self.runner_loss_only = runner_loss_only
         # `failed-jobs` → POST rerun-failed-jobs; `all` → POST rerun (the whole run).
         self.scope = scope
         # Jobs judged WITHOUT a log (never written, or expired) — each raised as a `::warning::` so
@@ -651,6 +674,7 @@ def decide(repo: str, run_id: str, fetch, attempt: int | None = None,
                                "doing nothing.")
     transients = 0
     consequential = 0
+    losses = 0
     logless: list[str] = []
     for job in failed:
         label = f"job {job['id']}" + (f" ({job['name']})" if job.get("name") else "")
@@ -661,6 +685,8 @@ def decide(repo: str, run_id: str, fetch, attempt: int | None = None,
             return Decision(False, f"{label}: {reason}", logless=logless)
         if kind == TRANSIENT:
             transients += 1
+            if is_runner_loss(reason):
+                losses += 1
         else:
             consequential += 1
         print(f"{label}: {kind} — {reason}.")
@@ -683,7 +709,7 @@ def decide(repo: str, run_id: str, fetch, attempt: int | None = None,
         scope = RERUN_ALL
     return Decision(True, (f"all {len(failed)} failed job(s) are proven ({transients} transient, "
                            f"{consequential} consequential) — one retry ({scope})."),
-                    scope=scope, logless=logless)
+                    scope=scope, logless=logless, runner_loss_only=losses == transients)
 
 
 PULL_REQUEST_EVENTS = frozenset({"pull_request", "pull_request_target"})
@@ -744,9 +770,9 @@ def summarize(lines: list[str]) -> None:
 
 def run(repo: str, run_id: str, fetch, dry_run: bool, attempt: int | None = None,
         scope: str = RERUN_FAILED) -> int:
-    if attempt is not None and attempt != 1:
-        # ONE retry, ever. Said out loud rather than skipped: a skipped job reads like a pass.
-        line = (f"run {run_id} attempt {attempt}: the one automatic retry is spent (or this is a hand "
+    if attempt is not None and attempt > MAX_JUDGED_ATTEMPT:
+        # The budget is spent. Said out loud rather than skipped: a skipped job reads like a pass.
+        line = (f"run {run_id} attempt {attempt}: the automatic retries are spent (or this is a hand "
                 "re-run) — this red stands. Investigate it.")
         print(line)
         summarize([line])
@@ -767,6 +793,21 @@ def run(repo: str, run_id: str, fetch, dry_run: bool, attempt: int | None = None
     summarize(decision.logless + [decision.reason])
     if not decision.retry:
         return 0
+    if attempt is not None and attempt > 1 and not decision.runner_loss_only:
+        # The SECOND retry is for a lost runner only (see MAX_JUDGED_ATTEMPT): any other transient
+        # that survived its one retry is persistent, and surfaces as the durable failure it is.
+        line = (f"run {run_id} attempt {attempt}: proven transient, but not a LOST RUNNER, and its one "
+                "retry is already spent — this red stands. Investigate it.")
+        print(line)
+        summarize([line])
+        return 0
+    # The classification is on the record: an infrastructure verdict, never a code verdict.
+    kind = "INFRA — a lost runner (spot preemption / node loss)" if decision.runner_loss_only \
+        else "INFRA — a named transient"
+    classification = (f"classification: {kind}; says nothing about the code. Retry "
+                      f"{(attempt or 1)} of {MAX_JUDGED_ATTEMPT if decision.runner_loss_only else 1}.")
+    print(classification)
+    summarize([classification])
     endpoint = "rerun" if decision.scope == RERUN_ALL else "rerun-failed-jobs"
     # 🚨 THE DECISION IS ABOUT ONE ATTEMPT; THE POST IS ABOUT THE RUN AS IT IS NOW. A hand re-run can
     # start (and even fail for a real defect) while this steward is queued, and the event this job
@@ -1407,8 +1448,46 @@ def _self_test_cases(live_summary: str | None) -> int:
 
     # ── ONE retry, ever, and the attempt is the EVENT's. ──
     fetch = _fake({1: escaped})
-    check("attempt 2 reads nothing, posts nothing, and exits 0 naming why",
-          run("o/r", "9", fetch, dry_run=False, attempt=2) == 0 and not fetch.calls)  # type: ignore[attr-defined]
+    check("attempt 3 (budget spent) reads nothing, posts nothing, and exits 0 naming why",
+          run("o/r", "9", fetch, dry_run=False, attempt=3) == 0 and not fetch.calls)  # type: ignore[attr-defined]
+    fetch = _fake({1: escaped}, run_state=dict(RUN_STILL_RED, run_attempt=2))
+    check("attempt 2 with a NON-runner transient (registry blip) is NOT retried again",
+          run("o/r", "9", fetch, dry_run=False, attempt=2) == 0 and not _posted(fetch))
+    # 🚨 The lost-runner budget (Plugins#1785): a Spot preemption can hit attempt 2 too.
+    state2 = dict(RUN_STILL_RED, run_attempt=2)
+    fetch = _fake({1: _http(404)}, steps={1: FROZEN_LEG}, annotations={1: LOST_COMMUNICATION}, run_state=state2)
+    check("attempt 2 whose only failure is a LOST RUNNER is retried (second and last retry)",
+          run("o/r", "9", fetch, dry_run=False, attempt=2) == 0
+          and _posted(fetch) == ["POST /repos/o/r/actions/runs/9/rerun-failed-jobs"]
+          and any("/runs/9/attempts/2/jobs?" in c for c in fetch.calls))  # type: ignore[attr-defined]
+    fetch = _fake({1: _http(404)}, steps={1: DIED_IN_STEP}, annotations={1: LOST_COMMUNICATION}, run_state=state2)
+    check("...and a death MID-STEP on attempt 2 is a lost runner too",
+          run("o/r", "9", fetch, dry_run=False, attempt=2) == 0 and len(_posted(fetch)) == 1)
+    fetch = _fake({1: _http(404)}, steps={1: []}, annotations={1: BUDGET_ANNOTATION}, run_state=state2)
+    check("attempt 2 with a BUDGET refusal (transient, not a lost runner) is NOT retried",
+          run("o/r", "9", fetch, dry_run=False, attempt=2) == 0 and not _posted(fetch))
+    # Negative control: a REAL red beside a lost runner stays red on attempt 2, and on attempt 1.
+    real = REAL_LOG_HEAD + "2026-09-17T04:35:32.0000000Z Failed Foo.Bar [12 ms]\n"
+    for att in (1, 2):
+        fetch = _fake({1: _http(404), 2: real}, steps={1: FROZEN_LEG}, annotations={1: LOST_COMMUNICATION},
+                      run_state=dict(RUN_STILL_RED, run_attempt=att))
+        check(f"attempt {att}: a lost runner BESIDE a real test failure is NOT retried",
+              run("o/r", "9", fetch, dry_run=False, attempt=att) == 0 and not _posted(fetch))
+    fetch = _fake({1: real}, run_state=state2)
+    check("attempt 2: a real test failure alone is NOT retried (negative control)",
+          run("o/r", "9", fetch, dry_run=False, attempt=2) == 0 and not _posted(fetch))
+    # The classification marker reads real signature text, so a reworded signature cannot drop the
+    # second retry silently.
+    check("every runner-gone annotation signature is recognised as a lost runner",
+          all(is_runner_loss(f"{m} — {ANNOTATION_SIGNATURES[i][1]}")
+              for i, m in enumerate(("annotation",) * 2)) and is_runner_loss(
+                  f"annotation x — {ANNOTATION_SIGNATURES[0][1]}") and is_runner_loss(
+                  f"annotation x — {ANNOTATION_SIGNATURES[1][1]}"))
+    check("the budget refusal and a log signature are NOT lost runners",
+          not any(is_runner_loss(r) for r in (ANNOTATION_SIGNATURES[2][1], "a named transient signature")))
+    fetch = _fake({1: _http(404)}, steps={1: FROZEN_LEG}, annotations={1: LOST_COMMUNICATION})
+    check("the decision says runner_loss_only for a lost runner, and not for a registry blip",
+          decide("o/r", "9", fetch).runner_loss_only and not decide("o/r", "9", _fake({1: escaped})).runner_loss_only)
     fetch = _fake({1: escaped})
     run("o/r", "9", fetch, dry_run=False, attempt=1)
     check("attempt 1 lists THAT attempt's jobs (a hand rerun is never the one judged)",
@@ -1692,7 +1771,7 @@ def main() -> int:
     parser.add_argument("--run-id", help="the failed run to consider")
     parser.add_argument("--token", default=None, help="defaults to $GH_TOKEN")
     parser.add_argument("--attempt", type=int, default=None,
-                        help="the EVENT's run_attempt; only attempt 1 is judged (one retry, ever)")
+                        help="the EVENT's run_attempt; attempt 1 is judged, attempt 2 only for a lost runner")
     parser.add_argument("--rerun-scope", choices=(RERUN_FAILED, RERUN_ALL), default=RERUN_FAILED,
                         help="failed-jobs (POST rerun-failed-jobs) or all (POST rerun); a proven "
                              "consequential job forces all")
