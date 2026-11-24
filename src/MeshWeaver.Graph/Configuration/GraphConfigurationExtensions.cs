@@ -205,6 +205,14 @@ public static class GraphConfigurationExtensions
                 // Rule: path/namespace → partition (first path segment)
                 .AddQueryRoutingRule(query =>
                 {
+                    // A multi-path alternation (path:A|B|C) names several partitions: pinning to
+                    // the first would drop the rest. Abstain (unpinned) so the provider narrows
+                    // to the full set. Only a single partition pins.
+                    if (query.Paths is { Count: > 1 })
+                    {
+                        var partitions = query.PathPartitions();
+                        return partitions.Count == 1 ? new QueryRoutingHints { Partition = partitions[0] } : null;
+                    }
                     var path = query.Path;
                     if (string.IsNullOrEmpty(path)) return null;
                     var slash = path.IndexOf('/');

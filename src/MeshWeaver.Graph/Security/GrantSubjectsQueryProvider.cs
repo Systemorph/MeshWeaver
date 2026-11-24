@@ -183,7 +183,7 @@ public sealed class GrantSubjectsQueryProvider(IServiceProvider services) : IMes
             foreach (var ns in parsed.ExtractNamespaces())
                 if (AccessSubjectQueries.GrantScopeOf(ns) is { } scope)
                     return (scope, query, parsed);
-            if (AccessSubjectQueries.GrantScopeOf(parsed.Path) is { } pathScope)
+            if (parsed.Paths is not { Count: > 1 } && AccessSubjectQueries.GrantScopeOf(parsed.Path) is { } pathScope)
                 return (pathScope, query, parsed);
         }
         return null;

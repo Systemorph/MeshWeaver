@@ -432,15 +432,17 @@ public partial class MeshQuery : IMeshQueryCore
     internal static IReadOnlyList<string> MergeQueryNamespaces(ParsedQuery parsed)
     {
         var fromFilter = parsed.ExtractNamespaces();
-        if (string.IsNullOrEmpty(parsed.Path))
+        // Every partition the path anchor names — all of a path:A|B|C alternation, not only Path.
+        var fromPath = parsed.PathPartitions();
+        if (fromPath.Count == 0)
             return fromFilter;
-        var firstSegment = parsed.Path.Split('/', 2)[0];
         if (fromFilter.Count == 0)
-            return new[] { firstSegment };
-        var combined = new List<string>(fromFilter.Count + 1);
+            return fromPath;
+        var combined = new List<string>(fromFilter.Count + fromPath.Count);
         combined.AddRange(fromFilter);
-        if (!combined.Contains(firstSegment, StringComparer.OrdinalIgnoreCase))
-            combined.Add(firstSegment);
+        foreach (var seg in fromPath)
+            if (!combined.Contains(seg, StringComparer.OrdinalIgnoreCase))
+                combined.Add(seg);
         return combined;
     }
 
