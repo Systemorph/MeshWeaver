@@ -143,32 +143,52 @@ public class AReleaseRequestBuildsTheEditWrittenBeforeItTest(ITestOutputHelper o
     }
 
     /// <summary>
-    /// #8413 — a snapshot that never reaches the owners' versions must not hold a request for good.
-    /// The wait gives way, after its budget, to a decision against an UNESTABLISHED snapshot (which
-    /// compiles, never "satisfied"); a snapshot that does arrive inside the budget wins, established.
+    /// #8413 - a snapshot that never reaches the owners' versions must not hold a request for good.
+    /// This EXECUTES <c>AwaitSourceSnapshotCurrent</c> against a real source whose owner holds a newer
+    /// version than the (frozen) snapshot lists: before the bound it never emitted; now it gives way,
+    /// after the budget, to the own node with the snapshot's currency UNESTABLISHED (which compiles,
+    /// never "satisfied"). The control: a snapshot that shows the owner's version emits established.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = 60_000)]
     public async Task ASnapshotThatNeverCatchesUp_GivesWayToAnUnestablishedDecision_NotAnEndlessWait()
     {
         var ct = TestContext.Current.CancellationToken;
-        var node = new MeshNode("T", "type");
-        var fallback = Observable.Return(new NodeTypeCompilationHelpers.SourceSnapshotCurrency(node, false));
+        await CreateType("r1");
+        var sourcePath = $"{TypePath}/Source/api";
+        var owner = await Mesh.GetMeshNodeStream(sourcePath).Should().Within(60.Seconds())
+            .Match(n => n.Content is not null, "the source exists", ct);
+        var live = NodeTypeDefinition.SourceVersionOf(owner);
 
+        MeshNode OwnNodeListing(long version) => MeshNode.FromPath(TypePath) with
+        {
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                CurrentSourceVersions = System.Collections.Immutable.ImmutableDictionary<string, long>.Empty
+                    .Add(sourcePath, version),
+            },
+        };
+        // A replaying own stream that then goes quiet - the shape of a snapshot that stopped moving.
+        IObservable<MeshNode?> Frozen(MeshNode node) =>
+            Observable.Return<MeshNode?>(node).Concat(Observable.Never<MeshNode?>());
+
+        var stuck = OwnNodeListing(live - 1);
         var gaveUp = await NodeTypeCompilationHelpers
-            .WithinSnapshotBudget(Observable.Never<NodeTypeCompilationHelpers.SourceSnapshotCurrency>(), fallback,
-                TimeSpan.FromMilliseconds(200))
-            .Should().Within(10.Seconds()).Emit(cancellationToken: ct);
-        gaveUp.Established.Should().BeFalse("the currency of a snapshot that never arrived is unknown");
+            .AwaitSourceSnapshotCurrentWithin(Mesh, Frozen(stuck),
+                stuck.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!,
+                TypePath, null, TimeSpan.FromSeconds(2))
+            .Should().Within(30.Seconds()).Emit(cancellationToken: ct);
+        gaveUp.Established.Should().BeFalse("the currency of a snapshot that never caught up is unknown - the request compiles");
 
+        var current = OwnNodeListing(live);
         var arrived = await NodeTypeCompilationHelpers
-            .WithinSnapshotBudget(
-                Observable.Return(new NodeTypeCompilationHelpers.SourceSnapshotCurrency(node, true)), fallback,
-                TimeSpan.FromSeconds(5))
-            .Should().Within(10.Seconds()).Emit(cancellationToken: ct);
-        arrived.Established.Should().BeTrue("a snapshot inside the budget is the established answer");
+            .AwaitSourceSnapshotCurrentWithin(Mesh, Frozen(current),
+                current.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!,
+                TypePath, null, TimeSpan.FromSeconds(30))
+            .Should().Within(30.Seconds()).Emit(cancellationToken: ct);
+        arrived.Established.Should().BeTrue("a snapshot showing the owner's version is the established answer");
 
-        NodeTypeCompilationHelpers.SourceSnapshotWaitBudget.Should().BeLessThan(TimeSpan.FromMinutes(2),
-            "the bound must be short enough that an update never waits visibly for its compile");
+        NodeTypeCompilationHelpers.SourceSnapshotWaitBudget.Should().BeLessThan(TimeSpan.FromMinutes(2));
     }
 
     /// <summary>NEGATIVE CONTROL — an edit nobody released stays unbuilt (dirty, same assembly).</summary>
