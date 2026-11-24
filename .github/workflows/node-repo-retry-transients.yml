@@ -16,8 +16,10 @@ name: Node repo retry known transients (reusable)
 #
 # 🚨 THIS IS NOT A FLAKE-RETRIER. It reruns only when EVERY failed job is proven (a named log
 # signature, a named annotation, or a verdict/consequential job beside a proven one); one unproven
-# job and it declines, NAMING the job — a real red stays red. It judges only the event's
-# run_attempt 1 (one retry, ever — never a loop). A read it cannot make (job list, log, annotations,
+# job and it declines, NAMING the job — a real red stays red. It judges the event's run_attempt 1,
+# and run_attempt 2 ONLY when every proof is a lost runner (Spot preemption / node loss, which is
+# independent between attempts; Plugins#1785) — at most two retries, never a loop, and every retry
+# is logged as an INFRA classification, never a code verdict. A read it cannot make (job list, log, annotations,
 # the rerun POST) is a RED naming the read, never a quiet decline (#4534).
 #
 # Caller contract — a SEPARATE workflow file, triggered by the caller's CI completing:
