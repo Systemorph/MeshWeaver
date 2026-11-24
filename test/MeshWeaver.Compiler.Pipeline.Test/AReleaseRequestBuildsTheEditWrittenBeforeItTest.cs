@@ -142,6 +142,35 @@ public class AReleaseRequestBuildsTheEditWrittenBeforeItTest(ITestOutputHelper o
             .Should().BeTrue("…and once it has, the snapshot is current");
     }
 
+    /// <summary>
+    /// #8413 — a snapshot that never reaches the owners' versions must not hold a request for good.
+    /// The wait gives way, after its budget, to a decision against an UNESTABLISHED snapshot (which
+    /// compiles, never "satisfied"); a snapshot that does arrive inside the budget wins, established.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task ASnapshotThatNeverCatchesUp_GivesWayToAnUnestablishedDecision_NotAnEndlessWait()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var node = new MeshNode("T", "type");
+        var fallback = Observable.Return(new NodeTypeCompilationHelpers.SourceSnapshotCurrency(node, false));
+
+        var gaveUp = await NodeTypeCompilationHelpers
+            .WithinSnapshotBudget(Observable.Never<NodeTypeCompilationHelpers.SourceSnapshotCurrency>(), fallback,
+                TimeSpan.FromMilliseconds(200))
+            .Should().Within(10.Seconds()).Emit(cancellationToken: ct);
+        gaveUp.Established.Should().BeFalse("the currency of a snapshot that never arrived is unknown");
+
+        var arrived = await NodeTypeCompilationHelpers
+            .WithinSnapshotBudget(
+                Observable.Return(new NodeTypeCompilationHelpers.SourceSnapshotCurrency(node, true)), fallback,
+                TimeSpan.FromSeconds(5))
+            .Should().Within(10.Seconds()).Emit(cancellationToken: ct);
+        arrived.Established.Should().BeTrue("a snapshot inside the budget is the established answer");
+
+        NodeTypeCompilationHelpers.SourceSnapshotWaitBudget.Should().BeLessThan(TimeSpan.FromMinutes(2),
+            "the bound must be short enough that an update never waits visibly for its compile");
+    }
+
     /// <summary>NEGATIVE CONTROL — an edit nobody released stays unbuilt (dirty, same assembly).</summary>
     [Fact(Timeout = 120_000)]
     public async Task AnEditWithNoReleaseRequestAfterIt_IsNotCompiled()
