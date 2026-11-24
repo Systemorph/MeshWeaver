@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -742,23 +743,30 @@ internal static class NodeTypeCompilationHelpers
                                     && IsSettleableAdoptedPending(seenNode, seenDef, guards))
                                 {
                                     return SettleAdoptedPending(hubPath)
-                                        .Do(settled =>
+                                        .SelectMany(settled =>
                                         {
                                             if (settled)
+                                            {
                                                 logger?.LogInformation(
                                                     "Compile watcher: {HubPath} names a usable, clean build but sat at "
                                                     + "Pending after the adoption reported {Adopted} - settled Ok "
                                                     + "without a Roslyn pass (#4413).", hubPath, adopted);
+                                                return Observable.Return(true);
+                                            }
+                                            WarnGaveUp();
+                                            return Observable.Return(false);
                                         });
                                 }
-                                logger?.LogWarning(
+                                WarnGaveUp();
+                                return Observable.Return(false);
+
+                                void WarnGaveUp() => logger?.LogWarning(
                                     "Compile watcher: {HubPath} reported {Adopted} adopted "
                                     + "assembly(ies) but the node still has no usable build "
                                     + "{Budget}s later — compiling instead, because a stranded type "
                                     + "is worse than a redundant compile. Last state seen: {LastSeen}.",
                                     hubPath, adopted, AdoptionStampBudget.TotalSeconds,
                                     Volatile.Read(ref lastSeen));
-                                return Observable.Return(false);
                             });
                     }
 
@@ -770,14 +778,17 @@ internal static class NodeTypeCompilationHelpers
 
                     IObservable<bool> SettleAdoptedPending(string path)
                     {
-                        var wrote = false;
+                        var wrote = 0;
+                        var result = new AsyncSubject<bool>();
+                        // Subscribed INSIDE the impersonation: the chain is cold, so a write that ran
+                        // at the caller's later subscription would run without the system identity.
                         using (accessService?.ImpersonateAsSystem())
-                            return workspace.GetMeshNodeStream().Update(curr =>
+                            workspace.GetMeshNodeStream().Update(curr =>
                                 {
                                     var d = curr.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger);
                                     if (d is null || !IsSettleableAdoptedPending(curr, d, guards))
                                         return curr;
-                                    wrote = true;
+                                    Volatile.Write(ref wrote, 1);
                                     return curr with
                                     {
                                         Content = d with
@@ -789,14 +800,16 @@ internal static class NodeTypeCompilationHelpers
                                         }
                                     };
                                 })
-                                .Select(_ => wrote)
+                                .LastOrDefaultAsync()
+                                .Select(_ => Volatile.Read(ref wrote) == 1)
                                 .Catch<bool, Exception>(ex =>
                                 {
                                     logger?.LogWarning(ex,
                                         "Compile watcher: settling {HubPath} from Pending failed - compiling instead.", path);
                                     return Observable.Return(false);
                                 })
-                                .LastOrDefaultAsync();
+                                .Subscribe(result);
+                        return result;
                     }
 
                     void DispatchOrPark()

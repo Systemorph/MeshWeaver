@@ -1324,6 +1324,13 @@ predicate inside the write) and compiles nothing. Anything else still compiles: 
 build for another framework, a dirty record, a force. That is #2818's rule, so nothing is stranded
 at `Pending`.
 
+`Pending` also marks a compile in flight, and the record cannot tell the two apart (the Pending door
+stamps `DispatchedBuildInputs` either way). The settle is safe only because it runs inside the
+handler for that very flip, before the handler dispatches anything, and only for a build the node
+already names as usable and clean. A compile an earlier handler dispatched would still stamp its own
+terminal result over the settled record, as any compile does. That interleaving is not excluded by
+a guard; it is argued, and was not exercised by a test.
+
 ## Known boundary: the combo moves
 
 A verdict names the `ComboReadAt` of the snapshot it verified. An instance whose modules sync forward
