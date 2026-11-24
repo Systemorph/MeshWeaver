@@ -103,7 +103,8 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
     {
         foreach (var parsed in queries)
         {
-            if (parsed.Scope == QueryScope.Children && parsed.Paths is not { Count: > 1 } && OwnerOf(parsed.Path) is { } owner)
+            if (parsed.Scope == QueryScope.Children && OwnerOf(parsed.Path) is { } owner
+                && (parsed.Paths is not { Count: > 1 } || parsed.Paths.All(p => OwnerOf(p) == owner)))
                 return (owner, parsed);
             foreach (var ns in parsed.ExtractNamespaces())
                 if (OwnerOf(ns) is { } nsOwner)

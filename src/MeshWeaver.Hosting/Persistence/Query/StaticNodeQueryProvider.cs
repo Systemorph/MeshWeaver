@@ -920,6 +920,9 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
     {
         var fromFilter = parsed.ExtractNamespaces();
         var fromPath = parsed.PathPartitions();
+        // A non-concrete anchor (path:*) still contributes its literal first segment, as before.
+        if (fromPath.Count == 0 && !string.IsNullOrEmpty(parsed.Path))
+            fromPath = new[] { parsed.Path.Split('/', 2)[0] };
         if (fromPath.Count == 0)
             return fromFilter;
         if (fromFilter.Count == 0)
