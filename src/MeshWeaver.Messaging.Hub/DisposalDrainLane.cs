@@ -31,7 +31,10 @@ public sealed class DisposalDrainLane : TaskScheduler, IDisposable
 
     private readonly LinkedList<Task> tasks = new();
     private int liveThreads;
+    // Threads currently INSIDE Monitor.Wait (bracketed: ++ before, -- after, so a spurious wakeup
+    // cannot overcount), and wake-ups already sent that the woken thread has not yet consumed.
     private int parked;
+    private int pendingWakes;
     private bool completed;
 
     /// <summary>Gets the thread count the lane has started so far (parked threads included).</summary>
@@ -49,9 +52,10 @@ public sealed class DisposalDrainLane : TaskScheduler, IDisposable
         lock (tasks)
         {
             var node = tasks.AddLast(task);
-            if (parked > 0)
+            if (parked - pendingWakes > 0)
             {
-                --parked;
+                // One wake per waiting thread, so two tasks queued back to back wake two threads.
+                ++pendingWakes;
                 Monitor.Pulse(tasks);
                 return;
             }
@@ -93,6 +97,9 @@ public sealed class DisposalDrainLane : TaskScheduler, IDisposable
                 }
                 ++parked;
                 Monitor.Wait(tasks);
+                --parked;
+                if (pendingWakes > 0)
+                    --pendingWakes;
             }
             item = tasks.First!.Value;
             tasks.RemoveFirst();
@@ -124,7 +131,6 @@ public sealed class DisposalDrainLane : TaskScheduler, IDisposable
         lock (tasks)
         {
             completed = true;
-            parked = 0;
             Monitor.PulseAll(tasks);
         }
     }

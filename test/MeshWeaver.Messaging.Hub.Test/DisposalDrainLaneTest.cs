@@ -84,6 +84,23 @@ public class DisposalDrainLaneTest(ITestOutputHelper output) : HubTestBase(outpu
     }
 
     [Fact]
+    public async Task ATaskQueuedAfterDispose_StillRuns_AndParkedThreadsAreCountedOnlyWhileWaiting()
+    {
+        var lane = new DisposalDrainLane();
+        // Park a few lane threads, then run waves so wake-ups are consumed and recounted.
+        for (var wave = 0; wave < 5; wave++)
+        {
+            var batch = Enumerable.Range(0, 4).Select(_ => Task.Factory.StartNew(() => 1,
+                CancellationToken.None, TaskCreationOptions.DenyChildAttach, lane)).ToArray();
+            await Task.WhenAll(batch).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
+        lane.Dispose();
+        var late = Task.Factory.StartNew(() => 42, CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach, lane);
+        (await late.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Should().Be(42);
+    }
+
+    [Fact]
     public async Task TheLane_RunsTasksOnItsOwnNamedThreads_NotThePool()
     {
         using var lane = new DisposalDrainLane();
