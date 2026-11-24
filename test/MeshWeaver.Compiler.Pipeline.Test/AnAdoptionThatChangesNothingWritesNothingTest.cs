@@ -118,9 +118,32 @@ public class AnAdoptionThatChangesNothingWritesNothingTest(ITestOutputHelper out
                 }
             })
             .Should().Within(TestTimeouts.Convergence).Emit("the release request flips it Pending", ct);
+        // The OWNER's watcher (and the type's own first compile) write this record too, and under CPU
+        // load one of them settles the Pending flip before the seed reads it (#8505) — so the seed
+        // may answer Adopted (it settled it) or AlreadyServed (the owner did). Who settles is not the
+        // invariant; that the record ENDS Ok on the same bytes, recompiled by nobody, is: the next wait.
         (await Seed(typePath, a).Should().Within(TestTimeouts.Convergence).Emit("a seed always answers", ct))
-            .Should().Be(PrebuiltAssemblySeeder.SeedOutcome.Adopted,
-                "a usable build at Pending is settled by the adoption, not kept");
+            .Should().BeOneOf(
+                [PrebuiltAssemblySeeder.SeedOutcome.Adopted, PrebuiltAssemblySeeder.SeedOutcome.AlreadyServed],
+                "a usable build at Pending is settled (by the adoption or by the owner), never rewritten");
+        // A seed whose snapshot predated the flip answers AlreadyServed and writes nothing; the
+        // production owner's watcher settles that record on its adoption-confirmation timeout, which
+        // this harness (a flip with no release request behind it) never starts. So the retry IS the
+        // next seed: now it reads Pending and settles it. Bounded; a build that still is not Ok on
+        // the SAME bytes after the retries is the failure this step exists to catch.
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var settledOk = await Mesh.GetMeshNodeStream(typePath)
+                .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is
+                            { CompilationStatus: CompilationStatus.Ok } d
+                            && string.Equals(d.LatestAssemblyMvid, mvidA, StringComparison.Ordinal))
+                .Select(_ => true)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(8), Observable.Return(false))
+                .FirstAsync();
+            if (settledOk) break;
+            await Seed(typePath, a).Should().Within(TestTimeouts.Convergence).Emit("a seed always answers", ct);
+        }
         await Mesh.GetMeshNodeStream(typePath)
             .Should().Within(TestTimeouts.CrossSilo)
             .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is
@@ -128,8 +151,13 @@ public class AnAdoptionThatChangesNothingWritesNothingTest(ITestOutputHelper out
                         && string.Equals(d.LatestAssemblyMvid, mvidA, StringComparison.Ordinal),
                 "the adoption left Pending: nothing is stranded and nothing compiles");
         settled = await SettledOn(typePath, mvidA);
-        (await Seed(typePath, a).Should().Within(TestTimeouts.Convergence).Emit("a seed always answers", ct))
-            .Should().Be(PrebuiltAssemblySeeder.SeedOutcome.AlreadyServed, "settled again: kept, no churn");
+        // The owner's last settling write may still be in flight when the stream first shows Ok, so a
+        // seed in that window may still settle it (Adopted). The invariant is that it CONVERGES to
+        // keeping: within a few seeds the answer is AlreadyServed and stays so — no churn.
+        var kept = PrebuiltAssemblySeeder.SeedOutcome.Adopted;
+        for (var attempt = 0; attempt < 4 && kept != PrebuiltAssemblySeeder.SeedOutcome.AlreadyServed; attempt++)
+            kept = await Seed(typePath, a).Should().Within(TestTimeouts.Convergence).Emit("a seed always answers", ct);
+        kept.Should().Be(PrebuiltAssemblySeeder.SeedOutcome.AlreadyServed, "settled again: kept, no churn");
 
         // NEGATIVE CONTROL: different bytes on the same (unverified) record ARE adopted.
         var b = EmitAssembly("ChurnB" + Guid.NewGuid().ToString("N")[..6]);
