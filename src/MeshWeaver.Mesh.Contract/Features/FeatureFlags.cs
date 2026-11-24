@@ -131,6 +131,18 @@ public sealed record FeatureComposition(
 /// INSTANCE field and dies with the mesh, so nothing bleeds between tests or between users
 /// (Doc/Architecture/NoStaticState). Reloads arrive as a PUSH from the configuration provider
 /// (<see cref="ChangeToken.OnChange(Func{IChangeToken}, Action)"/>): no timer, no poller, no watchdog.</para>
+///
+/// <para>🚨 <b>The current reading is replayed OUTSIDE any lock shared between subscribers</b>
+/// (MeshWeaver#8438). A <see cref="BehaviorSubject{T}"/> delivers its current value to a new
+/// subscriber while holding the subject's own lock, so the whole synchronous downstream of that
+/// first value — for a boot pass or a sync decision, a long pipeline — ran under a lock every other
+/// reader of the flags needed to subscribe at all. One slow first delivery then stalled every other
+/// subscriber in the process; measured on a portal, the default install's 5-second read of the
+/// composition timed out with the process otherwise idle (no GC pause, no thread-pool backlog) and
+/// reported "NOTHING this environment declares is asserted this boot". A
+/// <see cref="ReplaySubject{T}"/> of one replays through a per-subscriber scheduled observer,
+/// outside its lock: uncontended it still answers synchronously inside <c>Subscribe</c>, and a
+/// slow subscriber delays only itself.</para>
 /// </summary>
 public sealed class ConfigurationFeatureFlags : IFeatureFlags, IDisposable
 {
@@ -139,7 +151,7 @@ public sealed class ConfigurationFeatureFlags : IFeatureFlags, IDisposable
 
     private readonly IConfiguration? configuration;
     private readonly ILogger<ConfigurationFeatureFlags>? logger;
-    private readonly BehaviorSubject<ImmutableSortedDictionary<string, FeatureFlag>> flags;
+    private readonly ReplaySubject<ImmutableSortedDictionary<string, FeatureFlag>> flags = new(1);
     private readonly IDisposable? reloadSubscription;
 
     /// <summary>Initializes the reader and takes the first reading.</summary>
@@ -150,7 +162,7 @@ public sealed class ConfigurationFeatureFlags : IFeatureFlags, IDisposable
     {
         this.configuration = configuration;
         this.logger = logger;
-        flags = new BehaviorSubject<ImmutableSortedDictionary<string, FeatureFlag>>(Read());
+        flags.OnNext(Read());
         // A push from the provider — the reload token is re-registered by OnChange itself, so this
         // survives every reload rather than firing once.
         reloadSubscription = configuration is null

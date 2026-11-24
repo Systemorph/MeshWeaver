@@ -90,7 +90,7 @@ public sealed class AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest(ITestOut
             .Should().BeNull("a withdrawn module is not held, so nothing resolves it as the current generation");
     }
 
-    private static byte[] Compile(string name, string source, IEnumerable<MetadataReference> extra)
+    internal static byte[] Compile(string name, string source, IEnumerable<MetadataReference> extra)
     {
         var compilation = CSharpCompilation.Create(name, [CSharpSyntaxTree.ParseText(source)],
             PlatformReferences.Platform().AddRange(extra),
@@ -102,12 +102,83 @@ public sealed class AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest(ITestOut
         return buffer.ToArray();
     }
 
-    private string Write(string name, byte[] image)
+    private string Write(string name, byte[] image) => Write(root, name, "g1", image);
+
+    internal static string Write(string root, string name, string generation, byte[] image)
     {
-        var directory = Path.Combine(root, "modules", $"{name}@g1");
+        var directory = Path.Combine(root, "modules", $"{name}@{generation}");
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, name + ".dll");
         File.WriteAllBytes(path, image);
         return path;
+    }
+}
+
+/// <summary>
+/// Review of #8400: the closure pass counts a module an EARLIER batch committed as present. When this
+/// batch's newer generation of the base is refused, the registry keeps the earlier one current, and a
+/// dependent resolves against it, so the dependent must not be withdrawn. The earlier generation here is
+/// the base without the undeployed reference; the later one is the base that cannot link.
+/// </summary>
+public sealed class AModuleWhoseDependencyIsHeldFromAnEarlierBatchIsKeptTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Absent = "MeshWeaver.Test.ClosureNotDeployed";
+    private const string Base = "MeshWeaver.Test.ClosureHeldBase";
+    private const string Dependent = "MeshWeaver.Test.ClosureHeldDependent";
+
+    private readonly string root = Path.Combine(Path.GetTempPath(), "boot-closure-held-" + Guid.NewGuid().ToString("N"));
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        const string Body = """
+            namespace MeshWeaver.Test.ClosureHeldBase;
+            public static class Chat
+            {
+                {{FIELD}}
+                public static MeshWeaver.Messaging.MessageHubConfiguration AddChatTypes(
+                    MeshWeaver.Messaging.MessageHubConfiguration configuration) => configuration;
+            }
+            """;
+        var absent = MetadataReference.CreateFromImage(AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest.Compile(
+            Absent, "namespace MeshWeaver.Test.ClosureNotDeployed; public sealed class Missing { }", []));
+        var healthy = AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest.Write(root, Base, "g1",
+            AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest.Compile(Base, Body.Replace("{{FIELD}}", ""), []));
+        var refused = AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest.Write(root, Base, "g2",
+            AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest.Compile(Base,
+                Body.Replace("{{FIELD}}", "public static MeshWeaver.Test.ClosureNotDeployed.Missing? Unused;"), [absent]));
+        var dependent = AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest.Write(root, Dependent, "g1",
+            AModuleWhoseDependencyIsAbsentIsWithdrawnAtBootTest.Compile(Dependent, """
+                [assembly: MeshWeaver.Test.ClosureHeldDependent.Module]
+                namespace MeshWeaver.Test.ClosureHeldDependent;
+                public static class BlazorChat
+                {
+                    public static MeshWeaver.Messaging.MessageHubConfiguration AddChatTypes(
+                        MeshWeaver.Messaging.MessageHubConfiguration configuration) =>
+                        MeshWeaver.Test.ClosureHeldBase.Chat.AddChatTypes(configuration);
+                }
+                public sealed class ModuleAttribute : MeshWeaver.Mesh.MeshNodeProviderAttribute
+                {
+                    public override System.Collections.Generic.IEnumerable<System.Func<
+                        MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Messaging.MessageHubConfiguration>> HubConfigurations =>
+                        [BlazorChat.AddChatTypes];
+                }
+                """, [MetadataReference.CreateFromFile(healthy)]));
+        return base.ConfigureMesh(builder).InstallAssemblies(healthy).InstallAssemblies(dependent, refused);
+    }
+
+    [Fact]
+    public void TheDependentKeepsRunning_AgainstTheGenerationTheEarlierBatchCommitted()
+    {
+        var refused = Mesh.ServiceProvider.GetServices<IncompatibleModule>().ToArray();
+        var contexts = Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
+
+        // Positive control: the later generation of the base really was refused in the later batch.
+        refused.Should().Contain(m => m.Name == Base, "the later base links against an assembly this deployment does not carry");
+        contexts.Current(Base).Should().NotBeNull("the earlier batch's generation of the base stays current");
+
+        refused.Should().NotContain(m => m.Name == Dependent,
+            "its dependency is held from the earlier batch, so the reference resolves");
+        contexts.Current(Dependent).Should().NotBeNull("the dependent is loaded and held");
     }
 }

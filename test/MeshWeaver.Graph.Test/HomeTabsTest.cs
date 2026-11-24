@@ -13,23 +13,25 @@ namespace MeshWeaver.Graph.Test;
 /// <summary>
 /// The home's Catalog region (<see cref="UserActivityLayoutAreas.BuildHome"/>) — the <b>Apps</b>
 /// icon grid (the viewer's own app records or the app directory, single partition, painted from
-/// the query rows), then the TYPE SECTIONS area (<see cref="HomeTypeSections"/>), and nothing else
-/// (policy <c>home-is-composer-apps-types</c>; the sections themselves: <see cref="HomeTypeSectionsTest"/>). <see cref="HomeStyle.Catalog"/>
+/// the query rows), and nothing else (policy <c>home-is-apps-and-chat</c>; the type sections that used to
+/// follow stay registered for authored bodies — <see cref="HomeTypeSectionsTest"/>). <see cref="HomeStyle.Catalog"/>
 /// switches back to the legacy single list (covered by <see cref="HomeCatalogTest"/>).
 /// </summary>
 public class HomeTabsTest
 {
     private const string NodePath = "rbuergi";
 
-    // ── Structure: Apps, then Spaces — and nothing else ─────────────────────────────────────────
+    // ── Structure: Apps — and nothing else ─────────────────────────────────────────
 
     [Fact]
-    public void Home_IsAppsThenTheTypeSections()
+    public void Home_IsTheAppsGridAlone()
     {
-        // Policy home-is-composer-apps-types: the message box, apps, then one section per type of
-        // content. The message box is the welcome template's Composer region; this is the Catalog
-        // region below it. Spaces are no band of their own any more — they are one of the types.
-        var home = UserActivityLayoutAreas.BuildHome(NodePath, sharedTargets: ["OrgA/Module"]);
+        // Policy home-is-apps-and-chat (owner, 2026-11-21: "then we only have apps on start page. plus
+        // chat window."): the message box (the welcome template's Composer region) and, in this Catalog
+        // region, the Apps grid — and NOTHING below it. Spaces and the viewer's own content are apps
+        // of their own now (Spaces, My files), not sections of the home.
+        var home = UserActivityLayoutAreas.BuildHome(NodePath, sharedTargets: ["OrgA/Module"],
+            user: new User { SpacePaths = ["Acme"], SharedPaths = ["OrgA/Module"] });
 
         var stack = home.Should().BeOfType<StackControl>().Subject;
         // The container keeps its child views protected; read them the way the layout renderer receives them.
@@ -37,21 +39,32 @@ public class HomeTabsTest
                 .GetProperty("Views", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
                 .GetValue(stack)!)
             .Cast<object>().ToArray();
-        views.Should().HaveCount(2);
+        views.Should().ContainSingle("the Apps grid is the whole Catalog region — no type sections, no Spaces band, no shared band");
         var apps = views[0].Should().BeOfType<MeshSearchControl>().Subject;
         apps.Title!.ToString().Should().Be("Apps");
         apps.RenderMode.Should().Be(MeshSearchRenderMode.Icons);
         apps.ShowSearchBox.Should().Be(false, "a launcher, not a search surface");
-        var sections = views[1].Should().BeOfType<LayoutAreaControl>().Subject;
-        sections.Reference.Area.Should().Be(HomeTypeSections.AreaName,
-            "the sections are their own area, so their discovery never holds up the Apps grid");
+        views.OfType<LayoutAreaControl>().Should().BeEmpty(
+            $"the default home embeds no {HomeTypeSections.AreaName} area any more — it stays registered for authored bodies only");
+    }
+
+    [Fact]
+    public void Home_IsTheAppsGridAlone_InDirectoryMode_Too()
+    {
+        var home = UserActivityLayoutAreas.BuildHome(NodePath, appsFromDirectory: true);
+        var views = ((System.Collections.IEnumerable)typeof(StackControl).BaseType!
+                .GetProperty("Views", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(home.Should().BeOfType<StackControl>().Subject)!)
+            .Cast<object>().ToArray();
+        views.Should().ContainSingle().Which.Should().BeOfType<MeshSearchControl>()
+            .Which.HiddenQuery!.ToString().Should().Contain($"path:{NodePath}/_Apps", "the directory launcher, alone");
     }
 
     [Fact]
     public void Apps_NoLongerCarriesTheSpacesFilter()
     {
         UserActivityLayoutAreas.BuildAppsBand(NodePath, null).ScopeTabs!.Select(t => t.Label)
-            .Should().Equal(["Apps"], "spaces are a type section below the apps, never an apps filter");
+            .Should().Equal(["Apps"], "spaces are an app of their own (Spaces), never an apps filter");
         UserActivityLayoutAreas.BuildAppsBand(NodePath, null, fromDirectory: true).ScopeTabs!.Select(t => t.Label)
             .Should().Equal("Apps", "Hidden");
     }

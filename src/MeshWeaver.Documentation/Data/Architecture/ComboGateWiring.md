@@ -309,6 +309,32 @@ The durable half is not optional. A log line depends on a per-category log level
 never have set — which is exactly how an install sat three builds behind for seven hours with
 nothing in the product able to say so (#2553). A node write does not.
 
+### 🚨 A run of NotVerifiable is an alarm — it still never holds a roll or a promotion
+
+One `NotVerifiable` is an incident of one candidate. A RUN of them for the same release line is a
+different fact: the gate has stopped examining anything while every roll proceeds on zero evidence.
+That was the state after the compose FATAL fixed in #8492 — every run ended green because a landed
+`NotVerifiable` is a green slot, so nothing said the lane had verified nothing for days.
+
+The decision (maintainer, 2026-11-23, bug-triage item *"combo-verify: a lane that verified nothing is
+green and the roll proceeds"*): **allowed, but loud** — not a hold.
+
+- **Not a hold on the roll** — the fail-closed reading above still applies.
+- **Not a hold on promotion to stable** — and it never was one. Stable advances only through the
+  canary soak ([Canary per Major Line](../CanaryPerMajorLine)); the combo verdict is not an input of
+  the promotion rule, so the soak keeps running and prod stays stable because the canary soaked,
+  not because the gate was blind.
+- **The alarm** — the instance counts the consecutive `NotVerifiable` verdicts recorded for the
+  candidate's release line (the major of its tag; newest first by `VerifiedAt`, from its own
+  `ComboVerifications`). Any Green or Red ends the streak, and another line's verdicts are not
+  counted. At `ComboNotVerifiableStreak.DefaultAlarmAfter` = 3 the instance logs an Error and answers
+  the verdict POST with `alarm: true` (`line`, `notVerifiableStreak`, `alarmAfter`).
+- **The audience** — `combo-verify-instance.sh` lands the verdict first, then fails the slot
+  (`COMBO GATE BLIND …`) on `alarm: true`. The red `verdict` job reaches the existing `combo-red`
+  reporter: one `ci-combo-unverified` ledger issue (sev:M) and one signed event to control triage. The
+  first landed verdict that examined something clears the streak and the next green run closes the
+  ledger.
+
 `NotVerifiable` and *no verdict at all* behave identically and read differently, on purpose: "the
 gate ran and could not answer" and "nothing has ever asked" are different incidents with different
 fixes, and an operator has to be able to tell them apart from the recorded sentence alone.
@@ -1268,38 +1294,42 @@ Also not established: whether the producing repository's own seeded gate shows t
 smaller scale. The 5 s stamp budget is not the fix. Raising it would hide the unanswered reads, and
 the reads would still cost every type its adoption.
 
-## Open: the gate compiles the large package a second time (#4413)
+## Closed: the gate compiled the large package a second time (#4413)
 
-Large combos (about 81 modules) sometimes end `NotVerifiable` because the gate runs out of
-`GATE_TIMEOUT`. The clock covers the bake and the gate together. What fills it, read from the
-slot logs of runs 43730201284 and 43722437356 (NotVerifiable) and 43725330495 (Green):
+Large combos (about 81 modules) ended `NotVerifiable` because the gate ran out of `GATE_TIMEOUT`;
+the clock covers the bake and the gate together. Beyond the bake (408 s to 827 s) the time went to
+`Hosting`: all of its NodeTypes logged `reported 1 adopted assembly(ies) but the node still has no
+usable build 5s later — compiling instead`, and the gate compiled each of them again.
 
-- **Bake:** 408 s to 827 s for the same 165 NodeTypes. 15 packages reuse their sealed bundles;
-  30 are rebuilt because the instance runs older package commits than the newest seal.
-- **Gate, every package except `Hosting`:** about 3 minutes.
-- **Gate, `Hosting`:** the rest. All 64 Hosting NodeTypes log
-  `reported 1 adopted assembly(ies) but the node still has no usable build 5s later — compiling
-  instead`. The gate then compiles every one of them again, although the bake compiled them, and
-  each type's tests wait for its own compile.
+**Cause (measured, run 45320319170, slot 2).** Every one of the 69 recompiled types had also logged,
+in the bake, `Prebuilt assembly for … NOT re-stamped (#6038)`, and the watcher's last state for each
+read `status=Pending coordinates=True usable=True dirty=False`. The ordering: the install-time
+adoption stamps the type `Ok`; a release request then flips it `Pending` while it still names the
+same usable build; the watcher's on-demand adoption asks the seeder, which finds the record "already
+serves these exact bytes" (`StandingBuildKept`), writes nothing and reports the type covered; the
+watcher accepts an adoption only when the node is `Ok` and usable, so after its 5 s stamp budget it
+compiles.
 
-This happens on the Green memex run too: there the bake was fast enough to leave room for it.
-Packages installed before `Hosting`, under less load, are adopted without a second compile.
+**Fix, first half (#8503, not sufficient).** `StandingBuildKept` keeps a record only when it is
+settled, status `Ok`. A combo run on the image built from it (run 45342343811, candidate
+4.0.14037) still recompiled 69 of 69: the seeder's first-emission snapshot of the node still read
+`Ok` (the install-time stamp) while the owner had already flipped it `Pending`, so the seeder
+judged a stale record and kept it. The seeder cannot see the owner's newer state.
 
-What is NOT yet known is why the node has no usable build after the adoption reports success. The
-seeder's write already completes on the owning hub's verdict (#2661), so "the write had not landed
-yet" is not the answer. The leading candidate is a definite ordering: the install-time adoption
-stamps the type `Ok`; the release request then finds the source versions not yet stamped (source
-reads time out under the 999-file install) and flips the type `Pending`; the watcher's on-demand
-adoption then finds the same bytes already recorded, returns `AlreadyServed` and writes nothing; and
-the watcher, which requires status `Ok`, compiles.
+**Fix, second half.** The decision moves to the side that owns the state. When the watcher's
+adoption confirmation times out, it checks the last node it saw: `Pending`, not dirty, not forced,
+and `HasUsableBuild` is exactly what the release watcher calls "satisfied by the existing current
+build", only with its status behind. The watcher then settles it `Ok` itself (re-checking the same
+predicate inside the write) and compiles nothing. Anything else still compiles: bytes missing, a
+build for another framework, a dirty record, a force. That is #2818's rule, so nothing is stranded
+at `Pending`.
 
-To decide it, the lane sets `MW_LOG_CATEGORIES=bake-seed=Debug,MeshWeaver.Graph.CompileWatcher=Debug`
-on the verify step. The verifier forwards that variable to the gate container by name
-(`DockerImageGate.ForwardedEnvironment`), and the tester raises only the categories it names,
-even at its default Warning level (`GateVerbosity.CategoryFilters`). The compile watcher's
-warning also names the last state it saw (`status`, `coordinates`, `usable`, `dirty`). Both
-tester-side halves ship in the candidate image, so they appear from the first candidate built
-after this change.
+`Pending` also marks a compile in flight, and the record cannot tell the two apart (the Pending door
+stamps `DispatchedBuildInputs` either way). The settle is safe only because it runs inside the
+handler for that very flip, before the handler dispatches anything, and only for a build the node
+already names as usable and clean. A compile an earlier handler dispatched would still stamp its own
+terminal result over the settled record, as any compile does. That interleaving is not excluded by
+a guard; it is argued, and was not exercised by a test.
 
 ## Known boundary: the combo moves
 

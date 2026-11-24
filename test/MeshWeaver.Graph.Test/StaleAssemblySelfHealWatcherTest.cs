@@ -379,6 +379,37 @@ public class StaleAssemblySelfHealWatcherTest(ITestOutputHelper output) : HubTes
     }
 
     /// <summary>
+    /// 🚨 Convergence never lands in the MIDDLE of a step the hub has in flight (#7324's rule, now
+    /// also for the stale-build recycle): with a step held, the settled publication recycles
+    /// nothing; the moment the step ends, the hub recycles itself. The idle case — the test above —
+    /// is the negative control that the recycle fires at once without a step.
+    /// </summary>
+    [Fact]
+    public async Task AutoRecycle_DefersWhileAStepIsInFlight_AndRecyclesWhenItEnds()
+    {
+        var (hub, offers, disposed) = BuildInstanceHub();
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler,
+            autoRecycle: true);
+
+        var steps = hub.Get<HubStepsInFlight>()
+            ?? throw new InvalidOperationException("every hub carries its in-flight marker");
+        var step = steps.Begin();
+
+        typeStream.OnNext(TypeNode(version: 12, assemblyPath: "TestData_StaleAssemblyType/v12-abc-222222222222.dll"));
+        Settle(scheduler);
+        (await DisposedWithinAsync(disposed, TimeSpan.FromMilliseconds(500))).Should().BeFalse(
+            "a step in flight defers the convergence recycle");
+
+        step.Dispose();
+        (await DisposedWithinAsync(disposed, TimeSpan.FromSeconds(10))).Should().BeTrue(
+            "the recycle is posted the moment the step ends");
+        AssertNoOffer(offers);
+    }
+
+    /// <summary>
     /// The anti-bounce half holds under convergence too: republishing the SAME assembly — the
     /// release-request stamp / release-notes / pin-edit writes — must not recycle anything, or the
     /// opt-in reintroduces exactly the restart storm that got the unguarded auto-recycle removed.

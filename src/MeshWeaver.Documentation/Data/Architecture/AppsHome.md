@@ -1,27 +1,71 @@
 # The Apps Home
 
 The default user home is, top to bottom: a heading welcoming the owner by first name
-("Welcome back, Jane"), the **message box** (start a thread), the **Getting started** guide until
-the owner hides it, the **Apps** grid, then the **type sections** — one per kind of content the
-viewer has that no app of theirs catalogs — and nothing else (policies
-[`home-is-composer-apps-types`](../PolicyNotProse) and
-[`home-getting-started-guide`](../PolicyNotProse)). The welcome template is that heading,
-`@@("area/Composer")`, `@@("area/GettingStarted")`, then `@@("area/Catalog")`; there is no
-contributed card, no searchable content list and no footer note.
+("Welcome back, Jane"), the **message box** (the chat window — start a thread), the **Getting
+started** guide until the owner hides it, and the **Apps** grid — and nothing else (policies
+[`home-is-apps-and-chat`](../PolicyNotProse) and [`home-getting-started-guide`](../PolicyNotProse)).
+The welcome template is that heading, `@@("area/Composer")`, `@@("area/HomeGettingStarted")`, then
+`@@("area/Catalog")`; there is no contributed card, no content list, no type section and no footer
+note.
 
 | Band | Contents | Order |
 |---|---|---|
 | **Apps** | the APP DIRECTORY (the apps the viewer can see through access, `{owner}/_Apps`) — every app exactly once, as an ICON grid, grouped and rearrangeable by drag and drop; a **Hidden** filter lists the apps the viewer hid. The viewer's own `{owner}/_App` records only under the explicit `Home:AppSource = Records` compatibility path. Fixed: always first, below the message box | last used |
-| **Type sections** | one titled icon grid per node TYPE the viewer has content of — the spaces they can reach (`User.SpacePaths`), the things in their own home, what was shared with them (`User.SharedPaths`, #385) — leaving out every type an installed app CATALOGS. Spaces are one of these types, not a band of their own. Only non-empty sections render. The viewer hides, shows and reorders them | the viewer's order, then newest change first |
 
 The Apps band is a launcher (no search box, painted from the query rows, no per-tile hub), built by
 `UserActivityLayoutAreas.BuildHome` → `BuildAppsBand` (`src/MeshWeaver.Graph`), pure and
-unit-tested (`HomeTabsTest`); the reactive shell is `CatalogAreaView`. The type sections are their
-own area on the user hub (`HomeTypeSections`, area `HomeSections`), embedded by the Catalog region
-so their discovery never holds up the Apps grid. The presentation screen (#1803) drops a marked
-space or grant before any section query is built. The regions that left the default
-(`area/HomeCards`, `area/Threads`) stay registered, so an authored home `Body` that embeds them
-keeps working.
+unit-tested (`HomeTabsTest`); the reactive shell is `CatalogAreaView`. The regions that left the
+default (`area/HomeCards`, `area/Threads`, `area/HomeSections`) stay registered, so an authored home
+`Body` that embeds them keeps working.
+
+## The home is centred on the apps (2026-11-21)
+
+Owner, 2026-11-21: *"let's also design a proper spaces app for the home screen rather than the add-on
+at bottom."* · *"at bottom, just bring contents of user home as explorer type view (i.e. navigatable
+by namespace)"* · *"or let's also put this in an app, then we only have apps on start page. plus chat
+window."* · *"then we center the user home around the apps."*
+
+Everything that used to follow the Apps grid — the type sections below (spaces among them) — moved
+into two apps, each a package in MeshWeaver.Plugins with its own tile on the grid:
+
+| App | Package | What it is | Built on |
+|---|---|---|---|
+| **Spaces** | `Spaces` (Plugins, `Spaces/Guide`) | every space the viewer reaches (`User.SpacePaths` ∪ the spaces in their home) and, on a second tab, everything shared with them (`User.SharedPaths`) — one query bar over both | the core [`CatalogApp`](/Doc/GUI/CatalogApp), two computed categories over the viewer's own profile, read live, screened for presentation mode |
+| **My files** | `Explorer` (Plugins, `Explorer/Guide`) | the viewer's own home as an explorer, navigable by namespace: breadcrumb back up, the folders one level down, the contents of the folder as the platform catalog | title, markdown links, stack and MeshSearch; the folder list probes children with the side index's own `DefaultNodeNavigation.ChildProbeQuery`; `?path=` confined to the viewer's home |
+
+**Where each piece lives.** Core composes the home and owns `CatalogApp`, `MeshSearch` and the
+probe; it carries no app. The two apps are packages (`app: true`, `preInstalled`, `tier: free`,
+top-level tiles via `launcherGroup: ""`), so the app directory lists them on every instance that
+installs them and nowhere else, exactly like every other app. Both are built from the platform's
+controls only, so Blazor, the web client and the native app render them from the same layout — the
+native app's offline home fixture (`app/react-native/src/homeSample.ts`) mirrors the Apps-only home.
+
+**Rollout order.** The Plugins packages land and publish first (they use only existing core
+surface); then this core change drops the type-sections embed. Until it rolls, an instance shows the
+two new tiles AND the old sections; after it, only the tiles. The `HomeTypeSections` code, its
+`HomeSections` / `CustomizeHome` areas and the `catalogs` declaration stay: an authored Body may
+embed them, and a catalog declaration still says which app owns a type.
+
+### Status at a glance — what a new user asked for (2026-11-17..19)
+
+First-hand feedback from an SME pilot user, which the owner asked to take into account: connecting
+accounts left him unsure what was connected (Google "lands in nothing", iCloud unclear, a private
+Office 365 account unknowable); a tile he did not understand (Voice Assistant — an integration for
+people who already run a voice assistant at home); an Apple sign-in through the MeshWeaver account
+that left him unsure what happened; and, the biggest pain, **losing track** — work takes long, he
+starts something else, and no longer knows what he already did and where it stands. The apps-only
+home plus the chat window must make STATUS visible without opening anything.
+
+| Ask | State | Where |
+|---|---|---|
+| **A short description on every app tile** | the directory rows already CARRY one — `AppDirectoryQueryProvider` stamps the root's `description` on each synthetic row, and every app root must declare one (`validate-repos.py`, `store-presentation.py`). Owed: the Icons render mode of the three renderers shows it (a tooltip on desktop, a second line on a phone) — a view-pack change in MeshWeaver.Plugins (`MeshSearchView`, `clients/react` mesh search, the native pack) under the parity ratchet. Both new apps ship a one-line description | next step |
+| **An overview of connected accounts** | exists as a page: Settings › Connections › Accounts lists every connector with its state (Plugins `Store/AppRoster` → *Personal is not an app*). Owed: a STATE badge on the Settings tile (connected / needs attention / broken) — a tile badge is a new row field the directory computes from the connectors' declared states, so the home shows a broken account without opening anything | next step |
+| **What is running, what just finished** | the Threads side menu already shows each open thread's LIVE activity (evaluating · queued · awaiting input, *The Threads app* below). Owed: the home's message box shows the viewer's running and recently finished threads with that same state under it, from the same `ThreadQueries.MyOpenThreads` query — so a person sees what is in progress and what came back while they were elsewhere | next step |
+| **Know what an account sign-in did** | owed: every connector's connect flow ends on its own status page (connected as `x`, what it can read, how to disconnect) rather than returning to where it started | next step |
+
+The first three are compositions of what exists (a row field, a badge, a query the Threads app
+already runs); none needs a new store. They are recorded here rather than built in this change
+because each touches all three renderers, and the parity ratchet holds them to land together.
 
 ## Getting started
 
@@ -29,7 +73,7 @@ Below the message box the default home shows a short **Getting started** guide �
 user takes, each pointing at a real feature:
 
 1. **Ask the assistant** — the message box just above.
-2. **Open or create a space** — the Spaces section further down, or **+ New** in the header.
+2. **Open or create a space** — the **Spaces** app (and **My files** for your own home), or **+ New** in the header.
 3. **Install an app from the [Store](/Store)** — installed apps appear in the Apps grid.
 4. **Pin what you use** — **Pin** in any page's ⋯ menu.
 5. **Browse the [documentation](/Doc)**.
@@ -43,14 +87,18 @@ every tab. The guide is its own area on the user hub (`HomeGettingStarted`, area
 hidden guide never flashes), shows while the flag is off, and disappears the moment the flag is
 written — a data change, never a rebuild. Only the home's owner sees it. A home whose owner wrote
 their own `Body` shows only what that page embeds, so the guide appears there only if the page
-embeds `@@("area/GettingStarted")`.
+embeds `@@("area/HomeGettingStarted")`.
 
 The text is platform-owned and follows the viewer's language: the catalog keys
 `home.gettingStarted.*` in `strings.{en,de}.json` (mirrored to MeshWeaver.Plugins
 `clients/react/src/i18n/`). Changing a step is a catalog change, not a content edit. Tests:
 `HomeGettingStartedTest` (`test/MeshWeaver.Graph.Test`).
 
-## Type sections (2026-11-08)
+## Type sections (2026-11-08) — retired from the default home 2026-11-21
+
+> **Superseded on the default home** by *The home is centred on the apps* above (policy
+> `home-is-apps-and-chat`). What follows describes the `HomeSections` area, which stays registered for
+> an authored home Body that embeds it.
 
 Maintainer, 2026-11-08, on a home whose band below Apps read "Spaces" over a filter "All (0)", a
 "Filter apps…" box, three view toggles and *"No apps yet — install apps from the Store."*: *"can we
@@ -458,3 +506,11 @@ or grant before their legs are built.
 - [Mesh Search & Catalogs](/Doc/GUI/MeshSearch) — the search control behind every scope
 - [Thread Operations](../ThreadOperations) — the canonical thread mutation surface (`MarkThreadDone` et al.)
 - [Localization](../Localization) — why every tab label and sort option resolves off `AccessContext.Locale`
+
+**The guide's area is `HomeGettingStarted`, never `GettingStarted`.** `/{user}/GettingStarted` is the
+setup wizard's page (the AI module's `OnboardingWizardArea`). Both register an area on the user hub, the
+later registration wins, and a shared name made the home embed the wizard's full-height screen — its
+"I'll finish this later" navigates to `/`, which is the home itself, so nothing could dismiss it
+(2026-11-24).
+An authored home `Body` that copied the old `@@("area/GettingStarted")` embed must change it to
+`@@("area/HomeGettingStarted")` — the old name is the setup wizard's page.

@@ -10,6 +10,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Graph.Security;
+using MeshWeaver.Graph.Retention;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
@@ -319,6 +320,12 @@ public static class GraphConfigurationExtensions
                 // every consumer — Systemorph/MeshWeaver#4601, and the birth of the payload in
                 // #4600. Same scope and lifetime as the guard above.
                 services.AddScoped<INodeValidator, Security.ContentSchemaValidator>();
+
+                // Configurable data retention (Doc/Architecture/DataRetention): finished
+                // activities, version history and log-entry rows older than the declared windows
+                // (Retention:* — the deployment record's config, per-partition rules over it) are
+                // removed by a bounded, scheduled sweep.
+                services.AddDataRetention();
 
                 // 🚨 THE partition teardown, registered ONCE and matching every partition ROOT
                 // structurally (#3436) — the deletion-side mirror of the single, centralized

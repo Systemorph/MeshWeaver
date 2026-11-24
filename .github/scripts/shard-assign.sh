@@ -135,7 +135,9 @@
 #      negative-wait classes (BuildTriggeredSyncPinsTheBuiltCommitTest, GreenBuildSkipsASettled-
 #      SourceTest, SaveMeshNodeRequestIsACheckedWriteTest, SystemOwnedSweepRetractsTheLastAdminTest)
 #      and was killed at 480 s exit=124, still progressing. Measured total ~600 s; it runs in
-#      three parts since.
+#      three parts since. On main (shard-weights refresh, 2026-11-23, #8471) part 1/3 measured
+#      307 s, past the 288 s threshold again, beside parts at 165 and 187 s: it runs in four
+#      parts since (~165 s each at the 659 s total), the part rows pending a fresh measurement.
 #
 #      MeshWeaver.Graph.Test was the one after that: listed at 64 s, it measured 406 s solo on
 #      run 37158590539 (85% of the cap) and was killed at 480 s exit=124 on run 37159733607,

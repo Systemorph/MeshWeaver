@@ -310,7 +310,13 @@
         "six spoke copies; step 3 widens `required-in` to all seven.",
         "",
         "Landed: step 1 core#4412; step 2 Plugins#1916, Education#337, Reinsurance#211,",
-        "SocialMedia#190, Manufacturing#91, Memex#363; step 3 this entry's widening."
+        "SocialMedia#190, Manufacturing#91, Memex#363; step 3 this entry's widening.",
+        "",
+        "Text change: a bullet added after 'A page is composed …' — a view of data is raw data + LINQ +",
+        "data-bound controls, never numbers baked into a code cell, a Markdown table or a page built",
+        "outside the platform, so the client redraws when the data or a selector changes. Landed in the",
+        "same three steps: step 1 core#8493; step 2 Plugins#5853, Education#454, Reinsurance#322,",
+        "SocialMedia#275, Manufacturing#156, Memex#1134; step 3 this entry's widening."
       ]
     },
     {

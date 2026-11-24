@@ -270,9 +270,22 @@ public partial record MeshBuilder
     /// probe's case, the whole of #3649 and #3735. That shape is named on stderr when an image
     /// copy exists, so nobody reads the absent module as "the image had nothing".</para>
     /// </summary>
-    /// <param name="modules">The candidates, in install order.</param>
+    /// <param name="modules">The candidates, in any order — they are installed dependencies-first
+    /// (<see cref="ModuleInstallOrder"/>), ties keeping the listed order.</param>
     /// <returns>The builder for method chaining.</returns>
     public MeshBuilder InstallModules(IReadOnlyList<ModuleInstallCandidate> modules)
+    {
+        ArgumentNullException.ThrowIfNull(modules);
+        // 🚨 Dependencies first, for EVERY host: a module's builder hook runs at install, and one that
+        // names a sibling module's type needs that sibling installed already (ModuleInstallOrder).
+        return InstallModulesAsListed(ModuleInstallOrder.DependenciesFirst(modules));
+    }
+
+    /// <summary>
+    /// Installs the candidates in exactly the order given — no dependency ordering. Reserved for tests
+    /// that need the name-ordered negative control; every host goes through <see cref="InstallModules"/>.
+    /// </summary>
+    public MeshBuilder InstallModulesAsListed(IReadOnlyList<ModuleInstallCandidate> modules)
     {
         ArgumentNullException.ThrowIfNull(modules);
         // A module's NATIVE payload is unreachable without this (#1728): Assembly.LoadFrom never
@@ -465,7 +478,12 @@ public partial record MeshBuilder
         // replacement pod died at boot (exit 139) before it could serve, reconcile or report.
         // A module whose dependency is absent cannot run, so it is withdrawn here with that
         // dependency — named, never silent — and the process boots.
-        WithdrawDependentsOfAbsentModules(ModuleContexts, pending, incompatible);
+        //
+        // 🚨 "Absent" is decided by the resolver the module will USE, not by batch membership: on
+        // 4.0.13590 the same crash recurred with MeshWeaver.AI not in the batch at all, so no
+        // refusal named it, while the probe's union surface still carried a copy of it that
+        // Blazor.Chat's own load context could never reach.
+        WithdrawModulesWhoseReferencesDoNotResolve(ModuleContexts, pending, incompatible);
 
         // 🚨 A node's GlobalServiceConfigurations delegate is invoked IMMEDIATELY by
         // ConfigureServices — it runs against the live IServiceCollection, not queued for later
@@ -1049,27 +1067,52 @@ public partial record MeshBuilder
     }
 
     /// <summary>
-    /// Withdraws, to a fixed point, every loaded module of this batch that references a module this
-    /// batch failed to load, and records each as incompatible naming the dependency. A name counts as
-    /// absent only when no copy of it is in the process: a module that fell back to an earlier
-    /// generation, or one the image binds in the default context, is present.
+    /// Withdraws, to a fixed point, every loaded module of this batch with a <c>MeshWeaver.*</c>
+    /// reference that the resolver THAT MODULE WILL USE cannot bind in this process, and records each
+    /// as incompatible naming the reference.
+    ///
+    /// <para>🚨 <b>Resolvable, not "refused in this batch".</b> The first form of this pass
+    /// (MeshWeaver#8399/#8401) withdrew a dependent only when its dependency was a REFUSED member of
+    /// this batch. A dependency the batch never saw — skipped before the batch by
+    /// <c>ModuleActivationBoot.ComputeEffectiveModuleEntries</c> (its landed DLL is missing, its entry
+    /// is disabled or unreadable, or it was never in the activation list) — left nothing to match, so
+    /// the dependent was held. And the link probe could still pass it, because its surface is a
+    /// UNION: the application closure, every assembly loaded in ANY load context of the process, and
+    /// the files of EVERY directory the batch loads from. A module context sees none of that union
+    /// beyond its own resolution order. On build.meshweaver.cloud (4.0.13590) that held
+    /// <c>MeshWeaver.Blazor.Chat</c> with a reference to an unresolvable <c>MeshWeaver.AI</c>, and
+    /// the mesh hub's construction threw <see cref="FileNotFoundException"/> inside
+    /// <c>MapMeshWeaver</c>.</para>
+    ///
+    /// <para><b>The rule is <see cref="ModuleLoadContext"/>'s own resolution order</b>, asked without
+    /// loading anything. A reference resolves when (1) the default context can bind it — a trusted
+    /// platform assembly, or one already loaded there (an image-bound module); (2) for a module held
+    /// in its own context, it is another module the registry holds as CURRENT — this batch's or an
+    /// earlier one's — or a file in the generation directory of such a module this one references
+    /// (that module's context serves it once it holds it); (3) it is a file in the module's OWN
+    /// directory. A copy beside an unrelated module, or one loaded into some other load context, is
+    /// none of these. A withdrawn module resolves for nobody, which is what makes this a fixed
+    /// point.</para>
+    ///
+    /// <para>Only <c>MeshWeaver.*</c> references are judged — the probe's own rule: a reference
+    /// outside the platform prefix is a private dependency the probe counts as unchecked, and its
+    /// absence is not certain.</para>
     /// </summary>
     /// <param name="contexts">The registry holding the modules loaded into their own context.</param>
     /// <param name="pending">The modules that loaded; withdrawn ones are removed.</param>
     /// <param name="incompatible">The refusals so far; a record is added per withdrawn module.</param>
-    private static void WithdrawDependentsOfAbsentModules(
+    private static void WithdrawModulesWhoseReferencesDoNotResolve(
         ModuleContexts contexts, List<PendingModuleInstall> pending, List<IncompatibleModule> incompatible)
     {
-        var present = pending
-            .Select(module => module.Assembly.GetName().Name)
-            .OfType<string>()
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var absent = incompatible
-            .Where(refused => !present.Contains(refused.Name) && !HeldInDefaultContext(refused.Name))
+        var refusedInBatch = incompatible
             .GroupBy(refused => refused.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        if (absent.Count == 0)
-            return;
+        var trusted = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(Path.GetFileNameWithoutExtension)
+            .OfType<string>()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var withdrawn = new Dictionary<string, IncompatibleModule>(StringComparer.OrdinalIgnoreCase);
 
         bool withdrew;
         do
@@ -1077,38 +1120,89 @@ public partial record MeshBuilder
             withdrew = false;
             foreach (var module in pending.ToArray())
             {
-                var dependency = module.Assembly.GetReferencedAssemblies()
-                    .Select(reference => reference.Name)
-                    .FirstOrDefault(name => name is not null && absent.ContainsKey(name));
-                if (dependency is null)
-                    continue;
                 var name = module.Assembly.GetName().Name ?? Path.GetFileNameWithoutExtension(module.Assembly.Location);
+                var held = contexts.Current(name) is { } generation && ReferenceEquals(generation.Assembly, module.Assembly)
+                    ? generation
+                    : null;
+                var directory = held?.Context.Directory ?? Path.GetDirectoryName(module.Assembly.Location);
+                var references = module.Assembly.GetReferencedAssemblies()
+                    .Select(reference => reference.Name)
+                    .OfType<string>()
+                    .ToArray();
+                var unresolved = references.FirstOrDefault(reference =>
+                    reference.StartsWith(ModulePlatformLink.PlatformAssemblyPrefix, StringComparison.Ordinal)
+                    && !ResolvesFor(contexts, reference, name, held is not null, directory, references, trusted, withdrawn));
+                if (unresolved is null)
+                    continue;
+
                 pending.Remove(module);
-                if (contexts.Current(name) is { } held && ReferenceEquals(held.Assembly, module.Assembly))
+                if (held is not null)
                 {
                     contexts.Uncommit(held);
                     contexts.Discard(held);
                 }
+                var cause = withdrawn.GetValueOrDefault(unresolved) ?? refusedInBatch.GetValueOrDefault(unresolved);
                 var refused = Report(new IncompatibleModule(
                     module.Assembly.Location,
                     name,
-                    $"it references the module '{dependency}', which did not load in this process "
-                    + $"({absent[dependency].Error}) — a module cannot run without a module it is linked "
-                    + "against, so it is withdrawn with it",
-                    dependency)
+                    $"it references the module '{unresolved}', which did not load in this process ("
+                    + (cause?.Error ?? NotInBatch(directory))
+                    + ") — a module cannot run without a module it is linked against, so it is withdrawn",
+                    unresolved)
                 {
-                    // The dependency's case decides whether a rollout can fix it, so the dependent
-                    // inherits it: a store module refused for a platform this one is not running
-                    // does not stall a roll, and neither does the module that needs it.
-                    RefusedBeforeLoad = absent[dependency].RefusedBeforeLoad,
+                    // A dependency refused in this batch decides whether a rollout can fix it, so the
+                    // dependent inherits its case. A dependency the batch never held is the module
+                    // SET's gap (a reconcile lands it), which no roll of this deployment closes:
+                    // stalling a roll on it would hold the very restart that activates the fix.
+                    RefusedBeforeLoad = cause?.RefusedBeforeLoad ?? true,
                 });
                 incompatible.Add(refused);
-                absent.TryAdd(name, refused);
+                withdrawn[name] = refused;
                 withdrew = true;
             }
         }
         while (withdrew);
     }
+
+    /// <summary>
+    /// Whether <paramref name="reference"/> resolves for the module <paramref name="self"/> through
+    /// the resolver it will actually use — see <see cref="WithdrawModulesWhoseReferencesDoNotResolve"/>
+    /// for the order and why each step is there. Loads nothing.
+    /// </summary>
+    private static bool ResolvesFor(
+        ModuleContexts contexts, string reference, string self, bool held, string? directory,
+        string[] references, HashSet<string> trusted, Dictionary<string, IncompatibleModule> withdrawn)
+    {
+        if (withdrawn.ContainsKey(reference))
+            return false;
+        // (1) The default context: a trusted platform assembly, or one an image-bound module put
+        // there. Every context's first step.
+        if (trusted.Contains(reference) || HeldInDefaultContext(reference))
+            return true;
+        // (2) Another module the registry holds as current, or a file a current module this one
+        // references carries (ModuleContexts.ResolveForDependent). A module in the default context
+        // has no such step: no default-context binding may hand out a collectible module.
+        if (held)
+        {
+            if (!string.Equals(reference, self, StringComparison.Ordinal) && contexts.Current(reference) is not null)
+                return true;
+            foreach (var dependency in references)
+                if (!withdrawn.ContainsKey(dependency)
+                    && !string.Equals(dependency, self, StringComparison.Ordinal)
+                    && contexts.Current(dependency) is { } current
+                    && File.Exists(Path.Combine(current.Context.Directory, reference + ".dll")))
+                    return true;
+        }
+        // (3) The module's own directory: its private closure.
+        return directory is not null && File.Exists(Path.Combine(directory, reference + ".dll"));
+    }
+
+    /// <summary>The cause, for a reference no member of this batch accounts for.</summary>
+    private static string NotInBatch(string? directory) =>
+        "no module of that name is held in this process, the application closure does not carry it, "
+        + $"and the module's own directory '{directory}' has no copy — it was not in this boot's module "
+        + "batch (skipped before it, or never installed). A copy beside another module, or one loaded "
+        + "into another load context, is not reachable from this module's context";
 
     /// <summary>Whether an assembly of this simple name is already loaded in the default context
     /// (an image-bound copy), in which case a reference to it resolves.</summary>

@@ -362,7 +362,27 @@ internal class TypeRegistry : ITypeRegistry
 
     // ── Writes ──────────────────────────────────────────────────────────────────────────────
 
-    public ITypeRegistry WithType(Type type) => WithType(type, FormatType(type));
+    public ITypeRegistry WithType(Type type)
+    {
+        // 🚨 The NAMELESS registration asks for the type's CANONICAL name, and FormatType answers with
+        // whatever name the chain already holds — so a platform type that an earlier caller registered
+        // under its FULL name (MessageHubConfiguration.WithType(Type) defaults to type.FullName: the
+        // portal's AddRadzenCharts does exactly that for ChartControl, a compiled NodeType's WithTypes
+        // can too) was re-registered under that full name by the platform's own sweep, and the hub then
+        // sent `MeshWeaver.Layout.Chart.ChartControl` where every other control says `ChartControl`.
+        // The platform owns the canonical name: when the chain holds the type under nothing but its full
+        // name, the nameless registration binds the SHORT name (the full name stays a read alias), unless
+        // that short name already resolves to another type — as a canonical name OR as an alias.
+        if (!type.IsGenericType
+            && ChainByType(type, out var registered) is not null
+            && registered is not null && registered == FullNameOf(type))
+        {
+            var shortName = type.Name;
+            if (shortName != registered && (ChainByName(shortName) is not { } holder || holder.Type == type))
+                return WithType(type, shortName);
+        }
+        return WithType(type, FormatType(type));
+    }
 
     public ITypeRegistry WithType(Type type, string typeName)
     {

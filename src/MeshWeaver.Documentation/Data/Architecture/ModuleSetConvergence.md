@@ -345,6 +345,18 @@ AI@^1.20.0, but this set loads 'MeshWeaver.AI' (package 'AI') at 1.19.4, which d
 it"* — writes NO set record and faults; both callers already answer a fault by leaving the mesh on
 the set it runs. The first wave that lands a satisfying dependency proposes.
 
+🚨 **A dependent that lands a module of its own HOLDS ITSELF BACK; it does not refuse the wave
+(2026-11-23).** Measured on the control instance: OpenAI's record required `AI@^4.1.0` while the
+landed AI was 4.0.13 (AI 4.1.0 was published after it), and every proposal for two hours was
+refused — so the providers that landed beside OpenAI in the same waves, unrelated to it, stayed off
+the mesh until AI 4.1.0 itself landed. `UnmetDependencyFloor.DependentModule` now names the module
+the unmet floor belongs to, and `ProposeCheckedModuleSet` proposes the wave with that module HELD
+BACK (`ModuleSetStore.Propose(..., holdBack)`): it keeps the generation the newest proposal already
+names — the one the mesh runs — or is left out when none does, a Warning names it
+(`[ModuleSet] HOLDING BACK module …`), and the wave that lands the dependency proposes both. A floor
+whose dependent has NO module to hold back (a content-only package) still refuses the whole set,
+exactly as above. Pinned by `ADependentWhoseFloorIsUnmetHoldsItselfBackNotTheWaveTest`.
+
 **Why the proposal, and not boot or the per-module landing.** The proposal is the one step that
 moves what the mesh runs (the rule at the top of this page), so it is the one place a set can be
 refused as a whole. A per-module landing would judge a half-landed wave — a dependent landing a

@@ -78,12 +78,35 @@ public sealed class ComboGateActivatesTheImagesBootModulesTest : IDisposable
         Assert.Equal(2, docker.Containers.Count);
         foreach (var container in docker.Containers)
             Assert.Equal(
-                new[]
-                {
-                    "/host/MeshWeaver.Hosting.Instance.dll",
-                    $"/host/modules/{FleetControl}/{FleetControl}.dll",
-                },
+                new[] { $"/host/modules/{FleetControl}/{FleetControl}.dll" },
                 ModuleArgs(container));
+    }
+
+    /// <summary>🚨 THE REGRESSION GUARD for combo-verify never verifying (#4413): a boot module whose
+    /// assembly sits at the platform host's app root is the host's own build, so it is named in
+    /// <see cref="ImageBootModuleSet.ShippedByHost"/> and never handed over as <c>--module</c> —
+    /// composing it fails the bake FATAL and turns every verdict NotVerifiable.</summary>
+    [Fact]
+    public void Resolve_NeverComposesWhatThePlatformHostAlreadyShips()
+    {
+        var set = ImageBootModules.Resolve(HostDir,
+            ["MeshWeaver.Hosting.Instance.dll", $"{FleetControl}.dll"], [], "/host");
+
+        Assert.Equal(new[] { $"/host/modules/{FleetControl}/{FleetControl}.dll" }, set.Paths.ToArray());
+        Assert.Equal(new[] { "MeshWeaver.Hosting.Instance.dll" }, set.ShippedByHost.ToArray());
+        Assert.Contains("closure", set.Describe());
+    }
+
+    /// <summary>An entry present BOTH under <c>modules/{name}/</c> and at the host root is composed
+    /// from <c>modules/</c> — the portal's own precedence — and not named as shipped by the host.</summary>
+    [Fact]
+    public void Resolve_PrefersTheModulesFolderOverTheHostRoot()
+    {
+        File.WriteAllText(Path.Combine(HostDir, FleetControl + ".dll"), "");
+        var set = ImageBootModules.Resolve(HostDir, [$"{FleetControl}.dll"], [], "/host");
+
+        Assert.Equal(new[] { $"/host/modules/{FleetControl}/{FleetControl}.dll" }, set.Paths.ToArray());
+        Assert.Empty(set.ShippedByHost);
     }
 
     /// <summary>An image whose environment cannot be read is an INSTRUMENT failure: no container

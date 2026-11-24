@@ -135,6 +135,28 @@ line cases fail.
 `main3` and runs it without `--scripts-ref`, so it gets the default line and the warning. Each such
 job passes `--line main3` (or `--scripts-ref "$SCRIPTS_REF"`) in its own repository.
 
+## A wake for another line bakes nothing
+
+A `repository_dispatch` always runs the dependent's DEFAULT branch, and the control instance
+routes a publication (`meshweaver-upstream-published`) to every repository that declared its
+source, whatever line it was sealed on. Between 2026-11-18 and 11-20 every satellite's `main`
+(the 4.x line) was woken by `main3` (3.x) publications. It baked its 4.x tree against the 3.x
+image, and the gate refused the install on the tree's own floors
+(`PackagePlatformFloorException: … needs platform ≥ 4.0.13190, and this instance runs 3.1.13703`).
+The ci-main-red ledgers of all five satellites alternated red and green with the two lines' wakes.
+
+`node-repo-publish-bake.yml`'s `epoch-leg` job now compares the wake's major
+(`client_payload.version`) with the major the caller's line declares: `<PlatformVersion>` in core's
+`Directory.Build.props` at the caller's `scripts-ref`, read by `cd-line.py platform-major`. On a
+mismatch it answers `run=false` with a `Wake for another line — nothing baked` notice, and
+`publish-bake` does not run: the wake is skipped and nothing bakes it there. A version that is not a
+platform version, an empty `scripts-ref`, or a major that cannot be read (including an empty or
+non-numeric answer from `cd-line.py`) is RED. Pushes, schedules and a dispatch without a version are not judged
+here. `.github/scripts/test-epoch-leg-line.py` executes the real step, with a falsification arm.
+
+What this does not do: it does not bake the other line. A satellite's `main3` tree is baked for the
+3.x identity only by a run on `main3`, and a dispatch cannot start one.
+
 ## Still one fleet state
 
 These places still announce or decide ONE fleet-wide state. They receive the line but do not key

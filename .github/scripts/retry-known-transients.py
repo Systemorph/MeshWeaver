@@ -123,6 +123,11 @@ JOB_LOG_LINE = re.compile(r"^﻿?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ", re
 #     ci-failure-ledger.py --artifact-misses). The job measured nothing about the diff; its producer had succeeded (a
 #     consumer whose producer FAILED reports that red once instead, and the failed producer vetoes
 #     the retry on its own log). Matched on the EMITTED annotation title, never the echoed source.
+#   combo-verify: NO VERDICT — GitHub API rate-limited until <t> — derive-combo-instances.py, AFTER
+#     ghrest.gh_cli waited for a reset that fit its budget or named one that did not: the fleet-reader
+#     installation's shared hourly budget was spent (2026-11-22: runs 45029369221, 45034137352,
+#     45045279093 reported "overlays NEVER READ" over a fleet that existed). Matched on the EMITTED
+#     record. A real roster defect prints a different blocker and never this line.
 #   shared-rules: NO VERDICT — sibling AGENTS.md unreadable (infra) — check-shared-rules.py, AFTER its
 #     own 3 retries with backoff: the App token's read of a sibling AGENTS.md answered 404, a different
 #     repo each time, while main passed minutes before and after (core #8040 run 42584371667:
@@ -132,6 +137,7 @@ SIGNATURES = re.compile(
     r"##\[error\]ci-run-artifacts: NOT MEASURED — artifact store miss \(infra\)"
     r"|##\[error\]shared-rules: NO VERDICT — sibling AGENTS\.md unreadable \(infra\)"
     r"|##\[error\]fleet-read: NO VERDICT — sibling unreadable after retries \(infra\)"
+    r"|##\[error\]combo-verify: NO VERDICT — GitHub API rate-limited until"
     r"|meshweaver\.azurecr\.io.*connection refused"
     r"|dial tcp .*: connect: connection refused"
     r"|registry answered 503 for https://memex\.meshweaver\.cloud"

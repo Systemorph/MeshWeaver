@@ -1,7 +1,7 @@
 ---
 Name: The Bake Gate Only Stalls a Roll
 Category: Architecture
-Description: Why the NodeType bake readiness gate took the control instance fully down, the two rules that now make a refusal possible only on an image that is newer than the build it would be protecting, why its verdict is read by readiness alone and never by the startup probe, and how a sweep a store outage faulted is re-run on the same pod.
+Description: Why the NodeType bake readiness gate took the control instance fully down, the two rules that now make a refusal possible only on an image that is newer than the build it would be protecting, why its verdict is read by readiness alone and never by the startup probe, how a sweep a store outage faulted is re-run on the same pod, why every declared bundle source is offered before the sweep judges a type, and why no automatic compile kickoff may race the process's own adoption.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>
 ---
 
@@ -313,6 +313,150 @@ same mesh passes. A third case shows a non-transient fault is not re-run.
 The host's readiness message (`NodeTypeBakeHealthCheck`, in the MeshWeaver.Plugins host) still
 ends "A restart re-runs the sweep". For a transient fault the gate's own detail, which that
 message carries, now names the re-run that is actually pending.
+
+## A registry-only installation adopts before the sweep judges
+
+On 2026-11-20 the dev instance's first platform-4 pod never became Ready. This instance installs
+its packages from a plugin registry only (`PluginCatalog:Registries`). Its record carries no
+`bundles` block, so no `bundle-fetch` init container fills a published root
+([Plugin Bundles in the Registry](../PluginBundlesInTheRegistry)). It syncs none of the
+packages' partitions. Its Loki lines show the sequence:
+
+1. 08:30:30Z: the warm-up starts.
+2. During the sweep, every module type in those partitions is parked by the untracked-module gate
+   ([#3583](https://github.com/Systemorph/MeshWeaver/issues/3583)) with
+   `no prebuilt bundle for framework c004e001/linux-x64 names this type`. Its dependents read
+   `UpstreamFailed`.
+3. 08:42:10Z: `warm-up complete … compileErrors=30`, then
+   `REFUSING READINESS — 53 NodeType(s) regressed on this image`.
+4. From 08:42:39Z: the default install's bundle client adopts, `Bundle for Store: adopted 0/25`.
+   Every stamp is refused: `MeshPublicationGate: REFUSING to publish 'prebuilt adoption stamp …' —
+   this process FAILED its own validation`.
+
+The registry held a sealed publication for that identity the whole time.
+
+**Why the adoption came last.** The boot seeding offers two bundle sources before the sweep
+enumerates: the image's `prebuilt/` shelf and a registry-fed published root. A registry the
+deployment declares only in `PluginCatalog:Registries` is read by `PluginBundleClient`, and the
+only boot pass that called it is the default install. That pass is sequenced after the bake on
+purpose (`PreWarmCompletion`, #1114), because it writes package roots through per-node hubs. So the
+sweep asked "does a bundle name this type?" before the one source that had the bundle was asked.
+It counted every such type as a regression. The publication gate then refused the late adoption
+because readiness had been refused, and readiness could never recover without that adoption. Each
+step was correct alone.
+
+**The fix: every declared bundle source is offered before the sweep.** `IBootBundleSource`
+(MeshWeaver.Hosting) is the third stage of the boot seeding, after the image's bundles and the
+published root (`DynamicTypePreWarmerHostedService.SeedBundles`). The plugin catalog registers
+`RegistryBundlesBeforeSweep`. For every installed package (`Plugins/<id>` install record) whose
+partition no `IPartitionSourceTracking` provider tracks, it calls `PluginBundleClient.Adopt` once
+per declared registry. That is the set the untracked-module gate would otherwise park.
+
+The invariant this restores: **the sweep judges a type only after every bundle source the
+deployment declares has been offered for it.**
+
+Nothing is relaxed:
+
+- The adoption is an ordinary `PrebuiltAssemblySeeder` adoption with the same framework-identity,
+  platform-range and source-fingerprint checks. Bytes from a newer platform are still declined.
+- On a provisional pod the shared stamp is held by the publication gate and released only when the
+  bake passes. This process's own `NodeTypeAdoptionRegistry` carries the adoption, so the sweep
+  counts the type as baked. A pod that regresses on anything else still discards the held stamps.
+- A type that no declared source covers is still parked and still regresses.
+- The pass is bounded per package (`RegistryUpdateReconciler.PerPackageAdoptBudget`) and never
+  faults the warm-up. The tracking read asks every install record in parallel under ONE overall
+  bound (`RegistryBundlesBeforeSweep.TrackingBudget`), so a hung provider costs boot that bound
+  once, never once per package; a record that did not answer in time reads as tracked. A registry that cannot be reached adopts nothing, and the sweep judges as
+  before.
+
+A partition that a sync source tracks compiles from that source, so the pass skips it. A first
+boot has no install record yet, so the pass adopts nothing and the default install adopts after
+the bake, as before. A mesh with no tracking seam never parks, so the pass does not run there.
+
+The regression test is `ARegistryOnlyInstallationAdoptsBeforeTheSweepJudgesTest`
+(MeshWeaver.Hosting.Test). It runs the real hosted warm-up with an armed gate, a real install
+record, an untracked partition and the plugin catalog's own registration. The registry's HTTP
+endpoint serves a `BundleWriter` bundle for the live identity. The positive case asserts the gate
+lands on `Complete`, and that the held stamp is released on admission. The negative control serves
+an index that names no bundle for the package, and the gate must still regress on the type.
+
+**Still open.** If the registry cannot be reached while the pod boots, the same deadlock forms. The
+types regress, and a later adoption is refused because the pod was refused. Recovering from that
+needs a governed `Restart` once the registry answers. Adopting sealed bytes on a refused pod whose
+only regressions are those very types would close it, but that is a change to the admission rule,
+and this fix does not make it.
+
+### The kickoff that raced the adoption
+
+The fix above was not sufficient. The next platform-4 pod on the same instance (image 4.0.13730,
+which carries it) still never became Ready, on ONE regression:
+`REFUSING READINESS — 1 NodeType(s) regressed on this image: Essentials/ActionLinkDefinition`.
+The boot source had done its job. Its log lines, in order:
+
+1. 14:06:42.9Z: `Bundle for Essentials@4.0.1: 8198704 byte(s) over HTTP` (the boot pass).
+2. 14:06:44.508Z: `Compile watcher: Essentials/ActionLink is a module's content … no prebuilt build
+   for it landed — PARKING with a named refusal instead of compiling (offered by a bundle: False)`.
+3. 14:06:44.586Z: `Prebuilt assembly ADOPTED for Essentials/ActionLink at version 71 … the shared
+   record's stamp is HELD`, then `Bundle for Essentials: adopted 10/10`.
+4. 14:09:32Z: the sweep judges `Essentials/ActionLink → CompileError (Untracked module content …)`.
+   `Essentials/ActionLinkDefinition` shares its sources and had a working build on the previous
+   image, so it reads as a regression. The publication gate discards 308 held publications.
+5. Later, every Essentials adoption stamp is refused: `adopted only 0/10 — declined: not seeded×10`.
+
+The park in step 2 landed 78 ms BEFORE the adoption it was racing (step 3). `Essentials/Email` and
+`Essentials/CouponJourneyPublishers` show the same order.
+
+**The defect.** The seeder activates each type's hub to stamp it. It takes the adoption reservation
+first (`NodeTypeAdoptionRegistry.Reserve`, #1763), so the activation cannot start a compile. Only the
+FIRST-BUILD kickoff (`CompilationStatus is null`) ever read that reservation. On a platform roll
+every record still names the previous framework, so the kickoff that fires is the FRAMEWORK-STALE
+kickoff. It ignored the reservation:
+
+- it probed the assembly store before the seeder had uploaded the bytes;
+- it flipped the type to Pending;
+- the compile watcher's on-demand pass found no offer, and the untracked-module gate (#3583) parked
+  the type.
+
+The park's write moved the record past version 71, the version the adoption had read. The sweep's
+overlay (`StampSuperseding`) correctly prefers a record that moved on, so it judged the park.
+
+So the sweep did not judge too early. The bundle was in, and this process had adopted it. A second
+decider on the same process overruled it. Neither "wait for the declared set" nor "treat the park as
+pending" would have helped. The adoption had ARRIVED, and a park that formed under a running
+adoption is wrong in itself.
+
+**The fix: this process's own adoption wins over every automatic kickoff.**
+`NodeTypeCompilationHelpers.AfterThisProcessAdoption` is the one interlock now used by all four
+kickoffs that flip Pending with no request from a person: first-build, compile recovery,
+framework-stale and the failed-verdict re-drive. It reads two facts, and the process already records
+both:
+
+- **An adoption in flight** (`IsReserved`). The kickoff waits for it to clear, within
+  `ReservationWaitBudget`. It is delayed and never cancelled, so a declined adoption still builds.
+  The framework-stale kickoff therefore probes the store AFTER the upload.
+- **An adoption recorded over the record as it stands now** (`StampSuperseding` on the CURRENT
+  version). On a provisional pod the shared stamp is held, so the record still names the old build.
+  The kickoff is skipped. The sweep counts the adoption from the same ledger, and admission releases
+  the stamp. A record that moved past the adoption (an owner refusal, a source change) is newer
+  evidence, and the kickoff runs on it. A covered skip consumes nothing: the one-shot
+  framework-stale kickoff takes its single shot only after the interlock, so it stays armed for the
+  record's next change.
+
+Nothing about the gates changes. The bake gate, the publication gate and the untracked-module gate
+are untouched. A type that no adoption covers is still kicked, parked and judged, and a genuine
+regression still refuses readiness.
+
+The regression test is `AnInFlightAdoptionWinsOverTheFrameworkStaleKickoffTest`
+(MeshWeaver.Compiler.Pipeline.Test). It reproduces the order through the seeder's own seam: the
+reservation is taken, the record turns framework-stale while it is held, and then the adoption
+finishes. Two cases are pinned:
+
+- A provisional adoption (recorded, stamp held) must leave the record alone. Without the fix it is
+  flipped at once.
+- A record that then moves PAST that adoption is still rebuilt, because the covered skip left the
+  kickoff armed.
+- The negative control: a declined adoption (nothing recorded) must not flip while it is in flight,
+  and the type must still be rebuilt for the live framework once the reservation clears.
 
 ## What this does not cover
 

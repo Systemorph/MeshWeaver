@@ -290,6 +290,30 @@ state; no bound was raised. `BakeOutput.NotYetSettled` is the predicate, pinned 
 
 Use this to capture a named release with author-written `ReleaseNotes`.
 
+#### The pages offer the button only to a viewer who may compile
+
+The request refuses a caller without `Permission.Compile` on the type. Every compile button on the
+NodeType pages asks the same question first, so a page never offers a click the request would refuse:
+**Recompile** / **Compile** on the Overview, **Create Release** on the Releases and Configuration
+panes, and **Recompile** on the compile-failed page (MeshWeaver#8412). The question is
+`hub.ObserveCompilePermission(path, userId)` — `Permission.Compile` through the hub's permission
+evaluator, the same check the request makes — asked for the viewer the page renders for
+(`LayoutAreaHost.ViewerContext`). The node menu already hid Compile and Recycle from that viewer.
+
+- **Denied** — the buttons are disabled, and a line beside them names the permission and the
+  partition whose Editor and Admin roles carry it (`ui.compileNotPermitted`). A global admin is not a
+  data superuser: an administrator of the instance holds no Compile on a partition where they hold no
+  role, so that line is what they see.
+- **Not answered yet, or no verdict** — the buttons stay as the compile state decides. A degraded
+  permission fold is not a refusal (#974); a click asks again and reports the honest no-verdict.
+
+The verdict is published on the `NodeTypeStatusView` projection (`ReleaseDisabled`, `CompileDisabled`,
+`CompileDeniedHint`), so the pages render at once and the buttons follow later grants or
+revocations without a reload. The compile-failed page's Recompile goes through the same
+permission-checked request (`ReleaseClick`). Before this change it wrote `RequestedReleaseAt` straight
+through the stream, so it asked for no Compile permission and stamped no `RequestedReleaseBy`.
+Proven by `CompileButtonsFollowTheViewersPermissionTest`.
+
 #### 🚨 A release request builds every source edit written BEFORE it
 
 The watcher may consume a request without compiling — "satisfied by the existing current build" —
@@ -1366,15 +1390,47 @@ already in hand there:
    Partition Sync administration page, so the page and the gate cannot disagree. A mesh with no
    implementation registered — a local mesh, CI's disposable meshes, the bake host — has no notion of
    tracking and compiles as before.
+   **A partition the running image materializes is tracked too** (#6930, 2026-11-20): when a
+   registered `IStaticRepoSource` with `SyncMode` `FullReplace` names the partition (`Doc` on every
+   portal), the static-repo import rewrites it from the image on every boot and prunes what the image
+   does not ship (an `Additive` source keeps foreign nodes, so its partition stays gated), so its live source is exactly what the image ships —
+   never an install's leftover copy. Measured on the company instance right after its roll to
+   platform 4: the shelf held the documentation's bundles only from a NEWER platform build
+   (4.0.13721 over the running 4.0.13719, declined on their platform range), four `Doc` example
+   types held only a platform-3 build that does not load on platform 4, and the gate parked each at
+   Error with "partition 'Doc' tracks no source". The answer comes from
+   `NodeTypeCompilationHelpers.IsMaterializedFromTheImage`. Pinned by
+   `AnImageShippedPartitionIsTrackedTest`.
 
 Module content **and** an untracked partition → the type PARKS with
 `PrebuiltAssemblySeeder.UntrackedPartitionParkReason`: deterministic, the attempt counter at zero,
-the reason naming the partition, whether a bundle was declined or simply absent, and the two fixes —
+the reason naming the partition, whether a bundle was declined or simply absent (a decline names no
+cause in the reason — the seeder's own `Prebuilt assembly … DECLINED` line does: a source
+fingerprint, a platform range, a dependency; #6930 measured a platform-range decline reported as a
+fingerprint one), and the two fixes —
 add a sync source for the partition and sync it, or publish/rebake the package for this identity —
 "then request a release to retry". It lifts through the same doors as every other park: a source
 change (the sync that was missing) re-drives it, and a release request after the rebake re-runs the
 adoption pass, which now adopts. `RequestedReleaseForce` does NOT bypass it: a force means "build
 the live source", and on such a partition the live source is the problem.
+
+**The gate judges after the boot bundle seeding, never during it** (#8440). On the build instance's
+platform-4 roll pod (2026-11-20 14:06:44.508) the watcher parked `Essentials/ActionLink` — "no prebuilt
+build for it landed" — and 78 ms later the registry pass logged `Prebuilt assembly ADOPTED` for it. The
+park wrote Error; the adoption's stamp was held until readiness (#5544); readiness waited on the bake;
+the bake read the park; `Essentials/ActionLinkDefinition` went UpstreamFailed and counted as a
+regression; every new pod replayed it and the roll stayed on the old image. A per-type reservation
+(`NodeTypeAdoptionRegistry.Reserve`) covers a type only from the moment ITS seed starts, and a pass
+reaches its types one after the other. So the warm-up now HOLDS the whole seeding
+(`NodeTypeAdoptionRegistry.HoldBootSeeding`, taken when the warm-up service is CONSTRUCTED — the host
+resolves every hosted service before it starts any, so before the silo or the HTTP server admit an
+activation — until the image shelf, the published root and every `IBootBundleSource` have been offered,
+or the host stops), and the gate waits on that hold, then on the type's
+own reservation, then re-reads the record (`NodeTypeCompilationHelpers.AfterInFlightAdoptions`): a type
+this process's ledger covers, or whose record is `Ok` with a usable build, is not judged at all. The waits
+are bounded (`BootSeedingWaitBudget`, 10 min; the reservation budget) and a timeout judges as before,
+named. A type nothing adopted still parks once the pass is done. Pinned by
+`TheGateDoesNotParkAheadOfAnInFlightAdoptionTest` and `TheWarmUpHoldsTheBootSeedingFromConstructionTest`.
 
 **The hold says why, on the record** (#6832). A type that still holds a build is not parked but
 HELD — `Ok`, `BuildProvenance: StaleAdopted` (or `Unavailable` + `AdoptionRefused` past the
@@ -1565,6 +1621,14 @@ differently, and `assert-bake-consumption.sh` fails on it by name.
 > refuses *afterwards*, when it stamps), the type flips to `Pending`, recompiles locally, and every
 > per-type verdict is green. Only the log says anything — and only because the refusal logs at
 > `Error`, above the gate's default level.
+
+#### An `@@` is a directive only in CODE
+
+`NodeCompileShaping.FindCodeIncludes` is the one scan the resolver and the fingerprint share: an `@@path`
+inside a `//` or `///` comment, a `/* */` comment or a string/character literal (regular, verbatim,
+interpolated, raw) is prose, is never read from the mesh, and is left as authored. Substitution is
+positional, so the same text in a comment next to a real directive is not rewritten. Pinned by
+`IncludesInCommentsTest`.
 
 #### 🚨 The fingerprint covers the `@@`-include closure — both sides resolve before hashing
 
@@ -3578,6 +3642,22 @@ leaves content as an untyped `JsonElement`, which renders **empty** rather than 
 protocol lives in the `/code` skill.
 
 ---
+
+## The existence probe is shared, one per NodeType
+
+`EnrichWithNodeType` starts every per-node activation with a one-shot `path:{nodeType}` probe. That probe
+is **coalesced**: one in-flight probe per NodeType, shared by every waiter (`NodeTypeProbeCache`, scoped to
+the mesh query core). A `Registered` answer is kept for the life of the mesh; `Missing` and `Indeterminate`
+are kept for 5 s so a burst shares one answer, then re-asked so a type registered a moment later is found.
+Before this, a burst of activations of one type (memex 2026-11-23: about 700 activations of one benchmark
+NodeType) issued 700 probes, each waiting out the 3 s budget on the same stalled partition query, and the
+parked continuations starved the silo thread pool. A faulted probe is logged once, not once per waiter.
+
+The shared probe is a **refcounted connection**, not a fire-and-forget subscription: it runs while an
+unfinished waiter is subscribed and is disposed when the last one leaves (a later waiter starts it again).
+A probe nobody owned outlived the mesh that asked: its in-flight `path:{type}` query kept a lease on a
+module generation's `IMeshQueryProvider` past teardown, so the collectible context could not unload
+(Plugins#1785, `AiLiveUpdateTest` teardown). Anything that holds a module lease must end with its caller.
 
 ## Quick reference
 

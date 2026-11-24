@@ -309,6 +309,17 @@ monolith mesh, the framework's own `RecycleCascade` seam as the instrument):
   generation, and is reported `Failed` itself. With the fault left to escape, both modules are reported
   `Failed` and the probe is never recycled.
 
+### The link probe measures the DEFAULT context's copy (2026-11-23)
+
+A module's `ModuleLoadContext` asks the default context for every assembly before it looks in its own
+directory, so the copy a module binds is the platform's. `ModulePlatformSurface` therefore lists the
+default context's assemblies ahead of any same-named copy in a secondary context (a superseded or staged
+generation, a collectible context awaiting unload), whatever order `AppDomain` lists them in. Before this,
+the first listed copy won (the suspected cause of the following, not yet observed on the pod): memex 4.0.13914 refused `MeshWeaver.AI` and `Essentials` at 03:20 for lacking
+`MeshWeaver.Reactive.ParallelReadExtensions`, a type the running `MeshWeaver.Messaging.Hub` defines, and the
+retry minutes later passed. A refusal for a missing type now also carries an advisory naming the copy it
+read (path, load context, mvid, type count). Tests: `ModuleLinkProbePlatformStaticClassTest`.
+
 ### A hub with a step in flight is recycled when the step ends (MeshWeaver#7324)
 
 **The wave never tears a hub down in the middle of a step it owns.** A step is any work a hub's
@@ -956,7 +967,7 @@ providers' contributions, not the retiring ones'. A sealed stage answers nothing
 list, so from the commit on every lookup is the current generations, and no stage pins a generation
 a later swap retires.
 
-**Three pins found and fixed on the way — each caught by the collection assertion failing, then read off
+**Four pins found and fixed on the way — each caught by the collection assertion failing, then read off
 a heap dump (`dotnet-dump` `gcroot`, ClrMD for the referrers):**
 
 1. A CHILD scope of the root under the container then in use (Autofac, since removed — MeshWeaver#7145)
@@ -977,6 +988,26 @@ a heap dump (`dotnet-dump` `gcroot`, ClrMD for the referrers):**
    `StaticNodeQueryProviderEndsWithItsContainerTest`). The registry also completes `VersionChanged` when it
    is disposed, releasing any subscriber that did not end its own subscription. The other root subscriber,
    `ModuleEndpointDataSource`, already ended its subscription with the host.
+4. **A live reader keeps the rows — and the content objects — of the generation that retired.** Found when
+   the real MeshWeaver.AI, and separately MeshWeaver.AI.Anthropic, were swapped as the PRIMARY of their swap:
+   unloaded with 0 leases, never collected (a Markdown.Collaboration swap in the same process was, because it
+   declares no nodes and nothing caches its services). A heap dump shows only allocator-internal roots when
+   read with `gcroot`; walking it from the roots with ClrMD, recording every path that reaches an object whose
+   type is defined in N, found the two external ones:
+   - `StaticNodeQueryProvider` emitted its Initial and said nothing more, so every live consumer of a query
+     over declared nodes — a synced query's replay cache, the aggregator's per-provider hit buffer
+     (`MeshQuery`), the credential resolver's snapshot — kept the previous generation's nodes. The provider
+     now **follows `ModuleContexts.VersionChanged`**: each swap ends the running read, re-reads, and emits the
+     difference against what the reader holds (`Updated` for a rebuilt row, `Added`/`Removed` for
+     membership; a swap that rebuilt nothing for this reader emits nothing), and the aggregator clears its
+     hit buffer once the merged Initial is out. The stream therefore no longer completes after its Initial
+     (it already did not whenever a storage provider answered the same query); it ends only when the module registry is disposed, which drops the rows it held. An `Updated` row is detected by reference inequality, so a provider must hand back a fresh node for rebuilt content. Tests:
+     `StaticNodeQueryFollowsAModuleSwapTest` (with its no-change negative control).
+   - A singleton of one module that captures a service LIST of another module — `DefaultChatClientProvider`
+     took `IEnumerable<IChatClientFactory>` at construction — pins the other module's generation and goes on
+     using the retired code. **Read a service list on use, never capture it.** The fix and its test ship in the paired MeshWeaver.Plugins change that declares this PR as its `Core-ref` (it needs this platform addition first), so until that lands this bullet's pin is still open in the AI module. Plugins:
+     `AiLiveUpdateTest` (collection assertions for AI and for the provider, and a negative control that
+     holds the provider's factories across the swap and must see N reported retained by name).
 
 **Only boot-time infrastructure may be restart-required.** `[ModuleRestartRequired(category, reason)]`
 takes a `ModuleBootCategory` — `StorageDriver`, `Orleans`, `Authentication`, `Host` — a deliberately
@@ -1074,6 +1105,24 @@ a root service, a mesh-hub type registration, per-node-hub configuration, an aut
 swaps live: the service answers from N+1, the node is served from N+1, the running mesh hub's type
 registry maps the name to N+1's type, and N is collected; the negative control: a hook that adds a
 query routing rule is a blocker the guard names.
+
+### The boot batch installs dependencies first (every host)
+
+`MeshBuilder.InstallModules` orders its batch **leaves-first** by the entry assemblies' references to the
+OTHER modules of the batch (`ModuleInstallOrder.DependenciesFirst`, read from assembly METADATA — nothing is
+loaded or run). Installing materialises each module, which runs its builder hook, and a hook that names a
+sibling module's type needs that sibling's generation installed already. The persisted boot list is
+name-sorted, so `MeshWeaver.Mail.Gmail` ran before `MeshWeaver.Mail.MicrosoftGraph`:
+`FileNotFoundException`, the capture recorded "its builder hook could not be decomposed" as a blocker, and
+every later update of Mail.MicrosoftGraph answered `RestartRequired … its dependent MeshWeaver.Mail.Gmail`
+(memex.meshweaver.cloud, 2026-11-21). It was first fixed in the Plugins portal's composition root only;
+the ordering lives in core so LocalMesh, the tester and any other host get it. The sort is stable (the
+listed order, name order at boot, breaks ties, so an edge-free batch is unchanged); an unreadable DLL keeps
+its place; the members of a reference cycle are installed in listed order and named on stderr
+(`[MeshWeaver.Mesh.ModuleInstallOrder]`). `InstallModulesAsListed` is the unordered form, reserved for the
+negative control. Pinned by `ModuleInstallOrderTest` (`MeshWeaver.Compiler.Pipeline.Test`): a dependent
+whose hook touches its dependency's type, listed BEFORE it, decomposes; the same batch as listed reproduces
+the blocker.
 
 ## What is shipped (slice 6 — endpoints, views, platform independence)
 

@@ -63,6 +63,26 @@ public class RoutingVersionQuery : IVersionQuery
     /// nothing remains — <c>true</c>.</remarks>
     public IObservable<bool> PurgeVersions(string path)
         => GetQuery(path)?.PurgeVersions(path) ?? Observable.Return(true);
+
+    /// <inheritdoc />
+    /// <remarks>Forwards to the provider registered for the partition. A partition no provider
+    /// claims has no store holding its history: pruned, nothing removed.</remarks>
+    public IObservable<VersionHistoryPruneOutcome> PruneHistory(string partition, VersionHistoryPrune prune)
+        => GetQuery(partition)?.PruneHistory(partition, prune)
+           ?? Observable.Return(VersionHistoryPruneOutcome.Pruned(0));
+
+    /// <inheritdoc />
+    /// <remarks>Forwards to the provider registered for the path's partition; a path no provider
+    /// claims has no store holding its history — <c>true</c>.</remarks>
+    public IObservable<bool> DiscardNewestVersions(string path, int maxRows)
+        => GetQuery(path)?.DiscardNewestVersions(path, maxRows) ?? Observable.Return(true);
+
+    /// <inheritdoc />
+    /// <remarks>Forwards to the provider registered for the partition; a partition no provider claims
+    /// has no store holding its history: drained, nothing removed.</remarks>
+    public IObservable<VersionHistoryPruneOutcome> DrainHistory(string partition, VersionHistoryDrain drain)
+        => GetQuery(partition)?.DrainHistory(partition, drain)
+           ?? Observable.Return(VersionHistoryPruneOutcome.Pruned(0));
 }
 
 /// <summary>
@@ -98,4 +118,18 @@ public class NoOpVersionQuery : IVersionQuery
     /// <inheritdoc />
     /// <remarks>Nothing is ever recorded here, so nothing remains.</remarks>
     public IObservable<bool> PurgeVersions(string path) => Observable.Return(true);
+
+    /// <inheritdoc />
+    /// <remarks>Nothing is ever recorded here, so there is nothing to prune.</remarks>
+    public IObservable<VersionHistoryPruneOutcome> PruneHistory(string partition, VersionHistoryPrune prune)
+        => Observable.Return(VersionHistoryPruneOutcome.Pruned(0));
+
+    /// <inheritdoc />
+    /// <remarks>Nothing is ever recorded here, so nothing remains.</remarks>
+    public IObservable<bool> DiscardNewestVersions(string path, int maxRows) => Observable.Return(true);
+
+    /// <inheritdoc />
+    /// <remarks>Nothing is ever recorded here, so there is nothing to drain.</remarks>
+    public IObservable<VersionHistoryPruneOutcome> DrainHistory(string partition, VersionHistoryDrain drain)
+        => Observable.Return(VersionHistoryPruneOutcome.Pruned(0));
 }

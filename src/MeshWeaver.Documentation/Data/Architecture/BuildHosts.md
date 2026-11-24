@@ -763,10 +763,11 @@ fixes can merge while the host closes its gaps one by one. That is a third execu
 repository off Actions once that stage's own parity is proven, while the other stages stay in shadow:
 
 - **Where it is declared.** `equivalentStages` in core main's `.github/build-routing.json`, the same
-  trunk-only file as `hostForced`, so no pull request routes its own stage. One object per repository:
-  `{"<stage>": {"comparable": N, "disagreements": 0, "report": "<the measurement>"}}`. The evidence comes
-  from MeshWeaver.Plugins `scripts/build-parity-report.py`. It is declared, never derived: the executor
-  reads the declaration and measures nothing.
+  trunk-only file as `hostForced`, so no pull request routes its own stage. One object per repository
+  and LINE (see "Route by line" below):
+  `{"<line>": {"<stage>": {"comparable": N, "disagreements": 0, "report": "<the measurement>"}}}`. The
+  evidence comes from MeshWeaver.Plugins `scripts/build-parity-report.py`. It is declared, never derived:
+  the executor reads the declaration and measures nothing.
 - **The bar.** At least 20 comparable pull requests, where both the host and Actions reached a verdict,
   and zero disagreements. `build-executor.py --check-routing` refuses an entry below the bar in core CI,
   and the executor refuses it again at run time: the stage stays in shadow and the run says why.
@@ -793,6 +794,44 @@ repository off Actions once that stage's own parity is proven, while the other s
 
 `build-executor.py --self-test` holds the bar, the order, the queued-and-verified requirement, trunk
 and route-only, with negative controls for each refusal. Every case runs on fakes, with no network.
+
+### Route by line — each line's verdicts on the host that runs that line (policy `ci-routes-by-line`)
+
+The platform has two lines, and each has its own build host: `main` (v4, net11) runs on `latest4`, and
+`main3` (v3, net10) runs on `latest3`. A host of one line cannot build the other: a net10 host fails a
+net11 pull request with `NETSDK1045` in seconds. So the required verdicts are routed per line:
+
+- **The line is declared, not derived.** A run's line is its pull request's BASE branch, or its own
+  branch for a trunk run, looked up in core's `.github/delivery-lines.json`. The line's
+  `buildHostChannel` is the channel the build-request is queued on. A run that names no line (the
+  caller passes no `LINES_FILE`) routes no stage, and its admission says so.
+- **Evidence is counted per line.** `equivalentStages.<repository>.<line>.<stage>`. Evidence from `main3`
+  pull requests moves only `main3` verdicts. A v4 stage moves only on v4 evidence. `--check-routing`
+  refuses a line key that `.github/delivery-lines.json` does not declare, and refuses the
+  per-repository shape that predates this section (a stage where a line belongs).
+- **The host must serve the line.** A declared stage moves only when the operations instance's queue
+  answer for the line's channel says `routesRequestChannel: true` (the instance queues the run on the
+  channel the request names) AND `channelServed: true` (the control record names a host for that
+  channel). An instance that says neither is read as not serving. A run queued where no host takes it
+  would hold its required context until the job cap.
+- **Actions is the fallback, and it is said.** When a stage is declared for the run's line but the
+  line's host cannot take the run (not served, not routable, not verifiably queued, the queue did not
+  answer, or the instance's own switch says `actions`), the stage's Actions legs carry the verdict. The
+  admission prints one `Fallback to GitHub Actions` warning per stage, naming the line, the channel and
+  the reason. A stage that was never declared for the line is shadow, not a fallback.
+- **Every verdict names its executor.** The admission writes two more outputs: `line`, and
+  `verdict-sources`, a JSON object with one entry per declared stage:
+  `{"executor": "host" | "actions", "fallback": true | false, "line", "channel", "why"}`. A required
+  context prints `fromJSON(verdict-sources)['<stage>'].why`, so a reader of the check sees whether the
+  build host or GitHub Actions produced it, and whether that was a fallback. The step summary lists
+  the same sentence for each stage.
+- **Nothing is skipped.** The fallback changes WHO produces a verdict, never whether a required context
+  reports one. `stage-executors` keeps its two values (`host`, `host-forced`), so every existing consumer
+  is unchanged. The contexts keep their names, and branch protection does not change.
+
+`build-executor.py --self-test` holds each rule with a negative control: v3 evidence never moves a v4
+pull request, a run with no line routes nothing, the per-repository shape is refused, and each fallback
+cause is said by stage.
 
 ### The host publication graph (module-pack on a host)
 

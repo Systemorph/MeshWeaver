@@ -3747,6 +3747,15 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-previous-epoch-carry-forward.py
 
+    # The publish-bake lane's `epoch-leg` ends a call whose repository_dispatch wake names ANOTHER
+    # line's major (policy major-lines-run-separately): a 3.x publication woke the satellites' 4.x
+    # `main` trees, which baked against the 3.x image and went red on their own floors. This
+    # EXTRACTS the `leg` step by `id:` and executes it against a stubbed core-file fetch serving the
+    # real cd-line.py, with a falsification arm that removes the major comparison.
+    - name: "Execute the publish-bake epoch-leg line check against stubbed core files"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-epoch-leg-line.py
+
     # node-repo-compile-check.yml takes its reference set from the tester's /app, or — with the
     # optional platform-image pair — from the PORTAL's, asserting the two are one build. The lane
     # is workflow_call only, so this is the one place its reference-set step EXECUTES before a

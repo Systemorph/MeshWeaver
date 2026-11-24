@@ -489,7 +489,16 @@ public sealed class ModulePlatformSurface
         string[]? probeDirectories, ImmutableArray<string> platformFiles = default)
     {
         var loaded = ImmutableDictionary.CreateBuilder<string, Assembly>(StringComparer.OrdinalIgnoreCase);
-        foreach (var assembly in loadedAssemblies)
+        // 🚨 PLATFORM FIRST, whatever order the process lists its assemblies in. A module's load
+        // context asks the DEFAULT context for every assembly before it looks in its own directory
+        // (ModuleLoadContext.Load), so the copy a module binds is the default context's copy. A
+        // process also holds same-named copies in SECONDARY contexts — an earlier generation's, a
+        // staged one, a collectible context still awaiting its unload — and AppDomain's list is not
+        // ordered by precedence. Taking the first of a name measured the module against whichever of
+        // them listed first: memex 2026-11-23 refused MeshWeaver.AI and Essentials for lacking
+        // ParallelReadExtensions the running platform defines, and the next landing minutes later
+        // passed. OrderBy is stable, so within a context the caller's order still decides.
+        foreach (var assembly in loadedAssemblies.OrderBy(a => IsDefaultContext(a) ? 0 : 1))
         {
             var name = assembly.GetName().Name;
             if (!string.IsNullOrEmpty(name))
@@ -510,6 +519,32 @@ public sealed class ModulePlatformSurface
 
         return new ModulePlatformSurface(
             files.ToImmutable(), loaded.ToImmutable(), platformBound: platformBound);
+    }
+
+    private static bool IsDefaultContext(Assembly assembly) =>
+        // A null context (a byte-array load into a hidden context) is NOT the platform's: the
+        // platform's copies are bound by the default context, which GetLoadContext reports as Default.
+        ReferenceEquals(AssemblyLoadContext.GetLoadContext(assembly), AssemblyLoadContext.Default);
+
+    /// <summary>
+    /// Which copy this surface reads <paramref name="assemblyName"/> from — path, load context,
+    /// module version id and type count — so a refusal that names a missing type also names the
+    /// bytes it was measured against.
+    /// </summary>
+    internal string DescribeCopy(string assemblyName)
+    {
+        if (_declared.ContainsKey(assemblyName))
+            return "a published platform surface document";
+        _loaded.TryGetValue(assemblyName, out var assembly);
+        var path = assembly is not null && !string.IsNullOrEmpty(assembly.Location) && File.Exists(assembly.Location)
+            ? assembly.Location
+            : _files.GetValueOrDefault(assemblyName);
+        var context = assembly is null ? "not loaded"
+            : IsDefaultContext(assembly) ? "default context"
+            : "SECONDARY context " + (AssemblyLoadContext.GetLoadContext(assembly)?.Name ?? "(unnamed)");
+        var mvid = assembly is { IsDynamic: false } ? assembly.ManifestModule.ModuleVersionId.ToString("N")[..8] : "?";
+        return $"{path ?? "(no file)"} ({context}, mvid {mvid}, "
+               + $"{TypesOf(assemblyName)?.Count.ToString() ?? "unreadable"} types)";
     }
 
     private static bool IsUnder(string path, string directory)
@@ -1250,7 +1285,10 @@ public static partial class ModulePlatformLink
                             $"the platform's copy of '{assemblyName}' could not be read, so "
                             + "whether it carries the types this module links against is unknown");
                     if (!types.Contains(fullName))
+                    {
                         missing.Add($"{fullName} ({assemblyName})");
+                        advisories.Add($"{assemblyName}: the type was looked up in {surface.DescribeCopy(assemblyName)}");
+                    }
                 }
                 else if (!surface.LoadedCopyHasType(assemblyName, fullName))
                 {

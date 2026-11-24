@@ -575,14 +575,15 @@ def handover_problems(doc: dict) -> list[str]:
                             "contains a masked name.")
     verify_steps = [step for step in verify.get("steps", []) if isinstance(step, dict)]
     resolve_at = next((i for i, step in enumerate(verify_steps)
-                       if "derive-combo-instances.py --discover" in step.get("run", "")
+                       if "derive-combo-instances.py" in step.get("run", "")
+                       and ("--discover" in step.get("run", "") or "--load-scans" in step.get("run", ""))
                        and "--slot" in step.get("run", "")), None)
     lander_at = next((i for i, step in enumerate(verify_steps)
                       if "bash .github/scripts/combo-verify-instance.sh" in step.get("run", "")),
                      None)
     if resolve_at is None or lander_at is None or resolve_at > lander_at:
         problems.append(
-            "jobs.verify must resolve its slot with `derive-combo-instances.py --discover --slot` "
+            "jobs.verify must resolve its slot with `derive-combo-instances.py --load-scans … --slot` "
             "BEFORE it runs the lander; otherwise the lander has no installation to verify.")
     else:
         resolve = verify_steps[resolve_at]
@@ -646,6 +647,11 @@ def handover_problems(doc: dict) -> list[str]:
     elif "if" in counter or counter.get("continue-on-error"):
         problems.append("the job-count step is conditional or continue-on-error — a verdict "
                         "whose numerator could not be read must be red.")
+    elif (counter.get("env", {}).get("EXPECT_COUNT") != "${{ needs.preflight.outputs.count }}"
+          or '-ge "$expect"' not in counter.get("run", "") or "sleep" not in counter.get("run", "")):
+        problems.append("the job-count step must re-read the run's jobs until it lists the "
+                        "preflight's COUNT (bounded): a re-run copies passed jobs into the new "
+                        "attempt lazily, and a single read counted 5 of 7 on run 45066775860.")
     venv = verdict_step.get("env", {})
     if (venv.get("STARTED") != "${{ steps.jobs.outputs.started }}"
             or venv.get("PASSED") != "${{ steps.jobs.outputs.passed }}"):
@@ -716,6 +722,31 @@ def build_once_problems(doc: dict) -> list[str]:
                    if "bash .github/scripts/combo-verify-instance.sh" in str(step.get("run", ""))), {})
     if (lander.get("env") or {}).get("COMBO_VERIFIER") != COMBO_VERIFIER_ENV:
         problems.append(f"the lander step must set COMBO_VERIFIER to {COMBO_VERIFIER_ENV}.")
+    # 🚨 THE FLEET IS READ ONCE PER RUN (fleet-reader installation budget): the preflight saves the scans,
+    # ENCRYPTS them before the only upload that carries them (a public repository's artifacts are
+    # downloadable and the scans name a client estate's installations), and each slot loads them.
+    pre_steps = [step for step in (doc.get("jobs", {}).get("preflight", {}) or {}).get("steps", [])
+                 if isinstance(step, dict)]
+    saves = [i for i, step in enumerate(pre_steps) if "--save-scans" in str(step.get("run", ""))]
+    encrypts = [i for i, step in enumerate(pre_steps)
+                if "openssl enc -aes-256-cbc" in str(step.get("run", ""))
+                and "MW_COMBO_SCANS_KEY" in str(step.get("run", ""))
+                and "rm -f" in str(step.get("run", ""))]
+    scan_uploads = [i for i, step in enumerate(pre_steps)
+                    if "upload-artifact" in str(step.get("uses", ""))
+                    and (step.get("with") or {}).get("name") == "combo-scans"]
+    if not (saves and encrypts and scan_uploads and saves[0] < encrypts[0] < scan_uploads[0]):
+        problems.append("jobs.preflight must save the scans, encrypt them (deleting the plaintext) and "
+                        "only then upload the `combo-scans` artifact, in that order.")
+    elif not str((pre_steps[scan_uploads[0]].get("with") or {}).get("path", "")).endswith(".enc"):
+        problems.append("the `combo-scans` artifact must be the ENCRYPTED file (*.enc); a plaintext scan "
+                        "names a client estate's installations in a downloadable artifact.")
+    slot = next((step for step in verify_steps if "--slot" in str(step.get("run", ""))), {})
+    if "--load-scans" not in str(slot.get("run", "")) or not any(
+            "download-artifact" in str(step.get("uses", ""))
+            and (step.get("with") or {}).get("name") == "combo-scans" for step in verify_steps):
+        problems.append("jobs.verify must download `combo-scans` and resolve its slot with --load-scans — "
+                        "eight fleet reads per run is what spent the installation's budget.")
     return problems
 
 
@@ -825,8 +856,33 @@ LANDING_SCENARIOS = [
      "Red", "200", '{"recorded":false}', 1, "did not confirm", None),
     ("an unreachable instance (curl failed) ⇒ RED",
      "Green", "CURLFAIL", "", 1, "HTTP 000", None),
+    ("a confirm-phase 504 then a landed 200 ⇒ green after one re-post",
+     "Red", "504c,200", '{"recorded":true}', 0, "re-posting", "→ **Red**"),
+    ("a confirm-phase 504 on every attempt ⇒ RED naming NOT CONFIRMED after 3 re-posts",
+     "Red", "504c,504c,504c,504c", "", 1, "NOT CONFIRMED after 3 re-posts", None),
+    ("a 400 (even with a confirm-shaped body) ⇒ RED at once, never re-posted (negative control)",
+     "Red", "400c,200", '{"recorded":true}', 1, "HTTP 400", None),
+    ("a 504 that is not the confirm phase ⇒ RED at once, never re-posted",
+     "Red", "504,200", '{"recorded":true}', 1, "HTTP 504", None),
     ("a verdict kind this lane cannot classify ⇒ RED even though it landed",
      "Purple", "200", '{"recorded":true}', 1, "unknown verdict kind", None),
+    # The NotVerifiable STREAK: one is advisory, the run of them is a blind gate (answer field `alarm`).
+    ("the 3rd consecutive NotVerifiable of a line (alarm) ⇒ RED naming the blind gate, verdict still landed",
+     "NotVerifiable", "200",
+     '{"recorded":true,"line":"4","notVerifiableStreak":3,"alarmAfter":3,"alarm":true}',
+     1, "COMBO GATE BLIND", "→ **NotVerifiable**"),
+    ("a NotVerifiable below the threshold (alarm false) ⇒ still green (negative control)",
+     "NotVerifiable", "200",
+     '{"recorded":true,"line":"4","notVerifiableStreak":2,"alarmAfter":3,"alarm":false}',
+     0, "verdict is NotVerifiable", "→ **NotVerifiable**"),
+    ("a Green that examined something ⇒ green even if the answer carried an alarm flag (negative control)",
+     "Green", "200",
+     '{"recorded":true,"line":"4","notVerifiableStreak":0,"alarmAfter":3,"alarm":true}',
+     0, "GREEN", "→ **Green**"),
+    ("a Red that examined something ⇒ green even if the answer carried an alarm flag (negative control)",
+     "Red", "200",
+     '{"recorded":true,"line":"4","notVerifiableStreak":0,"alarmAfter":3,"alarm":true}',
+     0, "::warning::", "→ **Red**"),
 ]
 
 
@@ -854,12 +910,24 @@ fail() {{ echo "::error::[slot-0] $*"; exit 1; }}
 note() {{ echo "[slot-0] $*"; }}
 body_of() {{ head -c "$1" "$2" 2>/dev/null || true; }}
 mint_token() {{ TOKEN=stand-in; }}
+sleep() {{ :; }}
+POSTS={tmp}/posts
+: >"$POSTS"
 curl() {{
   local out="" prev=""
   for a in "$@"; do [ "$prev" = "-o" ] && out=$a; prev=$a; done
   [ "$STAND_CODE" != "CURLFAIL" ] || return 7
-  printf '%s' "$STAND_BODY" >"$out"
-  printf '%s' "$STAND_CODE"
+  # STAND_CODE is a comma list answered in order (the last one repeats); "504c" is a 504 whose body
+  # names the confirm phase, exactly as the portal's own timeout answers.
+  local n; n=$(($(wc -l <"$POSTS") + 1)); echo x >>"$POSTS"
+  local code; code=$(printf '%s' "$STAND_CODE" | cut -d, -f"$n")
+  [ -n "$code" ] || code=$(printf '%s' "$STAND_CODE" | awk -F, '{{print $NF}}')
+  if [ "${{code%c}}" != "$code" ]; then code=${{code%c}}
+    printf '%s' '{{"error":"Timed out","phase":"confirm","candidateTag":"9.9.9"}}' >"$out"
+  else
+    printf '%s' "$STAND_BODY" >"$out"
+  fi
+  printf '%s' "$code"
 }}
 shown=slot-0
 where="this instance"
@@ -1119,6 +1187,10 @@ def self_test(root: Path) -> int:
         return handover_problems(copy)
 
     mutations = {
+        "the job count read once, with no settle loop (run 45066775860)":
+            lambda jobs: [step.update({"run": "gh api repos/x/actions/runs/1/jobs?filter=latest "
+                                              "'^Verify instance slot [0-9]+ against its roll target$'"})
+                          for step in jobs["verdict"]["steps"] if step.get("id") == "jobs"],
         "the roster re-published as a job output":
             lambda jobs: jobs["preflight"]["outputs"].update(
                 instances="${{ steps.roster.outputs.instances }}"),
@@ -1243,6 +1315,15 @@ def self_test(root: Path) -> int:
             landing.replace("jq -e '.recorded == true' >/dev/null <\"$landed\"", "true", 1),
         "a refused POST accepted as landed":
             landing.replace('[ "$land_code" = "200" ] \\\n', 'true \\\n', 1),
+        "a confirm-phase 504 never re-posted (#4413)":
+            landing.replace('-ge "${LAND_RETRIES:-3}"', '-ge 0', 1),
+        "a 4xx re-posted blindly (#4413)":
+            landing.replace('[ "$land_code" = "504" ] && jq', '[ "$land_code" != "200" ] && jq', 1),
+        "a NotVerifiable streak never alarmed (a blind gate stays green)":
+            landing.replace("jq -e '.alarm == true'", "jq -e '.alarm == \"never\"'", 1),
+        "the alarm applied to every kind (a Green or Red reds the slot)":
+            landing.replace('[ "$KIND" = "NotVerifiable" ] && jq -e \'.alarm == true\'',
+                            'jq -e \'.alarm == true\'', 1),
         "an unknown verdict kind accepted":
             landing.replace('  *) fail "the verifier wrote an unknown verdict kind',
                             '  *) note "the verifier wrote an unknown verdict kind', 1),

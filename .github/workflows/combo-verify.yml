@@ -86,7 +86,16 @@ env:
   # Comfortably under the job's timeout-minutes, so the tool's own budget fires FIRST and says what
   # did not complete. The tool defaults to 45 minutes, which is exactly the fleet's hard job cap —
   # i.e. the default can only ever be pre-empted by the runner, with no diagnosis.
-  GATE_TIMEOUT: "1500"
+  #
+  # 🚨 2100, not 1500 (#4413): the clock covers the bake AND the gate. On the 84-module slot of run
+  # 45320319170 the bake took ~10 min and the gate was killed at 25 min total, 15 min in, with the
+  # Hosting types half done: no per-module result is written for a killed gate, so every module read
+  # "not verified" and the slot said NotVerifiable although the candidate compiled (181/181) and the
+  # tests were passing. The gate recompiles every Hosting type (see ComboGateWiring, "the gate
+  # compiles the large package a second time"), which is what a bigger budget pays for until that
+  # is fixed at its root. 2100 is the most the 45-minute job cap leaves (about 8 min of setup before the
+  # tool starts, about 2 after it): a bigger budget needs the second compile gone, not a longer job.
+  GATE_TIMEOUT: "2100"
 
 jobs:
   preflight:
@@ -205,7 +214,35 @@ jobs:
           MW_COMBO_DIGEST_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/derive-combo-instances.py --discover
+          python3 .github/scripts/derive-combo-instances.py --discover \
+            --save-scans "$RUNNER_TEMP/combo-scans.json"
+
+      # 🚨 THE FLEET IS READ ONCE PER RUN, NOT ONCE PER SLOT (the fleet-reader installation's budget,
+      # Doc/Architecture/CiRestBudget). The scans — not the roster, which cannot cross a job boundary —
+      # go to the slots as an artifact ENCRYPTED with the digest key, because a public repository's
+      # artifacts are downloadable and the scans name a client estate's installations. The plaintext
+      # is deleted in the same step; the slot still derives the roster from the scans and must
+      # reproduce this job's count and HMAC digest.
+      - name: Hand the encrypted fleet scans to the slots
+        env:
+          MW_COMBO_DIGEST_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/combo-scans.json" || { echo "::error::the derivation saved no scans to hand over"; exit 1; }
+          # A purpose-bound subkey, never the App key itself: HMAC-SHA256(key, "combo-scans-v1").
+          MW_COMBO_SCANS_KEY=$(python3 -c 'import hmac,hashlib,os;print(hmac.new(os.environ["MW_COMBO_DIGEST_KEY"].encode(),b"combo-scans-v1",hashlib.sha256).hexdigest())')
+          export MW_COMBO_SCANS_KEY
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:MW_COMBO_SCANS_KEY \
+            -in "$RUNNER_TEMP/combo-scans.json" -out "$RUNNER_TEMP/combo-scans.enc"
+          rm -f "$RUNNER_TEMP/combo-scans.json"
+          test -s "$RUNNER_TEMP/combo-scans.enc"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: combo-scans
+          path: ${{ runner.temp }}/combo-scans.enc
+          if-no-files-found: error
+          retention-days: 1
 
       # STEP TWO OF TWO. The roster now exists, so this asks whether it is a real, non-empty roster
       # and whether the source map derived from DeploymentContent.PluginRepos reached this step
@@ -326,7 +363,7 @@ jobs:
     # verifier or went red; this job never asks a second time.
     needs: [preflight, build-verifier]
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -355,6 +392,12 @@ jobs:
       # installation than the one counted. It registers the private roster's masks before it prints
       # anything, and writes INSTANCE_NAME / BASE_URL / SOURCES to $GITHUB_ENV for the steps below.
       # No `continue-on-error:` and no `if:` — a slot that cannot be resolved is a red verify job.
+      # The fleet scans the preflight read ONCE, encrypted (see its "Hand the encrypted fleet scans" step).
+      - uses: actions/download-artifact@v8
+        with:
+          name: combo-scans
+          path: ${{ runner.temp }}/combo-scans
+
       - name: "Which installation slot ${{ matrix.slot }} is"
         env:
           GH_TOKEN: ${{ steps.repo-token.outputs.token }}
@@ -368,7 +411,14 @@ jobs:
           EXPECT_DIGEST: ${{ needs.preflight.outputs.digest }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/derive-combo-instances.py --discover \
+          # A purpose-bound subkey, never the App key itself: HMAC-SHA256(key, "combo-scans-v1").
+          MW_COMBO_SCANS_KEY=$(python3 -c 'import hmac,hashlib,os;print(hmac.new(os.environ["MW_COMBO_DIGEST_KEY"].encode(),b"combo-scans-v1",hashlib.sha256).hexdigest())')
+          export MW_COMBO_SCANS_KEY
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:MW_COMBO_SCANS_KEY \
+            -in "$RUNNER_TEMP/combo-scans/combo-scans.enc" -out "$RUNNER_TEMP/combo-scans.json"
+          trap 'rm -f "$RUNNER_TEMP/combo-scans.json"' EXIT
+          python3 .github/scripts/derive-combo-instances.py \
+            --load-scans "$RUNNER_TEMP/combo-scans.json" \
             --slot "$SLOT" --expect-count "$EXPECT_COUNT" --expect-digest "$EXPECT_DIGEST"
 
       - uses: actions/setup-dotnet@v6
@@ -477,18 +527,34 @@ jobs:
       # happened to create. So this asks the run itself which per-instance jobs it has, by the exact
       # name the `verify` job declares, and the step below holds both numbers to the preflight's
       # count. No `continue-on-error:`: if the run cannot be read, this job is red and says so.
+      # 🚨 THE LISTING LAGS A RE-RUN (run 45066775860, 2026-11-22). The retry steward re-ran the failed
+      # VERDICT job of a run whose seven verify jobs had all succeeded; a re-run COPIES the passed jobs
+      # into the new attempt lazily, and for a few seconds `filter=latest` listed five of seven (the
+      # other two arrived with fresh job ids). The count read 5 and the verdict went red over a fully
+      # verified fleet. So the count is read until it reaches the preflight's roster size, bounded
+      # (8 reads, 15 s apart); a listing that stays short is STILL red — the denominator is never
+      # lowered, only the read is given time to settle.
       - name: Count the per-instance jobs this run created
         id: jobs
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECT_COUNT: ${{ needs.preflight.outputs.count }}
         run: |
           set -euo pipefail
-          gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
-            --jq '.jobs[] | select(.name | test("^Verify instance slot [0-9]+ against its roll target$")) | (.conclusion // "none")' \
-            >verify-jobs.txt
-          started=$(awk 'END { print NR + 0 }' verify-jobs.txt)
-          passed=$(awk '$0 == "success" { n++ } END { print n + 0 }' verify-jobs.txt)
+          expect="${EXPECT_COUNT:-0}"
+          for attempt in 1 2 3 4 5 6 7 8; do
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+              --jq '.jobs[] | select(.name | test("^Verify instance slot [0-9]+ against its roll target$")) | (.conclusion // "none")' \
+              >verify-jobs.txt
+            started=$(awk 'END { print NR + 0 }' verify-jobs.txt)
+            passed=$(awk '$0 == "success" { n++ } END { print n + 0 }' verify-jobs.txt)
+            if [ "$started" -ge "$expect" ]; then break; fi
+            if [ "$attempt" -lt 8 ]; then
+              echo "read $attempt: $started of $expect verify job(s) listed; reading again in 15 s"
+              sleep 15
+            fi
+          done
           {
             echo "started=$started"
             echo "passed=$passed"
@@ -570,7 +636,7 @@ jobs:
             exit 1
           fi
           if [ "$VERIFY" != "success" ]; then
-            echo "::error::the combo CHECK is broken for at least one instance (result: $VERIFY; $PASSED of $STARTED per-instance job(s) produced and landed a verdict). A per-instance job is red only when no verdict was produced or it did not land on its instance — a Red or NotVerifiable verdict that landed is green there and reported as a warning (advisory, policy platform-rolls-independently-of-packages). Read the red per-instance job for what stopped it."
+            echo "::error::the combo CHECK is broken for at least one instance (result: $VERIFY; $PASSED of $STARTED per-instance job(s) produced and landed a verdict). A per-instance job is red only when no verdict was produced or it did not land on its instance, or when the instance reports a BLIND GATE (a run of consecutive NotVerifiable verdicts for one release line reaching the instance's alarmAfter threshold) — a single Red or NotVerifiable verdict that landed is green there and reported as a warning (advisory, policy platform-rolls-independently-of-packages). Read the red per-instance job for what stopped it."
             exit 1
           fi
           # 🚨 THE LAST BACKSTOP, AND IT SURVIVED THE MOVE TO A DERIVED ROSTER ON PURPOSE (#3848).

@@ -112,6 +112,7 @@ public static class ImageBootModules
         var loaded = ImmutableArray.CreateBuilder<string>();
         var shadowed = ImmutableArray.CreateBuilder<string>();
         var absent = ImmutableArray.CreateBuilder<string>();
+        var shippedByHost = ImmutableArray.CreateBuilder<string>();
         foreach (var entry in declared.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             // An absolute entry names a path in the PORTAL's filesystem, which the gate host does
@@ -129,8 +130,11 @@ public static class ImageBootModules
             }
             if (File.Exists(Path.Combine(hostDir, "modules", name, entry)))
                 loaded.Add($"{mount}/modules/{name}/{entry}");
+            // 🚨 ONE PRODUCER (#3175): an assembly at the app root IS the platform host's own
+            // build. Composing it with --module as well made every combo bake FATAL ("composed
+            // with --module AND shipped by the platform host") and every verdict NotVerifiable.
             else if (File.Exists(Path.Combine(hostDir, entry)))
-                loaded.Add($"{mount}/{entry}");
+                shippedByHost.Add(entry);
             else
                 absent.Add(entry);
         }
@@ -138,6 +142,7 @@ public static class ImageBootModules
         {
             Paths = loaded.ToImmutable(),
             ShadowedByLanded = shadowed.ToImmutable(),
+            ShippedByHost = shippedByHost.ToImmutable(),
             Absent = absent.ToImmutable(),
         };
     }
@@ -185,6 +190,13 @@ public sealed record ImageBootModuleSet
     /// <summary>Declared entries the combo also LANDS — activated from the landed copy only.</summary>
     public ImmutableArray<string> ShadowedByLanded { get; init; } = [];
 
+    /// <summary>Declared entries whose assembly the platform host ALREADY ships in its application
+    /// directory (its closure). The portal activates those from the app closure, and composing one
+    /// with <c>--module</c> would put two builds of one assembly name in the bake — the one-producer
+    /// rule <c>BakeHost.ShippedByHostProblem</c> (#3175) refuses as FATAL. They are NAMED, never
+    /// passed as <c>--module</c>.</summary>
+    public ImmutableArray<string> ShippedByHost { get; init; } = [];
+
     /// <summary>Declared entries the composed host does not carry. A portal that requires one
     /// would refuse readiness on this image; the gate names them and activates the rest.</summary>
     public ImmutableArray<string> Absent { get; init; } = [];
@@ -198,5 +210,6 @@ public sealed record ImageBootModuleSet
         $"image boot modules: {Paths.Length} activated"
         + (Paths.Length > 0 ? $" ({string.Join(", ", Paths.Select(Path.GetFileNameWithoutExtension))})" : "")
         + (ShadowedByLanded.Length > 0 ? $"; {ShadowedByLanded.Length} taken from the landed copy instead ({string.Join(", ", ShadowedByLanded)})" : "")
+        + (ShippedByHost.Length > 0 ? $"; {ShippedByHost.Length} already in the platform host's closure, not composed as modules ({string.Join(", ", ShippedByHost)})" : "")
         + (Absent.Length > 0 ? $"; {Absent.Length} declared but NOT in the image ({string.Join(", ", Absent)})" : "");
 }

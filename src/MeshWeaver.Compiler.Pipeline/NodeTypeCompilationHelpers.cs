@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -710,12 +711,14 @@ internal static class NodeTypeCompilationHelpers
                         // Written on the stream's thread, read on the Timeout's timer thread — hence
                         // the Volatile pair, so the warning never reports a state older than the last.
                         var lastSeen = "no emission";
+                        MeshNode? lastNode = null;
                         return ownStream
                             .Select(n => (Node: n, Def: n?.ContentAs<NodeTypeDefinition>(
                                 hub.JsonSerializerOptions, logger)))
                             .Select(e =>
                             {
                                 var usable = e.Def is not null && HasUsableBuild(e.Node!, e.Def, guards);
+                                Volatile.Write(ref lastNode, e.Node);
                                 if (e.Def is { } seen)
                                     Volatile.Write(ref lastSeen,
                                         $"status={seen.CompilationStatus?.ToString() ?? "null"} "
@@ -728,15 +731,85 @@ internal static class NodeTypeCompilationHelpers
                             .Timeout(AdoptionStampBudget)
                             .Catch<bool, Exception>(_ =>
                             {
-                                logger?.LogWarning(
+                                // #4413 — the adoption was real but its stamp never moved the node off
+                                // Pending: the seeder judged a snapshot that predated the Pending
+                                // flip, found the bytes already served and wrote nothing. A node that
+                                // names a usable, clean build and is not forced is exactly what the
+                                // release watcher calls "satisfied by the existing current build" —
+                                // only its status is behind. Settle it; compile only when it is not.
+                                if (Volatile.Read(ref lastNode) is { } seenNode
+                                    && seenNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger)
+                                        is { } seenDef
+                                    && IsSettleableAdoptedPending(seenNode, seenDef, guards))
+                                {
+                                    return SettleAdoptedPending(hubPath)
+                                        .SelectMany(settled =>
+                                        {
+                                            if (settled)
+                                            {
+                                                logger?.LogInformation(
+                                                    "Compile watcher: {HubPath} names a usable, clean build but sat at "
+                                                    + "Pending after the adoption reported {Adopted} - settled Ok "
+                                                    + "without a Roslyn pass (#4413).", hubPath, adopted);
+                                                return Observable.Return(true);
+                                            }
+                                            WarnGaveUp();
+                                            return Observable.Return(false);
+                                        });
+                                }
+                                WarnGaveUp();
+                                return Observable.Return(false);
+
+                                void WarnGaveUp() => logger?.LogWarning(
                                     "Compile watcher: {HubPath} reported {Adopted} adopted "
                                     + "assembly(ies) but the node still has no usable build "
                                     + "{Budget}s later — compiling instead, because a stranded type "
                                     + "is worse than a redundant compile. Last state seen: {LastSeen}.",
                                     hubPath, adopted, AdoptionStampBudget.TotalSeconds,
                                     Volatile.Read(ref lastSeen));
-                                return Observable.Return(false);
                             });
+                    }
+
+                    // The one definition of "settleable", shared by the decision and the write's own
+                    // re-check so a node that moved on in between is never overwritten.
+                    static bool IsSettleableAdoptedPending(MeshNode node, NodeTypeDefinition def, BuildGuards? g)
+                        => def is { CompilationStatus: CompilationStatus.Pending, IsDirty: false, RequestedReleaseForce: false }
+                           && HasUsableBuild(node, def, g);
+
+                    IObservable<bool> SettleAdoptedPending(string path)
+                    {
+                        var wrote = 0;
+                        var result = new AsyncSubject<bool>();
+                        // Subscribed INSIDE the impersonation: the chain is cold, so a write that ran
+                        // at the caller's later subscription would run without the system identity.
+                        using (accessService?.ImpersonateAsSystem())
+                            workspace.GetMeshNodeStream().Update(curr =>
+                                {
+                                    var d = curr.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger);
+                                    if (d is null || !IsSettleableAdoptedPending(curr, d, guards))
+                                        return curr;
+                                    Volatile.Write(ref wrote, 1);
+                                    return curr with
+                                    {
+                                        Content = d with
+                                        {
+                                            CompilationStatus = CompilationStatus.Ok,
+                                            DispatchedBuildInputs = null,
+                                            CompilationError = null,
+                                            CompilationDiagnostics = null,
+                                        }
+                                    };
+                                })
+                                .LastOrDefaultAsync()
+                                .Select(_ => Volatile.Read(ref wrote) == 1)
+                                .Catch<bool, Exception>(ex =>
+                                {
+                                    logger?.LogWarning(ex,
+                                        "Compile watcher: settling {HubPath} from Pending failed - compiling instead.", path);
+                                    return Observable.Return(false);
+                                })
+                                .Subscribe(result);
+                        return result;
                     }
 
                     void DispatchOrPark()
@@ -859,8 +932,15 @@ internal static class NodeTypeCompilationHelpers
 
                         var tracking = new SingleAssignmentDisposable();
                         onDemandAdoptionSubs.Add(tracking);
-                        tracking.Disposable = PartitionTracksSources(hub, hubPath)
-                            .Timeout(OnDemandAdoptionBudget)
+                        // 🚨 #8440 — the gate judges only AFTER every adoption this process has in
+                        // flight for the type, and the boot bundle seeding pass, have finished. A
+                        // park written while a bundle that names the type is still being adopted
+                        // is an Error the adoption cannot undo (its stamp is held until readiness,
+                        // and readiness reads the park).
+                        tracking.Disposable = AfterInFlightAdoptions(
+                                hub, adoptionRegistry, hubPath, ownStream, guards, logger)
+                            .SelectMany(_ => PartitionTracksSources(hub, hubPath)
+                                .Timeout(OnDemandAdoptionBudget))
                             // The install-record read is asked only where it can change the verdict:
                             // an untracked partition, a type that is module content by its declared
                             // version alone. Unreadable reads null, and null compiles (below).
@@ -1033,19 +1113,10 @@ internal static class NodeTypeCompilationHelpers
             // then re-evaluates (the Update below still refuses to move a non-null status), so a
             // DECLINED adoption compiles exactly as before. The wait is bounded — a leaked
             // reservation must cost a delay, never an unbuilt type.
-            .SelectMany(node =>
-                (adoptionRegistry?.WhenClear(hubPath) ?? Observable.Return(Unit.Default))
-                    .Timeout(NodeTypeAdoptionRegistry.ReservationWaitBudget)
-                    .Catch((TimeoutException _) =>
-                    {
-                        logger?.LogWarning(
-                            "First-build kickoff: {HubPath} waited {Budget}s for an in-flight "
-                            + "prebuilt adoption that never released its reservation — building "
-                            + "anyway (a stranded type is worse than a redundant compile)",
-                            hubPath, NodeTypeAdoptionRegistry.ReservationWaitBudget.TotalSeconds);
-                        return Observable.Return(Unit.Default);
-                    })
-                    .Select(_ => node))
+            // The same interlock now guards every automatic kickoff — see AfterThisProcessAdoption,
+            // which also skips a type this process adopted PROVISIONALLY (stamp held, record unmoved).
+            .SelectMany(_ => AfterThisProcessAdoption(
+                hub, adoptionRegistry, hubPath, ownStream, "First-build kickoff", logger))
             .Subscribe(node =>
             {
                 // 🚨 GATED ON TEARDOWN, and it is not defensive padding.
@@ -1137,6 +1208,9 @@ internal static class NodeTypeCompilationHelpers
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus == CompilationStatus.Compiling
                 && !IsStaticOnlyNodeType(node, def))
+            // An adoption this process has in flight or recorded wins here too (AfterThisProcessAdoption).
+            .SelectMany(_ => AfterThisProcessAdoption(
+                hub, adoptionRegistry, hubPath, ownStream, "Compile recovery", logger))
             .Subscribe(node =>
             {
                 // Same gate, same reason as the first-build kickoff above: a DI resolve inside a
@@ -1210,6 +1284,21 @@ internal static class NodeTypeCompilationHelpers
                 && IsSettledOnAStaleBuild(def, guards)
                 && !IsStaticOnlyNodeType(node, def)
                 && parkRegistry?.IsParked(hubPath) != true)
+            // 🚨 THE PLATFORM-ROLL RACE (see AfterThisProcessAdoption). On a roll every record is
+            // framework-stale, and a boot adoption's own activation arms THIS kickoff: without the
+            // interlock it probed the store before the seeder uploaded, flipped Pending, and the
+            // untracked-module gate parked the type the adoption was about to cover. Waiting for the
+            // reservation puts the store probe below AFTER the upload. The one-shot (Take(1)) is
+            // taken only AFTER the interlock, on the CURRENT record: a covered or no-longer-stale
+            // arming consumes nothing, so the kickoff stays armed for the record's next change — a
+            // record that later moves past the adoption is still rebuilt, and the spent flag (#6195)
+            // is written only by a kickoff that actually acted.
+            .Select(_ => AfterThisProcessAdoption(
+                    hub, adoptionRegistry, hubPath, ownStream, "Framework-stale kickoff", logger)
+                .Where(node => DefinitionOf(hub, node) is { } current
+                               && IsSettledOnAStaleBuild(current, guards)
+                               && parkRegistry?.IsParked(hubPath) != true))
+            .Concat()
             .Take(1)
             .SelectMany(node => MeetsDependencyFloorHere(hub, hubPath, "framework-stale kickoff", logger)
                 .Where(eligible => eligible)
@@ -1368,17 +1457,27 @@ internal static class NodeTypeCompilationHelpers
         // it (#6627); see HasFailureFromOlderPlatform.
         var redriveClosedTypeSet = hub.ServiceProvider.IsClosedTypeSet();
         var redriveGivenUp = false;
+        bool FailedVerdictWantsRedrive(MeshNode? node) => node?.Content is NodeTypeDefinition def
+            && (HasStaleFailureVerdict(def, guards.ModulesHash, hubPath, guards,
+                    Volatile.Read(ref staleBuildKickoffSpent) == 1)
+                || HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath, redriveClosedTypeSet))
+            && !IsStaticOnlyNodeType(node, def);
         var failedVerdictKickoffSub = ownStream
-            .Where(node => node?.Content is NodeTypeDefinition def
-                && (HasStaleFailureVerdict(def, guards.ModulesHash, hubPath, guards,
-                        Volatile.Read(ref staleBuildKickoffSpent) == 1)
-                    || HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath, redriveClosedTypeSet))
-                && !IsStaticOnlyNodeType(node, def))
+            .Where(FailedVerdictWantsRedrive)
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
             //
             // 🚨 #6195 review — the key carries the ATTEMPT, not only the state: see RedriveDedupeKey.
             .DistinctUntilChanged(node => RedriveDedupeKey((NodeTypeDefinition)node!.Content!, guards.ModulesHash))
+            // An adoption this process has in flight or recorded wins (AfterThisProcessAdoption): on
+            // a platform roll a failure from the previous image is an older-platform trigger, and a
+            // flip here while the boot adoption is stamping the type parks it in an untracked
+            // partition exactly as the framework-stale kickoff did. In order (Concat), re-judged on
+            // the current record, so the body never logs a flip the record no longer asks for.
+            .Select(_ => AfterThisProcessAdoption(
+                    hub, adoptionRegistry, hubPath, ownStream, "Failed-verdict re-drive", logger)
+                .Where(FailedVerdictWantsRedrive))
+            .Concat()
             .Subscribe(
                 node =>
                 {
@@ -2618,8 +2717,7 @@ internal static class NodeTypeCompilationHelpers
                         // boot path, and — decisively — NO window in which the node carries a
                         // published CurrentSourceVersions against an unstamped adopted build, which
                         // is the state a release request reads as dirty and recompiles.
-                        var pendingStamp = def.RequestedSourceStampAt is not null;
-
+                        //
                         // 🚨 #2813 — the live CONTENT fingerprint, computed HERE because this is
                         // the one place that already holds the live source nodes, and written in
                         // the SAME update as the tick snapshot so a reader can never see one
@@ -2648,56 +2746,17 @@ internal static class NodeTypeCompilationHelpers
                         // 🚨 #2948 — it is now resolved UPSTREAM (the include closure needs mesh
                         // reads, which cannot happen inside this pure lambda), and it can be NULL:
                         // null means the closure could not be established, NOT that there is
-                        // nothing to hash. The previous value stands in that case — inventing one
-                        // from a short closure is a false refusal.
+                        // nothing to hash. Inventing one from a short closure is a false refusal;
+                        // keeping the previous one beside a MOVED snapshot is the opposite lie
+                        // (#8413) — see PublishSourceSnapshot.
                         var fingerprint = published.Fingerprint;
 
-                        // Idempotent: no-op when CurrentSourceVersions already
-                        // matches the just-computed snapshot. IsDirty is a
-                        // computed property — derives from CurrentSourceVersions
-                        // vs CompiledSources — so no separate flag to write.
-                        // (A pending stamp still has to be consumed, so it never no-ops.)
-                        //
-                        // 🚨 The fingerprint is part of the equality. Without it a node persisted
-                        // before this field existed — snapshot already current, fingerprint null —
-                        // would no-op forever and never acquire one, so the type could never be
-                        // judged again. The condition is what makes the field SELF-HEALING on the
-                        // first activation after an upgrade. An INCONCLUSIVE emission (fingerprint
-                        // null) drops out of the comparison entirely: it has nothing to say about
-                        // the field, so it must neither force a write nor block the snapshot's.
-                        var moduleVersion = published.ModuleVersion;
-                        // #4280 — the include list is part of the equality for the same reason the
-                        // fingerprint is: a node persisted before the field existed must acquire
-                        // it on its first activation, and an inconclusive emission (null) drops out.
-                        var includes = published.Includes;
-                        if (!pendingStamp
-                            && def.CurrentSourceVersions is not null
-                            && DictEquals(def.CurrentSourceVersions, snapshot)
-                            && (fingerprint is null
-                                || string.Equals(
-                                    def.CurrentSourceFingerprint, fingerprint,
-                                    StringComparison.Ordinal))
-                            && (includes is null
-                                || (def.CurrentSourceIncludes is not null
-                                    && def.CurrentSourceIncludes.SequenceEqual(includes, StringComparer.Ordinal)))
-                            && (!moduleVersion.Established
-                                || string.Equals(
-                                    def.CurrentModuleVersion, moduleVersion.Version,
-                                    StringComparison.Ordinal)))
+                        // The equality, the generation rule and the stamp: PublishSourceSnapshot.
+                        var updated = PublishSourceSnapshot(
+                            def, snapshot, fingerprint, published.Includes, published.ModuleVersion,
+                            (d, live) => ApplyAdoptedSourceStampAndReport(d, live, hub, hubPath, logger));
+                        if (updated is null)
                             return curr;
-
-                        var updated = def with
-                        {
-                            CurrentSourceVersions = snapshot,
-                            CurrentSourceFingerprint = fingerprint ?? def.CurrentSourceFingerprint,
-                            CurrentSourceIncludes = includes ?? def.CurrentSourceIncludes,
-                            CurrentModuleVersion = moduleVersion.Established
-                                ? moduleVersion.Version
-                                : def.CurrentModuleVersion,
-                        };
-
-                        if (pendingStamp)
-                            updated = ApplyAdoptedSourceStampAndReport(updated, snapshot, hub, hubPath, logger);
 
                         return curr with { Content = updated };
                     }).Subscribe(
@@ -2708,6 +2767,87 @@ internal static class NodeTypeCompilationHelpers
                 },
             logger,
             "Sources watcher");
+    }
+
+    /// <summary>
+    /// One publication of the sources watcher, as a PURE function: the record the watcher writes
+    /// for a freshly discovered source <paramref name="snapshot"/>, or <c>null</c> when nothing
+    /// changed (a no-op write). A pending adopted-build stamp is fulfilled through
+    /// <paramref name="applyStamp"/> in the same write (#1834).
+    ///
+    /// <para>🚨 <b>One source generation per record</b> (#8413). The fingerprint can be
+    /// INCONCLUSIVE for an emission (<paramref name="fingerprint"/> null: the <c>@@</c>-include
+    /// closure could not be read, #2948). The previous value used to stand beside the NEW
+    /// snapshot, so the record paired today's <see cref="NodeTypeDefinition.CurrentSourceVersions"/>
+    /// with yesterday's <see cref="NodeTypeDefinition.CurrentSourceFingerprint"/>. Every adoption
+    /// judge reads that pair: a bundle baked from the PREVIOUS sources matched the stale
+    /// fingerprint, was stamped <see cref="BuildProvenance.AdoptedVerified"/>, and
+    /// <c>CompiledSources</c> became the new snapshot. The record then read "Up to date" over bytes
+    /// built from the previous source. Now a moved snapshot with an inconclusive fingerprint CLEARS
+    /// the fingerprint (nothing was measured for this generation), and a pending stamp is LEFT
+    /// STANDING. Every judge treats an absent live fingerprint as "cannot judge yet"
+    /// (<see cref="CanJudgeAdoption(NodeTypeDefinition, IReadOnlyDictionary{string, long})"/>), so
+    /// the next conclusive publication decides it. An unchanged snapshot keeps its fingerprint, as
+    /// before, because that value still describes it.</para>
+    /// </summary>
+    /// <param name="def">The owner's current definition.</param>
+    /// <param name="snapshot">The source snapshot just discovered.</param>
+    /// <param name="fingerprint">Its content fingerprint, or null when inconclusive.</param>
+    /// <param name="includes">The resolved include paths, or null when inconclusive.</param>
+    /// <param name="moduleVersion">The partition root's module version reading.</param>
+    /// <param name="applyStamp">The adopted-build stamp judgement.</param>
+    /// <returns>The definition to write, or null for a no-op.</returns>
+    internal static NodeTypeDefinition? PublishSourceSnapshot(
+        NodeTypeDefinition def,
+        IReadOnlyDictionary<string, long> snapshot,
+        string? fingerprint,
+        System.Collections.Immutable.ImmutableList<string>? includes,
+        (string? Version, bool Established) moduleVersion,
+        Func<NodeTypeDefinition, IReadOnlyDictionary<string, long>, NodeTypeDefinition> applyStamp)
+    {
+        var pendingStamp = def.RequestedSourceStampAt is not null;
+        var snapshotMoved = def.CurrentSourceVersions is null
+                            || !DictEquals(def.CurrentSourceVersions, snapshot);
+
+        // Idempotent: no-op when CurrentSourceVersions already matches the just-computed snapshot.
+        // IsDirty is a computed property, so no separate flag to write. (A pending stamp still has
+        // to be consumed, so it never no-ops.)
+        //
+        // The fingerprint is part of the equality: a node persisted before the field existed —
+        // snapshot current, fingerprint null — must acquire one on its first activation. An
+        // INCONCLUSIVE emission (fingerprint null) drops out of the comparison: it has nothing to
+        // say about the field. #4280 — the include list, likewise.
+        if (!pendingStamp
+            && !snapshotMoved
+            && (fingerprint is null
+                || string.Equals(def.CurrentSourceFingerprint, fingerprint, StringComparison.Ordinal))
+            && (includes is null
+                || (def.CurrentSourceIncludes is not null
+                    && def.CurrentSourceIncludes.SequenceEqual(includes, StringComparer.Ordinal)))
+            && (!moduleVersion.Established
+                || string.Equals(def.CurrentModuleVersion, moduleVersion.Version, StringComparison.Ordinal)))
+            return null;
+
+        // 🚨 #8413 — a fingerprint is kept only for the snapshot it was measured over.
+        var inconclusiveMove = fingerprint is null && snapshotMoved;
+        var updated = def with
+        {
+            CurrentSourceVersions = snapshot,
+            CurrentSourceFingerprint = fingerprint
+                ?? (inconclusiveMove ? null : def.CurrentSourceFingerprint),
+            CurrentSourceIncludes = includes
+                ?? (inconclusiveMove ? null : def.CurrentSourceIncludes),
+            CurrentModuleVersion = moduleVersion.Established
+                ? moduleVersion.Version
+                : def.CurrentModuleVersion,
+        };
+
+        // 🚨 #8413 — and a stamp is never judged against a generation nobody measured: it stays
+        // standing for the next conclusive publication (the #4208 deferral, one cause further).
+        if (pendingStamp && !(inconclusiveMove && def.AdoptedSourceFingerprint is { Length: > 0 }))
+            updated = applyStamp(updated, snapshot);
+
+        return updated;
     }
 
     /// <summary>
@@ -3780,6 +3920,16 @@ internal static class NodeTypeCompilationHelpers
     /// any registered <see cref="IPartitionSourceTracking"/> answering true. ONE emission. A mesh
     /// with no implementation registered has no notion of tracking (a local mesh, CI's disposable
     /// meshes, the bake host) and answers true: compiling stays legal there, exactly as it was.
+    ///
+    /// <para>🚨 <b>A partition a registered <see cref="IStaticRepoSource"/> materializes is TRACKED</b>
+    /// (MeshWeaver#6930, 2026-11-20). The static-repo import rewrites such a partition from the
+    /// RUNNING image on every boot (<c>Doc</c> above all), so its live source is not an install's
+    /// leftover copy — it is exactly the source the running image ships, which is the one case the
+    /// gate's "a local build would serve old code as if it were current" does not describe. Before
+    /// this, the image's own documentation NodeTypes read "partition 'Doc' tracks no source", and on
+    /// a pod whose shelf held only a bundle from a NEWER platform build (declined on its platform
+    /// range) four of them parked at Error with nothing to serve, measured on the company instance
+    /// right after its roll to platform 4.</para>
     /// </summary>
     internal static IObservable<bool> PartitionTracksSources(IMessageHub hub, string nodeTypePath)
     {
@@ -3787,12 +3937,100 @@ internal static class NodeTypeCompilationHelpers
         if (providers.Length == 0)
             return Observable.Return(true);
         var partition = PartitionOf(nodeTypePath);
+        if (IsMaterializedFromTheImage(hub, partition))
+            return Observable.Return(true);
         return providers
             .Select(p => p.IsTracked(partition).Take(1))
             .CombineLatest()
             .Select(answers => answers.Any(tracked => tracked))
             .Take(1);
     }
+
+    /// <summary>How long the untracked-module gate waits for the boot bundle seeding pass before it
+    /// judges a type anyway (#8440). Generous: a roll pod is not ready while the pass runs, and a
+    /// type left Pending a little longer costs nothing, while a park written before the pass
+    /// adopted the type costs the whole roll. A pass that never releases costs this delay once.</summary>
+    internal static readonly TimeSpan BootSeedingWaitBudget = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// 🚨 THE ORDERING the untracked-module gate needs (MeshWeaver#8440): emits ONCE when the gate
+    /// may judge <paramref name="hubPath"/> — no boot bundle seeding pass is in flight, no adoption
+    /// of this path is in flight, and the type's CURRENT record is not covered by an adoption — and
+    /// completes EMPTY when an adoption covered it, so nothing is parked over a build that landed.
+    ///
+    /// <para>Measured on the build instance's platform-4 roll pod, 2026-11-20 14:06:44.508: the
+    /// watcher parked <c>Essentials/ActionLink</c> ("no prebuilt build for it landed"), and at .586
+    /// the registry pass ADOPTED it. The park wrote Error; the adoption's stamp was held until
+    /// readiness; readiness read the bake; the bake read the park; every pod of the roll replayed it.
+    /// Waiting here makes that order impossible inside one process: the park decision is taken after
+    /// the pass, against the record (and this process's adoption ledger) as the pass left them.</para>
+    ///
+    /// <para>"Covered" is read the way the first-build kickoff reads it
+    /// (<see cref="AfterThisProcessAdoption"/>): this process's own stamp supersedes the snapshot
+    /// (a provisional pod, whose shared stamp is held), or the record itself is <c>Ok</c> with a
+    /// usable build (an admitted one). Both waits are bounded; a wait that times out judges as
+    /// before, named in the log.</para>
+    /// </summary>
+    internal static IObservable<Unit> AfterInFlightAdoptions(
+        IMessageHub hub,
+        NodeTypeAdoptionRegistry? registry,
+        string hubPath,
+        IObservable<MeshNode?> ownStream,
+        BuildGuards guards,
+        ILogger? logger)
+    {
+        if (registry is null)
+            return Observable.Return(Unit.Default);
+        var seedingClear = registry.WhenBootSeedingClear()
+            .Timeout(BootSeedingWaitBudget)
+            .Catch((TimeoutException _) =>
+            {
+                logger?.LogWarning(
+                    "Compile watcher: {HubPath} waited {Budget} min for the boot bundle seeding pass, which "
+                    + "never finished — judging it at the untracked-module gate anyway (MeshWeaver#8440)",
+                    hubPath, BootSeedingWaitBudget.TotalMinutes);
+                return Observable.Return(Unit.Default);
+            });
+        var pathClear = registry.WhenClear(hubPath)
+            .Timeout(NodeTypeAdoptionRegistry.ReservationWaitBudget)
+            .Catch((TimeoutException _) => Observable.Return(Unit.Default));
+        return seedingClear
+            .SelectMany(_ => pathClear)
+            .Where(_ => !hub.IsShuttingDown)
+            .SelectMany(_ => ownStream.OfType<MeshNode>().Take(1))
+            .Where(current =>
+            {
+                var definition = current.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger);
+                var covered = registry.StampSuperseding(hubPath, current.Version) is not null
+                              || (definition is { CompilationStatus: CompilationStatus.Ok }
+                                  && HasUsableBuild(current, definition, guards));
+                if (covered)
+                    logger?.LogInformation(
+                        "Compile watcher: {HubPath} was adopted from a prebuilt bundle while it waited for the "
+                        + "untracked-module gate — NOT parking it: the adoption is the build (MeshWeaver#8440)",
+                        hubPath);
+                return !covered;
+            })
+            .Select(_ => Unit.Default)
+            .Take(1);
+    }
+
+    /// <summary>
+    /// Whether a registered <see cref="IStaticRepoSource"/> MIRRORS <paramref name="partition"/>
+    /// from the running image (case-insensitive, as partitions are). Reads only each source's
+    /// <see cref="IStaticRepoSource.Partition"/> and <see cref="IStaticRepoSource.SyncMode"/>; never
+    /// enumerates nodes.
+    ///
+    /// <para>🚨 Only a <see cref="PartitionSyncMode.FullReplace"/> source counts. Its import prunes
+    /// every node the image does not ship, so nothing left behind by an install survives a boot.
+    /// An <see cref="PartitionSyncMode.Additive"/> source (the AI catalogs) keeps nodes it did not
+    /// write, so a leftover module type in such a partition is exactly what the gate exists for, and
+    /// it stays gated.</para>
+    /// </summary>
+    internal static bool IsMaterializedFromTheImage(IMessageHub hub, string partition) =>
+        hub.ServiceProvider.GetServices<IStaticRepoSource>()
+            .Any(source => source.SyncMode == PartitionSyncMode.FullReplace
+                           && string.Equals(source.Partition, partition, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The partition that holds the install records — one <c>Package</c> node per installed
     /// package at <c>Plugins/{id}</c>, written by the platform installer after the content lands and
@@ -4262,6 +4500,94 @@ internal static class NodeTypeCompilationHelpers
     /// <summary>The node's content as a <see cref="NodeTypeDefinition"/>, or null.</summary>
     private static NodeTypeDefinition? DefinitionOf(IMessageHub hub, MeshNode? node) =>
         node?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+
+    /// <summary>
+    /// 🚨 <b>THIS PROCESS'S OWN ADOPTION WINS OVER EVERY AUTOMATIC KICKOFF</b> — the interlock that
+    /// #1763 gave the first-build kickoff alone, for every kickoff that flips a type to
+    /// <see cref="CompilationStatus.Pending"/> without a person asking (first-build, recovery,
+    /// framework-stale, failed-verdict re-drive).
+    ///
+    /// <para><b>The deadlock it ends</b> (the dev instance's platform-4 pod, 2026-11-20). A boot
+    /// bundle source adopts a package's prebuilt NodeTypes BEFORE the sweep judges them, and the
+    /// seeder ACTIVATES each type's hub to stamp it. On a platform roll every record names the
+    /// previous framework, so the activation armed the FRAMEWORK-STALE kickoff, which — unlike the
+    /// first-build one — never looked at the reservation: it probed the store before the seeder had
+    /// uploaded, flipped Pending, and the compile watcher's untracked-module gate (#3583) parked the
+    /// type "no prebuilt build for it landed" 78 ms before the adoption it was racing logged
+    /// ADOPTED. The park's write moved the record past the version the adoption had read, so the
+    /// sweep's overlay (<see cref="NodeTypeAdoptionRegistry.StampSuperseding"/>) rightly preferred
+    /// the newer record — the park — and judged the type a CompileError; a type sharing its sources
+    /// that had a working build on the previous image read as a REGRESSION, readiness was refused,
+    /// and the publication gate then discarded the very adoption stamps that would have healed it.
+    /// The pod could never become Ready.</para>
+    ///
+    /// <para><b>Two facts, both this process's own, both already recorded.</b> (1) An adoption IN
+    /// FLIGHT (<see cref="NodeTypeAdoptionRegistry.IsReserved"/>): the kickoff waits for it to clear,
+    /// bounded by <see cref="NodeTypeAdoptionRegistry.ReservationWaitBudget"/> — it DELAYS, it never
+    /// cancels, so a declined adoption still builds. (2) An adoption RECORDED over the record as it
+    /// stands now (<see cref="NodeTypeAdoptionRegistry.StampSuperseding"/> on the CURRENT version):
+    /// on a provisional process the stamp is HELD by the publication gate, so the shared record still
+    /// names the old build, and a kickoff reading it would rebuild — or, in an untracked partition,
+    /// park — a type this process has already adopted. That kickoff is skipped; the sweep counts the
+    /// adoption from the same ledger, and admission releases the stamp. The ordering rule is the
+    /// ledger's, unchanged: a record that moved PAST the adoption (an owner refusal, a source change)
+    /// is newer evidence and the kickoff runs on it.</para>
+    ///
+    /// <para>Emits the CURRENT node once the type is free to be kicked, or completes empty when this
+    /// process's adoption covers it or the hub is going away. A covered skip consumes nothing: a
+    /// one-shot kickoff stays armed for the record's next change, so a record that later moves past
+    /// the adoption (an owner refusal) is still kicked.
+    /// With no registry (a host that never composed <c>AddGraph</c>) it emits the current node at
+    /// once — the behaviour before the interlock existed.</para>
+    /// </summary>
+    /// <param name="hub">The NodeType's own hub.</param>
+    /// <param name="registry">The process's adoption registry, or null.</param>
+    /// <param name="hubPath">The NodeType's path.</param>
+    /// <param name="ownStream">The hub's own node stream.</param>
+    /// <param name="kickoff">What the log line calls the kickoff.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static IObservable<MeshNode> AfterThisProcessAdoption(
+        IMessageHub hub,
+        NodeTypeAdoptionRegistry? registry,
+        string hubPath,
+        IObservable<MeshNode?> ownStream,
+        string kickoff,
+        ILogger? logger)
+    {
+        var cleared = registry is null
+            ? Observable.Return(Unit.Default)
+            : registry.WhenClear(hubPath)
+                .Timeout(NodeTypeAdoptionRegistry.ReservationWaitBudget)
+                .Catch((TimeoutException _) =>
+                {
+                    logger?.LogWarning(
+                        "{Kickoff}: {HubPath} waited {Budget}s for an in-flight prebuilt adoption that "
+                        + "never released its reservation — proceeding anyway (a stranded type is worse "
+                        + "than a redundant compile)",
+                        kickoff, hubPath, NodeTypeAdoptionRegistry.ReservationWaitBudget.TotalSeconds);
+                    return Observable.Return(Unit.Default);
+                });
+        return cleared
+            // 🚨 Gated on teardown, as the first-build kickoff's body is: the wait above can deliver
+            // on a timer thread seconds later, and every kickoff body resolves from the hub's
+            // services inside a single-argument Subscribe.
+            .Where(_ => !hub.IsShuttingDown)
+            // The CURRENT record, not the emission that armed the kickoff: the adoption may have
+            // landed (admitted) or been recorded (provisional) while the kickoff waited.
+            .SelectMany(_ => ownStream.OfType<MeshNode>().Take(1))
+            .Where(current =>
+            {
+                if (registry?.StampSuperseding(hubPath, current.Version) is not { } stamp)
+                    return true;
+                logger?.LogInformation(
+                    "{Kickoff}: {HubPath} is covered by this process's own prebuilt adoption (stamped over "
+                    + "version {Observed}, the record is at {Version}) — NOT flipping it to Pending: the "
+                    + "shared stamp is held until this process passes its readiness validation, and the "
+                    + "sweep counts the adoption from the same ledger",
+                    kickoff, hubPath, stamp.ObservedVersion, current.Version);
+                return false;
+            });
+    }
 
     /// <summary>
     /// 🚨 The framework-stale kickoff's state predicate: a SETTLED record whose recorded build is

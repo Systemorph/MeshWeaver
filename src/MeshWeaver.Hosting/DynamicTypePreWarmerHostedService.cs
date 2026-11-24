@@ -66,6 +66,17 @@ public sealed class DynamicTypePreWarmerHostedService(
     public const string EnabledConfigKey = "PreWarm:DynamicTypes";
 
     /// <summary>
+    /// 🚨 #8440 review — the boot-seeding hold, taken at CONSTRUCTION. The host resolves every
+    /// <see cref="IHostedService"/> before it starts any, so this precedes the Orleans silo, the
+    /// HTTP server and every activation they admit; the warm-up itself only starts at
+    /// <c>ApplicationStarted</c>, and a hold taken there would leave a window in which the compile
+    /// watcher judges a type the coming pass will adopt. Released exactly once: when the seeding
+    /// stages end (<c>seeded</c>), on an early return of the kick, or on stop/dispose.
+    /// </summary>
+    private readonly IDisposable _bootSeedingHold =
+        services.GetService<NodeTypeAdoptionRegistry>()?.HoldBootSeeding() ?? Disposable.Empty;
+
+    /// <summary>
     /// How many of the costliest NodeTypes the warm-up summary NAMES (issue #1439). Small on
     /// purpose: the point is to identify the compile units worth looking at, not to log a table —
     /// and the per-type lines already carry every type's own cost for anyone who wants the full
@@ -162,6 +173,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         if (mesh is null)
         {
             logger.LogDebug("DynamicTypePreWarmer: no mesh hub resolved — skipping startup warm-up");
+            _bootSeedingHold.Dispose();
             bake?.MarkSettled(PreWarmSettlement.NotApplicable);
             return;
         }
@@ -492,16 +504,35 @@ public sealed class DynamicTypePreWarmerHostedService(
         // kept the adoptions. Re-run, the sweep would overlay those retained adoptions, classify the
         // types as baked, and admit the pod with the shared records still naming the old builds.
         // Seeding again re-offers the stamps, held until the re-run's verdict exactly as at boot.
+        // 🚨 THIRD STAGE — every bundle source the deployment DECLARES beyond the two on disk (the
+        // plugin catalog's registries: IBootBundleSource). The sweep below judges an untracked
+        // module type by whether a bundle names it; a source that is offered only AFTER the bake
+        // (the default install, sequenced on PreWarmCompletion) answered "no" for every type it
+        // carries, the sweep refused readiness on them, and the publication gate then refused the
+        // late adoption because readiness was refused — a deadlock no restart could leave. Offered
+        // here, the adoption is held (provisional) or written (admitted) like the two above.
         IObservable<int> SeedBundles() =>
             (closedTypeSet ? Observable.Return(0)
                 : ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
             .SelectMany(_ => closedTypeSet ? Observable.Return(0)
-                : ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger));
-        var seeded = (importSettled?.Settled ?? Observable.Return(Unit.Default))
-            .Do(_ => progress?.Invoke(closedTypeSet
-                ? $"{ClosedTypeSet.ConfigKey}=true — no prebuilt bundle is adopted onto a database NodeType"
-                : "adopting the prebuilt bundles shipped for this framework before enumerating"))
-            .SelectMany(_ => SeedBundles());
+                : ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger))
+            .SelectMany(_ => closedTypeSet ? Observable.Return(0)
+                : BootBundleSources.SeedAll(mesh, logger));
+        // 🚨 #8440 — the boot seeding is HELD on the adoption registry from this service's
+        // construction (see _bootSeedingHold) until the three stages above have offered every bundle. The compile
+        // watcher's untracked-module gate waits on that hold before it parks anything, so a type a
+        // bundle names cannot be parked at Error in the window before its seed starts (measured:
+        // Essentials/ActionLink parked 78 ms before the registry pass adopted it, and the park held
+        // the whole roll). The hold ends when the stages complete — or fault, or are disposed.
+        var seeded = Observable.Using(
+            () => _bootSeedingHold,
+            _ => (importSettled?.Settled ?? Observable.Return(Unit.Default))
+                .Take(1)
+                .Do(_ => progress?.Invoke(closedTypeSet
+                    ? $"{ClosedTypeSet.ConfigKey}=true — no prebuilt bundle is adopted onto a database NodeType"
+                    : "adopting the prebuilt bundles shipped for this framework before enumerating"))
+                .SelectMany(_ => SeedBundles())
+                .Take(1));
 
         if (!sweepEnabled)
         {
@@ -914,6 +945,7 @@ public sealed class DynamicTypePreWarmerHostedService(
     /// <inheritdoc />
     public void Dispose()
     {
+        _bootSeedingHold.Dispose();
         _startedRegistration?.Dispose();
         _startedRegistration = null;
         _warmSubscription?.Dispose();

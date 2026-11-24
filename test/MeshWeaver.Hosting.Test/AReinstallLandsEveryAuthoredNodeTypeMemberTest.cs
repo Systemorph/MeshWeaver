@@ -67,6 +67,7 @@ public sealed class AReinstallLandsEveryAuthoredNodeTypeMemberTest
         if (type == typeof(string)) return (string?)current + "-changed";
         if (type == typeof(long)) return (long)(current ?? 0L) + 1;
         if (type == typeof(DateTimeOffset)) return new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        if (type == typeof(TimeSpan)) return ((TimeSpan?)current ?? TimeSpan.Zero) + TimeSpan.FromDays(1);
         if (type == typeof(List<string>)) return new List<string> { "changed" };
         if (type == typeof(IReadOnlyList<string>)) return new[] { "changed" };
         if (type == typeof(ImmutableList<string>)) return ImmutableList.Create("changed");
@@ -85,6 +86,12 @@ public sealed class AReinstallLandsEveryAuthoredNodeTypeMemberTest
             {
                 SubjectProperty = ((MeshWeaver.Mesh.Security.PointReadDeclaration?)current)?.SubjectProperty + "-changed",
                 Namespace = "changed",
+            };
+        if (type == typeof(NodeTypeListView))
+            return new NodeTypeListView
+            {
+                Mode = NodeTypeListMode.Table,
+                Columns = [new MeshWeaver.Layout.MeshSearchColumn("Changed", "content.changed")],
             };
         if (type.IsEnum) return Enum.GetValues(type).Cast<object>().First(v => !v.Equals(current ?? Activator.CreateInstance(type)));
         return null;

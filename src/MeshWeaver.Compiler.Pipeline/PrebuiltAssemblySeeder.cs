@@ -184,8 +184,9 @@ public static class PrebuiltAssemblySeeder
     /// THIS: the "live source" of a partition nothing syncs is whatever an install left behind, and
     /// compiling it serves old code that reads as current. Two shapes, because the fix differs:
     /// <paramref name="offered"/> means a bundle for this identity DID name the type and was
-    /// declined (its source fingerprint disagrees with the files here — the files are stale, not
-    /// the bundle), otherwise no bundle for this identity named it at all (the bake has not landed).
+    /// declined — for ANY reason the seeder logs (a source fingerprint that disagrees with the
+    /// files here, or a platform floor newer than the running build: #6930 measured the latter
+    /// under the former's wording), otherwise no bundle for this identity named it at all (the bake has not landed).
     /// Pure.
     /// </summary>
     public static string UntrackedPartitionParkReason(string nodeTypePath, bool offered)
@@ -194,9 +195,10 @@ public static class PrebuiltAssemblySeeder
         var partition = slash > 0 ? nodeTypePath[..slash] : nodeTypePath;
         var finding = offered
             ? $"the prebuilt bundle for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
-              + "names this type but was DECLINED: its source fingerprint disagrees with the "
-              + "files this mesh holds (either side may be the newer one), and nothing syncs "
-              + "those files"
+              + "names this type but was DECLINED (the 'Prebuilt assembly … DECLINED' log line "
+              + "names why: its source fingerprint disagrees with the files this mesh holds, or "
+              + "a platform build newer than the one running here produced it), and nothing "
+              + "syncs those files"
             : $"no prebuilt bundle for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
               + "names this type";
         return $"Untracked module content: NodeType '{nodeTypePath}' is a module's content, but "
@@ -520,6 +522,10 @@ public static class PrebuiltAssemblySeeder
         if (NodeTypeBakeStatus.Classify(
                 observed, storeHasBytes, liveFrameworkMvid ?? LiveFrameworkMvid,
                 liveDependencyIdOf, liveToolchainId) is not BakeState.Baked)
+            return null;
+
+        // #4413 — kept means settled: only an Ok record is. See ComboGateWiring.
+        if (observed.CompilationStatus is not CompilationStatus.Ok)
             return null;
 
         if (incomingMvid is { Length: > 0 }

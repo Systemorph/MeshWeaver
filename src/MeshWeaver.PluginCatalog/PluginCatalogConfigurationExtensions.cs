@@ -103,6 +103,11 @@ public static class PluginCatalogConfigurationExtensions
                 // Mesh-scoped: its in-flight cache dies with the mesh.
                 .AddSingleton<IShippedBuildSource>(
                     sp => new RegistryShippedBuildSource(sp.GetRequiredService<IMessageHub>()))
+                // The declared registries' bundles for installed packages in untracked partitions are
+                // offered BEFORE the boot sweep judges them (IBootBundleSource) — never only after the
+                // bake, where a refused readiness would refuse their stamps too. Mesh-scoped.
+                .AddSingleton<MeshWeaver.Hosting.IBootBundleSource>(
+                    sp => new RegistryBundlesBeforeSweep(sp.GetRequiredService<IMessageHub>()))
                 // The first step of every test run on this mesh (MeshOperations.RunTests reads
                 // it): resolve the target set from the feed, read what is installed, converge,
                 // or refuse naming the skew (maintainer, 2026-10-04).

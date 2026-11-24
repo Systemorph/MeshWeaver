@@ -38,6 +38,17 @@ quietly queued on another major's host (measured: core main on net11 claimed by 
 request's channel (`routesRequestChannel: true` on its queue answer); an older instance queues every
 build-request on `latest`, so the follower would wait on a run of another channel — that is `actions`, said.
 
+🧵 ROUTE BY LINE (owner decision on MeshWeaver.Plugins#5577, option A; policy `per-stage-ci-equivalence`). Each platform
+line routes its required verdicts to the build host that runs THAT line. Per-stage equivalence is declared PER LINE —
+`equivalentStages.<repo>.<line>.<stage>`, the line being the delivery line's branch (`main`, `main3`) — so evidence
+measured on one line never moves another line's verdict, and a run that names no line (no `LINES_FILE`) routes no stage.
+GitHub Actions stays only as the FALLBACK while a line's host cannot take the run, and that fallback is explicit: a
+`Fallback to GitHub Actions` warning names the line, the channel and the reason, and the `verdict-sources` output says,
+per stage, which executor produces the verdict, so the required context can print it. A stage declared for a line is
+honoured only when the instance declares that it routes the request's channel AND that a host serves it
+(`channelServed: true` on its queue answer: the control record names a host for the channel). Anything else is the
+fallback, said.
+
     python3 .github/scripts/build-executor.py --self-test
     python3 .github/scripts/build-executor.py        # reads the environment the workflow sets
 
@@ -128,6 +139,9 @@ class Inputs:
     # core's delivery lines (.github/delivery-lines.json): when set, the channel is the line's declared
     # `buildHostChannel` (resolve_line_channel), never `channel` above.
     lines_file: str = ""
+    # The delivery line this run belongs to (resolve_line_channel): '' without a lines file, or for a run on a branch that
+    # is not a line. Per-line equivalence is read under this key (route by line).
+    line: str = ""
 
 
 @dataclass
@@ -141,6 +155,13 @@ class Decision:
     # no per-stage answer; a consumer then reads the run-level `executor` for every stage (today's behaviour).
     stages: dict = field(default_factory=dict)
     channel: str = "latest"   # the channel this run was decided for (the follow jobs read it)
+    line: str = ""            # the delivery line the run belongs to ('' = none named)
+    # {stage: why}: the stages DECLARED equivalent for this run's line whose verdict still comes from GitHub Actions in
+    # this run, because the line's host could not take it. This is the explicit FALLBACK (route by line).
+    fallbacks: dict = field(default_factory=dict)
+    # {stage: {"executor": "host" | "actions", "fallback": bool, "line", "channel", "why"}}: WHO PRODUCES each stage's
+    # verdict in this run, for the required context to print (verdict_sources fills it).
+    sources: dict = field(default_factory=dict)
 
 
 CHANNEL_SHAPE = re.compile(r"[a-z0-9][a-z0-9._-]*")
@@ -182,7 +203,7 @@ def resolve_line_channel(i: Inputs) -> tuple[Inputs, str]:
     channel = line.get("buildHostChannel")
     if not isinstance(channel, str) or not CHANNEL_SHAPE.fullmatch(channel):
         raise BadInput(f"the delivery line {branch!r} declares no build-host channel (`buildHostChannel` is {channel!r}) in {i.lines_file}")
-    return Inputs(**{**i.__dict__, "channel": channel}), (
+    return Inputs(**{**i.__dict__, "channel": channel, "line": branch}), (
         f"the {'base ' if pr else ''}line {branch} runs on build-{channel} (its declared buildHostChannel)")
 
 
@@ -198,14 +219,33 @@ def channel_unroutable(i: Inputs, answer: object) -> str:
             f"declare routesRequestChannel) — a follower would wait on a run of another channel")
 
 
-def run_page_url(api: str, repo_name: str, sha: str) -> str:
-    """The queued run's live page: the API's origin + `Hosting/Builds/<repo>/<sha>` (a latest run's node id
-    is its sha — the only channel a build-request queues). '' when the API is not a safe URL or the
-    names are not path-shaped."""
+def channel_unserved(i: Inputs, answer: object) -> str:
+    """Why no build host serves this run's channel, or '' when the instance DECLARES that one does (`channelServed: true`
+    on its queue answer: the control record names a host for the channel). This is declared, never derived from who
+    happened to claim last. An instance that does not say is read as NOT serving: a stage whose verdict the host is to
+    carry must never be followed into a queue no host takes from, which would hold its required context until the cap.
+    `latest` is always served, exactly as channel_unroutable treats it: an instance that predates `channelServed` keeps
+    its latest runs (review of #8418 — decide_forced read it without the exemption _decide_on_channel had)."""
+    if i.channel == "latest":
+        return ""
+    if isinstance(answer, dict) and answer.get("channelServed") is True:
+        return ""
+    if isinstance(answer, dict) and answer.get("channelServed") is False:
+        return (f"the operations instance declares no build host serving channel '{i.channel}' (channelServed: false) — "
+                f"the line's host is down or not provisioned")
+    return f"the operations instance does not say whether a build host serves channel '{i.channel}' (no channelServed on its queue answer)"
+
+
+def run_page_url(api: str, repo_name: str, sha: str, channel: str = "latest") -> str:
+    """The queued run's live page: the API's origin + `Hosting/Builds/<repo>/<id>`, where a latest run's node id is its
+    sha and a run on another channel's is `<sha>-<channel>` (the queue's BuildChannel.IdOf). '' when the API is not a
+    safe URL or the names are not path-shaped."""
     if not safe_url(api) or not re.fullmatch(r"[A-Za-z0-9._-]+", repo_name or "") or not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
         return ""
+    if not CHANNEL_SHAPE.fullmatch(channel or ""):
+        return ""
     p = urllib.parse.urlparse(api)
-    return f"{p.scheme}://{p.netloc}/Hosting/Builds/{repo_name}/{sha}"
+    return f"{p.scheme}://{p.netloc}/Hosting/Builds/{repo_name}/{sha if channel == 'latest' else f'{sha}-{channel}'}"
 
 
 def safe_url(raw: str) -> str:
@@ -366,11 +406,18 @@ def evidence_problem(evidence: object) -> str:
     return ""
 
 
-def equivalent_stages(doc: Optional[dict], repo_name: str, names: list, withholds: Optional[dict] = None) -> tuple[list, list]:
-    """(the declared stages whose verdict the HOST carries, notes on every declaration that was NOT honoured).
-    A stage is honoured only when `equivalentStages.<repo>.<stage>` declares evidence that meets the bar AND every
-    stage declared BEFORE it is honoured too: the host runs its stages fail-fast in the declared order, so a later
-    stage behind a shadow one could read `not run` and turn a required context red for a reason it never checked.
+def _evidence_shaped(v: object) -> bool:
+    """A value of the per-REPOSITORY shape of before ({stage: evidence}): an object whose keys are all evidence fields."""
+    return isinstance(v, dict) and bool(v) and all(k in ("comparable", "disagreements", "report") for k in v)
+
+
+def equivalent_stages(doc: Optional[dict], repo_name: str, names: list, withholds: Optional[dict] = None,
+                      line: str = "") -> tuple[list, list]:
+    """(the declared stages whose verdict the HOST carries on this run's LINE, notes on every declaration that was NOT
+    honoured). ROUTE BY LINE: a stage is honoured only when `equivalentStages.<repo>.<line>.<stage>` declares evidence
+    that meets the bar for THIS run's line (a run that names no line routes no stage), AND every stage declared BEFORE
+    it is honoured too: the host runs its stages fail-fast in the declared order, so a later stage behind a shadow one
+    could read `not run` and turn a required context red for a reason it never checked.
     A stage that WITHHOLDS suites on the host (`withholds`, stage_withholds) is never honoured: the host's green would
     stand for suites it did not run, and with the Actions legs skipped nobody would run them.
     Pure."""
@@ -379,11 +426,31 @@ def equivalent_stages(doc: Optional[dict], repo_name: str, names: list, withhold
     table = doc.get("equivalentStages", {})
     if not isinstance(table, dict):
         return [], ["the routing decision's equivalentStages is not an object — no stage is routed"]
-    entries = table.get(repo_name, {})
-    if not isinstance(entries, dict):
+    per_line = table.get(repo_name, {})
+    if not isinstance(per_line, dict):
         return [], [f"equivalentStages.{repo_name} is not an object — no stage is routed"]
-    notes = [f"equivalentStages.{repo_name}.{s} names a stage .github/build-stages.json does not declare — ignored"
-             for s in entries if s not in names]
+    # the per-REPOSITORY shape of before route by line ({stage: evidence}) names no line, so it routes nothing — said
+    # (a key is that shape when it is a declared stage, or when its value is evidence-shaped — so a legacy entry for a
+    # stage build-stages.json does not declare is said too, never silently dropped)
+    legacy = [k for k, v in per_line.items() if k in names or _evidence_shaped(v)]
+    notes = [f"equivalentStages.{repo_name}.{k} is a stage where a line belongs — equivalence is declared per line "
+             f"(equivalentStages.{repo_name}.<line>.{k}) — ignored" for k in legacy]
+    if not line:
+        if per_line:
+            notes.append(f"equivalentStages.{repo_name} declares the line(s) {', '.join(sorted(per_line))}, but this run names "
+                         f"no delivery line (no LINES_FILE, or a branch that is not a line) — route by line: no stage is routed")
+        return [], notes
+    if line not in per_line:
+        lines_declared = sorted(k for k in per_line if k not in legacy)
+        if lines_declared:
+            notes.append(f"equivalentStages.{repo_name} declares the line(s) {', '.join(lines_declared)}, but none for this "
+                         f"run's line {line} — route by line: no stage is routed on {line}")
+        return [], notes
+    entries = per_line.get(line, {})
+    if not isinstance(entries, dict):
+        return [], notes + [f"equivalentStages.{repo_name}.{line} is not an object — no stage is routed"]
+    notes += [f"equivalentStages.{repo_name}.{line}.{s} names a stage .github/build-stages.json does not declare — ignored"
+              for s in entries if s not in names]
     honoured: list = []
     gap = ""
     for name in names:
@@ -396,10 +463,10 @@ def equivalent_stages(doc: Optional[dict], repo_name: str, names: list, withhold
             problem = (f"the stage withholds {len(held)} suite(s) a build host cannot run ({'; '.join(held)[:200]}) — only the "
                        f"Actions legs run them, so they keep the verdict")
         if problem:
-            notes.append(f"stage {name} is declared equivalent, but {problem} — it stays in shadow")
+            notes.append(f"stage {name} is declared equivalent on line {line}, but {problem} — it stays in shadow")
             gap = gap or name
         elif gap:
-            notes.append(f"stage {name} is declared equivalent, but the earlier stage {gap} is not — the host runs stages "
+            notes.append(f"stage {name} is declared equivalent on line {line}, but the earlier stage {gap} is not — the host runs stages "
                          f"fail-fast, so {name} stays in shadow until {gap} moves too")
         else:
             honoured.append(name)
@@ -454,15 +521,24 @@ def decide(i: Inputs, get: Get, post: Post, routing: Optional[Routing] = None, r
         raise BadInput(f"CHANNEL {i.channel!r} is not a channel name")
     d = _decide_on_channel(i, get, post, routing, route_only)
     d.channel = i.channel
+    d.line = i.line
     if line_why:
         d.why = f"{d.why} [{line_why}]"
+    d.sources = verdict_sources(d, stage_debt(i.stages_file)[0], i.line)
     return d
 
 
 def _decide_on_channel(i: Inputs, get: Get, post: Post, routing: Optional[Routing], route_only: bool) -> Decision:
+    claimed: list = []   # the stages of a repository that CLAIMS ciEquivalent: on a failure below, each one falls back
+
     def actions(why: str, warn: bool = True) -> Decision:
         lines = [f"::warning title=Heavy legs on Actions::{why} — the heavy legs run on GitHub Actions (today's behaviour)"] if warn else []
-        return Decision(ACTIONS, api, why, lines)
+        # route by line: a repository whose stages ARE the verdict (ciEquivalent), on a run of a declared LINE, that ends
+        # on Actions after its claim was read — a failure, or the instance's own switch — has every stage fall back, said
+        # by stage. `claimed` is still empty for the events the host never runs and for a repository with no claim, and a
+        # run that names no line keeps today's sentences (route by line does not apply to it).
+        fallbacks = {s: why for s in claimed} if i.line else {}
+        return Decision(ACTIONS, api, why, lines + fallback_lines(i, fallbacks), fallbacks=fallbacks)
 
     api = api_url_of(i)
     # 🚨 ONLY A PULL REQUEST OR A TRUNK RUN (review of #7153): the host merges a non-trunk run onto a
@@ -483,6 +559,7 @@ def _decide_on_channel(i: Inputs, get: Get, post: Post, routing: Optional[Routin
         if route_only:
             return actions(f"{i.repo.split('/')[-1]} is not host-forced for this {i.event or 'unknown'} run", warn=False)
         return actions(no_stages, warn=False)
+    claimed = list(stages)
     if not api:
         return actions("no build API is configured (vars.MW_BUILD_API, or an https BUILD_WEBHOOK_URL to derive it from)", warn=False)
     repo_name = i.repo.split("/")[-1]
@@ -502,6 +579,10 @@ def _decide_on_channel(i: Inputs, get: Get, post: Post, routing: Optional[Routin
     # instance that does not queues it on latest, and the follower waits on a run of another channel).
     if unroutable := channel_unroutable(i, answer):
         return actions(unroutable)
+    # 🧵 a LINE's channel is followed only where the instance declares a host serves it (route by line): a run no host
+    # takes would hold every required context until the job cap — that is the fallback to Actions, said
+    if unserved := channel_unserved(i, answer):
+        return actions(unserved)
     if not i.secret or not i.queue_url:
         return actions("the instance says host, but this context has no webhook pair (BUILD_WEBHOOK_URL / BUILD_WEBHOOK_SECRET) to queue the run with")
     if not safe_url(i.queue_url):
@@ -517,7 +598,7 @@ def _decide_on_channel(i: Inputs, get: Get, post: Post, routing: Optional[Routin
         verdict = None
     if verdict != "verified":
         return actions(f"the inbox stored the build-request but did not verify its signature (signature: {verdict!r})")
-    page = run_page_url(api, repo_name, i.sha)
+    page = run_page_url(api, repo_name, i.sha, i.channel)
     return Decision(HOST, api, f"the instance runs {repo_name}'s stages ({', '.join(stages)}) on build-{i.channel}; the run is queued", [
         f"::notice title=Heavy legs on a build host::{repo_name}@{i.sha[:12]} is queued on build-{i.channel} — every heavy leg is followed from the host ({', '.join(stages)})"
         + (f"; live progress: {page}" if page else "")], page, {s: HOST for s in stages})
@@ -531,9 +612,16 @@ def decide_forced(i: Inputs, get: Get, post: Post, api: str, route_only: bool, d
     run is ALSO queued on the host (best effort), so the host runs what it can and its own check runs show how far
     it got — none of them is a required context."""
     repo_name = i.repo.split("/")[-1]
+    names, owes = stage_debt(i.stages_file)
+    # 🧵 Route by line: the stages declared equivalent FOR THIS RUN'S LINE (evidence permitting). Whether the host carries
+    # them is decided below; when it cannot, their verdict falls back to Actions and the run SAYS so (fallback_lines).
+    honoured, notes = equivalent_stages(doc, repo_name, names, stage_withholds(i.stages_file), i.line)
 
-    def actions(why: str) -> Decision:
-        return Decision(ACTIONS, api, why, [f"::warning title=Heavy legs on Actions::{why} — the heavy legs run on GitHub Actions"])
+    def actions(why: str, warn: bool = True) -> Decision:
+        # the host is unreachable for this run, so every stage declared for the line falls back — said, by stage
+        fallbacks = {} if route_only else {s: why for s in honoured}
+        lines = [f"::warning title=Heavy legs on Actions::{why} — the heavy legs run on GitHub Actions"] if warn else []
+        return Decision(ACTIONS, api, why, lines + fallback_lines(i, fallbacks), fallbacks=fallbacks)
 
     if not api:
         return actions(f"{repo_name} is host-forced, but no build API is configured — the routing cannot be confirmed")
@@ -546,8 +634,9 @@ def decide_forced(i: Inputs, get: Get, post: Post, api: str, route_only: bool, d
     except (ValueError, AttributeError):
         answer, executor = None, None
     if not isinstance(executor, str) or executor.strip().lower() != HOST:
-        return Decision(ACTIONS, api, f"{repo_name} is host-forced, but the instance executes it on {executor!s:.40}", [])
-    names, owes = stage_debt(i.stages_file)
+        # the instance's declared switch (Hosting:Builds:Executor / HostRepos) is the owner's rollback, not a host that is
+        # down — but a stage declared for this line still loses its host verdict in this run, so it is still SAID
+        return actions(f"{repo_name} is host-forced, but the instance executes it on {executor!s:.40}", warn=False)
     queued = "not queued (route check only)" if route_only else "not queued (no stages declared)"
     verified = False
     unroutable = channel_unroutable(i, answer)
@@ -568,12 +657,15 @@ def decide_forced(i: Inputs, get: Get, post: Post, api: str, route_only: bool, d
                       else f"NOT queued on the host (HTTP {st:03d}, signature {verdict!r})")
         else:
             queued = "NOT queued on the host (no webhook pair or an unsafe inbox in this context)"
-    # 🧩 Per-stage equivalence: only on a run the host really holds (queued AND verified) — a stage whose verdict the
-    # host is to carry on a run it never received would leave its required context waiting on nothing.
-    honoured, notes = equivalent_stages(doc, repo_name, names, stage_withholds(i.stages_file))
-    host_stages = honoured if verified else []
-    if honoured and not verified:
-        notes.append(f"stage(s) {', '.join(honoured)} are declared equivalent, but this run is {queued} — they stay on Actions for this run")
+    # 🧩 Per-stage equivalence: only on a run the host really holds (queued AND verified) on a channel the instance
+    # declares a host SERVES — a stage whose verdict the host is to carry on a run no host takes would leave its required
+    # context waiting on nothing. Otherwise the line's stages FALL BACK to Actions, said by stage.
+    unserved = channel_unserved(i, answer)
+    host_stages = honoured if verified and not unserved else []
+    fallbacks: dict = {}
+    if honoured and not host_stages and not route_only:
+        reason = f"this run is {queued}" if not verified else unserved
+        fallbacks = {s: reason for s in honoured}
     why = (f"{repo_name} is routed to the build server by the owner's decision (policy {ROUTING_POLICY}) in SHADOW while its "
            f"host stages still owe parity with the Actions legs — the legs run on Actions and carry every required verdict "
            f"until the debt below is paid and `ciEquivalent` is claimed; the run is {queued}")
@@ -582,10 +674,40 @@ def decide_forced(i: Inputs, get: Get, post: Post, api: str, route_only: bool, d
                 f"required contexts carry the host's followed verdict, the other stages stay in shadow")
     lines = [f"::warning title=Shadow run on the build host (owner decision {ROUTING_POLICY})::{why}"]
     lines += [f"::notice title=Stage on the build host::{s}: the host's verdict is followed into its required context (declared equivalent)" for s in host_stages]
+    lines += fallback_lines(i, fallbacks)
     lines += [f"::warning title=Stage equivalence not honoured::{n[:900]}" for n in notes]
     lines += [f"::warning title=Owed on the build host (shadow — not a red)::{o[:900]}" for o in owes]
     return Decision(HOST_FORCED, api, why + " — owed: " + " | ".join(o[:300] for o in owes), lines,
-                    stages={n: (HOST if n in host_stages else HOST_FORCED) for n in names})
+                    stages={n: (HOST if n in host_stages else HOST_FORCED) for n in names}, fallbacks=fallbacks)
+
+
+def fallback_lines(i: Inputs, fallbacks: dict) -> list:
+    """The explicit FALLBACK, one warning per stage (route by line): the stage is declared equivalent for this run's
+    line, but its verdict comes from GitHub Actions in this run — the line, the channel and the reason named. Pure."""
+    return [f"::warning title=Fallback to GitHub Actions::{s}: declared equivalent on line {i.line or '?'} (build-{i.channel}), "
+            f"but its verdict comes from GitHub Actions in this run — {why[:700]}" for s, why in fallbacks.items()]
+
+
+def verdict_sources(d: Decision, names: list, line: str) -> dict:
+    """{stage: {executor, fallback, line, channel, why}} — WHO PRODUCES each declared stage's verdict in this run, in one
+    sentence a required context prints (the verdict says which executor produced it). `host` only where the follow job
+    carries the host's verdict; `actions` everywhere else, with `fallback: true` where the stage was declared equivalent
+    for this line and the host could not take the run. Pure."""
+    out: dict = {}
+    for s in names:
+        on = (d.stages or {}).get(s) or d.executor
+        if on == HOST:
+            why = f"the build host on build-{d.channel} (line {line or '?'}); its verdict is followed into this context"
+            out[s] = {"executor": HOST, "fallback": False, "line": line, "channel": d.channel, "why": why}
+        elif s in d.fallbacks:
+            why = (f"GitHub Actions, as the FALLBACK: the stage is declared equivalent on line {line or '?'}, but "
+                   f"{d.fallbacks[s][:400]}")
+            out[s] = {"executor": ACTIONS, "fallback": True, "line": line, "channel": d.channel, "why": why}
+        else:
+            why = ("GitHub Actions; the build host runs it in shadow (not declared equivalent on this line)" if on == HOST_FORCED
+                   else "GitHub Actions; this run is not routed to a build host")
+            out[s] = {"executor": ACTIONS, "fallback": False, "line": line, "channel": d.channel, "why": why}
+    return out
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -678,17 +800,23 @@ def emit(d: Decision, env: dict) -> None:
             # `fromJSON(stage-executors)['<stage>'] || executor`, so an empty map is today's behaviour for every stage.
             f.write(f"executor={d.executor}\napi-url={d.api_url}\nstage-executors={json.dumps(d.stages, sort_keys=True, separators=(',', ':'))}\n"
                     f"channel={d.channel}\n")
+            # route by line: the run's line, and per stage WHO PRODUCES its verdict — a required context prints
+            # `fromJSON(verdict-sources)['<stage>'].why`, so every verdict says which executor produced it
+            f.write(f"line={d.line}\nverdict-sources={json.dumps(d.sources, sort_keys=True, separators=(',', ':'), ensure_ascii=False)}\n")
     if env.get("GITHUB_STEP_SUMMARY"):
         with open(env["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(f"- 🏗️ Heavy legs: **{d.executor}** — {d.why.replace(chr(10), ' ')}\n")
+            for s, src in d.sources.items():
+                f.write(f"- {'🏗️' if src['executor'] == HOST else '↩️' if src['fallback'] else '⚙️'} `{s}` verdict: {src['why']}\n")
             if d.executor == HOST and d.page_url:
                 f.write(f"- 📡 Live progress of the run (stage board, what is left, log tail): {d.page_url}\n")
 
 
-def check_routing(path: str) -> list:
-    """Every problem with a routing decision FILE's per-stage declarations: a malformed table, or evidence below the
-    bar. The committed .github/build-routing.json must answer [] — a declaration the executor would refuse at run time
-    is refused at review instead. Pure but for the read."""
+def check_routing(path: str, lines_file: str = "") -> list:
+    """Every problem with a routing decision FILE's per-line, per-stage declarations: a malformed table, a line key that
+    is not a declared delivery line, or evidence below the bar. The committed .github/build-routing.json must answer
+    [] — a declaration the executor would refuse at run time is refused at review instead. `lines_file` defaults to
+    the routing file's sibling delivery-lines.json; an explicitly named one must exist. Pure but for the reads."""
     try:
         with open(path) as fh:
             doc = json.load(fh)
@@ -698,18 +826,40 @@ def check_routing(path: str) -> list:
         return [f"{path} is not a JSON object"]
     table = doc.get("equivalentStages", {})
     if not isinstance(table, dict):
-        return ["equivalentStages is not an object {repository: {stage: evidence}}"]
+        return ["equivalentStages is not an object {repository: {line: {stage: evidence}}}"]
+    # route by line: every line key must be a DECLARED delivery line (the sibling .github/delivery-lines.json, when it is
+    # there), so a typo or a retired line never sits in the file routing nothing while it reads as a decision
+    lines_path = lines_file or os.path.join(os.path.dirname(os.path.abspath(path)), "delivery-lines.json")
+    declared_lines: Optional[set] = None
+    if os.path.isfile(lines_path):
+        try:
+            with open(lines_path) as fh:
+                ldoc = json.load(fh)
+            declared_lines = {l["branch"] for l in ldoc.get("lines", []) if isinstance(l, dict) and isinstance(l.get("branch"), str)}
+        except (OSError, ValueError, AttributeError) as e:
+            return [f"{lines_path} is unreadable ({type(e).__name__}) — the line keys cannot be checked"]
+    elif lines_file:
+        return [f"{lines_file} is absent — the line keys cannot be checked"]
     problems = []
     forced = doc.get("hostForced") if isinstance(doc.get("hostForced"), list) else []
-    for repo, entries in table.items():
-        if not isinstance(entries, dict):
-            problems.append(f"equivalentStages.{repo} is not an object {{stage: evidence}}")
+    for repo, per_line in table.items():
+        if not isinstance(per_line, dict):
+            problems.append(f"equivalentStages.{repo} is not an object {{line: {{stage: evidence}}}}")
             continue
         if repo not in forced:
             problems.append(f"equivalentStages.{repo}: the repository is not in hostForced, so the declaration routes nothing")
-        for stage, evidence in entries.items():
-            if p := evidence_problem(evidence):
-                problems.append(f"equivalentStages.{repo}.{stage}: {p}")
+        for line, entries in per_line.items():
+            if declared_lines is not None and line not in declared_lines:
+                problems.append(f"equivalentStages.{repo}.{line}: '{line}' is not a delivery line declared in {lines_path} "
+                                f"(declared: {', '.join(sorted(declared_lines)) or 'none'}) — evidence is declared per line (route by line)")
+                continue
+            if not isinstance(entries, dict) or (entries and all(k in ("comparable", "disagreements", "report") for k in entries)):
+                problems.append(f"equivalentStages.{repo}.{line} is not an object {{stage: evidence}} — evidence is declared per "
+                                f"line: equivalentStages.<repository>.<line>.<stage>")
+                continue
+            for stage, evidence in entries.items():
+                if p := evidence_problem(evidence):
+                    problems.append(f"equivalentStages.{repo}.{line}.{stage}: {p}")
     return problems
 
 
@@ -717,7 +867,10 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--check-routing", metavar="FILE",
-                    help="refuse a routing decision whose per-stage equivalence declarations do not meet the parity bar (exit 1)")
+                    help="refuse a routing decision whose per-line, per-stage equivalence declarations do not meet the parity bar "
+                         "or name an undeclared line (exit 1)")
+    ap.add_argument("--lines", metavar="FILE", default="",
+                    help="with --check-routing: the delivery lines the line keys must name (default: the routing file's sibling delivery-lines.json)")
     ap.add_argument("--route-only", action="store_true",
                     help="answer only whether this pull request is HOST-FORCED (policy build-server-routes-all-ci — SHADOW until "
                          "parity): queues nothing and exits 0 either way; the owed gap is printed as warnings")
@@ -725,11 +878,12 @@ def main(argv: list[str]) -> int:
     if a.self_test:
         return self_test()
     if a.check_routing:
-        problems = check_routing(a.check_routing)
+        problems = check_routing(a.check_routing, a.lines)
         for p in problems:
             print(f"::error title=Per-stage equivalence::{p}")
         if not problems:
-            print(f"✓ {a.check_routing}: every per-stage equivalence declaration meets the bar (≥ {MIN_PARITY_PAIRS} comparable, 0 disagreements, a report)")
+            print(f"✓ {a.check_routing}: every per-line, per-stage equivalence declaration names a declared line and meets the bar "
+                  f"(≥ {MIN_PARITY_PAIRS} comparable, 0 disagreements, a report)")
         return 1 if problems else 0
     try:
         d = decide(inputs_from_env(dict(os.environ)), _http_get, _http_post, _routing, route_only=a.route_only)
@@ -973,11 +1127,25 @@ def self_test() -> int:
     check("forced/route-only on an unlisted repository is actions", d.executor == ACTIONS, d)
     # 5b'. PER-STAGE EQUIVALENCE (policy per-stage-ci-equivalence): a declared, evidenced stage of a host-forced
     # repository carries the host's verdict; every other stage stays in shadow. All fakes — no network.
+    # 🧵 ROUTE BY LINE (#5577): evidence is declared per delivery line; these cases run a pull request onto main3 (the
+    # v3 line, build-latest3) on an instance that routes the request's channel and declares a host serving it.
     proven = {"comparable": 23, "disagreements": 0, "report": "build-parity-report.py 2026-10-30"}
-    def route_eq(eq: dict, *repos):
+    eq_lines = os.path.join(tmp, "eq-delivery-lines.json")
+    with open(eq_lines, "w") as fh:
+        json.dump({"lines": [{"branch": "main", "buildHostChannel": "latest4"}, {"branch": "main3", "buildHostChannel": "latest3"}]}, fh)
+    served_q = get_answer(200, {"channel": "latest3", "executor": "host", "routesRequestChannel": True, "channelServed": True})
+
+    def L(**kw) -> Inputs:
+        return with_(**{"stages_file": owing, "lines_file": eq_lines, "base_ref": "main3", **kw})
+
+    def route_raw(eq: object, *repos):
         return lambda: (200, json.dumps({"policy": ROUTING_POLICY, "hostForced": list(repos) or ["MeshWeaver.Plugins"], "equivalentStages": eq}))
+
+    def route_eq(eq: dict, *repos, line: str = "main3"):
+        # {repo: {stage: evidence}} declared under ONE line: {repo: {line: {stage: evidence}}}
+        return route_raw({repo: {line: stages} for repo, stages in eq.items()}, *repos)
     calls.clear()
-    d = decide(with_(stages_file=owing), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}))
+    d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}))
     check("stage/a declared, evidenced FIRST stage is carried by the host; the rest stay in shadow",
           d.executor == HOST_FORCED and d.stages == {"compile-check": HOST, "gate": HOST_FORCED}, d)
     check("stage/... and says so as a notice", any("Stage on the build host" in l and "compile-check" in l for l in d.lines), d.lines)
@@ -986,13 +1154,13 @@ def self_test() -> int:
                               ("no report", {**proven, "report": ""}, "names no report"),
                               ("a bool for a count", {**proven, "comparable": True}, "at least 20"),
                               ("not an object", "proven", "not an object")):
-        d = decide(with_(stages_file=owing), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": ev}}))
+        d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": ev}}))
         check(f"stage/NEGATIVE: evidence with {label} is refused — the stage stays in shadow",
               d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED} and any(phrase in l for l in d.lines), (d.stages, d.lines))
     withholding = os.path.join(tmp, "withholding.json")
     with open(withholding, "w") as fh:
         json.dump({"owes": ["x"], "stages": [{"name": "compile-check", "withholds": ["src/Cosmos.Test (needs docker)"]}, {"name": "gate"}]}, fh)
-    d = decide(with_(stages_file=withholding), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}))
+    d = decide(L(stages_file=withholding), served_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}))
     check("stage/NEGATIVE: a proven stage that WITHHOLDS suites on the host stays in shadow, said (only Actions runs them)",
           d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED} and any("withholds 1 suite" in l and "Cosmos.Test" in l for l in d.lines), (d.stages, d.lines))
     check("stage/withholds are read per stage; a malformed declaration withholds something",
@@ -1016,31 +1184,104 @@ def self_test() -> int:
         json.dump({"ciEquivalent": True, "owes": [], "stages": [{"name": "compile-check"}, {"name": "portal-hosts", "withholds": []}]}, fh)
     with open(equiv_held, "w") as fh:
         json.dump({"ciEquivalent": True, "owes": [], "stages": [{"name": "compile-check"}, {"name": "portal-hosts", "withholds": ["src/Cosmos.Test (needs docker)"]}]}, fh)
-    d = decide(with_(stages_file=equiv_held), host_q, ok_post, route("MeshWeaver.Plugins"))
+    d = decide(with_(stages_file=equiv_held), served_q, ok_post, route("MeshWeaver.Plugins"))
     check("stage/NEGATIVE: a claiming repository whose stage withholds is NOT routed to the host (no stage carries a host verdict)",
           d.executor != HOST and all(v != HOST for v in (d.stages or {}).values()), (d.executor, d.stages))
     with open(equiv_held, "w") as fh:
         json.dump({"ciEquivalent": True, "owes": [], "stages": [{"name": "compile-check"}, {"name": "portal-hosts", "withholds": []}]}, fh)
     check("stage/an empty withholds does not void the claim", declared_stages(equiv_held)[0] == ["compile-check", "portal-hosts"], declared_stages(equiv_held))
-    d = decide(with_(stages_file=owing), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"gate": proven}}))
+    d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Plugins": {"gate": proven}}))
     check("stage/NEGATIVE: a later stage behind an unproven one stays in shadow (the host runs fail-fast)",
           d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED} and any("fail-fast" in l for l in d.lines), (d.stages, d.lines))
-    d = decide(with_(stages_file=owing), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven, "gate": proven}}))
+    d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven, "gate": proven}}))
     check("stage/both proven in order: both carried by the host", d.stages == {"compile-check": HOST, "gate": HOST}, d.stages)
-    d = decide(with_(stages_file=owing), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"portal-hosts": proven}}))
+    d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Plugins": {"portal-hosts": proven}}))
     check("stage/a declaration for a stage the repository does not declare is ignored, said",
           all(v == HOST_FORCED for v in d.stages.values()) and any("does not declare" in l for l in d.lines), (d.stages, d.lines))
-    d = decide(with_(stages_file=owing), host_q, ok_post, route_eq({"MeshWeaver.Crm": {"compile-check": proven}}))
+    d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Crm": {"compile-check": proven}}))
     check("stage/NEGATIVE: another repository's declaration routes nothing here", d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED}, d.stages)
-    d = decide(with_(stages_file=owing), host_q, post_answer(202, {"signature": "unsigned"}), route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}))
+    d = decide(L(), served_q, post_answer(202, {"signature": "unsigned"}), route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}))
     check("stage/NEGATIVE: a run the host never verifiably received carries NO host stage (its context would wait on nothing)",
-          d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED} and any("stay on Actions for this run" in l for l in d.lines), (d.stages, d.lines))
-    d = decide(with_(stages_file=owing), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}), route_only=True)
+          d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED}
+          and any(l.startswith("::warning title=Fallback to GitHub Actions::compile-check") and "NOT queued" in l for l in d.lines)
+          and d.fallbacks.keys() == {"compile-check"}, (d.stages, d.lines))
+    d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}), route_only=True)
     check("stage/route-only queues nothing, so no stage is carried by the host", all(v == HOST_FORCED for v in d.stages.values()), d.stages)
-    d = decide(with_(stages_file=owing, event="push", ref_name="main", pr=None), host_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}))
+    d = decide(with_(stages_file=owing, event="push", ref_name="main", pr=None), served_q, ok_post, route_eq({"MeshWeaver.Plugins": {"compile-check": proven}}))
     check("stage/a trunk run is never forced, so no stage moves", d.executor == ACTIONS and d.stages == {}, d)
-    d = decide(with_(stages_file=owing), host_q, ok_post, lambda: (200, json.dumps({"hostForced": ["MeshWeaver.Plugins"], "equivalentStages": []})))
+    d = decide(L(), served_q, ok_post, lambda: (200, json.dumps({"hostForced": ["MeshWeaver.Plugins"], "equivalentStages": []})))
     check("stage/a malformed equivalentStages routes no stage, said", all(v == HOST_FORCED for v in d.stages.values()) and any("not an object" in l for l in d.lines), d.lines)
+    # 5b''. 🧵 ROUTE BY LINE: the evidence of one line never moves another; a run that names no line moves nothing; Actions
+    # is the FALLBACK — said by stage, with line, channel and reason — whenever the line's host cannot take the run.
+    v3_only = route_eq({"MeshWeaver.Plugins": {"compile-check": proven, "gate": proven}}, line="main3")
+    d = decide(L(), served_q, ok_post, v3_only)
+    check("line-route/a v3 pull request on v3 evidence: both stages carried by build-latest3, said per stage",
+          d.stages == {"compile-check": HOST, "gate": HOST} and d.line == "main3" and d.channel == "latest3"
+          and d.fallbacks == {} and all(s["executor"] == HOST and "build-latest3" in s["why"] for s in d.sources.values()), (d.stages, d.sources))
+    v4_q = get_answer(200, {"channel": "latest4", "executor": "host", "routesRequestChannel": True, "channelServed": True})
+    d = decide(L(base_ref="main"), v4_q, ok_post, v3_only)
+    check("line-route/NEGATIVE: v3 evidence never moves a v4 pull request — every stage stays in shadow, no fallback (nothing declared for v4)",
+          d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED} and d.line == "main" and d.fallbacks == {}
+          and all(s["executor"] == ACTIONS and not s["fallback"] for s in d.sources.values()), (d.stages, d.sources))
+    d = decide(L(lines_file=""), host_q, ok_post, v3_only)
+    check("line-route/NEGATIVE: a run that names NO line (no LINES_FILE) routes no stage, and says why",
+          all(v == HOST_FORCED for v in d.stages.values()) and any("names no delivery line" in l for l in d.lines), (d.stages, d.lines))
+    d = decide(L(), served_q, ok_post, route_raw({"MeshWeaver.Plugins": {"compile-check": proven}}))
+    check("line-route/NEGATIVE: the per-REPOSITORY shape of before (a stage where a line belongs) routes nothing, said",
+          all(v == HOST_FORCED for v in d.stages.values()) and any("is a stage where a line belongs" in l for l in d.lines), (d.stages, d.lines))
+    for label, answer, phrase in (
+            ("the instance declares no host serving the line's channel",
+             {"executor": "host", "routesRequestChannel": True, "channelServed": False}, "channelServed: false"),
+            ("the instance does not say whether a host serves it",
+             {"executor": "host", "routesRequestChannel": True}, "does not say whether a build host serves"),
+            ("the instance cannot queue the line's channel",
+             {"executor": "host", "channelServed": True}, "routesRequestChannel")):
+        d = decide(L(), get_answer(200, answer), ok_post, v3_only)
+        check(f"line-route/FALLBACK when {label}: Actions carries both verdicts, said by stage with line, channel and reason",
+              d.stages == {"compile-check": HOST_FORCED, "gate": HOST_FORCED} and set(d.fallbacks) == {"compile-check", "gate"}
+              and sum(1 for l in d.lines if l.startswith("::warning title=Fallback to GitHub Actions::") and "line main3 (build-latest3)" in l and phrase in l) == 2
+              and all(s["executor"] == ACTIONS and s["fallback"] and "FALLBACK" in s["why"] for s in d.sources.values()), (d.stages, d.fallbacks, d.lines))
+        check(f"line-route/... and never an error (the Actions legs run; nothing is skipped): {label}", not any(l.startswith("::error") for l in d.lines), d.lines)
+    for label, getter in (("the queue does not answer", get_answer(503, "")), ("the queue answer is not JSON", get_answer(200, "<html>"))):
+        d = decide(L(), getter, ok_post, v3_only)
+        check(f"line-route/FALLBACK when {label}: the run is on Actions and each declared stage says it fell back",
+              d.executor == ACTIONS and set(d.fallbacks) == {"compile-check", "gate"}
+              and any(l.startswith("::warning title=Fallback to GitHub Actions::gate") for l in d.lines), (d.executor, d.fallbacks, d.lines))
+    d = decide(L(), get_answer(200, {"executor": "actions"}), ok_post, v3_only)
+    check("line-route/the instance's switch to actions (the owner's rollback) still names the stages that lost their host verdict",
+          d.executor == ACTIONS and set(d.fallbacks) == {"compile-check", "gate"}
+          and not any(l.startswith("::warning title=Heavy legs on Actions") for l in d.lines), (d.fallbacks, d.lines))
+    d = decide(L(), served_q, ok_post, v3_only, route_only=True)
+    check("line-route/route-only names no fallback (it queues nothing by design)", d.fallbacks == {}, d.fallbacks)
+    d = decide(L(), served_q, ok_post, route_eq({"MeshWeaver.Plugins": {"gate": proven}}))
+    check("line-route/a stage NOT honoured (fail-fast) is shadow, never a fallback (it was never the host's)",
+          d.fallbacks == {} and d.sources["gate"]["executor"] == ACTIONS and not d.sources["gate"]["fallback"], d.sources)
+    # the plain-host route (a repository that CLAIMS ciEquivalent): a failure on a line channel is the fallback, by stage
+    d = decide(L(stages_file=stages), get_answer(200, {"executor": "host", "routesRequestChannel": True, "channelServed": False}), ok_post)
+    check("line-route/a CLAIMING repository whose line channel no host serves falls back to Actions, said by stage",
+          d.executor == ACTIONS and set(d.fallbacks) == {"compile-check", "gate"} and "channelServed: false" in d.why, (d.executor, d.fallbacks))
+    calls.clear()
+    d = decide(L(stages_file=stages), served_q, ok_post)
+    check("line-route/... and is host on a served line channel, its live page under the channel's node id",
+          d.executor == HOST and d.page_url.endswith("a" * 40 + "-latest3") and d.fallbacks == {}, (d.executor, d.page_url))
+    d = decide(with_(stages_file=stages), host_q, ok_post)
+    check("line-route/negative control: a latest run needs no channelServed (an instance of before is unchanged)", d.executor == HOST, d)
+    # review of #8418: the FORCED path exempts `latest` too — a line whose host channel is latest keeps its honoured
+    # stages on an instance that predates channelServed (the same rule _decide_on_channel applies)
+    latest_lines = os.path.join(tmp, "latest-delivery-lines.json")
+    with open(latest_lines, "w") as fh:
+        json.dump({"lines": [{"branch": "main3", "buildHostChannel": "latest"}]}, fh)
+    d = decide(L(lines_file=latest_lines), host_q, ok_post, v3_only)
+    check("line-route/a host-forced line on channel latest needs no channelServed: its proven stages stay on the host",
+          d.channel == "latest" and d.stages == {"compile-check": HOST, "gate": HOST} and d.fallbacks == {}, (d.channel, d.stages, d.fallbacks))
+    check("line-route/... and channel_unserved exempts latest, as channel_unroutable does",
+          channel_unserved(with_(channel="latest"), {}) == "" and channel_unserved(with_(channel="latest3"), {}) != "", "")
+    d = decide(L(base_ref="main"), v4_q, ok_post, v3_only)
+    check("line-route/a run whose line has NO declaration while others do routes nothing, and NAMES its line",
+          all(v == HOST_FORCED for v in d.stages.values()) and any("none for this run's line main" in l for l in d.lines), d.lines)
+    d = decide(L(), served_q, ok_post, route_raw({"MeshWeaver.Plugins": {"portal-hosts": proven}}))
+    check("line-route/NEGATIVE: a per-repository entry for a stage build-stages.json does not declare is said, never silently dropped",
+          all(v == HOST_FORCED for v in d.stages.values()) and any("portal-hosts is a stage where a line belongs" in l for l in d.lines), d.lines)
     # The committed routing decision itself holds the bar (no entry that the executor would refuse).
     committed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "build-routing.json")
     if os.path.isfile(committed):
@@ -1048,8 +1289,21 @@ def self_test() -> int:
         check("routing/the committed .github/build-routing.json declares only evidence that meets the bar", problems == [], problems)
     bad_routing = os.path.join(tmp, "bad-routing.json")
     with open(bad_routing, "w") as fh:
-        json.dump({"hostForced": ["X"], "equivalentStages": {"X": {"gate": {"comparable": 3, "disagreements": 0, "report": "r"}}}}, fh)
-    check("routing/NEGATIVE: --check-routing refuses evidence below the bar", any("at least 20" in p for p in check_routing(bad_routing)), check_routing(bad_routing))
+        json.dump({"hostForced": ["X"], "equivalentStages": {"X": {"main3": {"gate": {"comparable": 3, "disagreements": 0, "report": "r"}}}}}, fh)
+    check("routing/NEGATIVE: --check-routing refuses evidence below the bar",
+          any("at least 20" in p for p in check_routing(bad_routing, eq_lines)), check_routing(bad_routing, eq_lines))
+    for label, eq, phrase in (
+            ("an undeclared line", {"X": {"main2": {"gate": proven}}}, "'main2' is not a delivery line"),
+            ("the per-repository shape (evidence where a line belongs)", {"X": {"gate": proven}}, "'gate' is not a delivery line"),
+            ("evidence directly under a line", {"X": {"main3": proven}}, "evidence is declared per line")):
+        with open(bad_routing, "w") as fh:
+            json.dump({"hostForced": ["X"], "equivalentStages": eq}, fh)
+        check(f"routing/NEGATIVE: --check-routing refuses {label}", any(phrase in p for p in check_routing(bad_routing, eq_lines)), check_routing(bad_routing, eq_lines))
+    with open(bad_routing, "w") as fh:
+        json.dump({"hostForced": ["X"], "equivalentStages": {"X": {"main3": {"gate": proven}, "main": {}}}}, fh)
+    check("routing/positive control: a proven stage under a declared line passes", check_routing(bad_routing, eq_lines) == [], check_routing(bad_routing, eq_lines))
+    check("routing/an explicitly named lines file that is absent is refused",
+          any("is absent" in p for p in check_routing(bad_routing, os.path.join(tmp, "nope.json"))), check_routing(bad_routing, os.path.join(tmp, "nope.json")))
     # 5c. wiring (core's own lane): SHADOW — on `host-forced` the Actions build runs and the required context is
     # judged on it, the debt is a warning; on plain `host` (a repository that claims parity) the Actions build is
     # replaced by the host's follow jobs (negative control: that route is unchanged).
@@ -1099,7 +1353,7 @@ def self_test() -> int:
     lines_file = os.path.join(tmp, "delivery-lines.json")
     with open(lines_file, "w") as fh:
         json.dump(lines_doc, fh)
-    routes_q = get_answer(200, {"channel": "latest4", "executor": "host", "routesRequestChannel": True})
+    routes_q = get_answer(200, {"channel": "latest4", "executor": "host", "routesRequestChannel": True, "channelServed": True})
     core = with_(repo="Systemorph/MeshWeaver", lines_file=lines_file)
     for base_line, want in (("main", "latest4"), ("main3", "latest3")):
         calls.clear()
@@ -1176,7 +1430,19 @@ def self_test() -> int:
     out, summ = os.path.join(tmp, "out"), os.path.join(tmp, "summary")
     emit(Decision(HOST, "https://control.example.com/api/builds", "queued", [], run_page_url("https://control.example.com/api/builds", "MeshWeaver.Plugins", "a" * 40)),
          {"GITHUB_OUTPUT": out, "GITHUB_STEP_SUMMARY": summ})
-    check("emit/outputs", open(out).read() == "executor=host\napi-url=https://control.example.com/api/builds\nstage-executors={}\nchannel=latest\n", open(out).read())
+    check("emit/outputs", open(out).read() == "executor=host\napi-url=https://control.example.com/api/builds\nstage-executors={}\nchannel=latest\n"
+          "line=\nverdict-sources={}\n", open(out).read())
+    # route by line: the run's line and WHO PRODUCES each stage's verdict are outputs a required context prints
+    out3, summ3 = os.path.join(tmp, "out3"), os.path.join(tmp, "summary3")
+    d = decide(L(), get_answer(200, {"executor": "host", "routesRequestChannel": True, "channelServed": False}), ok_post, v3_only)
+    emit(d, {"GITHUB_OUTPUT": out3, "GITHUB_STEP_SUMMARY": summ3})
+    written = dict(ln.split("=", 1) for ln in open(out3).read().splitlines())
+    sources = json.loads(written.get("verdict-sources", "{}"))
+    check("emit/line and verdict-sources are written, one line each, with the fallback named per stage",
+          written.get("line") == "main3" and sources.get("gate", {}).get("fallback") is True
+          and "FALLBACK" in sources.get("gate", {}).get("why", "") and len(open(out3).read().splitlines()) == 6, open(out3).read())
+    check("emit/the summary says, per stage, which executor produces its verdict",
+          "`gate` verdict: GitHub Actions, as the FALLBACK" in open(summ3).read() and "`compile-check` verdict:" in open(summ3).read(), open(summ3).read())
     out2 = os.path.join(tmp, "out2")
     emit(Decision(HOST_FORCED, "https://control.example.com/api/builds", "shadow", [], "", {"gate": HOST_FORCED, "compile-check": HOST}),
          {"GITHUB_OUTPUT": out2})
@@ -1196,7 +1462,8 @@ def self_test() -> int:
     print("build-executor self-test: all cases passed (host when declared + said + queued and verified; actions — said — on every failure: "
           "no stages, no API, unsafe URL, unreachable, 503, not JSON, no executor, actions, unknown, no pair, refused, unverified; the "
           "request's shape, trunk, the admission's base, the signature, outputs; host-forced = shadow: queued, legs on Actions, debt as warnings; "
-          "the line picks the channel — main → latest4, main3 → latest3, an undeclared base red, a non-routing instance never queued)")
+          "the line picks the channel — main → latest4, main3 → latest3, an undeclared base red, a non-routing instance never queued; "
+          "route by line — evidence per line, no line routes nothing, Actions as the said fallback per stage when a line's host cannot take the run)")
     return 0
 
 

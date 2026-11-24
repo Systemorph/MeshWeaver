@@ -119,6 +119,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Three Registries a Read Can Miss](ThreeRegistriesAReadCanMiss) — "the type is not registered" is three unrelated tables (the hub's type registry, the workspace's mapped collections, the reduce manager), so a guard that checks one while the read uses another passes having checked nothing; plus what a refusal and a recovery failure must NAME to be followed up
 - [An Answer Nobody Gave Is Not Cached](AnswerNobodyGaveIsNotCached) — a synced chain replays its FIRST frame for the life of the process, and a provider that completes without an Initial is counted as an empty one, so a cold moment used to become a permanent false "absent"; the frame now names who never answered and an unanswered frame is delivered but not kept
 - [The Query Fan-In's Stall Terminal](QueryFanInStallTerminal) — a provider that neither emits, completes nor errors used to starve the all-providers Initial gate for ever, with no error and nothing to grep; the merge now faults naming it, at a DERIVED rung strictly inside the permission fold's own budget, and every consumer that decides access already fails closed on it
+- [Progressive Queries](ProgressiveQueries) — `MeshQueryRequest.Progressive` lets a caller that keeps consuming the stream take each partition's rows as that partition answers; opt-in, because many callers take the first Initial as the whole answer, and the settled result is the non-progressive answer
 - [A Standing Watch Re-Opens After a Transient Fault](StandingWatchesReopen) — a subscription held for the process's life has no next caller, so it must re-open itself after a typed transient fault, bounded; and "no answer in time" has two shapes, the in-process timeout and the router's flattened one
 - [MeshNode Stream Cache](MeshNodeStreamCache)
 - [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
@@ -184,6 +185,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Import-Side Content Degradation](ImportSideContentDegradation) — a typed file whose own parser is absent on the importing host lands as Markdown with its configuration discarded, and the read-side degradation instrument is blind to it by construction, because the content it wrote types perfectly (#4319)
 - [Vector Search](VectorSearch)
 - [Durable But Unreadable](DurableButUnreadable) — a write that is acknowledged, versioned and invisible
+- [Read After Write Across Hubs](ReadAfterWriteAcrossHubs) — a write's terminal means the node is readable from any hub; why it was not (two owner streams)
 - [Instance-Key Resolution](InstanceKeyResolution) — the registry reads an instance key through live mirrors, never a per-request point read
 - [Cross-Schema Fan-Out Elimination](CrossSchemaFanOutElimination) — an unanchored query is a lock bomb; the census and the per-caller plan
 - [Addressed Notifications](AddressedNotifications) — plan 1 worked out: deliver a notification to its addressee so the bell reads two schemas, not 199
@@ -256,6 +258,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Communication Hub](CommunicationHub) — one participant registry, one message-type family (approvals, notifications, information requests) and the master-plus-copies fan-out that keeps every inbox query anchored to one schema
 - [Notifications](Notifications)
 - [Notification Retention](NotificationRetention) — the platform's first data-retention pass, and why it is a logon action
+- [Data Retention](DataRetention) — the configurable retention of activities, version history and log-entry rows: per-instance config keys, per-partition rules (pricing tiers), and the bounded sweep that applies them
 - [Agentic AI](AgenticAI)
 - [Script Execution](ScriptExecution)
 - [Agent Framework Stores — mesh nodes behind Microsoft's abstractions](AgentFrameworkStores)
@@ -527,6 +530,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Release & Self-Update Strategy](ReleaseStrategy)
 - [CD Delivery Lines](CdDeliveryLines) — one `main-cd.yml` delivers every branch line (`main`, `main3`): the line is derived from the event and refused by name otherwise, each line runs its own copy of the file, its own Plugins branch, floating label and concurrency lanes, and every "newest set" selection stays inside the line's major (policy `major-lines-run-separately`)
 - [Release Channels](ReleaseChannels) — a channel is a named, moving pointer to an immutable release; `latest` is derived and only `stable` is promoted, and a channel names what to SELECT while the selection always resolves to an immutable id that is what gets pinned, recorded and run
+- [Canary Per Major Line](CanaryPerMajorLine) — one canary deployment per major line follows `latest` for the platform and every module; every other deployment of the line follows `stable`, which advances only after the canary soaked a build green, computed once on the control instance and taken by followers as one wave
 - [Release Editions and the Declared Labels](ReleaseEditions) — every moving image label (`3-latest`, `3.1-stable`, `3-mac`, `3-enterprise`, `main`) declared in one file that retention excludes by name; who writes each one, and the gap to close before a Mac Studio or Mac mini can host an instance
 - [Release Support Policy](/Doc/Architecture/SupportPolicy)
 - [Released Artifact Retention](ReleasedArtifactRetention) — retain artifacts for at least 30 days, supported releases for their support lifetime, and every artifact still needed by a published set or consumer

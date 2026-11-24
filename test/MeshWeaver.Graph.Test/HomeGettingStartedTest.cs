@@ -62,6 +62,17 @@ public class HomeGettingStartedTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     [Fact]
+    public void TheGuideAreaNameIsNotTheSetupWizardsPage()
+    {
+        // The setup wizard (MeshWeaver.AI) owns /{user}/GettingStarted. Both register on the user hub; the
+        // later registration wins, so a shared name made the home embed the full-height wizard screen
+        // (and its "finish later" navigate to "/" was a no-op) on every instance that has the AI module.
+        HomeGettingStarted.AreaName.Should().NotBe("GettingStarted");
+        UserActivityLayoutAreas.UserWelcomeMarkdown("Jane").Should()
+            .Contain($"area/{HomeGettingStarted.AreaName}").And.NotContain("area/GettingStarted\"");
+    }
+
+    [Fact]
     public void TheGuideIsNotOnAnAuthoredHome()
     {
         var authored = UserActivityLayoutAreas.BuildOwnerHome(Alice, "Alice", MeshNode.FromPath(Alice) with
@@ -72,7 +83,7 @@ public class HomeGettingStartedTest(ITestOutputHelper output) : MonolithMeshTest
 
         var markdown = authored.Should().BeOfType<MarkdownControl>().Which.Markdown?.ToString();
         Assert.NotNull(markdown);
-        markdown.Should().NotContain("area/GettingStarted",
+        markdown.Should().NotContain("area/HomeGettingStarted",
             "a home whose owner wrote their own Body shows only what that page embeds");
     }
 

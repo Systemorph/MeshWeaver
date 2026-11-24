@@ -87,6 +87,20 @@ that [#2776](https://github.com/Systemorph/MeshWeaver/issues/2776) was filed on.
 > streams: at most 3 posts to the subscriber, and all 60 mirrors still re-ask). Unchanged: the
 > re-asks themselves, which still cross the router one per stream.
 
+> **Heartbeats are spread, not phase-locked (#5532, the 2026-11-21 recurrence).** The third
+> emitter of that flood was not a teardown at all. Every mirror posts a `HeartBeatEvent` to its
+> owner (first at 5 s, then every 45 s), and an owner that does not serve the named stream answers
+> with a `StreamEndedEvent` (#6047); both cross the pod's mesh hub. Every timer of a wave of mirrors
+> opened in one second had the same first tick and the same period, so the wave beat in one instant,
+> forever. memex-cloud, 2026-11-21T09:29:20Z, `mesh/5oZo…`: 27 of the 30 shed lines named
+> `HeartBeatEvent`, 3 `StreamEndedEvent`, on a pod whose per-node hubs (thousands of MailCopy
+> hubs read for their attachments) were being disposed. `HeartbeatSchedule` now pulls each stream's
+> first beat (up to 80 %) and period (up to 25 %) EARLIER by a stable hash of its stream id, never
+> later, so the wave decorrelates and the keep-alive cadence is never longer than configured.
+> Test: `HeartbeatWaveSpreadTest` (3000 mirrors: at most 150 beats in any 100 ms mesh-hub window, at
+> the first beat and over five periods; the unspread schedule is the negative control, all 3000 in
+> one window).
+
 ## The two arithmetic traps
 
 #2776 was filed as *"the activity node's owner ends its streams ~5 s in"*, and two hypotheses — a

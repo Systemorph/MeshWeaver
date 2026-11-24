@@ -174,6 +174,29 @@ public record DeploymentContent
     [Description("Instances on this host (deployment ids, the local control instance first)")]
     public ImmutableList<string>? Instances { get; init; }
 
+    /// <summary>
+    /// Where this host is DECLARED to stand (<see cref="HostSite"/>) — set on a <see cref="MacHostKind"/>
+    /// record whose machine was placed at a known site, e.g. handed to a client as its dedicated machine.
+    /// Null (the default, and every record before this field) declares no site: the fleet board says
+    /// "no site declared" and compares nothing. What the control instance OBSERVES — the approximate
+    /// location of the heartbeat's egress address — lives on the host's status, never here
+    /// (Plugins Hosting/MacStudioFleet §2c).
+    /// </summary>
+    [Description("Declared site of a host record — the premises the machine stands in")]
+    public HostSite? Site { get; init; }
+
+    /// <summary>
+    /// Whether the control instance hands this HOST fleet build jobs. Null (the default) states nothing:
+    /// the host takes what its owner's heartbeat opt-in accepts, exactly as before the field. <c>false</c>
+    /// declines them on the control side whatever the heartbeat advertises — a claim naming this machine
+    /// is refused by name — while the host stays enrolled, keeps reporting its signed heartbeat and stays
+    /// device-managed. It is the record-level switch for a machine handed to a client, and it never turns
+    /// jobs ON: <c>true</c> is the same as null, since only the owner's opt-in can offer the machine
+    /// (Plugins Hosting/MacStudioFleet §2c, Hosting/BackLease §13.2).
+    /// </summary>
+    [Description("False: control hands this host no fleet build jobs, whatever its heartbeat opt-in says")]
+    public bool? AcceptsFleetJobs { get; init; }
+
     /// <summary>Lifecycle: Planned, Live, Suspended, Decommissioned. Null is treated as Live.</summary>
     public string? Status { get; init; }
 
