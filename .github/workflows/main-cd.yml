@@ -5228,13 +5228,16 @@ jobs:
           # baseline that is still the armed set can be more than 100 runs old (3.1.13957 was, on
           # 2026-11-24, and every 3.x ladder after it read "not among the last 100" - #8524).
           run_id=""
-          for page in $(seq 1 40); do
-            run_id=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW_FILE/runs?per_page=100&page=$page" \
-              --jq "[.workflow_runs[] | select(.run_number == $BASELINE_RUN_NUMBER)] | .[0].id // empty") \
-              || refuse "could not list this workflow's runs to locate run #$BASELINE_RUN_NUMBER (the run that built $BASELINE_VERSION)"
-            if [ -n "$run_id" ]; then break; fi
+          for page in $(seq 1 100); do
+            # One call per page: "<runs on the page><TAB><matching id>". An empty page is the end of the
+            # history; an API failure is its own refusal, never "not found".
+            row=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW_FILE/runs?per_page=100&page=$page" \
+              --jq "[(.workflow_runs | length), ([.workflow_runs[] | select(.run_number == $BASELINE_RUN_NUMBER)] | .[0].id // \"\")] | @tsv") \
+              || refuse "could not list this workflow's runs (page $page) to locate run #$BASELINE_RUN_NUMBER (the run that built $BASELINE_VERSION)"
+            run_id=$(printf '%s' "$row" | cut -f2)
+            if [ -n "$run_id" ] || [ "$(printf '%s' "$row" | cut -f1)" = "0" ]; then break; fi
           done
-          [ -n "$run_id" ] || refuse "run #$BASELINE_RUN_NUMBER (the run that built $BASELINE_VERSION) is not among the last 4000 runs of $WORKFLOW_FILE"
+          [ -n "$run_id" ] || refuse "run #$BASELINE_RUN_NUMBER (the run that built $BASELINE_VERSION) is not in the history of $WORKFLOW_FILE that GitHub still keeps"
           rm -rf baseline-bundles; mkdir -p baseline-bundles
           gh run download "$run_id" -R "$REPO" -p 'module-bundle-*' -D baseline-bundles \
             || refuse "run $run_id (#$BASELINE_RUN_NUMBER, $BASELINE_VERSION) has no downloadable module-bundle-* artifacts (expired, or that run never packed them)"
@@ -5398,12 +5401,14 @@ jobs:
           if [ -z "${BASELINE_RUN_NUMBER:-}" ]; then echo "base=" >> "$GITHUB_OUTPUT"; echo "no baseline run recorded — no base epoch"; exit 0; fi
           # PAGED, never "the last 100" (see the satellite-compat baseline step; #8524).
           sha=""
-          for page in $(seq 1 40); do
-            sha=$(gh api "repos/$REPO/actions/workflows/main-cd.yml/runs?per_page=100&page=$page" \
-              --jq "[.workflow_runs[] | select(.run_number == $BASELINE_RUN_NUMBER)] | .[0].head_sha // empty")
-            if [ -n "$sha" ]; then break; fi
+          for page in $(seq 1 100); do
+            row=$(gh api "repos/$REPO/actions/workflows/main-cd.yml/runs?per_page=100&page=$page" \
+              --jq "[(.workflow_runs | length), ([.workflow_runs[] | select(.run_number == $BASELINE_RUN_NUMBER)] | .[0].head_sha // \"\")] | @tsv") \
+              || { echo "::error::could not list main-cd runs (page $page) to read the baseline run #$BASELINE_RUN_NUMBER"; exit 1; }
+            sha=$(printf '%s' "$row" | cut -f2)
+            if [ -n "$sha" ] || [ "$(printf '%s' "$row" | cut -f1)" = "0" ]; then break; fi
           done
-          [ -n "$sha" ] || { echo "::error::run #$BASELINE_RUN_NUMBER (the baseline) is not among the last 4000 main-cd runs — its platform commit, and so its compatibility epoch, cannot be read"; exit 1; }
+          [ -n "$sha" ] || { echo "::error::run #$BASELINE_RUN_NUMBER (the baseline) is not in the main-cd history GitHub still keeps — its platform commit, and so its compatibility epoch, cannot be read"; exit 1; }
           git fetch --no-tags --depth=1 origin "$sha"
           base=""
           if git cat-file -e "${sha}:src/MeshWeaver.Compiler/platform-compatibility.json" 2>/dev/null; then
