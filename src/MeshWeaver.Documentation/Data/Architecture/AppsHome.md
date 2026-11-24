@@ -512,3 +512,5 @@ setup wizard's page (the AI module's `OnboardingWizardArea`). Both register an a
 later registration wins, and a shared name made the home embed the wizard's full-height screen — its
 "I'll finish this later" navigates to `/`, which is the home itself, so nothing could dismiss it
 (2026-11-24).
+An authored home `Body` that copied the old `@@("area/GettingStarted")` embed must change it to
+`@@("area/HomeGettingStarted")` — the old name is the setup wizard's page.
