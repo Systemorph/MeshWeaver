@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
 
 namespace MeshWeaver.Compiler;
 
@@ -36,6 +38,25 @@ public sealed class SourceGeneratorLedger
 
     /// <summary>The build recorded under <paramref name="name"/>, or null.</summary>
     internal GeneratorBuild? Recorded(string name) => builds.TryGetValue(name, out var build) ? build : null;
+
+    /// <summary>
+    /// The DECLARED generators this owner has already built (<see cref="DeclaredGenerators"/>),
+    /// keyed by <see cref="DeclaredGenerator.Key"/> — the declaring NodeType plus the hash of its
+    /// generator sources. Each entry's generators hold their own collectible load context, so this
+    /// map is what keeps that context alive for as long as the ledger's owner (the runtime compile
+    /// service, a bake run) lives, and nothing longer. Unlike <see cref="builds"/> there is no
+    /// conflict to refuse: two revisions of one generator are two keys in two contexts.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, ImmutableArray<ISourceGenerator>> declared = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The generators built for <paramref name="key"/>, building them with <paramref name="build"/>
+    /// on the first ask. Two compiles that race the first ask may both build; one result is kept and
+    /// the other's collectible context is simply never referenced again. A build that THROWS is not
+    /// recorded, so the next compile asks again.
+    /// </summary>
+    internal ImmutableArray<ISourceGenerator> DeclaredBuild(string key, Func<ImmutableArray<ISourceGenerator>> build)
+        => declared.TryGetValue(key, out var hit) ? hit : declared.GetOrAdd(key, build());
 }
 
 /// <summary>

@@ -67,7 +67,7 @@ CI also builds images on push, but it lags — check `az acr repository show-tag
 Business rules and scopes were removed from the platform (commit `f7a8c086c`); they ship as the
 **`MeshWeaver.Plugins/BusinessRules` plugin**, which carries the scope runtime as a shared-source library
 node (pulled into a consumer's compilation via `shared=@BusinessRules/Scope/Source`) and carries the
-`ScopeCodeGenerator` source for the generator-injection seam. The platform and the Doc partition start with
+`ScopeCodeGenerator` source, which it DECLARES as a generator (below). The platform and the Doc partition start with
 **zero** business-rules dependency — stated in the comment blocks in `MeshWeaver.Graph.csproj` and
 `Memex.Portal.Distributed.csproj`, and asserted against the built image by `PortalImageFacility`.
 
@@ -76,16 +76,14 @@ Consequences for a deploy:
 - **An `IScope<,>` node needs the BusinessRules plugin installed** on the target environment. It does not
   compile "just by declaring the interface" — neither the `IScope<,>` surface nor the generator is in the
   image's reference set.
-- **`MeshNodeCompilationService.BuiltInGeneratorPaths` is EMPTY on a deployed image.** It only fills when a
-  `MeshWeaver.BusinessRules.Generator.dll` happens to sit next to the app (a dev/self-host tree that put one
-  there) — kept as graceful degradation, not as the shipping story.
-- **The legacy-`#r` strip is keyed off that same list, so on a deployed image it does nothing.**
-  `StripBuiltInScopeGeneratorRef` removes a legacy `#r "nuget:MeshWeaver.BusinessRules.Generator"` only when
-  `builtInPresent` is true. On an image where it is false the `#r` survives and is resolved through NuGet.
-  ⚠️ **Unresolved:** the XML doc on that method still describes the built-in generator as shipping with the
-  platform, and warns that resolving the legacy `#r` hard-fails on a deployed image once the mesh-local feed
-  was gone. Those two statements can no longer both hold. Treat a deployed node still carrying that `#r` as
-  suspect and verify it compiles on the target environment rather than assuming it is filtered.
+- **The scope generator runs because the plugin DECLARES it, not because a DLL is on the image.**
+  `BusinessRules/Scope` names its generator source in `generators`, and the mesh compiles it and runs
+  it over that type and over every `shared=@BusinessRules/Scope/Source` consumer — see
+  [Node Type Compilation → Declared source generators](../NodeTypeCompilation#declared-source-generators).
+  The old probe for a `MeshWeaver.BusinessRules.Generator.dll` beside the app, and the strip of a
+  legacy `#r "nuget:MeshWeaver.BusinessRules.Generator"` keyed off it, are removed. A node that still
+  carries that `#r` resolves it through NuGet like any other package and fails if no feed serves it:
+  delete the line and pull the plugin's sources instead.
 
 **The `dotnet publish -t:PublishContainer` command above is self-contained — there is no pack step and no
 mesh-local feed.** The former `BakeMeshLocalFeed` target and the CI "Pack mesh-local #r packages" step were

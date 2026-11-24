@@ -1088,8 +1088,15 @@ internal class MeshNodeCompilationService(
                 ValidateCellSurfaceSingleHome(node.Path, selfPath, matchedCodePaths)
                     .Select(_ => codeFiles))
             .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path, includeClosure))
-            .SelectMany(codeFiles =>
+            // Stage: the source generators NodeTypes DECLARED for this compile (policy
+            // declared-source-generators) — this type's own and those of every type whose sources
+            // the snapshot pulls. Read before any Roslyn work, so a declared generator that cannot
+            // be read fails the compile by name instead of compiling without it.
+            .SelectMany(codeFiles => ResolveDeclaredGenerators(selfPath, ntDef, matchedCodePaths)
+                .Select(declaredGenerators => (codeFiles, declaredGenerators)))
+            .SelectMany(stage =>
             {
+                var (codeFiles, declaredGenerators) = stage;
                 // Final stage: combine + compile. The Roslyn `Compile` call itself is
                 // the only Task→Observable bridge in this whole method. The join order
                 // lives in the toolchain (it shapes the emitted bytes).
@@ -1183,7 +1190,7 @@ internal class MeshNodeCompilationService(
                 // Catch below leaves it alone) to RunCompile's terminal Error write.
                 return CpuLaneBound.Bound(
                         (ct, laneWait) => OnThreadPool(() =>
-                            CompileAsync(codeFile, configuration, contentCollections, node, laneWait, ct,
+                            CompileAsync(codeFile, configuration, contentCollections, node, declaredGenerators, laneWait, ct,
                                 new DependencyInputs(
                                     [.. matchedCodePaths.Select((path, i) =>
                                         new DependencySourceUnit(path, codeFiles[i].Code ?? string.Empty))],
@@ -1355,6 +1362,83 @@ internal class MeshNodeCompilationService(
                     + $"shared= source entry on '{selfPath}', or clear cellSurface on the owning type."));
             });
     }
+
+    /// <summary>
+    /// The source generators NodeTypes DECLARE for a compile of <paramref name="selfPath"/> (policy
+    /// <c>declared-source-generators</c>, <see cref="DeclaredGenerators"/>): the type's own
+    /// <c>generators</c>, and those of every type whose <c>Source/</c>/<c>Test/</c> subtree
+    /// <paramref name="sourcePaths"/> reaches into — the same owners, in the same order, the bake
+    /// resolves (<see cref="DeclaredGenerators.CandidateOwners"/>).
+    ///
+    /// <para>🚨 It fails CLOSED, unlike the cell-surface gate above, because the two directions are
+    /// opposite: skipping a generator compiles an assembly MISSING the code the declaration exists
+    /// to generate, and that assembly would then be adopted and served. So a stalled read of a
+    /// declaring owner or of one of its generator files is
+    /// <see cref="SourceDiscoveryUnavailableException"/> (an availability failure, retried like any
+    /// other unestablished source set), and a declared file that is genuinely absent is a
+    /// <see cref="CompilationException"/> naming it. An owner that is ABSENT declares nothing.</para>
+    ///
+    /// <para>Zero-cost for a type that pulls no foreign sources and declares none: no read.</para>
+    /// </summary>
+    private IObservable<ImmutableArray<DeclaredGenerator>> ResolveDeclaredGenerators(
+        string selfPath, NodeTypeDefinition? selfDefinition, IReadOnlyList<string> sourcePaths)
+    {
+        var owners = DeclaredGenerators.CandidateOwners(selfPath, sourcePaths);
+        if (owners.Length == 1 && selfDefinition?.Generators is not { Count: > 0 })
+            return Observable.Return(ImmutableArray<DeclaredGenerator>.Empty);
+
+        return owners
+            .Select(owner => (owner.Equals(selfPath, StringComparison.OrdinalIgnoreCase)
+                    ? Observable.Return(selfDefinition)
+                    : ReadDeclaredGeneratorNode(selfPath, owner)
+                        .Select(n => n?.ContentAs<NodeTypeDefinition>(JsonOptions)))
+                .SelectMany(definition => definition?.Generators is { Count: > 0 } entries
+                    ? ReadDeclaredGenerator(selfPath, owner, entries).Select(g => (DeclaredGenerator?)g)
+                    : Observable.Return<DeclaredGenerator?>(null)))
+            // One owner after another, in CandidateOwners' order — the result is ordered either way,
+            // and a sequential walk keeps the reads off the mesh in a burst.
+            .Concat()
+            .Where(generator => generator is not null)
+            .Select(generator => generator!)
+            .ToList()
+            .Select(list => list.ToImmutableArray());
+    }
+
+    /// <summary>One owner's declared generator: every entry's Code node, read in declaration order.</summary>
+    private IObservable<DeclaredGenerator> ReadDeclaredGenerator(
+        string selfPath, string owner, IReadOnlyList<string> entries)
+    {
+        IObservable<ImmutableList<DeclaredGeneratorFile>> files = Observable.Return(ImmutableList<DeclaredGeneratorFile>.Empty);
+        foreach (var entry in entries)
+        {
+            var path = DeclaredGenerators.FilePath(owner, entry);
+            var declaredEntry = entry;
+            files = files.SelectMany(acc => ReadDeclaredGeneratorNode(selfPath, path)
+                .Select(node => node?.ContentAs<CodeConfiguration>(JsonOptions)?.Code is { Length: > 0 } code
+                    ? acc.Add(new DeclaredGeneratorFile(path, code))
+                    : throw new CompilationException(selfPath,
+                        $"'{owner}' declares the source generator '{declaredEntry}', but no Code node with "
+                        + $"source exists at '{path}'. '{selfPath}' pulls '{owner}''s sources, so it is "
+                        + "compiled with that generator or not at all.")));
+        }
+        return files.Select(list => new DeclaredGenerator(owner, [.. list]));
+    }
+
+    /// <summary>
+    /// A bounded System read of a declaring owner or a generator file. A stall is NOT "absent" here
+    /// (see <see cref="ResolveDeclaredGenerators"/>): it surfaces as
+    /// <see cref="SourceDiscoveryUnavailableException"/>, so the compile is retried rather than run
+    /// without the generator.
+    /// </summary>
+    private IObservable<MeshNode?> ReadDeclaredGeneratorNode(string selfPath, string path)
+        => ReadCompileSourceNode(path, ReadTimeoutBehavior.Throw)
+            .Take(1)
+            .Catch<MeshNode?, TimeoutException>(ex => Observable.Throw<MeshNode?>(
+                new SourceDiscoveryUnavailableException(
+                    $"The declared source generators for '{selfPath}' could not be ESTABLISHED: reading "
+                    + $"'{path}' did not answer ({ex.Message}). The compile was not attempted, because "
+                    + "compiling without a declared generator would emit an assembly missing the code it "
+                    + "generates. Retry once the mesh answers.")));
 
     /// <summary>
     /// On a FAILED compile, re-derive the diagnostics in their structured, per-source-file
@@ -1779,11 +1863,6 @@ internal class MeshNodeCompilationService(
             strippedSources.Add((p.Path, stripped, p.LastModifiedTicks));
         }
 
-        // A legacy `#r "nuget:MeshWeaver.BusinessRules.Generator"` must NOT reach the NuGet resolver
-        // (the generator ships built-in now) — see GeneratorPipeline.StripBuiltInScopeGeneratorRef.
-        GeneratorPipeline.StripBuiltInScopeGeneratorRef(
-            allNugetRefs, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
-
         // 🚨 100% reactive — NO await, and the input assembly is NOT wrapped in
         // _ioPool.Run. The only async leaf is NuGet restore (network IO), and it runs
         // ONLY when a `#r "nuget:"` directive is present — bridged through the IoPool
@@ -2112,13 +2191,10 @@ internal class MeshNodeCompilationService(
     /// that touches the network or the disk.
     ///
     /// <para>Strips <c>#r "nuget:…"</c> directives: Roslyn compilation (unlike scripting) does not
-    /// process them. The BusinessRules scope generator is pulled in ONLY when the node Source
-    /// EXPLICITLY declares <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> — no auto-injection
-    /// heuristic (that forced generator resolution on the compile path for any node merely
-    /// mentioning IScope). Explicit <c>#r</c> → resolved by the caller → discovered + run by
-    /// <c>RunSourceGenerators</c>. The legacy built-in-generator <c>#r</c> is stripped here too
-    /// (the same strip <c>AssembleCompilationInputs</c> makes; resolving it hard-fails now that the
-    /// mesh-local feed is gone).</para>
+    /// process them; the caller resolves them and <c>RunSourceGenerators</c> discovers any generator
+    /// among them. The source generators NodeTypes DECLARED for this compile
+    /// (<paramref name="declaredGenerators"/>, policy <c>declared-source-generators</c>) are stamped
+    /// into the text (<see cref="DeclaredGenerators.Stamp"/>), so the content key covers them.</para>
     ///
     /// <para>🚨 <b>Shared with the re-evaluation lane</b> (#1976): the content key is a hash of
     /// THIS text, so the lane's regeneration and the compile MUST produce it from the same code.
@@ -2129,19 +2205,19 @@ internal class MeshNodeCompilationService(
         MeshNode node,
         CodeConfiguration? codeFile,
         string? hubConfiguration,
-        IReadOnlyList<ContentCollectionConfig>? contentCollections)
+        IReadOnlyList<ContentCollectionConfig>? contentCollections,
+        IReadOnlyList<DeclaredGenerator> declaredGenerators)
     {
         var rawSource = _attributeGenerator.GenerateAttributeSource(
             node, codeFile, hubConfiguration, contentCollections);
         var (source, extractedRefs) = NuGetDirectiveParser.Extract(rawSource);
         var nugetRefList = extractedRefs.ToList();
-        GeneratorPipeline.StripBuiltInScopeGeneratorRef(
-            nugetRefList, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
         // 🚨 The references are RECORDED in the build (NuGetBuildRecord): every reader of the bytes —
         // another replica, this one after a restart, the start-up registration pass — resolves the
         // package closure from them before it loads (EnsureBuildPackageProbing). Stamped into the
         // TEXT, so the content key covers it and a build from before the stamp is rebuilt, not adopted.
-        return (NuGetBuildRecord.Stamp(source, nugetRefList), [.. nugetRefList]);
+        return (DeclaredGenerators.Stamp(NuGetBuildRecord.Stamp(source, nugetRefList), declaredGenerators),
+            [.. nugetRefList]);
     }
 
     /// <summary>
@@ -2149,8 +2225,8 @@ internal class MeshNodeCompilationService(
     /// generated input exists as text, and before a single Roslyn call. It keys the exact thing the
     /// toolchain's full-MVID proxy stands in for: what Roslyn is actually fed. The NuGet-resolved
     /// assemblies ride in as generator candidates, so a change in what a <c>#r "nuget:"</c>
-    /// resolves to moves the key (<see cref="GeneratorPipeline.EffectiveGeneratorPaths"/> is the
-    /// same set <c>RunSourceGenerators</c> loads — one resolution, no drift).
+    /// resolves to moves the key (the same set <c>RunSourceGenerators</c> loads — one resolution, no
+    /// drift). A declared generator is in the TEXT (<see cref="PrepareGeneratedSource"/>).
     ///
     /// <para>ONE function, called by the compile that STAMPS the key and by the re-evaluation lane
     /// that READS it (#1976) — see <see cref="PrepareGeneratedSource"/>.</para>
@@ -2239,12 +2315,14 @@ internal class MeshNodeCompilationService(
         var assemblyName = $"DynamicNode_{cacheService.SanitizeNodeName(node.Path)}";
         return BoundLeg(
                 _ => SnapshotSources(ntDef, selfPath, sourcesOverride)
-                    .Select(matches =>
-                        NodeCompileShaping.CollectCompileSources(matches, node.Path, logger).Sources)
-                    .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path))
-                    .Select(codeFiles => PrepareGeneratedSource(
-                        node, NodeCompileShaping.CombineSources(codeFiles),
-                        ntDef.Configuration, ntDef.ContentCollections))
+                    .Select(matches => NodeCompileShaping.CollectCompileSources(matches, node.Path, logger))
+                    // The same declared-generator resolution the compile makes, so the regenerated
+                    // key carries the same stamp.
+                    .SelectMany(collected => ResolveDeclaredGenerators(selfPath, ntDef, collected.MatchedPaths)
+                        .SelectMany(declaredGenerators => ResolveIncludesForCodeFiles(collected.Sources, node.Path)
+                            .Select(codeFiles => PrepareGeneratedSource(
+                                node, NodeCompileShaping.CombineSources(codeFiles),
+                                ntDef.Configuration, ntDef.ContentCollections, declaredGenerators))))
                     .SelectMany(prepared => prepared.NuGetReferences.Length == 0
                         ? Observable.Return(
                             GeneratedInputDigestOf(assemblyName, prepared.Source, [], CancellationToken.None))
@@ -2278,6 +2356,7 @@ internal class MeshNodeCompilationService(
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
         MeshNode node,
+        IReadOnlyList<DeclaredGenerator> declaredGenerators,
         CpuLaneWait laneWait,
         CancellationToken ct,
         DependencyInputs dependencyInputs)
@@ -2290,7 +2369,7 @@ internal class MeshNodeCompilationService(
         // compile instead of returning the stale completed task.
         var lazy = _inflightCompiles.GetOrAdd(nodeName, n =>
             new Lazy<InflightCompile>(() => new InflightCompile(
-                RunCompileAndEvict(codeFile, hubConfiguration, contentCollections, node, n, laneWait, ct, dependencyInputs),
+                RunCompileAndEvict(codeFile, hubConfiguration, contentCollections, node, declaredGenerators, n, laneWait, ct, dependencyInputs),
                 laneWait)));
         var inflight = lazy.Value;
         // A caller that joined a compile already in flight times its bound against the LEADER's
@@ -2305,6 +2384,7 @@ internal class MeshNodeCompilationService(
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
         MeshNode node,
+        IReadOnlyList<DeclaredGenerator> declaredGenerators,
         string nodeName,
         CpuLaneWait laneWait,
         CancellationToken ct,
@@ -2312,7 +2392,7 @@ internal class MeshNodeCompilationService(
     {
         try
         {
-            return await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, nodeName, laneWait, ct, dependencyInputs);
+            return await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, declaredGenerators, nodeName, laneWait, ct, dependencyInputs);
         }
         finally
         {
@@ -2325,6 +2405,7 @@ internal class MeshNodeCompilationService(
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
         MeshNode node,
+        IReadOnlyList<DeclaredGenerator> declaredGenerators,
         string nodeName,
         CpuLaneWait laneWait,
         CancellationToken ct,
@@ -2341,7 +2422,7 @@ internal class MeshNodeCompilationService(
         // extract/strip the `#r "nuget:"` directives — see PrepareGeneratedSource, which the
         // re-evaluation lane shares so a regenerated content key cannot drift from a stamped one.
         var (source, nugetRefs) = PrepareGeneratedSource(
-            node, codeFile, hubConfiguration, contentCollections);
+            node, codeFile, hubConfiguration, contentCollections, declaredGenerators);
         // ONE snapshot: the references Roslyn compiles against and the module files the edge
         // extraction names as modules come from the same enumeration of the installed modules.
         var referenceSnapshot = ReferenceSnapshot;
@@ -2392,7 +2473,7 @@ internal class MeshNodeCompilationService(
                 // The lane's token (pool drain) AND the compile's own bound (BoundLeg) both stop Roslyn.
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, laneCt);
                 return EmitCompiled(
-                    node, nodeName, source, references, nugetAssemblyPaths, sourcePath, dependencyInputs,
+                    node, nodeName, source, references, nugetAssemblyPaths, declaredGenerators, sourcePath, dependencyInputs,
                     referenceSnapshot.ModuleLocations, linked.Token);
             })
             .Await(ct)
@@ -2409,6 +2490,7 @@ internal class MeshNodeCompilationService(
         string source,
         IEnumerable<MetadataReference> references,
         IReadOnlyList<string> nugetAssemblyPaths,
+        IReadOnlyList<DeclaredGenerator> declaredGenerators,
         string sourcePath,
         DependencyInputs dependencyInputs,
         ImmutableArray<string> moduleLocations,
@@ -2432,8 +2514,11 @@ internal class MeshNodeCompilationService(
         // A different build of a generator another NodeType already loaded into this process throws
         // SourceGeneratorBuildConflictException (a CompilationException) naming both NodeTypes, and
         // the terminal write-back parks this one at CompilationStatus=Error with that message (#7444).
+        // A DECLARED generator whose sources do not compile throws a CompilationException naming
+        // the declaring type, which parks this one the same way.
         var compilation = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
-            authored, nugetAssemblyPaths, _generatorLedger, node.Path, logger, ct, out var nodeGeneratedTrees);
+            authored, nugetAssemblyPaths, declaredGenerators, _generatorLedger, node.Path, logger, ct,
+            out var nodeGeneratedTrees);
         // Option C (Doc/Architecture/InMeshImpersonation): references to impersonation APIs in the
         // AUTHORED source AND in what a NODE-SUPPLIED generator (one the node #r'd) emitted — judged
         // after generation, because such a generator's output is the author's code (#6619 review);

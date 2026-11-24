@@ -417,6 +417,93 @@ instance — the mirrored `samples/` subtree was retired and `Northwind` install
 at its own root as a `Store/Plugin` catalog entry, after which the same
 `shared=@…` values resolve as authored.
 
+### Declared source generators
+
+A package can ship a Roslyn **source generator** as plain source, and in-mesh
+NodeTypes that use the package get the generated code at compile time — on a
+deployed portal, in the bake and in `mw-plugin-test compile`/`build`, with the
+same result (policy
+[`declared-source-generators`](../PolicyNotProse)). The BusinessRules package
+uses it for its scope generator, so an `IScope<TIdentity, TState>` gets its
+`…Proxy` implementation generated instead of hand-written.
+
+**Declaring one.** The NodeType that owns the generator lists its source files
+in `generators`, as Code node paths **relative to the type**. The files sit
+outside `Source/` and `Test/`, so they are not also compiled as ordinary
+sources:
+
+```json
+{
+  "$type": "NodeTypeDefinition",
+  "generators": ["GeneratorSource/ScopeCodeGenerator"]
+}
+```
+
+An entry that is absolute, starts with `@`, or contains `..` is refused: a
+package can point only at its own content.
+
+**Who gets it — opt-in per dependent.** The generator runs over:
+
+| compile | gets the generator? |
+|---|---|
+| the declaring type itself (its own `Source/` + `Test/`) | yes |
+| a type whose resolved sources reach into the declaring type's `Source/` or `Test/` (`"shared=@BusinessRules/Scope/Source"`) | yes |
+| any other compile — including on an instance where the package is installed | **no** |
+
+The owners are found from the resolved source paths, with the same
+`{owner}/Source/…` rule the cell-surface gate uses
+(`DeclaredGenerators.CandidateOwners`).
+
+**How it runs.** The mesh compiles the declared files against the host's own
+reference set (which carries the Roslyn the process runs), deterministically,
+and loads the result into a **collectible load context of its own**. That
+context resolves Roslyn from the default context, so the generator implements
+the host's `ISourceGenerator`. Built generators are kept by the compile owner's
+`SourceGeneratorLedger` — the runtime compile service, or one bake run — never
+statically. Two revisions of one generator, for example before and after a
+package update, are two builds in two contexts. Neither is refused, unlike a
+second build of a `#r "nuget:"` generator, which shares the default context
+(#7444).
+
+**Content key.** Each declared generator is recorded in the generated compile
+input as
+`[assembly: AssemblyMetadata("MeshWeaver.DeclaredGenerator", "{owner} sha256:{hash}")]`,
+where the hash covers the generator's file paths and text. Because it is in the
+text, it is part of every content key computed over that text: the runtime's,
+the bake's, the cross-run compile cache's and the re-evaluation lane's. Editing
+the generator therefore rebuilds its consumers, and a compile that runs no
+declared generator keeps exactly the key it had.
+
+**Failure is loud.** A declared file that is absent, or a generator that does
+not compile, fails the consumer's compile with a message naming the declaring
+type and the file. A declaring owner or file that cannot be READ in time is
+`Unavailable`, like any other unestablished source set, and is retried. None of
+these compiles the type without the generator: that would ship an assembly
+missing the code the declaration exists to produce.
+
+**Not covered yet.** Scripts and interactive-markdown cells run no declared
+generator. The language-service paths (hover, completion, the `/code`
+pre-flight) do not either, so they do not see generated members. Core's local
+harness `run-node-tests.py` does not build declared generators.
+
+**Why it is shaped this way.** The earlier plan (MeshWeaver#463,
+MeshWeaver.Plugins#54) was to inject the scope generator into every compile on
+an instance that installed the plugin. It was changed on purpose:
+
+- **Opt-in.** A package must not change what an unrelated NodeType compiles to.
+  The silo wedge that took scopes out of the platform (#463) came from
+  scope-using types activating where nobody asked for them.
+- **Declared.** The generator a compile runs is named in committed content
+  (policy `declared-not-derived`). It is not derived from a DLL that happens to
+  sit next to the app. That probe (`GeneratorPipeline.BuiltInGeneratorPaths`) is
+  removed: no deployed image ever carried the file, so it could only make a dev
+  tree and a portal disagree.
+- **Built from source by the mesh.** BusinessRules is a pure content package,
+  with no compiled module and no build lane of its own. Module bundles carry no
+  analyzer assets. Compiling the declared source where the consumer compiles
+  needs neither, and keeps the generator and its consumers in one versioned
+  package.
+
 ---
 
 ## Watching compile progress

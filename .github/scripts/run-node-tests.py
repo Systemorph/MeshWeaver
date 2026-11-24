@@ -345,9 +345,12 @@ def sibling_plugin_refs(refs: dict) -> tuple[dict, int]:
 
 
 def find_generator(search_roots) -> str | None:
-    """The BusinessRules scope generator ships with the platform; a module whose scopes are IScope<,>
-       interfaces needs it or nothing implements them. Loaded by its real file name — Roslyn resolves
-       analyzers by assembly identity, and a renamed copy silently produces no output."""
+    """A prebuilt BusinessRules scope generator DLL, when the developer has one. The mesh does NOT use
+       one: it compiles the generator a NodeType DECLARES (`generators`, policy
+       declared-source-generators) — which this harness does not build yet, so a module whose scopes
+       rely on the generated proxies needs --with-generator and a locally built generator here.
+       Loaded by its real file name — Roslyn resolves analyzers by assembly identity, and a renamed
+       copy silently produces no output."""
     name = "MeshWeaver.BusinessRules.Generator.dll"
     for root in filter(None, search_roots):
         hits = [p for p in glob.glob(str(Path(root) / "**" / name), recursive=True)
@@ -1140,11 +1143,13 @@ def main() -> int:
     parser.add_argument("--type", action="append", default=[],
                         help="only this NodeType (repeatable); matched on the node name or full path")
     parser.add_argument("--with-generator", action="store_true",
-                        help="also feed the BusinessRules scope generator. OFF by default: proxies "
-                             "are committed by gen-scope-proxies.py and the mesh runs no generator, "
-                             "so the default mirrors the mesh. Turning this on when proxies are "
-                             "committed produces a SECOND implementation per scope and registration "
-                             "fails on a duplicate key.")
+                        help="also feed a locally built BusinessRules scope generator DLL. OFF by "
+                             "default. The mesh runs the generator a NodeType DECLARES "
+                             "(policy declared-source-generators); this harness does not build "
+                             "declared generators, so a module whose scopes have no committed "
+                             "proxies needs this flag to run its tests here. Turning it on when "
+                             "proxies ARE committed produces a SECOND implementation per scope and "
+                             "registration fails on a duplicate key.")
     args = parser.parse_args()
 
     if args.self_test:
