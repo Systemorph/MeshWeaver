@@ -58,6 +58,8 @@ public static class IoPoolServiceCollectionExtensions
         // Mesh-scoped, so in-flight activity runs are counted per mesh and the counter dies with
         // it (NoStaticState). Teardown quiesces on this — see ActivityTracker.
         services.TryAddSingleton<ActivityTracker>();
+        // Teardown drains of a disposing hub run on dedicated threads, never behind the pool's queue (#5799).
+        services.TryAddSingleton<IDisposalDrainScheduler, DisposalDrainLane>();
         return services;
     }
 }
