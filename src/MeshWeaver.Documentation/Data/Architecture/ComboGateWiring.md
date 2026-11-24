@@ -1310,11 +1310,19 @@ serves these exact bytes" (`StandingBuildKept`), writes nothing and reports the 
 watcher accepts an adoption only when the node is `Ok` and usable, so after its 5 s stamp budget it
 compiles.
 
-**Fix.** `StandingBuildKept` keeps a record only when it is settled, status `Ok`. Over a usable
-build at `Pending` the seeder writes the stamp once, which sets `Ok`; the next seed finds `Ok` and
-keeps, so this does not churn. The watcher itself is unchanged: a type that cannot adopt (bytes
-missing, dirty, unusable, a force) still compiles, which is what #2818 requires, so nothing is
-stranded at `Pending`.
+**Fix, first half (#8503, not sufficient).** `StandingBuildKept` keeps a record only when it is
+settled, status `Ok`. A combo run on the image built from it (run 45342343811, candidate
+4.0.14037) still recompiled 69 of 69: the seeder's first-emission snapshot of the node still read
+`Ok` (the install-time stamp) while the owner had already flipped it `Pending`, so the seeder
+judged a stale record and kept it. The seeder cannot see the owner's newer state.
+
+**Fix, second half.** The decision moves to the side that owns the state. When the watcher's
+adoption confirmation times out, it checks the last node it saw: `Pending`, not dirty, not forced,
+and `HasUsableBuild` is exactly what the release watcher calls "satisfied by the existing current
+build", only with its status behind. The watcher then settles it `Ok` itself (re-checking the same
+predicate inside the write) and compiles nothing. Anything else still compiles: bytes missing, a
+build for another framework, a dirty record, a force. That is #2818's rule, so nothing is stranded
+at `Pending`.
 
 ## Known boundary: the combo moves
 
