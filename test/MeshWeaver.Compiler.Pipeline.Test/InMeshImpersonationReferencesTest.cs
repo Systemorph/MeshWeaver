@@ -417,7 +417,7 @@ public class InMeshImpersonationReferencesTest
         var authored = CompileSource($"{Usings}\npublic static class Probe {{ }}");
 
         var generated = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
-            authored, [generatorPath], new SourceGeneratorLedger(), "Test/Probe",
+            authored, [generatorPath], [], new SourceGeneratorLedger(), "Test/Probe",
             Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
             TestContext.Current.CancellationToken, out var nodeGenerated);
 

@@ -11,10 +11,9 @@ namespace MeshWeaver.Compiler;
 /// <c>#r "nuget:..."</c>, so generators are modular and travel with the node Source instead of being
 /// baked into the low-level <c>MeshWeaver.Graph</c> project. A generator referenced from Graph
 /// is a Roslyn analyzer that propagates to every downstream project and bloats every build
-/// (project_graph_generator_build_bloat); instead the compile pipeline injects
-/// <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> for nodes that declare an <c>IScope&lt;,&gt;</c>,
-/// the resolver fetches it from the mesh-local feed, and its <c>ScopeCodeGenerator</c> is discovered +
-/// run here — emitting the concrete <c>IScope&lt;TIdentity,TState&gt;</c> implementations.
+/// (project_graph_generator_build_bloat). A generator a PACKAGE contributes as source is not loaded
+/// here: it is declared on its NodeType and compiled by the mesh into a collectible context of its
+/// own (<see cref="DeclaredGenerators"/>, policy <c>declared-source-generators</c>).
 /// </summary>
 internal static class SourceGeneratorLoader
 {
@@ -283,6 +282,23 @@ internal static class SourceGeneratorLoader
             return ImmutableArray<ISourceGenerator>.Empty;
         }
 
+        return InstantiateGenerators(assembly, path, logger);
+    }
+
+    /// <summary>
+    /// Every <see cref="GeneratorAttribute"/>-marked, parameterless, non-abstract type in
+    /// <paramref name="assembly"/>, instantiated — an incremental generator wrapped as an
+    /// <see cref="ISourceGenerator"/>. Shared by the <c>#r</c> discovery above and the declared
+    /// generators (<see cref="DeclaredGenerators"/>), so the two cannot disagree about what counts
+    /// as a generator.
+    /// </summary>
+    /// <param name="assembly">The loaded generator assembly.</param>
+    /// <param name="origin">Where it came from, for the log.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static ImmutableArray<ISourceGenerator> InstantiateGenerators(
+        Assembly assembly, string origin, ILogger logger)
+    {
+        var path = origin;
         Type?[] types;
         try
         {

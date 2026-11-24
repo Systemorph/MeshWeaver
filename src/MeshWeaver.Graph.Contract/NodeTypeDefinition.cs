@@ -13,7 +13,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// Properties like Name, Icon, Order, Namespace are on MeshNode itself.
 /// This record holds only NodeType-specific configuration.
 /// </summary>
-public record NodeTypeDefinition
+public record NodeTypeDefinition : IDeclaresSourceGenerators
 {
     /// <summary>
     /// Optional per-type override for the "+"/Create action. When set, the generic
@@ -351,6 +351,24 @@ public record NodeTypeDefinition
     /// usually wants a bespoke Tests list too.
     /// </remarks>
     public IReadOnlyList<string>? Tests { get; init; }
+
+    /// <summary>
+    /// The Roslyn source generators this NodeType CONTRIBUTES to the compiles that pull its sources
+    /// — each entry a Code node path RELATIVE to this NodeType (e.g.
+    /// <c>"GeneratorSource/ScopeCodeGenerator"</c> names
+    /// <c>{this path}/GeneratorSource/ScopeCodeGenerator</c>). Policy
+    /// <c>declared-source-generators</c>: the mesh compiles these files into a collectible analyzer,
+    /// keyed by their content and the compiler's identity, and runs it over this type's own compile
+    /// and over every compile whose source set reaches into this type's <c>Source/</c> or
+    /// <c>Test/</c> subtree (a <c>shared=@{this path}/Source</c> consumer). Nothing else gets it —
+    /// a compile that does not pull these sources is untouched.
+    /// </summary>
+    /// <remarks>
+    /// Null or empty: this type contributes no generator. The generator files must sit OUTSIDE
+    /// <c>Source/</c> and <c>Test/</c>, or they would also be compiled as ordinary sources. See
+    /// <c>Doc/Architecture/NodeTypeCompilation</c> → "Declared source generators".
+    /// </remarks>
+    public IReadOnlyList<string>? Generators { get; init; }
 
     /// <summary>
     /// Current lifecycle state of the NodeType's compile. Written through by

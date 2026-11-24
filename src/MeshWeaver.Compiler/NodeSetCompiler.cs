@@ -57,8 +57,7 @@ public static class NodeSetCompiler
     /// and executable filter, in the order they are concatenated.</param>
     /// <param name="ExpandedQueries">Every expanded source/test query that was evaluated.</param>
     /// <param name="GeneratedSource">The full C# text handed to Roslyn (skeleton + user code).</param>
-    /// <param name="NuGetReferences">The <c>#r "nuget:"</c> references the sources declare, after
-    /// the built-in-generator strip.</param>
+    /// <param name="NuGetReferences">The <c>#r "nuget:"</c> references the sources declare.</param>
     public sealed record CompileInputs(
         string NodePath,
         string AssemblyName,
@@ -95,6 +94,16 @@ public static class NodeSetCompiler
         /// every foreign type unattributed, i.e. an edge set that is silently empty.
         /// </summary>
         public required ImmutableArray<DependencySourceUnit> SourceUnits { get; init; }
+
+        /// <summary>
+        /// The source generators NodeTypes DECLARED for this compile (policy
+        /// <c>declared-source-generators</c>, <see cref="DeclaredGenerators"/>): the type's own, and
+        /// those of every type whose <c>Source/</c>/<c>Test/</c> subtree the matched set reaches into.
+        /// Already recorded in <see cref="GeneratedSource"/> (<see cref="DeclaredGenerators.Stamp"/>),
+        /// so the content key covers them. An init-only property for the arity reason
+        /// <see cref="CompiledNode.Warnings"/> records; empty for a compile that runs none.
+        /// </summary>
+        public ImmutableArray<DeclaredGenerator> DeclaredGenerators { get; init; } = [];
     }
 
     /// <summary>One compiled NodeType's artifacts.</summary>
@@ -214,12 +223,15 @@ public static class NodeSetCompiler
             .GenerateAttributeSource(typeNode, combined, configuration, contentCollections);
         var (source, extractedRefs) = NuGetDirectiveParser.Extract(rawSource);
         var nugetRefs = extractedRefs.ToList();
-        GeneratorPipeline.StripBuiltInScopeGeneratorRef(
-            nugetRefs, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
         // The package references ride IN the bytes, so whoever loads this build — a portal adopting
         // the bake, on any replica — can resolve the closure it needs (NuGetBuildRecord). The same
         // stamp as the runtime compile's PrepareGeneratedSource: the content key is this text.
         source = NuGetBuildRecord.Stamp(source, nugetRefs);
+        // The generators NodeTypes declared for this compile ride in the TEXT too, so the content
+        // key covers them — the same stamp the runtime's PrepareGeneratedSource writes.
+        // The include closure counts too — an `@@` include can pull another type's Source/ node.
+        var declaredGenerators = ResolveDeclaredGenerators(nodes, typeNode, nodePath, [.. matchedPaths, .. closure.Keys]);
+        source = MeshWeaver.Compiler.DeclaredGenerators.Stamp(source, declaredGenerators);
 
         return new CompileInputs(
             nodePath,
@@ -231,7 +243,44 @@ public static class NodeSetCompiler
         {
             ResolvedIncludes = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal, closure),
             SourceUnits = [.. matchedPaths.Select((path, i) => new DependencySourceUnit(path, resolvedFiles[i].Code ?? string.Empty))],
+            DeclaredGenerators = declaredGenerators,
         };
+    }
+
+    /// <summary>
+    /// The generators NodeTypes in <paramref name="nodes"/> declare for a compile of
+    /// <paramref name="selfPath"/> — <see cref="DeclaredGenerators.CandidateOwners"/> over the matched
+    /// source paths, each owner's <c>generators</c> entries read off its definition, each entry's
+    /// Code node read from the same tree. A declared file that is not in the tree is a
+    /// <see cref="CompilationException"/>: compiling without it would emit an assembly missing the
+    /// very code the declaration exists to generate.
+    /// </summary>
+    private static ImmutableArray<DeclaredGenerator> ResolveDeclaredGenerators(
+        NodeSet nodes, MeshNode typeNode, string selfPath, IReadOnlyList<string> matchedPaths)
+    {
+        var builder = ImmutableArray.CreateBuilder<DeclaredGenerator>();
+        foreach (var owner in MeshWeaver.Compiler.DeclaredGenerators.CandidateOwners(selfPath, matchedPaths))
+        {
+            var ownerNode = owner.Equals(selfPath, StringComparison.OrdinalIgnoreCase) ? typeNode : nodes.Find(owner);
+            // A node set holds NodeType content TYPED (the importer materialises it; the bake selects
+            // its candidates by the same test), so the declaration is read off the typed content.
+            if (ownerNode?.Content is not IDeclaresSourceGenerators { Generators: { Count: > 0 } entries })
+                continue;
+            var files = ImmutableArray.CreateBuilder<DeclaredGeneratorFile>(entries.Count);
+            foreach (var entry in entries)
+            {
+                var path = MeshWeaver.Compiler.DeclaredGenerators.FilePath(owner, entry);
+                var code = (nodes.Find(path)?.Content as CodeConfiguration)?.Code;
+                if (string.IsNullOrEmpty(code))
+                    throw new CompilationException(selfPath,
+                        $"'{owner}' declares the source generator '{entry}', but no Code node with source "
+                        + $"exists at '{path}'. '{selfPath}' pulls the sources of '{owner}', so it is "
+                        + "compiled with that generator or not at all.");
+                files.Add(new DeclaredGeneratorFile(path, code));
+            }
+            builder.Add(new DeclaredGenerator(owner, files.MoveToImmutable()));
+        }
+        return builder.ToImmutable();
     }
 
     /// <summary>
@@ -381,7 +430,8 @@ public static class NodeSetCompiler
         // The NODE-SUPPLIED generators' trees are the author's code too: the dependency scan reads
         // them (a generator the node #r'd can emit a reflection lookup just as its source can).
         var compilation = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
-            authored, generatorPaths, generatorLedger, inputs.NodePath, logger, ct, out var nodeGeneratedTrees);
+            authored, generatorPaths, inputs.DeclaredGenerators, generatorLedger, inputs.NodePath, logger, ct,
+            out var nodeGeneratedTrees);
 
         var artifact = EmitPipeline.EmitCompilationToDirectory(
             compilation, nodeName, inputs.NodePath, outputDirectory, ct);
