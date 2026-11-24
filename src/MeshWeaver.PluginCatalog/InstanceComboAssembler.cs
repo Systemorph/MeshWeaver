@@ -230,22 +230,29 @@ public sealed class InstanceComboAssembler
 
         var syncRepo = NullIfBlank(module.GitSync?.RepositoryUrl);
         var syncSha = NullIfBlank(module.GitSync?.LastSyncCommitSha);
-        // 🚨 A sync declined for a platform floor the CANDIDATE meets lands on the roll: verify the
-        // commit it is waiting to land, not the one the roll replaces.
-        if (module.GitSync is { DeclinedCommitSha: { Length: > 0 } declined, DeclinedFloor: { } floor }
+        var subdirectory = NullIfBlank(module.GitSync?.Subdirectory);
+        // 🚨 A sync DECLINED for a platform floor the CANDIDATE meets lands on the roll — and it
+        // lands the source's branch HEAD of that day, not the commit the declined attempt read
+        // (that record is only rewritten by an attempt: memex-cloud's said Nov 18 for a week, a
+        // commit that predates the type its sibling already uses). So verify the head the roll
+        // would land, resolved to an exact sha at assembly (ResolvedCommit) and stamped MOVING.
+        if (syncRepo is not null
+            && module.GitSync is { DeclinedCommitSha.Length: > 0, DeclinedFloor: { } floor }
             && ComboAssemblyOptions.ParsePlatform(floor) is { } floorVersion
             && ComboAssemblyOptions.ParsePlatform(options.CandidatePlatform) is { } candidate
-            && candidate >= floorVersion
-            && LooksLikeCommitSha(declined))
+            && candidate >= floorVersion)
         {
+            var branch = NullIfBlank(module.GitSync.Branch) ?? "HEAD";
             options.Output.WriteLine(
-                $"  {module.ModuleId}: sync declined at {declined[..Math.Min(12, declined.Length)]} "
-                + $"for platform >= {floor}; candidate {options.CandidatePlatform} meets it, so that "
-                + "commit is what the roll lands — verified instead of "
-                + $"{syncSha?[..Math.Min(12, syncSha.Length)] ?? "(none)"}.");
-            syncSha = declined;
+                $"  {module.ModuleId}: sync declined for platform >= {floor}; candidate "
+                + $"{options.CandidatePlatform} meets it, so the roll lands '{branch}' HEAD — "
+                + $"verified instead of the installed {syncSha?[..Math.Min(12, syncSha.Length)] ?? "(none)"}.");
+            return new ModulePlan(module)
+            {
+                Fetch = new FetchSpec(syncRepo, branch, subdirectory, FolderFilter: null,
+                    MaterializationPin.Moving, RequireModuleVersionMatch: false),
+            };
         }
-        var subdirectory = NullIfBlank(module.GitSync?.Subdirectory);
         var package = module.Package;
         var recordedModuleVersion = NullIfBlank(package?.ModuleVersion);
 

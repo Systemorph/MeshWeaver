@@ -33,6 +33,7 @@ public sealed class ComboReadsAGitSyncedModulesDebtAndDeclinedCommitTest : IDisp
     private const string Repo = "https://github.com/Systemorph/ComboFixture";
     private static readonly string SyncedCommit = new('1', 40);
     private static readonly string DeclinedCommit = new('2', 40);
+    private static readonly string HeadCommit = new('3', 40);
     private const string Version = "aaaaaaaaaaaaaaaa";
 
     private readonly string workRoot = Path.Combine(
@@ -68,11 +69,14 @@ public sealed class ComboReadsAGitSyncedModulesDebtAndDeclinedCommitTest : IDisp
     }
 
     [Fact]
-    public async Task ADeclinedSync_IsVerifiedAtTheDeclinedCommit_WhenTheCandidateMeetsTheFloor()
+    public async Task ADeclinedSync_IsVerifiedAtTheBranchHead_WhenTheCandidateMeetsTheFloor()
     {
         var run = await Verify(null, ("4.0.13526", DeclinedCommit), candidate: "4.0.14059");
 
-        run.Assembly.Modules.Single().ResolvedCommit.Should().Be(DeclinedCommit);
+        // The head the roll lands (the fake resolves a branch name to HeadCommit) — neither the
+        // installed commit nor the stale one the declined attempt read.
+        run.Assembly.Modules.Single().ResolvedCommit.Should().Be(HeadCommit);
+        run.Assembly.Modules.Single().Pin.Should().Be(MaterializationPin.Moving);
     }
 
     [Theory]
@@ -120,7 +124,7 @@ public sealed class ComboReadsAGitSyncedModulesDebtAndDeclinedCommitTest : IDisp
         // The SUBDIRECTORY fetch: the module's files re-rooted, no repository root in sight.
         var assembler = new InstanceComboAssembler(
             (_, gitRef, subdirectory, _) => Observable.Return(new RepoSnapshot(
-                gitRef.Length == 40 ? gitRef : SyncedCommit,
+                gitRef.Length == 40 ? gitRef : gitRef == "main" ? HeadCommit : SyncedCommit,
                 subdirectory is null
                     ? moduleFiles.ToImmutableList()
                     : moduleFiles.Select(f => new RepoFile(
