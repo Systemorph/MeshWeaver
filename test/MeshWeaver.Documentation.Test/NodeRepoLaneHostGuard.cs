@@ -162,6 +162,30 @@ public class NodeRepoLaneHostGuard
     }
 
     /// <summary>
+    /// The runner's <c>$ROOT/shared</c> is PERSISTENT and shared with jobs of other lines, and the tester takes the
+    /// HIGHEST version of each framework under the root it is handed. A 3.x gate handed the raw directory compiled
+    /// against net11 reference assemblies (left by a 4.x job) while the host ran net10 — every in-mesh Tests area
+    /// failed with "Could not load file or assembly System.Linq, Version=11.0.0.0" (Reinsurance main3, 2026-11-24).
+    /// The lane must hand over a VIEW restricted to the portal's declared band and assert reference major == runtime
+    /// major, red naming both.
+    /// </summary>
+    [Fact]
+    public void TheGateLane_VolumeMode_ReferencesOnlyTheFrameworkBandTheHostRunsOn()
+    {
+        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, Gate)));
+
+        Assert.True(lines.Contains("echo \"shared=$VIEW\" >> \"$GITHUB_OUTPUT\"", StringComparison.Ordinal),
+            $"{Gate}: the `shared` output (the tester's --shared-frameworks) must be the band-restricted VIEW, "
+            + "never the runner's raw $ROOT/shared, which carries every line's framework.");
+        Assert.False(lines.Contains("echo \"shared=$SHARED\" >> \"$GITHUB_OUTPUT\"", StringComparison.Ordinal),
+            $"{Gate}: the raw runner shared-framework root must not be handed to the tester.");
+        Assert.True(lines.Contains("::error title=Reference framework differs from the runtime::", StringComparison.Ordinal)
+                    && lines.Contains("\"$REF_MAJOR\" != \"$PORTAL_MAJOR\"", StringComparison.Ordinal),
+            $"{Gate}: the lane must assert reference-framework major == platform-host runtime major and fail red "
+            + "naming both.");
+    }
+
+    /// <summary>
     /// In VOLUME mode the composed host is started with the runner's <c>dotnet</c>, so the portal image's
     /// <c>MESHWEAVER_PLATFORM_VERSION</c> (which <c>docker run</c> inherits in container mode) never reaches the
     /// tester, and <c>PlatformBuildInfo</c> falls back to the run-less assembly version (<c>3.1.0+&lt;sha&gt;</c>):
