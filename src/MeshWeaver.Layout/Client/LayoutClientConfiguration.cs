@@ -78,7 +78,7 @@ public record LayoutClientConfiguration(IMessageHub Hub)
     internal ImmutableList<ViewMap> ViewMaps { get; init; } = ImmutableList<ViewMap>.Empty;
 
     /// <summary>
-    /// Who registered each entry of <see cref="ViewMaps"/>, in registration order — one string per
+    /// Who registered each entry of <see cref="ViewMaps"/> and <see cref="GenericViewMaps"/>, in registration order — one string per
     /// map, shaped <c>Assembly:Method</c> (for example <c>MeshWeaver.Blazor.Views:AddDefaultViews</c>)
     /// or <c>Assembly:ViewModel→View</c> for the typed <see cref="WithView{TViewModel,TView}"/> form.
     /// Recorded at <c>WithView</c> time so the fallback warning and a host's health check can name
@@ -94,6 +94,40 @@ public record LayoutClientConfiguration(IMessageHub Hub)
     /// registered after <c>AddBlazor()</c> — first-match-wins met a map that never declined.
     /// </summary>
     internal ViewMap? FallbackViewMap { get; init; }
+
+    /// <summary>
+    /// The GENERIC tier: maps that claim a control by its SHAPE (any <c>IContainerControl</c>, say)
+    /// rather than by its type. Consulted only after every map in <see cref="ViewMaps"/> declined,
+    /// and before <see cref="FallbackViewMap"/>.
+    ///
+    /// <para>🚨 Why a tier and not an ordinary map: <see cref="ViewMaps"/> is first-match-wins in
+    /// REGISTRATION order, and the order is not the author's to choose — an image-bound pack folds
+    /// into the hub's configuration at boot, a pack loaded from the module store is appended after
+    /// it. A shape match registered by the base pack therefore claimed every control of that shape a
+    /// LATER pack owns: <c>ChartControl</c> is a container with no children, the base pack's generic
+    /// container view claimed it ahead of the Radzen pack and rendered its (empty) child list, and
+    /// every chart of a portal drew NOTHING — no fallback, no warning, because a map had accepted.
+    /// A specific registration must win over a shape, whatever order the two arrived in.</para>
+    /// </summary>
+    internal ImmutableList<ViewMap> GenericViewMaps { get; init; } = ImmutableList<ViewMap>.Empty;
+
+    /// <summary>
+    /// Returns a copy with <paramref name="viewMap"/> appended to the GENERIC tier (see
+    /// <see cref="GenericViewMaps"/>): it is consulted only when no specific map accepted the
+    /// control. Use it for a map that matches controls by shape — an interface or a base type — so a
+    /// view pack that registers a view for one concrete control of that shape is never pre-empted,
+    /// in whichever order the two were registered. The owner is recorded in
+    /// <see cref="ViewMapOwners"/> like any other map's.
+    /// </summary>
+    /// <param name="viewMap">The shape-matching view map.</param>
+    /// <param name="owner">The name recorded for this map, conventionally <c>Assembly:Method</c>.</param>
+    /// <returns>A new instance with the generic map added.</returns>
+    public LayoutClientConfiguration WithGenericView(ViewMap viewMap, string owner)
+    {
+        ArgumentNullException.ThrowIfNull(viewMap);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        return this with { GenericViewMaps = GenericViewMaps.Add(viewMap), ViewMapOwners = ViewMapOwners.Add(owner) };
+    }
 
     /// <summary>
     /// Returns a copy with <paramref name="viewMap"/> as the last-resort fallback (see
@@ -146,7 +180,8 @@ public record LayoutClientConfiguration(IMessageHub Hub)
     }
 
     /// <summary>
-    /// Tries each registered view map in order and returns the first non-null <see cref="ViewDescriptor"/> for the given instance;
+    /// Tries each registered view map in order, then each map of the generic tier
+    /// (<see cref="GenericViewMaps"/>), and returns the first non-null <see cref="ViewDescriptor"/> for the given instance;
     /// when every map declines, the host's <see cref="FallbackViewMap"/> (if any) produces the last-resort descriptor.
     /// That fall-through is the ONE place a control silently turns into escaped text, so it is logged
     /// once per (hub, control type) at Warning on <see cref="ViewDispatchLogCategory"/>, naming the
@@ -159,7 +194,9 @@ public record LayoutClientConfiguration(IMessageHub Hub)
     /// <returns>The first matching <see cref="ViewDescriptor"/>, the fallback's descriptor, or null.</returns>
     public ViewDescriptor? GetViewDescriptor(object instance, ISynchronizationStream<JsonElement>? stream, string area)
     {
-        var descriptor = ViewMaps.Select(m => m.Invoke(instance, stream, area)).FirstOrDefault(d => d is not null);
+        // Specific maps first, then the generic (shape-matching) tier — see GenericViewMaps.
+        var descriptor = ViewMaps.Concat(GenericViewMaps)
+            .Select(m => m.Invoke(instance, stream, area)).FirstOrDefault(d => d is not null);
         if (descriptor is not null)
             return descriptor;
 
