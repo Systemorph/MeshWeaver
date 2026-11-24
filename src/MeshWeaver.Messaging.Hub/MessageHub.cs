@@ -3221,6 +3221,7 @@ public sealed class MessageHub : IMessageHub
         // The stall detector's baseline: how many turns the pump had completed when the teardown
         // began. Its first verdict compares against THIS, so a pump that drained 500 accepted turns
         // in the first budget reads as busy rather than as a wedge with no history.
+        (messageService as MessageService)?.BeginDisposal();
         stallTurnsSeen = (messageService as MessageService)?.TurnsCompleted ?? -1;
         // The DEQUEUE baseline, taken in the same breath. The completed-turn baseline above cannot
         // see a pump that never took anything off its queue — both counters read the same frozen

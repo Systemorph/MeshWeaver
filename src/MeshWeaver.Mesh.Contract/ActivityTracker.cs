@@ -97,8 +97,20 @@ public sealed class ActivityTracker : IDisposable
         counts.Where(running => running == 0).Take(1).Select(_ => Unit.Default);
 
     /// <summary>The runs currently in flight — a snapshot, most recently started last.</summary>
-    public IReadOnlyList<ActivityRunHandle> InFlight =>
-        runs.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value).ToImmutableList();
+    // 🚨 Snapshot FIRST, in one atomic step (ConcurrentDictionary.ToArray locks every bucket), then
+    // sort the copy. `runs.OrderBy(..).Select(..).ToImmutableList()` enumerated the live dictionary
+    // twice — once for the count the Select iterator preallocates its array from, once to fill it —
+    // so a run starting between the two overflowed the array: IndexOutOfRangeException out of the
+    // /drain endpoint on every roll that coincided with an activity start (#8508).
+    public IReadOnlyList<ActivityRunHandle> InFlight
+    {
+        get
+        {
+            var snapshot = runs.ToArray();
+            Array.Sort(snapshot, static (a, b) => a.Key.CompareTo(b.Key));
+            return snapshot.Select(kvp => kvp.Value).ToImmutableList();
+        }
+    }
 
     /// <summary>
     /// Registers one run as in flight. Dispose the returned handle when the run reaches a TERMINAL
