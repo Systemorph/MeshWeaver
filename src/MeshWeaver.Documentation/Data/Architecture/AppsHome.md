@@ -4,7 +4,7 @@ The default user home is, top to bottom: a heading welcoming the owner by first 
 ("Welcome back, Jane"), the **message box** (the chat window — start a thread), the **Getting
 started** guide until the owner hides it, and the **Apps** grid — and nothing else (policies
 [`home-is-apps-and-chat`](../PolicyNotProse) and [`home-getting-started-guide`](../PolicyNotProse)).
-The welcome template is that heading, `@@("area/Composer")`, `@@("area/GettingStarted")`, then
+The welcome template is that heading, `@@("area/Composer")`, `@@("area/HomeGettingStarted")`, then
 `@@("area/Catalog")`; there is no contributed card, no content list, no type section and no footer
 note.
 
@@ -87,7 +87,7 @@ every tab. The guide is its own area on the user hub (`HomeGettingStarted`, area
 hidden guide never flashes), shows while the flag is off, and disappears the moment the flag is
 written — a data change, never a rebuild. Only the home's owner sees it. A home whose owner wrote
 their own `Body` shows only what that page embeds, so the guide appears there only if the page
-embeds `@@("area/GettingStarted")`.
+embeds `@@("area/HomeGettingStarted")`.
 
 The text is platform-owned and follows the viewer's language: the catalog keys
 `home.gettingStarted.*` in `strings.{en,de}.json` (mirrored to MeshWeaver.Plugins
@@ -506,3 +506,11 @@ or grant before their legs are built.
 - [Mesh Search & Catalogs](/Doc/GUI/MeshSearch) — the search control behind every scope
 - [Thread Operations](../ThreadOperations) — the canonical thread mutation surface (`MarkThreadDone` et al.)
 - [Localization](../Localization) — why every tab label and sort option resolves off `AccessContext.Locale`
+
+**The guide's area is `HomeGettingStarted`, never `GettingStarted`.** `/{user}/GettingStarted` is the
+setup wizard's page (the AI module's `OnboardingWizardArea`). Both register an area on the user hub, the
+later registration wins, and a shared name made the home embed the wizard's full-height screen — its
+"I'll finish this later" navigates to `/`, which is the home itself, so nothing could dismiss it
+(2026-11-24).
+An authored home `Body` that copied the old `@@("area/GettingStarted")` embed must change it to
+`@@("area/HomeGettingStarted")` — the old name is the setup wizard's page.

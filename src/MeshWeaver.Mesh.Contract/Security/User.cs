@@ -143,7 +143,7 @@ public record User : AccessObject
 
     /// <summary>
     /// Whether the owner hid the <b>Getting started</b> guide on their default home page
-    /// (<c>@@("area/GettingStarted")</c>). A preference of the VIEWER about their OWN home, stored
+    /// (<c>@@("area/HomeGettingStarted")</c>). A preference of the VIEWER about their OWN home, stored
     /// here beside <see cref="PresentationMode"/> for the same reason: it must survive navigation,
     /// a reconnect and a second device, and browser storage is never the source of truth for it.
     /// Written only by the guide's Hide button through <c>GetMeshNodeStream(userPath).Update</c>.
