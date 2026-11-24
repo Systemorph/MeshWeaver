@@ -2139,7 +2139,9 @@ jobs:
       # Sparse: this job needs the two registry-login scripts and the mirror script, not the repo.
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/acr-retention
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -2578,7 +2580,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/acr-retention
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -2664,6 +2668,7 @@ jobs:
             .github/scripts
             .github/control-instance.json
             .github/delivery-lines.json
+            .github/acr-retention/instances.json
           sparse-checkout-cone-mode: false
       - name: "The decision can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
@@ -2837,6 +2842,7 @@ jobs:
             .github/scripts
             .github/control-instance.json
             .github/delivery-lines.json
+            .github/acr-retention/instances.json
           sparse-checkout-cone-mode: false
       - name: "The decision can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
@@ -3284,7 +3290,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/acr-retention
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -3345,7 +3353,9 @@ jobs:
       # job needs exactly that one script, not the repo.
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/acr-retention
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -3657,6 +3667,7 @@ jobs:
             .github/scripts
             .github/control-instance.json
             .github/delivery-lines.json
+            .github/acr-retention/instances.json
           sparse-checkout-cone-mode: false
       - name: "The selection can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
