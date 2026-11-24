@@ -206,6 +206,16 @@ public sealed record GitSyncCoordinate
     /// <summary>When mesh and repo were last reconciled. A node modified after this has diverged
     /// from <see cref="LastSyncCommitSha"/>.</summary>
     public DateTimeOffset? LastSyncedAt { get; init; }
+
+    /// <summary>The commit the last sync attempt was DECLINED at because the instance's platform
+    /// was below the module's declared floor (<c>LastSyncOutcome</c> = Declined) — the content the
+    /// instance lands the moment it rolls to a platform meeting <see cref="DeclinedFloor"/>. Null
+    /// when the last attempt was not a platform-floor decline.</summary>
+    public string? DeclinedCommitSha { get; init; }
+
+    /// <summary>The platform floor that decline waits for (the highest one when several modules
+    /// of the space declined), e.g. <c>4.0.13526</c>.</summary>
+    public string? DeclinedFloor { get; init; }
 }
 
 /// <summary>The <c>Plugins/{id}</c> install-record coordinate — a
