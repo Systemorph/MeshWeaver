@@ -376,11 +376,17 @@ public sealed class GitHubWebhookProcessor
                 // terminates on, so the subscribing thread stays latched as system-security while
                 // the restore lands somewhere else entirely. RunAsSystem opens the scope, composes
                 // AND subscribes the work inside it, and leaves it on the same thread.
-                accessService.RunAsSystem(
+                // 🚨 OWNED UNTIL THE IoPool DRAIN (MeshWeaver#8510). This import is fire-and-forget: its
+                // only owner used to be nobody, so a silo stop that cancelled the pools mid-import (or
+                // after its activity finished but before the no-op cleanup returned) found it still
+                // attached and logged "pool 'Layout' was cancelled with N subscription(s) still attached"
+                // at Error on every such stop. The handle is released when the import concludes.
+                hub.SubscribeOwnedUntilIoDrain(
+                    accessService.RunAsSystem(
                         // 🚨 A COMMIT, NOT "latest" — see the remarks.
                         () => hub.UpdateToPushedCommitFromGitHub(
-                            t.SpacePath, t.UserId, landing, trigger, sourceId: t.SourceId))
-                    .Subscribe(
+                            t.SpacePath, t.UserId, landing, trigger, sourceId: t.SourceId)),
+                    "GitHubWebhookProcessor.TriggerSyncAtCommit",
                         activity => logger?.LogInformation(
                             "GitSync {Trigger} import of {Space} at {Sha} completed ({Activity}).",
                             trigger, t.SpacePath, landing, activity),
