@@ -286,6 +286,8 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
                         Subdirectory = primary.Config.Subdirectory,
                         LastSyncCommitSha = primary.Config.LastSyncCommitSha,
                         LastSyncedAt = primary.Config.LastSyncedAt,
+                        DeclinedCommitSha = DeclinedAt(primary.Config, out var floor),
+                        DeclinedFloor = floor,
                     };
                 },
                 StringComparer.OrdinalIgnoreCase);
@@ -295,6 +297,31 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
             .OrderBy(module => module, StringComparer.OrdinalIgnoreCase)
             .ToImmutableList();
         return new SyncEntryFold(coordinates, unconnected);
+    }
+
+    /// <summary>
+    /// The commit a platform-floor DECLINE is holding back, with the highest floor waited for.
+    /// 🚨 A declined module is not "absent after the roll": the instance's installed content is the
+    /// OLD commit only until the platform meets the floor, and a combo that verifies the old commit
+    /// beside siblings that already moved (a Deployments record using a type the held Hosting adds)
+    /// reads Red about a skew the roll itself removes.
+    /// </summary>
+    internal static string? DeclinedAt(GitHubSyncConfig config, out string? floor)
+    {
+        floor = null;
+        if (!string.Equals(config.LastSyncOutcome, "Declined", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(config.LastAttemptedCommitSha))
+            return null;
+        var floors = (config.ModuleOutcomes ?? [])
+            .Where(o => string.Equals(o.Outcome, "Declined", StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(o.Floor))
+            .Select(o => o.Floor!)
+            .ToList();
+        // A decline that names no floor cannot be proven satisfiable by any candidate.
+        if (floors.Count == 0)
+            return null;
+        floor = floors.OrderByDescending(f => ComboAssemblyOptions.ParsePlatform(f)).First();
+        return config.LastAttemptedCommitSha;
     }
 
     /// <summary>
