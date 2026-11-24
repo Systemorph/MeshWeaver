@@ -711,6 +711,10 @@ public static class GitHubActivityExtensions
                 }, onActivityCreated))));
     }
 
+    /// <summary>How long the best-effort removal of a no-op attempt's activity may take before it is
+    /// abandoned with a Warning and the activity stays in the partition.</summary>
+    internal static readonly TimeSpan NoOpActivityRemovalBudget = TimeSpan.FromMinutes(2);
+
     /// <summary>
     /// 🚨 <b>An unattended sync attempt that changed nothing leaves no permanent Activity</b>
     /// (MeshWeaver#8020; <c>Doc/Architecture/GitHubSync</c> → "What an unattended attempt leaves
@@ -765,6 +769,10 @@ public static class GitHubActivityExtensions
                 return access.RunAsSystem(() => meshService.DeleteNode(activityPath))
                     .Take(1)
                     .DefaultIfEmpty(false)
+                    // Bounded (MeshWeaver#8510): the removal is best-effort, so it must not keep the whole
+                    // attempt — and the pooled subscription under it — open for hours. Two silo stops
+                    // found this chain parked ~4 h after the activity had finished.
+                    .Timeout(NoOpActivityRemovalBudget)
                     .Catch((Exception ex) =>
                     {
                         logger?.LogWarning(ex,
