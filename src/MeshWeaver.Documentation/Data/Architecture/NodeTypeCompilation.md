@@ -342,7 +342,14 @@ instant of teardown (`ShuttingDown`), so no decision reaches a dying hub. Waitin
 dispatched against a record that names the edit, so its source read cannot settle on the pre-edit
 set (a set older than the record is refused — "A compile NEVER runs against an unestablished source set" below).
 If a source's owner cannot be read, currency is unknown and the request is never treated as
-satisfied — it compiles. The legacy `CreateReleaseRequest` handler (`MeshDataSource.HandleCreateRelease`)
+satisfied — it compiles.
+**The wait is bounded (#8413)** — `SourceSnapshotWaitBudget`, 30 s. A snapshot that never reaches the owners'
+versions would otherwise leave `RequestedReleaseAt > LastReleaseRequestHandledAt` for good, across a restart
+too (the same disagreement is rebuilt from the same rows): the installed package version read "Success" while
+the page said the source changed and needed a compile, and no person could compile (#8412). Past the budget the
+currency is unknown, exactly as for an unreadable owner, and the request compiles; the log says
+`the source snapshot did not reach the versions the sources' owners hold`. The watcher reads the definition
+through `ContentAs`, never a type test, so a record that arrives as JSON is not a watcher that silently never matches. The legacy `CreateReleaseRequest` handler (`MeshDataSource.HandleCreateRelease`)
 decides `AlreadyUpToDate` through the same gate, and then waits for the compile state to settle
 AGAIN before deciding, so it never acts on a compile that entered `Pending`/`Compiling` during the
 wait.
