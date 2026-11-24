@@ -98,4 +98,36 @@ public class NodeTypeProbeCoalescingTest
             .Subscribe(r => answer = r.Outcome);
         answer.Should().Be(Outcome.Registered, "the next activation probes afresh instead of waiting on a dead entry");
     }
+
+    [Fact]
+    public void LastWaiterLeaving_DisposesTheInFlightProbe_SoNothingOutlivesTheMesh()
+    {
+        var cache = NewCache();
+        var live = 0;
+        IObservable<(Outcome, string?)> Probe() => Observable.Create<(Outcome, string?)>(_ =>
+        {
+            live++;
+            return System.Reactive.Disposables.Disposable.Create(() => live--);
+        });
+        var a = cache.GetOrProbe("A/X", Probe).Subscribe();
+        var b = cache.GetOrProbe("A/X", Probe).Subscribe();
+        live.Should().Be(1, "two waiters share one probe subscription");
+        a.Dispose();
+        live.Should().Be(1, "one waiter is still interested");
+        b.Dispose();
+        live.Should().Be(0, "the probe holds nothing (a query lease, Plugins#1785) once nobody waits");
+    }
+
+    [Fact]
+    public void AWaiterAfterAbandonment_RestartsTheProbeAndStillGetsTheAnswer()
+    {
+        var cache = NewCache();
+        var gate = new Subject<(Outcome, string?)>();
+        cache.GetOrProbe("A/X", () => gate).Subscribe().Dispose();
+        var answer = default(Outcome?);
+        cache.GetOrProbe("A/X", () => gate).Subscribe(r => answer = r.Outcome);
+        gate.OnNext((Outcome.Registered, null));
+        gate.OnCompleted();
+        answer.Should().Be(Outcome.Registered);
+    }
 }

@@ -329,6 +329,10 @@ internal static class NodeTypeEnrichmentHelpers
         private sealed class Entry
         {
             public readonly System.Reactive.Subjects.AsyncSubject<(ProbeOutcome Outcome, string? Collision)> Result = new();
+            public readonly object Gate = new();
+            public IObservable<(ProbeOutcome Outcome, string? Collision)>? Source;
+            public IDisposable? Connection;
+            public int Waiters;
             public volatile bool Done;
             public volatile bool Keep = true;
             public long CompletedAt;
@@ -346,16 +350,15 @@ internal static class NodeTypeEnrichmentHelpers
                     var expired = entry.Done && !entry.Keep
                         && clock() - entry.CompletedAt > NegativeTtlMs;
                     if (!expired)
-                        return entry.Result.AsObservable();
+                        return Attach(entry);
                     if (!entries.TryUpdate(nodeType, fresh, entry))
                         continue;
                 }
-                // We own the new entry: run the one probe and publish to every waiter.
+                // We own the new entry: build the one probe; it runs while someone waits on it.
                 var owner = fresh;
-                IObservable<(ProbeOutcome Outcome, string? Collision)> source;
                 try
                 {
-                    source = probe();
+                    owner.Source = probe();
                 }
                 catch (Exception ex)
                 {
@@ -366,33 +369,69 @@ internal static class NodeTypeEnrichmentHelpers
                     owner.Result.OnError(ex);
                     throw;
                 }
-                source.Subscribe(
-                    r =>
-                    {
-                        owner.Keep = r.Outcome == ProbeOutcome.Registered;
-                        owner.CompletedAt = clock();
-                        owner.Done = true;
-                        owner.Result.OnNext(r);
-                        owner.Result.OnCompleted();
-                    },
-                    ex =>
-                    {
-                        owner.Keep = false;
-                        owner.CompletedAt = clock();
-                        owner.Done = true;
-                        owner.Result.OnError(ex);
-                    },
-                    () =>
-                    {
-                        if (owner.Done) return;
-                        owner.Keep = false;
-                        owner.CompletedAt = clock();
-                        owner.Done = true;
-                        owner.Result.OnCompleted();
-                    });
-                return owner.Result.AsObservable();
+                return Attach(owner);
             }
         }
+
+        /// <summary>
+        /// A waiter on the shared probe. 🚨 The probe's subscription is a REFCOUNTED connection: the
+        /// first waiter starts it, and when the LAST unfinished waiter leaves it is disposed. A probe
+        /// subscribed once and never tied to anyone outlived the mesh that asked (an in-flight
+        /// <c>path:{type}</c> query kept its lease on a module generation's IMeshQueryProvider past
+        /// teardown, so the generation could not unload — Plugins#1785). A later waiter starts a new
+        /// connection; the answer is published to the same entry.
+        /// </summary>
+        private IObservable<(ProbeOutcome Outcome, string? Collision)> Attach(Entry entry)
+            => Observable.Create<(ProbeOutcome Outcome, string? Collision)>(observer =>
+            {
+                var subscription = entry.Result.Subscribe(observer);
+                SingleAssignmentDisposable? link = null;
+                lock (entry.Gate)
+                {
+                    entry.Waiters++;
+                    if (!entry.Done && entry.Connection is null && entry.Source is not null)
+                        entry.Connection = link = new SingleAssignmentDisposable();
+                }
+                if (link is not null)
+                    link.Disposable = entry.Source!.Subscribe(
+                        r =>
+                        {
+                            entry.Keep = r.Outcome == ProbeOutcome.Registered;
+                            entry.CompletedAt = clock();
+                            entry.Done = true;
+                            entry.Result.OnNext(r);
+                            entry.Result.OnCompleted();
+                        },
+                        ex =>
+                        {
+                            entry.Keep = false;
+                            entry.CompletedAt = clock();
+                            entry.Done = true;
+                            entry.Result.OnError(ex);
+                        },
+                        () =>
+                        {
+                            if (entry.Done) return;
+                            entry.Keep = false;
+                            entry.CompletedAt = clock();
+                            entry.Done = true;
+                            entry.Result.OnCompleted();
+                        });
+                return Disposable.Create(() =>
+                {
+                    subscription.Dispose();
+                    IDisposable? release = null;
+                    lock (entry.Gate)
+                    {
+                        if (--entry.Waiters == 0 && !entry.Done)
+                        {
+                            release = entry.Connection;
+                            entry.Connection = null;
+                        }
+                    }
+                    release?.Dispose();
+                });
+            });
     }
 
     /// <summary>
