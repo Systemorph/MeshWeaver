@@ -44,9 +44,8 @@ public sealed class GitHubSyncService
     private readonly GitHubAppTokenService? appTokens;
     private readonly GitHostingProviders providers;
     private readonly ILogger? logger;
-    private readonly FileFormatParserRegistry parsers;
-    private readonly FileFormatParserRegistry strictImportParsers;
     private readonly JsonSerializerOptions strictImportOptions;
+    private readonly LateBoundParserRegistries parserRegistries;
     private readonly GitSyncPolicy policy;
 
     private sealed class SyncSnapshotParseException(string message, string commitSha)
@@ -82,16 +81,20 @@ public sealed class GitHubSyncService
         // The deployment's limits (GitSync:AllowedPartitions, GitSync:Export:Enabled) —
         // Doc/Architecture/SensitiveContentInLogs. Absent keys keep every partition and export open.
         policy = GitSyncPolicy.From(hub.ServiceProvider);
-        var contributedParsers = hub.ServiceProvider.GetServices<IFileFormatParser>().ToArray();
-        parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, contributedParsers);
         // A newer authored record must not be materialized by an older image while silently
         // dropping properties it does not know. Keep the normal options for hub traffic and
         // export; only GitSync's repository read is strict. The object converter lets a strict
         // read's JsonException escape, and ParseSnapshot refuses the whole snapshot before any
         // node is written or the commit is acknowledged.
         strictImportOptions = StrictImportOptions(hub.JsonSerializerOptions);
-        strictImportParsers = new FileFormatParserRegistry(strictImportOptions, contributedParsers);
+        parserRegistries = new LateBoundParserRegistries(
+            () => hub.ServiceProvider.GetServices<IFileFormatParser>().ToArray(),
+            hub.JsonSerializerOptions, strictImportOptions);
     }
+
+    // Resolved at USE, not captured at construction — see LateBoundParserRegistries (fb-1fa1722b).
+    private FileFormatParserRegistry parsers => parserRegistries.Normal;
+    private FileFormatParserRegistry strictImportParsers => parserRegistries.Strict;
 
     private static JsonSerializerOptions StrictImportOptions(JsonSerializerOptions hubOptions)
     {
@@ -1518,6 +1521,13 @@ public sealed class GitHubSyncService
             problem = UnmappedNodeMembers.DescribeRefusal(path, file.Content, ex, strictImportOptions);
         });
         if (parsed is null) return Observable.Return(((MeshNode?)null, false, problem));
+        // A Skill/Agent file that reached only the catch-all markdown parser was NOT parsed: refuse the
+        // snapshot (same loud path as any unparseable file) rather than store MarkdownContent.
+        if (ParserBoundNodeTypes.Describe(file.Path, parsed) is { } unparsedProblem)
+        {
+            logger?.LogError("GitSync snapshot refused: {Problem}", unparsedProblem);
+            return Observable.Return(((MeshNode?)null, false, (string?)unparsedProblem));
+        }
         // #3474 — the repo→mesh half of the NodeType content ownership rule, at the seam where a
         // repo file becomes a node: the file's MESH-OWNED compile bookkeeping never enters the
         // mesh. An UPDATE keeps the live node's values regardless (PreserveLiveOperational); a
