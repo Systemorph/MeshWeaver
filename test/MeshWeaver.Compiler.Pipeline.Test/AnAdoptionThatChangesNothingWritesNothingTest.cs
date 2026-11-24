@@ -8,6 +8,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.DependencyInjection;
@@ -140,7 +141,8 @@ public class AnAdoptionThatChangesNothingWritesNothingTest(ITestOutputHelper out
                 .Select(_ => true)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(8), Observable.Return(false))
-                .FirstAsync();
+                .FirstAsync()
+                .Await(ct);
             if (settledOk) break;
             await Seed(typePath, a).Should().Within(TestTimeouts.Convergence).Emit("a seed always answers", ct);
         }
