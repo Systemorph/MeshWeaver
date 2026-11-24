@@ -2377,8 +2377,10 @@ def main() -> int:
     no_decl = workflow_text.replace(
         "          sparse-checkout: |\n            .github/scripts\n            .github/control-instance.json\n"
         "            .github/delivery-lines.json\n"
+        "            .github/acr-retention/instances.json\n"
         "          sparse-checkout-cone-mode: false\n      - name: \"The selection can say no (self-test)\"",
         "          sparse-checkout: |\n            .github/scripts\n            .github/delivery-lines.json\n"
+        "            .github/acr-retention/instances.json\n"
         "          sparse-checkout-cone-mode: false\n      - name: \"The selection can say no (self-test)\"", 1)
     case("...and the guard catches the arm checking out no control declaration",
          no_decl != workflow_text and any("control-instance.json" in p for p in separation_problems(no_decl)),
@@ -2386,8 +2388,10 @@ def main() -> int:
     for step_name, job_name in (("The selection can say no (self-test)", "arm"), ("The decision can say no (self-test)", "control-first")):
         no_lines = workflow_text.replace(
             "            .github/control-instance.json\n            .github/delivery-lines.json\n"
+            "            .github/acr-retention/instances.json\n"
             f"          sparse-checkout-cone-mode: false\n      - name: \"{step_name}\"",
             "            .github/control-instance.json\n"
+            "            .github/acr-retention/instances.json\n"
             f"          sparse-checkout-cone-mode: false\n      - name: \"{step_name}\"", 1)
         case(f"...and the guard catches `{job_name}` checking out no delivery lines",
              no_lines != workflow_text and any(f"`{job_name}`'s sparse checkout omits `.github/delivery-lines.json`" in p for p in separation_problems(no_lines)),

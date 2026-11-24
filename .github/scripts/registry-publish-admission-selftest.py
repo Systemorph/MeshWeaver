@@ -264,6 +264,34 @@ def mirror_steps_without_secret(text: str) -> list[str]:
     return missing
 
 
+def mirror_jobs_without_record(text: str) -> list[str]:
+    """Every job that calls mirror-image-to-registry.sh from a SPARSE checkout lacking the retention record.
+
+    The admission reads .github/acr-retention/instances.json (and .github/control-instance.json) from the repo the
+    step runs in; a job that sparse-checks-out only .github/scripts has neither file, so its governed mirror is red
+    on main with "the registry record could not be read" (the first main-cd after #8403).
+    """
+    lines = text.split("\n")
+    heads = [(i, m.group(1)) for i, l in enumerate(lines) if (m := re.match(r"^  ([A-Za-z0-9_-]+):\s*$", l))]
+    bad = []
+    for n, (start, name) in enumerate(heads):
+        end = heads[n + 1][0] if n + 1 < len(heads) else len(lines)
+        body = lines[start:end]
+        if not any("mirror-image-to-registry.sh" in l and not l.strip().startswith("#") for l in body):
+            continue
+        sparse = [i for i, l in enumerate(body) if re.match(r"^\s+sparse-checkout:", l)]
+        for i in sparse:
+            block = [body[i]]
+            for x in body[i + 1:]:
+                if re.match(r"^\s{12,}\S", x) and not re.match(r"^\s+[A-Za-z-]+:", x):
+                    block.append(x)
+                else:
+                    break
+            if not any(".github/acr-retention" in x for x in block):
+                bad.append(f"job {name} (line {start + i + 1})")
+    return bad
+
+
 GOVERNED = governed_hosts()
 check(GOVERNED == {"cr.meshweaver.cloud"}, f"static: the record's lease-governed registries are {sorted(GOVERNED)}, not the one host this lane knows")
 lanes = {name: (HERE.parent / "workflows" / name).read_text(encoding="utf-8") for name in lpd.PUBLISHING_WORKFLOWS}
@@ -273,6 +301,8 @@ for name, text in lanes.items():
         failures.append(f"🚨 static: {name} {hit} writes a lease-governed registry OUTSIDE mirror-image-to-registry.sh, so no admission guards it")
     for gap in mirror_steps_without_secret(text):
         failures.append(f"🚨 static: {name} {gap} calls the mirror without `CONTROL_WEBHOOK_SECRET: ${{{{ secrets.CONTROL_WEBHOOK_SECRET }}}}` in its env — a governed mirror there would be RED on main")
+    for gap in mirror_jobs_without_record(text):
+        failures.append(f"🚨 static: {name} {gap} calls the mirror from a sparse checkout without .github/acr-retention — the admission cannot read the registry record and the mirror is RED on main")
     mirror_sites += sum(1 for l in text.split("\n") if "mirror-image-to-registry.sh" in l and not l.strip().startswith("#"))
 check(mirror_sites >= 10, f"static: only {mirror_sites} mirror call site(s) found in the publishing lanes — the reader stopped seeing them, so the secret arm checked nothing")
 # Negative controls: each static arm fires on the shape it exists for.
@@ -280,6 +310,10 @@ check(direct_governed_writes('env:\n  REGISTRY: cr.meshweaver.cloud\njobs:\n  x:
       "NEGATIVE CONTROL: a direct --tag push to the governed registry was NOT flagged")
 check(mirror_steps_without_secret("jobs:\n  x:\n    steps:\n      - name: m\n        run: .github/scripts/mirror-image-to-registry.sh a b\n"),
       "NEGATIVE CONTROL: a mirror step without the secret was NOT flagged")
+check(mirror_jobs_without_record("jobs:\n  x:\n    steps:\n      - uses: actions/checkout@v7\n        with:\n          sparse-checkout: .github/scripts\n      - run: .github/scripts/mirror-image-to-registry.sh a b\n"),
+      "NEGATIVE CONTROL: a mirror job with a scripts-only sparse checkout was NOT flagged")
+check(not mirror_jobs_without_record("jobs:\n  x:\n    steps:\n      - uses: actions/checkout@v7\n        with:\n          sparse-checkout: |\n            .github/scripts\n            .github/acr-retention\n      - run: .github/scripts/mirror-image-to-registry.sh a b\n"),
+      "CONTROL: a mirror job whose sparse checkout carries the record was flagged")
 
 if failures:
     print("registry-publish-admission self-test FAILED:")
