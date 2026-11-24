@@ -4882,6 +4882,14 @@ public static class PackageInstaller
             return null;
         var ext = System.IO.Path.GetExtension(file.RelativePath);
         var parsed = parsers.TryParse(ext, file.RelativePath, file.Content, file.RelativePath);
+        if (parsed is not null && ParserBoundNodeTypes.Describe(file.RelativePath, parsed) is { } unboundProblem)
+        {
+            // A Skill/Agent file the catch-all markdown parser swallowed: not parsed, not installed
+            // (fb-1fa1722b). Counted as unreadable so the install record and its landing line say so.
+            logger?.LogError("Package file not installed: {Problem}", unboundProblem);
+            unparsed?.Add(file.RelativePath);
+            return null;
+        }
         if (parsed is null)
         {
             // A CLAIMED extension whose CONTENT could not be read — the #1767 population, and the
@@ -5056,6 +5064,11 @@ public static class PackageInstaller
         if (parsed is null)
         {
             logger?.LogWarning("No parser for package file {Path}; skipped.", file.RelativePath);
+            return null;
+        }
+        if (ParserBoundNodeTypes.Describe(file.RelativePath, parsed) is { } unboundProblem)
+        {
+            logger?.LogError("Package file not installed: {Problem}", unboundProblem);
             return null;
         }
 
