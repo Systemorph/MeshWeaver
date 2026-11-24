@@ -93,6 +93,11 @@ base=$(python3 -c 'import json,sys; u=json.load(open(sys.argv[1]))["url"]; asser
 URL="$base$ROUTE"
 run="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
 
+# post() writes the response here; assigned before the function is defined so the dependency is locally visible.
+resp="${RUNNER_TEMP:-/tmp}/registry-admission-resp-$$"
+: > "$resp"
+trap 'rm -f "$resp"' EXIT
+
 post() {
   # One signed POST. Prints the HTTP code on stdout; the body lands in $resp.
   local body sig
@@ -109,10 +114,6 @@ print(json.dumps({"event": "registry-publish-admission", "op": os.environ["OP"],
     -X POST "$URL" -H 'Content-Type: application/json' -H "X-Hub-Signature-256: $sig" --data "$body") || code=000
   printf '%s\n' "${code:-000}"
 }
-
-resp="${RUNNER_TEMP:-/tmp}/registry-admission-resp-$$"
-: > "$resp"
-trap 'rm -f "$resp"' EXIT
 
 if [ "$op" = complete ]; then
   code=$(post)
