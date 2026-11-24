@@ -1016,9 +1016,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             NodeType = typePath,
             Content = System.Text.Json.JsonSerializer.SerializeToElement(new { Title = "instance" })
         }, ct);
-        await client.Observe(new GetDataRequest(new MeshNodeReference()),
-                o => o.WithTarget(new Address(instancePath)))
-            .FirstAsync().Timeout(90.Seconds()).Await(ct);
+        await ReadInstance(client, instancePath, 90.Seconds(), ct);
         Output.WriteLine($"Activated instance {instancePath} — self-heal should have fired.");
 
         // 4. The self-heal must have recompiled the NodeType and re-stamped the
@@ -1038,11 +1036,33 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         Output.WriteLine("NodeType self-healed: live framework version restored via recompile.");
 
         // 5. The instance grain stays responsive after the heal.
-        var after = await client.Observe(new GetDataRequest(new MeshNodeReference()),
-                o => o.WithTarget(new Address(instancePath)))
-            .FirstAsync().Timeout(10.Seconds()).Await(ct);
+        var after = await ReadInstance(client, instancePath, 10.Seconds(), ct);
         after.Message.Should().NotBeNull("the instance stays responsive after the self-heal recompile");
     }
+
+    /// <summary>
+    /// Reads the instance's node, riding out the ONE transient this scenario provokes by design: the
+    /// self-heal recompile advances the NodeType's build, and an activation bound to the previous
+    /// (framework-stale) build retires itself so the next one binds the new build. A request that
+    /// lands on the activation while it retires is answered with the documented
+    /// <see cref="ErrorType.ShuttingDown"/> NACK — "the address may reactivate; retry to get the
+    /// authoritative answer" (MessageService dispose-reject; the same ride-out
+    /// <c>OrleansMeshTest</c> uses after a <c>DisposeRequest</c>). Only that NACK is retried, and the
+    /// whole read stays inside the caller's own budget: a hub that never reactivates, or any other
+    /// failure, still fails the test loudly.
+    /// </summary>
+    private static async Task<IMessageDelivery<GetDataResponse>> ReadInstance(
+        IMessageHub client, string instancePath, TimeSpan budget, CancellationToken ct) =>
+        await Observable
+            .Defer(() => client
+                .Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(instancePath)))
+                .FirstAsync())
+            .RetryWhen(errors => errors.SelectMany(ex =>
+                ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown }
+                    ? Observable.Timer(TimeSpan.FromMilliseconds(200))
+                    : Observable.Throw<long>(ex)))
+            .Timeout(budget)
+            .Await(ct);
 }
 
 /// <summary>
