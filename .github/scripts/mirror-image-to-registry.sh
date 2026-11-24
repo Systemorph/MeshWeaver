@@ -81,6 +81,29 @@ esac
 
 src_bytes=$(stored_bytes "$SRC") || src_bytes=""
 
+# 🚨 A WRITE TO A LEASE-GOVERNED REGISTRY IS ADMITTED FIRST, OR IT DOES NOT HAPPEN (MeshWeaver#7530,
+# owner decision A). `cr.meshweaver.cloud` has no lock, so its cleanup's whole safety margin is the
+# registry-maintenance lease on control: this mirror asks control to admit it before the copy and
+# reports completion after, so no cleanup starts while it writes and it never writes while a
+# cleanup (its DELETEs or its read-only collect window) holds the lease. While the lease is held the
+# admission WAITS; control unreachable, a refused signature or no secret is RED. Which hosts are
+# governed is read from the record, never listed here (registry-publish-admission.sh governs).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+governed=$(bash "$HERE/registry-publish-admission.sh" governs "$@") || exit 1
+admitted=()
+if [ -n "$governed" ]; then
+  step="${GITHUB_JOB:-local}/mirror-$(printf '%s\n' "$SRC" "$@" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:12])')"
+  complete_admissions() {
+    local host
+    for host in ${admitted[@]+"${admitted[@]}"}; do bash "$HERE/registry-publish-admission.sh" complete "$step" "$host" || true; done
+  }
+  trap complete_admissions EXIT
+  for host in $governed; do
+    bash "$HERE/registry-publish-admission.sh" admit "$step" "$host" || exit 1
+    admitted+=("$host")
+  done
+fi
+
 args=()
 for target in "$@"; do args+=(--tag "$target"); done
 echo "→ mirroring $SRC ($src_digest) to: $*"
