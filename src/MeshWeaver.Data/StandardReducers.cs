@@ -322,12 +322,20 @@ public static class StandardReducers
                 // DIFFERENT entity, and JsonPointer.Create below escapes it a second time
                 // ("a~01b"), so the patched value was never found and the owner kept its old one.
                 Id = p.Path.GetSegment(1).Decode(),
-                Op = p.Op switch
-                {
-                    OperationType.Add => OperationType.Add,
-                    OperationType.Remove => OperationType.Remove,
-                    _ => OperationType.Replace
-                }
+                // 🚨 The verb names what happened to the ENTITY only when the path ENDS at the
+                // entity (/collection/id). Under it (/collection/id/keys/1) an add or a remove is an
+                // edit INSIDE the entity — a list that shrank — so it is a Replace of the entity.
+                // Reading it as the entity's own removal emitted `[entity = null, entity = new]` for
+                // ONE edit, and the entity reducer took the null and dropped the frame: an open
+                // reduced read never saw an untick (GridRowSelectionFromViewsTest flake).
+                Op = p.Path.SegmentCount > 2
+                    ? OperationType.Replace
+                    : p.Op switch
+                    {
+                        OperationType.Add => OperationType.Add,
+                        OperationType.Remove => OperationType.Remove,
+                        _ => OperationType.Replace
+                    }
             }))
             {
                 var collection = allChanges.First().Path.GetSegment(0).Decode();
