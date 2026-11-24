@@ -75,6 +75,17 @@ Two load-bearing rules for pack authors:
    fallback render. A map that answers for a control it does not own — or throws, which the old
    terminal arm did — silently replaces every pack registered after it.
 
+   **Match by TYPE in the ordinary list; match by SHAPE in the generic tier.** A map that claims
+   controls by an interface or a base type — "any `IContainerControl`" — answers for controls
+   other packs own, and registration order is not the author's to choose: an image-bound pack folds
+   into the hub's configuration at boot, a pack loaded from the module store is appended after it.
+   Register such a map with `WithGenericView(map, owner)`: the generic tier is consulted only after
+   every ordinary map declined, and before the fallback. Measured: `ChartControl` is a container
+   with no children; the base pack's container arm, in the ordinary list, claimed every chart
+   ahead of the store-loaded Radzen pack, and `ContainerView` drew the empty child list — every
+   chart of a portal rendered as nothing, with no fallback and no warning, because a map had
+   accepted. The base pack's container view now sits in the generic tier.
+
    **Reading the fallback warning.** That last resort is the one place a control silently turns
    into text (`StackControl { Id = , Style = … }` on screen), so `LayoutClientConfiguration` logs
    it once per control type per hub, at Warning, on the channel
