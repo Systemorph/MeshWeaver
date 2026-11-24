@@ -3653,6 +3653,12 @@ Before this, a burst of activations of one type (memex 2026-11-23: about 700 act
 NodeType) issued 700 probes, each waiting out the 3 s budget on the same stalled partition query, and the
 parked continuations starved the silo thread pool. A faulted probe is logged once, not once per waiter.
 
+The shared probe is a **refcounted connection**, not a fire-and-forget subscription: it runs while an
+unfinished waiter is subscribed and is disposed when the last one leaves (a later waiter starts it again).
+A probe nobody owned outlived the mesh that asked: its in-flight `path:{type}` query kept a lease on a
+module generation's `IMeshQueryProvider` past teardown, so the collectible context could not unload
+(Plugins#1785, `AiLiveUpdateTest` teardown). Anything that holds a module lease must end with its caller.
+
 ## Quick reference
 
 | I want to… | Do this |
