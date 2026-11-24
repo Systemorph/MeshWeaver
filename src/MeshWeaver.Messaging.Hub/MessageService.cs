@@ -190,6 +190,9 @@ public class MessageService : IMessageService
     private readonly ConcurrentDictionary<string, (IMessageDelivery Delivery, CancellationTokenSource TimeoutCts, string GatesAtDeferral)>
         deferredDeliveries = new();
     private TaskScheduler turnScheduler = TaskScheduler.Default;
+    // Set once by BeginDisposal; guarded by turnGate. Non-null = this hub's drains run on the lane.
+    private TaskScheduler? disposalLane;
+    private int drainGeneration;
     private readonly HierarchicalRouting hierarchicalRouting;
     /// <summary>
     /// Universal storm circuit-breaker. Detects an unbounded retry/resubscribe/repost
@@ -1754,9 +1757,16 @@ public class MessageService : IMessageService
         Interlocked.Increment(ref drainsScheduled);
         try
         {
-            Task.Factory.StartNew(DrainOne, CancellationToken.None,
+            TaskScheduler scheduler;
+            int generation;
+            lock (turnGate)
+            {
+                generation = drainGeneration;
+                scheduler = disposalLane ?? turnScheduler;
+            }
+            Task.Factory.StartNew(() => DrainOne(generation), CancellationToken.None,
                 TaskCreationOptions.DenyChildAttach | TaskCreationOptions.PreferFairness,
-                turnScheduler);
+                scheduler);
         }
         catch (Exception ex)
         {
@@ -1785,12 +1795,21 @@ public class MessageService : IMessageService
     // Counts THIS body as executing for as long as it runs, so the disposal snapshot can tell a
     // drain that is running from a drain that was merely scheduled (#3593). The inner loop keeps
     // every one of its early returns; the counter is released in the finally regardless.
-    private void DrainOne()
+    private void DrainOne(int generation)
     {
-        // The scheduler actually gave us a thread. Paired with drainsScheduled above; the two are
-        // what make "queued and never started" a MEASUREMENT rather than an inference (#3593).
-        Interlocked.Increment(ref drainsStarted);
-        Interlocked.Increment(ref drainsInFlight);
+        lock (turnGate)
+        {
+            // A drain the disposal lane superseded (BeginDisposal) was queued on the pool before
+            // teardown began; the lane's drain owns the latch now, so this one must not touch it.
+            // Its counters were settled when it was superseded.
+            if (generation != drainGeneration)
+                return;
+            // The scheduler actually gave us a thread. Paired with drainsScheduled above; the two are
+            // what make "queued and never started" a MEASUREMENT rather than an inference (#3593).
+            // Inside the gate so the supersede check and this start cannot interleave.
+            Interlocked.Increment(ref drainsStarted);
+            Interlocked.Increment(ref drainsInFlight);
+        }
         try
         {
             DrainLoop();
@@ -1799,6 +1818,38 @@ public class MessageService : IMessageService
         {
             Interlocked.Decrement(ref drainsInFlight);
         }
+    }
+
+    // 🚨 #5799 — teardown must not depend on the thread pool's queue. A hosted hub's pump drains on
+    // TaskScheduler.Default, so a ShutdownRequest posted by Dispose() waited behind every item the pool
+    // had queued: on a backlogged pool the drain sat unstarted for the whole stall budget. From the
+    // moment a hub begins disposing, its drains run on the mesh's DisposalDrainLane instead — dedicated
+    // threads. A drain ALREADY queued on the pool (the latch was held by earlier traffic, so the
+    // ShutdownRequest rode behind it) is superseded: a fresh drain is scheduled on the lane and the pool
+    // item becomes a no-op (DrainOne sees the new generation). Orleans grain hubs keep their activation
+    // scheduler — only a hub on TaskScheduler.Default moves.
+    internal void BeginDisposal()
+    {
+        if (!ReferenceEquals(turnScheduler, TaskScheduler.Default))
+            return;
+        var lane = hub.ServiceProvider.GetService(typeof(DisposalDrainLane)) as DisposalDrainLane;
+        if (lane is null)
+            return;
+        bool reschedule;
+        lock (turnGate)
+        {
+            disposalLane = lane;
+            reschedule = draining
+                         && Interlocked.Read(ref drainsScheduled) - Interlocked.Read(ref drainsStarted) > 0;
+            if (reschedule)
+            {
+                drainGeneration++;
+                // The abandoned pool drain will never count itself; settle it here.
+                Interlocked.Increment(ref drainsStarted);
+            }
+        }
+        if (reschedule)
+            ScheduleDrainOne();
     }
 
     // A synchronous handler can post its next turn before completing, so draining until empty

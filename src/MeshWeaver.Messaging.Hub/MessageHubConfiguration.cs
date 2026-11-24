@@ -288,6 +288,12 @@ public record MessageHubConfiguration
         {
             services.AddSingleton<ReleaseLane>();
         }
+        // ONE disposal lane per mesh (#5799): hubs tearing down drain on dedicated threads, never
+        // behind the thread pool's queue. Registered on the root, inherited by every hosted hub.
+        if (ParentServiceProvider?.GetService<DisposalDrainLane>() == null)
+        {
+            services.AddSingleton<DisposalDrainLane>();
+        }
         Services.Invoke(services);
         return services;
     }

@@ -278,6 +278,23 @@ untouched**, and the verdict still names them if they ever fire.
 🚨 **The negative control ran.** With only the flag removed and the test project rebuilt, the test
 fails in 12 s with the verdict above; with it, green in 406 ms. One line is the whole difference.
 
+### Resolved 2026-11-24 (#5799): teardown no longer rides the pool
+
+`drainsAwaitingScheduler>0` on a hosted hub meant the pool had accepted the drain and not run it. Seven
+changes (#5931 the snapshot field, #5971 parked registry threads, #7314 allocation drivers, #7877 the
+update-backlog writer, #8137 idle-worker count, #8140 and #8385 the `SystemClock` lock) each removed one
+thing that held or flooded the pool, and the verdict kept firing (1,224 occurrences, 1,106 on memex-cloud),
+because the drain was still a pool work item: it waits behind everything queued before it (the 2026-11-24
+heartbeat read `poolThreads=34 poolPending=2865`), whatever put that backlog there.
+
+From the moment `Dispose()` begins, a hub on `TaskScheduler.Default` now drains on the mesh's
+`DisposalDrainLane` (dedicated threads, one lane per mesh registered on the root hub, at most 16 threads,
+kept parked). A drain already queued on the pool when disposal began is superseded: a new drain is
+scheduled on the lane and the pool item becomes a no-op (generation check in `MessageService.DrainOne`).
+Orleans grain hubs keep their activation scheduler. Pinned by `DisposalDrainLaneTest`. So a
+`THE PUMP IS NOT TURNING` verdict on a hosted hub after this change is no longer "the pool is busy"; read
+it as a lane or latch defect.
+
 ### A running drain also has to return its worker
 
 Global queueing does not preempt a drain that is already running. The original `DrainLoop`
