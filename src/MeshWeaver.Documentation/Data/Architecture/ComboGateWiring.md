@@ -1294,38 +1294,27 @@ Also not established: whether the producing repository's own seeded gate shows t
 smaller scale. The 5 s stamp budget is not the fix. Raising it would hide the unanswered reads, and
 the reads would still cost every type its adoption.
 
-## Open: the gate compiles the large package a second time (#4413)
+## Closed: the gate compiled the large package a second time (#4413)
 
-Large combos (about 81 modules) sometimes end `NotVerifiable` because the gate runs out of
-`GATE_TIMEOUT`. The clock covers the bake and the gate together. What fills it, read from the
-slot logs of runs 43730201284 and 43722437356 (NotVerifiable) and 43725330495 (Green):
+Large combos (about 81 modules) ended `NotVerifiable` because the gate ran out of `GATE_TIMEOUT`;
+the clock covers the bake and the gate together. Beyond the bake (408 s to 827 s) the time went to
+`Hosting`: all of its NodeTypes logged `reported 1 adopted assembly(ies) but the node still has no
+usable build 5s later — compiling instead`, and the gate compiled each of them again.
 
-- **Bake:** 408 s to 827 s for the same 165 NodeTypes. 15 packages reuse their sealed bundles;
-  30 are rebuilt because the instance runs older package commits than the newest seal.
-- **Gate, every package except `Hosting`:** about 3 minutes.
-- **Gate, `Hosting`:** the rest. All 64 Hosting NodeTypes log
-  `reported 1 adopted assembly(ies) but the node still has no usable build 5s later — compiling
-  instead`. The gate then compiles every one of them again, although the bake compiled them, and
-  each type's tests wait for its own compile.
+**Cause (measured, run 45320319170, slot 2).** Every one of the 69 recompiled types had also logged,
+in the bake, `Prebuilt assembly for … NOT re-stamped (#6038)`, and the watcher's last state for each
+read `status=Pending coordinates=True usable=True dirty=False`. The ordering: the install-time
+adoption stamps the type `Ok`; a release request then flips it `Pending` while it still names the
+same usable build; the watcher's on-demand adoption asks the seeder, which finds the record "already
+serves these exact bytes" (`StandingBuildKept`), writes nothing and reports the type covered; the
+watcher accepts an adoption only when the node is `Ok` and usable, so after its 5 s stamp budget it
+compiles.
 
-This happens on the Green memex run too: there the bake was fast enough to leave room for it.
-Packages installed before `Hosting`, under less load, are adopted without a second compile.
-
-What is NOT yet known is why the node has no usable build after the adoption reports success. The
-seeder's write already completes on the owning hub's verdict (#2661), so "the write had not landed
-yet" is not the answer. The leading candidate is a definite ordering: the install-time adoption
-stamps the type `Ok`; the release request then finds the source versions not yet stamped (source
-reads time out under the 999-file install) and flips the type `Pending`; the watcher's on-demand
-adoption then finds the same bytes already recorded, returns `AlreadyServed` and writes nothing; and
-the watcher, which requires status `Ok`, compiles.
-
-To decide it, the lane sets `MW_LOG_CATEGORIES=bake-seed=Debug,MeshWeaver.Graph.CompileWatcher=Debug`
-on the verify step. The verifier forwards that variable to the gate container by name
-(`DockerImageGate.ForwardedEnvironment`), and the tester raises only the categories it names,
-even at its default Warning level (`GateVerbosity.CategoryFilters`). The compile watcher's
-warning also names the last state it saw (`status`, `coordinates`, `usable`, `dirty`). Both
-tester-side halves ship in the candidate image, so they appear from the first candidate built
-after this change.
+**Fix.** `StandingBuildKept` keeps a record only when it is settled, status `Ok`. Over a usable
+build at `Pending` the seeder writes the stamp once, which sets `Ok`; the next seed finds `Ok` and
+keeps, so this does not churn. The watcher itself is unchanged: a type that cannot adopt (bytes
+missing, dirty, unusable, a force) still compiles, which is what #2818 requires, so nothing is
+stranded at `Pending`.
 
 ## Known boundary: the combo moves
 
