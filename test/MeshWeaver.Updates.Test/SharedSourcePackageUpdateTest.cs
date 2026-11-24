@@ -165,6 +165,43 @@ public class SharedSourcePackageUpdateTest(ITestOutputHelper output) : UpdateSce
         await AssertRebuilt(n, instance, "N1");
     }
 
+    /// <summary>
+    /// #8413 (reopened 2026-11-24): TWO package updates in quick succession — the second only the
+    /// shared folder and a test, landing while the first release may still be in flight. The record
+    /// must end on a build of the SECOND update with every release request handled.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task TwoQuickDeltas_TheSecondTouchingOnlySharedAndTest_EndOnTheSecondsBuild()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var n = await InstallN();
+        var instance = await CreateInstance(TypePath, "inst");
+        await AssertServes(instance, "N", "the instance activates on build N");
+
+        var all1 = new[] { Root(), AppNode(), Shared("N1"), TestFile("n1"), TypeNode() };
+        await PackageInstaller.Install(Mesh, Manifest with { Version = "1.0.1" }, all1, "n1")
+            .Take(1)
+            .Should().Within(Step + Step).Emit("the first update must complete",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        // No wait for the first release: the second update lands inside it.
+        var all2 = new[] { Root(), AppNode(), Shared("N2"), TestFile("n2"), TypeNode() };
+        await PackageInstaller.Install(Mesh, Manifest with { Version = "1.0.2" }, all2, "n2")
+            .Take(1)
+            .Should().Within(Step + Step).Emit("the second update must complete",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        await DefinitionWhere(TypePath,
+            d => d.CompilationStatus == CompilationStatus.Ok
+                 && !d.IsDirty
+                 && !string.Equals(d.LatestAssemblyPath, n.LatestAssemblyPath, StringComparison.Ordinal)
+                 && (d.RequestedReleaseAt is null
+                     || (d.LastReleaseRequestHandledAt is { } handled && handled >= d.RequestedReleaseAt)),
+            "the record must settle on a new build with every release request handled");
+        await Recycle(instance);
+        await AssertServes(instance, "N2", "after the dispose the build of the SECOND update serves");
+    }
+
     /// <summary>The full re-install of the same change (the fallback the delta takes when it cannot
     /// run) — every package type is released, the consumer among them.</summary>
     [Fact(Timeout = 300_000)]
