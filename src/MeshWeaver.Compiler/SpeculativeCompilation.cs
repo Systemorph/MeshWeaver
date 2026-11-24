@@ -78,8 +78,6 @@ internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolve
                 .Concat(proposedNugetRefs)
                 .ToList()
             : [.. proposedNugetRefs];
-        GeneratorPipeline.StripBuiltInScopeGeneratorRef(
-            toResolve, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
 
         var effectiveReferences = composeOnto;
         if (toResolve.Count > 0)

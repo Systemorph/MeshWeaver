@@ -1,92 +1,27 @@
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
-using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Compiler;
 
 /// <summary>
-/// Source-generator shaping for dynamic NodeType compiles: which generator assemblies run, and
-/// which legacy <c>#r "nuget:"</c> directives are stripped before NuGet resolution. Both change
-/// what Roslyn emits without any API change, so they live inside the toolchain identity boundary
-/// (#1707).
+/// Source-generator shaping for dynamic NodeType compiles: which generators run — the ones a node
+/// <c>#r</c>'d and the ones a NodeType declared (<see cref="DeclaredGenerators"/>) — and how they
+/// enter the content key. Both change what Roslyn emits without any API change, so they live
+/// inside the toolchain identity boundary (#1707). The platform itself ships no generator.
 /// </summary>
 public static class GeneratorPipeline
 {
     /// <summary>
-    /// Paths of source-generator assemblies fed to EVERY dynamic-node compilation, resolved once
-    /// per process. 🚨 The platform does NOT ship any — business rules / scopes moved OUT of the
-    /// platform (see the comment blocks in <c>MeshWeaver.Graph.csproj</c> and
-    /// <c>Memex.Portal.Distributed.csproj</c>): the scope runtime is a shared-source library node
-    /// in the <c>MeshWeaver.Plugins/BusinessRules</c> plugin, pulled into a consumer's compilation
-    /// via <c>shared=@BusinessRules/Scope/Source</c>, and the plugin carries the
-    /// <c>ScopeCodeGenerator</c> SOURCE for the generator-injection seam. So on a deployed image
-    /// this list is EMPTY. It only fills when a <c>MeshWeaver.BusinessRules.Generator.dll</c> is
-    /// physically present next to the app (a dev/self-host tree that placed one there) — kept as
-    /// graceful degradation for such trees, and because the legacy-<c>#r</c> strip keys off it.
-    /// </summary>
-    internal static readonly IReadOnlyList<string> BuiltInGeneratorPaths = ResolveBuiltInGenerators();
-
-    /// <summary>
-    /// NuGet package id (and, with <c>.dll</c>, assembly file name) of the BusinessRules scope
-    /// source generator. When a copy is present in the app base (<see cref="BuiltInGeneratorPaths"/>
-    /// non-empty), a legacy <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> is redundant and is
-    /// filtered out of BOTH the generator list (avoid a double-run → CS0101, see
-    /// <see cref="RunSourceGenerators"/>) and the NuGet resolve set (avoid a dead round-trip).
-    /// </summary>
-    internal const string BuiltInScopeGeneratorId = "MeshWeaver.BusinessRules.Generator";
-
-    private static IReadOnlyList<string> ResolveBuiltInGenerators()
-    {
-        var path = Path.Combine(AppContext.BaseDirectory, BuiltInScopeGeneratorId + ".dll");
-        return File.Exists(path) ? [path] : [];
-    }
-
-    /// <summary>
-    /// Removes a legacy <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> from the NuGet resolve
-    /// set when the generator ships built-in (<paramref name="builtInPresent"/>). The generator is
-    /// now part of the platform, so that <c>#r</c> is redundant — and RESOLVING it hard-fails on a
-    /// deployed image: after <c>BakeMeshLocalFeed</c> was removed (#395) the mesh-local feed
-    /// (<c>dist/packages</c>) is gone, so NuGet throws
-    /// <c>"The local source '/app/dist/packages' doesn't exist"</c> and breaks every deployed scope
-    /// node still carrying the legacy <c>#r</c> (the prod BalanceSheet failure). Behaviour is
-    /// unchanged: the built-in generator still emits the <c>IScope&lt;,&gt;</c> implementations, and
-    /// <see cref="RunSourceGenerators"/> already de-dups the generator itself (CS0101). When the
-    /// built-in is somehow absent the <c>#r</c> is kept so the generator can still resolve via NuGet.
-    /// Other package references are never touched.
-    /// </summary>
-    internal static void StripBuiltInScopeGeneratorRef(List<NuGetPackageReference> refs, bool builtInPresent)
-    {
-        if (builtInPresent)
-            refs.RemoveAll(r => string.Equals(
-                r.Id, BuiltInScopeGeneratorId, StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>
-    /// The generator-candidate assemblies a compile actually loads: the built-in generator (when a
-    /// copy is present beside the app) plus everything the node's <c>#r</c> directives resolved to,
-    /// minus a duplicate of the built-in. Extracted so the CONTENT KEY
-    /// (<see cref="GeneratedInputIdentity.OfGeneratedInput"/>) hashes the SAME set
-    /// <see cref="RunSourceGenerators"/> runs — a key computed over a different set would be a key
-    /// about a compile that never happened.
-    /// </summary>
-    internal static IReadOnlyList<string> EffectiveGeneratorPaths(
-        IReadOnlyList<string> generatorAssemblyPaths)
-        => BuiltInGeneratorPaths.Count == 0
-            ? generatorAssemblyPaths
-            : [.. BuiltInGeneratorPaths,
-               .. generatorAssemblyPaths.Where(p => !string.Equals(
-                   Path.GetFileName(p), BuiltInScopeGeneratorId + ".dll", StringComparison.OrdinalIgnoreCase))];
-
-    /// <summary>
-    /// The assemblies the stage-1 CONTENT KEY hashes for the generator half: the
-    /// <see cref="EffectiveGeneratorPaths"/> plus, for every candidate whose package ships a
+    /// The assemblies the stage-1 CONTENT KEY hashes for the generator half: the <c>#r</c>-resolved
+    /// candidates plus, for every candidate whose package ships a
     /// RID-specific runtime group, the runtime asset discovery actually LOADS in its place
     /// (<see cref="SourceGeneratorLoader.RuntimeAssetOf"/>) — two runtime helpers behind one compile
     /// stub can make a generator emit different source, so they must not share a key. Identical to
-    /// <see cref="EffectiveGeneratorPaths"/> for every package without a <c>runtimes/</c> folder.
-    /// Shared by the bake, the runtime compile and the re-evaluation lane.
+    /// the candidates for every package without a <c>runtimes/</c> folder. Shared by the bake, the
+    /// runtime compile and the re-evaluation lane. (A DECLARED generator is not here: its identity
+    /// rides in the generated text, <see cref="DeclaredGenerators.Stamp"/>.)
     /// </summary>
     internal static IReadOnlyList<string> DigestedGeneratorPaths(IReadOnlyList<string> generatorAssemblyPaths)
         => DigestedGeneratorPaths(generatorAssemblyPaths, CancellationToken.None);
@@ -99,7 +34,7 @@ public static class GeneratorPipeline
     internal static IReadOnlyList<string> DigestedGeneratorPaths(
         IReadOnlyList<string> generatorAssemblyPaths, CancellationToken cancellationToken)
     {
-        var effective = EffectiveGeneratorPaths(generatorAssemblyPaths);
+        var effective = generatorAssemblyPaths;
         List<string>? runtime = null;
         foreach (var path in effective)
         {
@@ -108,17 +43,11 @@ public static class GeneratorPipeline
                 && !string.Equals(asset, path, StringComparison.OrdinalIgnoreCase))
                 (runtime ??= []).Add(asset);
         }
-        return runtime is null ? effective : [.. effective, .. runtime];
+        return runtime is null ? [.. effective] : [.. effective, .. runtime];
     }
 
     /// <summary>
-    /// Runs the built-in scope generator plus any OTHER generator a node <c>#r</c>'d over
-    /// <paramref name="compilation"/>. A node's own
-    /// <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> is filtered OUT — otherwise the same
-    /// generator loads from two paths (built-in + baked) and runs twice → duplicate
-    /// <c>IScope&lt;,&gt;</c> implementations → CS0101. Legacy nodes that still carry that
-    /// <c>#r</c> keep compiling (built-in supersedes it, and the strip above keeps it out of the
-    /// NuGet resolve set so it never round-trips).
+    /// Runs every generator a node <c>#r</c>'d over <paramref name="compilation"/>.
     ///
     /// <para>🚨 The generators load through <paramref name="ledger"/> for
     /// <paramref name="loadedFor"/>: a different build of a generator this process already loaded for
@@ -128,42 +57,34 @@ public static class GeneratorPipeline
     internal static CSharpCompilation RunSourceGenerators(
         CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths,
         SourceGeneratorLedger ledger, string loadedFor, ILogger logger, CancellationToken ct)
-        => RunSourceGeneratorsWithNodeOutput(compilation, generatorAssemblyPaths, ledger, loadedFor, logger, ct, out _);
+        => RunSourceGeneratorsWithNodeOutput(compilation, generatorAssemblyPaths, [], ledger, loadedFor, logger, ct, out _);
 
     /// <summary>
-    /// As <see cref="RunSourceGenerators"/>,
-    /// and hands back the trees the NODE-SUPPLIED generators added — every generator that is not one
-    /// of the platform's <see cref="BuiltInGeneratorPaths"/>. A node's own <c>#r</c>'d generator runs
-    /// code the node chose, so what it emits is the author's code for the in-mesh impersonation check
+    /// Runs every generator a node <c>#r</c>'d AND every generator a NodeType DECLARED for this
+    /// compile (<paramref name="declaredGenerators"/>, policy <c>declared-source-generators</c>) over
+    /// <paramref name="compilation"/>, and hands back the trees they added. Every one of them runs
+    /// code a node or a package chose — the platform contributes no generator of its own — so what
+    /// they emit is the author's code for the in-mesh impersonation check
     /// (<c>InMeshImpersonationReferences</c>), which must scan it AFTER generation (#6619 review).
     /// </summary>
     internal static CSharpCompilation RunSourceGeneratorsWithNodeOutput(
         CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths,
+        IReadOnlyList<DeclaredGenerator> declaredGenerators,
         SourceGeneratorLedger ledger, string loadedFor, ILogger logger,
         CancellationToken ct, out ImmutableArray<SyntaxTree> nodeGeneratedTrees)
     {
         nodeGeneratedTrees = [];
-        var allPaths = EffectiveGeneratorPaths(generatorAssemblyPaths);
-        if (allPaths.Count == 0)
+        if (generatorAssemblyPaths.Count == 0 && declaredGenerators.Count == 0)
             return compilation;
-        var builtIn = SourceGeneratorLoader.Discover(
-            allPaths.Where(p => BuiltInGeneratorPaths.Contains(p, StringComparer.OrdinalIgnoreCase)),
-            ledger, loadedFor, logger);
-        var nodeSupplied = SourceGeneratorLoader.Discover(
-            allPaths.Where(p => !BuiltInGeneratorPaths.Contains(p, StringComparer.OrdinalIgnoreCase)),
-            ledger, loadedFor, logger);
-        var generators = builtIn.AddRange(nodeSupplied);
+        var generators = SourceGeneratorLoader.Discover(generatorAssemblyPaths, ledger, loadedFor, logger);
+        foreach (var declared in declaredGenerators.OrderBy(g => g.OwnerPath, StringComparer.Ordinal))
+            generators = generators.AddRange(DeclaredGenerators.Load(declared, ledger, loadedFor, logger, ct));
         if (generators.IsDefaultOrEmpty)
             return compilation;
         var driver = CSharpGeneratorDriver.Create(generators);
         var ran = driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
-        if (!nodeSupplied.IsDefaultOrEmpty)
-        {
-            var untrusted = nodeSupplied.ToHashSet(ReferenceEqualityComparer.Instance);
-            nodeGeneratedTrees = [.. ran.GetRunResult().Results
-                .Where(r => untrusted.Contains(r.Generator))
-                .SelectMany(r => r.GeneratedSources.Select(g => g.SyntaxTree))];
-        }
+        nodeGeneratedTrees = [.. ran.GetRunResult().Results
+            .SelectMany(r => r.GeneratedSources.Select(g => g.SyntaxTree))];
         return (CSharpCompilation)updated;
     }
 }

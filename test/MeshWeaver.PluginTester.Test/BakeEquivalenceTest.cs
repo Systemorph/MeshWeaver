@@ -62,7 +62,25 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
         """{"$type":"MeshNode","id":"Lib","namespace":"","path":"Lib","mainNode":"Lib","name":"Lib","nodeType":"Space","state":"Active","content":{"$type":"PluginManifest","description":"Shared sources."}}""";
 
     private const string SharedNodeTypeJson =
-        """{"$type":"MeshNode","id":"Shared","namespace":"Lib","path":"Lib/Shared","mainNode":"Lib/Shared","name":"Shared","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"Shared library.","configuration":"config => config.WithContentType<SharedMarker>().AddDefaultLayoutAreas()","includeGlobalTypes":true}}""";
+        """{"$type":"MeshNode","id":"Shared","namespace":"Lib","path":"Lib/Shared","mainNode":"Lib/Shared","name":"Shared","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"Shared library.","configuration":"config => config.WithContentType<SharedMarker>().AddDefaultLayoutAreas()","includeGlobalTypes":true,"generators":["GeneratorSource/ProbeGenerator"]}}""";
+
+    // 🚨 A DECLARED source generator (policy declared-source-generators): Lib/Shared contributes it,
+    // so it runs over Lib/Shared's own compile and over Widget/Thing, which pulls Lib/Shared's
+    // sources. Both producers must decide that identically — the surface (assertion 5) and the
+    // dependency record with its content key (assertion 4) cover it, and 7e checks it actually ran.
+    private const string ProbeGeneratorSource =
+        """
+        using Microsoft.CodeAnalysis;
+
+        [Generator]
+        public sealed class ProbeGenerator : IIncrementalGenerator
+        {
+            public void Initialize(IncrementalGeneratorInitializationContext context)
+                => context.RegisterPostInitializationOutput(c => c.AddSource(
+                    "DeclaredGeneratorProbe.g.cs",
+                    "public static class DeclaredGeneratorProbe { public const int Value = 42; }"));
+        }
+        """;
 
     private const string HelperSource =
         """
@@ -169,6 +187,7 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
             WriteFile(root, "Lib/index.json", LibIndexJson);
             WriteFile(root, "Lib/Shared.json", SharedNodeTypeJson);
             WriteFile(root, "Lib/Shared/Source/Helper.cs", HelperSource);
+            WriteFile(root, "Lib/Shared/GeneratorSource/ProbeGenerator.cs", ProbeGeneratorSource);
 
             WriteFile(root, "Widget/index.json", WidgetIndexJson);
             WriteFile(root, "Widget/Thing.json", ThingNodeTypeJson);
@@ -348,6 +367,13 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
             Assert.Contains(
                 "Widget/Snippets/Greeting",
                 treeReport.Types.Single(t => t.NodePath == "Widget/Thing").ResolvedIncludePaths);
+
+            // 7e. The DECLARED generator ran where its sources are pulled — Lib/Shared itself and its
+            //     shared= consumer Widget/Thing — and its source file is not compiled as a source.
+            Assert.Contains("DeclaredGeneratorProbe", thingSurface);
+            Assert.Contains("DeclaredGeneratorProbe",
+                SurfaceOf(tree.Bundles["Lib"]["Lib/Shared"].Assembly).Select(TypeNameOf));
+            Assert.DoesNotContain("ProbeGenerator", thingSurface);
 
             // 7c. The `nodeType:Code` filter excluded the Scope-typed .cs from the QUERY itself…
             Assert.DoesNotContain("Widget/Thing/Source/Scoped", thing.SourceVersions.Keys);

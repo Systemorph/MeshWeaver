@@ -10,15 +10,16 @@ namespace MeshWeaver.Graph.Configuration;
 ///
 /// <para>A Scope node holds the <c>IScope&lt;TIdentity,TState&gt;</c> C# source as its
 /// <see cref="CodeConfiguration"/> Content, exactly like a <see cref="CodeNodeType"/>, but is
-/// typed <c>"Scope"</c> so it reads as a scope in the graph and so the BusinessRules scope
-/// generator is associated with this type rather than running over every plain Code compile
-/// (see <c>MeshNodeCompilationService.RunSourceGenerators</c>, which now runs the generator
-/// only when a unit actually declares an <c>IScope&lt;,&gt;</c>).</para>
+/// typed <c>"Scope"</c> so it reads as a scope in the graph. The scope generator itself is not
+/// associated with this type: the BusinessRules package DECLARES it on its <c>BusinessRules/Scope</c>
+/// NodeType, and it runs only over compiles that pull that type's sources (policy
+/// <c>declared-source-generators</c>, <c>MeshWeaver.Compiler.DeclaredGenerators</c>).</para>
 ///
 /// <para>Authored by putting <c>// NodeType: Scope</c> in the file's <c>&lt;meshweaver&gt;</c>
 /// header (see <c>CSharpFileParser</c>); the source then lives under <c>{NodeType}/Source/</c>
 /// like any other Code source and is folded into the owning NodeType's Roslyn unit, where the
-/// generator emits the <c>{Scope}Proxy : ScopeBase&lt;…&gt;</c> implementations.</para>
+/// declared generator, when the unit pulls it, emits the <c>{Scope}Proxy : ScopeBase&lt;…&gt;</c>
+/// implementations.</para>
 /// </summary>
 public static class ScopeNodeType
 {
