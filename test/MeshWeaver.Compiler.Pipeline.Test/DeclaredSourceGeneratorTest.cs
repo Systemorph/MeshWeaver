@@ -257,6 +257,61 @@ public class DeclaredSourceGeneratorTest(ITestOutputHelper output) : MonolithMes
         }
     }
 
+    /// <summary>
+    /// A type that pulls the carrier's source through an <c>@@</c> INCLUDE rather than a source query
+    /// also carries the carrier's sources, so it gets the generator too (review on #8507).
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void ATypeThatIncludesTheCarriersSource_GetsTheGenerator()
+    {
+        var includer = TypeNode("declgenapp/Includer");
+        var tree = NodeSet.Create(
+        [
+            CarrierType(), CarrierApi(), GeneratorFile(), includer,
+            Code("declgenapp/Includer/Source", "Uses", $"@@{Carrier}/Source/Api"),
+        ]);
+        var output = TempDirectory();
+        try
+        {
+            var compiled = Bake(tree, includer, output, TestContext.Current.CancellationToken);
+            compiled.Inputs.MatchedSourcePaths.Should().NotContain($"{Carrier}/Source/Api",
+                "the carrier's file arrives through the include, not the source query");
+            TypeNamesOf(compiled.DllPath).Should().Contain("DeclaredGeneratorProbe");
+        }
+        finally
+        {
+            Delete(output);
+        }
+    }
+
+    /// <summary>
+    /// The ledger holds ONE build per declaring type: a newer revision replaces the older one, so a
+    /// superseded revision's collectible context is no longer rooted by the ledger and can unload
+    /// (review on #8507). Asking for the old revision again rebuilds it rather than finding it cached.
+    /// </summary>
+    [Fact]
+    public void TheLedger_HoldsOneBuildPerDeclaringType()
+    {
+        var ledger = new SourceGeneratorLedger();
+        var builds = new List<string>();
+        System.Collections.Immutable.ImmutableArray<Microsoft.CodeAnalysis.ISourceGenerator> Build(string key)
+        {
+            builds.Add(key);
+            return [];
+        }
+
+        ledger.DeclaredBuild(Carrier, "v1", () => Build("v1"));
+        ledger.DeclaredBuild(Carrier, "v1", () => Build("v1"));
+        ledger.DeclaredBuild(Carrier, "v2", () => Build("v2"));
+        ledger.DeclaredBuild("other/Owner", "o1", () => Build("o1"));
+        ledger.DeclaredBuild(Carrier, "v2", () => Build("v2"));
+        ledger.DeclaredBuild(Carrier, "v1", () => Build("v1"));
+
+        builds.Should().Equal(["v1", "v2", "o1", "v1"],
+            "a repeat of the held revision is served, another owner is independent, and a superseded "
+            + "revision is no longer held");
+    }
+
     /// <summary>A declared generator file that is not in the tree fails the compile BY NAME — never
     /// a compile without the generator.</summary>
     [Fact(Timeout = 120_000)]

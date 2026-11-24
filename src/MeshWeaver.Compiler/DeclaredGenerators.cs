@@ -62,7 +62,8 @@ public sealed record DeclaredGenerator(string OwnerPath, ImmutableArray<Declared
 /// hash) therefore gets its own collectible <see cref="AssemblyLoadContext"/>, which resolves
 /// everything it references — Roslyn above all — from the default context, so the generator's
 /// <see cref="ISourceGenerator"/> is the host compiler's own type. The built generators are held
-/// by the <see cref="SourceGeneratorLedger"/> of whoever owns the compiles, never statically.</para>
+/// by the <see cref="SourceGeneratorLedger"/> of whoever owns the compiles — one build per declaring
+/// type, so a superseded revision's context can unload — never statically.</para>
 /// </summary>
 public static class DeclaredGenerators
 {
@@ -169,7 +170,7 @@ public static class DeclaredGenerators
     internal static ImmutableArray<ISourceGenerator> Load(
         DeclaredGenerator generator, SourceGeneratorLedger ledger, string loadedFor, ILogger logger,
         CancellationToken ct)
-        => ledger.DeclaredBuild(generator.Key, () => Build(generator, loadedFor, logger, ct));
+        => ledger.DeclaredBuild(generator.OwnerPath, generator.Key, () => Build(generator, loadedFor, logger, ct));
 
     private static ImmutableArray<ISourceGenerator> Build(
         DeclaredGenerator generator, string loadedFor, ILogger logger, CancellationToken ct)

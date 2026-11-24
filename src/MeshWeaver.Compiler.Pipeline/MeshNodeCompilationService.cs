@@ -1092,7 +1092,10 @@ internal class MeshNodeCompilationService(
             // declared-source-generators) — this type's own and those of every type whose sources
             // the snapshot pulls. Read before any Roslyn work, so a declared generator that cannot
             // be read fails the compile by name instead of compiling without it.
-            .SelectMany(codeFiles => ResolveDeclaredGenerators(selfPath, ntDef, matchedCodePaths)
+            // The include closure counts too: an `@@` include can pull a Code node out of ANOTHER
+            // type's Source/ subtree, and that compile then carries the owner's sources.
+            .SelectMany(codeFiles => ResolveDeclaredGenerators(selfPath, ntDef,
+                    [.. matchedCodePaths, .. includeClosure.Keys])
                 .Select(declaredGenerators => (codeFiles, declaredGenerators)))
             .SelectMany(stage =>
             {
@@ -1367,7 +1370,8 @@ internal class MeshNodeCompilationService(
     /// The source generators NodeTypes DECLARE for a compile of <paramref name="selfPath"/> (policy
     /// <c>declared-source-generators</c>, <see cref="DeclaredGenerators"/>): the type's own
     /// <c>generators</c>, and those of every type whose <c>Source/</c>/<c>Test/</c> subtree
-    /// <paramref name="sourcePaths"/> reaches into — the same owners, in the same order, the bake
+    /// <paramref name="sourcePaths"/> (the matched sources AND the <c>@@</c> include closure) reaches
+    /// into — the same owners, in the same order, the bake
     /// resolves (<see cref="DeclaredGenerators.CandidateOwners"/>).
     ///
     /// <para>🚨 It fails CLOSED, unlike the cell-surface gate above, because the two directions are
@@ -1418,8 +1422,8 @@ internal class MeshNodeCompilationService(
                     ? acc.Add(new DeclaredGeneratorFile(path, code))
                     : throw new CompilationException(selfPath,
                         $"'{owner}' declares the source generator '{declaredEntry}', but no Code node with "
-                        + $"source exists at '{path}'. '{selfPath}' pulls '{owner}''s sources, so it is "
-                        + "compiled with that generator or not at all.")));
+                        + $"source exists at '{path}'. '{selfPath}' pulls the sources of '{owner}', so it "
+                        + "is compiled with that generator or not at all.")));
         }
         return files.Select(list => new DeclaredGenerator(owner, [.. list]));
     }
@@ -2318,11 +2322,16 @@ internal class MeshNodeCompilationService(
                     .Select(matches => NodeCompileShaping.CollectCompileSources(matches, node.Path, logger))
                     // The same declared-generator resolution the compile makes, so the regenerated
                     // key carries the same stamp.
-                    .SelectMany(collected => ResolveDeclaredGenerators(selfPath, ntDef, collected.MatchedPaths)
-                        .SelectMany(declaredGenerators => ResolveIncludesForCodeFiles(collected.Sources, node.Path)
-                            .Select(codeFiles => PrepareGeneratedSource(
-                                node, NodeCompileShaping.CombineSources(codeFiles),
-                                ntDef.Configuration, ntDef.ContentCollections, declaredGenerators))))
+                    .SelectMany(collected =>
+                    {
+                        var closure = new Dictionary<string, string>(StringComparer.Ordinal);
+                        return ResolveIncludesForCodeFiles(collected.Sources, node.Path, closure)
+                            .SelectMany(codeFiles => ResolveDeclaredGenerators(selfPath, ntDef,
+                                    [.. collected.MatchedPaths, .. closure.Keys])
+                                .Select(declaredGenerators => PrepareGeneratedSource(
+                                    node, NodeCompileShaping.CombineSources(codeFiles),
+                                    ntDef.Configuration, ntDef.ContentCollections, declaredGenerators)));
+                    })
                     .SelectMany(prepared => prepared.NuGetReferences.Length == 0
                         ? Observable.Return(
                             GeneratedInputDigestOf(assemblyName, prepared.Source, [], CancellationToken.None))

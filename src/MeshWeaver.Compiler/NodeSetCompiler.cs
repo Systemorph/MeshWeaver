@@ -229,7 +229,8 @@ public static class NodeSetCompiler
         source = NuGetBuildRecord.Stamp(source, nugetRefs);
         // The generators NodeTypes declared for this compile ride in the TEXT too, so the content
         // key covers them — the same stamp the runtime's PrepareGeneratedSource writes.
-        var declaredGenerators = ResolveDeclaredGenerators(nodes, typeNode, nodePath, matchedPaths);
+        // The include closure counts too — an `@@` include can pull another type's Source/ node.
+        var declaredGenerators = ResolveDeclaredGenerators(nodes, typeNode, nodePath, [.. matchedPaths, .. closure.Keys]);
         source = MeshWeaver.Compiler.DeclaredGenerators.Stamp(source, declaredGenerators);
 
         return new CompileInputs(
@@ -273,8 +274,8 @@ public static class NodeSetCompiler
                 if (string.IsNullOrEmpty(code))
                     throw new CompilationException(selfPath,
                         $"'{owner}' declares the source generator '{entry}', but no Code node with source "
-                        + $"exists at '{path}'. '{selfPath}' pulls '{owner}''s sources, so it is compiled "
-                        + "with that generator or not at all.");
+                        + $"exists at '{path}'. '{selfPath}' pulls the sources of '{owner}', so it is "
+                        + "compiled with that generator or not at all.");
                 files.Add(new DeclaredGeneratorFile(path, code));
             }
             builder.Add(new DeclaredGenerator(owner, files.MoveToImmutable()));

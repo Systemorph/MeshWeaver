@@ -40,23 +40,36 @@ public sealed class SourceGeneratorLedger
     internal GeneratorBuild? Recorded(string name) => builds.TryGetValue(name, out var build) ? build : null;
 
     /// <summary>
-    /// The DECLARED generators this owner has already built (<see cref="DeclaredGenerators"/>),
-    /// keyed by <see cref="DeclaredGenerator.Key"/> — the declaring NodeType plus the hash of its
-    /// generator sources. Each entry's generators hold their own collectible load context, so this
-    /// map is what keeps that context alive for as long as the ledger's owner (the runtime compile
-    /// service, a bake run) lives, and nothing longer. Unlike <see cref="builds"/> there is no
-    /// conflict to refuse: two revisions of one generator are two keys in two contexts.
+    /// The DECLARED generator build this ledger's owner currently holds for each declaring NodeType
+    /// (<see cref="DeclaredGenerators"/>): ONE per owner — the build of the revision last asked for,
+    /// under its <see cref="DeclaredGenerator.Key"/> (owner plus source hash). Each build lives in its
+    /// own collectible load context, referenced only from here and from compiles still running with
+    /// it, so replacing an owner's entry with a newer revision is what lets the superseded context
+    /// unload. Without that, every save of a generator source on a live portal would pin one more
+    /// context for the life of the process. Unlike <see cref="builds"/> there is no conflict to
+    /// refuse: two revisions of one generator are two contexts.
     /// </summary>
-    private readonly ConcurrentDictionary<string, ImmutableArray<ISourceGenerator>> declared = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (string Key, ImmutableArray<ISourceGenerator> Generators)> declared =
+        new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The generators built for <paramref name="key"/>, building them with <paramref name="build"/>
-    /// on the first ask. Two compiles that race the first ask may both build; one result is kept and
-    /// the other's collectible context is simply never referenced again. A build that THROWS is not
-    /// recorded, so the next compile asks again.
+    /// The generators built for <paramref name="key"/> of <paramref name="ownerPath"/>, building them
+    /// with <paramref name="build"/> when the owner's held build is another revision (or none). The
+    /// new build REPLACES the owner's previous one: a compile already running with the old array
+    /// keeps it until it finishes, and nothing else roots it. Two compiles that race may both build;
+    /// the last write is kept and the other's context is simply never referenced again. Two
+    /// compiles that alternate between revisions (mid-update) rebuild rather than accumulate. A
+    /// build that THROWS records nothing, so the next compile asks again.
     /// </summary>
-    internal ImmutableArray<ISourceGenerator> DeclaredBuild(string key, Func<ImmutableArray<ISourceGenerator>> build)
-        => declared.TryGetValue(key, out var hit) ? hit : declared.GetOrAdd(key, build());
+    internal ImmutableArray<ISourceGenerator> DeclaredBuild(
+        string ownerPath, string key, Func<ImmutableArray<ISourceGenerator>> build)
+    {
+        if (declared.TryGetValue(ownerPath, out var held) && held.Key == key)
+            return held.Generators;
+        var generators = build();
+        declared[ownerPath] = (key, generators);
+        return generators;
+    }
 }
 
 /// <summary>
