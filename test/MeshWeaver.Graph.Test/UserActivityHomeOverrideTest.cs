@@ -45,7 +45,7 @@ public class UserActivityHomeOverrideTest
         var md = UserActivityLayoutAreas.UserWelcomeMarkdown("Jane Roe");
 
         var blocks = md.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        blocks.Should().Equal("# Welcome back, Jane", "@@(\"area/Composer\")", "@@(\"area/GettingStarted\")", "@@(\"area/Catalog\")");
+        blocks.Should().Equal("# Welcome back, Jane", "@@(\"area/Composer\")", "@@(\"area/HomeGettingStarted\")", "@@(\"area/Catalog\")");
     }
 
     [Fact]
