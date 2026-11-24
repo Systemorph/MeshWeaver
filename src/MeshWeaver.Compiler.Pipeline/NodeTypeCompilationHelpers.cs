@@ -2957,7 +2957,9 @@ internal static class NodeTypeCompilationHelpers
         return ActivityControlPlaneExtensions.SubscribeHubWatcher(
             hub,
             () => ownStream
-            .Where(node => node?.Content is NodeTypeDefinition def
+            // ContentAs, never a type test: a definition that arrives as a JsonObject/JsonElement reads
+            // as ABSENT to `is NodeTypeDefinition`, and a watcher that never matches never says so.
+            .Where(node => node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } def
                 && def.RequestedReleaseAt is { } req
                 // Strictly past our process-local COMMIT high-water — a flapped-back
                 // older value (or a duplicate emission of an already-committed
@@ -3007,7 +3009,7 @@ internal static class NodeTypeCompilationHelpers
                     AwaitSourceSnapshotCurrent(hub, ownStream, requestedAgainst, hubPath, logger)
                     .SelectMany(snapshot => workspace.GetMeshNodeStream().Update(curr =>
                     {
-                        if (curr.Content is not NodeTypeDefinition def) return curr;
+                        if (curr.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is not { } def) return curr;
                         // 🚨 #1834 — fulfil a pending adoption stamp BEFORE the satisfied-branch
                         // reads IsDirty, in the same write. This is the last ordering in which the
                         // adoption could still be thrown away: the sources watcher has published
@@ -3197,14 +3199,21 @@ internal static class NodeTypeCompilationHelpers
     public static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrent(
         IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
         string hubPath, ILogger? logger)
+        => AwaitSourceSnapshotCurrentWithin(hub, ownStream, requestedAgainst, hubPath, logger, SourceSnapshotWaitBudget);
+
+    /// <summary>The same wait with its budget named - the tests' seam; production uses
+    /// <see cref="SourceSnapshotWaitBudget"/>.</summary>
+    internal static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrentWithin(
+        IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
+        string hubPath, ILogger? logger, TimeSpan budget)
         // Teardown ends the read and the wait at its first instant, so neither caller's decision
         // can reach a dying hub nor keep a cross-hub read pending through Quiescing.
-        => AwaitSourceSnapshotCurrentCore(hub, ownStream, requestedAgainst, hubPath, logger)
+        => AwaitSourceSnapshotCurrentCore(hub, ownStream, requestedAgainst, hubPath, logger, budget)
             .TakeUntil(hub.ShuttingDown);
 
     private static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrentCore(
         IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
-        string hubPath, ILogger? logger)
+        string hubPath, ILogger? logger, TimeSpan budget)
     {
         var paths = requestedAgainst.CurrentSourceVersions?.Keys
             .OrderBy(p => p, StringComparer.Ordinal).ToArray() ?? [];
@@ -3242,12 +3251,42 @@ internal static class NodeTypeCompilationHelpers
                         "[ReleaseRequestWatcher] {HubPath}: the source snapshot is behind the request ({Source}) "
                         + "— deciding once it shows the versions the sources' owners hold",
                         hubPath, FirstBehind(requestedAgainst.CurrentSourceVersions, live));
-                return ownStream
-                    .Where(n => DefinitionOf(n) is { } d && SnapshotShows(d.CurrentSourceVersions, live))
-                    .Take(1)
-                    .Select(n => new SourceSnapshotCurrency(n!, true));
+                // 🚨 #8413 — the wait is BOUNDED. An unbounded wait is a request that is neither handled
+                // nor refused: when the published snapshot never reaches the owners' versions (a source
+                // whose owner reads a version the snapshot's query never shows, a binding that went
+                // quiet), RequestedReleaseAt stayed past LastReleaseRequestHandledAt for good — across
+                // a restart too, because the same disagreement is rebuilt from the same rows — and the
+                // installed update never became effective while the page read "needs a compile".
+                // Past the budget the snapshot's currency is UNKNOWN, which is what Established=false
+                // says: the caller then compiles (never "satisfied"), the safe direction.
+                return WithinSnapshotBudget(
+                    ownStream
+                        .Where(n => DefinitionOf(n) is { } d && SnapshotShows(d.CurrentSourceVersions, live))
+                        .Take(1)
+                        .Select(n => new SourceSnapshotCurrency(n!, true)),
+                    Observable.Defer(() =>
+                    {
+                        logger?.LogWarning(
+                            "[ReleaseRequestWatcher] {HubPath}: the source snapshot did not reach the versions the "
+                            + "sources' owners hold within {Budget} (first behind: {Source}) — its currency is "
+                            + "unknown, so the request is decided as NOT up to date and compiles (#8413)",
+                            hubPath, budget, FirstBehind(requestedAgainst.CurrentSourceVersions, live));
+                        return current.Select(c => c with { Established = false });
+                    }),
+                    budget);
             });
     }
+
+    /// <summary>The bound itself: the wait for a current snapshot, or — once <paramref name="budget"/>
+    /// has passed without one — the fallback that decides against an UNESTABLISHED snapshot.</summary>
+    internal static IObservable<SourceSnapshotCurrency> WithinSnapshotBudget(
+        IObservable<SourceSnapshotCurrency> wait, IObservable<SourceSnapshotCurrency> fallback, TimeSpan budget)
+        => wait.Timeout(budget, fallback);
+
+    /// <summary>How long <see cref="AwaitSourceSnapshotCurrent"/> waits for the published source
+    /// snapshot to show the versions the sources' owners hold. Normal lag is a change-feed hop; this
+    /// is the bound past which the wait is a defect, not a race (#8413).</summary>
+    internal static readonly TimeSpan SourceSnapshotWaitBudget = TimeSpan.FromSeconds(30);
 
     /// <summary>Whether <paramref name="snapshot"/> is at least as new as the owners' live versions:
     /// every path it still lists shows the owner's version or newer (an owner-deleted path must be
