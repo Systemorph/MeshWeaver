@@ -171,6 +171,6 @@ Two guards now close it. `GitHubSyncService` resolves the contributed parsers wh
 service was built still counts. And `ParserBoundNodeTypes.Describe` names a Skill/Agent file that
 only reached the catch-all parser: GitSync **refuses the whole snapshot** (loud, no commit
 acknowledged, retried when the AI module is active) and the package installer **does not install
-the file** (counted as unreadable on the install record). Plain `.md` files and other typed markdown
+the file** (a node-repo install counts it as unreadable on the install record; the legacy `package.json` install path logs an error and skips it). Plain `.md` files and other typed markdown
 nodes are untouched. Nodes already stored wrongly are not repaired by this change: re-import the
 affected packages on a host with AI active (a changed commit, or the source's re-sync).
