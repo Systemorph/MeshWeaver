@@ -1753,9 +1753,39 @@ jobs:
             fi
           done < <(jq -r '((.runtimeOptions.frameworks // []) + (if .runtimeOptions.framework then [.runtimeOptions.framework] else [] end))[] | [.name, .version] | @tsv' "$RC")
           [ "$missing" -eq 0 ] || exit 1
+          # 🚨 THE REFERENCE VIEW — the frameworks the platform host RUNS ON, and no others.
+          # `$ROOT/shared` is a PERSISTENT directory of the runner, shared by every job that lands
+          # on it, and a job of ANOTHER line leaves its own framework there (a 4.x/net11 job
+          # installs 11.0.x beside this line's 10.0.x). The tester builds its reference set from
+          # the HIGHEST version of each framework under the root it is handed, so handing it
+          # `$ROOT/shared` compiled a 3.x gate against net11 reference assemblies while the host
+          # ran net10: every in-mesh Tests area then failed with `Could not load file or assembly
+          # System.Linq, Version=11.0.0.0` (Reinsurance main3, 2026-11-24). The assertion above
+          # proves the portal's band is PRESENT, never that it is the newest one installed. So the
+          # tester is handed a view holding, per declared framework, the newest version OF THE
+          # PORTAL'S BAND, and the view is then ASSERTED against the portal's declared major.
+          VIEW="${RUNNER_TEMP:-/tmp}/reference-frameworks"
+          rm -rf "$VIEW"; mkdir -p "$VIEW"
+          while IFS="$(printf '\t')" read -r name want; do
+            [ -n "$name" ] || continue
+            band="${want%.*}"
+            have=$(find "$SHARED/$name" -maxdepth 1 -mindepth 1 -type d -name "${band}.*" 2>/dev/null | sed 's#.*/##' | sort -V | tail -1)
+            mkdir -p "$VIEW/$name"
+            ln -s "$SHARED/$name/$have" "$VIEW/$name/$have"
+          done < <(jq -r '((.runtimeOptions.frameworks // []) + (if .runtimeOptions.framework then [.runtimeOptions.framework] else [] end))[] | [.name, .version] | @tsv' "$RC")
+          PORTAL_MAJOR=$(jq -r '((.runtimeOptions.frameworks // []) + (if .runtimeOptions.framework then [.runtimeOptions.framework] else [] end))[] | select(.name=="Microsoft.NETCore.App") | .version' "$RC" | sed 's/\..*//' | head -1)
+          REF_DIR=$(find "$VIEW/Microsoft.NETCore.App" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)
+          REF_MAJOR=$(basename "${REF_DIR:-?}" | sed 's/\..*//')
+          RUNTIMES=$("$ROOT/dotnet" --list-runtimes | awk '$1=="Microsoft.NETCore.App"{print $2}' | tr '\n' ' ')
+          case " $RUNTIMES" in *" ${PORTAL_MAJOR}."*) RT_OK=1 ;; *) RT_OK=0 ;; esac
+          if [ -z "$PORTAL_MAJOR" ] || [ "$REF_MAJOR" != "$PORTAL_MAJOR" ] || [ "$RT_OK" != 1 ]; then
+            echo "::error title=Reference framework differs from the runtime::the compile would reference Microsoft.NETCore.App ${REF_MAJOR}.x ($REF_DIR) while the platform host runs on ${PORTAL_MAJOR:-?}.x (runtimes installed at $ROOT: $RUNTIMES). A reference set of one major run on another fails every in-mesh test with 'Could not load file or assembly ... Version=${REF_MAJOR}.0.0.0' and names nothing."
+            exit 1
+          fi
+          echo "reference frameworks: $(cd "$VIEW" && ls -d */* | tr '\n' ' ')— reference major $REF_MAJOR == platform host major $PORTAL_MAJOR, runtime installed; $SHARED also carries Microsoft.NETCore.App $(ls "$SHARED/Microsoft.NETCore.App" | tr '\n' ' ') (not referenced)"
           echo "dotnet=$ROOT/dotnet" >> "$GITHUB_OUTPUT"
-          echo "shared=$SHARED" >> "$GITHUB_OUTPUT"
-          echo "the composed host will be started by $ROOT/dotnet ($("$ROOT/dotnet" --version 2>/dev/null || echo '?')), reference frameworks from $SHARED"
+          echo "shared=$VIEW" >> "$GITHUB_OUTPUT"
+          echo "the composed host will be started by $ROOT/dotnet ($("$ROOT/dotnet" --version 2>/dev/null || echo '?')), reference frameworks from $VIEW"
       - name: Log in to the image registry
         if: steps.platform-source.outputs.mode == 'container'
         env:
