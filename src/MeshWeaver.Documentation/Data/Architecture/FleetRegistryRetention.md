@@ -158,11 +158,11 @@ says `rule: derived-protected-set`, and it carries:
   does not render yet is printed, not red, and it accepts nothing until it is rendered. Otherwise
   the record would block the chart repository's pull request that adds the Job.
 - **`cleanupAuthorized: false`, with `authorizationBlockedBy`** naming what it waits for. That list is:
-  tag writers outside instance actions (the promotion retag, the CD pointer moves and the mirror
-  push), which do not respect the lease — making publish and seal mutually exclusive with it needs a
-  mechanism the owner has not chosen yet; CD's push steps, which do not yet wait out the read-only
-  window's refusal; the publisher credential on the control instance; and the owner's approval of a
-  first deleting run against a complete what-if. The Plugins half of blob GC is no longer on it: the
+  bundle publication from the node repositories, which is not yet admitted under the lease (a push
+  inside the read-only window is refused; no DELETE can reach `plugins/*`); a hand or rollback retag
+  outside CD, held off by the break-glass rule only; the publisher credential on the control
+  instance; and the owner's approval of a first deleting run against a complete what-if. Core's CD
+  publishes are no longer on it — see *Publishing under the lease* below. The Plugins half of blob GC is no longer on it: the
   lease-holding run drives the read-only window
   ([Plugins#5299](https://github.com/Systemorph/MeshWeaver.Plugins/pull/5299),
   [#5400](https://github.com/Systemorph/MeshWeaver.Plugins/pull/5400)) through the approved aks-ops
@@ -188,6 +188,48 @@ job is still red.
 
 The ACR's half of the same decision is policy `registry-retention` (#3438): a 30-day window by age,
 no build-count quota, and the purge changed only through the governed `RegistryRetention` action.
+
+### Publishing under the lease (#7530, owner decision A)
+
+`distribution` has no lock, so the cleanup's whole safety margin is the registry-maintenance lease on
+the control instance. A CD step that WRITES a lease-governed registry is therefore admitted under the
+lease before it writes, and it reports completion after. Lease-governed means `retention.rule:
+derived-protected-set` in this record, which today is `cr.meshweaver.cloud`. The writing steps are
+every mirror push, pointer move and release retag.
+
+- **One path.** Every write goes through `mirror-image-to-registry.sh`. That script calls
+  `registry-publish-admission.sh admit` before the copy and `complete` after it. A completion is also
+  reported when the copy fails. `admit` is one signed POST (`X-Hub-Signature-256` with
+  `CONTROL_WEBHOOK_SECRET`) to `<control url>/api/registry-maintenance/admission`. The control URL is
+  `.github/control-instance.json`'s `url`. Control records a `Publish` admission on the same lease row,
+  by the same compare-and-set, as the image-applying instance actions (MeshWeaver.Plugins
+  `RegistryPublishAdmission`).
+- **Both exclusions.** A cleanup cannot take the lease while a publish holds an admission that has not
+  completed. A publish cannot write while a cleanup holds the lease, whether the cleanup is in its
+  DELETEs or in its read-only collect window. While the lease is held, control answers 409. The step
+  then WAITS, asking again every 60 s for up to 20 minutes, and after that it is RED naming the holder.
+  It never writes.
+- **Fail closed, never skipped.** These are all red, and nothing is written:
+  - control unreachable;
+  - a signature control refuses (401);
+  - no route (404, a control image that predates the route);
+  - a lease that cannot be recorded (503);
+  - a missing secret on the step;
+  - an unreadable record.
+
+  A completion that control does not record is only a warning. The admission then holds maintenance
+  back until its 60-minute bound, which outlasts every job's 45-minute hard cut. That is the safe
+  direction.
+- **Enforced, not remembered.** `registry-publish-admission-selftest.py` runs on every pull request. It
+  drives both scripts against a fake control and asserts three things:
+  - a publish during a held lease copies nothing;
+  - every other refusal is red;
+  - an ACR-only mirror asks control nothing (the negative control).
+
+  It also reads `main-cd.yml` and `release.yml` with the same helpers as the push-target derivation,
+  and goes red when a `--tag` push names a lease-governed registry (a write that bypasses the
+  admission), or when a mirror step does not carry the secret.
+
 
 ### R0 — Nothing deletes from `cr.meshweaver.cloud`, and that is a DECLARED state
 

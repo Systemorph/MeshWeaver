@@ -2159,6 +2159,8 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: Mirror portal-ai (staging tag) to the fleet registry — same manifest, digest verified
+        env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
         run: >
           .github/scripts/mirror-image-to-registry.sh
           "${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
@@ -2325,6 +2327,8 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: Mirror migration (staging tag) to the fleet registry — same manifest, digest verified
+        env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
         run: >
           .github/scripts/mirror-image-to-registry.sh
           "${{ env.ACR }}/memex-migration:${{ needs.gate.outputs.staging_tag }}"
@@ -2590,6 +2594,8 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: Tag memex-control:<sha>, :<line label> (ACR, then the fleet registry) — identity only, never the version
+        env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
         run: |
           set -euo pipefail
           # 🚨 IDENTITY TAGS ONLY here. The VERSION tag (what a Continuous record with `updatePattern:
@@ -2710,6 +2716,7 @@ jobs:
       - name: "Tag memex-control:<version> (+ the line pointers) — the fleet registry first, ACR's version tag LAST"
         if: steps.control_tags.outputs.action == 'tag'
         env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
           MOVE: ${{ steps.control_tags.outputs.move_pointers }}
         run: |
           set -euo pipefail
@@ -2938,6 +2945,8 @@ jobs:
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: "Tag <first instance repository>:<version> — the fleet registry first, ACR's version tag LAST"
         if: env.FIRST != 'none' && steps.tags.outputs.action == 'tag'
+        env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
         run: |
           set -euo pipefail
           # The SOURCE is this run's PROMOTED portal (promote copied the same staging manifest to its
@@ -3101,6 +3110,8 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: Mirror mw-plugin-test (staging tag) to the fleet registry — same manifest, digest verified
+        env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
         run: >
           .github/scripts/mirror-image-to-registry.sh
           "${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}"
@@ -3289,6 +3300,8 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: Mirror mw-core-tests (staging tag) to the fleet registry — same manifest, digest verified
+        env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
         run: >
           .github/scripts/mirror-image-to-registry.sh
           "${{ env.ACR }}/mw-core-tests:${{ needs.gate.outputs.staging_tag }}"
@@ -3364,6 +3377,8 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: "Phase A — identity tags (everything except the portal's version)"
+        env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
         run: |
           set -euo pipefail
           promote() { # promote <repo> <tag>...   — ACR, then the same tags on cr (digest verified)
@@ -3397,6 +3412,7 @@ jobs:
         # that does not move `latest` (main3) writes `latest` nowhere.
         id: pointers_b
         env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
           GH_TOKEN: ${{ github.token }}
           # 🚨 PER LINE (policy `major-lines-run-separately`): the line's OWN floating label (`main`,
           # `main3`), and `latest` only from the ONE line delivery-lines.json says moves it — two
@@ -3803,6 +3819,8 @@ jobs:
         run: .github/scripts/check-image-build-identity.sh "$SRC_PORTAL_TAG" "$V_PORTAL"
       - name: "Phase C — arm the release: memex-portal-ai:<version>"
         if: steps.select.outputs.armed == 'true'
+        env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
         run: |
           set -euo pipefail
           # 🚨 THE ARMING WRITE. Until this single PUT lands, no install can see this set:
@@ -3830,6 +3848,8 @@ jobs:
         # newer armed set leaves every pointer — `latest` included — where that set put it.
         id: line_pointers
         if: steps.select.outputs.armed == 'true'
+        env:
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}   # MeshWeaver#7530: the mirror is admitted on control (registry-maintenance lease) before it writes the fleet registry
         run: |
           set -euo pipefail
           # The three MOVING POINTERS of a line, from a version like 3.0.0-ci.8059 (or a clean
