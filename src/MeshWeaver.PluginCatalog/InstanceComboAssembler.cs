@@ -81,6 +81,7 @@ public sealed class InstanceComboAssembler
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch;
+    private readonly Func<string, string, string?, string, Func<string, bool>, IObservable<RepoSnapshot>>? fetchFiltered;
     private readonly IIoPool filePool;
     private readonly ComboAssemblyOptions options;
     private readonly ILogger? logger;
@@ -95,13 +96,19 @@ public sealed class InstanceComboAssembler
     /// <param name="filePool">The pool the blocking file writes run on (never a hub scheduler).</param>
     /// <param name="options">Policy + bounds; defaults refuse moving refs and incomplete combos.</param>
     /// <param name="logger">Diagnostics.</param>
+    /// <param name="fetchFiltered">Optional single-file fetch (the client's filtered
+    /// <c>Fetch</c>): how a git-synced module — fetched as a SUBDIRECTORY, whose snapshot never
+    /// carries the repository root — still reads its repository's <c>plugin-gate.allow</c>.
+    /// Absent, such a module honours no known debt (the stricter reading).</param>
     public InstanceComboAssembler(
         Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch,
         IIoPool filePool,
         ComboAssemblyOptions? options = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        Func<string, string, string?, string, Func<string, bool>, IObservable<RepoSnapshot>>? fetchFiltered = null)
     {
         this.fetch = fetch;
+        this.fetchFiltered = fetchFiltered;
         this.filePool = filePool;
         this.options = options ?? new ComboAssemblyOptions();
         this.logger = logger;
@@ -224,6 +231,28 @@ public sealed class InstanceComboAssembler
         var syncRepo = NullIfBlank(module.GitSync?.RepositoryUrl);
         var syncSha = NullIfBlank(module.GitSync?.LastSyncCommitSha);
         var subdirectory = NullIfBlank(module.GitSync?.Subdirectory);
+        // 🚨 A sync DECLINED for a platform floor the CANDIDATE meets lands on the roll — and it
+        // lands the source's branch HEAD of that day, not the commit the declined attempt read
+        // (that record is only rewritten by an attempt: memex-cloud's said Nov 18 for a week, a
+        // commit that predates the type its sibling already uses). So verify the head the roll
+        // would land, resolved to an exact sha at assembly (ResolvedCommit) and stamped MOVING.
+        if (syncRepo is not null
+            && module.GitSync is { DeclinedCommitSha.Length: > 0, DeclinedFloor: { } floor }
+            && ComboAssemblyOptions.ParsePlatform(floor) is { } floorVersion
+            && ComboAssemblyOptions.ParsePlatform(options.CandidatePlatform) is { } candidate
+            && candidate >= floorVersion)
+        {
+            var branch = NullIfBlank(module.GitSync.Branch) ?? "HEAD";
+            options.Output.WriteLine(
+                $"  {module.ModuleId}: sync declined for platform >= {floor}; candidate "
+                + $"{options.CandidatePlatform} meets it, so the roll lands '{branch}' HEAD — "
+                + $"verified instead of the installed {syncSha?[..Math.Min(12, syncSha.Length)] ?? "(none)"}.");
+            return new ModulePlan(module)
+            {
+                Fetch = new FetchSpec(syncRepo, branch, subdirectory, FolderFilter: null,
+                    MaterializationPin.Moving, RequireModuleVersionMatch: false),
+            };
+        }
         var package = module.Package;
         var recordedModuleVersion = NullIfBlank(package?.ModuleVersion);
 
@@ -428,9 +457,9 @@ public sealed class InstanceComboAssembler
                 if (verdict.Failed is not null)
                     return Observable.Return(new ModuleOutcome(plan, verdict.Failed, Absent: false));
 
-                var withDebt = WithKnownDebt(verdict.Entry, spec, snapshot, plan.Module.ModuleId);
-                return filePool.InvokeBlocking(ct =>
-                        WriteModule(workRoot, plan.Module.ModuleId, files, ct))
+                return WithKnownDebt(verdict.Entry, spec, snapshot, plan.Module.ModuleId)
+                    .SelectMany(withDebt => filePool.InvokeBlocking(ct =>
+                            WriteModule(workRoot, plan.Module.ModuleId, files, ct))
                     .Select(written => new ModuleOutcome(plan, withDebt with
                     {
                         Status = ModuleAssemblyStatus.Materialized,
@@ -440,7 +469,7 @@ public sealed class InstanceComboAssembler
                     }, Absent: false))
                     .Do(outcome => options.Output.WriteLine(
                         $"  ok  {outcome.Entry.ModuleId}: {outcome.Entry.FileCount} file(s) @ "
-                        + $"{snapshot.CommitSha} → {outcome.Entry.Pin}"));
+                        + $"{snapshot.CommitSha} → {outcome.Entry.Pin}")));
             })
             .Catch((Exception exception) =>
             {
@@ -460,18 +489,50 @@ public sealed class InstanceComboAssembler
     /// the repository root the file lives at. A malformed file is recorded as such and honours
     /// nothing: a guessed subset could excuse a failure the repository never listed.
     /// </summary>
-    private ModuleAssembly WithKnownDebt(
+    private IObservable<ModuleAssembly> WithKnownDebt(
         ModuleAssembly entry, FetchSpec spec, RepoSnapshot snapshot, string moduleId)
     {
-        if (spec.FolderFilter is null || spec.Subdirectory is not null)
-            return entry;
+        // A package folder arrives as a WHOLE-repository snapshot: the file is in it.
+        if (spec.FolderFilter is not null && spec.Subdirectory is null)
+            return Observable.Return(DebtFrom(entry, spec, snapshot, snapshot, spec.FolderFilter, moduleId));
+
+        // 🚨 A git-synced module (a SUBDIRECTORY fetch) never carries the repository root, so its
+        // source repository's declared debt was invisible and a structurally-unsatisfiable install
+        // the repository itself allows (Education's AgenticEngineering, MeshWeaver#4413) read Red on
+        // every candidate. Read the one root file at the SAME commit the module was fetched at.
+        if (spec.Subdirectory is { } subdirectory && fetchFiltered is not null)
+            return fetchFiltered(spec.RepositoryUrl, snapshot.CommitSha, null, options.AccessToken,
+                    path => string.Equals(path, ComboKnownDebt.FileName, StringComparison.Ordinal))
+                .Take(1)
+                .Timeout(options.FetchTimeout)
+                .Select(root => DebtFrom(entry, spec, root, snapshot, subdirectory, moduleId))
+                // The debt file is an allowance, never evidence: failing to read it means no
+                // allowance (every failure counts), never a failed module of its own.
+                .Catch((Exception exception) =>
+                {
+                    logger?.LogWarning(exception,
+                        "[ComboAssembly] reading {File} for {Module} failed.", ComboKnownDebt.FileName, moduleId);
+                    return Observable.Return(entry with
+                    {
+                        KnownDebtError = $"{ComboKnownDebt.FileName} in '{spec.RepositoryUrl}' at "
+                                         + $"{snapshot.CommitSha} could not be read, so no known debt is "
+                                         + $"honoured for '{moduleId}': {exception.GetType().Name}: {exception.Message}",
+                    });
+                });
+        return Observable.Return(entry);
+    }
+
+    private ModuleAssembly DebtFrom(
+        ModuleAssembly entry, FetchSpec spec, RepoSnapshot source, RepoSnapshot moduleSnapshot,
+        string folder, string moduleId)
+    {
         try
         {
-            var debt = ComboKnownDebt.ForModule(snapshot, spec.FolderFilter, moduleId);
+            var debt = ComboKnownDebt.ForModule(source, folder, moduleId);
             if (debt.Count > 0)
                 options.Output.WriteLine(
                     $"  debt {moduleId}: {debt.Count} known-debt entr(ies) declared in "
-                    + $"{ComboKnownDebt.FileName} @ {snapshot.CommitSha}");
+                    + $"{ComboKnownDebt.FileName} @ {moduleSnapshot.CommitSha}");
             return entry with { KnownDebt = [.. debt.Select(d => d.ToString())] };
         }
         catch (FormatException exception)
@@ -479,7 +540,7 @@ public sealed class InstanceComboAssembler
             return entry with
             {
                 KnownDebtError = $"{ComboKnownDebt.FileName} in '{spec.RepositoryUrl}' at "
-                                 + $"{snapshot.CommitSha} is malformed, so no known debt is "
+                                 + $"{moduleSnapshot.CommitSha} is malformed, so no known debt is "
                                  + $"honoured for '{moduleId}': {exception.Message}",
             };
         }

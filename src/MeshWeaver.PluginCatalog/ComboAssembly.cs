@@ -26,6 +26,25 @@ public sealed record ComboAssemblyOptions
     /// module riding it — never an unbounded hang.</summary>
     public TimeSpan FetchTimeout { get; init; } = TimeSpan.FromMinutes(2);
 
+    /// <summary>The platform the candidate image carries (its tag, e.g. <c>4.0.14059</c>). A sync
+    /// the instance DECLINED for a platform floor is materialised at the commit it declined when
+    /// the candidate meets that floor — it lands on the roll — and at its installed commit when
+    /// it does not (or when this is unset).</summary>
+    public string? CandidatePlatform { get; init; }
+
+    /// <summary>The numeric <c>major.minor.build</c> of a platform string, ignoring a pre-release
+    /// or build suffix; <c>null</c> when it has none.</summary>
+    public static Version? ParsePlatform(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        var core = text.Trim().TrimStart('v', 'V');
+        var cut = core.IndexOfAny(['-', '+']);
+        if (cut >= 0)
+            core = core[..cut];
+        return Version.TryParse(core, out var version) ? version : null;
+    }
+
     /// <summary>Access token handed to the fetch (empty = anonymous, for public repos).</summary>
     public string AccessToken { get; init; } = "";
 

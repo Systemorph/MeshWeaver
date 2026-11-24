@@ -143,7 +143,9 @@ var assembler = new InstanceComboAssembler(
         SourceRepositories = sources,
         DefaultSourceRepository = defaultSource,
         Output = Console.Out,
-    });
+    },
+    fetchFiltered: (url, gitRef, subdirectory, token, filter) =>
+        ((IGitHubRepoClient)client).Fetch(url, gitRef, subdirectory, token, filter));
 
 // 🚨 ObserveCompletion, never Rx's own observable-to-Task bridge — see the ruling of
 // 2026-08-30 ("no ToTask ever") and ReactiveCompletion's remarks.
