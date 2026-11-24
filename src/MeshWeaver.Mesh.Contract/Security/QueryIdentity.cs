@@ -282,6 +282,9 @@ public static class QueryIdentityResolver
             var parsed = new QueryParser().Parse(query);
             if (IsNamedSegment(FirstSegment(parsed.Path)))
                 return true;
+            foreach (var seg in parsed.PathPartitions())
+                if (IsNamedSegment(seg))
+                    return true;
             foreach (var ns in parsed.ExtractNamespaces())
                 if (IsNamedSegment(FirstSegment(ns)))
                     return true;

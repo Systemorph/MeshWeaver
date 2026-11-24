@@ -363,6 +363,30 @@ public record ParsedQuery(
         return named.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    /// <summary>
+    /// The distinct first segments (partition names) the <c>path:</c> anchor names — EVERY value of a
+    /// multi-path alternation (<c>path:A|B|C</c>, <see cref="Paths"/>), or the one segment of a
+    /// single <see cref="Path"/>. <see cref="Path"/> alone is only the FIRST alternative, so a router
+    /// or provider matcher that reads it pins the whole query to one partition and silently drops the
+    /// rest. Wildcard/empty anchors name nothing and are skipped. Excludes <c>namespace:</c> filters
+    /// (see <see cref="ExtractNamespaces"/>).
+    /// </summary>
+    /// <returns>Distinct partition names in query order; empty when the anchor names none.</returns>
+    public IReadOnlyList<string> PathPartitions()
+    {
+        var segs = new List<string>();
+        if (Paths is { Count: > 0 })
+        {
+            foreach (var p in Paths)
+                if (FirstSegmentOrNull(p) is { } s) segs.Add(s);
+        }
+        else if (FirstSegmentOrNull(Path) is { } s)
+        {
+            segs.Add(s);
+        }
+        return segs.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     private static string? FirstSegmentOrNull(string? path)
     {
         if (!NamesConcretePartition(path)) return null;
