@@ -3298,14 +3298,21 @@ internal static class NodeTypeCompilationHelpers
     public static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrent(
         IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
         string hubPath, ILogger? logger)
+        => AwaitSourceSnapshotCurrentWithin(hub, ownStream, requestedAgainst, hubPath, logger, SourceSnapshotWaitBudget);
+
+    /// <summary>The same wait with its budget named - the tests' seam; production uses
+    /// <see cref="SourceSnapshotWaitBudget"/>.</summary>
+    internal static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrentWithin(
+        IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
+        string hubPath, ILogger? logger, TimeSpan budget)
         // Teardown ends the read and the wait at its first instant, so neither caller's decision
         // can reach a dying hub nor keep a cross-hub read pending through Quiescing.
-        => AwaitSourceSnapshotCurrentCore(hub, ownStream, requestedAgainst, hubPath, logger)
+        => AwaitSourceSnapshotCurrentCore(hub, ownStream, requestedAgainst, hubPath, logger, budget)
             .TakeUntil(hub.ShuttingDown);
 
     private static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrentCore(
         IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
-        string hubPath, ILogger? logger)
+        string hubPath, ILogger? logger, TimeSpan budget)
     {
         var paths = requestedAgainst.CurrentSourceVersions?.Keys
             .OrderBy(p => p, StringComparer.Ordinal).ToArray() ?? [];
@@ -3362,10 +3369,10 @@ internal static class NodeTypeCompilationHelpers
                             "[ReleaseRequestWatcher] {HubPath}: the source snapshot did not reach the versions the "
                             + "sources' owners hold within {Budget} (first behind: {Source}) — its currency is "
                             + "unknown, so the request is decided as NOT up to date and compiles (#8413)",
-                            hubPath, SourceSnapshotWaitBudget, FirstBehind(requestedAgainst.CurrentSourceVersions, live));
+                            hubPath, budget, FirstBehind(requestedAgainst.CurrentSourceVersions, live));
                         return current.Select(c => c with { Established = false });
                     }),
-                    SourceSnapshotWaitBudget);
+                    budget);
             });
     }
 
