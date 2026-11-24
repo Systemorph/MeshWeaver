@@ -287,7 +287,12 @@ var assembler = new InstanceComboAssembler(
         SourceRepositories = sources,
         DefaultSourceRepository = defaultSource,
         Output = Console.Out,
-    });
+        CandidatePlatform = string.IsNullOrWhiteSpace(candidateTag)
+            ? InstanceComboVerifier.TagOf(imageRef)
+            : candidateTag,
+    },
+    fetchFiltered: (url, gitRef, subdirectory, token, filter) =>
+        ((IGitHubRepoClient)client).Fetch(url, gitRef, subdirectory, token, filter));
 
 // ── Phase one: --assemble-only ─────────────────────────────────────────────────────────────────
 // Materialise and decide. Nothing the gate needs is touched: no host, no modules, no docker.
