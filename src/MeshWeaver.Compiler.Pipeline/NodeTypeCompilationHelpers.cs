@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -710,12 +711,14 @@ internal static class NodeTypeCompilationHelpers
                         // Written on the stream's thread, read on the Timeout's timer thread — hence
                         // the Volatile pair, so the warning never reports a state older than the last.
                         var lastSeen = "no emission";
+                        MeshNode? lastNode = null;
                         return ownStream
                             .Select(n => (Node: n, Def: n?.ContentAs<NodeTypeDefinition>(
                                 hub.JsonSerializerOptions, logger)))
                             .Select(e =>
                             {
                                 var usable = e.Def is not null && HasUsableBuild(e.Node!, e.Def, guards);
+                                Volatile.Write(ref lastNode, e.Node);
                                 if (e.Def is { } seen)
                                     Volatile.Write(ref lastSeen,
                                         $"status={seen.CompilationStatus?.ToString() ?? "null"} "
@@ -728,15 +731,85 @@ internal static class NodeTypeCompilationHelpers
                             .Timeout(AdoptionStampBudget)
                             .Catch<bool, Exception>(_ =>
                             {
-                                logger?.LogWarning(
+                                // #4413 — the adoption was real but its stamp never moved the node off
+                                // Pending: the seeder judged a snapshot that predated the Pending
+                                // flip, found the bytes already served and wrote nothing. A node that
+                                // names a usable, clean build and is not forced is exactly what the
+                                // release watcher calls "satisfied by the existing current build" —
+                                // only its status is behind. Settle it; compile only when it is not.
+                                if (Volatile.Read(ref lastNode) is { } seenNode
+                                    && seenNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger)
+                                        is { } seenDef
+                                    && IsSettleableAdoptedPending(seenNode, seenDef, guards))
+                                {
+                                    return SettleAdoptedPending(hubPath)
+                                        .SelectMany(settled =>
+                                        {
+                                            if (settled)
+                                            {
+                                                logger?.LogInformation(
+                                                    "Compile watcher: {HubPath} names a usable, clean build but sat at "
+                                                    + "Pending after the adoption reported {Adopted} - settled Ok "
+                                                    + "without a Roslyn pass (#4413).", hubPath, adopted);
+                                                return Observable.Return(true);
+                                            }
+                                            WarnGaveUp();
+                                            return Observable.Return(false);
+                                        });
+                                }
+                                WarnGaveUp();
+                                return Observable.Return(false);
+
+                                void WarnGaveUp() => logger?.LogWarning(
                                     "Compile watcher: {HubPath} reported {Adopted} adopted "
                                     + "assembly(ies) but the node still has no usable build "
                                     + "{Budget}s later — compiling instead, because a stranded type "
                                     + "is worse than a redundant compile. Last state seen: {LastSeen}.",
                                     hubPath, adopted, AdoptionStampBudget.TotalSeconds,
                                     Volatile.Read(ref lastSeen));
-                                return Observable.Return(false);
                             });
+                    }
+
+                    // The one definition of "settleable", shared by the decision and the write's own
+                    // re-check so a node that moved on in between is never overwritten.
+                    static bool IsSettleableAdoptedPending(MeshNode node, NodeTypeDefinition def, BuildGuards? g)
+                        => def is { CompilationStatus: CompilationStatus.Pending, IsDirty: false, RequestedReleaseForce: false }
+                           && HasUsableBuild(node, def, g);
+
+                    IObservable<bool> SettleAdoptedPending(string path)
+                    {
+                        var wrote = 0;
+                        var result = new AsyncSubject<bool>();
+                        // Subscribed INSIDE the impersonation: the chain is cold, so a write that ran
+                        // at the caller's later subscription would run without the system identity.
+                        using (accessService?.ImpersonateAsSystem())
+                            workspace.GetMeshNodeStream().Update(curr =>
+                                {
+                                    var d = curr.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger);
+                                    if (d is null || !IsSettleableAdoptedPending(curr, d, guards))
+                                        return curr;
+                                    Volatile.Write(ref wrote, 1);
+                                    return curr with
+                                    {
+                                        Content = d with
+                                        {
+                                            CompilationStatus = CompilationStatus.Ok,
+                                            DispatchedBuildInputs = null,
+                                            CompilationError = null,
+                                            CompilationDiagnostics = null,
+                                        }
+                                    };
+                                })
+                                .LastOrDefaultAsync()
+                                .Select(_ => Volatile.Read(ref wrote) == 1)
+                                .Catch<bool, Exception>(ex =>
+                                {
+                                    logger?.LogWarning(ex,
+                                        "Compile watcher: settling {HubPath} from Pending failed - compiling instead.", path);
+                                    return Observable.Return(false);
+                                })
+                                .Subscribe(result);
+                        return result;
                     }
 
                     void DispatchOrPark()
