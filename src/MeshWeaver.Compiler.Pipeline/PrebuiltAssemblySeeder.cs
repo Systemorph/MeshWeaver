@@ -524,6 +524,10 @@ public static class PrebuiltAssemblySeeder
                 liveDependencyIdOf, liveToolchainId) is not BakeState.Baked)
             return null;
 
+        // #4413 — kept means settled: only an Ok record is. See ComboGateWiring.
+        if (observed.CompilationStatus is not CompilationStatus.Ok)
+            return null;
+
         if (incomingMvid is { Length: > 0 }
             && string.Equals(incomingMvid, observed.LatestAssemblyMvid, StringComparison.Ordinal)
             && StampWouldMatch(observed.CompiledDependencies, dependencies)

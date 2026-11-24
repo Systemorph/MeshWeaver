@@ -106,6 +106,31 @@ public class AnAdoptionThatChangesNothingWritesNothingTest(ITestOutputHelper out
         afterDef.LastCompiledVersion.Should().Be(before.LastCompiledVersion, "no new store key was minted");
         afterDef.LatestAssemblyPath.Should().Be(before.LatestAssemblyPath);
 
+        // #4413 — the record is flipped Pending by a release request while it still names the same
+        // usable build. Seeding the same bytes must now SETTLE it (Adopted, status Ok) rather than
+        // keep it: a Pending record kept untouched is what the compile watcher recompiled.
+        await Mesh.GetMeshNodeStream(typePath)
+            .Update(n => n with
+            {
+                Content = n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)! with
+                {
+                    CompilationStatus = CompilationStatus.Pending,
+                }
+            })
+            .Should().Within(TestTimeouts.Convergence).Emit("the release request flips it Pending", ct);
+        (await Seed(typePath, a).Should().Within(TestTimeouts.Convergence).Emit("a seed always answers", ct))
+            .Should().Be(PrebuiltAssemblySeeder.SeedOutcome.Adopted,
+                "a usable build at Pending is settled by the adoption, not kept");
+        await Mesh.GetMeshNodeStream(typePath)
+            .Should().Within(TestTimeouts.CrossSilo)
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is
+                        { CompilationStatus: CompilationStatus.Ok } d
+                        && string.Equals(d.LatestAssemblyMvid, mvidA, StringComparison.Ordinal),
+                "the adoption left Pending: nothing is stranded and nothing compiles");
+        settled = await SettledOn(typePath, mvidA);
+        (await Seed(typePath, a).Should().Within(TestTimeouts.Convergence).Emit("a seed always answers", ct))
+            .Should().Be(PrebuiltAssemblySeeder.SeedOutcome.AlreadyServed, "settled again: kept, no churn");
+
         // NEGATIVE CONTROL: different bytes on the same (unverified) record ARE adopted.
         var b = EmitAssembly("ChurnB" + Guid.NewGuid().ToString("N")[..6]);
         var mvidB = ServedBuildIdentity.OfBytes(b)!;
@@ -149,6 +174,17 @@ public class StandingBuildKeptTest
                 Usable(BuildProvenance.AdoptedUnverified, null, "1.2.0"), storeHasBytes: true,
                 "97cc9233aaa64a3fb72edca5a2ce18ce", null, null, "1.2.0")
             .Should().NotBeNull();
+
+    [Theory]
+    [InlineData(CompilationStatus.Pending)]
+    [InlineData(null)]
+    public void SameBytes_OverAnUnsettledRecord_AreWritten_SoTheWatcherAdoptsInsteadOfCompiling(
+        CompilationStatus? status)
+        => PrebuiltAssemblySeeder.StandingBuildKept(
+                Usable(BuildProvenance.AdoptedUnverified, null, "1.2.0") with { CompilationStatus = status },
+                storeHasBytes: true, "97cc9233aaa64a3fb72edca5a2ce18ce", null, null, "1.2.0")
+            .Should().BeNull("a usable build at Pending is not settled: keeping it writes nothing, the "
+                + "compile watcher waits for status Ok and then compiles the type again (#4413)");
 
     [Fact]
     public void SameBytes_ButTheStoreLostThem_IsReplaced()
