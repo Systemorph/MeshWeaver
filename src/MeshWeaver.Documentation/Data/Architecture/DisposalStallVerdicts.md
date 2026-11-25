@@ -1212,6 +1212,19 @@ stale-capture defect described under #945 in `JsonSynchronizationStream`. A layo
 and over what window they built up. The next occurrence names the writer in its first Warning.
 Read that line before anything else.
 
+## A drain that is running and began since the last look is progress (#6156)
+
+The detector read "no phase transition for 8 s" as a stall even when a quiesce drain was executing: the
+verdict printed `drainsInFlight=1` with no turn on the block, and the next diagnostics line read
+`RunLevel=Dead, Disposal=Completed`. The turn counters only move when a handler completes, and the
+young-turn check only sees a turn that is on the block at the snapshot instant; a drain loop between two
+turns, or unwinding the final `ShutdownRequest`, has neither. `DisposalStallRules.InFlightDrainIsProgress`
+now counts a drain as progress when one is in flight, no turn is on the block, and the pump's
+`DrainsStartedCount` advanced since the previous look (`[DISPOSE-BUSY] ... a drain is in flight and N
+drain(s) began`). The SAME drain in flight across a whole budget with nothing completing is unchanged and
+still reaches the verdicts, as does any turn on the block older than the budget. Pinned by
+`DisposalStallRulesTest`.
+
 ## What this page does not claim
 
 The wedge in #3593 is **not fixed**. What changed is that the next occurrence is nameable: the
