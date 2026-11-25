@@ -14,6 +14,7 @@ using System.Text.Json.Schema;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.Data;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Layout;
 using MeshWeaver.Domain;
@@ -3703,7 +3704,21 @@ public partial class MeshOperations
             // boundary (ContentSchemaValidator) admits — the verb and the boundary must agree
             // (review on #6231).
             return DiscriminatorResolves(discriminator, contentType, probeHub)
-                ? null
+                ? (IsMarkdownFallback(discriminator, probeHub)
+                    // Skill and Agent ARE markdown files by design (their parser fills MarkdownContent).
+                    && !ParserBoundNodeTypes.IsParserBound(meshNode.NodeType)
+                    // 🚨 The ONE resolving discriminator this verb refuses: MarkdownContent is what a
+                    // prose-shaped writer produces when it could not produce the record. Admitted, it
+                    // stored ~235 agent-filed Feedback/Feedback nodes as MarkdownContent that read as no
+                    // feedback record at all — their hand-over never ran and nothing said so. A caller
+                    // that truly wants a markdown body creates a Markdown node.
+                    ? $"Error: refused create of {meshNode.Path}: the content's \"$type\" is '{discriminator}' "
+                    + $"(a markdown body), but NodeType '{meshNode.NodeType}' stores {contentType.Name}. "
+                    + "Stored, the node would read as no record to every consumer and anything that reacts "
+                    + "to this NodeType would skip it without a word. Send the content as "
+                    + $"\"$type\": \"{contentType.Name}\" with its declared members (get @<path>/schema/); "
+                    + "put prose in the type's own text member. Nothing was written."
+                    : null)
                 : $"Error: refused create of {meshNode.Path}: the content's \"$type\" is '{discriminator}', "
                 + $"but no type of that name exists for NodeType '{meshNode.NodeType}' — its content type is "
                 + $"{contentType.Name}. Stored, the node would read as empty to every consumer and anything "
@@ -3716,6 +3731,26 @@ public partial class MeshOperations
         return UnknownContentMembersOfType(createdContent, contentType, probeHub.JsonSerializerOptions) is { Count: > 0 } unknown
             ? UnknownContentMembersMessage("create", meshNode.Path, meshNode.NodeType, contentType, unknown)
             : null;
+    }
+
+    /// <summary>Whether <paramref name="discriminator"/> names <c>MarkdownContent</c>, full or short name.</summary>
+    /// <remarks>
+    /// By NAME first, then by IDENTITY: when the probe hub's registry resolves the discriminator to a
+    /// type, it must be the framework's own <see cref="MarkdownContent"/> — a different record that
+    /// merely shares the short name stays admitted. (Never reached for a NodeType that declares
+    /// MarkdownContent itself: <c>ContentDiscriminator.Admits</c> admits that earlier.)
+    /// </remarks>
+    private static bool IsMarkdownFallback(string discriminator, IMessageHub probeHub)
+    {
+        var shortName = discriminator[(discriminator.LastIndexOf('.') + 1)..];
+        if (!string.Equals(shortName, "MarkdownContent", StringComparison.Ordinal))
+            return false;
+        var registry = probeHub.ServiceProvider.GetService<ITypeRegistry>();
+        if (registry is not null
+            && ((registry.TryGetType(discriminator, out var def) && def?.Type is not null)
+                || (registry.TryGetType(shortName, out def) && def?.Type is not null)))
+            return def.Type == typeof(MarkdownContent);
+        return true;
     }
 
     /// <summary>

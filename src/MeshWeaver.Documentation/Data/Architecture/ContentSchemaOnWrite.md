@@ -254,7 +254,13 @@ What now refuses, and where:
 | `ContentSchemaValidator` (every Create/Update) | a `$type` that contradicts the declared type AND resolves on none of: this hub's `$type` registry (full, then short name), the mesh-wide content-type map, the declared type's own assembly | `content.schema.unknownDiscriminator`, naming the discriminator, the declared type and its members |
 | MCP `create` (`MeshOperations.ValidateCreatedContent`) | the same unresolvable `$type`, judged on the NodeType's own probe hub; and any top-level content key the bound type does not declare (the `patch`/`update` rule) — except when the `$type` resolves to a DIFFERENT real type, whose members are that type's and which the write boundary admits | the probe now resolves the bound type through `IMeshContentTypeRegistry.TryResolveByNodeType` when the name lookup misses |
 
-Deliberately unchanged: a `$type` that resolves to a REAL type is still admitted (the declared
+One resolving `$type` IS refused, on MCP `create` only: `MarkdownContent` on a NodeType whose content
+type is another record (Skill and Agent excepted — they are markdown files by design). It is what a
+prose-shaped writer produces when it could not produce the record; admitted, agent-filed
+`Feedback/Feedback` nodes were stored as `MarkdownContent` and read as no feedback record, so their
+hand-over never ran. An Update of an already-affected node stays admitted so it can be repaired.
+
+Deliberately unchanged: any other `$type` that resolves to a REAL type is still admitted (the declared
 type's assembly is searched so a polymorphic subtype compiled beside an in-mesh content type stays
 legal); an Update keeping the discriminator the stored node already carries is Valid, so an existing
 dead letter can still be repaired; and the historical `ValidateAgainst` bind check keeps its old
