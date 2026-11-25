@@ -774,6 +774,8 @@
   "files.addFolder": "Add folder",
   "files.newArticle": "New article",
   "files.dropToUpload": "Drop files here to upload them",
+  "files.collectionUnavailable": "The collection ‘{0}’ could not be opened on this portal, so files cannot be listed or uploaded here. Reload the page; if it persists, report it with this collection name.",
+  "files.collectionLoadFailed": "The collection ‘{0}’ failed to load: {1}",
   "files.includeSatellites": "Include satellite data:",
   "form.validationFailed": "Validation failed",
   "grid.itemsPerPage": "Items per page:",
