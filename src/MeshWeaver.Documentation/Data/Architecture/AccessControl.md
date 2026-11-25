@@ -896,6 +896,25 @@ When the same role is assigned at multiple levels, the **deepest assignment wins
 
 At `ACME/Project`, Alice has Editor permissions (Read + Create + Update + Comment) but not Admin.
 
+## 🔒 Non-inheritable roles — `Role.IsInheritable`
+
+A role is inheritable by default: assigned at `ACME`, it grants on `ACME/Project`, `ACME/Project/Doc`
+and every other descendant. A custom `Role` node declared **`isInheritable: false`** confers its
+permissions **only on the scope it is assigned at** — assigned at `A`, it grants on `A` and nothing on
+`A/B`. Use it to give someone access to one node without opening the folders under it.
+
+- The fold (`PermissionEvaluator.ComputeRoleState`) returns, next to the folded role ids, the roles
+  granted at the **target's own scope** (after that scope's denies). A custom role resolved from the
+  Role node contributes only if it is inheritable **or** is in that local set. Direct grants and group
+  grants take the same path, so a non-inheritable role given to a group is not inherited by its
+  members' descendants either.
+- The built-in roles are all inheritable; the flag changes nothing for them.
+- A deny is unaffected: it still removes the role from its scope downward.
+- Pinned by `NonInheritableRoleIsNotInheritedTest` (`test/MeshWeaver.Graph.Test`).
+- The Postgres projection `user_effective_permissions` (MeshWeaver.Plugins, `RoleFoldSql`) must give
+  the same verdict, since search and listings read it; see
+  [The permission projection folds per role](https://github.com/Systemorph/MeshWeaver.Plugins/blob/main/Hosting/PermissionProjectionRoleFold.md).
+
 ## Deny override
 
 A deny assignment blocks an inherited grant for a specific role, but does not affect other roles. Each node's `Roles[]` array can mix grants and denies:
