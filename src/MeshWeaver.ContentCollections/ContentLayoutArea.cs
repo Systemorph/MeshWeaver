@@ -351,6 +351,9 @@ public static class ContentLayoutArea
             : RenderContent(filePath, content, false)));
     }
 
+    /// <summary>The PDF reader's frame height: viewport-relative, so it fits any screen.</summary>
+    internal const string PdfFrameHeight = "85vh";
+
     private static UiControl RenderPdf(LayoutAreaHost host, string collectionName, string filePath)
     {
         // The file name/path is USER content (uploads): URL-encode each path segment so a crafted
@@ -366,7 +369,9 @@ public static class ContentLayoutArea
         return Controls.Stack
             .WithWidth("100%")
             .WithVerticalGap(8)
-            .WithView(Controls.Embed(contentUrl, fileName))
+            // The reader fills the viewport (the 600px frame default is half a tall screen): 85vh leaves room for
+            // the page header and the download link beneath it.
+            .WithView(Controls.Embed(contentUrl, fileName).WithHeight(PdfFrameHeight))
             .WithView(Controls.Link(host.Localize("content.downloadPdf"), contentUrl + "?download").WithDownload(fileName));
     }
 }
