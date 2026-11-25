@@ -2459,21 +2459,38 @@ jobs:
           set -euo pipefail
           # Version-shaped tags only (3.0.0-…); staging-<sha>-<run> and the sha/main pointers are not
           # releases. The listing failing is RED — "could not read" must never become "first run".
-          tags=$(az acr repository show-tags -n meshweaver --repository memex-control --orderby time_desc --top 200 -o tsv)
+          tags=$(az acr repository show-tags -n meshweaver --repository memex-control --orderby time_desc --top 1000 -o tsv)
+          ntags=$(printf '%s\n' "$tags" | grep -c . || true)
           versions=$(printf '%s\n' "$tags" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || true)
-          prev=$(printf '%s\n' "$versions" | grep -vxF "$V_CONTROL" | grep -v '^$' | head -n 1 || true)
+          # 🚨 N−1 IS OF THIS BUILD'S OWN LINE (its MAJOR; policy `major-lines-run-separately`).
+          # `memex-control` holds the versions of EVERY line, newest first; the newest of ANY line
+          # is not the previous version of THIS one — a 3.x build was judged against a 4.x image
+          # that expects a db_version the 3.x line never had (MeshWeaver#8544, #8527). The choice
+          # is made by platform-version.py (self-tested) and asserted again below, red naming both.
+          line_versions=$(printf '%s\n' "$versions" | python3 .github/scripts/platform-version.py previous-in-line "$V_CONTROL")
+          prev=$(printf '%s\n' "$line_versions" | grep -v '^$' | head -n 1 || true)
+          own_line=$(printf '%s\n' "$versions" | grep -xF "$V_CONTROL" || true)
           if [ -n "$prev" ]; then
-            echo "previous control image: $prev"
+            python3 .github/scripts/platform-version.py same-line "$V_CONTROL" "$prev"
+            echo "previous control image (same line as $V_CONTROL): $prev"
             echo "args=--previous ${{ env.ACR }}/memex-control:$prev" >> "$GITHUB_OUTPUT"
-          elif [ -n "$versions" ]; then
-            # Only THIS run's version is tagged: a promotion of this very version got as far as the
+          elif [ -n "$own_line" ]; then
+            # Only THIS run's version is tagged in its line: a promotion of this very version got as far as the
             # ACR tag and failed afterwards (e.g. in the mirror), and this is a re-run. That is not a
             # first run — skipping N−1 here would bypass it for a version that is already tagged.
             # Fail closed; the next commit's run has this version as its previous and proceeds.
-            echo "::error::memex-control carries only this run's own version ($V_CONTROL) — a partial promotion of this version, not a first run. Refusing to skip leg (c); the next commit's run will judge against $V_CONTROL."
+            echo "::error::memex-control carries only this run's own version ($V_CONTROL) in its line — a partial promotion of this version, not a first run. Refusing to skip leg (c); the next commit's run will judge against $V_CONTROL."
             exit 1
           else
-            echo "::notice::memex-control carries no version tag yet — this is the FIRST control image, so leg (c) (previous image against this run's migrated database) is not applicable. Every later run resolves a previous version and must pass it."
+            # A listing that hit the window cannot prove the line's absence: that is "could not see",
+            # never "first run" — fail closed (the listing is newest-first, --top 1000).
+            if [ "$ntags" -ge 1000 ]; then
+              echo "::error::memex-control listing hit the 1000-tag window without a tag of this build's line ($V_CONTROL) — cannot establish that this is the first image of the line. Refusing to skip leg (c); page the listing or prune the repository."
+              exit 1
+            fi
+            others=$(printf '%s\n' "$versions" | grep -v '^$' | head -n 3 | tr '\n' ' ' || true)
+            [ -n "$others" ] && others=" (${others% })" || others=""
+            echo "::notice::memex-control carries no version tag of this build's line ($V_CONTROL) yet — this is the FIRST control image of the line, so leg (c) (previous image against this run's migrated database) is not applicable. Other lines' images${others} are never an N−1 for it. Every later run of the line resolves a previous version and must pass it."
             echo "args=--first-run" >> "$GITHUB_OUTPUT"
           fi
       # `--postgres` names the ACR copy of pgvector (the fleet's Docker Hub mirror, `az acr import`ed

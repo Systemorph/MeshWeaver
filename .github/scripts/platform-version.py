@@ -30,6 +30,16 @@ Usage:
                                              # prints those of <version>'s line pointers whose LINE
                                              # holds no newer set — moving one of the others would
                                              # move it BACKWARDS (release.yml, Systemorph/MeshWeaver#7407)
+  platform-version.py previous-in-line <version>
+                                             # stdin: one tag per line, NEWEST FIRST (the registry's
+                                             # listing); prints the newest version-shaped tag of
+                                             # <version>'s own LINE (its MAJOR) other than <version>
+                                             # itself — nothing when the line has none. N−1 is chosen
+                                             # HERE, never across lines (MeshWeaver#8544, #8527)
+  platform-version.py same-line <version> <other>
+                                             # exit 1, ::error:: naming both, unless both have the
+                                             # same MAJOR; naming the unreadable one when either
+                                             # has no readable line — the assertion on a chosen N−1
   platform-version.py --self-test
 """
 from __future__ import annotations
@@ -77,6 +87,39 @@ def line_pointers(version: str) -> list[str]:
 def _line_of(pointer: str) -> tuple[str, ...]:
     """`3-latest` → ('3',), `3.0-latest` → ('3','0'), `3.0.0-latest` → ('3','0','0')."""
     return tuple(pointer[: -len("-latest")].split("."))
+
+
+VERSION_SHAPED = re.compile(r"^(\d+)\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$")
+
+
+def line_of(version: str) -> str | None:
+    """The delivery LINE a version belongs to: its MAJOR (`main3` carries 3.x, `main` 4.x — policy
+    `major-lines-run-separately`). The database schema chain is per line, so the previous image of
+    the N−1 leg must be of this line: another line's image expects another db_version."""
+    m = VERSION_SHAPED.match((version or "").strip())
+    return m.group(1) if m else None
+
+
+def previous_in_line(version: str, tags: list[str]) -> str | None:
+    """The newest tag (the listing is newest-first) of `version`'s line, other than `version`."""
+    line = line_of(version)
+    if line is None:
+        raise ValueError(f"{version!r} is not a version-shaped tag — it names no line")
+    for tag in tags:
+        if tag != version and line_of(tag) == line:
+            return tag
+    return None
+
+
+def same_line_problem(version: str, other: str) -> str | None:
+    a, b = line_of(version), line_of(other)
+    if a is None or b is None:
+        unreadable = [repr(v) for v, m in ((version, a), (other, b)) if m is None]
+        return f"cannot read the line of {' or '.join(unreadable)} (not a version-shaped tag)"
+    if a != b:
+        return (f"the N-1 image {other!r} is of line {b}.x but the build under test {version!r} is of line {a}.x — "
+                f"another line's image expects another db_version, so it cannot judge this build's migration")
+    return None
 
 
 def forward_pointers(version: str, tags: list[str]) -> list[str]:
@@ -149,6 +192,21 @@ def self_test() -> int:
         check("forward: a non-set version is refused", "accepted", "refused")
     except ValueError:
         check("forward: a non-set version is refused", "refused", "refused")
+    tags = ["4.0.14117", "3.1.14100", "3.0.0-ci.9000", "4.0.14090", "staging-abc-1", "3-latest", "main"]
+    check("N-1 of a 3.x build is the newest 3.x tag, not the newer 4.0", previous_in_line("3.1.14130", tags), "3.1.14100")
+    check("N-1 of a 4.x build is the newest 4.x tag", previous_in_line("4.0.14200", tags), "4.0.14117")
+    check("N-1 skips the build's own tag", previous_in_line("4.0.14117", tags), "4.0.14090")
+    check("a line with no earlier tag has no N-1", previous_in_line("5.0.1", tags), None)
+    check("legacy ci tags are of their major", previous_in_line("3.1.14100", ["3.0.0-ci.9000"]), "3.0.0-ci.9000")
+    check("same-line accepts one line", same_line_problem("3.1.14130", "3.1.14100"), None)
+    check("same-line accepts the legacy notation of the line", same_line_problem("3.1.14130", "3.0.0-ci.9000"), None)
+    refusal = same_line_problem("3.1.14130", "4.0.14117") or ""
+    check("same-line is red across lines and names both", "3.1.14130" in refusal and "4.0.14117" in refusal, True)
+    try:
+        previous_in_line("main", tags)
+        check("a non-version has no line", "accepted", "refused")
+    except ValueError:
+        check("a non-version has no line", "refused", "refused")
     print(f"platform-version self-test: {len(failures)} failure(s)")
     for f in failures:
         print(f"  - {f}")
@@ -181,6 +239,21 @@ def main(argv: list[str]) -> int:
             print(" ".join(forward_pointers(argv[2], sys.stdin.read().split())))
         except ValueError as error:
             print(f"::error::{error}", file=sys.stderr)
+            return 1
+        return 0
+    if len(argv) == 3 and argv[1] == "previous-in-line":
+        try:
+            prev = previous_in_line(argv[2], sys.stdin.read().split())
+        except ValueError as error:
+            print(f"::error::{error}", file=sys.stderr)
+            return 1
+        if prev:
+            print(prev)
+        return 0
+    if len(argv) == 4 and argv[1] == "same-line":
+        problem = same_line_problem(argv[2], argv[3])
+        if problem:
+            print(f"::error::{problem}", file=sys.stderr)
             return 1
         return 0
     print(__doc__, file=sys.stderr)
