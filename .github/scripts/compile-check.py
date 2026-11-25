@@ -60,6 +60,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unicodedata
@@ -1649,6 +1650,17 @@ def set_key(sources, lam, ref_xml: str, impl_frameworks: bool, refs_digest: str,
     return verdict_key(unit, csproj, refs_digest, toolchain, ai_available, impl_frameworks)
 
 
+def _remove_work_dir(work: Path) -> None:
+    """Remove one work directory; a failure is NAMED on stderr, never swallowed."""
+    def warn(_fn, path, exc):
+        print(f"  warning: could not remove compile-check work directory {path}: "
+              f"{exc if isinstance(exc, BaseException) else exc[1]}", file=sys.stderr)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(work, onexc=warn)
+    else:
+        shutil.rmtree(work, onerror=warn)
+
+
 def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: bool, workers: int,
                  cache: "Path | None" = None, refs_digest: str = "", toolchain: str = "",
                  stats: "dict | None" = None, cache_write: bool = False, trusted: "list | None" = None,
@@ -1691,38 +1703,46 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
 
     dirs = queue.Queue()
     restored = {}
-    # Only as many work directories (and restores) as the MISSES can use: a cached set never borrows one.
-    for _ in range(min(len(ordered) - len(cached), max(1, workers))):
-        work = Path(tempfile.mkdtemp(prefix="compile-check-"))
-        restored[work] = restore_dir(work, ref_xml, impl_frameworks) is None
-        dirs.put(work)
-
-    def build(indexed):
-        index, item = indexed
-        if index in cached:
-            return cached[index], 0.0
-        (sources, lam), _ = item
-        work = dirs.get()
-        try:
-            started = time.time()
-            outcome = compile_set(work, sources, ref_xml, restored[work], ai_available,
-                                  lambda_src=lam, impl_frameworks=impl_frameworks)
-            # CS errors still mean the restore worked; only an infra error (no CS diagnostic at
-            # all) leaves this directory's restore in doubt, so its next build restores again.
-            restored[work] = outcome[2] is None
-            if cache is not None and cache_write and index in keys:
-                claim = write_verdict(cache, keys[index], outcome)
-                if claim is not None and claims is not None:
-                    claims.append(claim)
-            return outcome, time.time() - started
-        finally:
+    made = []   # every work directory minted here — removed on EVERY exit (success, failure, abandoned generator)
+    try:
+        # Only as many work directories (and restores) as the MISSES can use: a cached set never borrows one.
+        for _ in range(min(len(ordered) - len(cached), max(1, workers))):
+            work = Path(tempfile.mkdtemp(prefix="compile-check-"))
+            made.append(work)   # registered BEFORE the restore, so a restore that raises still leaves nothing
+            restored[work] = restore_dir(work, ref_xml, impl_frameworks) is None
             dirs.put(work)
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        # `map` yields in submission order as each result is ready, so the log keeps the serial
-        # order and streams while later sets are still building.
-        for item, (outcome, seconds) in zip(ordered, pool.map(build, list(enumerate(ordered)))):
-            yield item, outcome, seconds
+        def build(indexed):
+            index, item = indexed
+            if index in cached:
+                return cached[index], 0.0
+            (sources, lam), _ = item
+            work = dirs.get()
+            try:
+                started = time.time()
+                outcome = compile_set(work, sources, ref_xml, restored[work], ai_available,
+                                      lambda_src=lam, impl_frameworks=impl_frameworks)
+                # CS errors still mean the restore worked; only an infra error (no CS diagnostic at
+                # all) leaves this directory's restore in doubt, so its next build restores again.
+                restored[work] = outcome[2] is None
+                if cache is not None and cache_write and index in keys:
+                    claim = write_verdict(cache, keys[index], outcome)
+                    if claim is not None and claims is not None:
+                        claims.append(claim)
+                return outcome, time.time() - started
+            finally:
+                dirs.put(work)
+
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            # `map` yields in submission order as each result is ready, so the log keeps the serial
+            # order and streams while later sets are still building.
+            for item, (outcome, seconds) in zip(ordered, pool.map(build, list(enumerate(ordered)))):
+                yield item, outcome, seconds
+    finally:
+        for work in made:
+            # Never silent: a directory that survives (a file still held by a dead child, a permission
+            # error) is NAMED, so a recurring leak stays visible instead of re-accumulating unseen.
+            _remove_work_dir(work)
 
 
 # ── diagnostics classification ─────────────────────────────────────────────────────────────────
@@ -2292,6 +2312,7 @@ def _self_test() -> int:
 
     _self_test_exit_codes(failures)
     _self_test_parallel(failures)
+    _self_test_no_temp_leak(failures)
     _self_test_verdict_cache(failures)
 
     if failures:
@@ -2325,6 +2346,79 @@ def _self_test() -> int:
           f"{EXIT_REFUSED_NOTHING_JUDGED} — each with one `REFUSED` line and no GREEN line; a "
           "NodeType-less --modules unit says NOTHING TO COMPILE; GREEN only over a judged count > 0")
     return 0
+
+
+def _self_test_no_temp_leak(failures: list) -> None:
+    """compile_sets mints its work directories with mkdtemp and must remove every one on EVERY exit.
+
+    Measured on a CI host: 7.2 GB of `compile-check-*` directories (each a restored project plus its
+    obj/bin) and one ENOSPC — nothing ever removed them. Four exits, one fresh TMPDIR each so a
+    leftover is counted rather than guessed: success, a build that raises, a restore that raises, and
+    a generator abandoned after its first result."""
+    import tempfile
+    global compile_set, restore_dir
+    real, real_restore = compile_set, restore_dir
+    ordered = [((frozenset(), str(i)), [f"Pkg/T{i}"]) for i in range(4)]
+
+    minted = []
+
+    def ok_restore(work, ref_xml, impl_frameworks):
+        minted.append(work)
+        (work / "obj").mkdir()
+        (work / "obj" / "x.bin").write_bytes(b"x" * 16)
+        return None
+
+    def ok_build(work, sources, ref_xml, restored, ai_available, lambda_src=None, impl_frameworks=False):
+        return [], False, None
+
+    def bad_build(*a, **k):
+        raise RuntimeError("build blew up")
+
+    def bad_restore(work, ref_xml, impl_frameworks):
+        minted.append(work)
+        raise RuntimeError("restore blew up")
+
+    def run(build, restore, how):
+        """(directories left behind, directories minted, whether a RuntimeError escaped)."""
+        global compile_set, restore_dir
+        with tempfile.TemporaryDirectory() as sandbox:
+            saved = tempfile.tempdir
+            tempfile.tempdir = sandbox
+            compile_set, restore_dir = build, restore
+            minted.clear()
+            raised = False
+            try:
+                gen = compile_sets(ordered, "", True, False, 2)
+                try:
+                    if how == "abandon":
+                        next(gen)
+                        gen.close()
+                    else:
+                        list(gen)
+                except RuntimeError:
+                    raised = True
+                left = len(list(Path(sandbox).iterdir()))
+            finally:
+                tempfile.tempdir = saved
+                compile_set, restore_dir = real, real_restore
+            return left, len(minted), raised
+
+    for label, build, restore, how, must_raise in (
+            ("a successful run", ok_build, ok_restore, "all", False),
+            ("a build that raises", bad_build, ok_restore, "all", True),
+            ("a restore that raises", ok_build, bad_restore, "all", True),
+            ("an abandoned generator", ok_build, ok_restore, "abandon", False)):
+        left, made, raised = run(build, restore, how)
+        # The case must have EXERCISED the cleanup: directories were minted, and the raising cases
+        # really raised - otherwise "nothing left" would pass over a run that tested nothing.
+        if made == 0:
+            failures.append(f"  temp leak: {label} minted no work directory - the case exercised nothing")
+        if raised != must_raise:
+            failures.append(f"  temp leak: {label} {'did not raise' if must_raise else 'raised'} as the case requires")
+        if left:
+            failures.append(f"  temp leak: {label} left {left} work director(y/ies) behind")
+    if not any("temp leak" in f for f in failures):
+        print("\u2713 no temp leak: a successful run, a build that raises, a restore that raises and an abandoned generator each remove every compile-check work directory")
 
 
 def _self_test_verdict_cache(failures: list) -> None:
