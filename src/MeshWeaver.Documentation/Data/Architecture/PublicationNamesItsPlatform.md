@@ -176,3 +176,8 @@ record is then stamped with the RUNNING build, because the bytes were verified t
 - A different key, a ceiling breach and `Modules:VersionStrictness=Exact` still decline on the
   comparison.
 - Proven in `test/MeshWeaver.Updates.Test/NewerPatchBundleAdoptionTest.cs`.
+- The same rule covers the other two floor sites: install time (`PluginBundleClient.ShippedBuildsOf`
+  measures each payload and ships those that link) and the sealed-publication ladder
+  (`SealedPublicationIndex.ApplyLadder` no longer holds a newer-patch publication unless called with
+  `exact: true`; the per-bundle adoption measures it). Install time has no strictness setting, so it
+  always measures.
