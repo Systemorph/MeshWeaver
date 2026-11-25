@@ -402,6 +402,30 @@ public class LocalizationTest
         => typeof(Sample).GetProperty(nameof(Sample.NoAttributesAtAll))!
             .LocalizedDescription("de").Should().BeNull();
 
+    /// <summary>
+    /// The file browser's "collection cannot be opened / failed to load" messages carry the collection
+    /// name (and the failure) as placeholders. Pin both languages: present, translated (German differs
+    /// from English), and the placeholders survive translation and substitute.
+    /// </summary>
+    [Theory]
+    [InlineData("files.collectionUnavailable", 1)]
+    [InlineData("files.collectionLoadFailed", 2)]
+    public void FileBrowserCollectionMessages_ExistInBothLanguagesWithPlaceholders(string key, int placeholders)
+    {
+        var args = new object?[] { "Pictures", "boom" }.Take(placeholders).ToArray();
+        var en = LocalizationCatalog.Get(key, "en", args);
+        var de = LocalizationCatalog.Get(key, "de", args);
+
+        en.Should().NotBe(key).And.Contain("Pictures").And.NotContain("{0}");
+        de.Should().NotBe(key).And.Contain("Pictures").And.NotContain("{0}");
+        de.Should().NotBe(en, "the German text must be translated, not copied");
+        if (placeholders == 2)
+        {
+            en.Should().Contain("boom");
+            de.Should().Contain("boom").And.NotContain("{1}");
+        }
+    }
+
     public static IEnumerable<object[]> NonDefaultLocales()
         => Locales.Supported
             .Where(l => l != Locales.Default)

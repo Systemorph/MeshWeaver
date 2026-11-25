@@ -133,6 +133,14 @@ repos:
         job: review-answered
         lane: node-repo-review-answered.yml
         grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
+      # ── Review answered, outage retry (MeshWeaver#7187) — ARRIVING. Plugins called the review-answered lane but never the
+      # retry listener beside it, so an API-outage red ("API rate limit exceeded for installation", Plugins#5708, 2026-11-20)
+      # was never re-run and the pull request stayed blocked until a person re-ran it (control triage fb-0048a712).
+      - workflow: review-answered-retry.yml
+        job: retry
+        lane: node-repo-review-answered-retry.yml
+        grants: {actions: write, contents: read, pull-requests: read}
+        pending: the thin review-answered-retry.yml caller lands in the MeshWeaver.Plugins pull request that follows core's roster row (control triage fb-0048a712)
       # ── Request review on real change (policy review-on-real-change) — ARRIVING. With the ruleset's Copilot rule at
       # `review_on_push: false`, this caller requests the review a push still owes (its own diff changed); the lane's
       # one GraphQL requestReviews needs `pull-requests: write`.
