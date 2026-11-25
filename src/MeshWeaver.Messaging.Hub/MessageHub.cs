@@ -3098,6 +3098,7 @@ public sealed class MessageHub : IMessageHub
     // `stallTurnsSeen`, which counts HANDLER completions (#3593).
     private long stallDequeuedSeen = -1;
     private long disposalDequeuedBaseline = -1;
+    private long stallDrainsStartedSeen = -1;
     private bool wedgedTurnCancelled;
     // Event ids for the stall verdicts: the red-log triage keys an incident on the log SITE and
     // deliberately ignores prose, so each verdict shape files as ONE issue however many hubs
@@ -3229,6 +3230,7 @@ public sealed class MessageHub : IMessageHub
         // do anything yet (#3593, 47 hubs in one shutdown).
         stallDequeuedSeen = disposalDequeuedBaseline =
             (messageService as MessageService)?.TurnsDequeued ?? -1;
+        stallDrainsStartedSeen = (messageService as MessageService)?.DrainsStartedCount ?? -1;
 
         // 🚨 The in-flight turn is NOT cancelled here. Work this hub accepted before teardown began
         // runs to completion — a merge that is half-way through, a handler awaiting pooled I/O.
@@ -3376,6 +3378,28 @@ public sealed class MessageHub : IMessageHub
                 "[DISPOSE-BUSY] {Address}: no phase transition for {Timeout}, but the turn on the block "
                 + "({MessageType}) is only {ElapsedMs}ms old — the pump is moving; waiting.",
                 Address, DisposalWatchdogTimeout, young, snapshot.Value.CurrentMessageElapsedMs);
+            return;
+        }
+
+        // 🚨 A drain that is RUNNING and began after the last look is progress (#6156). The turn
+        // counters above only move when a handler completes and the "young turn" check only sees a
+        // turn that is on the block at the snapshot instant: a drain loop between two turns, or one
+        // unwinding the final ShutdownRequest, has neither — it was read as "no teardown progress"
+        // and the hub reached Dead a moment later (verdict printed drainsInFlight=1, the next line
+        // RunLevel=Dead). The SAME drain still in flight across a whole budget with no turn
+        // completing is unchanged: it falls through to the verdicts below.
+        var drainsStartedNow = pump?.DrainsStartedCount ?? -1;
+        var drainsStartedBefore = stallDrainsStartedSeen;
+        stallDrainsStartedSeen = drainsStartedNow;
+        if (snapshot is { } drainView
+            && DisposalStallRules.InFlightDrainIsProgress(
+                drainView.DrainsInFlight, drainView.CurrentMessage, drainsStartedNow, drainsStartedBefore))
+        {
+            TryLog(LogLevel.Information,
+                "[DISPOSE-BUSY] {Address}: no phase transition for {Timeout}, but a drain is in flight and "
+                + "{Started} drain(s) began since the last look (drainsInFlight={InFlight}) — the pump is "
+                + "cycling, not stuck; waiting.",
+                Address, DisposalWatchdogTimeout, drainsStartedNow - drainsStartedBefore, drainView.DrainsInFlight);
             return;
         }
 
