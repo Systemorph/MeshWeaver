@@ -3068,8 +3068,13 @@ internal static class NodeTypeCompilationHelpers
                 // restart consistency; owner-written via UpdateOwn, so it never flaps).
                 && (def.LastReleaseRequestHandledAt is null
                     || req > def.LastReleaseRequestHandledAt.Value)
-                && def.CompilationStatus is not CompilationStatus.Pending
-                                          and not CompilationStatus.Compiling),
+                // Settled, OR in flight for longer than any real compile (InFlightCompileIsStale):
+                // a request must never be filtered out for good by a status that will not settle.
+                // Whether the stale status is really abandoned is decided in the callback, from the
+                // compile's own activity — age is only the floor.
+                && (def.CompilationStatus is not CompilationStatus.Pending
+                                          and not CompilationStatus.Compiling
+                    || InFlightCompileIsStale(def, req) is not null)),
                 node =>
                 {
                     // 🚨 The trigger value OBSERVED by the Where for THIS emission.
@@ -3105,6 +3110,13 @@ internal static class NodeTypeCompilationHelpers
                     // below waits until the published snapshot shows them. See
                     // AwaitSourceSnapshotCurrent.
                     var requestedAgainst = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)!;
+                    if (requestedAgainst.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
+                    {
+                        // Only reachable past the age floor (the Where above). Never silent, and never
+                        // a clobber of a compile that is genuinely running.
+                        SettleAbandonedInFlight(hub, workspace, requestedAgainst, triggerAt, hubPath, logger);
+                        return;
+                    }
                     AwaitSourceSnapshotCurrent(hub, ownStream, requestedAgainst, hubPath, logger)
                     .SelectMany(snapshot => workspace.GetMeshNodeStream().Update(curr =>
                     {
@@ -4729,6 +4741,109 @@ internal static class NodeTypeCompilationHelpers
     ///   guess; park instead, exactly as before.</item>
     /// </list>
     /// </summary>
+    /// <summary>How long a type may sit at <c>Pending</c>/<c>Compiling</c> before a newer release
+    /// request treats it as wedged. A Roslyn pass of a large tree is minutes at the outside.</summary>
+    internal static readonly TimeSpan InFlightStaleAfter = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// When the in-flight status (<c>Pending</c>/<c>Compiling</c>) of <paramref name="def"/> began, if
+    /// it is older than <see cref="InFlightStaleAfter"/> at the time of the request
+    /// <paramref name="requestAt"/>; otherwise <c>null</c> (not stale, or no start can be known).
+    /// Compiling began at <c>LastCompileStartedAt</c>; a Pending began no earlier than the later of
+    /// that and the last handled request (the flip stamps the handled mark in the same commit).
+    /// </summary>
+    internal static DateTimeOffset? InFlightCompileIsStale(NodeTypeDefinition def, DateTimeOffset requestAt)
+    {
+        DateTimeOffset? since = def.CompilationStatus switch
+        {
+            CompilationStatus.Compiling => def.LastCompileStartedAt,
+            CompilationStatus.Pending => def.LastCompileStartedAt is { } c
+                ? (def.LastReleaseRequestHandledAt is { } h && h > c ? h : c)
+                : def.LastReleaseRequestHandledAt,
+            _ => null,
+        };
+        return since is { } s && requestAt - s >= InFlightStaleAfter ? s : null;
+    }
+
+    /// <summary>
+    /// A request found the type in flight past <see cref="InFlightStaleAfter"/>. Age is only the floor:
+    /// the status is settled <c>Unavailable</c> (with its reason, and a Warning) ONLY when no live compile
+    /// owns it — see <see cref="CompileOwnerIsLive"/>. A live owner is left alone, with a Warning that
+    /// says the request is waiting for it. The settle re-emits the own node at a settled status, so the
+    /// release watcher then dispatches the request through its normal path.
+    /// </summary>
+    private static void SettleAbandonedInFlight(
+        IMessageHub hub, IWorkspace workspace, NodeTypeDefinition observed, DateTimeOffset triggerAt,
+        string hubPath, ILogger? logger)
+        => CompileOwnerIsLive(hub, observed, triggerAt)
+            .SelectMany(live =>
+            {
+                if (live)
+                {
+                    logger?.LogWarning(
+                        "[ReleaseRequestWatcher] {HubPath}: release request {Req} is waiting for a compile "
+                        + "that has been {Status} for over {Floor} but is still alive (activity {Activity}) "
+                        + "— not interfering", hubPath, triggerAt, observed.CompilationStatus,
+                        InFlightStaleAfter, observed.LastCompilationActivityPath);
+                    return Observable.Empty<MeshNode>();
+                }
+                return workspace.GetMeshNodeStream().Update(curr =>
+                {
+                    // Re-verify inside the owner's write: only the very status observed, still in flight.
+                    if (curr.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is not { } def
+                        || def.CompilationStatus != observed.CompilationStatus
+                        || InFlightCompileIsStale(def, triggerAt) is not { } since)
+                        return curr;
+                    var reason = $"A compile left this type {def.CompilationStatus} since {since:u} and no "
+                        + $"live compile owns it (activity {def.LastCompilationActivityPath ?? "none"}); the "
+                        + $"release request of {triggerAt:u} cleared that abandoned state and re-dispatches.";
+                    logger?.LogWarning("[ReleaseRequestWatcher] {HubPath}: {Reason}", hubPath, reason);
+                    return curr with
+                    {
+                        Content = def with
+                        {
+                            CompilationStatus = CompilationStatus.Unavailable,
+                            CompilationError = reason,
+                            CompilationErrorText = null,
+                            // A terminal status leaves nothing in flight (#3390).
+                            DispatchedBuildInputs = null,
+                        }
+                    };
+                });
+            })
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "[ReleaseRequestWatcher] {HubPath}: could not settle an abandoned in-flight status", hubPath));
+
+    /// <summary>
+    /// Whether a live compile owns the in-flight status: its compile activity exists, is still
+    /// <c>Running</c>, and was written to within <see cref="InFlightStaleAfter"/> of the request (a running
+    /// compile logs its phases, so its node moves). An absent / finished / faulted / silent activity — or
+    /// none recorded, as for a Pending nobody dispatched — means nobody owns it. An activity that cannot
+    /// be READ is unknown and reads as live: never clobber on a guess.
+    /// </summary>
+    internal static IObservable<bool> CompileOwnerIsLive(
+        IMessageHub hub, NodeTypeDefinition observed, DateTimeOffset requestAt)
+    {
+        if (string.IsNullOrEmpty(observed.LastCompilationActivityPath)
+            || observed.CompilationStatus != CompilationStatus.Compiling)
+            return Observable.Return(false);
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        return access.RunAsSystem(() => hub
+                .GetMeshNodeOutcome(observed.LastCompilationActivityPath, onTimeout: ReadTimeoutBehavior.EmitNull)
+                .Take(1))
+            .Select(outcome => outcome.Status switch
+            {
+                NodeReadStatus.Unavailable => true,
+                NodeReadStatus.Present when outcome.Node is { } n =>
+                    n.ContentAs<MeshWeaver.Data.ActivityLog>(hub.JsonSerializerOptions)
+                        is { Status: MeshWeaver.Data.ActivityStatus.Running }
+                    && requestAt - n.LastModified < InFlightStaleAfter,
+                _ => false,
+            });
+    }
+
     internal static bool IsSatisfiedByInFlightCompile(NodeTypeDefinition def, string requestedToken)
         => !def.RequestedReleaseForce
            && def.DispatchedBuildInputs is { } dispatched

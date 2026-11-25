@@ -379,6 +379,21 @@ configuration snapshot. Its DLL completion time alone cannot cover an edit made 
 compile was running. See [Compile Cache Input Freshness](../CompileCacheInputFreshness) for the
 executed stale-byte/current-stamp regression and the unchanged-input cache control.
 
+### 🚨 A release request is never latched behind a wedged in-flight status
+
+`Pending`/`Compiling` is the single-flight lock, and the release-request watcher only acts on a
+settled status, so a request that arrives while one is set waits for the compile's own terminal
+write. When the compile never lands (a Pending flip no one dispatched, a Compiling whose activity
+never started or whose pod is gone) that wait used to be silent and permanent: `requestedReleaseAt`
+advanced on every `compile`, `lastReleaseRequestHandledAt` never moved, `compile` timed out with no
+activity, and a recycle re-bound the same record. Now a request arriving past `InFlightStaleAfter`
+(10 minutes; the floor, never the verdict) reaches the watcher, which settles the status
+`Unavailable` (reason in `CompilationError`, Warning in the log) ONLY when no live compile owns it:
+the compile activity is absent, finished, or has not been written to within the floor. A Running,
+recently written activity (or one that cannot be read) is left alone, with a Warning saying the
+request is waiting for it. The settle re-emits the own node at a settled status, so the same
+watcher then dispatches the request. Pinned by `AReleaseRequestIsNeverLatchedBehindAWedgedCompileTest`.
+
 ### Source and test queries — and naming them
 
 Which Code nodes feed a compile is declared on `NodeTypeDefinition.Sources` /
