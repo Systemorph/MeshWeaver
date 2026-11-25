@@ -4805,6 +4805,8 @@ internal static class NodeTypeCompilationHelpers
                             CompilationStatus = CompilationStatus.Unavailable,
                             CompilationError = reason,
                             CompilationErrorText = null,
+                            // A terminal status leaves nothing in flight (#3390).
+                            DispatchedBuildInputs = null,
                         }
                     };
                 });
