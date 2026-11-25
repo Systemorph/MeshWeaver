@@ -95,6 +95,7 @@ internal sealed class ProcessLivenessHeartbeatService(
         // runtime's DAC), and a host without it still reports the stall — saying it cannot name the frame.
         var workerStacks = ResolveWorkerStacks();
         TimeSpan? lastStallCapture = null;
+        TimeSpan? lastQueueCensus = null;
         ProcessLivenessSample? previous = null;
         var tick = 0L;
         var due = period;
@@ -129,6 +130,14 @@ internal sealed class ProcessLivenessHeartbeatService(
                 logger.LogInformation("{Reading}", reading.Describe());
                 if (step is not null)
                     logger.LogWarning("{HeapStep}", step);
+                if (ThreadPoolStall.ShouldLogQueueCensus(sample.ThreadPoolPending, sample.Elapsed, lastQueueCensus))
+                {
+                    lastQueueCensus = sample.Elapsed;
+                    logger.LogWarning(
+                        "[POOLQUEUE] tick={Tick} {Pending} work item(s) queued over {Threads} thread(s).{Census}",
+                        sample.TickSeq, sample.ThreadPoolPending, sample.ThreadPoolThreads,
+                        ThreadPoolQueueCensus.Take().Render());
+                }
                 if (stalled
                     && Interlocked.CompareExchange(ref stallCaptureInFlight, 1, 0) == 0)
                 {
