@@ -195,6 +195,21 @@ public static class PrebuiltAdoptionPolicy
     public static VersionStrictness DefaultFor(bool isDevelopment) =>
         isDevelopment ? VersionStrictness.Minimum : VersionStrictness.Family;
 
+    /// <summary>The link-check options a decision calls for: members as well as types when the
+    /// adoption crosses the producer floor, types only otherwise.</summary>
+    public static ModuleLinkOptions LinkOptionsFor(AdoptionDecision? decision)
+        => decision is { MemberLinkRequired: true } ? ModuleLinkOptions.WithMembers : ModuleLinkOptions.TypesOnly;
+
+    /// <summary>The platform version a seeded record is stamped with: the RUNNING build when the
+    /// adoption crossed the producer floor on the strength of the link check (the bytes were verified
+    /// to bind here, and the producer's newer build would make the record yield to a replica that does
+    /// not exist), the producer's own statement otherwise.</summary>
+    public static string? StampedPlatformVersion(
+        AdoptionDecision? decision, string? livePlatformVersion, string? producerPlatformVersion)
+        => decision is { CrossesFloor: true } && livePlatformVersion is not null
+            ? livePlatformVersion
+            : producerPlatformVersion;
+
     /// <summary>The major line of a version string (<c>3.0.0-ci.8059</c> → 3), or null when the
     /// string does not start with one.</summary>
     public static int? MajorOf(string? version)
@@ -242,6 +257,9 @@ public static class PrebuiltAdoptionPolicy
                 // they call resolved against the running process, ModuleLinkOptions.WithMembers).
                 // Bytes that call surface this platform lacks are declined by the measurement,
                 // naming the member. Exact strictness keeps the old rule.
+                // Residual, accepted within the compatibility key's promise: surface reached only by
+                // reflection or dynamic binding is invisible to a metadata check; a mismatch there
+                // surfaces at activation and the stale-build self-heal recompiles from source.
                 if (strictness != VersionStrictness.Exact
                     && Compiler.PlatformCompatibility.IsFloorOnlyDecline(
                         candidate.FrameworkIdentity, candidate.ProducerPlatformVersion, candidate.PlatformCeiling,
@@ -362,12 +380,12 @@ public static class PrebuiltAdoptionPolicy
                       + (absent.Count > 5 ? $" … +{absent.Count - 5}" : "");
                 return live.RequirePrebuilt
                     ? new AdoptionDecision(AdoptionVerdict.Refuse,
-                        $"{link.Module} links against platform types this deployment does not carry "
+                        $"{link.Module} links against platform types or members this deployment does not carry "
                         + $"({missing}), and this mesh does not compile module content "
                         + $"({PrebuiltAssemblySeeder.RequirePrebuiltConfigKey}): rebake the package for "
                         + $"framework {live.FrameworkIdentity}", LinkCheckRequired: false)
                     : new AdoptionDecision(AdoptionVerdict.CompileInstead,
-                        $"{link.Module} links against platform types this deployment does not carry "
+                        $"{link.Module} links against platform types or members this deployment does not carry "
                         + $"({missing}) — the live source compiles instead", LinkCheckRequired: false);
             }
             default:

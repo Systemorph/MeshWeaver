@@ -1739,7 +1739,7 @@ public static class ShippedPrebuiltBundles
                         var link = ModulePlatformLink.Check(
                             a.Assembly, moduleName, closure ?? ImmutableHashSet<string>.Empty,
                             context!.Surface.Value,
-                            decision!.MemberLinkRequired ? ModuleLinkOptions.WithMembers : ModuleLinkOptions.TypesOnly);
+                            PrebuiltAdoptionPolicy.LinkOptionsFor(decision));
                         var verdict = PrebuiltAdoptionPolicy.AfterLink(decision!, link, context.Live);
                         if (verdict.Verdict == AdoptionVerdict.Refuse)
                         {
@@ -1785,7 +1785,7 @@ public static class ShippedPrebuiltBundles
                             // with the RUNNING build: the bytes were verified to bind HERE, and the
                             // producer's newer build would make the ladder (OwnedByANewerPlatformBuild)
                             // yield the record to a replica that does not exist.
-                            tolerant && decision!.CrossesFloor ? context!.Live.PlatformVersion : producerPlatformVersion,
+                            PrebuiltAdoptionPolicy.StampedPlatformVersion(decision, context?.Live.PlatformVersion, producerPlatformVersion),
                             platformCeiling)
                         .Take(1)
                         .Timeout(SeedBudget)
