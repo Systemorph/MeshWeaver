@@ -101,7 +101,7 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
             .Materialize()
             .Should().Within(10.Seconds()).Match(n => n.Kind == System.Reactive.NotificationKind.OnError);
 
-        notification.Exception!.Message.Should().Contain("AccessContext must never be null",
+        (notification.Exception is { } failure ? failure : throw new InvalidOperationException("OnError carried no exception")).Message.Should().Contain("AccessContext must never be null",
             because: "the never-null AccessContext invariant: an application post that resolves " +
                      "no context is a gap — the post lost the user identity. The PostPipeline " +
                      "fails the delivery (no identity, no delivery) so the awaiting Observe gets " +
@@ -266,7 +266,7 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
 
         var notification = await chunks.Materialize()
             .Should().Within(10.Seconds()).Match(n => n.Kind == System.Reactive.NotificationKind.OnError);
-        notification.Exception!.Message.Should().Contain("AccessContext must never be null",
+        (notification.Exception is { } failure ? failure : throw new InvalidOperationException("OnError carried no exception")).Message.Should().Contain("AccessContext must never be null",
             because: "the eager post inside the projection ran on a scheduler thread with no identity");
     }
 
@@ -298,7 +298,7 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
 
         var notification = await chunks.Materialize()
             .Should().Within(10.Seconds()).Match(n => n.Kind == System.Reactive.NotificationKind.OnError);
-        notification.Exception!.Message.Should().Contain("AccessContext must never be null",
+        (notification.Exception is { } failure ? failure : throw new InvalidOperationException("OnError carried no exception")).Message.Should().Contain("AccessContext must never be null",
             because: "a null identity is not invented into one: no identity, no delivery");
     }
 }
