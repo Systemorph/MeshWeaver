@@ -143,10 +143,10 @@ public class NewerPatchBundleAdoptionTest : IDisposable
         var decision = Decide(VersionStrictness.Family, Producer);
         var path = Module("ResolvingModule", """
             using System;
-            using MeshWeaver.Reactive;
+            using MeshWeaver.Messaging;
             public static class Probe
             {
-                public static IObservable<int> Both(IObservable<int> a, IObservable<int> b) => a.WhenBoth(b, (x, y) => x + y);
+                public static IObservable<int> Both(IObservable<int> a, IObservable<int> b) => a.MergeInline(b);
             }
             """);
 
@@ -168,11 +168,11 @@ public class NewerPatchBundleAdoptionTest : IDisposable
         var decision = Decide(VersionStrictness.Family, Producer);
         // A "newer" platform: the same assembly and type, with a method the running build lacks.
         var newerHub = Emit("MeshWeaver.Messaging.Hub", """
-            [assembly: System.Reflection.AssemblyVersion("4.0.0.0")]
-            namespace MeshWeaver.Reactive { public static class ParallelReadExtensions { public static int NewInThisBuild() => 1; } }
+            [assembly: System.Reflection.AssemblyVersion("@@RUNNING@@")]
+            namespace MeshWeaver.Messaging { public static class InlineRxOperators { public static int NewInThisBuild() => 1; } }
             """, References(excluding: "MeshWeaver.Messaging.Hub"));
         var path = Module("NeedsNewerModule", """
-            public static class Probe { public static int Go() => MeshWeaver.Reactive.ParallelReadExtensions.NewInThisBuild(); }
+            public static class Probe { public static int Go() => MeshWeaver.Messaging.InlineRxOperators.NewInThisBuild(); }
             """, extra: MetadataReference.CreateFromImage(newerHub), excluding: "MeshWeaver.Messaging.Hub");
 
         var link = ModulePlatformLink.Check(path, ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory),
@@ -195,11 +195,11 @@ public class NewerPatchBundleAdoptionTest : IDisposable
             new PrebuiltAdoptionPolicy.Candidate(Key, Running, null) { ProducerPlatformVersion = Producer },
             live);
         var newerHub = Emit("MeshWeaver.Messaging.Hub", """
-            [assembly: System.Reflection.AssemblyVersion("4.0.0.0")]
-            namespace MeshWeaver.Reactive { public static class ParallelReadExtensions { public static int NewInThisBuild() => 1; } }
+            [assembly: System.Reflection.AssemblyVersion("@@RUNNING@@")]
+            namespace MeshWeaver.Messaging { public static class InlineRxOperators { public static int NewInThisBuild() => 1; } }
             """, References(excluding: "MeshWeaver.Messaging.Hub"));
         var path = Module("NeedsNewerRefusedModule", """
-            public static class Probe { public static int Go() => MeshWeaver.Reactive.ParallelReadExtensions.NewInThisBuild(); }
+            public static class Probe { public static int Go() => MeshWeaver.Messaging.InlineRxOperators.NewInThisBuild(); }
             """, extra: MetadataReference.CreateFromImage(newerHub), excluding: "MeshWeaver.Messaging.Hub");
 
         var link = ModulePlatformLink.Check(path, ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory),
@@ -228,10 +228,10 @@ public class NewerPatchBundleAdoptionTest : IDisposable
     {
         var path = Module("InstallResolving", """
             using System;
-            using MeshWeaver.Reactive;
+            using MeshWeaver.Messaging;
             public static class Probe
             {
-                public static IObservable<int> Both(IObservable<int> a, IObservable<int> b) => a.WhenBoth(b, (x, y) => x + y);
+                public static IObservable<int> Both(IObservable<int> a, IObservable<int> b) => a.MergeInline(b);
             }
             """);
 
@@ -245,11 +245,11 @@ public class NewerPatchBundleAdoptionTest : IDisposable
     public void InstallTime_ANewerPatchBundle_ThatNeedsNewerSurface_IsNotShipped()
     {
         var newerHub = Emit("MeshWeaver.Messaging.Hub", """
-            [assembly: System.Reflection.AssemblyVersion("4.0.0.0")]
-            namespace MeshWeaver.Reactive { public static class ParallelReadExtensions { public static int NewInThisBuild() => 1; } }
+            [assembly: System.Reflection.AssemblyVersion("@@RUNNING@@")]
+            namespace MeshWeaver.Messaging { public static class InlineRxOperators { public static int NewInThisBuild() => 1; } }
             """, References(excluding: "MeshWeaver.Messaging.Hub"));
         var path = Module("InstallNeedsNewer", """
-            public static class Probe { public static int Go() => MeshWeaver.Reactive.ParallelReadExtensions.NewInThisBuild(); }
+            public static class Probe { public static int Go() => MeshWeaver.Messaging.InlineRxOperators.NewInThisBuild(); }
             """, extra: MetadataReference.CreateFromImage(newerHub), excluding: "MeshWeaver.Messaging.Hub");
 
         Assert.Empty(Shipped(Producer, "Plugin/Type", File.ReadAllBytes(path)));
@@ -311,7 +311,7 @@ public class NewerPatchBundleAdoptionTest : IDisposable
 
     private static byte[] Emit(string assemblyName, string source, System.Collections.Generic.IEnumerable<MetadataReference> references)
     {
-        var compilation = CSharpCompilation.Create(assemblyName, [CSharpSyntaxTree.ParseText(source)], references,
+        var compilation = CSharpCompilation.Create(assemblyName, [CSharpSyntaxTree.ParseText(source.Replace("@@RUNNING@@", typeof(MeshWeaver.Messaging.InlineRxOperators).Assembly.GetName().Version!.ToString(), StringComparison.Ordinal))], references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         using var buffer = new MemoryStream();
         var result = compilation.Emit(buffer);
