@@ -102,8 +102,9 @@ public class DisposalDrainLaneTest : HubTestBase
     {
         var lane = (DisposalDrainLane)Mesh.ServiceProvider.GetRequiredService<IDisposalDrainScheduler>();
         var pool = Mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>().Get(IoPoolNames.Blob);
-        var ioStarted = new ManualResetEventSlim(false);
-        using var ioGate = new ManualResetEventSlim(false);
+        // The leaf signals the test through an AsyncSubject it completes; the test releases the leaf
+        // through the class's volatile `release` flag, polled under a bounded SpinUntil.
+        var ioStarted = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
 
         var hub = (MessageHub)Mesh.GetHostedHub(new Address("victim", "disposal-lane-slow-io"), c => c
             .WithPostingIdentity(PostingIdentity.System)
@@ -114,9 +115,10 @@ public class DisposalDrainLaneTest : HubTestBase
             }), HostedHubCreation.Always)!;
         hub.RegisterForDisposal(_ => pool.Invoke(async ct =>
         {
-            ioStarted.Set();
-            // The slow store call: holds a POOL task for as long as the gate is shut, never a lane thread.
-            await Task.Run(() => ioGate.Wait(TestTimeouts.Convergence, ct), ct);
+            ioStarted.OnNext(System.Reactive.Unit.Default);
+            ioStarted.OnCompleted();
+            // The slow store call: holds a POOL task until released, never a lane thread.
+            await Task.Run(() => SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Convergence), ct);
         }));
 
         await hub.Observe(new Ping(), o => o.WithTarget(hub.Address))
@@ -127,18 +129,18 @@ public class DisposalDrainLaneTest : HubTestBase
         try
         {
             hub.Dispose();
-            ioStarted.Wait(TestTimeouts.Quick, TestContext.Current.CancellationToken)
-                .Should().BeTrue("the dispose action's I/O must have started");
+            await ioStarted.Should().Within(TestTimeouts.Quick)
+                .Emit("the dispose action's I/O must have started",
+                    cancellationToken: TestContext.Current.CancellationToken);
 
             SpinWait.SpinUntil(() => lane.ActiveDrains == 0, TestTimeouts.Quick)
-                .Should().BeTrue("with the dispose action's I/O still outstanding (" + ioGate.IsSet
-                    + "), no drain may still be running on the disposal lane: the I/O leaf runs on the pool, "
+                .Should().BeTrue("with the dispose action's I/O still outstanding, no drain may still be running on the disposal lane: the I/O leaf runs on the pool, "
                     + "so a lane turn never blocks on the network");
-            ioGate.IsSet.Should().BeFalse("the lane was free while the I/O was STILL slow");
+            Volatile.Read(ref release).Should().Be(0,"the lane was free while the I/O was STILL slow");
         }
         finally
         {
-            ioGate.Set();
+            Volatile.Write(ref release, 1);
         }
 
         await hub.DisposalCompleted.Should().Within(TestTimeouts.Convergence)
