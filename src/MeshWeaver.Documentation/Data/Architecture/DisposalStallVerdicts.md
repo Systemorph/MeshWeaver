@@ -288,12 +288,21 @@ because the drain was still a pool work item: it waits behind everything queued 
 heartbeat read `poolThreads=34 poolPending=2865`), whatever put that backlog there.
 
 From the moment `Dispose()` begins, a hub on `TaskScheduler.Default` now drains on the mesh's
-`DisposalDrainLane` (dedicated threads, one lane per mesh registered by `AddIoPools`, at most 16 threads,
+`DisposalDrainLane` (dedicated threads, one lane per mesh registered by `AddIoPools`, a 1,024-thread safety ceiling,
 kept parked, built on the sanctioned `LimitedConcurrencyLevelTaskScheduler`). A drain already queued on the pool when disposal began is superseded: a new drain is
 scheduled on the lane and the pool item becomes a no-op (generation check in `MessageService.DrainOne`).
 Orleans grain hubs keep their activation scheduler. Pinned by `DisposalDrainLaneTest`. So a
 `THE PUMP IS NOT TURNING` verdict on a hosted hub after this change is no longer "the pool is busy"; read
 it as a lane or latch defect.
+
+**Recurrence 2026-11-25 (4 verdicts after the roll, 3 `sync/*` hubs, `RunLevel=Started`, `drainsAwaitingScheduler=1`,
+0 dequeued).** The lane itself was saturated: it started with a 16-thread cap, a lane thread is held for as
+long as the turn on it blocks, and a mass teardown (a `Feedback/Inbox` recycle loop plus dozens of `Ops/Issue/*`
+hubs, one disposal action blocked 30 s on an Npgsql timeout) parked sixteen such turns, so the first turn of
+every other disposing hub queued behind them. The cap is now a ceiling against a runaway (a thread starts only
+when no parked one is free), and the pump verdict names the scheduler it is waiting on (`on disposal-lane(...)`
+or `(pool, no disposal lane resolved)`), so the next recurrence is read, not inferred. Pinned by
+`DisposalDrainLaneTest.ABlockedLaneBeyondTheOldCap_DoesNotStarveADisposingHub`.
 
 ### A running drain also has to return its worker
 

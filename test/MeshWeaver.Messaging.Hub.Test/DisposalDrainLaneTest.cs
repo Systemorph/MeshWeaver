@@ -92,6 +92,67 @@ public class DisposalDrainLaneTest : HubTestBase
             .Emit("teardown completes", cancellationToken: TestContext.Current.CancellationToken);
     }
 
+    /// <summary>
+    /// The recurrence: the lane started with 16 threads, and a mass teardown whose turns BLOCK (a
+    /// disposal action waiting on a database timeout) parked all sixteen, so the next disposing hub's
+    /// first turn — <c>RunLevel=Started</c>, queue depth 1 — queued behind them. Here more lane threads
+    /// than the old cap are held blocked, and the pool is saturated too; a started hub must still reach
+    /// Quiescing. Fails with <c>DisposalDrainLane.MaxThreads == 16</c>.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ABlockedLaneBeyondTheOldCap_DoesNotStarveADisposingHub()
+    {
+        var hub = (MessageHub)Mesh.GetHostedHub(new Address("victim", "disposal-lane-saturated"), c => c
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithHandler<Ping>((h, d) =>
+            {
+                h.Post(new Pong(), o => o.ResponseFor(d));
+                return d.Processed();
+            }), HostedHubCreation.Always)!;
+
+        await hub.Observe(new Ping(), o => o.WithTarget(hub.Address))
+            .Should().Within(TestTimeouts.Quick)
+            .Emit("the hub must be fully started before its disposal is put under test",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var reachedQuiescing = hub.RunLevelChanged
+            .Where(level => level >= MessageHubRunLevel.Quiescing)
+            .Replay(1);
+        using var connection = reachedQuiescing.Connect();
+
+        var lane = (DisposalDrainLane)Mesh.ServiceProvider.GetRequiredService<IDisposalDrainScheduler>();
+        var blockers = 40; // far above the old 16-thread cap
+        using var gate = new ManualResetEventSlim(false);
+        var running = new CountdownEvent(16); // the old cap: enough to saturate it
+        try
+        {
+            for (var i = 0; i < blockers; i++)
+                _ = Task.Factory.StartNew(() =>
+                {
+                    running.Signal();
+                    gate.Wait(TestTimeouts.Convergence);
+                }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                    lane.Scheduler);
+            running.Wait(TestTimeouts.Quick, TestContext.Current.CancellationToken)
+                .Should().BeTrue("the old cap's worth of blockers must be holding lane threads before the hub is disposed");
+
+            hub.Dispose();
+
+            await reachedQuiescing.Should().Within(TestTimeouts.Quick)
+                .Emit("a disposing hub's first turn must get a lane thread even while "
+                    + blockers + " lane turns are blocked (#5799 recurrence)",
+                    cancellationToken: TestContext.Current.CancellationToken);
+            gate.IsSet.Should().BeFalse("the hub advanced while the lane's blockers were STILL held");
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        await hub.DisposalCompleted.Should().Within(TestTimeouts.Convergence)
+            .Emit("teardown completes", cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public async Task TheLane_RunsTasksOnItsOwnNamedThreads_NotThePool()
     {

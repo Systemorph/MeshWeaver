@@ -1828,6 +1828,12 @@ public class MessageService : IMessageService
     // ShutdownRequest rode behind it) is superseded: a fresh drain is scheduled on the lane and the pool
     // item becomes a no-op (DrainOne sees the new generation). Orleans grain hubs keep their activation
     // scheduler — only a hub on TaskScheduler.Default moves.
+    /// <summary>The scheduler this pump's drains run on right now — named in the pump verdict.</summary>
+    internal string DrainSchedulerName =>
+        disposalLane is { } lane ? "disposal-lane(" + lane.GetType().Name + ")"
+            : turnScheduler.GetType().Name + (ReferenceEquals(turnScheduler, TaskScheduler.Default)
+                ? "(pool, no disposal lane resolved)" : "");
+
     internal void BeginDisposal()
     {
         if (!ReferenceEquals(turnScheduler, TaskScheduler.Default))
