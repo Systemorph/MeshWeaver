@@ -129,6 +129,24 @@ behaves as start. The value is serialised by name, and the Blazor client parses 
 into Fluent UI's own `HorizontalAlignment.Stretch`, so `HorizontalAlignment.Stretch` and the string
 `"stretch"` mean the same thing.
 
+## Blocks still fill a start-aligned column
+
+Start alignment shrinks children to their content, but not every child. In the Blazor client, two
+kinds of child fill the width of a vertical, start-aligned stack (`align-self: stretch`):
+
+- a **nested stack**, horizontal or vertical
+- a **block-level control**, which carries the `mw-block` class: the Radzen chart and pivot-grid views
+
+Before this, a nested stack shrank to its content. A chart inside one then resolved its `width: 100%`
+against its own 300 px SVG, and drew 300 px wide on a 988 px page. Under start alignment, a stretched
+box puts its content exactly where the shrunk box did, so nothing in it moves. Its edge reaches the
+column's edge, and a percentage width inside it resolves against the column.
+
+The rule applies only to a start-aligned parent, which is the default. A centred or end-aligned
+parent keeps placing its nested stacks by its own alignment. The rule has zero specificity, so a
+width or `align-self` that the author sets still wins. The client marks the parent `mw-stack--v-start`
+and each stack `mw-stack`. The rule itself is in MeshWeaver.Plugins `mw-controls.css`.
+
 ---
 
 # Adding Child Controls
