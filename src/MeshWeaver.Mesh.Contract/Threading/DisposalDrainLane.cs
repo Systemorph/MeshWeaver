@@ -39,7 +39,7 @@ public sealed class DisposalDrainLane : IDisposalDrainScheduler, IDisposable
     /// <summary>Creates the lane; the logger, when resolvable, receives the saturation warning.</summary>
     public DisposalDrainLane(ILoggerFactory? loggerFactory = null)
     {
-        logger = loggerFactory?.CreateLogger(typeof(DisposalDrainLane).FullName!);
+        logger = loggerFactory?.CreateLogger(nameof(DisposalDrainLane));
     }
 
     /// <inheritdoc />
