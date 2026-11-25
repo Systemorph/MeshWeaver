@@ -1770,6 +1770,8 @@ jobs:
             [ -n "$name" ] || continue
             band="${want%.*}"
             have=$(find "$SHARED/$name" -maxdepth 1 -mindepth 1 -type d -name "${band}.*" 2>/dev/null | sed 's#.*/##' | sort -V | tail -1)
+            # The presence check above already refuses this; the view must never fall back to the raw root.
+            [ -n "$have" ] || { echo "::error title=Reference framework band missing::no ${band}.x of $name under $SHARED (installed: $(ls "$SHARED/$name" 2>/dev/null | tr '\n' ' ')) — the platform host declares >= $want, and the reference view is built from that band only."; exit 1; }
             mkdir -p "$VIEW/$name"
             ln -s "$SHARED/$name/$have" "$VIEW/$name/$have"
           done < <(jq -r '((.runtimeOptions.frameworks // []) + (if .runtimeOptions.framework then [.runtimeOptions.framework] else [] end))[] | [.name, .version] | @tsv' "$RC")
