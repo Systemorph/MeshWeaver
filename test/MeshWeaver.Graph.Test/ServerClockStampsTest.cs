@@ -2,6 +2,7 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -53,6 +54,18 @@ public class ServerClockStampsTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 180000)]
+    public async Task PersonUpsertCreate_WithBackdatedStamps_GetsTheServerTime()
+    {
+        var before = DateTimeOffset.UtcNow.AddSeconds(-5);
+        var created = await MeshService.CreateOrUpdateNode(Page(NewId(), TestPartition, backdate: true)).Take(1)
+            .Should().Within(60.Seconds()).Emit("the upsert lands",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        created.CreatedDate.Should().BeAfter(before);
+        created.LastModified.Should().BeAfter(before);
+    }
+
+    [Fact(Timeout = 180000)]
     public async Task PersonBulkCreate_WithBackdatedStamps_GetsTheServerTime()
     {
         var before = DateTimeOffset.UtcNow.AddSeconds(-5);
@@ -85,6 +98,50 @@ public class ServerClockStampsTest(ITestOutputHelper output) : MonolithMeshTestB
                 cancellationToken: TestContext.Current.CancellationToken);
         after.CreatedDate.Should().Be(created.CreatedDate);
         after.LastModified.Should().BeAfter(Backdated.AddYears(1));
+    }
+
+    /// <summary>
+    /// Restore-from-version writes the historical node back through UpdateNode (VersionPlugin). For a
+    /// LIVE node the update pipeline keeps the live createdDate; a restore never re-stamps it.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task Restore_OfALiveNode_KeepsTheOriginalCreatedDate()
+    {
+        var created = await MeshService.CreateNode(Page(NewId(), TestPartition, false)).Take(1)
+            .Should().Within(60.Seconds()).Emit("the create lands",
+                cancellationToken: TestContext.Current.CancellationToken);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        await MeshService.UpdateNode(created with { Version = 0, Name = "restored" }).Take(1)
+            .Should().Within(60.Seconds()).Emit("the restore lands",
+                cancellationToken: TestContext.Current.CancellationToken);
+        var after = await Mesh.GetWorkspace().GetMeshNodeStream(created.Path)
+            .Where(n => n is not null && n.Name == "restored")
+            .Should().Within(60.Seconds()).Emit("restored is live",
+                cancellationToken: TestContext.Current.CancellationToken);
+        after.CreatedDate.Should().Be(created.CreatedDate);
+    }
+
+    /// <summary>
+    /// A restore (UpdateNode) of a DELETED node does not fall into the create handler: it is refused
+    /// "Node not found", so a restore can never re-stamp a node with the server clock.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task Restore_OfADeletedNode_IsRefused_NotRecreatedWithANewStamp()
+    {
+        var created = await MeshService.CreateNode(Page(NewId(), TestPartition, false)).Take(1)
+            .Should().Within(60.Seconds()).Emit("the create lands",
+                cancellationToken: TestContext.Current.CancellationToken);
+        await MeshService.DeleteNode(created.Path).Take(1)
+            .Should().Within(60.Seconds()).Emit("deleted",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var message = await MeshService.UpdateNode(created with { Version = 0 })
+            .Take(1).Select(_ => (string?)null)
+            .Catch<string?, Exception>(e => Observable.Return<string?>(e.Message))
+            .Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+        message.Should().NotBeNull("the restore of a deleted node is refused, not re-created");
+        message!.Should().Contain("not found");
     }
 
     /// <summary>Negative control: the platform (an import) keeps the carried history.</summary>
