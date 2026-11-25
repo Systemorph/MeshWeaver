@@ -192,6 +192,7 @@ public class MessageService : IMessageService
     private TaskScheduler turnScheduler = TaskScheduler.Default;
     // Set once by BeginDisposal; guarded by turnGate. Non-null = this hub's drains run on the lane.
     private TaskScheduler? disposalLane;
+    private IDisposalDrainScheduler? disposalDrain;
     private int drainGeneration;
     private readonly HierarchicalRouting hierarchicalRouting;
     /// <summary>
@@ -1759,12 +1760,16 @@ public class MessageService : IMessageService
         {
             TaskScheduler scheduler;
             int generation;
+            IDisposalDrainScheduler? lane;
             lock (turnGate)
             {
                 generation = drainGeneration;
                 scheduler = disposalLane ?? turnScheduler;
+                lane = disposalDrain;
             }
-            Task.Factory.StartNew(() => DrainOne(generation), CancellationToken.None,
+            // A saturated lane says so NOW, naming the turns that hold its threads.
+            try { lane?.NoteQueued(Address.ToString()); } catch { /* diagnostics must never fail a schedule */ }
+            Task.Factory.StartNew(() => DrainOne(generation, lane), CancellationToken.None,
                 TaskCreationOptions.DenyChildAttach | TaskCreationOptions.PreferFairness,
                 scheduler);
         }
@@ -1795,7 +1800,7 @@ public class MessageService : IMessageService
     // Counts THIS body as executing for as long as it runs, so the disposal snapshot can tell a
     // drain that is running from a drain that was merely scheduled (#3593). The inner loop keeps
     // every one of its early returns; the counter is released in the finally regardless.
-    private void DrainOne(int generation)
+    private void DrainOne(int generation, IDisposalDrainScheduler? lane)
     {
         lock (turnGate)
         {
@@ -1810,12 +1815,15 @@ public class MessageService : IMessageService
             Interlocked.Increment(ref drainsStarted);
             Interlocked.Increment(ref drainsInFlight);
         }
+        IDisposable? tracked = null;
         try
         {
+            tracked = lane?.TrackDrain(Address.ToString(), () => currentlyExecutingMessageType);
             DrainLoop();
         }
         finally
         {
+            tracked?.Dispose();
             Interlocked.Decrement(ref drainsInFlight);
         }
     }
@@ -1855,6 +1863,7 @@ public class MessageService : IMessageService
         lock (turnGate)
         {
             disposalLane = lane.Scheduler;
+            disposalDrain = lane;
             reschedule = draining
                          && Interlocked.Read(ref drainsScheduled) - Interlocked.Read(ref drainsStarted) > 0;
             if (reschedule)
