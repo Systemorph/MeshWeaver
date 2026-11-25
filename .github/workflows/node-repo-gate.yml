@@ -1743,6 +1743,7 @@ jobs:
           missing=0
           while IFS="$(printf '\t')" read -r name want; do
             [ -n "$name" ] || continue
+            case "$name" in */*|*..*) echo "::error title=Invalid framework name::the platform host's runtimeconfig declares framework '$name', which is not a plain framework name — refusing to build the reference view from it."; exit 1 ;; esac
             band="${want%.*}"
             have=$(find "$SHARED/$name" -maxdepth 1 -mindepth 1 -type d -name "${band}.*" 2>/dev/null | sed 's#.*/##' | sort -V | tail -1)
             if [ -z "$have" ]; then
@@ -1768,6 +1769,7 @@ jobs:
           rm -rf "$VIEW"; mkdir -p "$VIEW"
           while IFS="$(printf '\t')" read -r name want; do
             [ -n "$name" ] || continue
+            case "$name" in */*|*..*) echo "::error title=Invalid framework name::the platform host's runtimeconfig declares framework '$name', which is not a plain framework name — refusing to build the reference view from it."; exit 1 ;; esac
             band="${want%.*}"
             have=$(find "$SHARED/$name" -maxdepth 1 -mindepth 1 -type d -name "${band}.*" 2>/dev/null | sed 's#.*/##' | sort -V | tail -1)
             # The presence check above already refuses this; the view must never fall back to the raw root.
@@ -1776,6 +1778,7 @@ jobs:
             ln -s "$SHARED/$name/$have" "$VIEW/$name/$have"
           done < <(jq -r '((.runtimeOptions.frameworks // []) + (if .runtimeOptions.framework then [.runtimeOptions.framework] else [] end))[] | [.name, .version] | @tsv' "$RC")
           PORTAL_MAJOR=$(jq -r '((.runtimeOptions.frameworks // []) + (if .runtimeOptions.framework then [.runtimeOptions.framework] else [] end))[] | select(.name=="Microsoft.NETCore.App") | .version' "$RC" | sed 's/\..*//' | head -1)
+          [ -n "$PORTAL_MAJOR" ] || { echo "::error title=No Microsoft.NETCore.App declared::the platform host's runtimeconfig ($(basename "$RC")) declares no Microsoft.NETCore.App, so the runtime major the reference set must match cannot be read."; exit 1; }
           REF_DIR=$(find "$VIEW/Microsoft.NETCore.App" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)
           REF_MAJOR=$(basename "${REF_DIR:-?}" | sed 's/\..*//')
           RUNTIMES=$("$ROOT/dotnet" --list-runtimes | awk '$1=="Microsoft.NETCore.App"{print $2}' | tr '\n' ' ')

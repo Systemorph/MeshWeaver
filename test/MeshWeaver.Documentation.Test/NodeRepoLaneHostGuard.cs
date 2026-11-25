@@ -179,10 +179,10 @@ public class NodeRepoLaneHostGuard
             + "never the runner's raw $ROOT/shared, which carries every line's framework.");
         Assert.False(lines.Contains("echo \"shared=$SHARED\" >> \"$GITHUB_OUTPUT\"", StringComparison.Ordinal),
             $"{Gate}: the raw runner shared-framework root must not be handed to the tester.");
-        Assert.True(lines.Contains("::error title=Reference framework differs from the runtime::", StringComparison.Ordinal)
-                    && lines.Contains("\"$REF_MAJOR\" != \"$PORTAL_MAJOR\"", StringComparison.Ordinal),
-            $"{Gate}: the lane must assert reference-framework major == platform-host runtime major and fail red "
-            + "naming both.");
+        Assert.True(lines.Contains("::error title=Reference framework differs from the runtime::", StringComparison.Ordinal),
+            $"{Gate}: the red for a reference/runtime major mismatch must be titled 'Reference framework differs from the runtime'.");
+        Assert.True(lines.Contains("\"$REF_MAJOR\" != \"$PORTAL_MAJOR\"", StringComparison.Ordinal),
+            $"{Gate}: the lane must compare the reference-framework major with the platform-host runtime major.");
     }
 
     /// <summary>
