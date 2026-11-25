@@ -38,7 +38,8 @@ Usage:
                                              # HERE, never across lines (MeshWeaver#8544, #8527)
   platform-version.py same-line <version> <other>
                                              # exit 1, ::error:: naming both, unless both have the
-                                             # same MAJOR — the assertion on a chosen N−1
+                                             # same MAJOR; naming the unreadable one when either
+                                             # has no readable line — the assertion on a chosen N−1
   platform-version.py --self-test
 """
 from __future__ import annotations
@@ -113,7 +114,8 @@ def previous_in_line(version: str, tags: list[str]) -> str | None:
 def same_line_problem(version: str, other: str) -> str | None:
     a, b = line_of(version), line_of(other)
     if a is None or b is None:
-        return f"cannot read the line of {version!r} ({a}) or {other!r} ({b})"
+        unreadable = [repr(v) for v, m in ((version, a), (other, b)) if m is None]
+        return f"cannot read the line of {' or '.join(unreadable)} (not a version-shaped tag)"
     if a != b:
         return (f"the N-1 image {other!r} is of line {b}.x but the build under test {version!r} is of line {a}.x — "
                 f"another line's image expects another db_version, so it cannot judge this build's migration")
