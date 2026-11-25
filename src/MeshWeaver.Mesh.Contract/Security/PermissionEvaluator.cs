@@ -348,13 +348,13 @@ internal static class PermissionEvaluator
                 // like PartitionAccessPolicy.PublicRead — so a declared public surface needs no
                 // role and no AccessAssignment row of any kind. It only ever ADDS Read.
                 return (state.RoleIds, PermissionCap: cap,
-                    state.PublicGrant | GateGrant(gates, snap.GatedNodes, nodePath), snap.Locked);
+                    state.PublicGrant | GateGrant(gates, snap.GatedNodes, nodePath), snap.Locked, state.LocalRoleIds);
             });
 
         return enriched
             .SelectMany(state =>
             {
-                var (roleIds, permissionCap, publicGrant, locked) = state;
+                var (roleIds, permissionCap, publicGrant, locked, localRoleIds) = state;
 
                 // 🔒 A locked account holds no effective permission anywhere — its own home partition
                 // and every public surface included. Nothing else needs evaluating.
@@ -379,10 +379,13 @@ internal static class PermissionEvaluator
                     ? Observable.Return(rolePermsValue)
                     : Observable.Return(rolePermsValue).CombineLatest(
                         customRoleIds
-                            .Select(id => GetRole(cache, options, id))
+                            .Select(id => GetRole(cache, options, id).Select(r => (Id: id, Role: r)))
                             .Merge()
-                            .Where(r => r is not null)
-                            .Aggregate(Permission.None, (acc, r) => acc | r!.Permissions),
+                            // 🔒 Role.IsInheritable: a role declared isInheritable:false confers its
+                            // permissions only where it was assigned, never on a descendant.
+                            .Where(x => x.Role is not null
+                                        && (x.Role.IsInheritable || localRoleIds.Contains(x.Id)))
+                            .Aggregate(Permission.None, (acc, x) => acc | x.Role!.Permissions),
                         (builtIn, custom) => builtIn | custom);
 
                 IObservable<Permission> withPublic = (userId != WellKnownUsers.Anonymous && userId != WellKnownUsers.Public)
@@ -896,7 +899,7 @@ internal static class PermissionEvaluator
 
     #region Scope hierarchy / role-state composition
 
-    private static (ImmutableHashSet<string> RoleIds, Permission PermissionCap, Permission PublicGrant) ComputeRoleState(
+    private static (ImmutableHashSet<string> RoleIds, Permission PermissionCap, Permission PublicGrant, ImmutableHashSet<string> LocalRoleIds) ComputeRoleState(
         ImmutableDictionary<string, ImmutableHashSet<string>> scopeToRoles,
         string nodePath,
         string userId,
@@ -917,8 +920,20 @@ internal static class PermissionEvaluator
         var publicGrant = Permission.None;
         var isSelfScopeOwner = userId != WellKnownUsers.Anonymous
                                && userId != WellKnownUsers.Public;
+        // 🔒 Role.IsInheritable: the roles granted AT the target's own scope (the last scope on the
+        // chain), after that scope's denies. A role declared isInheritable:false counts only from
+        // this set — a grant made on an ANCESTOR reaches a descendant through roleIds alone, and the
+        // role's flag (which is only known once the role node is read) decides whether it may.
+        var localRoleIds = ImmutableHashSet<string>.Empty;
         foreach (var scope in GetScopeHierarchy(nodePath))
         {
+            localRoleIds = scopeToRoles.TryGetValue(scope, out var grantedHere)
+                ? grantedHere
+                : ImmutableHashSet<string>.Empty;
+            if (scopeToDeniedRoles is not null
+                && scopeToDeniedRoles.TryGetValue(scope, out var deniedHere))
+                localRoleIds = localRoleIds.Except(deniedHere);
+
             PartitionAccessPolicy? policy = null;
             if (runtimePolicies is not null && runtimePolicies.TryGetValue(scope, out var rp))
                 policy = rp;
@@ -978,7 +993,7 @@ internal static class PermissionEvaluator
         // NOWHERE in this file; a future "just check the claims" is a regression, not a shortcut.
         // Pinned by PaywallRealGateShapeTests (DbRoleClaim_DoesNotGrantNodeRead and siblings) and
         // by ApiTokenCapabilityFreshnessTest.
-        return (roleIds, permissionCap, publicGrant);
+        return (roleIds, permissionCap, publicGrant, localRoleIds);
     }
 
     /// <summary>
