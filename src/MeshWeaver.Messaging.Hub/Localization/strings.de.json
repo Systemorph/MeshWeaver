@@ -774,6 +774,8 @@
   "files.addFolder": "Ordner hinzufügen",
   "files.newArticle": "Neuer Artikel",
   "files.dropToUpload": "Dateien hier ablegen, um sie hochzuladen",
+  "files.collectionUnavailable": "Die Sammlung ‘{0}’ konnte auf diesem Portal nicht geöffnet werden, daher können hier keine Dateien aufgelistet oder hochgeladen werden. Laden Sie die Seite neu; besteht das Problem weiter, melden Sie es mit diesem Sammlungsnamen.",
+  "files.collectionLoadFailed": "Die Sammlung ‘{0}’ konnte nicht geladen werden: {1}",
   "files.includeSatellites": "Satellitendaten einbeziehen:",
   "form.validationFailed": "Validierung fehlgeschlagen",
   "grid.itemsPerPage": "Einträge pro Seite:",
