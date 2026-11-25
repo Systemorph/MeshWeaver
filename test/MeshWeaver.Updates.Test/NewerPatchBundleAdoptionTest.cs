@@ -118,9 +118,11 @@ public class NewerPatchBundleAdoptionTest : IDisposable
     [Fact]
     public void ADifferentKey_IsNotRescuedByTheMeasurement()
     {
-        var decision = Decide(VersionStrictness.Exact, Producer, key: "c003e001");
-        Assert.False(decision.Adopts);
-        Assert.False(decision.CrossesFloor);
+        // Exact declines a foreign key outright; Family/Minimum may adopt it on the family rule, but
+        // never as a floor rescue: CrossesFloor is the newer-patch-of-the-SAME-key path only.
+        Assert.False(Decide(VersionStrictness.Exact, Producer, key: "c003e001").Adopts);
+        foreach (var strictness in new[] { VersionStrictness.Family, VersionStrictness.Minimum })
+            Assert.False(Decide(strictness, Producer, key: "c003e001").CrossesFloor, strictness.ToString());
     }
 
     /// <summary>A ceiling the running build is above still declines, newer producer or not.</summary>
@@ -309,9 +311,13 @@ public class NewerPatchBundleAdoptionTest : IDisposable
         return path;
     }
 
+    private static readonly string RunningHubVersion =
+        typeof(MeshWeaver.Messaging.InlineRxOperators).Assembly.GetName().Version?.ToString()
+        ?? throw new InvalidOperationException("The running Messaging.Hub assembly carries no version.");
+
     private static byte[] Emit(string assemblyName, string source, System.Collections.Generic.IEnumerable<MetadataReference> references)
     {
-        var compilation = CSharpCompilation.Create(assemblyName, [CSharpSyntaxTree.ParseText(source.Replace("@@RUNNING@@", typeof(MeshWeaver.Messaging.InlineRxOperators).Assembly.GetName().Version!.ToString(), StringComparison.Ordinal))], references,
+        var compilation = CSharpCompilation.Create(assemblyName, [CSharpSyntaxTree.ParseText(source.Replace("@@RUNNING@@", RunningHubVersion, StringComparison.Ordinal))], references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         using var buffer = new MemoryStream();
         var result = compilation.Emit(buffer);

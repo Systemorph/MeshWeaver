@@ -569,7 +569,7 @@ public sealed class PluginBundleClient
                 liveKey, livePlatformVersion))
         {
             var closure = assemblies.Select(a => Path.GetFileNameWithoutExtension(a.NodePath))
-                .Concat((manifest!.Assemblies ?? []).Select(e => Path.GetFileNameWithoutExtension(e.Assembly ?? "")))
+                .Concat((manifest.Assemblies ?? []).Select(e => Path.GetFileNameWithoutExtension(e.Assembly ?? "")))
                 .Concat((manifest.Module?.Assemblies ?? []).Select(f => Path.GetFileNameWithoutExtension(f)))
                 .Where(n => !string.IsNullOrEmpty(n))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);

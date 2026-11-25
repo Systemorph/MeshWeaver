@@ -179,5 +179,5 @@ record is then stamped with the RUNNING build, because the bytes were verified t
 - The same rule covers the other two floor sites: install time (`PluginBundleClient.ShippedBuildsOf`
   measures each payload and ships those that link) and the sealed-publication ladder
   (`SealedPublicationIndex.ApplyLadder` no longer holds a newer-patch publication unless called with
-  `exact: true`; the per-bundle adoption measures it). Install time has no strictness setting, so it
-  always measures.
+  `exact: true`; the per-bundle adoption measures it). Install time honours `Modules:VersionStrictness=Exact` like the sweep (Exact keeps the plain decline); otherwise it
+  measures.
