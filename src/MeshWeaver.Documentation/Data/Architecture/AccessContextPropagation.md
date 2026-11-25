@@ -574,6 +574,26 @@ The second half of the leak — the caller's *previous* identity being written o
 | `access.RunAs(identity, work)` / `access.RunAs(resolver, work)` | The same seal for an explicit identity the caller carries — an export rendering as the requesting user, a Blazor view re-establishing the durable circuit user. The resolver overload reads the identity on the subscribing thread. |
 | `source.ContainIdentity(access)` | Sealing an **already-composed** chain — several system calls where the caller builds on the LAST one's emission. Forward direction only. |
 
+#### 🚨 `hub.Observe(...)` inside an Rx projection posts on the SCHEDULER's thread (#8551)
+
+`Observe` posts **eagerly, when it is called**. A layout area that reads a file in chunks with
+`chunks.ToObservable().Select(name => hub.Observe(new GetDataRequest(...), ...)).Concat()` calls it from
+the projection, which runs on the scheduler's thread, where the viewer's `AsyncLocal` is gone. Every
+read was refused (`AccessContext must never be null …`, 30 in 7 s on one hub) and the page showed no data.
+
+```csharp
+// ❌ the projection runs after a scheduler hop: no identity, no delivery
+chunks.ToObservable().Select(name => hub.Observe(new GetDataRequest(...), o => o.WithTarget(owner))).Concat();
+
+// ✅ capture the viewer while the area renders; open it around each cold read
+var viewer = access.Context ?? access.CircuitContext;
+chunks.ToObservable().Select(name => access.RunAs(viewer, () => hub.Observe(new GetDataRequest(...), o => o.WithTarget(owner)))).Concat();
+```
+
+A viewer captured as `null` stays `null` — `RunAs` invents nothing and the read is refused. Never answer this
+with `ImpersonateAsSystem`: the read would then run with System's rights, not the viewer's. Pinned by
+`PostPipelineAccessContextTest` (the refusal, the carried identity, the anonymous negative control).
+
 🚨 **It never invents an identity.** What is restored is exactly what was ambient at Subscribe: a real user for a user-driven flow, `system-security` for a genuinely system-initiated one, and **nothing at all** when the subscriber had no identity — so a background worker that never had a user is not fail-closed by adopting it. The only behaviour that changes is the defect: a caller who *had* an identity, silently continuing as System.
 
 Pinned by `SystemScopeDoesNotEscapeTest` (test/MeshWeaver.Messaging.Hub.Test), whose first case asserts the raw Rx ordering every other case rests on.
