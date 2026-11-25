@@ -288,12 +288,24 @@ because the drain was still a pool work item: it waits behind everything queued 
 heartbeat read `poolThreads=34 poolPending=2865`), whatever put that backlog there.
 
 From the moment `Dispose()` begins, a hub on `TaskScheduler.Default` now drains on the mesh's
-`DisposalDrainLane` (dedicated threads, one lane per mesh registered by `AddIoPools`, at most 16 threads,
+`DisposalDrainLane` (dedicated threads, one lane per mesh registered by `AddIoPools`, at most 64 threads, saturation logged,
 kept parked, built on the sanctioned `LimitedConcurrencyLevelTaskScheduler`). A drain already queued on the pool when disposal began is superseded: a new drain is
 scheduled on the lane and the pool item becomes a no-op (generation check in `MessageService.DrainOne`).
 Orleans grain hubs keep their activation scheduler. Pinned by `DisposalDrainLaneTest`. So a
 `THE PUMP IS NOT TURNING` verdict on a hosted hub after this change is no longer "the pool is busy"; read
 it as a lane or latch defect.
+
+**Recurrence 2026-11-25 (4 verdicts after the roll, 3 `sync/*` hubs, `RunLevel=Started`, `drainsAwaitingScheduler=1`,
+0 dequeued).** The stalled drain was queued and never started during a mass teardown (a `Feedback/Inbox` recycle
+loop plus dozens of `Ops/Issue/*` hubs; one dispose action faulted on a 30 s Npgsql timeout at 07:59:36). What is
+established: the pump verdict did not name its scheduler, and the lane's 16-thread cap is reachable by any
+teardown turn that blocks. What is NOT established: which turn blocked. The dispose action that timed out
+(`MeshDataSource.FlushPendingOwnSave`) writes through the storage adapter's write lane (an `IIoPool` leaf), so it
+does not hold a lane thread. Therefore: the cap is 64 (a burst must not start hundreds of threads); a drain queued
+while all lane threads run drains logs `[DISPOSAL-LANE] saturated` naming the oldest holders and the message each
+is executing; and the pump verdict names the scheduler (`on disposal-lane(...)` / `(pool, no disposal lane
+resolved)`). The next recurrence will name the blocking turn. Pinned by `DisposalDrainLaneTest`
+(`ADisposeActionDoingSlowIo_DoesNotHoldALaneThread`, `ASaturatedLane_WarnsNamingTheBlockingTurns`).
 
 ### A running drain also has to return its worker
 
