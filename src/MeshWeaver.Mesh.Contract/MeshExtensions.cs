@@ -1526,8 +1526,8 @@ public static class MeshExtensions
                                 // a carried value is honoured only for the platform (import,
                                 // repair) and for a relocation, whose stamps are the STORED
                                 // source's (authorshipSource), never the message's.
-                                CreatedDate = authorshipSource is not null
-                                    ? (node.CreatedDate == default ? now : MeshNode.StorageStable(node.CreatedDate))
+                                CreatedDate = authorshipSource is { } fromCD
+                                    ? (fromCD.CreatedDate == default ? now : MeshNode.StorageStable(fromCD.CreatedDate))
                                     : RequestIdentity.Moment(node.CreatedDate, identity, now),
                                 // A person or service never records somebody else as the author;
                                 // only the platform (an import, a repair) preserves a carried stamp,
@@ -1535,8 +1535,8 @@ public static class MeshExtensions
                                 CreatedBy = authorshipSource is { } fromC
                                     ? fromC.CreatedBy
                                     : RequestIdentity.Author(node.CreatedBy, identity),
-                                LastModified = authorshipSource is not null
-                                    ? (node.LastModified == default ? now : MeshNode.StorageStable(node.LastModified))
+                                LastModified = authorshipSource is { } fromLM
+                                    ? (fromLM.LastModified == default ? now : MeshNode.StorageStable(fromLM.LastModified))
                                     : RequestIdentity.Moment(node.LastModified, identity, now),
                                 LastModifiedBy = authorshipSource is { } fromM
                                     ? fromM.LastModifiedBy
