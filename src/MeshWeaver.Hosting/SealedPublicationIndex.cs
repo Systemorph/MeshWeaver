@@ -402,10 +402,16 @@ public static class SealedPublicationIndex
     /// <param name="source">One source's reading.</param>
     /// <param name="runningPlatformVersion">The platform build this instance runs.</param>
     /// <returns>The reading, held when the producer is newer.</returns>
-    public static SealedSource ApplyLadder(SealedSource source, string? runningPlatformVersion)
+    /// <param name="exact">True under <see cref="VersionStrictness.Exact"/>: a newer producer holds the
+    /// publication. Otherwise (default) a publication read under THIS compatibility key is not held
+    /// for a newer-patch producer: the version comparison is replaced by the member-level link check
+    /// every bundle adoption runs (<see cref="PrebuiltAdoptionPolicy.Decide"/>), which declines bytes
+    /// needing surface this build lacks, per type, and compiles instead.</param>
+    public static SealedSource ApplyLadder(SealedSource source, string? runningPlatformVersion, bool exact = false)
     {
         ArgumentNullException.ThrowIfNull(source);
-        if (!source.IsSealed
+        if (!exact
+            || !source.IsSealed
             || !Compiler.PlatformCompatibility.ProducerIsNewer(source.ProducerPlatformVersion, runningPlatformVersion))
             return source;
         var at = source.SourceCommit is { Length: > 8 } c ? c[..8] : source.SourceCommit ?? "an unknown commit";
