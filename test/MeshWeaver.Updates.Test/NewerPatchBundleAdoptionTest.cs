@@ -74,6 +74,20 @@ public class NewerPatchBundleAdoptionTest : IDisposable
         Assert.Contains(Running, decision.Reason, StringComparison.Ordinal);
     }
 
+    /// <summary>The seed-level consequences of crossing the floor: members are measured and the record is stamped with the RUNNING build.</summary>
+    [Fact]
+    public void CrossingTheFloor_MeasuresMembers_AndStampsTheRunningBuild()
+    {
+        var crossing = Decide(VersionStrictness.Family, Producer);
+        Assert.Same(ModuleLinkOptions.WithMembers, PrebuiltAdoptionPolicy.LinkOptionsFor(crossing));
+        Assert.Equal(Running, PrebuiltAdoptionPolicy.StampedPlatformVersion(crossing, Running, Producer));
+
+        var ordinary = Decide(VersionStrictness.Family, "4.0.14000");
+        Assert.Same(ModuleLinkOptions.TypesOnly, PrebuiltAdoptionPolicy.LinkOptionsFor(ordinary));
+        Assert.Equal("4.0.14000", PrebuiltAdoptionPolicy.StampedPlatformVersion(ordinary, Running, "4.0.14000"));
+        Assert.Equal(Producer, PrebuiltAdoptionPolicy.StampedPlatformVersion(crossing, null, Producer));
+    }
+
     /// <summary>Exact strictness keeps the producer-floor rule, with both versions named.</summary>
     [Fact]
     public void Exact_StillDeclinesANewerProducer_NamingBothVersions()
