@@ -143,7 +143,7 @@ internal static class ClosedTypeSetPackageRows
                 if (toDelete.Length == 0)
                     return Observable.Return(new Outcome(withheld, read, ImmutableList<string>.Empty));
                 return toDelete
-                    .Select(row => DeleteRowOnly(hub, access, row.Path, row.Version)
+                    .Select(row => DeleteRowOnly(hub, access, persistence, options, row.Path, row.Version)
                         .Select(removed => removed ? row.Path : null)
                         .Catch<string?, Exception>(ex =>
                         {
@@ -173,30 +173,68 @@ internal static class ClosedTypeSetPackageRows
     /// invalidation and the disposal of a live activation at the path — never a storage write.
     /// True = removed, false = already gone; errors on a refusal. Cold.
     ///
-    /// <para>🚨 <b>Version-guarded.</b> The row is classified (an unclaimed NodeType row) from the
-    /// batch read; <see cref="DeleteNodeRequest.ExpectedVersion"/> carries the version that read
-    /// saw, so a row CLAIMED (or otherwise rewritten) after the read answers <c>Conflict</c> and is
-    /// kept — the decision is never applied to a node it was not made about.</para>
+    /// <para>🚨 <b>The version guard is the STORE's, never the owner's.</b> The row is classified (an
+    /// unclaimed NodeType row) from the batch read. <see cref="DeleteNodeRequest.ExpectedVersion"/>
+    /// compares against the LIVE version of the node the OWNING hub holds, and on a closed type set
+    /// that is never the stored row: the path is a type the image registers in code, so its hub holds
+    /// the code-registered definition at version 0 while the row an earlier open-mesh install left
+    /// sits in storage at, say, version 56. Every delete answered
+    /// <c>Conflict … expected version 56, found 0</c> and the row was never removed (control, every
+    /// boot: <c>Feedback/Feedback</c>, <c>Essentials/OperationRequest</c>). The decision is instead
+    /// re-checked against what this method acts on — the stored row, read again immediately before the
+    /// delete — so a row CLAIMED or rewritten after the batch read is still kept.</para>
+    ///
+    /// <para><b>The accepted window.</b> This is check-then-act: a write landing between that re-read
+    /// and the delete is not seen. It is accepted because the framework delete is the only route that
+    /// runs the delete validators, tells the change feed and disposes a live activation, and it offers
+    /// no store-level precondition that could hold here (the one it has is the owner's, above); the
+    /// store's compare-and-delete (<see cref="IStorageAdapter.DeleteIfVersionAtMost"/>) would bypass
+    /// those. The window is one store read to one hub turn, on a row only an install writes, and a
+    /// boot-time pass retries nothing it kept — a claimed row is named and left on the next pass.</para>
     /// </summary>
     /// <param name="hub">The installing hub.</param>
     /// <param name="access">The access service that supplies the System identity.</param>
+    /// <param name="persistence">The store the classifying read came from.</param>
+    /// <param name="options">The serializer options the store is read with.</param>
     /// <param name="path">The NodeType row to remove.</param>
     /// <param name="readVersion">The version the classifying read saw.</param>
     private static IObservable<bool> DeleteRowOnly(
-        IMessageHub hub, AccessService access, string path, long readVersion) =>
-        access.RunAsSystem(() => Observable.Defer(() => hub.GetMeshHub().NodeOperationIssuingHub()
-            .Observe(new DeleteNodeRequest(path)
-                {
-                    KeepDescendants = true,
-                    ExpectedVersion = readVersion,
-                    DeletedBy = WellKnownUsers.System,
-                },
-                o => o.WithTarget(hub.NodeOperationTarget()))
-            .Take(1)
-            .SelectMany(delivery => delivery.Message.Success
-                ? Observable.Return(!delivery.Message.AlreadyAbsent)
-                : Observable.Throw<bool>(new InvalidOperationException(
-                    $"{delivery.Message.RejectionReason}: {delivery.Message.Error ?? "the delete was refused"}")))));
+        IMessageHub hub, AccessService access, IStorageAdapter persistence,
+        System.Text.Json.JsonSerializerOptions options, string path, long readVersion) =>
+        Observable.Defer(() => persistence.Read(path, options).Take(1).DefaultIfEmpty(null))
+            .SelectMany(stored =>
+            {
+                if (stored is null)
+                    return Observable.Return(false);
+                if (!StillTheRowThatWasClassified(stored, readVersion))
+                    return Observable.Throw<bool>(new InvalidOperationException(
+                        $"Conflict: the NodeType row '{path}' changed since it was classified "
+                        + $"(read at version {readVersion}, now version {stored.Version}, "
+                        + $"sync behavior {stored.SyncBehavior}). Nothing was deleted."));
+                return access.RunAsSystem(() => Observable.Defer(() => hub.GetMeshHub().NodeOperationIssuingHub()
+                    .Observe(new DeleteNodeRequest(path)
+                        {
+                            KeepDescendants = true,
+                            DeletedBy = WellKnownUsers.System,
+                        },
+                        o => o.WithTarget(hub.NodeOperationTarget()))
+                    .Take(1)
+                    .SelectMany(delivery => delivery.Message.Success
+                        ? Observable.Return(!delivery.Message.AlreadyAbsent)
+                        : Observable.Throw<bool>(new InvalidOperationException(
+                            $"{delivery.Message.RejectionReason}: {delivery.Message.Error ?? "the delete was refused"}")))));
+            });
+
+    /// <summary>
+    /// Whether <paramref name="stored"/> is still the row the install classified as the package's to
+    /// remove: a NodeType row, unclaimed, at the version that classification read. Pure.
+    /// </summary>
+    /// <param name="stored">The row as stored now.</param>
+    /// <param name="readVersion">The version the classifying read saw.</param>
+    internal static bool StillTheRowThatWasClassified(MeshNode stored, long readVersion) =>
+        IsNodeTypeRow(stored)
+        && stored.SyncBehavior == SyncBehavior.Include
+        && stored.Version == readVersion;
 
     /// <summary>
     /// The file → node-path mapping the install of <paramref name="manifest"/> applies
