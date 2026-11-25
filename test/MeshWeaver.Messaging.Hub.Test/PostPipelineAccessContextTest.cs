@@ -101,7 +101,7 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
             .Materialize()
             .Should().Within(10.Seconds()).Match(n => n.Kind == System.Reactive.NotificationKind.OnError);
 
-        notification.Exception!.Message.Should().Contain("AccessContext must never be null",
+        (notification.Exception is { } failure ? failure : throw new InvalidOperationException("OnError carried no exception")).Message.Should().Contain("AccessContext must never be null",
             because: "the never-null AccessContext invariant: an application post that resolves " +
                      "no context is a gap — the post lost the user identity. The PostPipeline " +
                      "fails the delivery (no identity, no delivery) so the awaiting Observe gets " +
@@ -232,5 +232,73 @@ public class PostPipelineAccessContextTest(ITestOutputHelper output) : HubTestBa
             because: "ImpersonateAsHub stamps the hub's full address as principal — " +
                      "this is the legitimate hub-self-post identity, opted in at the " +
                      "callsite rather than the silent PostPipeline fallback.");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // MeshWeaver#8551 — a hub.Observe built inside an Rx projection, after a scheduler hop.
+    //
+    // A layout area read a file chunk by chunk:
+    //     chunks.ToObservable().Select(name => hub.Observe(new GetDataRequest(...), ...)).Concat()
+    // Observe POSTS EAGERLY, when it is called. Inside that projection the call runs on the
+    // scheduler's thread, where the AsyncLocal identity of the render is gone, so every chunk read
+    // was refused ("AccessContext must never be null for an application post"). The canonical fix
+    // carries the identity the work acts FOR as a value and opens it around the cold work:
+    // access.RunAs(viewer, () => hub.Observe(...)). Nothing is widened: a viewer with no identity
+    // still gets no delivery.
+    // ---------------------------------------------------------------------------------------------
+
+    private static IObservable<IMessageDelivery> ObserveEachOnScheduler(int count,
+        Func<IObservable<IMessageDelivery>> read)
+        => Observable.Range(0, count, System.Reactive.Concurrency.TaskPoolScheduler.Default)
+            .Select(_ => Observable.Defer(read))
+            .Concat();
+
+    [Fact]
+    public async Task Observe_built_in_an_Rx_projection_after_a_scheduler_hop_has_lost_the_viewer_and_is_refused()
+    {
+        var client = GetClient(c => c.WithPostingIdentity(PostingIdentity.User));
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+
+        IObservable<IMessageDelivery> chunks;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = "viewer-8551", Name = "viewer-8551" }))
+            chunks = ObserveEachOnScheduler(3,
+                () => client.Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress())));
+
+        var notification = await chunks.Materialize()
+            .Should().Within(10.Seconds()).Match(n => n.Kind == System.Reactive.NotificationKind.OnError);
+        (notification.Exception is { } failure ? failure : throw new InvalidOperationException("OnError carried no exception")).Message.Should().Contain("AccessContext must never be null",
+            because: "the eager post inside the projection ran on a scheduler thread with no identity");
+    }
+
+    [Fact]
+    public async Task RunAs_with_the_captured_viewer_carries_the_identity_into_every_chunk_read()
+    {
+        var client = GetClient(c => c.WithPostingIdentity(PostingIdentity.User));
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+        var viewer = new AccessContext { ObjectId = "viewer-8551", Name = "viewer-8551" };
+
+        var chunks = ObserveEachOnScheduler(3, () =>
+            access.RunAs(viewer, () => client.Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))));
+
+        var all = await chunks.ToList().Should().Within(10.Seconds()).Emit();
+        all.Should().HaveCount(3);
+        all.Select(d => ((IMessageDelivery<CaptureContextResponse>)d).Message.ObjectId)
+            .Should().OnlyContain(id => id == "viewer-8551",
+                because: "each read is posted as the viewer it acts for, never as System");
+    }
+
+    [Fact]
+    public async Task RunAs_with_no_viewer_still_fails_closed_so_an_anonymous_read_gains_nothing()
+    {
+        var client = GetClient(c => c.WithPostingIdentity(PostingIdentity.User));
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+
+        var chunks = ObserveEachOnScheduler(3, () =>
+            access.RunAs((AccessContext?)null, () => client.Observe(new CaptureContextRequest(), o => o.WithTarget(CreateHostAddress()))));
+
+        var notification = await chunks.Materialize()
+            .Should().Within(10.Seconds()).Match(n => n.Kind == System.Reactive.NotificationKind.OnError);
+        (notification.Exception is { } failure ? failure : throw new InvalidOperationException("OnError carried no exception")).Message.Should().Contain("AccessContext must never be null",
+            because: "a null identity is not invented into one: no identity, no delivery");
     }
 }

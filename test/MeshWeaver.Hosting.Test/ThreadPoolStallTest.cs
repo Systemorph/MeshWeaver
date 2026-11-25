@@ -347,4 +347,48 @@ public class ThreadPoolStallTest
         ThreadPoolStall.DescribeQueueDelay(sample, TimeSpan.FromSeconds(6), null, null)
             .Should().Contain("no stack reader is registered in this host");
     }
+
+    /// <summary>
+    /// 2026-11-24, memex: every [POOLSTALL] capture read "0 of them IDLE" while 17-51 of 28-60 workers stood
+    /// parked as <c>LowLevelThreadBlocker.Wait</c> / <c>LowLevelLifoSemaphore.Block</c> / <c>WaitAsWaiter</c> —
+    /// the .NET 10/11 spelling of the pool's own wait, which only the old semaphore names were matched against.
+    /// </summary>
+    [Fact]
+    public void AnIdleWorkerParkedInTheNet11Blocker_IsCountedIdle()
+    {
+        string[] idle =
+        [
+            "InlinedCallFrame",
+            "InlinedCallFrame",
+            "System.Threading.LowLevelThreadBlocker.Wait()",
+            "System.Threading.LowLevelLifoSemaphore.Block(Int32)",
+            "System.Threading.LowLevelLifoSemaphore.WaitAsWaiter(Int32)",
+            "System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()",
+            "System.Threading.Thread.StartCallback(System.Threading.Thread*)",
+        ];
+        string[] blockerUnderAWorkItem =
+        [
+            "System.Threading.LowLevelThreadBlocker.Wait()",
+            "Some.Handler.Blocks()",
+            "System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()",
+        ];
+
+        ThreadPoolStall.IsIdleWorker(idle).Should().BeTrue();
+        ThreadPoolStall.IsIdleWorker(blockerUnderAWorkItem).Should().BeFalse(
+            "a blocker wait inside a work item holds the worker");
+    }
+
+    [Fact]
+    public void TheQueueCensusIsLoggedOnADeepQueue_NotMoreOftenThanItsCooldown()
+    {
+        var t0 = TimeSpan.FromMinutes(10);
+        ThreadPoolStall.ShouldLogQueueCensus(ThreadPoolStall.QueueCensusPendingThreshold - 1, t0, null)
+            .Should().BeFalse("a shallow queue is not worth a line");
+        ThreadPoolStall.ShouldLogQueueCensus(ThreadPoolStall.QueueCensusPendingThreshold, t0, null)
+            .Should().BeTrue();
+        ThreadPoolStall.ShouldLogQueueCensus(50_000, t0 + TimeSpan.FromSeconds(10), t0)
+            .Should().BeFalse("inside the cooldown, however deep the queue");
+        ThreadPoolStall.ShouldLogQueueCensus(50_000, t0 + ThreadPoolStall.QueueCensusCooldown, t0)
+            .Should().BeTrue();
+    }
 }
