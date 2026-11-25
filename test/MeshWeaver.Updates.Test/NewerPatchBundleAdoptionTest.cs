@@ -255,6 +255,17 @@ public class NewerPatchBundleAdoptionTest : IDisposable
         Assert.Empty(Shipped(Producer, "Plugin/Type", File.ReadAllBytes(path)));
     }
 
+    /// <summary>Install time honours Modules:VersionStrictness=Exact like the sweep: the plain floor decline.</summary>
+    [Fact]
+    public void InstallTime_UnderExact_ANewerPatchBundle_IsDeclinedWhole()
+    {
+        var path = Module("InstallExact", "public static class Probe { }");
+        var builds = MeshWeaver.PluginCatalog.PluginBundleClient.ShippedBuildsOf(
+            (ManifestOf(Producer), [new MeshWeaver.Plugin.Packaging.BundleReader.Payload("Plugin/Type", File.ReadAllBytes(path), null)]),
+            "test-origin", null, Key, Running, exact: true);
+        Assert.Empty(builds);
+    }
+
     /// <summary>Install time: another key is still declined whole, newer producer or not.</summary>
     [Fact]
     public void InstallTime_ADifferentKey_IsStillDeclinedWhole()

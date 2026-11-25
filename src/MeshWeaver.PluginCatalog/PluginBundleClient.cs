@@ -522,10 +522,11 @@ public sealed class PluginBundleClient
                     return Observable.Return<IReadOnlyList<ShippedBuild>>([]);
                 }
                 var origin = $"{_registryUrl} {pluginId}@{bundle.Version}";
+                var exact = MeshWeaver.Hosting.PrebuiltAdoptionPolicy.Resolve(_hub.ServiceProvider) == MeshWeaver.Hosting.VersionStrictness.Exact;
                 return Download(pluginId, bundle, index)
                     .SelectMany(result => result.Bytes is null
                         ? Observable.Return<IReadOnlyList<ShippedBuild>>([])
-                        : _httpPool.InvokeBlocking(ct => ShippedBuildsOf(BundleReader.Read(result.Bytes, ct), origin, _logger)));
+                        : _httpPool.InvokeBlocking(ct => ShippedBuildsOf(BundleReader.Read(result.Bytes, ct), origin, _logger, exact)));
             })
             .Catch((Exception ex) =>
             {
@@ -546,21 +547,23 @@ public sealed class PluginBundleClient
     /// <param name="logger">Logger for a whole-bundle decline.</param>
     internal static IReadOnlyList<ShippedBuild> ShippedBuildsOf(
         (BundleReader.Manifest? Manifest, IReadOnlyList<BundleReader.Payload> Assemblies) read, string origin,
-        ILogger? logger)
+        ILogger? logger, bool exact = false)
         => ShippedBuildsOf(read, origin, logger,
-            PrebuiltAssemblySeeder.LiveFrameworkMvid, PrebuiltAssemblySeeder.LivePlatformVersion);
+            PrebuiltAssemblySeeder.LiveFrameworkMvid, PrebuiltAssemblySeeder.LivePlatformVersion, exact);
 
     /// <summary>The shipped builds of a read bundle
     /// against an explicit live key and platform build - the seam the update scenarios drive.</summary>
     internal static IReadOnlyList<ShippedBuild> ShippedBuildsOf(
         (BundleReader.Manifest? Manifest, IReadOnlyList<BundleReader.Payload> Assemblies) read, string origin,
-        ILogger? logger, string liveKey, string? livePlatformVersion)
+        ILogger? logger, string liveKey, string? livePlatformVersion, bool exact = false)
     {
         var (manifest, assemblies) = read;
         // A producer NEWER than the running build under THIS compatibility key is not declined on the
         // comparison: each payload is measured (types and members, against the running process) and
         // only those that link are returned. Everything else declines exactly as before.
-        if (manifest is not null
+        // Exact (Modules:VersionStrictness) keeps the plain producer-floor decline here too, as in the sweep.
+        if (!exact
+            && manifest is not null
             && MeshWeaver.Compiler.PlatformCompatibility.IsFloorOnlyDecline(
                 manifest.FrameworkMvid, manifest.ProducerPlatformVersion, manifest.PlatformCeiling,
                 liveKey, livePlatformVersion))

@@ -402,6 +402,7 @@ public static class SealedPublicationIndex
     /// <param name="source">One source's reading.</param>
     /// <param name="runningPlatformVersion">The platform build this instance runs.</param>
     /// <returns>The reading, held when the producer is newer.</returns>
+    /// <remarks>No production caller passes <c>exact</c>: the read has no strictness in hand, and under Exact each bundle is still declined at adoption by <see cref="PrebuiltAdoptionPolicy.Decide"/> (the type then compiles from source - exactly what the held reading said). The parameter is the seam that keeps the old hold testable and available to a caller that resolves the setting.</remarks>
     /// <param name="exact">True under <see cref="VersionStrictness.Exact"/>: a newer producer holds the
     /// publication. Otherwise (default) a publication read under THIS compatibility key is not held
     /// for a newer-patch producer: the version comparison is replaced by the member-level link check
