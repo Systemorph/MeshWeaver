@@ -45,7 +45,7 @@ public class SealedSyncFollowsTheLadderTest
     private const string Running = "3.0.0-ci.9218";
 
     [Fact]
-    public void APublicationProducedByANewerBuild_IsNotAdoptable_ButTheSourcesStillLand()
+    public void APublicationProducedByANewerPatch_StaysSealed_AndAdoptionMeasuresIt()
     {
         using var root = new TempRoot();
         Publish(root.Path, Head, producer: "3.0.0-ci.9321");
@@ -54,23 +54,17 @@ public class SealedSyncFollowsTheLadderTest
 
         outcome.Should().Be(SealedReadOutcome.Read);
         var plugins = sources.Should().ContainSingle().Which;
-        plugins.HeldForNewerPlatform.Should().BeTrue();
-        plugins.IsSealed.Should().BeFalse("sealed only for a NEWER platform is not sealed for this instance");
+        plugins.HeldForNewerPlatform.Should().BeFalse(
+            "within one compatibility key a newer-patch producer is measured per bundle (member link check), not held");
+        plugins.IsSealed.Should().BeTrue();
         plugins.ProducerPlatformVersion.Should().Be("3.0.0-ci.9321");
 
-        plugins.Refusal.Should().Contain("3.0.0-ci.9321").And.Contain(Running)
-            .And.Contain("BYTES are not adopted").And.Contain("sources still sync");
+        plugins.Refusal.Should().BeNull();
 
-        // 🚨 Policy module-sync-per-manifest-hash — the forbidden rung is a fact about BYTES
-        // (platform 1 + plugin 2 bytes are never adopted), never a reason to freeze the SOURCES:
-        // this is the control-instance deadlock, where the hold stranded the Roll planner's own fix.
         SealedSyncGate.Decide(Plugins, Head, OldSync, sources, Key).Proceed.Should().BeTrue();
         var plan = SealedSyncGate.DecideBuild(Plugins, Head, OldSync, sources, Key, null);
         plan.Proceed.Should().BeTrue();
-        plan.Commit.Should().Be(Head, "the green build lands at its own commit");
-        plan.SealedCommit.Should().BeNull("no publication usable HERE was baked from it — its types compile");
-        plan.Reason.Should().Contain("3.0.0-ci.9321",
-            "the plan still states why the bytes are not adopted, so an operator can tell compile from adopt");
+        plan.SealedCommit.Should().Be(Head, "the publication is usable here; each bundle is measured at adoption");
     }
 
     [Fact]
@@ -116,12 +110,13 @@ public class SealedSyncFollowsTheLadderTest
         {
             ProducerPlatformVersion = "3.0.0-ci.9321",
         };
-        SealedPublicationIndex.ApplyLadder(sealedNewer, Running).HeldForNewerPlatform.Should().BeTrue();
-        SealedPublicationIndex.ApplyLadder(sealedNewer, "3.0.0-ci.9321").IsSealed.Should().BeTrue("the producing build itself");
-        SealedPublicationIndex.ApplyLadder(sealedNewer, "3.0.0-ci.9400").IsSealed.Should().BeTrue("a later build of the key");
+        SealedPublicationIndex.ApplyLadder(sealedNewer, Running).HeldForNewerPlatform.Should().BeFalse("tolerant by default");
+        SealedPublicationIndex.ApplyLadder(sealedNewer, Running, exact: true).HeldForNewerPlatform.Should().BeTrue();
+        SealedPublicationIndex.ApplyLadder(sealedNewer, "3.0.0-ci.9321", exact: true).IsSealed.Should().BeTrue("the producing build itself");
+        SealedPublicationIndex.ApplyLadder(sealedNewer, "3.0.0-ci.9400", exact: true).IsSealed.Should().BeTrue("a later build of the key");
 
         var torn = sealedNewer with { IsSealed = false, Refusal = "no completion sentinel" };
-        SealedPublicationIndex.ApplyLadder(torn, Running).Should().Be(torn, "an unsealed reading keeps its own refusal");
+        SealedPublicationIndex.ApplyLadder(torn, Running, exact: true).Should().Be(torn, "an unsealed reading keeps its own refusal");
     }
 
     [Fact]
@@ -134,7 +129,7 @@ public class SealedSyncFollowsTheLadderTest
                 new SealedSource("plugins-extra", "Systemorph/MeshWeaver.Plugins", Head, true, null)
                 {
                     ProducerPlatformVersion = "3.0.0-ci.9321",
-                }, Running),
+                }, Running, exact: true),
         ];
 
         SealedSyncGate.Decide(Plugins, Head, OldSync, sources, Key).Proceed.Should().BeTrue(

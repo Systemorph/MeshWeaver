@@ -71,6 +71,21 @@ public enum AdoptionVerdict
 /// adopted (<see cref="PrebuiltAdoptionPolicy.AfterLink"/>).</param>
 public sealed record AdoptionDecision(AdoptionVerdict Verdict, string Reason, bool LinkCheckRequired)
 {
+    /// <summary>
+    /// True when the link check must ALSO resolve every member the bytes call (name and signature),
+    /// not only the types. Set when the bytes were produced by a platform build NEWER than the
+    /// running one within the same compatibility key: the version comparison is replaced by a
+    /// measurement, and only a member-level measurement can see a method the running platform lacks.
+    /// </summary>
+    public bool MemberLinkRequired { get; init; }
+
+    /// <summary>
+    /// True when this adoption crosses the producing-build floor on the strength of the measured link
+    /// check; the record is then stamped with the RUNNING platform build (the bytes were verified to
+    /// bind here), not the producer's.
+    /// </summary>
+    public bool CrossesFloor { get; init; }
+
     /// <summary>True when the bytes may land (possibly after the link check).</summary>
     public bool Adopts => Verdict == AdoptionVerdict.Adopt;
 }
@@ -180,6 +195,21 @@ public static class PrebuiltAdoptionPolicy
     public static VersionStrictness DefaultFor(bool isDevelopment) =>
         isDevelopment ? VersionStrictness.Minimum : VersionStrictness.Family;
 
+    /// <summary>The link-check options a decision calls for: members as well as types when the
+    /// adoption crosses the producer floor, types only otherwise.</summary>
+    public static ModuleLinkOptions LinkOptionsFor(AdoptionDecision? decision)
+        => decision is { MemberLinkRequired: true } ? ModuleLinkOptions.WithMembers : ModuleLinkOptions.TypesOnly;
+
+    /// <summary>The platform version a seeded record is stamped with: the RUNNING build when the
+    /// adoption crossed the producer floor on the strength of the link check (the bytes were verified
+    /// to bind here, and the producer's newer build would make the record yield to a replica that does
+    /// not exist), the producer's own statement otherwise.</summary>
+    public static string? StampedPlatformVersion(
+        AdoptionDecision? decision, string? livePlatformVersion, string? producerPlatformVersion)
+        => decision is { CrossesFloor: true } && livePlatformVersion is not null
+            ? livePlatformVersion
+            : producerPlatformVersion;
+
     /// <summary>The major line of a version string (<c>3.0.0-ci.8059</c> → 3), or null when the
     /// string does not start with one.</summary>
     public static int? MajorOf(string? version)
@@ -217,7 +247,34 @@ public static class PrebuiltAdoptionPolicy
             if (Compiler.PlatformCompatibility.DeclineReason(
                     candidate.FrameworkIdentity, candidate.ProducerPlatformVersion, candidate.PlatformCeiling,
                     live.FrameworkIdentity, live.PlatformVersion) is { } range)
+            {
+                // The stamped floor is the build that PRODUCED the bytes, not the oldest platform
+                // they run on: every follower on a line's stable build declined every bundle the
+                // line's canary produced and served stale adopted builds for days. Within one
+                // compatibility key (same major, same epoch - the platform's backwards-compatibility
+                // promise) a newer-patch producer is therefore NOT declined on the version
+                // comparison alone: the bytes' real requirement is MEASURED (every type AND member
+                // they call resolved against the running process, ModuleLinkOptions.WithMembers).
+                // Bytes that call surface this platform lacks are declined by the measurement,
+                // naming the member. Exact strictness keeps the old rule.
+                // Residual, accepted within the compatibility key's promise: surface reached only by
+                // reflection or dynamic binding is invisible to a metadata check; a mismatch there
+                // surfaces at activation and the stale-build self-heal recompiles from source.
+                if (strictness != VersionStrictness.Exact
+                    && Compiler.PlatformCompatibility.IsFloorOnlyDecline(
+                        candidate.FrameworkIdentity, candidate.ProducerPlatformVersion, candidate.PlatformCeiling,
+                        live.FrameworkIdentity, live.PlatformVersion))
+                    return new AdoptionDecision(AdoptionVerdict.Adopt,
+                        $"same platform compatibility key {live.FrameworkIdentity}; produced by platform "
+                        + $"{candidate.ProducerPlatformVersion}, running {live.PlatformVersion} - the version "
+                        + "comparison is replaced by the measured member-level link check",
+                        LinkCheckRequired: true)
+                    {
+                        MemberLinkRequired = true,
+                        CrossesFloor = true,
+                    };
                 return new AdoptionDecision(AdoptionVerdict.Decline, range, LinkCheckRequired: false);
+            }
             return new AdoptionDecision(AdoptionVerdict.Adopt,
                 $"sealed for this platform compatibility key {live.FrameworkIdentity}"
                 + (candidate.ProducerPlatformVersion is null ? "" : $" by platform {candidate.ProducerPlatformVersion}")
@@ -313,18 +370,22 @@ public static class PrebuiltAdoptionPolicy
             }
             case ModuleLinkState.Unlinkable:
             {
-                var missing = link.MissingTypes.IsDefaultOrEmpty
+                // Types AND members: a member the running platform lacks is named here too - the
+                // newer-patch adoption (MemberLinkRequired) is declined on exactly this evidence.
+                var absent = (link.MissingTypes.IsDefault ? [] : link.MissingTypes)
+                    .Concat(link.MissingMembers.IsDefault ? [] : link.MissingMembers).ToList();
+                var missing = absent.Count == 0
                     ? "(none named)"
-                    : string.Join(", ", link.MissingTypes.Take(5))
-                      + (link.MissingTypes.Length > 5 ? $" … +{link.MissingTypes.Length - 5}" : "");
+                    : string.Join(", ", absent.Take(5))
+                      + (absent.Count > 5 ? $" … +{absent.Count - 5}" : "");
                 return live.RequirePrebuilt
                     ? new AdoptionDecision(AdoptionVerdict.Refuse,
-                        $"{link.Module} links against platform types this deployment does not carry "
+                        $"{link.Module} links against platform types or members this deployment does not carry "
                         + $"({missing}), and this mesh does not compile module content "
                         + $"({PrebuiltAssemblySeeder.RequirePrebuiltConfigKey}): rebake the package for "
                         + $"framework {live.FrameworkIdentity}", LinkCheckRequired: false)
                     : new AdoptionDecision(AdoptionVerdict.CompileInstead,
-                        $"{link.Module} links against platform types this deployment does not carry "
+                        $"{link.Module} links against platform types or members this deployment does not carry "
                         + $"({missing}) — the live source compiles instead", LinkCheckRequired: false);
             }
             default:
