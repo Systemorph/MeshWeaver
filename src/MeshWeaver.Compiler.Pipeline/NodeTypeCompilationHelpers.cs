@@ -4775,7 +4775,9 @@ internal static class NodeTypeCompilationHelpers
     private static void SettleAbandonedInFlight(
         IMessageHub hub, IWorkspace workspace, NodeTypeDefinition observed, DateTimeOffset triggerAt,
         string hubPath, ILogger? logger)
-        => CompileOwnerIsLive(hub, observed, triggerAt)
+        // Deferred, so a throw while composing the liveness read (a missing AccessService, a faulted
+        // hub) reaches the OnError below instead of escaping into the watcher's emission callback.
+        => Observable.Defer(() => CompileOwnerIsLive(hub, observed, triggerAt))
             .SelectMany(live =>
             {
                 if (live)
