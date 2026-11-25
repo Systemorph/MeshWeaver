@@ -183,6 +183,14 @@ internal static class ClosedTypeSetPackageRows
     /// boot: <c>Feedback/Feedback</c>, <c>Essentials/OperationRequest</c>). The decision is instead
     /// re-checked against what this method acts on — the stored row, read again immediately before the
     /// delete — so a row CLAIMED or rewritten after the batch read is still kept.</para>
+    ///
+    /// <para><b>The accepted window.</b> This is check-then-act: a write landing between that re-read
+    /// and the delete is not seen. It is accepted because the framework delete is the only route that
+    /// runs the delete validators, tells the change feed and disposes a live activation, and it offers
+    /// no store-level precondition that could hold here (the one it has is the owner's, above); the
+    /// store's compare-and-delete (<see cref="IStorageAdapter.DeleteIfVersionAtMost"/>) would bypass
+    /// those. The window is one store read to one hub turn, on a row only an install writes, and a
+    /// boot-time pass retries nothing it kept — a claimed row is named and left on the next pass.</para>
     /// </summary>
     /// <param name="hub">The installing hub.</param>
     /// <param name="access">The access service that supplies the System identity.</param>
