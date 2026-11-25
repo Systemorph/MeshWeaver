@@ -71,4 +71,20 @@ public static class RequestIdentity
         !string.IsNullOrEmpty(identity) && !IsPlatform(identity)
             ? identity
             : string.IsNullOrEmpty(nodeStamp) ? identity : nodeStamp;
+
+    /// <summary>
+    /// The creation/modification INSTANT a node is written with: the server clock
+    /// (<paramref name="now"/>) whenever a person or service is writing, because nobody backdates a
+    /// record — the stamp is the moment the owner accepted the write, and an append-only consumer
+    /// (newest save wins, an audit trail) reads it as exactly that. Only the platform (a GitSync
+    /// import, a repair, a restore) preserves a carried stamp, so history survives; a carried
+    /// default still gets <paramref name="now"/>. Pure. Companion of <see cref="Author"/>.
+    /// </summary>
+    /// <param name="nodeStamp">The <c>CreatedDate</c>/<c>LastModified</c> the incoming node carries.</param>
+    /// <param name="identity">The resolved requester (<see cref="Resolve"/>).</param>
+    /// <param name="now">The owner's own storage-stable clock reading.</param>
+    public static DateTimeOffset Moment(DateTimeOffset nodeStamp, string? identity, DateTimeOffset now) =>
+        nodeStamp == default || (!string.IsNullOrEmpty(identity) && !IsPlatform(identity))
+            ? now
+            : MeshNode.StorageStable(nodeStamp);
 }
