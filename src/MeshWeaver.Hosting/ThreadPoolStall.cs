@@ -366,12 +366,43 @@ public static class ThreadPoolStall
         while (i < frames.Count && IsRuntimeFrame(frames[i]))
             i++;
         var semaphore = i;
-        while (i < frames.Count && frames[i].StartsWith("System.Threading.LowLevelLifoSemaphore", StringComparison.Ordinal))
+        // .NET 10/11 parks a worker as LowLevelThreadBlocker.Wait → LowLevelLifoSemaphore.Block →
+        // WaitAsWaiter/WaitSlow; earlier runtimes as LowLevelLifoSemaphore.WaitNative/WaitForSignal. Both
+        // are the pool's own wait (2026-11-24: every memex capture printed "0 of them IDLE" while 17-51 of
+        // 28-60 workers stood in the blocker, because only the semaphore name was recognised).
+        while (i < frames.Count && IsPoolWaitFrame(frames[i]))
             i++;
         return i > semaphore
             && i < frames.Count
             && frames[i].StartsWith("System.Threading.PortableThreadPool+WorkerThread.", StringComparison.Ordinal);
     }
+
+    private static bool IsPoolWaitFrame(string frame) =>
+        frame.StartsWith("System.Threading.LowLevelLifoSemaphore", StringComparison.Ordinal)
+        || frame.StartsWith("System.Threading.LowLevelThreadBlocker", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The queue depth at which the heartbeat logs a <c>[POOLQUEUE]</c> census line without waiting for a
+    /// probe item to be delayed 5 s: a <c>[POOLSTALL]</c> capture is rate-limited to one per
+    /// <see cref="CaptureCooldown"/>, so a pod whose pool backed up many times an hour named its queue once.
+    /// </summary>
+    public const int QueueCensusPendingThreshold = 2_000;
+
+    /// <summary>The least time between two <c>[POOLQUEUE]</c> census lines in one process.</summary>
+    public static readonly TimeSpan QueueCensusCooldown = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Whether this tick logs a queue census: the queue holds at least
+    /// <see cref="QueueCensusPendingThreshold"/> items and the last census (if any) is at least
+    /// <see cref="QueueCensusCooldown"/> behind. No stack dump is involved — the census reads the queue only.
+    /// </summary>
+    /// <param name="pending">Work items queued, from the tick's sample.</param>
+    /// <param name="now">The heartbeat's monotonic clock.</param>
+    /// <param name="lastCensus">The heartbeat clock at the last census, or null if none was logged.</param>
+    /// <returns>Whether to log a census now.</returns>
+    public static bool ShouldLogQueueCensus(long pending, TimeSpan now, TimeSpan? lastCensus) =>
+        pending >= QueueCensusPendingThreshold
+        && (lastCensus is not { } last || now - last >= QueueCensusCooldown);
 
     /// <summary>
     /// Whether a captured frame is a RUNTIME frame — a transition into native code such as
