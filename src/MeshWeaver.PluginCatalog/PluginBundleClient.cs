@@ -522,10 +522,11 @@ public sealed class PluginBundleClient
                     return Observable.Return<IReadOnlyList<ShippedBuild>>([]);
                 }
                 var origin = $"{_registryUrl} {pluginId}@{bundle.Version}";
+                var exact = MeshWeaver.Hosting.PrebuiltAdoptionPolicy.Resolve(_hub.ServiceProvider) == MeshWeaver.Hosting.VersionStrictness.Exact;
                 return Download(pluginId, bundle, index)
                     .SelectMany(result => result.Bytes is null
                         ? Observable.Return<IReadOnlyList<ShippedBuild>>([])
-                        : _httpPool.InvokeBlocking(ct => ShippedBuildsOf(BundleReader.Read(result.Bytes, ct), origin, _logger)));
+                        : _httpPool.InvokeBlocking(ct => ShippedBuildsOf(BundleReader.Read(result.Bytes, ct), origin, _logger, exact)));
             })
             .Catch((Exception ex) =>
             {
@@ -546,12 +547,51 @@ public sealed class PluginBundleClient
     /// <param name="logger">Logger for a whole-bundle decline.</param>
     internal static IReadOnlyList<ShippedBuild> ShippedBuildsOf(
         (BundleReader.Manifest? Manifest, IReadOnlyList<BundleReader.Payload> Assemblies) read, string origin,
-        ILogger? logger)
+        ILogger? logger, bool exact = false)
+        => ShippedBuildsOf(read, origin, logger,
+            PrebuiltAssemblySeeder.LiveFrameworkMvid, PrebuiltAssemblySeeder.LivePlatformVersion, exact);
+
+    /// <summary>The shipped builds of a read bundle
+    /// against an explicit live key and platform build - the seam the update scenarios drive.</summary>
+    internal static IReadOnlyList<ShippedBuild> ShippedBuildsOf(
+        (BundleReader.Manifest? Manifest, IReadOnlyList<BundleReader.Payload> Assemblies) read, string origin,
+        ILogger? logger, string liveKey, string? livePlatformVersion, bool exact = false)
     {
         var (manifest, assemblies) = read;
+        // A producer NEWER than the running build under THIS compatibility key is not declined on the
+        // comparison: each payload is measured (types and members, against the running process) and
+        // only those that link are returned. Everything else declines exactly as before.
+        // Exact (Modules:VersionStrictness) keeps the plain producer-floor decline here too, as in the sweep.
+        if (!exact
+            && manifest is not null
+            && MeshWeaver.Compiler.PlatformCompatibility.IsFloorOnlyDecline(
+                manifest.FrameworkMvid, manifest.ProducerPlatformVersion, manifest.PlatformCeiling,
+                liveKey, livePlatformVersion))
+        {
+            var closure = assemblies.Select(a => Path.GetFileNameWithoutExtension(a.NodePath))
+                .Concat((manifest.Assemblies ?? []).Select(e => Path.GetFileNameWithoutExtension(e.Assembly ?? "")))
+                .Concat((manifest.Module?.Assemblies ?? []).Select(f => Path.GetFileNameWithoutExtension(f)))
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var surface = ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory);
+            var linked = new List<ShippedBuild>();
+            foreach (var a in assemblies)
+            {
+                var link = ModulePlatformLink.Check(a.Assembly, a.NodePath, closure, surface, ModuleLinkOptions.WithMembers);
+                if (link.MayLoad)
+                    linked.Add(new ShippedBuild(a.NodePath, a.Assembly, a.Pdb, origin));
+                else
+                    logger?.LogInformation(
+                        "Shipped build {NodePath} from {Origin} (platform {Producer}, running {Running}) needs "
+                        + "surface this platform lacks: {Report} - compiling instead",
+                        a.NodePath, origin, manifest.ProducerPlatformVersion,
+                        livePlatformVersion, link.Report());
+            }
+            return linked;
+        }
         if (PrebuiltAssemblySeeder.DeclineReason(
                 manifest?.FrameworkMvid, manifest?.ProducerPlatformVersion, manifest?.PlatformCeiling,
-                PrebuiltAssemblySeeder.LiveFrameworkMvid, PrebuiltAssemblySeeder.LivePlatformVersion) is { } reason)
+                liveKey, livePlatformVersion) is { } reason)
         {
             logger?.LogInformation("Shipped builds from {Origin} declined whole: {Reason}", origin, reason);
             return [];

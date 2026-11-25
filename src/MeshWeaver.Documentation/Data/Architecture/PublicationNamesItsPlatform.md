@@ -157,3 +157,27 @@ publication's set is RED from the start: that is exactly the declined case.
 | the writer's cases | `.github/scripts/test-publish-bake-overlap.py` ("platform record") |
 | the registry index field | MeshWeaver.Plugins `PluginBundleEndpoints.PrebuiltIndex` |
 | the gate's decision and re-check | `.github/scripts/publication-platform.py`, `node-repo-gate.yml` step `publication-platform` and the seed step |
+
+## A follower on an older patch serves a newer patch's bundle - measured, not compared
+
+The floor a bundle carries is the build that PRODUCED it, not the oldest platform it runs on. A
+follower rolled to a line's stable build (which lags the canary by the soak) therefore declined
+every bundle the canary produced - `its platform floor 4.0.14117 … is NEWER than the running
+platform 4.0.14099` - and served stale adopted builds for as long as it lagged (measured 2026-11-25).
+
+Within ONE compatibility key (same major, same epoch: the platform's backwards-compatibility
+promise) the version comparison no longer decides alone. `PrebuiltAdoptionPolicy.Decide` adopts a
+newer-patch bundle PENDING the member-level link check (`ModuleLinkOptions.WithMembers`: every type
+and every member the bytes call, by name and signature, resolved against the running process). The
+record is then stamped with the RUNNING build, because the bytes were verified to bind here.
+
+- Bytes that call a member the running platform lacks are declined by the measurement, the member
+  is named in the reason, and the sweep compiles instead (a require-prebuilt mesh refuses loudly).
+- A different key, a ceiling breach and `Modules:VersionStrictness=Exact` still decline on the
+  comparison.
+- Proven in `test/MeshWeaver.Updates.Test/NewerPatchBundleAdoptionTest.cs`.
+- The same rule covers the other two floor sites: install time (`PluginBundleClient.ShippedBuildsOf`
+  measures each payload and ships those that link) and the sealed-publication ladder
+  (`SealedPublicationIndex.ApplyLadder` no longer holds a newer-patch publication unless called with
+  `exact: true`; the per-bundle adoption measures it). Install time honours `Modules:VersionStrictness=Exact` like the sweep (Exact keeps the plain decline); otherwise it
+  measures.
