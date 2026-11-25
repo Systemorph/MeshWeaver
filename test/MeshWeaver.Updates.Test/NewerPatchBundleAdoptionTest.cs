@@ -210,6 +210,88 @@ public class NewerPatchBundleAdoptionTest : IDisposable
         Assert.Contains("NewInThisBuild", verdict.Reason, StringComparison.Ordinal);
     }
 
+    private static MeshWeaver.Plugin.Packaging.BundleReader.Manifest ManifestOf(string? producer, string key = Key) =>
+        new("Plugin", "1.0.0", key, [])
+        {
+            ProducerPlatformVersion = producer,
+        };
+
+    private static System.Collections.Generic.IReadOnlyList<MeshWeaver.Mesh.Services.ShippedBuild> Shipped(
+        string? producer, string nodePath, byte[] bytes, string key = Key)
+        => MeshWeaver.PluginCatalog.PluginBundleClient.ShippedBuildsOf(
+            (ManifestOf(producer, key), [new MeshWeaver.Plugin.Packaging.BundleReader.Payload(nodePath, bytes, null)]),
+            "test-origin", null, Key, Running);
+
+    /// <summary>Install time: a newer-patch bundle whose members link is returned as a shipped build.</summary>
+    [Fact]
+    public void InstallTime_ANewerPatchBundle_WhoseMembersResolve_IsShipped()
+    {
+        var path = Module("InstallResolving", """
+            using System;
+            using MeshWeaver.Reactive;
+            public static class Probe
+            {
+                public static IObservable<int> Both(IObservable<int> a, IObservable<int> b) => a.WhenBoth(b, (x, y) => x + y);
+            }
+            """);
+
+        var builds = Shipped(Producer, "Plugin/Type", File.ReadAllBytes(path));
+
+        Assert.Single(builds);
+    }
+
+    /// <summary>Install time: a newer-patch bundle that needs surface the running build lacks is NOT shipped.</summary>
+    [Fact]
+    public void InstallTime_ANewerPatchBundle_ThatNeedsNewerSurface_IsNotShipped()
+    {
+        var newerHub = Emit("MeshWeaver.Messaging.Hub", """
+            [assembly: System.Reflection.AssemblyVersion("4.0.0.0")]
+            namespace MeshWeaver.Reactive { public static class ParallelReadExtensions { public static int NewInThisBuild() => 1; } }
+            """, References(excluding: "MeshWeaver.Messaging.Hub"));
+        var path = Module("InstallNeedsNewer", """
+            public static class Probe { public static int Go() => MeshWeaver.Reactive.ParallelReadExtensions.NewInThisBuild(); }
+            """, extra: MetadataReference.CreateFromImage(newerHub), excluding: "MeshWeaver.Messaging.Hub");
+
+        Assert.Empty(Shipped(Producer, "Plugin/Type", File.ReadAllBytes(path)));
+    }
+
+    /// <summary>Install time honours Modules:VersionStrictness=Exact like the sweep: the plain floor decline.</summary>
+    [Fact]
+    public void InstallTime_UnderExact_ANewerPatchBundle_IsDeclinedWhole()
+    {
+        var path = Module("InstallExact", "public static class Probe { }");
+        var builds = MeshWeaver.PluginCatalog.PluginBundleClient.ShippedBuildsOf(
+            (ManifestOf(Producer), [new MeshWeaver.Plugin.Packaging.BundleReader.Payload("Plugin/Type", File.ReadAllBytes(path), null)]),
+            "test-origin", null, Key, Running, exact: true);
+        Assert.Empty(builds);
+    }
+
+    /// <summary>Install time: another key is still declined whole, newer producer or not.</summary>
+    [Fact]
+    public void InstallTime_ADifferentKey_IsStillDeclinedWhole()
+    {
+        var path = Module("InstallOtherKey", "public static class Probe { }");
+        Assert.Empty(Shipped(Producer, "Plugin/Type", File.ReadAllBytes(path), key: "c003e001"));
+    }
+
+    /// <summary>Sealed publication: a newer-patch producer under this key stays sealed (adoption measures per type).</summary>
+    [Fact]
+    public void TheLadder_NoLongerHoldsANewerPatchPublication_ButExactStill_Does()
+    {
+        var source = new SealedSource("plugins", "Systemorph/MeshWeaver.Plugins", "abc12345", true, null)
+        {
+            ProducerPlatformVersion = Producer,
+        };
+
+        var tolerant = SealedPublicationIndex.ApplyLadder(source, Running);
+        Assert.True(tolerant.IsSealed);
+        Assert.False(tolerant.HeldForNewerPlatform);
+
+        var exact = SealedPublicationIndex.ApplyLadder(source, Running, exact: true);
+        Assert.False(exact.IsSealed);
+        Assert.True(exact.HeldForNewerPlatform);
+    }
+
     private static System.Collections.Generic.List<MetadataReference> References(string? excluding = null) =>
         [.. CompileReferences.Default.Where(r => r.Display is { } p && p.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(Path.GetFileNameWithoutExtension(p), excluding, StringComparison.OrdinalIgnoreCase))];
