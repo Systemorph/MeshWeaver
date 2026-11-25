@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.PluginCatalog.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Updates.Test" />
     <!-- The install/composition tests that exercise serveFromPartition moved to
          MeshWeaver.AI.Test (#2276) — that capability exists only on AI's node types. They are
          WHITE-BOX tests of this catalog (RunDefaultInstall, Parse, ExcludedBy are internal), so
