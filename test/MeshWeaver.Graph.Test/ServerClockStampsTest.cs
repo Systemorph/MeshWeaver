@@ -73,7 +73,7 @@ public class ServerClockStampsTest(ITestOutputHelper output) : MonolithMeshTestB
         var delivery = await ObserveNodeOperation(new CreateNodesRequest(batch)).FirstAsync()
             .Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
 
-        delivery.Message.Success.Should().BeTrue(delivery.Message.Error?.ToString());
+        delivery.Message.Success.Should().BeTrue(delivery.Message.Error?.ToString() ?? "");
         foreach (var n in delivery.Message.Created)
         {
             n.CreatedDate.Should().BeAfter(before);
@@ -152,7 +152,7 @@ public class ServerClockStampsTest(ITestOutputHelper output) : MonolithMeshTestB
             .RunAsSystem(() => ObserveNodeOperation(new CreateNodeRequest(Page(NewId(), TestPartition, true))))
             .FirstAsync().Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
 
-        delivery.Message.Success.Should().BeTrue(delivery.Message.Error?.ToString());
+        delivery.Message.Success.Should().BeTrue(delivery.Message.Error?.ToString() ?? "");
         delivery.Message.Node!.CreatedDate.Should().Be(Backdated);
         delivery.Message.Node.LastModified.Should().Be(Backdated);
     }
