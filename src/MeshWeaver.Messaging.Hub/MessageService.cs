@@ -1317,6 +1317,13 @@ public class MessageService : IMessageService
     internal int DrainsInFlight => Volatile.Read(ref drainsInFlight);
 
     /// <summary>
+    /// Drains that have begun running, ever. Monotonic. Read by the disposal stall detector: a
+    /// change since its last look means a NEW drain started in the window — the pump is cycling,
+    /// not stuck (#6156).
+    /// </summary>
+    internal long DrainsStartedCount => Interlocked.Read(ref drainsStarted);
+
+    /// <summary>
     /// Drains handed to the turn scheduler, minus drains that actually began. Positive means the
     /// scheduler ACCEPTED work and has not run it — the hub is waiting on a thread it will not get
     /// until that scheduler services its queue. Zero, with the drain flag latched and nothing in
