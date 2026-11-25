@@ -462,6 +462,33 @@ public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
+    /// 🚨 The agent-filed <c>Feedback/Feedback</c> defect: an agent created
+    /// <c>{user}/Feedback/&lt;slug&gt;</c> with <c>"$type":"MarkdownContent"</c> and the verb answered
+    /// <c>Created:</c> because MarkdownContent RESOLVES (a "different record"). About 235 nodes were
+    /// stored that read as no feedback record, so their hand-over never ran and nothing said so. The
+    /// verb now refuses it, by name, before the write; the declared shape still lands (control below).
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task McpCreate_WithMarkdownContentOnATypeThatDeclaresAnotherRecord_IsRefusedBeforeTheWrite()
+    {
+        var id = NewId();
+
+        var refused = await new MeshOperations(Mesh)
+            .Create(NodeJson(id, """{"$type":"MarkdownContent","content":"## The finding\n\nprose"}"""))
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"create answered: {refused}");
+        refused.Should().StartWith("Error: refused create")
+            .And.Contain("MarkdownContent").And.Contain(nameof(SchemaGuardedContent))
+            .And.Contain("Nothing was written");
+
+        var landed = await new MeshOperations(Mesh)
+            .Create(NodeJson(NewId(), $$"""{"$type":"{{nameof(SchemaGuardedContent)}}","label":"ok"}"""))
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+        landed.Should().StartWith("Created:", "the declared record is the control: the refusal is about the fallback, not creates");
+    }
+
+    /// <summary>
     /// The reverse direction from the same incident: the RIGHT shape plus a member the bound type
     /// does not declare (<c>description</c>) was created and the member silently dropped. Patch and
     /// Update already refuse that; Create now does too, naming the member.
