@@ -1522,18 +1522,22 @@ public static class MeshExtensions
                             var newNode = node with
                             {
                                 State = MeshNodeState.Active,
-                                CreatedDate = node.CreatedDate == default
-                                    ? now
-                                    : MeshNode.StorageStable(node.CreatedDate),
+                                // 🚨 The instant is the OWNER's clock for a person or service —
+                                // a carried value is honoured only for the platform (import,
+                                // repair) and for a relocation, whose stamps are the STORED
+                                // source's (authorshipSource), never the message's.
+                                CreatedDate = authorshipSource is { } fromCD
+                                    ? (fromCD.CreatedDate == default ? now : MeshNode.StorageStable(fromCD.CreatedDate))
+                                    : RequestIdentity.Moment(node.CreatedDate, identity, now),
                                 // A person or service never records somebody else as the author;
                                 // only the platform (an import, a repair) preserves a carried stamp,
                                 // and a relocation carries its STORED source's (AuthorshipFrom).
                                 CreatedBy = authorshipSource is { } fromC
                                     ? fromC.CreatedBy
                                     : RequestIdentity.Author(node.CreatedBy, identity),
-                                LastModified = node.LastModified == default
-                                    ? now
-                                    : MeshNode.StorageStable(node.LastModified),
+                                LastModified = authorshipSource is { } fromLM
+                                    ? (fromLM.LastModified == default ? now : MeshNode.StorageStable(fromLM.LastModified))
+                                    : RequestIdentity.Moment(node.LastModified, identity, now),
                                 LastModifiedBy = authorshipSource is { } fromM
                                     ? fromM.LastModifiedBy
                                     : RequestIdentity.Author(node.LastModifiedBy, identity),
@@ -2693,13 +2697,9 @@ public static class MeshExtensions
                             var stamped = toCreate.Select(n => n with
                             {
                                 State = MeshNodeState.Active,
-                                CreatedDate = n.CreatedDate == default
-                                    ? now
-                                    : MeshNode.StorageStable(n.CreatedDate),
+                                CreatedDate = RequestIdentity.Moment(n.CreatedDate, capturedBy, now),
                                 CreatedBy = RequestIdentity.Author(n.CreatedBy, capturedBy),
-                                LastModified = n.LastModified == default
-                                    ? now
-                                    : MeshNode.StorageStable(n.LastModified),
+                                LastModified = RequestIdentity.Moment(n.LastModified, capturedBy, now),
                                 LastModifiedBy = RequestIdentity.Author(n.LastModifiedBy, capturedBy),
                                 Version = n.Version > 0 ? n.Version : 1,
                             }).ToImmutableList();
