@@ -13,4 +13,27 @@ public interface IDisposalDrainScheduler
 {
     /// <summary>The scheduler teardown drains run on.</summary>
     TaskScheduler Scheduler { get; }
+
+    /// <summary>
+    /// A drain is about to be queued on the lane for <paramref name="hubAddress"/>. A lane that is
+    /// saturated says so here (a Warning naming the turns holding its threads), so a stall is
+    /// visible at the moment it forms instead of surfacing eight seconds later as a verdict.
+    /// </summary>
+    void NoteQueued(string hubAddress)
+    {
+    }
+
+    /// <summary>
+    /// Registers a drain that is RUNNING on the lane, with a reader for the turn it is executing, so a
+    /// saturated lane can name what holds its threads. Dispose the result when the drain ends.
+    /// </summary>
+    IDisposable TrackDrain(string hubAddress, Func<string?> currentTurn) => NoDrain.Instance;
+
+    private sealed class NoDrain : IDisposable
+    {
+        public static readonly NoDrain Instance = new();
+        public void Dispose()
+        {
+        }
+    }
 }

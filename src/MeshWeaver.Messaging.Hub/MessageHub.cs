@@ -3557,14 +3557,14 @@ public sealed class MessageHub : IMessageHub
                 "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
                 + "(last progress: {LastProgress}). RunLevel={RunLevel}, queue depth {Depth}. "
                 + "THE PUMP IS NOT TURNING: the drain flag is latched, drainsInFlight={DrainsInFlight}, "
-                + "drainsAwaitingScheduler={DrainsAwaiting}, and NO turn was dequeued in that window "
+                + "drainsAwaitingScheduler={DrainsAwaiting} on {DrainScheduler}, and NO turn was dequeued in that window "
                 + "({Dequeued} dequeued in total since Dispose()). The queued work — the "
                 + "ShutdownRequest included — has therefore never been handed to a handler, so this "
                 + "stall is in THIS hub's turn scheduling and NOT in a hosted hub or a join. "
                 + "MECHANISM: {Mechanism}. Disposal is NOT forced.\n{Diagnostics}",
                 Address, DisposalWatchdogTimeout, lastProgress, RunLevel, pumpView.Buffer,
-                pumpView.DrainsInFlight, drainsAwaiting, dequeued - disposalDequeuedBaseline,
-                mechanism, DescribeWedge());
+                pumpView.DrainsInFlight, drainsAwaiting, pump.DrainSchedulerName,
+                dequeued - disposalDequeuedBaseline, mechanism, DescribeWedge());
             return;
         }
 
