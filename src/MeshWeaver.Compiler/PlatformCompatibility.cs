@@ -286,6 +286,24 @@ public static class PlatformCompatibility
     }
 
     /// <summary>
+    /// True when the ONLY thing standing between these bytes and this process is the FLOOR: same
+    /// compatibility key (same major, same epoch), the running build is inside the declared
+    /// ceiling, and the producing build is newer than the running one. This is the case where the
+    /// stamped floor ("the build that produced it") over-states what the bytes need - a follower on
+    /// the stable build of a line meets every bundle the line's canary produced - and where the
+    /// adoption policy may replace the version comparison by a MEASUREMENT of the bytes' real
+    /// requirement (the member-level link check). A key mismatch, a ceiling breach or an
+    /// unreadable version is NOT floor-only and keeps declining.
+    /// </summary>
+    public static bool IsFloorOnlyDecline(
+        string? producedKey, string? floorPlatformVersion, string? ceilingPlatformVersion,
+        string liveKey, string? livePlatformVersion)
+        => !string.IsNullOrEmpty(producedKey)
+           && string.Equals(producedKey, liveKey, StringComparison.Ordinal)
+           && ProducerIsNewer(floorPlatformVersion, livePlatformVersion)
+           && !ProducerIsNewer(livePlatformVersion, ceilingPlatformVersion);
+
+    /// <summary>
     /// The FLOOR half of <see cref="DeclineReason(string?, string?, string?, string, string?)"/>: true only when BOTH versions are readable and
     /// the producer is strictly newer. Comparable means both carry a run ordinal (two continuous
     /// builds) or neither does (two releases); a release against a continuous build is not ordered
