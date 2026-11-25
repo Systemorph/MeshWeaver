@@ -1738,7 +1738,8 @@ public static class ShippedPrebuiltBundles
                             ? n : a.NodePath;
                         var link = ModulePlatformLink.Check(
                             a.Assembly, moduleName, closure ?? ImmutableHashSet<string>.Empty,
-                            context!.Surface.Value);
+                            context!.Surface.Value,
+                            PrebuiltAdoptionPolicy.LinkOptionsFor(decision));
                         var verdict = PrebuiltAdoptionPolicy.AfterLink(decision!, link, context.Live);
                         if (verdict.Verdict == AdoptionVerdict.Refuse)
                         {
@@ -1780,7 +1781,11 @@ public static class ShippedPrebuiltBundles
                             // the owner's arriving-vs-moved distinction.
                             a.SourcePaths,
                             a.SourceIncludes,
-                            producerPlatformVersion,
+                            // A floor crossed on the strength of the measured link check is stamped
+                            // with the RUNNING build: the bytes were verified to bind HERE, and the
+                            // producer's newer build would make the ladder (OwnedByANewerPlatformBuild)
+                            // yield the record to a replica that does not exist.
+                            PrebuiltAdoptionPolicy.StampedPlatformVersion(decision, context?.Live.PlatformVersion, producerPlatformVersion),
                             platformCeiling)
                         .Take(1)
                         .Timeout(SeedBudget)
