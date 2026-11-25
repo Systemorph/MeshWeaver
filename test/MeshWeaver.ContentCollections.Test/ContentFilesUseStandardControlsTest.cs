@@ -129,6 +129,8 @@ public class ContentFilesUseStandardControlsTest : HubTestBase
         var src = embed.Src.ToString()!;
         (embed.Kind?.ToString()).Should().Be(EmbedKind.Document);
         embed.Title.ToString().Should().Be("annual report.pdf");
+        embed.Height.Should().NotBeNull();
+        embed.Height!.ToString().Should().Be("85vh", "a PDF reader fits the screen; the 600px default filled half of a tall one");
         src.Should().Contain("annual%20report.pdf", "the user-supplied name is URL-encoded");
         EmbedSources.SafeSrc(src, EmbedKind.Document).Should().Be(src,
             "the content route is a relative portal address, which a renderer frames");
