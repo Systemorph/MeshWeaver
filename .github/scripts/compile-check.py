@@ -1650,6 +1650,17 @@ def set_key(sources, lam, ref_xml: str, impl_frameworks: bool, refs_digest: str,
     return verdict_key(unit, csproj, refs_digest, toolchain, ai_available, impl_frameworks)
 
 
+def _remove_work_dir(work: Path) -> None:
+    """Remove one work directory; a failure is NAMED on stderr, never swallowed."""
+    def warn(_fn, path, exc):
+        print(f"  warning: could not remove compile-check work directory {path}: "
+              f"{exc if isinstance(exc, BaseException) else exc[1]}", file=sys.stderr)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(work, onexc=warn)
+    else:
+        shutil.rmtree(work, onerror=warn)
+
+
 def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: bool, workers: int,
                  cache: "Path | None" = None, refs_digest: str = "", toolchain: str = "",
                  stats: "dict | None" = None, cache_write: bool = False, trusted: "list | None" = None,
@@ -1729,7 +1740,9 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
                 yield item, outcome, seconds
     finally:
         for work in made:
-            shutil.rmtree(work, ignore_errors=True)
+            # Never silent: a directory that survives (a file still held by a dead child, a permission
+            # error) is NAMED, so a recurring leak stays visible instead of re-accumulating unseen.
+            _remove_work_dir(work)
 
 
 # ── diagnostics classification ─────────────────────────────────────────────────────────────────
@@ -2347,7 +2360,10 @@ def _self_test_no_temp_leak(failures: list) -> None:
     real, real_restore = compile_set, restore_dir
     ordered = [((frozenset(), str(i)), [f"Pkg/T{i}"]) for i in range(4)]
 
+    minted = []
+
     def ok_restore(work, ref_xml, impl_frameworks):
+        minted.append(work)
         (work / "obj").mkdir()
         (work / "obj" / "x.bin").write_bytes(b"x" * 16)
         return None
@@ -2359,14 +2375,18 @@ def _self_test_no_temp_leak(failures: list) -> None:
         raise RuntimeError("build blew up")
 
     def bad_restore(work, ref_xml, impl_frameworks):
+        minted.append(work)
         raise RuntimeError("restore blew up")
 
     def run(build, restore, how):
+        """(directories left behind, directories minted, whether a RuntimeError escaped)."""
+        global compile_set, restore_dir
         with tempfile.TemporaryDirectory() as sandbox:
             saved = tempfile.tempdir
             tempfile.tempdir = sandbox
             compile_set, restore_dir = build, restore
-            made = 0
+            minted.clear()
+            raised = False
             try:
                 gen = compile_sets(ordered, "", True, False, 2)
                 try:
@@ -2376,19 +2396,25 @@ def _self_test_no_temp_leak(failures: list) -> None:
                     else:
                         list(gen)
                 except RuntimeError:
-                    pass
-                made = len(list(Path(sandbox).iterdir()))
+                    raised = True
+                left = len(list(Path(sandbox).iterdir()))
             finally:
                 tempfile.tempdir = saved
                 compile_set, restore_dir = real, real_restore
-            return made
+            return left, len(minted), raised
 
-    for label, build, restore, how in (
-            ("a successful run", ok_build, ok_restore, "all"),
-            ("a build that raises", bad_build, ok_restore, "all"),
-            ("a restore that raises", ok_build, bad_restore, "all"),
-            ("an abandoned generator", ok_build, ok_restore, "abandon")):
-        left = run(build, restore, how)
+    for label, build, restore, how, must_raise in (
+            ("a successful run", ok_build, ok_restore, "all", False),
+            ("a build that raises", bad_build, ok_restore, "all", True),
+            ("a restore that raises", ok_build, bad_restore, "all", True),
+            ("an abandoned generator", ok_build, ok_restore, "abandon", False)):
+        left, made, raised = run(build, restore, how)
+        # The case must have EXERCISED the cleanup: directories were minted, and the raising cases
+        # really raised - otherwise "nothing left" would pass over a run that tested nothing.
+        if made == 0:
+            failures.append(f"  temp leak: {label} minted no work directory - the case exercised nothing")
+        if raised != must_raise:
+            failures.append(f"  temp leak: {label} {'did not raise' if must_raise else 'raised'} as the case requires")
         if left:
             failures.append(f"  temp leak: {label} left {left} work director(y/ies) behind")
     if not any("temp leak" in f for f in failures):
