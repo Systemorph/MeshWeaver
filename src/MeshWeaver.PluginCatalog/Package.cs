@@ -580,6 +580,21 @@ public record PackageManifest
     public ImmutableSortedSet<string>? WithheldFiles { get; init; }
 
     /// <summary>
+    /// 🚨 The declared files the install SKIPPED because the parser their type needs is not
+    /// registered on the host that ran it (a <c>nodeType: Skill</c>/<c>Agent</c> file, whose parser
+    /// the AI module contributes, on a host where that module has not landed yet). Unlike
+    /// <see cref="UnreadableFiles"/> this is NOT a packaging defect: the very same bytes install
+    /// cleanly the moment the parser is registered, so a record carrying any such file is PARTIAL —
+    /// the next install pass retries the package in full once the parser is available
+    /// (<c>PackageInstaller.OwesParserRetry</c>), and the completeness sweep neither reports these
+    /// as absent nor as unreadable but under their own sentence.
+    ///
+    /// <para>Recorded by the writer, merged like <see cref="UnreadableFiles"/>. <c>null</c> on a
+    /// record that never skipped one.</para>
+    /// </summary>
+    public ImmutableSortedSet<string>? PendingParserFiles { get; init; }
+
+    /// <summary>
     /// Opt IN to unattended updates for this installed package: when the source repo's CI goes
     /// green and this module's content hash actually moved, install the delta without waiting for
     /// a human to click Update. Unset — the platform default — the record stays on the reminder

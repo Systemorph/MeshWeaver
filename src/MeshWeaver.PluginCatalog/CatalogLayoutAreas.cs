@@ -927,6 +927,25 @@ public static partial class CatalogLayoutAreas
                     return Full();
                 }
 
+                // 🚨 A PARTIAL record: an earlier install skipped files for want of a parser that
+                // was not registered on that host (the AI module had not landed). The record is
+                // stamped, so the hash-equal exit below would serve it as current forever; once the
+                // parser IS registered a full install completes it. While it is still absent a retry
+                // would skip the same files again, so the normal path runs and the record stays
+                // partial (and says so).
+                if (record is not null
+                    && PackageInstaller.OwesParserRetry(record, new FileFormatParserRegistry(
+                        hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>())))
+                {
+                    logger?.LogInformation(
+                        "Package {Id}: its install record is PARTIAL — {Count} file(s) were skipped "
+                        + "because their parser was not registered then ({Files}) — and the parser is "
+                        + "registered now. Installing in FULL to complete it.",
+                        pkg.Id, record.PendingParserFiles!.Count,
+                        string.Join(", ", record.PendingParserFiles!.Take(5)));
+                    return Full();
+                }
+
                 if (record is not null
                     && string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
                 {
