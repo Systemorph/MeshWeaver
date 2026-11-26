@@ -104,6 +104,17 @@ public class ImageCanvasControlTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [Fact]
+    public void Normalize_ACornerDragMovesTwoEdges_BothGiveWay()
+    {
+        // The top-left corner dragged past the bottom-right one: on BOTH axes the dragged edge
+        // stops at the opposite one, and the opposite trims keep their values.
+        new ImageCanvasCrop(300, 250, 150, 100, 400, 300).Normalize(ImageCanvasEdge.Top, ImageCanvasEdge.Left)
+            .Should().Be(new ImageCanvasCrop(249, 199, 150, 100, 400, 300));
+        new ImageCanvasCrop(300, 0, 150, 0, 400, 300).Normalize("NotAnEdge")
+            .Should().Be(new ImageCanvasCrop(300, 0, 99, 0, 400, 300), "an unknown value is no moving edge");
+    }
+
+    [Fact]
     public void Normalize_ADegenerateExtentIsTreatedAsOneUnit()
     {
         new ImageCanvasCrop(5, 5, 5, 5, 0, -3).Normalize()

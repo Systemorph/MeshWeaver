@@ -93,19 +93,19 @@ public record ImageCanvasCrop(int Left, int Top, int Right, int Bottom, int Widt
     /// <summary>
     /// The ONE geometry rule every renderer applies before writing a crop back, so the four
     /// trims always describe a real region: each trim is clamped to <c>[0, extent − 1]</c>, and
-    /// when the two trims of an axis would leave less than one unit, the trim on the
+    /// when the two trims of an axis would leave less than one unit, the trim on a
     /// <paramref name="moving"/> edge gives way (the edge the viewer is dragging stops at the other
-    /// one instead of pushing it). A <paramref name="moving"/> of <c>null</c> (a whole-frame move,
-    /// or normalising stored values) gives way on the right and bottom.
+    /// one instead of pushing it). A corner drag moves two edges at once (e.g. Top and Left). With
+    /// no moving edge (normalising stored values) the right and bottom trims give way.
     /// </summary>
-    /// <param name="moving">The edge being dragged — one of <see cref="ImageCanvasEdge"/> — or null.</param>
+    /// <param name="moving">The edges being dragged — values of <see cref="ImageCanvasEdge"/>; unknown values are ignored.</param>
     /// <returns>The normalised crop.</returns>
-    public ImageCanvasCrop Normalize(string? moving = null)
+    public ImageCanvasCrop Normalize(params string[] moving)
     {
         var w = Math.Max(1, Width);
         var h = Math.Max(1, Height);
-        var (left, right) = Axis(Left, Right, w, moving is ImageCanvasEdge.Left);
-        var (top, bottom) = Axis(Top, Bottom, h, moving is ImageCanvasEdge.Top);
+        var (left, right) = Axis(Left, Right, w, moving.Contains(ImageCanvasEdge.Left));
+        var (top, bottom) = Axis(Top, Bottom, h, moving.Contains(ImageCanvasEdge.Top));
         return this with { Left = left, Top = top, Right = right, Bottom = bottom, Width = w, Height = h };
     }
 

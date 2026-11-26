@@ -178,7 +178,8 @@ The trims are in **model units** — the picture's full extent is `ModelWidth ×
 (typically the source image's pixels), whatever size it is drawn at — and each is the amount
 removed from that edge. Before writing, a renderer applies `ImageCanvasCrop.Normalize`: trims are
 clamped so at least one unit remains, and the edge being dragged stops at the opposite one instead
-of pushing it.
+of pushing it. A corner moves two edges at once and passes both
+(`Normalize(ImageCanvasEdge.Top, ImageCanvasEdge.Left)`).
 
 ```csharp --render InputImageCanvas --show-code
 Controls.Stack
