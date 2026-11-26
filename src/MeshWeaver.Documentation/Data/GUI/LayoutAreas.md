@@ -294,6 +294,22 @@ the page in the middle of a wide window with empty bands on both sides.
 
 # Common Patterns
 
+## Filling the height of the page
+
+A top-level area is given the full height of the page: the area's root control (typically a `Controls.Stack`) is stretched to it, and the page scrolls when the content is taller. The stack does **not** stretch its children: a heading, a form and a button keep their natural height, so short content stays short at the top instead of being spread out.
+
+A child that should take the screen asks for it, and it then shares the stack's height with its siblings:
+
+```csharp
+Controls.Stack
+    .WithView(Controls.H2("Report"))
+    .WithView(Controls.Embed(url, "Report"))   // a framed document: 85vh by default, never a fixed 600px
+    .WithView(Controls.Button("Apply"))
+```
+
+- A framed document or app (`Controls.Embed`) defaults to `85vh`, so it fits any screen; pass `.WithHeight("...")` for another length.
+- Any other control takes the rest of the stack with `.WithHeight("100%")`: the heading and the button keep their space and the control gets what is left.
+
 ## Splitter with Nav Menu and Content Pane
 
 A horizontal splitter with a collapsible left navigation and a fluid content area — used by NodeType and Code nodes:
