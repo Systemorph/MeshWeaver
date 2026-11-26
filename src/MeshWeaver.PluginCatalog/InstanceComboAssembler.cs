@@ -287,11 +287,22 @@ public sealed class InstanceComboAssembler
                         requireMatch: false);
                 if (recordedModuleVersion is not null)
                     // No exact GIT ref, but the record claims an exact IDENTITY (a content hash
-                    // over the module's own files). Fetch the best movable ref — the recorded
-                    // ref, else the node repos' per-module release tag ({Module}/vX.Y.Z), else
-                    // HEAD — and PROVE the tree against the recorded hash.
+                    // over the module's own files). Fetch the best movable ref — the node repos'
+                    // per-module release tag ({Module}/vX.Y.Z) when a version is recorded, else
+                    // the recorded ref, else HEAD — and PROVE the tree against the recorded hash.
+                    // An exact commit in installedRef never reaches here: the branches above
+                    // return it first, so installedRef is movable (HEAD, a branch) on this path.
+                    // 🚨 The release tag wins over a recorded MOVABLE ref (MeshWeaver#4413): a record
+                    // written before the commit was recorded carries installedFromRef "HEAD" — a
+                    // ref that has moved on since — and `installedRef ?? tag` let that "HEAD"
+                    // shadow the release tag that names the installed bytes, so every package
+                    // that had not updated since (Chess, QualityTime, RolePlay on control: the
+                    // tag's manifest.lock carries EXACTLY the recorded moduleVersion) failed the
+                    // proof against a newer HEAD and dragged the whole combo to NotVerifiable.
                     return PackagePlan(packageRepo,
-                        installedRef ?? (version is not null ? $"{folder}/v{version}" : "HEAD"),
+                        version is not null
+                            ? $"{folder}/v{version}"
+                            : installedRef ?? "HEAD",
                         MaterializationPin.VerifiedModuleVersion, requireMatch: true);
                 if (options.AllowMoving)
                     return PackagePlan(packageRepo, installedRef ?? version ?? "HEAD",
