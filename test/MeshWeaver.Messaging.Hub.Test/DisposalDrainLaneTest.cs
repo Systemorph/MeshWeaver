@@ -177,7 +177,7 @@ public class DisposalDrainLaneTest : HubTestBase
     public void ABurstFillingTheLane_IsReportedAsAbsorbed_NotAsAWarning()
     {
         var sink = new CapturingLoggerFactory();
-        using var lane = new DisposalDrainLane(sink);
+        using var lane = new DisposalDrainLane(sink, stuckAfter: TimeSpan.FromHours(1), sustainedAfter: TimeSpan.FromHours(1));
         var tracked = Enumerable.Range(0, DisposalDrainLane.MaxThreads)
             .Select(i => lane.TrackDrain("sync/burst-" + i, () => "ShutdownRequest")).ToArray();
 
@@ -189,12 +189,37 @@ public class DisposalDrainLaneTest : HubTestBase
             .Which.Should().Contain("sync/waiting").And.Contain("burst absorbed").And.Contain("sync/burst-0");
     }
 
+    /// <summary>
+    /// Churn: every drain is young, but the lane stays full past the sustained threshold. That is
+    /// reported as stuck too — Information is the ceiling only for a burst that ends.
+    /// </summary>
+    [Fact]
+    public void ALaneThatStaysFull_IsEscalatedToAWarning_EvenWhenEveryDrainIsYoung()
+    {
+        var sink = new CapturingLoggerFactory();
+        using var lane = new DisposalDrainLane(sink, stuckAfter: TimeSpan.FromHours(1),
+            sustainedAfter: TimeSpan.FromMilliseconds(150));
+        var first = Enumerable.Range(0, DisposalDrainLane.MaxThreads)
+            .Select(i => lane.TrackDrain("sync/a-" + i, () => "ShutdownRequest")).ToArray();
+        lane.NoteQueued("sync/first");
+        SpinWait.SpinUntil(() => false, TimeSpan.FromMilliseconds(300));
+        // The earlier drains finished and fresh ones took their threads: no holder is old.
+        foreach (var t in first) t.Dispose();
+        var second = Enumerable.Range(0, DisposalDrainLane.MaxThreads)
+            .Select(i => lane.TrackDrain("sync/b-" + i, () => "ShutdownRequest")).ToArray();
+        lane.NoteQueued("sync/second");
+        foreach (var t in second) t.Dispose();
+
+        sink.Informations.Should().ContainSingle().Which.Should().Contain("sync/first");
+        sink.Warnings.Should().ContainSingle().Which.Should().Contain("sync/second").And.Contain("stuck");
+    }
+
     /// <summary>The two levels are throttled separately: a burst must not hide a stuck lane.</summary>
     [Fact]
     public void ABurstReport_DoesNotSuppressALaterStuckWarning()
     {
         var sink = new CapturingLoggerFactory();
-        using var lane = new DisposalDrainLane(sink, stuckAfter: TimeSpan.FromMilliseconds(150));
+        using var lane = new DisposalDrainLane(sink, stuckAfter: TimeSpan.FromMilliseconds(150), sustainedAfter: TimeSpan.FromHours(1));
         var tracked = Enumerable.Range(0, DisposalDrainLane.MaxThreads)
             .Select(i => lane.TrackDrain("sync/h-" + i, () => "ShutdownRequest")).ToArray();
 

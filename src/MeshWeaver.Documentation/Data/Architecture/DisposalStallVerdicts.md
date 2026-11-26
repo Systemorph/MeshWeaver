@@ -318,8 +318,8 @@ with a parent disposing every hosted child in one call (`HostedHubsCollection.Di
 module container ending during a package uninstall at 20:21:54Z: hundreds of `RunLevel=DisposeHostedHubs`
 rejections in the same second). The lane is the bound on that burst, and the burst drains in milliseconds.
 So the lane now reports by what distinguishes the two cases, the age of the oldest holder:
-`[DISPOSAL-LANE] stuck` (Warning, oldest holder past `DisposalDrainLane.DefaultStuckAfter`, 1 s — a turn is
-blocking) versus `[DISPOSAL-LANE] burst absorbed` (Information, with the oldest holder's age, so bursts stay
+`[DISPOSAL-LANE] stuck (saturated)` (Warning: oldest holder past `DisposalDrainLane.DefaultStuckAfter`, 1 s — a turn is
+blocking — or the lane continuously full past `DefaultSustainedAfter`, 30 s — churn) versus `[DISPOSAL-LANE] burst absorbed (saturated)` (Information, with the oldest holder's age, so bursts stay
 countable). Read a `stuck` line as the original defect; read `burst absorbed` as the cap working.
 
 ### A running drain also has to return its worker

@@ -39,6 +39,9 @@ public sealed class DisposalDrainLane : IDisposalDrainScheduler, IDisposable
     /// <summary>How long the oldest holder may have been in its drain before a full lane is reported as stuck.</summary>
     public static readonly TimeSpan DefaultStuckAfter = TimeSpan.FromSeconds(1);
 
+    /// <summary>How long the lane may stay continuously full, however short each drain, before it is reported as stuck.</summary>
+    public static readonly TimeSpan DefaultSustainedAfter = TimeSpan.FromSeconds(30);
+
     private static readonly TimeSpan WarnEvery = TimeSpan.FromSeconds(5);
 
     private readonly LimitedConcurrencyLevelTaskScheduler scheduler = new(MaxThreads, ThreadName);
@@ -47,6 +50,8 @@ public sealed class DisposalDrainLane : IDisposalDrainScheduler, IDisposable
     private long nextId;
     private long lastWarnedTicks;
     private long lastNotedTicks;
+    private long fullSinceTicks;
+    private long lastFullTicks;
 
     /// <summary>
     /// Creates the lane; the logger, when resolvable, receives the saturation reports.
@@ -54,11 +59,18 @@ public sealed class DisposalDrainLane : IDisposalDrainScheduler, IDisposable
     /// <param name="loggerFactory">Source of the lane's logger.</param>
     /// <param name="stuckAfter">Age of the oldest holder at which a full lane is reported as stuck
     /// (Warning) rather than as an absorbed burst (Information); <see cref="DefaultStuckAfter"/> when null.</param>
-    public DisposalDrainLane(ILoggerFactory? loggerFactory = null, TimeSpan? stuckAfter = null)
+    /// <param name="sustainedAfter">How long the lane may stay continuously full (each drain short, the queue
+    /// never empty) before that too is reported as stuck; <see cref="DefaultSustainedAfter"/> when null.</param>
+    public DisposalDrainLane(ILoggerFactory? loggerFactory = null, TimeSpan? stuckAfter = null,
+        TimeSpan? sustainedAfter = null)
     {
         logger = loggerFactory?.CreateLogger(nameof(DisposalDrainLane));
         StuckAfter = stuckAfter ?? DefaultStuckAfter;
+        SustainedAfter = sustainedAfter ?? DefaultSustainedAfter;
     }
+
+    /// <summary>How long continuous saturation counts as stuck even when no single drain is old.</summary>
+    public TimeSpan SustainedAfter { get; }
 
     /// <summary>The age of the oldest holder at which a full lane counts as stuck.</summary>
     public TimeSpan StuckAfter { get; }
@@ -88,7 +100,15 @@ public sealed class DisposalDrainLane : IDisposalDrainScheduler, IDisposable
         if (oldest.Length == 0)
             return;
         var oldestAge = Stopwatch.GetElapsedTime(oldest[0].StartedTicks, now);
-        var stuck = oldestAge >= StuckAfter;
+        // Churn is not a burst: drains that each finish quickly but never let the lane empty are
+        // consecutive saturated observations, no more than a throttle period apart, spanning
+        // SustainedAfter. A gap longer than that means the lane drained in between.
+        var lastFull = Interlocked.Exchange(ref lastFullTicks, now);
+        if (lastFull == 0 || Stopwatch.GetElapsedTime(lastFull, now) > WarnEvery + WarnEvery)
+            Interlocked.Exchange(ref fullSinceTicks, now);
+        var fullFor = Stopwatch.GetElapsedTime(Interlocked.Read(ref fullSinceTicks), now);
+        var sustained = fullFor >= SustainedAfter;
+        var stuck = oldestAge >= StuckAfter || sustained;
         // One throttle per level: an absorbed burst a moment ago must not swallow the report of a
         // stuck lane.
         ref var gate = ref stuck ? ref lastWarnedTicks : ref lastNotedTicks;
@@ -101,13 +121,13 @@ public sealed class DisposalDrainLane : IDisposalDrainScheduler, IDisposable
             + $"{(long)Stopwatch.GetElapsedTime(r.StartedTicks, now).TotalMilliseconds}ms in this drain]"));
         if (stuck)
             logger?.LogWarning(
-                "[DISPOSAL-LANE] stuck: all {Max} lane threads are running drains and the oldest has held its "
-                + "thread for {Age}ms, so the drain for {Hub} waits behind them. A teardown turn that BLOCKS "
+                "[DISPOSAL-LANE] stuck (saturated): all {Max} lane threads are running drains — the oldest has held its "
+                + "thread for {Age}ms, the lane has been full for {FullFor}ms — so the drain for {Hub} waits behind them. A teardown turn that BLOCKS "
                 + "holds its thread — blocking I/O belongs behind IIoPool. Oldest holders: {Holders}",
-                MaxThreads, (long)oldestAge.TotalMilliseconds, hubAddress, holders);
+                MaxThreads, (long)oldestAge.TotalMilliseconds, (long)fullFor.TotalMilliseconds, hubAddress, holders);
         else
             logger?.LogInformation(
-                "[DISPOSAL-LANE] burst absorbed: all {Max} lane threads are running drains (oldest {Age}ms, "
+                "[DISPOSAL-LANE] burst absorbed (saturated): all {Max} lane threads are running drains (oldest {Age}ms, "
                 + "under the {StuckAfter}ms stuck threshold), so the drain for {Hub} waits its turn — a mass "
                 + "teardown draining, not a blocked turn. Oldest holders: {Holders}",
                 MaxThreads, (long)oldestAge.TotalMilliseconds, (long)StuckAfter.TotalMilliseconds, hubAddress, holders);
