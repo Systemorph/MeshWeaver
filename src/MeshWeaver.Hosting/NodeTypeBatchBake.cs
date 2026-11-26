@@ -1221,9 +1221,9 @@ internal static class NodeTypeBatchBake
             return Observable.Return(new PreWarmOutcome(
                 typePath, PreWarmStatus.CompileError,
                 "standing compile failure for the live inputs — not re-attempted: "
-                + (standing.CompilationError is { Length: > 0 } e
-                    ? e.Split('\n')[0]
-                    : "(no error recorded)")));
+                // The recorded diagnostics in full: the gate's verdict must still NAME the genuine
+                // defect, exactly as a fresh compile's would.
+                + (standing.CompilationError is { Length: > 0 } e ? e : "(no error recorded)")));
         }
 
         // PER-COMPILE cost, appended to the per-type line that already exists — no new log volume.
