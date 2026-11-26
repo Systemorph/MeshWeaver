@@ -53,6 +53,8 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
     private int answerFailures;
     private int failRecordingOnce;
     private int failPromoteOnce;
+    private int hideStagedOnce;
+    private string StagedHere(string key) => Path.Combine(moduleRoot, "modules", ".landing-requests", key);
     private int promoteFailures;
     private ModuleLandingService? landing;
     private readonly FakeRegistry registry = new();
@@ -81,6 +83,13 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
                     SpinWait.SpinUntil(() => releaseRemoval == 1, TestTimeouts.Convergence);
                 })
                 {
+                    AfterStagingSeam = key =>
+                    {
+                        // An owner on the OLD major reads the shared root's tree, not this line's: armed once,
+                        // the staged bytes go where it will not look.
+                        if (Interlocked.Exchange(ref hideStagedOnce, 0) == 1 && Directory.Exists(StagedHere(key)))
+                            Directory.Delete(StagedHere(key), recursive: true);
+                    },
                     OwnerPromoteSeam = node =>
                     {
                         if (Interlocked.Exchange(ref failPromoteOnce, 0) != 1)
@@ -255,6 +264,35 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         // The staged bytes are the WRITER's to drop, after its durable barrier — never the owner's
         // after an in-memory commit (#7974 review). This writer died, so they stay.
         Directory.Exists(Landing.StagedLandingDirectory(key)).Should().BeTrue("the owner never drops staged bytes itself");
+    }
+
+    /// <summary>
+    /// 🚨 During a roll between platform majors the install record's owner can be an OLD-major replica that
+    /// reads another module tree and answers "the staged bytes are gone" (pearl, 2026-11-26: every module
+    /// refused, readiness refused on every type that binds one). The writer then lands its own bytes into
+    /// its own tree. Negative control inside the test: with the bytes in place the owner lands them and the
+    /// fallback is never taken.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnOwnerThatCannotFindTheStagedBytes_LeavesTheWriterToLandThemItself()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string module = "Acme.CrossMajor.Module";
+        await WriteRecord("LandCrossMajor", module, ct);
+        Interlocked.Exchange(ref hideStagedOnce, 1);
+        var verdict = await Land(module, "1.0.0", RecordPath("LandCrossMajor"), recordAtPlan: true)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        verdict.Applied.Should().BeTrue(verdict.Detail);
+        var entry = await Entry(module, ct);
+        entry.Should().NotBeNull("the writer landed its own bytes into its own tree");
+        entry!.Enabled.Should().BeTrue();
+
+        const string other = "Acme.SameMajor.Module";
+        await WriteRecord("LandSameMajor", other, ct);
+        var normal = await Land(other, "1.0.0", RecordPath("LandSameMajor"), recordAtPlan: true)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        normal.Applied.Should().BeTrue(normal.Detail);
+        normal.Detail.Should().NotStartWith(ModuleLandingService.StagedBytesGonePrefix);
     }
 
     /// <summary>
