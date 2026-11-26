@@ -83,7 +83,7 @@ public class DividerEmbedAndImageBoundsTest(ITestOutputHelper output) : HubTestB
     [Fact]
     public void Embed_DefaultHeight_IsViewportRelative()
     {
-        EmbedControl.DefaultHeight.Should().EndWith("vh", "a framed document or app fits any screen");
+        EmbedControl.DefaultHeight.Should().Be("85vh", "a framed document or app fits any screen: viewport-relative, with room for the page header");
         Controls.Embed("/api/content/x.pdf", "x.pdf").Height.Should().Be(EmbedControl.DefaultHeight);
     }
 
