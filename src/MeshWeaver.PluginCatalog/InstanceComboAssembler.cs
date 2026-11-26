@@ -290,8 +290,17 @@ public sealed class InstanceComboAssembler
                     // over the module's own files). Fetch the best movable ref — the recorded
                     // ref, else the node repos' per-module release tag ({Module}/vX.Y.Z), else
                     // HEAD — and PROVE the tree against the recorded hash.
+                    // 🚨 The release tag wins over a recorded MOVABLE ref (MeshWeaver#4413): a record
+                    // written before the commit was recorded carries installedFromRef "HEAD" — a
+                    // ref that has moved on since — and `installedRef ?? tag` let that "HEAD"
+                    // shadow the release tag that names the installed bytes, so every package
+                    // that had not updated since (Chess, QualityTime, RolePlay on control: the
+                    // tag's manifest.lock carries EXACTLY the recorded moduleVersion) failed the
+                    // proof against a newer HEAD and dragged the whole combo to NotVerifiable.
                     return PackagePlan(packageRepo,
-                        installedRef ?? (version is not null ? $"{folder}/v{version}" : "HEAD"),
+                        version is not null
+                            ? $"{folder}/v{version}"
+                            : installedRef ?? "HEAD",
                         MaterializationPin.VerifiedModuleVersion, requireMatch: true);
                 if (options.AllowMoving)
                     return PackagePlan(packageRepo, installedRef ?? version ?? "HEAD",
