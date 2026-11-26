@@ -3356,7 +3356,7 @@ internal static class NodeTypeCompilationHelpers
                 var live = System.Collections.Immutable.ImmutableDictionary.ToImmutableDictionary(
                     reads,
                     r => r.Path,
-                    r => r.Outcome.Node is { } n ? NodeTypeDefinition.SourceVersionOf(n) : (long?)null);
+                    r => r.Outcome.Node is { } n ? OwnerVersionAsStored(n) : (long?)null);
                 if (!SnapshotShows(requestedAgainst.CurrentSourceVersions, live))
                     logger?.LogInformation(
                         "[ReleaseRequestWatcher] {HubPath}: the source snapshot is behind the request ({Source}) "
@@ -3387,6 +3387,30 @@ internal static class NodeTypeCompilationHelpers
                     budget);
             });
     }
+
+    /// <summary>
+    /// 🚨 #8413 — the owner's version of a source AS THE DURABLE SNAPSHOT CAN SHOW IT.
+    ///
+    /// <para>The owner's hub holds the node it stamped: <c>NodeUpdatePipeline</c> mints
+    /// <see cref="MeshNode.LastModified"/> from a raw <c>UtcNow</c> (100 ns ticks), while the store
+    /// the source query reads back keeps whole MICROSECONDS (<see cref="MeshNode.StorageStable"/>).
+    /// Compared tick for tick, a source whose hot owner holds <c>…3715</c> against a snapshot built
+    /// from the stored <c>…371</c> is "behind" for as long as that hub lives (nine writes in ten),
+    /// so the wait ran its whole budget and the request compiled as "currency unknown" - measured
+    /// 2026-11-26: 29 / 60 / 194 warnings in 7 days on memex / memex-cloud / build, bursting while a
+    /// person edits and presses Compile, and confirmed against the live nodes (the hub answers
+    /// <c>20:27:30.6323715</c>, the store <c>20:27:30.632371</c>). Both readings are the SAME write;
+    /// this puts the owner's side on the store's grid. A snapshot carrying the full tick (a change
+    /// feed value) is never below its own floor, so it is still accepted.</para>
+    ///
+    /// <para>Only a real timestamp is floored; the <see cref="MeshNode.Version"/> fallback is a
+    /// counter and is returned as is (flooring it would turn 11 into 10).</para>
+    /// </summary>
+    /// <param name="node">The owner's current source node.</param>
+    internal static long OwnerVersionAsStored(MeshNode node) =>
+        node.LastModified.UtcTicks > NodeTypeDefinition.UnknownSourceVersionTicks
+            ? MeshNode.StorageStable(node.LastModified).UtcTicks
+            : node.Version;
 
     /// <summary>The bound itself: the wait for a current snapshot, or — once <paramref name="budget"/>
     /// has passed without one — the fallback that decides against an UNESTABLISHED snapshot.</summary>
@@ -5127,6 +5151,67 @@ internal static class NodeTypeCompilationHelpers
         && !IsUnconvergableSourceFailure(def, nodeTypePath)
         && (string.IsNullOrWhiteSpace(def.FailedPlatformVersion)
             || PlatformCompatibility.ProducerIsNewer(livePlatformVersion, def.FailedPlatformVersion));
+
+    /// <summary>
+    /// 🚨 <b>Is the type's STANDING compile failure still the right answer for the inputs live now?</b>
+    /// The bake-side twin of <see cref="HasStaleFailureVerdict"/> and
+    /// <see cref="HasFailureFromOlderPlatform"/> — true exactly when NEITHER would re-drive it, so the
+    /// batch bake must not compile it again.
+    ///
+    /// <para><b>The storm it ends (MeshWeaver#8529, 328 occurrences on memex-cloud).</b> The batch
+    /// bake classifies every type from the STORE, and <c>CompilationStatus.Error</c> maps to
+    /// <see cref="BakeState.PreviouslyBroken"/> ⇒ needs a bake — on EVERY boot of EVERY pod. Six
+    /// broken user types were therefore re-compiled by every one of the ~58 pods a two-day window of
+    /// rolls started, ~4 minutes and ~2.9 GB of working set per pod, each time producing the identical
+    /// <c>CS0246</c>. The activation path never did this: it stamps what a verdict was formed from
+    /// (<see cref="NodeTypeDefinition.FailedBuildInputs"/>, <see cref="NodeTypeDefinition.FailedPlatformVersion"/>)
+    /// and re-drives ONCE per distinct input set. The bake simply never read the stamp.</para>
+    ///
+    /// <para><b>The rule — memoisation of a deterministic function, not a retry cap.</b> A type that
+    /// failed under EXACTLY these inputs (framework key, installed modules, the source set the compile
+    /// consumed) on this platform build or a newer one fails identically now; compiling again can only
+    /// repeat the measurement. Any of the three moving — a source edit, a module update, a newer
+    /// platform build that may now carry a symbol the source already uses — earns exactly one fresh
+    /// attempt, which re-stamps and so closes the door again.</para>
+    ///
+    /// <para>🚨 <b>Fails open</b>, with ONE deliberate exception. Every uncertainty about the
+    /// VERDICT answers NO (compile): an absent stamp (a failure that predates the field, or one
+    /// baked into a committed file), an <c>Unavailable</c> settle (it formed no verdict), a different
+    /// token, a failure formed on an OLDER ordered platform build. A needless compile costs a
+    /// compile; a latched skip strands a type. The exception is an UNORDERED live build (a local
+    /// <c>-dev</c> source build, an unparseable version): it cannot claim to be newer than anything,
+    /// so the platform half answers "not older" and the type is declined for identical inputs —
+    /// exactly as <see cref="HasFailureFromOlderPlatform"/> already behaves at activation. Source and
+    /// module changes still earn their attempt on such a build; only the "newer build" trigger is
+    /// unavailable to it.</para>
+    /// </summary>
+    /// <param name="def">The type's persisted definition.</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the live inputs.</param>
+    /// <param name="liveSources">The source set this pass resolved FRESH (path → version) — the live
+    /// witness, not the record's own snapshot, which a bake-only pod's sources watcher may not have
+    /// refreshed.</param>
+    /// <param name="livePlatformVersion">This process's platform build, or null when unknown.</param>
+    /// <returns>True when the standing verdict stands and a compile would repeat it.</returns>
+    internal static bool IsStandingFailureCurrent(
+        NodeTypeDefinition def,
+        string? modulesHash,
+        IReadOnlyDictionary<string, long> liveSources,
+        string? livePlatformVersion)
+    {
+        if (def.CompilationStatus is not CompilationStatus.Error
+            || string.IsNullOrEmpty(def.FailedBuildInputs))
+            return false;
+        if (!string.Equals(
+                def.FailedBuildInputs, BuildInputsToken(modulesHash, liveSources), StringComparison.Ordinal))
+            return false;
+        // A failure formed on an older ORDERED build gets its one attempt on the newer one — the
+        // same second trigger the activation re-drive has (an additive platform change moves nothing
+        // in the token). An unordered live build (a local -dev source build) cannot claim to be newer.
+        var formedOnOlderPlatform = IsOrderedPlatformBuild(livePlatformVersion)
+            && (string.IsNullOrWhiteSpace(def.FailedPlatformVersion)
+                || PlatformCompatibility.ProducerIsNewer(livePlatformVersion, def.FailedPlatformVersion));
+        return !formedOnOlderPlatform;
+    }
 
     /// <summary>
     /// The value a FAILURE stamps as <see cref="NodeTypeDefinition.FailedPlatformVersion"/>: the live

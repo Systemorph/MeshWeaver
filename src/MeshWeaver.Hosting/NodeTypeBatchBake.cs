@@ -1194,6 +1194,38 @@ internal static class NodeTypeBatchBake
                 typePath, PreWarmStatus.DeclaredSourcesMissing, detail));
         }
 
+        // 🚨 A STANDING FAILURE THAT HAS ALREADY BEEN MEASURED UNDER THESE INPUTS IS NOT COMPILED
+        // AGAIN (MeshWeaver#8529). The classifier above sends every CompilationStatus.Error to a
+        // bake on every boot — right for the first attempt after a new image, wrong for the fifty-
+        // eighth pod of a roll window recompiling the same six user types for ~4 minutes each. The
+        // failure stamp records what the verdict was formed from; if the live inputs (framework key,
+        // installed modules, THIS pass's freshly resolved sources) equal it and the platform build is
+        // not newer, the compile is a repetition. Nothing is written: the record already says it.
+        if (standing is not null
+            && NodeTypeCompilationHelpers.IsStandingFailureCurrent(
+                standing,
+                mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
+                sources
+                    .Where(n => !string.IsNullOrEmpty(n.Path))
+                    .Aggregate(
+                        System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
+                        (acc, n) => acc.SetItem(n.Path, NodeTypeDefinition.SourceVersionOf(n))),
+                NodeTypeCompilationHelpers.LivePlatformVersion))
+        {
+            logger?.LogInformation(
+                "BatchBake: {TypePath} NOT RE-COMPILED — its standing compile failure was formed under "
+                + "exactly the inputs live now ({Inputs}) on this platform build or a newer one, so a "
+                + "compile would only repeat it. A source edit, a module update or a newer platform "
+                + "build earns a fresh attempt; so does the Compile button.",
+                typePath, standing.FailedBuildInputs);
+            return Observable.Return(new PreWarmOutcome(
+                typePath, PreWarmStatus.CompileError,
+                "standing compile failure for the live inputs — not re-attempted: "
+                // The recorded diagnostics in full: the gate's verdict must still NAME the genuine
+                // defect, exactly as a fresh compile's would.
+                + (standing.CompilationError is { Length: > 0 } e ? e : "(no error recorded)")));
+        }
+
         // PER-COMPILE cost, appended to the per-type line that already exists — no new log volume.
         // This is the measurement that answers "is compilation what eats the memory?" directly rather
         // than by elimination: one linked bake of 279 types left the pod at 2.5 GB, so the fleet is
