@@ -25,6 +25,26 @@ public static class ParserBoundNodeTypes
         nodeType is not null && Types.Contains(nodeType, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// True when <paramref name="registry"/> now carries a parser for EVERY parser-bound type — a
+    /// probe through the registry's own parse path, so it answers by the same mechanism
+    /// <see cref="Describe"/> uses on a real file rather than by a second list of parser types.
+    /// Used to decide whether a package that skipped files for want of a parser can be retried.
+    /// </summary>
+    /// <param name="registry">The parser registry an install would use.</param>
+    public static bool AllParsersRegistered(FileFormatParserRegistry registry)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        foreach (var type in Types)
+        {
+            var probe = registry.TryParse(".md", $"_probe/{type}.md",
+                $"---\nnodeType: {type}\nname: probe\n---\nprobe\n", $"_probe/{type}.md");
+            if (probe is null || Describe($"_probe/{type}.md", probe) is not null)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// A problem line when <paramref name="parsed"/> is a parser-bound type that fell through to the
     /// catch-all markdown parser (its content is still <see cref="MarkdownContent"/>), else null.
     /// </summary>
