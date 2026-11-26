@@ -180,8 +180,12 @@ public static class EmbedSources
 /// <param name="Title">The frame's accessible name (its <c>title</c>), required — a literal or a binding. User-facing: pass a localized string.</param>
 public record EmbedControl(object Src, object Title) : UiControl<EmbedControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
-    /// <summary>The default frame height.</summary>
-    public const string DefaultHeight = "600px";
+    /// <summary>
+    /// The default frame height: viewport-relative, so a framed document or app fits any screen.
+    /// A fixed 600px was half of a tall one; #8564 fixed that for the content PDF reader alone, the
+    /// same default left the node-file PDF reader and every code-defined area that embeds a frame short.
+    /// </summary>
+    public const string DefaultHeight = "85vh";
 
     /// <summary>One of <see cref="EmbedKind"/>; <see cref="EmbedKind.Document"/> by default.</summary>
     public object? Kind { get; init; } = EmbedKind.Document;
