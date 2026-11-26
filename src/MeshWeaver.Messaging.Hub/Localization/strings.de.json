@@ -1882,6 +1882,7 @@
   "activity.import.strandedByNodeType": "⚠ {path}: mit dem NodeType '{nodeType}' geschrieben, den diese Quelle nicht vorab mitliefert und den das Mesh nicht hat. Der Node ist VERWAIST, bis dieser Typ eintrifft — er wird als Unavailable gelesen. Importieren Sie die Quelle, die ihn definiert, oder ändern Sie den Typ des Nodes.",
   "activity.import.keptServerAddition": "↩ {path} beibehalten (auf dem Server hinzugefügt — committen, um es zurückzuspielen).",
   "activity.import.pruned": "🗑 {path} entfernt (nicht mehr im Repository vorhanden).",
+  "activity.import.pruneRefusedBound": "⛔ In {partition} wurde nichts entfernt: Das Entfernen hätte mehr als den erlaubten Anteil der Partition auf einmal gelöscht — das ist eine Fehleinschätzung, kein Abgleich.",
   "activity.import.pruneRefusedIncompleteListing": "⛔ In {partition} wurde nichts entfernt: Die QUELL-Auflistung kam UNVOLLSTÄNDIG zurück (der Repository-Baum wurde abgeschnitten) — ein dort fehlender Node ist eine ungelesene Datei, keine gelöschte. Alles Gelesene wurde importiert; es wurde nichts entfernt.",
   "activity.import.itemFailed": "⚠ Import von {path} fehlgeschlagen: {error}",
   "activity.import.itemRefusedBefore": "⚠ {path} wurde bei exakt diesem Inhalt bereits von einem früheren Import ABGELEHNT, das Mesh enthält diesen Inhalt also NICHT — dieselben Bytes verletzen dieselbe Regel, und es wurde kein Schreibvorgang versucht. Korrigieren Sie die Quelldatei oder importieren Sie erneut mit „force“, um die Ablehnung wieder vollständig zu sehen.",
