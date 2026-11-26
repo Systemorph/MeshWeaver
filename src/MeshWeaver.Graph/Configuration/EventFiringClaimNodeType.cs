@@ -42,11 +42,15 @@ public static class EventFiringClaimNodeType
     /// <summary>How long a claim is honoured before a replica may take it over as abandoned.</summary>
     public static readonly TimeSpan Lease = TimeSpan.FromMinutes(15);
 
-    /// <summary>The claim node id for one slot of one subscription.</summary>
-    public static string IdOf(string subscriptionId, DateTimeOffset slot) => $"{subscriptionId}_{slot.UtcTicks}";
+    /// <summary>The claim node id for one slot of one subscription. A takeover of an abandoned claim is a
+    /// create of the NEXT generation's id (<paramref name="generation"/> &gt; 0), so a takeover is single-flight
+    /// too: exactly one replica's create wins it.</summary>
+    public static string IdOf(string subscriptionId, DateTimeOffset slot, int generation = 0) =>
+        generation <= 0 ? $"{subscriptionId}_{slot.UtcTicks}" : $"{subscriptionId}_{slot.UtcTicks}_t{generation}";
 
     /// <summary>The claim node path for one slot of one subscription.</summary>
-    public static string Path(string subscriptionId, DateTimeOffset slot) => $"{Namespace}/{IdOf(subscriptionId, slot)}";
+    public static string Path(string subscriptionId, DateTimeOffset slot, int generation = 0) =>
+        $"{Namespace}/{IdOf(subscriptionId, slot, generation)}";
 
     /// <summary>Registers the claim node type.</summary>
     public static TBuilder AddEventFiringClaimType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder

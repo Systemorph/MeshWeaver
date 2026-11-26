@@ -32,7 +32,7 @@ public class EventSubscriptionSingleFlightTest(ITestOutputHelper output) : Monol
         public IObservable<MeshNode> Execute(EventSubscription subscription, string _)
         {
             Interlocked.Increment(ref calls);
-            return Observable.Return(new MeshNode(subscription.TargetPath!));
+            return Observable.Return(new MeshNode(subscription.TargetPath ?? PostPath));
         }
     }
 
@@ -91,7 +91,8 @@ public class EventSubscriptionSingleFlightTest(ITestOutputHelper output) : Monol
             .GetMeshNodeStream(EventFiringClaimNodeType.Path(subscription.Id, slot))
             .Where(n => n is not null)
             .FirstAsync().Timeout(10.Seconds()).Await();
-        Assert.Equal(EventFiringClaimNodeType.NodeType, claim!.NodeType);
+        Assert.NotNull(claim);
+        Assert.Equal(EventFiringClaimNodeType.NodeType, claim.NodeType);
     }
 
     [Fact(Timeout = 60000)]
@@ -114,7 +115,8 @@ public class EventSubscriptionSingleFlightTest(ITestOutputHelper output) : Monol
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
             .FirstAsync().Timeout(40.Seconds()).Await();
 
-        Assert.Equal(EventSubscriptionStatus.Fired, final!.Status);
+        Assert.NotNull(final);
+        Assert.Equal(EventSubscriptionStatus.Fired, final.Status);
         Assert.Equal(1, handler.Calls);
 
         // A one-shot has no later firing whose sweep would remove its claim: its winner retires it.
@@ -128,6 +130,51 @@ public class EventSubscriptionSingleFlightTest(ITestOutputHelper output) : Monol
             .Where(count => count == 0)
             .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.Equal(0, remaining);
+    }
+
+    /// <summary>
+    /// A claim whose holder died mid-fire (older than the lease, next slot never recorded) does not end the
+    /// schedule: every replica reaching the overdue slot sees it stale, and exactly ONE takes it over.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AnAbandonedClaim_IsTakenOverByExactlyOneReplica()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var slot = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.Timer,
+            FireAt = slot,
+            RepeatEvery = TimeSpan.FromHours(24),
+            ContinuationType = EventContinuationType.PublishSocialPost,
+            TargetPath = PostPath,
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
+
+        // The dead holder's claim, two leases old.
+        using (accessService.ImpersonateAsSystem())
+            await meshService.CreateNode(new MeshNode(EventFiringClaimNodeType.IdOf(subscription.Id, slot), EventFiringClaimNodeType.Namespace)
+            {
+                NodeType = EventFiringClaimNodeType.NodeType,
+                Name = "abandoned",
+                Content = new EventFiringClaim
+                {
+                    SubscriptionId = subscription.Id,
+                    Slot = slot,
+                    ClaimedAt = DateTimeOffset.UtcNow - 2 * EventFiringClaimNodeType.Lease,
+                    ClaimedBy = "dead-replica/1",
+                },
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
+
+        await StartReplicas();
+
+        await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(n => n?.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
+            .Where(x => x?.FireAt > DateTimeOffset.UtcNow)
+            .FirstAsync().Timeout(40.Seconds()).Await();
+
+        Assert.Equal(1, handler.Calls);
     }
 
     /// <summary>The claim trail is bounded: after N firings of a repeater at most two claim nodes remain.</summary>
