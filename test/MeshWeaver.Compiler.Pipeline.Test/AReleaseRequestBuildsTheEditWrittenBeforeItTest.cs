@@ -191,6 +191,38 @@ public class AReleaseRequestBuildsTheEditWrittenBeforeItTest(ITestOutputHelper o
         NodeTypeCompilationHelpers.SourceSnapshotWaitBudget.Should().BeLessThan(TimeSpan.FromMinutes(2));
     }
 
+    /// <summary>
+    /// #8413 root cause: the owner's hub holds a 100 ns LastModified, the store (and so the published
+    /// snapshot) holds whole microseconds. The owner's side of the comparison is read on the
+    /// store's grid, so a snapshot built from the stored value shows it; a genuinely older snapshot
+    /// still does not; a counter fallback is not floored.
+    /// </summary>
+    [Fact]
+    public void TheOwnersVersion_IsReadOnTheStoresMicrosecondGrid()
+    {
+        var hot = new DateTimeOffset(2026, 11, 26, 20, 27, 30, TimeSpan.Zero).AddTicks(6323715);
+        var stored = hot.AddTicks(-5);
+        stored.Ticks.Should().NotBe(hot.Ticks);
+        var owner = MeshNode.FromPath("t/Source/a") with { LastModified = hot, Version = 7 };
+        const string path = "t/Source/a";
+        var live = System.Collections.Immutable.ImmutableDictionary<string, long?>.Empty
+            .Add(path, NodeTypeCompilationHelpers.OwnerVersionAsStored(owner));
+
+        NodeTypeCompilationHelpers.SnapshotShows(
+                new System.Collections.Generic.Dictionary<string, long> { [path] = stored.UtcTicks }, live)
+            .Should().BeTrue("the stored value IS the owner's write - 5 ticks of sub-microsecond precision are not an older snapshot");
+        NodeTypeCompilationHelpers.SnapshotShows(
+                new System.Collections.Generic.Dictionary<string, long> { [path] = hot.UtcTicks }, live)
+            .Should().BeTrue("a full-precision snapshot is never below its own floor");
+        NodeTypeCompilationHelpers.SnapshotShows(
+                new System.Collections.Generic.Dictionary<string, long> { [path] = stored.UtcTicks - 10 }, live)
+            .Should().BeFalse("one microsecond older is a genuinely earlier edit");
+
+        NodeTypeCompilationHelpers.OwnerVersionAsStored(
+                MeshNode.FromPath(path) with { LastModified = DateTimeOffset.MinValue.AddYears(1600), Version = 11 })
+            .Should().Be(11, "the Version fallback is a counter, never floored");
+    }
+
     /// <summary>NEGATIVE CONTROL — an edit nobody released stays unbuilt (dirty, same assembly).</summary>
     [Fact(Timeout = 120_000)]
     public async Task AnEditWithNoReleaseRequestAfterIt_IsNotCompiled()

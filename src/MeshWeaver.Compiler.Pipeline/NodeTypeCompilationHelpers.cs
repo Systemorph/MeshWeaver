@@ -3356,7 +3356,7 @@ internal static class NodeTypeCompilationHelpers
                 var live = System.Collections.Immutable.ImmutableDictionary.ToImmutableDictionary(
                     reads,
                     r => r.Path,
-                    r => r.Outcome.Node is { } n ? NodeTypeDefinition.SourceVersionOf(n) : (long?)null);
+                    r => r.Outcome.Node is { } n ? OwnerVersionAsStored(n) : (long?)null);
                 if (!SnapshotShows(requestedAgainst.CurrentSourceVersions, live))
                     logger?.LogInformation(
                         "[ReleaseRequestWatcher] {HubPath}: the source snapshot is behind the request ({Source}) "
@@ -3387,6 +3387,30 @@ internal static class NodeTypeCompilationHelpers
                     budget);
             });
     }
+
+    /// <summary>
+    /// 🚨 #8413 — the owner's version of a source AS THE DURABLE SNAPSHOT CAN SHOW IT.
+    ///
+    /// <para>The owner's hub holds the node it stamped: <c>NodeUpdatePipeline</c> mints
+    /// <see cref="MeshNode.LastModified"/> from a raw <c>UtcNow</c> (100 ns ticks), while the store
+    /// the source query reads back keeps whole MICROSECONDS (<see cref="MeshNode.StorageStable"/>).
+    /// Compared tick for tick, a source whose hot owner holds <c>…3715</c> against a snapshot built
+    /// from the stored <c>…371</c> is "behind" for as long as that hub lives (nine writes in ten),
+    /// so the wait ran its whole budget and the request compiled as "currency unknown" - measured
+    /// 2026-11-26: 29 / 60 / 194 warnings in 7 days on memex / memex-cloud / build, bursting while a
+    /// person edits and presses Compile, and confirmed against the live nodes (the hub answers
+    /// <c>20:27:30.6323715</c>, the store <c>20:27:30.632371</c>). Both readings are the SAME write;
+    /// this puts the owner's side on the store's grid. A snapshot carrying the full tick (a change
+    /// feed value) is never below its own floor, so it is still accepted.</para>
+    ///
+    /// <para>Only a real timestamp is floored; the <see cref="MeshNode.Version"/> fallback is a
+    /// counter and is returned as is (flooring it would turn 11 into 10).</para>
+    /// </summary>
+    /// <param name="node">The owner's current source node.</param>
+    internal static long OwnerVersionAsStored(MeshNode node) =>
+        node.LastModified.UtcTicks > NodeTypeDefinition.UnknownSourceVersionTicks
+            ? MeshNode.StorageStable(node.LastModified).UtcTicks
+            : node.Version;
 
     /// <summary>The bound itself: the wait for a current snapshot, or — once <paramref name="budget"/>
     /// has passed without one — the fallback that decides against an UNESTABLISHED snapshot.</summary>
