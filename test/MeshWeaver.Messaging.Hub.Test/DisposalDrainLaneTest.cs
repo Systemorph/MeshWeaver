@@ -148,14 +148,15 @@ public class DisposalDrainLaneTest : HubTestBase
     }
 
     /// <summary>
-    /// A saturated lane is LOUD: when a drain is queued while every lane thread runs a drain, a Warning
-    /// names the turns holding them. A drain that blocks is reported with the message it is executing.
+    /// A lane whose threads are all held by turns that have been running past the stuck threshold is
+    /// LOUD: a Warning names the turns holding them. A drain that blocks is reported with the message
+    /// it is executing.
     /// </summary>
     [Fact]
-    public void ASaturatedLane_WarnsNamingTheBlockingTurns()
+    public void AStuckLane_WarnsNamingTheBlockingTurns()
     {
         var sink = new CapturingLoggerFactory();
-        using var lane = new DisposalDrainLane(sink);
+        using var lane = new DisposalDrainLane(sink, stuckAfter: TimeSpan.Zero);
         var tracked = Enumerable.Range(0, DisposalDrainLane.MaxThreads)
             .Select(i => lane.TrackDrain("victim/blocked-" + i, () => "ShutdownRequest")).ToArray();
 
@@ -164,7 +165,71 @@ public class DisposalDrainLaneTest : HubTestBase
         foreach (var t in tracked) t.Dispose();
         sink.Warnings.Should().ContainSingle()
             .Which.Should().Contain("victim/starved").And.Contain("ShutdownRequest")
-            .And.Contain("victim/blocked-0").And.Contain("saturated");
+            .And.Contain("victim/blocked-0").And.Contain("stuck");
+        sink.Informations.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// A mass teardown fills the lane for milliseconds (memex-cloud 2026-11-26: 64 <c>sync/*</c> hubs,
+    /// oldest holder 13-185 ms). That is the bound working, not a stall: Information, never Warning.
+    /// </summary>
+    [Fact]
+    public void ABurstFillingTheLane_IsReportedAsAbsorbed_NotAsAWarning()
+    {
+        var sink = new CapturingLoggerFactory();
+        using var lane = new DisposalDrainLane(sink, stuckAfter: TimeSpan.FromHours(1), sustainedAfter: TimeSpan.FromHours(1));
+        var tracked = Enumerable.Range(0, DisposalDrainLane.MaxThreads)
+            .Select(i => lane.TrackDrain("sync/burst-" + i, () => "ShutdownRequest")).ToArray();
+
+        lane.NoteQueued("sync/waiting");
+
+        foreach (var t in tracked) t.Dispose();
+        sink.Warnings.Should().BeEmpty("a lane whose holders all started moments ago is draining, not blocked");
+        sink.Informations.Should().ContainSingle()
+            .Which.Should().Contain("sync/waiting").And.Contain("burst absorbed").And.Contain("sync/burst-0");
+    }
+
+    /// <summary>
+    /// Churn: every drain is young, but the lane stays full past the sustained threshold. That is
+    /// reported as stuck too — Information is the ceiling only for a burst that ends.
+    /// </summary>
+    [Fact]
+    public void ALaneThatStaysFull_IsEscalatedToAWarning_EvenWhenEveryDrainIsYoung()
+    {
+        var sink = new CapturingLoggerFactory();
+        using var lane = new DisposalDrainLane(sink, stuckAfter: TimeSpan.FromHours(1),
+            sustainedAfter: TimeSpan.FromMilliseconds(150));
+        var first = Enumerable.Range(0, DisposalDrainLane.MaxThreads)
+            .Select(i => lane.TrackDrain("sync/a-" + i, () => "ShutdownRequest")).ToArray();
+        lane.NoteQueued("sync/first");
+        SpinWait.SpinUntil(() => false, TimeSpan.FromMilliseconds(300));
+        // The earlier drains finished and fresh ones took their threads: no holder is old.
+        foreach (var t in first) t.Dispose();
+        var second = Enumerable.Range(0, DisposalDrainLane.MaxThreads)
+            .Select(i => lane.TrackDrain("sync/b-" + i, () => "ShutdownRequest")).ToArray();
+        lane.NoteQueued("sync/second");
+        foreach (var t in second) t.Dispose();
+
+        sink.Informations.Should().ContainSingle().Which.Should().Contain("sync/first");
+        sink.Warnings.Should().ContainSingle().Which.Should().Contain("sync/second").And.Contain("stuck");
+    }
+
+    /// <summary>The two levels are throttled separately: a burst must not hide a stuck lane.</summary>
+    [Fact]
+    public void ABurstReport_DoesNotSuppressALaterStuckWarning()
+    {
+        var sink = new CapturingLoggerFactory();
+        using var lane = new DisposalDrainLane(sink, stuckAfter: TimeSpan.FromMilliseconds(150), sustainedAfter: TimeSpan.FromHours(1));
+        var tracked = Enumerable.Range(0, DisposalDrainLane.MaxThreads)
+            .Select(i => lane.TrackDrain("sync/h-" + i, () => "ShutdownRequest")).ToArray();
+
+        lane.NoteQueued("sync/first");
+        SpinWait.SpinUntil(() => false, TimeSpan.FromMilliseconds(300));
+        lane.NoteQueued("sync/second");
+
+        foreach (var t in tracked) t.Dispose();
+        sink.Informations.Should().ContainSingle();
+        sink.Warnings.Should().ContainSingle().Which.Should().Contain("sync/second");
     }
 
     [Fact]
@@ -180,11 +245,13 @@ public class DisposalDrainLaneTest : HubTestBase
     private sealed class CapturingLoggerFactory : Microsoft.Extensions.Logging.ILoggerFactory
     {
         public System.Collections.Concurrent.ConcurrentQueue<string> Warnings { get; } = new();
+        public System.Collections.Concurrent.ConcurrentQueue<string> Informations { get; } = new();
         public void AddProvider(Microsoft.Extensions.Logging.ILoggerProvider provider) { }
-        public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => new Capture(Warnings);
+        public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => new Capture(Warnings, Informations);
         public void Dispose() { }
 
-        private sealed class Capture(System.Collections.Concurrent.ConcurrentQueue<string> sink)
+        private sealed class Capture(System.Collections.Concurrent.ConcurrentQueue<string> sink,
+            System.Collections.Concurrent.ConcurrentQueue<string> info)
             : Microsoft.Extensions.Logging.ILogger
         {
             public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -194,6 +261,8 @@ public class DisposalDrainLaneTest : HubTestBase
             {
                 if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning)
                     sink.Enqueue(formatter(state, exception));
+                else if (logLevel == Microsoft.Extensions.Logging.LogLevel.Information)
+                    info.Enqueue(formatter(state, exception));
             }
         }
     }
