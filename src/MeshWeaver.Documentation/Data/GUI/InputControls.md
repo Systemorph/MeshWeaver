@@ -166,6 +166,43 @@ German reader is handed *Hier unterschreiben*, *Löschen*, *Fertig*.
 
 ---
 
+# Image Canvas
+
+`ImageCanvasControl` is a picture the viewer edits by **dragging on it** — today a crop region with
+handles on its edges and corners. It is a thin overlay, never a second image renderer: the control
+draws the picture exactly as given (the server has already rendered it) and, on top, only the crop
+frame and its handles. A drag is shown locally while it lasts and commits **once, on release**, as
+ordinary field edits of the four bound trims; the server re-renders and the new picture flows back.
+
+The trims are in **model units** — the picture's full extent is `ModelWidth × ModelHeight`
+(typically the source image's pixels), whatever size it is drawn at — and each is the amount
+removed from that edge. Before writing, a renderer applies `ImageCanvasCrop.Normalize`: trims are
+clamped so at least one unit remains, and the edge being dragged stops at the opposite one instead
+of pushing it. A corner moves two edges at once and passes both
+(`Normalize(ImageCanvasEdge.Top, ImageCanvasEdge.Left)`).
+
+```csharp --render InputImageCanvas --show-code
+Controls.Stack
+    .WithView(Controls.ImageCanvas(
+            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='400' height='240'><rect width='400' height='240' fill='%234f46e5'/><circle cx='200' cy='120' r='70' fill='%23facc15'/></svg>",
+            "A yellow circle on a blue background")
+        .WithModelSize(400, 240)
+        .WithCrop(40, 20, 40, 20))
+```
+
+| Method | Purpose | Default |
+|---|---|---|
+| `WithModelSize(width, height)` | The picture's full extent in model units — required for the crop tool | — |
+| `WithCrop(left, top, right, bottom)` | Bind the crop tool to the four trims (typically `JsonPointerReference`s into the node) | no crop tool |
+| `WithMaxHeight(object)` | The tallest the picture is drawn (CSS length); its width never exceeds the container | `70vh` |
+| `WithAlt(object)` | The picture's accessible name | — |
+
+The accessible names of the crop frame and its eight handles are catalog keys (`imageCanvas.*`), so
+a German reader hears *Linke Kante des Zuschnitts*. Every value the canvas edits should also be
+editable as a number in a form beside it, so keyboard and screen-reader users lose nothing.
+
+---
+
 # See Also
 
 - [Editor](../Editor) — auto-generates a form from a record using these controls

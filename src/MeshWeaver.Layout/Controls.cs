@@ -105,6 +105,16 @@ public static class Controls
     /// <returns>A new <see cref="SignaturePadControl"/>.</returns>
     public static SignaturePadControl SignaturePad(object data) => new(data);
 
+    /// <summary>
+    /// Creates a picture the viewer edits by dragging on it — today a crop region with handles,
+    /// bound with <see cref="ImageCanvasControl.WithCrop"/> and sized in model units with
+    /// <see cref="ImageCanvasControl.WithModelSize"/>.
+    /// </summary>
+    /// <param name="image">The picture (an image URL or <c>data:image/…</c> URI) or a binding to one.</param>
+    /// <param name="alt">The localized accessible name of the picture, or a binding.</param>
+    /// <returns>A new <see cref="ImageCanvasControl"/>.</returns>
+    public static ImageCanvasControl ImageCanvas(object image, object alt) => new(image, alt);
+
     /// <summary>Creates a numeric input control bound to <paramref name="data"/>.</summary>
     /// <param name="data">The bound numeric value or data-binding expression.</param>
     /// <param name="type">The numeric type (e.g. integer, decimal) that constrains input.</param>
