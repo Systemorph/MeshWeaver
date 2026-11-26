@@ -1170,6 +1170,18 @@ It is bounded three ways, and the first is the one that does the work:
 3. **Terminal.** Past `MaxAutomaticFailureRedrives` the kickoff gives up for the hub's lifetime and
    says so, naming the type, its error and the remedy. An explicit Compile refunds the budget.
 
+**The boot-time bake obeys the same stamp (MeshWeaver#8529).** The batch bake classifies from the
+store, and a `CompilationStatus.Error` type is `PreviouslyBroken` ⇒ needs a bake — so before this rule
+every pod re-compiled every standing failure on every boot. Measured on memex-cloud: six broken user
+types × ~58 pods in two days of rolls, ~4 minutes and ~2.9 GB of working set per pod, the identical
+`CS0246` each time, 328 incident occurrences and rising. `NodeTypeBatchBake.BakeResolved` now asks
+`NodeTypeCompilationHelpers.IsStandingFailureCurrent` first: when the failure's `FailedBuildInputs`
+equal the live token (framework key, installed modules, the source set THIS pass resolved fresh) and
+`FailedPlatformVersion` is not older than the running ordered build, the type is reported
+`CompileError` with "not re-attempted" and nothing is compiled or written. A source edit, a module
+update or a newer platform build earns exactly one fresh attempt, which re-stamps. Every uncertainty
+(no stamp, `Unavailable`, a different token) compiles.
+
 The re-drive is **owner-driven, never caller-driven**. It fires from the type's OWN hub on facts the
 node already holds; no request, and no requester's identity, is an input. The compile runs as System
 and its activity row lands in the owning partition attributed to System — exactly as the first-build,

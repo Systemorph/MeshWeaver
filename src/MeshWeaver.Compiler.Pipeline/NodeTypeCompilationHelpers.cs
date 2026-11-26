@@ -5129,6 +5129,61 @@ internal static class NodeTypeCompilationHelpers
             || PlatformCompatibility.ProducerIsNewer(livePlatformVersion, def.FailedPlatformVersion));
 
     /// <summary>
+    /// 🚨 <b>Is the type's STANDING compile failure still the right answer for the inputs live now?</b>
+    /// The bake-side twin of <see cref="HasStaleFailureVerdict"/> and
+    /// <see cref="HasFailureFromOlderPlatform"/> — true exactly when NEITHER would re-drive it, so the
+    /// batch bake must not compile it again.
+    ///
+    /// <para><b>The storm it ends (MeshWeaver#8529, 328 occurrences on memex-cloud).</b> The batch
+    /// bake classifies every type from the STORE, and <c>CompilationStatus.Error</c> maps to
+    /// <see cref="BakeState.PreviouslyBroken"/> ⇒ needs a bake — on EVERY boot of EVERY pod. Six
+    /// broken user types were therefore re-compiled by every one of the ~58 pods a two-day window of
+    /// rolls started, ~4 minutes and ~2.9 GB of working set per pod, each time producing the identical
+    /// <c>CS0246</c>. The activation path never did this: it stamps what a verdict was formed from
+    /// (<see cref="NodeTypeDefinition.FailedBuildInputs"/>, <see cref="NodeTypeDefinition.FailedPlatformVersion"/>)
+    /// and re-drives ONCE per distinct input set. The bake simply never read the stamp.</para>
+    ///
+    /// <para><b>The rule — memoisation of a deterministic function, not a retry cap.</b> A type that
+    /// failed under EXACTLY these inputs (framework key, installed modules, the source set the compile
+    /// consumed) on this platform build or a newer one fails identically now; compiling again can only
+    /// repeat the measurement. Any of the three moving — a source edit, a module update, a newer
+    /// platform build that may now carry a symbol the source already uses — earns exactly one fresh
+    /// attempt, which re-stamps and so closes the door again.</para>
+    ///
+    /// <para>🚨 <b>Fails open.</b> Every uncertainty answers NO (compile): an absent stamp (a failure
+    /// that predates the field, or one baked into a committed file), an <c>Unavailable</c> settle (it
+    /// formed no verdict), a different token, a failure formed on an OLDER ordered platform build. A
+    /// needless compile costs a compile; a latched skip strands a type.</para>
+    /// </summary>
+    /// <param name="def">The type's persisted definition.</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the live inputs.</param>
+    /// <param name="liveSources">The source set this pass resolved FRESH (path → version) — the live
+    /// witness, not the record's own snapshot, which a bake-only pod's sources watcher may not have
+    /// refreshed.</param>
+    /// <param name="livePlatformVersion">This process's platform build, or null when unknown.</param>
+    /// <returns>True when the standing verdict stands and a compile would repeat it.</returns>
+    internal static bool IsStandingFailureCurrent(
+        NodeTypeDefinition def,
+        string? modulesHash,
+        IReadOnlyDictionary<string, long> liveSources,
+        string? livePlatformVersion)
+    {
+        if (def.CompilationStatus is not CompilationStatus.Error
+            || string.IsNullOrEmpty(def.FailedBuildInputs))
+            return false;
+        if (!string.Equals(
+                def.FailedBuildInputs, BuildInputsToken(modulesHash, liveSources), StringComparison.Ordinal))
+            return false;
+        // A failure formed on an older ORDERED build gets its one attempt on the newer one — the
+        // same second trigger the activation re-drive has (an additive platform change moves nothing
+        // in the token). An unordered live build (a local -dev source build) cannot claim to be newer.
+        var formedOnOlderPlatform = IsOrderedPlatformBuild(livePlatformVersion)
+            && (string.IsNullOrWhiteSpace(def.FailedPlatformVersion)
+                || PlatformCompatibility.ProducerIsNewer(livePlatformVersion, def.FailedPlatformVersion));
+        return !formedOnOlderPlatform;
+    }
+
+    /// <summary>
     /// The value a FAILURE stamps as <see cref="NodeTypeDefinition.FailedPlatformVersion"/>: the live
     /// build, or <see cref="UnknownPlatformBuild"/> when this process does not know its build. Never
     /// the previous failure's build — a new verdict formed on an unknown build recorded as if it were
