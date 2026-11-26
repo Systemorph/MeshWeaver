@@ -2438,7 +2438,7 @@ public static class StaticRepoImporter
                             {
                                 new LogMessage(
                                     $"⛔ Pruned nothing in {source.Partition}: the prune would delete more than "
-                                    + $"{pruneBound:P0} of the partition at once, which is a misjudgement, not a sync.",
+                                    + "the allowed share of the partition at once, which is a misjudgement, not a sync.",
                                     Microsoft.Extensions.Logging.LogLevel.Error)
                                     .WithKey("activity.import.pruneRefusedBound",
                                         ("partition", source.Partition)),
