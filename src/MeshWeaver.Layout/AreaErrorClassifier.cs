@@ -482,16 +482,11 @@ public static class AreaErrorClassifier
     /// a resubscribe hits the same failed hub, so the reason is rendered once, not retried).
     ///
     /// <para>🚨 <b>Never a sync stream that GAVE UP</b> (<see cref="SyncStreamOwnerRefusedException"/>).
-    /// That terminal is transient for a READER (the owner is coming back) but the stream that carries
-    /// it has latched the fault in its <c>ReplaySubject</c> store and replays it to every later
-    /// subscriber — so re-subscribing the SAME stream can never succeed (the stream's own contract:
-    /// "its readers can re-read", i.e. open a new one; see <see cref="AreaStreamReopen"/>). Retrying
-    /// it is not harmless: one page has hundreds of <c>NamedAreaView</c>s on ONE stream, each retrying
-    /// 5 times on the SAME backoff schedule, and each replay delivers the error and runs the whole
-    /// retry decision INSIDE the ReplaySubject's monitor — measured on the Feedback Inbox (two replicas,
-    /// 2026-11-25/26): 47 pool threads blocked in <c>ReplaySubject.Subscribe</c>, 36-60 K queued work
-    /// items, and every Postgres query fan-in in the process then timing out its 15 s bound
-    /// (<c>QueryProviderStalledException</c>, #8487/#8488/#8489).</para>
+    /// That terminal is transient for a reader, but the stream carrying it has latched the fault in
+    /// its <c>ReplaySubject</c> store and replays it to every later subscriber, so re-subscribing the
+    /// SAME stream can never succeed — a reader must open a NEW stream (see
+    /// <see cref="AreaStreamReopen"/>). Retrying also costs: every area on that one stream replays the
+    /// error, and runs the retry decision, inside the subject's monitor. Evidence: #8487.</para>
     /// </summary>
     public static bool ShouldRetryArea(Exception? ex)
         => ex is not ObjectDisposedException
