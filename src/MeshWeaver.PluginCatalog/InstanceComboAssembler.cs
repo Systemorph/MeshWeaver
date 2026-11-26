@@ -287,9 +287,11 @@ public sealed class InstanceComboAssembler
                         requireMatch: false);
                 if (recordedModuleVersion is not null)
                     // No exact GIT ref, but the record claims an exact IDENTITY (a content hash
-                    // over the module's own files). Fetch the best movable ref — the recorded
-                    // ref, else the node repos' per-module release tag ({Module}/vX.Y.Z), else
-                    // HEAD — and PROVE the tree against the recorded hash.
+                    // over the module's own files). Fetch the best movable ref — the node repos'
+                    // per-module release tag ({Module}/vX.Y.Z) when a version is recorded, else
+                    // the recorded ref, else HEAD — and PROVE the tree against the recorded hash.
+                    // An exact commit in installedRef never reaches here: the branches above
+                    // return it first, so installedRef is movable (HEAD, a branch) on this path.
                     // 🚨 The release tag wins over a recorded MOVABLE ref (MeshWeaver#4413): a record
                     // written before the commit was recorded carries installedFromRef "HEAD" — a
                     // ref that has moved on since — and `installedRef ?? tag` let that "HEAD"

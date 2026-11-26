@@ -27,7 +27,7 @@ public sealed class ComboPrefersTheReleaseTagOverARecordedHeadTest : IDisposable
     private const string Moved = "bbbbbbbbbbbbbbbb";
 
     private readonly string workRoot = Path.Combine(
-        Path.GetTempPath(), $"combo-tag-{Guid.NewGuid():N}"[..32]);
+        Path.GetTempPath(), $"combo-tag-{Guid.NewGuid().ToString("N")[..12]}");
 
     public void Dispose()
     {
@@ -99,9 +99,9 @@ public sealed class ComboPrefersTheReleaseTagOverARecordedHeadTest : IDisposable
                 },
             ],
         };
-        var report = await Task.Run(() => assembler.Assemble(combo, workRoot)
+        var report = await assembler.Assemble(combo, workRoot)
             .Timeout(TimeSpan.FromSeconds(60))
-            .Await(TestContext.Current.CancellationToken));
+            .Await(TestContext.Current.CancellationToken);
         return (report, refs);
     }
 }
