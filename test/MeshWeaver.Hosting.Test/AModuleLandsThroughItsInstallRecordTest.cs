@@ -54,7 +54,7 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
     private int failRecordingOnce;
     private int failPromoteOnce;
     private int hideStagedOnce;
-    private string StagedHere(string key) => Path.Combine(moduleRoot, "modules", ".landing-requests", key);
+    private int hidden;
     private int promoteFailures;
     private ModuleLandingService? landing;
     private readonly FakeRegistry registry = new();
@@ -87,8 +87,12 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
                     {
                         // An owner on the OLD major reads the shared root's tree, not this line's: armed once,
                         // the staged bytes go where it will not look.
-                        if (Interlocked.Exchange(ref hideStagedOnce, 0) == 1 && Directory.Exists(StagedHere(key)))
-                            Directory.Delete(StagedHere(key), recursive: true);
+                        if (Interlocked.Exchange(ref hideStagedOnce, 0) != 1)
+                            return;
+                        var staged = Landing.StagedLandingDirectory(key);
+                        Directory.Exists(staged).Should().BeTrue("the seam hides what the production path staged");
+                        Directory.Delete(staged, recursive: true);
+                        Interlocked.Increment(ref hidden);
                     },
                     OwnerPromoteSeam = node =>
                     {
@@ -283,9 +287,10 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
         var verdict = await Land(module, "1.0.0", RecordPath("LandCrossMajor"), recordAtPlan: true)
             .Timeout(TestTimeouts.Convergence).Await(ct);
         verdict.Applied.Should().BeTrue(verdict.Detail);
+        hidden.Should().Be(1, "the owner was really denied the staged bytes, so the fallback landed them");
         var entry = await Entry(module, ct);
         entry.Should().NotBeNull("the writer landed its own bytes into its own tree");
-        entry!.Enabled.Should().BeTrue();
+        (entry?.Enabled).Should().BeTrue();
 
         const string other = "Acme.SameMajor.Module";
         await WriteRecord("LandSameMajor", other, ct);
@@ -293,6 +298,9 @@ public class AModuleLandsThroughItsInstallRecordTest(ITestOutputHelper output) :
             .Timeout(TestTimeouts.Convergence).Await(ct);
         normal.Applied.Should().BeTrue(normal.Detail);
         normal.Detail.Should().NotStartWith(ModuleLandingService.StagedBytesGonePrefix);
+        hidden.Should().Be(1, "the second landing went through the owner untouched");
+        // The old major's literal, byte for byte — never reworded (frozen cross-major contract).
+        ModuleLandingService.StagedBytesGonePrefix.Should().Be("refused: the staged bytes of this landing are gone");
     }
 
     /// <summary>

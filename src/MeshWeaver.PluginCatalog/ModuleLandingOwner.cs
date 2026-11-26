@@ -609,7 +609,7 @@ public static class ModuleLandingOwner
     {
         logger?.LogWarning(
             "[ModuleLandingOwner] the install record's owner could not read the bytes staged for module '{Module}' ({Answer}) — "
-            + "it reads another module tree (an old-major replica during a roll); landing them into this process's own tree",
+            + "most likely it reads another module tree (an old-major replica during a roll); landing them into this process's own tree",
             arguments.Name, ownerAnswer);
         return landing.LandUnlessUninstalled(arguments);
     }

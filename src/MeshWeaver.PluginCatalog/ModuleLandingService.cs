@@ -1187,6 +1187,10 @@ public sealed class ModuleLandingService : IDisposable
     /// whose tree is the shared root's own <c>modules/</c> while the writer staged under
     /// <c>&lt;root&gt;/lines/&lt;major&gt;/modules/</c> (<see cref="ModuleRoot.ForLine"/>) — and an old
     /// image cannot be taught to look there.
+    ///
+    /// <para>🚨 <b>A frozen cross-major wire contract.</b> The producer of this text is the OLD major's image,
+    /// which can never be changed, so the literal must not be reworded: it is pinned against the 3.x answer
+    /// byte for byte in <c>AModuleLandsThroughItsInstallRecordTest</c>.</para>
     /// </summary>
     internal const string StagedBytesGonePrefix = "refused: the staged bytes of this landing are gone";
 
