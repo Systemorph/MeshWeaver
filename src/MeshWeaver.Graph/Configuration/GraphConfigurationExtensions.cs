@@ -89,6 +89,7 @@ public static class GraphConfigurationExtensions
                 // that stays here: the NodeType const classes and NotificationService.HasRoutingRules.
                 .AddInvitationType()
                 .AddEventSubscriptionType()
+                .AddEventFiringClaimType()
                 .AddScheduledActionType()   // legacy — kept so existing Admin/ScheduledAction nodes still deserialize + migrate
                 .AddEmailType()
                 .AddEaCredentialType()
