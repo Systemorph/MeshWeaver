@@ -588,8 +588,30 @@ public static class ModuleLandingOwner
                     // folder is the cost, never an accepted landing whose bytes were pulled away.
                     .SelectMany(_ => InstallRecordGate.Submit(hub, path, key, fact, logger, removeAnswer: null, budget: OperationBudget))
                     .SelectMany(outcome => Drop(landing, key, logger)
-                        .Select(_ => new ModuleLandingVerdict(outcome.Applied, outcome.Detail, outcome.Transient)));
+                        .Select(_ => new ModuleLandingVerdict(outcome.Applied, outcome.Detail, outcome.Transient)))
+                    // 🚨 An owner that cannot find the bytes this writer staged is an owner reading ANOTHER
+                    // module tree — in practice an old-MAJOR replica during a major roll (its tree is the
+                    // shared root, the writer's is <root>/lines/<major>), which no image can be taught to
+                    // look into. The writer then lands its own bytes into its own tree, still refused over
+                    // an uninstall by LandUnlessUninstalled; only the serialisation with the record's other
+                    // writers is given up, and only for this mixed-major window. Without this, a new-major
+                    // replica never landed a single module, refused readiness on every type that binds one,
+                    // and the roll stalled with the old major serving (pearl, 2026-11-26).
+                    .SelectMany(verdict => !verdict.Applied
+                        && verdict.Detail.StartsWith(ModuleLandingService.StagedBytesGonePrefix, StringComparison.Ordinal)
+                            ? LandHere(landing, arguments, verdict.Detail, logger)
+                            : Observable.Return(verdict));
             });
+    }
+
+    private static IObservable<ModuleLandingVerdict> LandHere(
+        ModuleLandingService landing, ModuleLandingArguments arguments, string ownerAnswer, ILogger? logger)
+    {
+        logger?.LogWarning(
+            "[ModuleLandingOwner] the install record's owner could not read the bytes staged for module '{Module}' ({Answer}) — "
+            + "most likely it reads another module tree (an old-major replica during a roll); landing them into this process's own tree",
+            arguments.Name, ownerAnswer);
+        return landing.LandUnlessUninstalled(arguments);
     }
 
     private static IObservable<Unit> Drop(ModuleLandingService landing, string key, ILogger? logger) =>

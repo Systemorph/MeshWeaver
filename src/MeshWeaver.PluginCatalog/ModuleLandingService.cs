@@ -1180,12 +1180,30 @@ public sealed class ModuleLandingService : IDisposable
     /// Not a generation (no <c>@</c>) and not transient, so the modules GC never collects it.</summary>
     internal const string LandingRequestsFolder = ".landing-requests";
 
+    /// <summary>
+    /// The verdict text an owner answers with when the bytes a writer staged are not under ITS module
+    /// tree. The writer reads it to land them itself (<see cref="ModuleLandingOwner.Land"/>): during a
+    /// roll between platform majors the install record's owner can live on a replica of the OLD major,
+    /// whose tree is the shared root's own <c>modules/</c> while the writer staged under
+    /// <c>&lt;root&gt;/lines/&lt;major&gt;/modules/</c> (<see cref="ModuleRoot.ForLine"/>) — and an old
+    /// image cannot be taught to look there.
+    ///
+    /// <para>🚨 <b>A frozen cross-major wire contract.</b> The producer of this text is the OLD major's image,
+    /// which can never be changed, so the literal must not be reworded: it is pinned against the 3.x answer
+    /// byte for byte in <c>AModuleLandsThroughItsInstallRecordTest</c>.</para>
+    /// </summary>
+    internal const string StagedBytesGonePrefix = "refused: the staged bytes of this landing are gone";
+
     /// <summary>Where the landing staged under <paramref name="key"/> lives. Pure.</summary>
     internal string StagedLandingDirectory(string key)
     {
         ValidateFileName(key, "staged landing key");
         return Path.Combine(baseDirectory, "modules", LandingRequestsFolder, key);
     }
+
+    /// <summary>Test seam: runs once a landing's bytes are staged, before the owner is asked — how a test
+    /// puts them where the owner will not find them (an owner reading another major's module tree).</summary>
+    internal Action<string>? AfterStagingSeam { get; init; }
 
     /// <summary>
     /// Writes a landing's bytes into <c>modules/.landing-requests/&lt;key&gt;/</c> — assemblies under
@@ -1223,6 +1241,7 @@ public sealed class ModuleLandingService : IDisposable
                     Write("n", relativePath, bytes);
                 Directory.CreateDirectory(temporary);
                 Directory.Move(temporary, target);
+                AfterStagingSeam?.Invoke(key);
             }
             catch
             {
@@ -1291,7 +1310,7 @@ public sealed class ModuleLandingService : IDisposable
                 })
                 .SelectMany(landing => landing is null
                     ? Observable.Return(new ModuleLandingVerdict(false,
-                        $"refused: the staged bytes of this landing are gone ({directory}) — nothing was landed"))
+                        $"{StagedBytesGonePrefix} ({directory}) — nothing was landed"))
                     // A person's re-install the owner authorized is carried out over a tombstone; every
                     // other landing keeps the uninstall check.
                     : LandUnlessUninstalled(landing, refuseOverUninstall: !operation.ReinstallByPerson));
