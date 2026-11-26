@@ -75,6 +75,18 @@ public class DividerEmbedAndImageBoundsTest(ITestOutputHelper output) : HubTestB
         embed.Allow.Should().BeNull();
     }
 
+    /// <summary>
+    /// A frame fits the screen, never a fixed pixel box: the 600px default was half of a tall screen and
+    /// #8564 patched it for one caller only (the content PDF reader), leaving the node-file PDF reader and
+    /// every code-defined area with an Embed short. Negative control: restore "600px" and this fails.
+    /// </summary>
+    [Fact]
+    public void Embed_DefaultHeight_IsViewportRelative()
+    {
+        EmbedControl.DefaultHeight.Should().Be("85vh", "a framed document or app fits any screen: viewport-relative, with room for the page header");
+        Controls.Embed("/api/content/x.pdf", "x.pdf").Height.Should().Be(EmbedControl.DefaultHeight);
+    }
+
     [Fact]
     public void Image_Bounds_RoundTrip_AndChangeEquality()
     {
