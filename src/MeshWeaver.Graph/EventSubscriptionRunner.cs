@@ -775,6 +775,8 @@ public sealed class EventSubscriptionRunner(
                     // run again, so release it once this occurrence has recorded its next slot.
                     if (subscription.RepeatEvery is not null)
                         executing.TryRemove(subscription.Id, out _);
+                    if (subscription.TriggerType == EventTriggerType.Timer)
+                        SweepClaims(subscription);
                     logger?.LogInformation(
                         "Event subscription {Id} fired: {Continuation} {Role} for {User} on {Target}",
                         subscription.Id, subscription.ContinuationType, subscription.Role, userId,
@@ -916,6 +918,38 @@ public sealed class EventSubscriptionRunner(
                 .Select(next => new TimerDecision(null, next))
                 .Catch((Exception _) => Observable.Return(TimerDecision.Nothing));
         });
+    }
+
+    /// <summary>How old a claim must be before ANY winner sweeps it, whoever it belonged to.</summary>
+    private static readonly TimeSpan ClaimRetention = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Bounds the claim trail: after a timer's firing is recorded, deletes the claims of this subscription's
+    /// EARLIER slots (a late loser of the slot just fired never looks at an earlier one) and every claim
+    /// older than <see cref="ClaimRetention"/>. A repeater therefore leaves one or two claim nodes, a
+    /// one-shot's last until the next sweep. Best effort: a failed delete is logged and left for the next sweep.
+    /// </summary>
+    private void SweepClaims(EventSubscription fired)
+    {
+        var current = fired.FireAt ?? DateTimeOffset.UtcNow;
+        AsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{EventFiringClaimNodeType.Namespace} scope:children nodeType:{EventFiringClaimNodeType.NodeType}"))
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .Take(1))
+            .SelectMany(c => (c.Items ?? []).Where(n =>
+            {
+                var claim = n.ContentAs<EventFiringClaim>(hub.JsonSerializerOptions);
+                return claim is not null
+                    && ((claim.SubscriptionId == fired.Id && claim.Slot < current)
+                        || DateTimeOffset.UtcNow - claim.ClaimedAt > ClaimRetention);
+            }).Select(n => n.Path).ToList())
+            .SelectMany(path => AsSystem(() => meshService.DeleteNode(path))
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogDebug(ex, "Could not delete stale firing claim {Path}; the next sweep retries.", path);
+                    return Observable.Return(false);
+                }))
+            .Subscribe(_ => { }, ex => logger?.LogDebug(ex, "Sweeping firing claims of {Id} failed.", fired.Id));
     }
 
     /// <summary>

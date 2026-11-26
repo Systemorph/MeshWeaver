@@ -115,6 +115,42 @@ public class EventSubscriptionSingleFlightTest(ITestOutputHelper output) : Monol
         Assert.Equal(1, handler.Calls);
     }
 
+    /// <summary>The claim trail is bounded: after N firings of a repeater at most two claim nodes remain.</summary>
+    [Fact(Timeout = 90000)]
+    public async Task ManyFirings_LeaveAtMostTwoClaimNodes()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.Timer,
+            FireAt = DateTimeOffset.UtcNow.AddSeconds(-1),
+            RepeatEvery = TimeSpan.FromSeconds(1),
+            ContinuationType = EventContinuationType.PublishSocialPost,
+            TargetPath = PostPath,
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
+
+        await StartReplicas();
+
+        // N firings: the continuation ran at least 6 times (once per slot, not once per replica per slot).
+        await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(_ => handler.Calls)
+            .Where(calls => calls >= 6)
+            .FirstAsync().Timeout(60.Seconds()).Await();
+
+        // The sweep follows each recorded firing, so the trail settles at one or two nodes — never six.
+        var remaining = await Observable.Interval(TimeSpan.FromMilliseconds(500))
+            .SelectMany(_ => accessService.RunAsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{EventFiringClaimNodeType.Namespace} scope:children nodeType:{EventFiringClaimNodeType.NodeType}"))
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .Take(1)))
+            .Select(c => (c.Items ?? []).Count(n => n.Id.StartsWith(subscription.Id + "_", StringComparison.Ordinal)))
+            .Where(count => count <= 2)
+            .FirstAsync().Timeout(30.Seconds()).Await();
+        Assert.InRange(remaining, 1, 2);
+    }
+
     public override async ValueTask DisposeAsync()
     {
         foreach (var runner in runners)
