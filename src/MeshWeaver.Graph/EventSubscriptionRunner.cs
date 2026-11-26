@@ -775,6 +775,12 @@ public sealed class EventSubscriptionRunner(
                     // run again, so release it once this occurrence has recorded its next slot.
                     if (subscription.RepeatEvery is not null)
                         executing.TryRemove(subscription.Id, out _);
+                    if (subscription.TriggerType == EventTriggerType.Timer)
+                    {
+                        SweepClaims(subscription);
+                        if (subscription.RepeatEvery is null)
+                            RetireOneShotClaim(subscription);
+                    }
                     logger?.LogInformation(
                         "Event subscription {Id} fired: {Continuation} {Role} for {User} on {Target}",
                         subscription.Id, subscription.ContinuationType, subscription.Role, userId,
@@ -858,20 +864,153 @@ public sealed class EventSubscriptionRunner(
                         subscription.Id);
                     return Observable.Return<EventSubscription?>(subscription);
                 }))
-            .Subscribe(current =>
+            // 🚨 ONE REPLICA RUNS A SLOT. Every replica runs its own runner with its own in-memory timer over the
+            // same durable subscription, so at the slot ALL of them reach this point, each seeing the still-Pending
+            // node (the next-slot write comes after the continuation). Without a cross-replica claim a nightly job
+            // started once per replica — three content re-indexes at 02:00:25Z on memex, each writing every file.
+            .SelectMany(current => DecideTimerFiring(subscription, current ?? subscription))
+            .Subscribe(decision =>
             {
                 if (timerSubs.TryRemove(subscription.Id, out var d))
                     d.Dispose();
+                if (decision.Fire is { } fire)
+                    Execute(fire, fire.SubjectId ?? "");
+                else if (decision.Reschedule is { Status: EventSubscriptionStatus.Pending, FireAt: not null } next)
+                    ScheduleTimer(next);
+            });
+    }
 
-                var live = current ?? subscription;
-                if (live.Status != EventSubscriptionStatus.Pending)
+    /// <summary>What a timer that reached its slot does: fire the subscription, or re-arm for a later slot.</summary>
+    private readonly record struct TimerDecision(EventSubscription? Fire, EventSubscription? Reschedule)
+    {
+        public static readonly TimerDecision Nothing = new(null, null);
+    }
+
+    /// <summary>How far ahead of now a re-read <see cref="EventSubscription.FireAt"/> may lie and still be the
+    /// slot this timer was armed for (timers fire marginally early, and replicas' clocks differ).</summary>
+    private static readonly TimeSpan SlotTolerance = TimeSpan.FromSeconds(5);
+
+    private IObservable<TimerDecision> DecideTimerFiring(EventSubscription armed, EventSubscription live)
+    {
+        if (live.Status != EventSubscriptionStatus.Pending)
+        {
+            logger?.LogInformation(
+                "Timer {Id} reached its slot but the subscription is {Status} — not firing.", armed.Id, live.Status);
+            return Observable.Return(TimerDecision.Nothing);
+        }
+        // The slot has moved on — another replica already fired and recorded the next one, or an operator
+        // edited the time. Not this timer's slot any more: arm for the recorded one instead.
+        if (live.FireAt is { } at && at > DateTimeOffset.UtcNow + SlotTolerance)
+        {
+            logger?.LogInformation(
+                "Timer {Id} reached its slot but the subscription now fires at {FireAt:o} — re-arming for that.", armed.Id, at);
+            return Observable.Return(new TimerDecision(null, live));
+        }
+        var slot = live.FireAt ?? armed.FireAt ?? DateTimeOffset.UtcNow;
+        return ClaimFiring(live, slot).SelectMany(won =>
+        {
+            if (won)
+                return Observable.Return(new TimerDecision(live, null));
+            logger?.LogInformation(
+                "Timer {Id}: another replica claimed the slot {Slot:o} — not firing here.", armed.Id, slot);
+            // The winner records the next slot on the subscription; this replica's timer is re-armed from it.
+            return AsSystem(() => hub.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(armed.Id)))
+                .Select(node => node?.ContentAs<EventSubscription>(hub.JsonSerializerOptions))
+                .Where(sub => sub is null || sub.Status != EventSubscriptionStatus.Pending || sub.FireAt != live.FireAt)
+                .Take(1)
+                .Timeout(EventFiringClaimNodeType.Lease)
+                .Select(next => new TimerDecision(null, next))
+                .Catch((Exception _) => Observable.Return(TimerDecision.Nothing));
+        });
+    }
+
+    /// <summary>How long a one-shot's own claim is kept after it fired — long enough for every late loser of the
+    /// slot to have seen the terminal <c>Fired</c> status. Test seam; the age sweep covers a claim whose
+    /// winner restarted before this elapsed.</summary>
+    internal TimeSpan OneShotClaimRetention { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>A one-shot has no later firing whose sweep would remove its claim, so its winner deletes it.</summary>
+    private void RetireOneShotClaim(EventSubscription fired)
+    {
+        var path = EventFiringClaimNodeType.Path(fired.Id, fired.FireAt ?? DateTimeOffset.UtcNow);
+        // Owned by the runner: a stop disposes it, so no delete is issued after it.
+        catchUpSubs.Add(Observable.Timer(OneShotClaimRetention)
+            .SelectMany(_ => AsSystem(() => meshService.DeleteNode(path)))
+            .Subscribe(_ => { }, ex => logger?.LogDebug(ex, "Could not delete one-shot firing claim {Path}; the age sweep retries.", path)));
+    }
+
+    /// <summary>How old a claim must be before ANY winner sweeps it, whoever it belonged to.</summary>
+    private static readonly TimeSpan ClaimRetention = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Bounds the claim trail: after a timer's firing is recorded, deletes the claims of this subscription's
+    /// EARLIER slots (a late loser of the slot just fired never looks at an earlier one) and every claim
+    /// older than <see cref="ClaimRetention"/>. A repeater therefore leaves one or two claim nodes, a
+    /// one-shot's last until the next sweep. Best effort: a failed delete is logged and left for the next sweep.
+    /// </summary>
+    private void SweepClaims(EventSubscription fired)
+    {
+        var current = fired.FireAt ?? DateTimeOffset.UtcNow;
+        AsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{EventFiringClaimNodeType.Namespace} scope:children nodeType:{EventFiringClaimNodeType.NodeType}"))
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .Take(1))
+            .SelectMany(c => (c.Items ?? []).Where(n =>
+            {
+                var claim = n.ContentAs<EventFiringClaim>(hub.JsonSerializerOptions);
+                return claim is not null
+                    && ((claim.SubscriptionId == fired.Id && claim.Slot < current)
+                        || DateTimeOffset.UtcNow - claim.ClaimedAt > ClaimRetention);
+            }).Select(n => n.Path).ToList())
+            .SelectMany(path => AsSystem(() => meshService.DeleteNode(path))
+                .Catch((Exception ex) =>
                 {
-                    logger?.LogInformation(
-                        "Timer {Id} reached its slot but the subscription is {Status} — not firing.",
-                        subscription.Id, live.Status);
-                    return;
+                    logger?.LogDebug(ex, "Could not delete stale firing claim {Path}; the next sweep retries.", path);
+                    return Observable.Return(false);
+                }))
+            .Subscribe(_ => { }, ex => logger?.LogDebug(ex, "Sweeping firing claims of {Id} failed.", fired.Id));
+    }
+
+    /// <summary>
+    /// Claims one slot of a timer subscription across replicas: creates the claim node, which only one
+    /// replica's create can win. Emits true when this replica may fire. An existing claim older than
+    /// <see cref="EventFiringClaimNodeType.Lease"/> belongs to a replica that died mid-fire and is taken over —
+    /// otherwise a crash between claim and next-slot write would end the schedule. A claim that cannot be
+    /// written at all fails OPEN (fires): a duplicate run is the lesser harm than a job that never runs.
+    /// </summary>
+    private IObservable<bool> ClaimFiring(EventSubscription subscription, DateTimeOffset slot)
+    {
+        MeshNode Claim() => new(EventFiringClaimNodeType.IdOf(subscription.Id, slot), EventFiringClaimNodeType.Namespace)
+        {
+            NodeType = EventFiringClaimNodeType.NodeType,
+            Name = $"{subscription.Id} @ {slot:u}",
+            Content = new EventFiringClaim
+            {
+                SubscriptionId = subscription.Id,
+                Slot = slot,
+                ClaimedAt = DateTimeOffset.UtcNow,
+                ClaimedBy = $"{Environment.MachineName}/{Environment.ProcessId}",
+            },
+        };
+        var path = EventFiringClaimNodeType.Path(subscription.Id, slot);
+        return AsSystem(() => meshService.CreateNode(Claim()))
+            .Select(_ => true)
+            .Catch((Exception ex) =>
+            {
+                if (ex.Message?.Contains("already exists", StringComparison.OrdinalIgnoreCase) != true)
+                {
+                    logger?.LogWarning(ex,
+                        "Could not claim slot {Slot:o} of timer {Id}; firing anyway rather than risk a missed run.",
+                        slot, subscription.Id);
+                    return Observable.Return(true);
                 }
-                Execute(live, live.SubjectId ?? "");
+                return AsSystem(() => hub.GetWorkspace().GetMeshNodeStream(path))
+                    .Take(1)
+                    .Select(node => node?.ContentAs<EventFiringClaim>(hub.JsonSerializerOptions))
+                    .SelectMany(existing =>
+                        existing is { } held && DateTimeOffset.UtcNow - held.ClaimedAt < EventFiringClaimNodeType.Lease
+                            ? Observable.Return(false)
+                            : AsSystem(() => meshService.CreateOrUpdateNode(Claim())).Select(_ => true));
             });
     }
 
