@@ -776,7 +776,11 @@ public sealed class EventSubscriptionRunner(
                     if (subscription.RepeatEvery is not null)
                         executing.TryRemove(subscription.Id, out _);
                     if (subscription.TriggerType == EventTriggerType.Timer)
+                    {
                         SweepClaims(subscription);
+                        if (subscription.RepeatEvery is null)
+                            RetireOneShotClaim(subscription);
+                    }
                     logger?.LogInformation(
                         "Event subscription {Id} fired: {Continuation} {Role} for {User} on {Target}",
                         subscription.Id, subscription.ContinuationType, subscription.Role, userId,
@@ -918,6 +922,21 @@ public sealed class EventSubscriptionRunner(
                 .Select(next => new TimerDecision(null, next))
                 .Catch((Exception _) => Observable.Return(TimerDecision.Nothing));
         });
+    }
+
+    /// <summary>How long a one-shot's own claim is kept after it fired — long enough for every late loser of the
+    /// slot to have seen the terminal <c>Fired</c> status. Test seam; the age sweep covers a claim whose
+    /// winner restarted before this elapsed.</summary>
+    internal TimeSpan OneShotClaimRetention { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>A one-shot has no later firing whose sweep would remove its claim, so its winner deletes it.</summary>
+    private void RetireOneShotClaim(EventSubscription fired)
+    {
+        var path = EventFiringClaimNodeType.Path(fired.Id, fired.FireAt ?? DateTimeOffset.UtcNow);
+        // Owned by the runner: a stop disposes it, so no delete is issued after it.
+        catchUpSubs.Add(Observable.Timer(OneShotClaimRetention)
+            .SelectMany(_ => AsSystem(() => meshService.DeleteNode(path)))
+            .Subscribe(_ => { }, ex => logger?.LogDebug(ex, "Could not delete one-shot firing claim {Path}; the age sweep retries.", path)));
     }
 
     /// <summary>How old a claim must be before ANY winner sweeps it, whoever it belonged to.</summary>

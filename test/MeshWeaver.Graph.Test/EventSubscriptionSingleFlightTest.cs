@@ -52,7 +52,10 @@ public class EventSubscriptionSingleFlightTest(ITestOutputHelper output) : Monol
         for (var i = 0; i < Replicas; i++)
         {
             var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
-                Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
+                Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>())
+            {
+                OneShotClaimRetention = TimeSpan.FromSeconds(1),
+            };
             runners.Add(runner);
             await runner.StartAsync(default);
         }
@@ -113,6 +116,18 @@ public class EventSubscriptionSingleFlightTest(ITestOutputHelper output) : Monol
 
         Assert.Equal(EventSubscriptionStatus.Fired, final!.Status);
         Assert.Equal(1, handler.Calls);
+
+        // A one-shot has no later firing whose sweep would remove its claim: its winner retires it.
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var remaining = await Observable.Interval(TimeSpan.FromMilliseconds(500))
+            .SelectMany(_ => accessService.RunAsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{EventFiringClaimNodeType.Namespace} scope:children nodeType:{EventFiringClaimNodeType.NodeType}"))
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .Take(1)))
+            .Select(c => (c.Items ?? []).Count(n => n.Id.StartsWith(subscription.Id + "_", StringComparison.Ordinal)))
+            .Where(count => count == 0)
+            .FirstAsync().Timeout(30.Seconds()).Await();
+        Assert.Equal(0, remaining);
     }
 
     /// <summary>The claim trail is bounded: after N firings of a repeater at most two claim nodes remain.</summary>
