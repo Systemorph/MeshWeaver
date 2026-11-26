@@ -550,6 +550,9 @@ public static class MeshNodeExtensions
         // EventSubscription grant nodes logging "stayed an untyped JsonElement".
         typeRegistry.WithType(typeof(EventSubscription), nameof(EventSubscription));
         typeRegistry.WithType(typeof(EventSubscriptionStatus), nameof(EventSubscriptionStatus));
+        // EventFiringClaim — the cross-replica single-flight claim of one timer slot (see
+        // EventFiringClaimNodeType): registered for the same reason, so a reader on another hub gets it typed.
+        typeRegistry.WithType(typeof(EventFiringClaim), nameof(EventFiringClaim));
         typeRegistry.WithType(typeof(EventTriggerType), nameof(EventTriggerType));
         typeRegistry.WithType(typeof(EventContinuationType), nameof(EventContinuationType));
         // What a DeliverTo node receives inside its own content (EventContinuationType.DeliverToNode).
