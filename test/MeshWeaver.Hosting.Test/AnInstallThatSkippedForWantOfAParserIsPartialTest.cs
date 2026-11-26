@@ -157,6 +157,31 @@ public class AnInstallThatSkippedForWantOfAParserIsPartialTest(ITestOutputHelper
         Assert.False(PackageInstaller.OwesParserRetry(record, Registry()));
     }
 
+    /// <summary>The record keys InstalledFiles by every DECLARED file, skipped ones included, so the sweep sees them.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task APartialRecord_IsReportedAsPartial_NotAbsentAndNotCurrent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var record = new PackageManifest
+        {
+            Id = Package, Kind = PackageKind.NodeRepo, TargetPartition = Package,
+            InstalledFiles = System.Collections.Immutable.ImmutableSortedDictionary<string, string>.Empty
+                .Add($"{Package}/index.json", "h1").Add($"{Package}/Notes.json", "h2").Add(SkillPath, "h3"),
+            PendingParserFiles = System.Collections.Immutable.ImmutableSortedSet.Create(StringComparer.Ordinal, SkillPath),
+        };
+
+        var verdict = await InstallCompleteness
+            .Observe(Storage, Mesh.JsonSerializerOptions, Package, Package, record, Registry())
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+
+        Assert.Equal([SkillPath], verdict.AwaitingParserFilePaths);
+        Assert.DoesNotContain(verdict.Missing, m => m.Contains("Skill/hello", StringComparison.Ordinal));
+        var landing = InstallCompleteness.DescribeLanding(verdict, "v1");
+        Assert.Contains("PARTIALLY installed", landing.Message);
+        Assert.Contains(SkillPath, landing.Message);
+        Assert.True(landing.Level >= Microsoft.Extensions.Logging.LogLevel.Warning);
+    }
+
     [Fact]
     public void ARecordWithNoSkippedFiles_OwesNoRetry_EvenWithTheParserRegistered()
     {

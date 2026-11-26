@@ -850,8 +850,8 @@ public static class InstallCompleteness
     {
         ArgumentNullException.ThrowIfNull(verdict);
         return $"Package {verdict.PackageId} is PARTIALLY installed: {verdict.AwaitingParserFilePaths.Count} "
-               + "file(s) were skipped because the parser their type needs (the AI module's file parser) "
-               + "was not registered on the host that installed them: "
+               + "file(s) were skipped because the file parser their node type needs was not "
+               + "registered on the host that installed them: "
                + $"[{string.Join(", ", verdict.AwaitingParserFilePaths.Take(MaxNamedInALine))}]. "
                + "The next install pass retries the package in full once that parser is available.";
     }

@@ -4837,7 +4837,7 @@ public static class PackageInstaller
         if (awaitingParser.Count > 0)
             logger?.LogWarning(
                 "Package '{Package}': {Skipped} file(s) were NOT installed because the parser their "
-                + "type needs is not registered on this host (the AI module has not landed): {Sample}. "
+                + "type needs is not registered on this host: {Sample}. "
                 + "The install record is stamped PARTIAL (PendingParserFiles) and the next install "
                 + "pass retries the package once the parser is available.",
                 packageId, awaitingParser.Count, string.Join(", ", awaitingParser.Take(5)));
