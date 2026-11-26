@@ -667,6 +667,76 @@ public static class StaticRepoImporter
             .ToArray();
     }
 
+    /// <summary>Config section listing partitions whose source the DECLARATION has retired
+    /// (<c>Features:StaticRepoSync:RetiredPartitions</c>). Only a partition named here (or in
+    /// <see cref="BuiltInRetiredPartitions"/>) is ever retired as an orphan.</summary>
+    public const string RetiredPartitionsConfigKey = "Features:StaticRepoSync:RetiredPartitions";
+
+    /// <summary>Config key for <see cref="DefaultMaxPruneFraction"/>.</summary>
+    public const string MaxPruneFractionConfigKey = "Features:StaticRepoSync:MaxPruneFraction";
+
+    /// <summary>Partitions whose source was retired by a committed decision (the <c>command</c>
+    /// catalog, unified into Skill). A declaration shipped in code.</summary>
+    public static readonly IReadOnlySet<string> BuiltInRetiredPartitions =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Command" };
+
+    /// <summary>One prune may delete at most this fraction of a partition's nodes (above
+    /// <see cref="PruneBoundFloor"/> nodes) — more is a misjudgement, not a sync.</summary>
+    public const double DefaultMaxPruneFraction = 0.25;
+
+    /// <summary>Prunes of at most this many nodes are never bounded (small partitions, one-off retirements).</summary>
+    public const int PruneBoundFloor = 10;
+
+    /// <summary>The verdict on orphaned source-owned partitions (policy <c>declared-not-derived</c>).</summary>
+    /// <param name="Retire">Orphans the declaration itself retired — safe to retire.</param>
+    /// <param name="CannotJudge">Orphans whose source is merely ABSENT on this process (module not
+    /// landed, registration hidden): an absent contributor is not a removal, so nothing is pruned.</param>
+    public sealed record OrphanVerdict(IReadOnlyList<string> Retire, IReadOnlyList<string> CannotJudge);
+
+    /// <summary>
+    /// Splits <see cref="ComputeOrphanedSourcePartitions"/>' result into what the declaration retired
+    /// and what is merely absent. Absence of a source on THIS process proves nothing (the 4.x boot that
+    /// deleted 1,491 <c>Provider</c> nodes ran before <c>MeshWeaver.AI</c> landed), so an orphan is only
+    /// retired when named in <paramref name="declaredRetired"/>. Pure + case-insensitive.
+    /// </summary>
+    public static OrphanVerdict JudgeOrphanedSourcePartitions(
+        IEnumerable<string> orphans, IEnumerable<string> declaredRetired)
+    {
+        var declared = new HashSet<string>(
+            declaredRetired.Where(d => !string.IsNullOrEmpty(d)), StringComparer.OrdinalIgnoreCase);
+        var list = orphans.ToArray();
+        return new OrphanVerdict(
+            list.Where(declared.Contains).ToArray(),
+            list.Where(o => !declared.Contains(o)).ToArray());
+    }
+
+    /// <summary>
+    /// True when deleting <paramref name="candidateCount"/> of <paramref name="partitionSize"/> nodes in
+    /// one prune exceeds the bound: more than <see cref="PruneBoundFloor"/> nodes AND more than
+    /// <paramref name="maxFraction"/> of the partition. Pure.
+    /// </summary>
+    public static bool ExceedsPruneBound(int candidateCount, int partitionSize,
+        double maxFraction = DefaultMaxPruneFraction)
+        => candidateCount > PruneBoundFloor
+           && partitionSize > 0
+           && candidateCount > partitionSize * maxFraction;
+
+    private static IReadOnlyCollection<string> DeclaredRetiredPartitions(IMessageHub hub)
+    {
+        var configured = hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>()
+            ?.GetSection(RetiredPartitionsConfigKey).GetChildren()
+            .Select(c => c.Value).Where(v => !string.IsNullOrEmpty(v)).Select(v => v!)
+            ?? Enumerable.Empty<string>();
+        return BuiltInRetiredPartitions.Concat(configured).ToArray();
+    }
+
+    private static double ConfiguredMaxPruneFraction(IMessageHub hub)
+        => double.TryParse(
+               hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>()?[MaxPruneFractionConfigKey],
+               System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var f)
+           && f is > 0 and <= 1
+            ? f : DefaultMaxPruneFraction;
+
     /// <summary>
     /// The nodes an import should PRUNE for a partition running <paramref name="mode"/>: existing
     /// partition nodes absent from the current source (<paramref name="sourcePaths"/>), still
@@ -794,18 +864,31 @@ public static class StaticRepoImporter
                     .Select(n => n.Id)               // marker id == partition name
                     .Where(id => !string.IsNullOrEmpty(id))
                     .ToArray();
-                var orphans = ComputeOrphanedSourcePartitions(previouslyOwned, currentSourcePartitions);
+                var allOrphans = ComputeOrphanedSourcePartitions(previouslyOwned, currentSourcePartitions);
+                // DECLARED, NOT DERIVED: an orphan is a source ABSENT on this process, which is not a
+                // source the declaration dropped. Only declared retirements are retired; every other
+                // orphan is "cannot judge" - skipped at Warning, its marker kept.
+                var verdict = JudgeOrphanedSourcePartitions(allOrphans, DeclaredRetiredPartitions(hub));
+                foreach (var skipped in verdict.CannotJudge)
+                    logger?.LogWarning(
+                        "[StaticRepoImport] source-owned partition '{Partition}' has no registered source on this "
+                        + "process (module not landed or registration hidden) and is not declared retired in "
+                        + "{Key}: NOT pruned - an absent contributor is not a removal.",
+                        skipped, RetiredPartitionsConfigKey);
+                var orphans = verdict.Retire;
 
-                // Delete each orphan partition (recursive subtree) + its marker — System-scoped, guarded
-                // per-orphan so one failure doesn't abort the rest.
+                // Retire each DECLARED orphan through the manifest-driven retirement: only what the
+                // source's own manifest recorded, never the partition root (which carries _Access /
+                // _Policy and every runtime node). Guarded per-orphan.
                 var prunes = orphans.Select(orphan =>
                 {
-                    logger?.LogInformation("[StaticRepoImport] pruning orphaned source-owned partition '{Partition}'.", orphan);
-                    return AsSystem(hub, () => meshService.DeleteNode(orphan)).Select(_ => 1)
+                    logger?.LogInformation("[StaticRepoImport] retiring declared-retired source-owned partition '{Partition}'.", orphan);
+                    return RetireSourceOn(hub, orphan, "declared retirement", logger)
+                        .Select(r => r.PrunedPaths.Count)
                         .Concat(AsSystem(hub, () => meshService.DeleteNode($"{SourceOwnedRegistryNamespace}/{orphan}")).Select(_ => 0))
                         .Catch<int, Exception>(ex =>
                         {
-                            logger?.LogWarning(ex, "[StaticRepoImport] prune of '{Partition}' failed (continuing).", orphan);
+                            logger?.LogWarning(ex, "[StaticRepoImport] retirement of '{Partition}' failed (continuing).", orphan);
                             return Observable.Return(0);
                         });
                 });
@@ -906,7 +989,13 @@ public static class StaticRepoImporter
     {
         logger ??= meshHub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
-        var hub = CreateImportHub(meshHub, logger);
+        return RetireSourceOn(CreateImportHub(meshHub, logger), partition, retiredBy, logger);
+    }
+
+    /// <summary><see cref="RetireSource"/> on an already-created import hub.</summary>
+    private static IObservable<StaticRepoImportResult> RetireSourceOn(
+        IMessageHub hub, string partition, string retiredBy, ILogger? logger)
+    {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         return ProvisionPartitions(hub, [partition])
             .SelectMany(_ => Observable.Zip(
@@ -2219,6 +2308,20 @@ public static class StaticRepoImporter
                     // no longer "newer on the server" and got PRUNED — the server addition silently deleted
                     // one cycle later, which is precisely what that baseline guard exists to prevent.
                     // Deterministic repro: TwoWaySyncTest.TwoWay_ServerAddition_SurvivesEveryLaterRepoPush.
+                    // THE BOUND (policy declared-not-derived): one prune that would take more than a
+                    // small fraction of the partition is a misjudgement (a hidden contributor, a
+                    // half-read source), never a sync. Refuse the WHOLE prune, loudly, keep everything.
+                    var pruneBound = ConfiguredMaxPruneFraction(hub);
+                    var pruneBoundRefused = ExceedsPruneBound(toPrune.Count, existing.Count, pruneBound);
+                    if (pruneBoundRefused)
+                    {
+                        logger?.LogError(
+                            "[StaticRepoImport] {Partition}: prune REFUSED - it would delete {Candidates} of {Total} "
+                            + "node(s) (> {Fraction:P0}); nothing was removed. Verify the source is complete and its "
+                            + "module landed, then raise {Key} deliberately if the removal is intended.",
+                            source.Partition, toPrune.Count, existing.Count, pruneBound, MaxPruneFractionConfigKey);
+                        toPrune = Array.Empty<MeshNode>();
+                    }
                     var keptFromPrune = Array.Empty<MeshNode>();
                     if (policy is not null)
                     {
@@ -2330,7 +2433,17 @@ public static class StaticRepoImporter
                         // retired Source nodes survived is exactly the state this sentence makes
                         // legible. It is NOT a generic "prune skipped": UpsertOnly and an empty
                         // candidate set stay silent, because they are not failures.
-                        var pruneRefusal = sourceListingIsComplete
+                        var pruneRefusal = pruneBoundRefused
+                            ? new[]
+                            {
+                                new LogMessage(
+                                    $"⛔ Pruned nothing in {source.Partition}: the prune would delete more than "
+                                    + $"{pruneBound:P0} of the partition at once, which is a misjudgement, not a sync.",
+                                    Microsoft.Extensions.Logging.LogLevel.Error)
+                                    .WithKey("activity.import.pruneRefusedBound",
+                                        ("partition", source.Partition)),
+                            }
+                            : sourceListingIsComplete
                             ? Array.Empty<LogMessage>()
                             : new[]
                             {

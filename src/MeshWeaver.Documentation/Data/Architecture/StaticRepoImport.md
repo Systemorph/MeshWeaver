@@ -122,7 +122,11 @@ recording it there froze the divergence permanently and invisibly. A partition t
 decoupled wholesale ("sync: none" on its root) is the one carve-out: declining everything there is
 the instruction, so it is stated rather than escalated.
 
-> 🚨 **Decouple by claiming the root — never by unregistering the source.** Dropping a partition from `AddStaticRepoSync` (config or code) removes it from the current source set → `ReconcileSourceOwnedPartitions` treats it as an orphan and **`DeleteNode`s the whole partition** (every node + key). Keep the source registered and claim the root instead.
+> 🚨 **An absent source is NOT a removal (declared, not derived).** A source that is unregistered on this process - its module has not landed, or a registration is hidden - makes its partition an *orphan* in `ReconcileSourceOwnedPartitions`. That used to `DeleteNode` the whole partition: on 2026-11-26 the first 4.x pearl pod booted before `MeshWeaver.AI` landed and deleted **1,491 `Provider` nodes**, `_Access` grants included. Now an orphan is retired **only when the declaration retires it** - `Features:StaticRepoSync:RetiredPartitions` (plus the built-in `Command`); every other orphan is "cannot judge", logged at Warning and left alone, marker kept. A declared retirement goes through the manifest-driven `RetireSource` (provenance-gated, `_Access`/`_Policy`/`_Activity` and the partition root spared), never a recursive delete of the root.
+>
+> 🚨 **A prune is bounded.** One prune that would delete more than `Features:StaticRepoSync:MaxPruneFraction` (default 25%) of a partition - and more than 10 nodes - is refused whole, logged at Error and written to the activity log (`activity.import.pruneRefusedBound`). A single removal, or any prune of 10 nodes or fewer, is never bounded. Raise the fraction deliberately if a mass removal is intended.
+>
+> 🚨 **To decouple, claim the root; to retire, declare it.** Dropping a partition from `AddStaticRepoSync` no longer deletes anything on its own - it just leaves the partition in place with a Warning. Claim the root ("sync: none") to decouple, or list the partition under `Features:StaticRepoSync:RetiredPartitions` to retire what the source imported.
 
 ### Why `CreateOrUpdateNodeRequest`, not CreateNode + Overwrite
 
