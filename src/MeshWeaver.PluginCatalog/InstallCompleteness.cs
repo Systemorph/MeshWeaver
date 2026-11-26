@@ -82,8 +82,12 @@ public static class InstallCompleteness
         // 🚨 …and the rows the installer deliberately does not hold on THIS host (a NodeType row on
         // a closed type set, #6627): they are owed to no mesh that cannot serve them.
         var withheld = record.WithheldFiles;
+        // …and the files the install skipped for want of a parser on its host: owed, but not ABSENT
+        // in the sense a reinstall-now repairs — they are reported under their own sentence.
+        var pending = record.PendingParserFiles;
         return files.Keys
             .Where(f => unreadable?.Contains(f) != true)
+            .Where(f => pending?.Contains(f) != true)
             .Where(f => withheld?.Contains(f) != true)
             .Select(f => PackageInstaller.NodePathForFile(f, parsers))
             .Where(p => !string.IsNullOrWhiteSpace(p))
@@ -608,7 +612,8 @@ public static class InstallCompleteness
     private readonly record struct Population(
         int DeclaredFiles, int NonNodeFiles, int ModuleSourceFiles,
         ImmutableSortedSet<string> ModuleSourceDirectories,
-        ImmutableSortedSet<string> UnreadableFilePaths)
+        ImmutableSortedSet<string> UnreadableFilePaths,
+        ImmutableSortedSet<string> AwaitingParserFilePaths)
     {
         public InstallCompletenessVerdict Apply(InstallCompletenessVerdict verdict) => verdict with
         {
@@ -617,6 +622,7 @@ public static class InstallCompleteness
             ModuleSourceFiles = ModuleSourceFiles,
             ModuleSourceDirectories = ModuleSourceDirectories,
             UnreadableFilePaths = UnreadableFilePaths,
+            AwaitingParserFilePaths = AwaitingParserFilePaths,
         };
     }
 
@@ -624,7 +630,7 @@ public static class InstallCompleteness
     {
         var empty = ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
         if (record?.InstalledFiles is not { Count: > 0 } files)
-            return new Population(0, 0, 0, empty, empty);
+            return new Population(0, 0, 0, empty, empty, empty);
         // 🚨 THREE buckets, not two. A non-node file is excluded BY DESIGN (a README, the manifest
         // sidecar, a content asset, a module source, an extension no parser claims); an UNREADABLE
         // one is a packaging fault the installer met and recorded (#3659). Folding them together
@@ -644,7 +650,10 @@ public static class InstallCompleteness
             .ToImmutableSortedSet(StringComparer.Ordinal);
         return new Population(
             files.Count, nonNode, sources.Count, directories,
-            UnreadableFilePaths(record, parsers));
+            UnreadableFilePaths(record, parsers),
+            record.PendingParserFiles is { Count: > 0 } pend
+                ? pend.Where(f => files.ContainsKey(f)).ToImmutableSortedSet(StringComparer.Ordinal)
+                : empty);
     }
 
     /// <summary><c>src/X/a/b.cs</c> → <c>src/X</c>: the module directory a declared source
@@ -801,9 +810,15 @@ public static class InstallCompleteness
         // declares a node that will never exist — and it is spelled as a PACKAGING defect, because
         // the one thing that cannot fix it is the remedy every other line here names: reinstalling
         // meets the same bytes and fails the same way, forever.
-        return after.UnreadableFilePaths.Count == 0
-            ? ordinary
-            : new LandingReport(LogLevel.Error, UnreadableSentence(after) + " " + ordinary.Message);
+        if (after.UnreadableFilePaths.Count > 0)
+            return new LandingReport(LogLevel.Error, UnreadableSentence(after) + " " + ordinary.Message);
+        // 🚨 A PARTIAL install is never reported as complete-and-current: files skipped for want of a
+        // parser are named, at Warning at least, with the retry that completes them.
+        if (after.AwaitingParserFilePaths.Count > 0)
+            return new LandingReport(
+                ordinary.Level > LogLevel.Warning ? ordinary.Level : LogLevel.Warning,
+                AwaitingParserSentence(after) + " " + ordinary.Message);
+        return ordinary;
     }
 
     /// <summary>
@@ -824,6 +839,21 @@ public static class InstallCompleteness
                + "(a package.json / tsconfig.json carries no $type, id or nodeType, so it is not a "
                + "node): move it out of the package, or give it a shape the parser recognises "
                + "(MeshWeaver#3659).";
+    }
+
+    /// <summary>
+    /// The sentence for files the install skipped because their parser is not registered on the
+    /// host that ran it — a PARTIAL install that the next pass retries once the parser is there.
+    /// </summary>
+    /// <param name="verdict">The verdict carrying <see cref="InstallCompletenessVerdict.AwaitingParserFilePaths"/>.</param>
+    public static string AwaitingParserSentence(InstallCompletenessVerdict verdict)
+    {
+        ArgumentNullException.ThrowIfNull(verdict);
+        return $"Package {verdict.PackageId} is PARTIALLY installed: {verdict.AwaitingParserFilePaths.Count} "
+               + "file(s) were skipped because the parser their type needs (the AI module's file parser) "
+               + "was not registered on the host that installed them: "
+               + $"[{string.Join(", ", verdict.AwaitingParserFilePaths.Take(MaxNamedInALine))}]. "
+               + "The next install pass retries the package in full once that parser is available.";
     }
 
     private static LandingReport DescribeVerdict(InstallCompletenessVerdict after, string module)
@@ -1184,6 +1214,14 @@ public sealed record InstallCompletenessVerdict(
     /// Error, as what they are — a package that declares a node it can never deliver.</para>
     /// </summary>
     public ImmutableSortedSet<string> UnreadableFilePaths { get; init; } =
+        ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The FILES the record's <see cref="PackageManifest.PendingParserFiles"/> names — skipped by an
+    /// install on a host without the parser their type needs. Not in <see cref="Missing"/> and not
+    /// unreadable: a PARTIAL install the next pass completes.
+    /// </summary>
+    public ImmutableSortedSet<string> AwaitingParserFilePaths { get; init; } =
         ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 
     /// <summary>What this verdict counted, and over what — one clause, on every line that reports
