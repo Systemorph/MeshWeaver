@@ -305,7 +305,22 @@ does not hold a lane thread. Therefore: the cap is 64 (a burst must not start hu
 while all lane threads run drains logs `[DISPOSAL-LANE] saturated` naming the oldest holders and the message each
 is executing; and the pump verdict names the scheduler (`on disposal-lane(...)` / `(pool, no disposal lane
 resolved)`). The next recurrence will name the blocking turn. Pinned by `DisposalDrainLaneTest`
-(`ADisposeActionDoingSlowIo_DoesNotHoldALaneThread`, `ASaturatedLane_WarnsNamingTheBlockingTurns`).
+(`ADisposeActionDoingSlowIo_DoesNotHoldALaneThread`, `AStuckLane_WarnsNamingTheBlockingTurns`).
+
+**Measured 2026-11-26 on image 4.0.14261: a full lane is a mass teardown, not a stuck lane (#5799).** After the
+cap and the watchdog fix, `DISPOSAL DEADLOCK DETECTED` went to 0 in 2 h (23 in the prior 24 h) while the lane
+logged `saturated` 45 times in 3 h (memex-cloud 40, memex 9, build 5, control 3 over the 3 h window). The
+holders named by every one of those lines: a `sync/*` hub running its `ShutdownRequest` (193 of 198 named
+holders on memex-cloud; the rest `between turns`), and the OLDEST holder never older than 252 ms (memex-cloud
+185, memex 252, build 116, control 91). No turn blocked, no slot leaked (a leaked slot would show an age that
+grows), and the same windows carry no stall verdict, `QUIESCE-TIMEOUT` or `FORCE-TEARDOWN`. The bursts coincide
+with a parent disposing every hosted child in one call (`HostedHubsCollection.DisposeHubsReactive` — e.g. a
+module container ending during a package uninstall at 20:21:54Z: hundreds of `RunLevel=DisposeHostedHubs`
+rejections in the same second). The lane is the bound on that burst, and the burst drains in milliseconds.
+So the lane now reports by what distinguishes the two cases, the age of the oldest holder:
+`[DISPOSAL-LANE] stuck` (Warning, oldest holder past `DisposalDrainLane.DefaultStuckAfter`, 1 s — a turn is
+blocking) versus `[DISPOSAL-LANE] burst absorbed` (Information, with the oldest holder's age, so bursts stay
+countable). Read a `stuck` line as the original defect; read `burst absorbed` as the cap working.
 
 ### A running drain also has to return its worker
 
