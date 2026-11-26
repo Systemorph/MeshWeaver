@@ -2765,7 +2765,7 @@ jobs:
           if [ "$BUILT" != "true" ]; then
             echo "uncarried-asset refusal: no container entry was compiled in this run, so there is no workspace-build log to hold to it (sdk entries are refused by module-pack itself)"
           elif grep -qF 'uncarried-asset refusal — ENFORCED for bundle target RID' "$RUNNER_TEMP/module-build/workspace-build.log"; then
-            grep -F 'uncarried-asset refusal — ENFORCED for bundle target RID' "$RUNNER_TEMP/module-build/workspace-build.log" | head -n 1
+            grep -m1 -F 'uncarried-asset refusal — ENFORCED for bundle target RID' "$RUNNER_TEMP/module-build/workspace-build.log"
           elif grep -qF 'Uncarried-asset refusal: ARMED' "$RUNNER_TEMP/tester-build-project-usage.txt"; then
             echo "::error::the pinned tester (tester-image-digest $TESTER_DIGEST) advertises the uncarried-asset refusal, but its workspace build printed no 'uncarried-asset refusal — ENFORCED' line — the refusal did not arm, and every container bundle in this run went unchecked for assets it does not carry (#4445)."
             exit 1
