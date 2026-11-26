@@ -1,4 +1,5 @@
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Layout;
@@ -479,9 +480,17 @@ public static class AreaErrorClassifier
     /// <see cref="ErrorType.CompilationInProgress"/> NACK (handled immediately by swapping
     /// to the Progress view, not by spinning), and never a hub init failure (durably FAILED —
     /// a resubscribe hits the same failed hub, so the reason is rendered once, not retried).
+    ///
+    /// <para>🚨 <b>Never a sync stream that GAVE UP</b> (<see cref="SyncStreamOwnerRefusedException"/>).
+    /// That terminal is transient for a reader, but the stream carrying it has latched the fault in
+    /// its <c>ReplaySubject</c> store and replays it to every later subscriber, so re-subscribing the
+    /// SAME stream can never succeed — a reader must open a NEW stream (see
+    /// <see cref="AreaStreamReopen"/>). Retrying also costs: every area on that one stream replays the
+    /// error, and runs the retry decision, inside the subject's monitor. Evidence: #8487.</para>
     /// </summary>
     public static bool ShouldRetryArea(Exception? ex)
         => ex is not ObjectDisposedException
+           && !ExceptionChain.Contains<SyncStreamOwnerRefusedException>(ex)
            && TryGetCompilationInProgressNodeType(ex) is null
            && TryGetInitializationFailureReason(ex) is null
            && IsTransientHubFailure(ex);

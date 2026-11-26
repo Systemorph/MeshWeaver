@@ -1,4 +1,6 @@
 using System;
+using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using Xunit;
 
@@ -190,6 +192,20 @@ public class AreaErrorClassifierTest
         // A durably-failed hub won't recover on resubscribe — render the reason once, never spin (#323).
         => AreaErrorClassifier.ShouldRetryArea(
                 Failure("Hub 'x' initialization failed: seed missing", ErrorType.Failed)).Should().BeFalse();
+
+    private static SyncStreamOwnerRefusedException GaveUp() =>
+        new("s1", "Feedback/Inbox", "giving up on owner Feedback/Inbox — ONE WEDGED TEARDOWN");
+
+    [Fact]
+    public void ShouldRetryArea_FalseForSyncStreamThatGaveUp_ItsStoreReplaysTheFaultForever()
+    {
+        // Transient for a reader (the owner is coming back)…
+        AreaErrorClassifier.IsTransientHubFailure(GaveUp()).Should().BeTrue();
+        // …but the stream that carries it has latched the fault, so re-subscribing it cannot succeed.
+        AreaErrorClassifier.ShouldRetryArea(GaveUp()).Should().BeFalse();
+        AreaErrorClassifier.ShouldRetryArea(new AggregateException(GaveUp())).Should().BeFalse();
+        AreaErrorClassifier.ShouldRetryArea(new InvalidOperationException("outer", GaveUp())).Should().BeFalse();
+    }
 
     [Fact]
     public void ShouldRetryArea_FalseForPermanentError()
