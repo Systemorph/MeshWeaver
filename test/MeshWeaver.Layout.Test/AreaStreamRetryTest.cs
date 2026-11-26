@@ -1,4 +1,6 @@
 using System;
+using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using System.Reactive;
 using System.Reactive.Linq;
 using Microsoft.Reactive.Testing;
@@ -263,5 +265,29 @@ public class AreaStreamRetryTest
 
         subscribeCount.Should().Be(1, "an inexistent address is not resubscribed even once");
         observer.Messages[0].Value.Kind.Should().Be(NotificationKind.OnError);
+    }
+
+    [Fact]
+    public void LatchedStreamThatGaveUp_IsSubscribedOnceByEveryArea_NotOncePerRetry()
+    {
+        // The Feedback Inbox shape (#8487): hundreds of area views share ONE stream whose ReplaySubject
+        // store latched a SyncStreamOwnerRefusedException. Each view used to resubscribe it 5 times;
+        // every resubscribe replays the error inside the subject's monitor and runs the retry decision
+        // there, so the pool threads piled up on the lock and every Postgres fan-in timed out behind them.
+        var scheduler = new TestScheduler();
+        var store = new System.Reactive.Subjects.ReplaySubject<int>(1);
+        store.OnError(new SyncStreamOwnerRefusedException("s1", "Feedback/Inbox", "gave up"));
+        const int areas = 300;
+        var subscriptions = 0;
+        var source = Observable.Defer(() => { subscriptions++; return store; });
+        var errors = 0;
+        for (var i = 0; i < areas; i++)
+            source.RetryAreaWithBackoff(AreaErrorClassifier.ShouldRetryArea, scheduler: scheduler)
+                .Subscribe(_ => { }, _ => errors++);
+
+        scheduler.Start();
+
+        subscriptions.Should().Be(areas, "a latched stream is read once per area and reported, never re-asked");
+        errors.Should().Be(areas, "every area still surfaces the failure at once");
     }
 }
