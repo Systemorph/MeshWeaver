@@ -1180,7 +1180,9 @@ equal the live token (framework key, installed modules, the source set THIS pass
 `FailedPlatformVersion` is not older than the running ordered build, the type is reported
 `CompileError` with "not re-attempted" and nothing is compiled or written. A source edit, a module
 update or a newer platform build earns exactly one fresh attempt, which re-stamps. Every uncertainty
-(no stamp, `Unavailable`, a different token) compiles.
+about the verdict (no stamp, `Unavailable`, a different token) compiles; the one exception is a
+running build whose version is unordered (a local `-dev` build), which cannot claim to be newer than
+the failing build and so only source and module changes re-attempt there, as on activation.
 
 The re-drive is **owner-driven, never caller-driven**. It fires from the type's OWN hub on facts the
 node already holds; no request, and no requester's identity, is an input. The compile runs as System

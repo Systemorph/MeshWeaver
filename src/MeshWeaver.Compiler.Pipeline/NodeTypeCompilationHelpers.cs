@@ -5150,10 +5150,16 @@ internal static class NodeTypeCompilationHelpers
     /// platform build that may now carry a symbol the source already uses — earns exactly one fresh
     /// attempt, which re-stamps and so closes the door again.</para>
     ///
-    /// <para>🚨 <b>Fails open.</b> Every uncertainty answers NO (compile): an absent stamp (a failure
-    /// that predates the field, or one baked into a committed file), an <c>Unavailable</c> settle (it
-    /// formed no verdict), a different token, a failure formed on an OLDER ordered platform build. A
-    /// needless compile costs a compile; a latched skip strands a type.</para>
+    /// <para>🚨 <b>Fails open</b>, with ONE deliberate exception. Every uncertainty about the
+    /// VERDICT answers NO (compile): an absent stamp (a failure that predates the field, or one
+    /// baked into a committed file), an <c>Unavailable</c> settle (it formed no verdict), a different
+    /// token, a failure formed on an OLDER ordered platform build. A needless compile costs a
+    /// compile; a latched skip strands a type. The exception is an UNORDERED live build (a local
+    /// <c>-dev</c> source build, an unparseable version): it cannot claim to be newer than anything,
+    /// so the platform half answers "not older" and the type is declined for identical inputs —
+    /// exactly as <see cref="HasFailureFromOlderPlatform"/> already behaves at activation. Source and
+    /// module changes still earn their attempt on such a build; only the "newer build" trigger is
+    /// unavailable to it.</para>
     /// </summary>
     /// <param name="def">The type's persisted definition.</param>
     /// <param name="modulesHash">The installed-module fingerprint half of the live inputs.</param>
