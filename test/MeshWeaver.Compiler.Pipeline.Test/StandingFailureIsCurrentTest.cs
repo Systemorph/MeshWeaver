@@ -75,6 +75,44 @@ public class StandingFailureIsCurrentTest
         NodeTypeCompilationHelpers.IsStandingFailureCurrent(Failed(OldBuild), ModulesHash, Sources, "4.0.0-dev")
             .Should().BeTrue("an unordered pair answers 'not newer', exactly as HasFailureFromOlderPlatform does");
 
+    // 🚨 #8529 follow-up — what a batch bake STAMPS must be comparable with what the next bake DERIVES.
+    // The record's CurrentSourceVersions is kept by the type's own hub watcher only, so it can lag the
+    // set a bake just resolved fresh and compiled against.
+    private const string TypePath = "U/T";
+    private static readonly ImmutableDictionary<string, long> LaggingSnapshot =
+        Sources.SetItem("U/T/Source/A", 1);
+
+    private static NodeTypeDefinition StampedByABake(IReadOnlyDictionary<string, long>? consumed) =>
+        NodeTypeCompilationHelpers.ApplyCompileFailure(
+            new NodeTypeDefinition { CurrentSourceVersions = LaggingSnapshot },
+            result: null,
+            new CompilationException(TypePath, "CS0246"),
+            activityPath: null,
+            ModulesHash,
+            TypePath,
+            importRefusals: null,
+            consumedSources: consumed);
+
+    [Fact]
+    public void AFailureStampedFromTheConsumedSources_IsCurrent_WhateverTheRecordSnapshotSays() =>
+        NodeTypeCompilationHelpers.IsStandingFailureCurrent(
+                StampedByABake(Sources), ModulesHash, Sources, NodeTypeCompilationHelpers.LivePlatformVersion)
+            .Should().BeTrue("the next bake resolves exactly the sources this one compiled against");
+
+    [Fact]
+    public void NegativeControl_AFailureStampedFromALaggingSnapshot_IsNotCurrent() =>
+        NodeTypeCompilationHelpers.IsStandingFailureCurrent(
+                StampedByABake(consumed: null), ModulesHash, Sources, NodeTypeCompilationHelpers.LivePlatformVersion)
+            .Should().BeFalse("without the consumed set the stamp describes sources nobody compiled — "
+                              + "the pre-fix shape that made every pod a stranger");
+
+    [Fact]
+    public void AFailureStampedFromTheConsumedSources_StillEarnsAnAttemptWhenTheSourcesMove() =>
+        NodeTypeCompilationHelpers.IsStandingFailureCurrent(
+                StampedByABake(Sources), ModulesHash, Sources.SetItem("U/T/Source/B", 99),
+                NodeTypeCompilationHelpers.LivePlatformVersion)
+            .Should().BeFalse("memoisation of a deterministic function, never a latch");
+
     [Fact]
     public void AnUnstampedOrNonErrorRecord_IsNeverCurrent()
     {
