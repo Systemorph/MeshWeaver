@@ -193,17 +193,7 @@ public static class ContentFileResolver
             // it is idempotent, it cancels nothing, and abandoning it costs only the answer (which
             // is why the "never put a client-side ceiling on a mesh operation" rule in
             // MeshService's remarks — about WRITES that keep running — does not apply here).
-            var issuingHub = hub.ReadIssuingHub();
-            return issuingHub.Observe(
-                    new GetDataRequest(new ContentCollectionReference(candidates)),
-                    o =>
-                    {
-                        o = o.WithTarget(targetAddress);
-                        return caller is null ? o : o.WithAccessContext(caller);
-                    })
-                .Take(1)
-                .FailIfNoFirstEmission(
-                    issuingHub, targetAddress.ToString() ?? string.Empty, "content collection config")
+            return ObserveCollectionConfigs(hub, targetAddress, candidates, caller)
                 .Select(delivery =>
                 {
                     var configs = ReadCollectionConfigs(delivery);
@@ -244,6 +234,34 @@ public static class ContentFileResolver
                         targetAddress));
                 });
         });
+    }
+
+    /// <summary>
+    /// THE one read of a node hub's content-collection configurations: a <c>GetDataRequest</c> for the
+    /// named collections to the owning node, which carries <c>[RequiresPermission(Read)]</c>. Issued off
+    /// the router (<c>ReadIssuingHub</c>) with the read budget, and shared by <see cref="Resolve"/> and
+    /// <see cref="OwnerCollectionConfigLookup"/> so the data-plane request stays in ONE place (see the
+    /// notes in <see cref="Resolve"/> on why the issuing hub and the budget matter).
+    /// </summary>
+    /// <param name="hub">The hub the caller holds.</param>
+    /// <param name="target">The owning node's address.</param>
+    /// <param name="names">The collection names to ask for.</param>
+    /// <param name="caller">An identity to stamp, or null to use the ambient one.</param>
+    internal static IObservable<IMessageDelivery> ObserveCollectionConfigs(
+        IMessageHub hub, Address target, IReadOnlyCollection<string> names, AccessContext? caller)
+    {
+        var issuingHub = hub.ReadIssuingHub();
+        return issuingHub.Observe(
+                new GetDataRequest(new ContentCollectionReference(names)),
+                o =>
+                {
+                    o = o.WithTarget(target);
+                    return caller is null ? o : o.WithAccessContext(caller);
+                })
+            .Take(1)
+            .FailIfNoFirstEmission(
+                issuingHub, target.ToString() ?? string.Empty, "content collection config")
+            .Select(delivery => (IMessageDelivery)delivery);
     }
 
     /// <summary>
