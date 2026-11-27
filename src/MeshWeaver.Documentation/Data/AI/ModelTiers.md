@@ -23,7 +23,7 @@ The rungs used to be `S` / `M` / `L` / `XL`. That was the wrong axis twice over.
 
 `coding` is the top rung deliberately. It is the one job where a cheaper model does not merely answer *less well* — it produces work that looks finished and is wrong, and the cost of that lands downstream, on a human, later.
 
-The legacy vocabulary keeps working everywhere a label is accepted, carried as **aliases** on the tiers: `utility` → **utility**, `light` → **chat**, `standard` → **reasoning**, `heavy` → **coding**, and the short-lived `S`/`M`/`L`/`XL` size labels map onto the same four by rank. An existing agent carrying `modelTier: standard` needs no change.
+The short-lived `S`/`M`/`L`/`XL` size labels are carried as **aliases** on the tiers, mapped by rank. The rank names `heavy`, `standard` and `light` were retired in Systemorph/MeshWeaver.Plugins#4882: an agent carrying `modelTier: standard` now falls through to the deployment default, so name the tier (`reasoning`).
 
 > A model whose name contains "coder" is not automatically a `coding` model. Benchmark before you label: in one head-to-head, the second-cheapest "coder" model failed four of five checks on a routine C# task while a cheaper general model passed all five. **Label from measurements, not from model names.**
 
@@ -161,24 +161,20 @@ On a laptop the same four tiers point at a local qwen instead of OpenRouter — 
 
 ## One vocabulary: the record names the tier NODES
 
-A deployment record's `ai.tiers` uses the same names as the tier nodes — `chat`, `reasoning`, `coding`, `utility`, `review` — and each renders as `AI__Tiers__{tier id}` (`AI:Tiers:coding` to the portal). That key is the record's **seed** for the tier node of that id: it is matched by the node's id or any of its aliases, read at resolution time, and never written onto the node, so the record stays the declaration and the node's own `model` stays the instance's choice (within the ceiling, under policy `model-settings-seed-and-ceiling`). It answers at the same rung as the deprecated keys below, ahead of them.
+A deployment record's `ai.tiers` uses the same names as the tier nodes — `chat`, `reasoning`, `coding`, `utility`, `review` — and each renders as `AI__Tiers__{tier id}` (`AI:Tiers:coding` to the portal). That key is the record's **seed** for the tier node of that id: it is matched by the node's id or any of its aliases, read at resolution time, and never written onto the node, so the record stays the declaration and the node's own `model` stays the instance's choice (within the ceiling, under policy `model-settings-seed-and-ceiling`).
 
-The rank names `heavy` (→ `coding`), `standard` (→ `reasoning`) and `light` (→ `chat`) are accepted in `ai.tiers` as **aliases for one release**: a record that still carries them keeps its mapping, and the tier's own name wins where both are set. The renderer no longer emits the `ModelTier__*` keys (Systemorph/MeshWeaver.Plugins#4882); only `AI__Tiers__{tier id}` reaches the portal. The deployment record page names a record that still uses an alias. The aliases and the bridge keys are removed after a sweep of in-mesh content and satellite records (Systemorph/MeshWeaver.Plugins#4882).
+The rank names `heavy`, `standard` and `light` are **retired** (Systemorph/MeshWeaver.Plugins#4882): a stored record that still carries one is read with it ignored, so name the tiers (`coding`, `reasoning`, `chat`). The renderer does not emit, and the engine does not read, the old `ModelTier__Heavy/Standard/Light/Utility` keys either; set `AI__Tiers__{tier id}`.
 
 ## Migrating off the `ModelTier:*` config
 
-The old keys — `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, `ModelTier__Utility` — are **no longer rendered** from a record, and the engine reads them for one more release only (with a deprecation warning), so a deployment that still sets them by hand does not lose its mapping on upgrade; set `AI__Tiers__{tier id}` instead. They map onto the tiers by rank, carried by each tier's aliases:
-
-| Deprecated key | Tier |
+| Retired key | Set this instead |
 |---|---|
-| `ModelTier__Heavy` | `coding` |
-| `ModelTier__Standard` | `reasoning` |
-| `ModelTier__Light` | `chat` |
-| `ModelTier__Utility` | `utility` |
+| `ModelTier__Heavy` | `AI__Tiers__coding` |
+| `ModelTier__Standard` | `AI__Tiers__reasoning` |
+| `ModelTier__Light` | `AI__Tiers__chat` |
+| `ModelTier__Utility` | `AI__Tiers__utility` |
 
-They sit **below** the node labels: a labelled model always wins, and the config only ever answers a tier no node carries — and even then, only when it names a model whose credentials resolve. Because the mapping goes through the aliases rather than a hard-coded switch, it keeps working for a deployment that renamed a tier, and an operator can point a *new* tier at an old key just by adding the alias.
-
-**To retire them:** put a `tier` on your model nodes, confirm the resolution warnings stop naming `LegacyConfig`, and delete the keys.
+The seed sits **below** the node labels: a labelled model always wins, and the seed only ever answers a tier no node carries — and even then, only when it names a model whose credentials resolve.
 
 ## Related
 
