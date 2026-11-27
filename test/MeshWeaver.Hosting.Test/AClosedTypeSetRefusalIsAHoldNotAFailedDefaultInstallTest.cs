@@ -2,6 +2,8 @@ using System;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
+using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -90,15 +92,15 @@ public class AClosedTypeSetRefusalIsAHoldNotAFailedDefaultInstallTest
 
     // --- the REAL per-package catch chain ---
 
-    private static DefaultInstallSummary Classify(Exception failure, bool closedTypeSet) =>
-        InstanceAutoRegistrationService.ClassifyInstallFailures(
+    private static async Task<DefaultInstallSummary> Classify(Exception failure, bool closedTypeSet) =>
+        await InstanceAutoRegistrationService.ClassifyInstallFailures(
                 Observable.Throw<DefaultInstallSummary>(failure), "Explorer", closedTypeSet, NullLogger.Instance)
-            .FirstAsync().Wait();
+            .FirstAsync().Await();
 
     [Fact]
-    public void TheChain_HoldsAnUnregisteredRootOnAClosedSet_AndReadsClean()
+    public async Task TheChain_HoldsAnUnregisteredRootOnAClosedSet_AndReadsClean()
     {
-        var summary = Classify(Refusal(), closedTypeSet: true);
+        var summary = await Classify(Refusal(), closedTypeSet: true);
         Assert.Equal(0, summary.Failed);
         Assert.Empty(summary.Failures);
         var hold = Assert.Single(summary.Held);
@@ -108,9 +110,9 @@ public class AClosedTypeSetRefusalIsAHoldNotAFailedDefaultInstallTest
     }
 
     [Fact]
-    public void TheChain_StillFailsTheSameRefusalOnAnOpenMesh()
+    public async Task TheChain_StillFailsTheSameRefusalOnAnOpenMesh()
     {
-        var summary = Classify(Refusal(), closedTypeSet: false);
+        var summary = await Classify(Refusal(), closedTypeSet: false);
         Assert.Equal(1, summary.Failed);
         Assert.Equal(["Explorer"], summary.Failures);
         Assert.Empty(summary.Held);
@@ -118,19 +120,19 @@ public class AClosedTypeSetRefusalIsAHoldNotAFailedDefaultInstallTest
     }
 
     [Fact]
-    public void TheChain_StillFailsARealFailureOnAClosedSet()
+    public async Task TheChain_StillFailsARealFailureOnAClosedSet()
     {
-        var summary = Classify(new InvalidOperationException("boom"), closedTypeSet: true);
+        var summary = await Classify(new InvalidOperationException("boom"), closedTypeSet: true);
         Assert.Equal(1, summary.Failed);
         Assert.Empty(summary.Held);
     }
 
     [Fact]
-    public void TheChain_KeepsThePlatformHoldAndTheAuthorizationSkip_BeforeTheTypeSetHold()
+    public async Task TheChain_KeepsThePlatformHoldAndTheAuthorizationSkip_BeforeTheTypeSetHold()
     {
-        var floor = Classify(new PackagePlatformFloorException("needs platform >= 4.0.14289"), closedTypeSet: true);
+        var floor = await Classify(new PackagePlatformFloorException("needs platform >= 4.0.14289"), closedTypeSet: true);
         Assert.Equal("needs platform >= 4.0.14289", Assert.Single(floor.Held).Reason);
-        var skipped = Classify(new PackageAuthorizationException("not authorised"), closedTypeSet: true);
+        var skipped = await Classify(new PackageAuthorizationException("not authorised"), closedTypeSet: true);
         Assert.Single(skipped.Skipped);
         Assert.Equal(0, skipped.Failed);
     }
