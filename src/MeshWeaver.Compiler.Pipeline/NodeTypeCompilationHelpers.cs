@@ -5980,12 +5980,15 @@ internal static class NodeTypeCompilationHelpers
         string? activityPath,
         string? modulesHash = null,
         string? nodeTypePath = null,
-        System.Collections.Immutable.ImmutableList<ImportRefusal>? importRefusals = null)
+        System.Collections.Immutable.ImmutableList<ImportRefusal>? importRefusals = null,
+        IReadOnlyDictionary<string, long>? consumedSources = null)
     {
-        // 🚨 Measured against the set the compile CONSUMED (the result's own snapshot when it
-        // resolved one, else the node's live one) — the same evidence FailedBuildInputs uses, so
-        // the two halves of the record describe the same compile.
-        var consumed = result?.CompiledSources ?? def.CurrentSourceVersions;
+        // 🚨 Measured against the set the compile CONSUMED — the result's own snapshot when it
+        // resolved one, else the set the CALLER handed the compiler (a batch bake resolves its
+        // sources fresh and a failing compile returns no result), else the node's recorded one —
+        // the same evidence FailedBuildInputs uses, so the two halves of the record describe the
+        // same compile.
+        var consumed = result?.CompiledSources ?? consumedSources ?? def.CurrentSourceVersions;
         var unmatched = SourceCoverage.UnmatchedSourceQueries(
             def.Sources, nodeTypePath, consumed?.Keys.ToList());
         var declaredCount = def.Sources is { Count: > 0 }
@@ -6050,8 +6053,14 @@ internal static class NodeTypeCompilationHelpers
             // forever. The source half is the snapshot the compile CONSUMED (the result's own set
             // when it resolved one, else the node's live snapshot), so an edit that lands while a
             // doomed compile is running still earns its own attempt.
-            FailedBuildInputs = BuildInputsToken(
-                modulesHash, result?.CompiledSources ?? def.CurrentSourceVersions),
+            //
+            // 🚨 #8529 — the set the compile CONSUMED, never the record's snapshot when the caller
+            // knows better. CurrentSourceVersions is kept only by the type's OWN hub watcher; on a
+            // pod whose bake is the only thing that ever touched the type it can lag the live source
+            // set, and a token stamped from the lagging snapshot never equals the token the NEXT
+            // pod's bake computes from its fresh discovery — so the standing-failure skip (see
+            // IsStandingFailureCurrent) could never match and every pod re-compiled.
+            FailedBuildInputs = BuildInputsToken(modulesHash, consumed),
             // The BUILD the verdict was formed on — the token's fw= is the stable compatibility
             // key and cannot tell two builds apart (see HasFailureFromOlderPlatform).
             FailedPlatformVersion = FailureStamp(LivePlatformVersion),

@@ -45,7 +45,7 @@ public class AStandingCompileFailureIsNotRecompiledByTheBatchBakeTest(ITestOutpu
         Code = $"public record {id}Probe({body});",
     };
 
-    private async Task Seed(CancellationToken ct)
+    private async Task Seed(CancellationToken ct, IReadOnlyDictionary<string, long>? recordedSnapshot = null)
     {
         var id = MeshNode.FromPath(TypePath).Id;
         foreach (var node in new[]
@@ -55,7 +55,11 @@ public class AStandingCompileFailureIsNotRecompiledByTheBatchBakeTest(ITestOutpu
                          NodeType = MeshNode.NodeTypePath,
                          Name = id,
                          State = MeshNodeState.Active,
-                         Content = new NodeTypeDefinition { Sources = ["namespace:Source scope:subtree"] },
+                         Content = new NodeTypeDefinition
+                         {
+                             Sources = ["namespace:Source scope:subtree"],
+                             CurrentSourceVersions = recordedSnapshot,
+                         },
                      },
                      new MeshNode("Main", $"{TypePath}/Source")
                      {
@@ -114,6 +118,31 @@ public class AStandingCompileFailureIsNotRecompiledByTheBatchBakeTest(ITestOutpu
 
         var third = await Bake(ct);
         third.Detail.Should().Contain(DeclinedMarker, "and it stays declined on every later boot");
+    }
+
+    /// <summary>
+    /// 🚨 #8529 follow-up — the failure's stamp is what the compile CONSUMED, not the record's
+    /// snapshot. <c>CurrentSourceVersions</c> is maintained only by the type's own hub watcher, so on a
+    /// pod whose bake is the only thing that touched the type it can lag the live set. A stamp built
+    /// from the lagging snapshot never equals the token the next pod derives from its fresh discovery,
+    /// so the decline never matched and every pod compiled again.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ARecordSnapshotThatLagsTheLiveSources_DoesNotDefeatTheDecline()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // A snapshot that names a source version no live node has — the lag, made deterministic.
+        await Seed(ct, new Dictionary<string, long> { [SourcePath] = 1L });
+
+        var first = await Bake(ct);
+        first.Status.Should().Be(PreWarmStatus.CompileError);
+        first.Detail.Should().NotContain(DeclinedMarker, "the FIRST attempt always runs");
+        await AwaitStampedError(ct);
+
+        var second = await Bake(ct);
+        second.Detail.Should().Contain(DeclinedMarker,
+            "the verdict was stamped with the sources the compile consumed, which are exactly the "
+            + "sources the next bake resolves — a lagging record snapshot must not make it a stranger");
     }
 
     [Fact(Timeout = 300_000)]

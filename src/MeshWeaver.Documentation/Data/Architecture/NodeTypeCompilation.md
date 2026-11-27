@@ -1184,6 +1184,20 @@ about the verdict (no stamp, `Unavailable`, a different token) compiles; the one
 running build whose version is unordered (a local `-dev` build), which cannot claim to be newer than
 the failing build and so only source and module changes re-attempt there, as on activation.
 
+**What a burst on a build that carries the rule is — and is not.** Measured on memex-cloud after the
+roll to the build with the rule (2026-11-27): three bursts of the same six types, each ONE attempt per
+type, each on a pod whose *installed module set* differed from the one the standing stamp was formed
+under (the first pod of the new build; two KEDA scale-up pods that fetched newer module builds, their
+`[ModuleLoad]` mvids differing in 47 of 47 modules). The four pods that shared the first module set
+all logged `NOT RE-COMPILED`. So a module-set change IS the by-design second trigger ("a module update
+may ship the symbol the source needs"): one attempt per distinct module set, re-stamped by that
+attempt. Two consequences are pinned: (1) the failure stamp is the set the compile CONSUMED
+(`ApplyCompileFailure(consumedSources:)`), never the record's `CurrentSourceVersions`, which only the
+type's own hub watcher refreshes and which can lag a bake-only pod's fresh discovery — a stamp from the
+lagging snapshot could never equal the next pod's token; (2) the per-type outcome line of the bake
+carries the verdict's SHAPE (`CS0246 x2`), not a third copy of the diagnostics, so one attempt reads as
+one attempt (the reporting funnel's record holds the complete text, once).
+
 The re-drive is **owner-driven, never caller-driven**. It fires from the type's OWN hub on facts the
 node already holds; no request, and no requester's identity, is an input. The compile runs as System
 and its activity row lands in the owning partition attributed to System — exactly as the first-build,
