@@ -314,15 +314,11 @@ def sibling_plugin_refs(refs: dict) -> tuple[dict, int]:
     Applies compile-check's own preference rule — an assembly's OWN project output beats a copy in
     someone else's bin, newest mtime breaks a tie — so a plugins copy can only displace a core entry
     when it is the assembly's own build and core's is a stale bystander copy."""
-    candidates = [
-        ROOT.parent / "MeshWeaver.Plugins",
-        ROOT.parent.parent / "MeshWeaver.Plugins",
-        Path(os.path.expanduser("~/code/MeshWeaver.Plugins")),
-    ]
-    for base in candidates:
+    cc = load_compile_check()
+    for base in cc.sibling_plugins_checkouts():
         dlls = []
         for cfg in ("Debug", "Release"):
-            dlls += glob.glob(str(base / "src" / "*" / "bin" / cfg / "net11.0" / "*.dll"))
+            dlls += glob.glob(str(base / "src" / "*" / "bin" / cfg / cc.TARGET_FRAMEWORK / "*.dll"))
         if not dlls:
             continue
         def is_own(path) -> bool:
@@ -945,6 +941,13 @@ def self_test() -> int:
     used = sorted({node.attr for node in ast.walk(ast.parse(Path(__file__).read_text(encoding="utf-8")))
                    if isinstance(node, ast.Attribute)
                    and isinstance(node.value, ast.Name) and node.value.id == "cc"})
+    # The sibling-Plugins checkouts and the single target framework are one definition shared with
+    # the gate; a rename would otherwise surface only on a developer's first real run.
+    case("compile-check exposes TARGET_FRAMEWORK and sibling_plugins_checkouts (positive)",
+         isinstance(getattr(cc, "TARGET_FRAMEWORK", None), str)
+         and any(p.name == "MeshWeaver.Plugins" for p in cc.sibling_plugins_checkouts()))
+    case("no hardcoded net11.0 glob left in this file's discovery (negative)",
+         ('cfg / "net' + '11.0"') not in Path(__file__).read_text(encoding="utf-8"))
     case("this file's own `cc.<name>` references could be collected (the list is derived, not kept)",
          len(used) >= 8, f"{len(used)} found: {used}")
     for attr in used:
@@ -1268,7 +1271,8 @@ def main() -> int:
                 "  breaking when the real fault is a short reference set. Refusing to run suites\n"
                 "  against it, exactly as compile-check.py refuses to report those as breaks.\n"
                 "\n  Build them once in the framework checkout, then re-run:\n"
-              + "".join(f"    dotnet build src/{m} -c Release\n" for m in missing_modules))
+              + "".join(f"    dotnet build <MeshWeaver.Plugins>/src/{m} -c Release "
+                        "-p:MeshWeaverRoot=$HOME/code/MeshWeaver/\n" for m in missing_modules))
         return 2
     host = host_rid()
     if (refusal := execution_host_refusal(layout, host)) is not None:
