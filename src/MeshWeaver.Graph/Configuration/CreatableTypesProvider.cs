@@ -6,6 +6,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -42,6 +43,43 @@ internal sealed class CreatableTypesProvider(
     IMessageHub hub,
     MeshConfiguration meshConfiguration) : ICreatableTypesProvider
 {
+    private readonly Lazy<ILogger?> logger = new(() =>
+        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<CreatableTypesProvider>());
+
+    private ILogger? Logger => logger.Value;
+
+    /// <summary>
+    /// 🚨 A SOURCE THAT DOES NOT ANSWER MUST NEVER BE A SILENT EMPTY. Runs <paramref name="factory"/>
+    /// under <paramref name="timeout"/>; on a timeout or fault it logs a WARNING naming
+    /// <paramref name="source"/> and RETRIES once (a transient miss is the common case), and only
+    /// if the retry (half the budget) also fails does it log again and use <paramref name="fallback"/>. Before this,
+    /// a single slow or failed read turned into an empty result with no log line, so the Create
+    /// menu intermittently dropped types with nothing to grep.
+    /// </summary>
+    internal static IObservable<T> Guarded<T>(
+        string source,
+        Func<IObservable<T>> factory,
+        TimeSpan timeout,
+        ILogger? logger,
+        Func<IObservable<T>> fallback) =>
+        Observable.Defer(factory).Timeout(timeout)
+            .Catch<T, Exception>(first =>
+            {
+                logger?.LogWarning(first,
+                    "Create menu source {Source} {Outcome}; retrying once with half the budget",
+                    source, first is TimeoutException ? $"did not answer within {timeout}" : "failed");
+                // The retry gets HALF the budget so a persistently dead source delays the menu by
+                // at most 1.5x its timeout, not 2x.
+                return Observable.Defer(factory).Timeout(timeout / 2)
+                    .Catch<T, Exception>(second =>
+                    {
+                        logger?.LogWarning(second,
+                            "Create menu source {Source} failed after retry; continuing WITHOUT it — types it supplies are missing from this menu",
+                            source);
+                        return fallback();
+                    });
+            });
+
     public IObservable<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypes(
         string? nodePath, MeshNode? parentNode)
     {
@@ -53,10 +91,12 @@ internal sealed class CreatableTypesProvider(
         // lookup could otherwise hand us null and silently drop Q2).
         if (parentNode is null && !string.IsNullOrEmpty(nodePath))
         {
-            return hub.GetWorkspace().GetMeshNodeStream(nodePath)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(30))
-                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            return Guarded(
+                    $"parent node '{nodePath}'",
+                    () => hub.GetWorkspace().GetMeshNodeStream(nodePath).Take(1),
+                    TimeSpan.FromSeconds(30),
+                    Logger,
+                    () => Observable.Return<MeshNode?>(null))
                 .SelectMany(resolved => GetCreatableTypesCore(nodePath, resolved));
         }
         return GetCreatableTypesCore(nodePath, parentNode);
@@ -70,7 +110,7 @@ internal sealed class CreatableTypesProvider(
 
         var typeNodesObs = meshQueryCore is null
             ? Observable.Return<IReadOnlyList<MeshNode>>([])
-            : QueryTypeNodes(meshQueryCore, hub.JsonSerializerOptions, nodePath, currentType);
+            : QueryTypeNodes(meshQueryCore, hub.JsonSerializerOptions, nodePath, currentType, Logger);
 
         // Resolve the parent's NodeTypeDefinition — its CreatableTypes (when
         // set) is an explicit whitelist that FILTERS auto-discovery on top of
@@ -107,10 +147,11 @@ internal sealed class CreatableTypesProvider(
     /// — no access control on the result set. Path-deduped via
     /// <c>ImmutableDictionary&lt;string, MeshNode&gt;</c> Scan.
     /// </summary>
-    private static IObservable<IReadOnlyList<MeshNode>> QueryTypeNodes(
+    internal static IObservable<IReadOnlyList<MeshNode>> QueryTypeNodes(
         IMeshQueryCore meshQueryCore,
         System.Text.Json.JsonSerializerOptions jsonOptions,
-        string? nodePath, string? currentType)
+        string? nodePath, string? currentType,
+        ILogger? logger = null, TimeSpan? timeout = null)
     {
         var queries = BuildQueries(nodePath, currentType);
         if (queries.Length == 0)
@@ -132,12 +173,14 @@ internal sealed class CreatableTypesProvider(
         // CombineLatest gate proceeds, and the test (or UI) gets the
         // partial answer it would have gotten if the timeout query had
         // returned empty naturally. Strictly better than hanging.
-        var observables = queries.Select(q => meshQueryCore
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(q), jsonOptions)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15), Observable.Empty<QueryResultChange<MeshNode>>())
-            .Catch<QueryResultChange<MeshNode>, Exception>(
-                _ => Observable.Empty<QueryResultChange<MeshNode>>()));
+        var observables = queries.Select(q => Guarded(
+            $"type query '{q}'",
+            () => meshQueryCore
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(q), jsonOptions)
+                .Take(1),
+            timeout ?? TimeSpan.FromSeconds(15),
+            logger,
+            () => Observable.Empty<QueryResultChange<MeshNode>>()));
 
         // Aggregate (not Scan) — Scan only emits per input, so an empty
         // result-set produces zero emissions and the downstream CombineLatest
@@ -243,21 +286,21 @@ internal sealed class CreatableTypesProvider(
             return Observable.Return(
                 declared.Aggregate(empty, (acc, path) => acc.SetItem(path, null)));
 
-        var lookups = declared.Select(path => meshQueryCore
-            .Query<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{path} nodeType:NodeType"),
-                hub.JsonSerializerOptions)
-            .Take(1)
-            .Select(change => (path, node: change.Items.FirstOrDefault(), probed: true))
-            // 🚨 A PROBE THAT DID NOT COMPLETE IS NOT AN ANSWER. Folding a timeout or a fault into
-            // the same "no row" the successful empty query produces would make a transient read
-            // failure OFFER the very type this read exists to withhold — the opt-out would hold
-            // when storage is healthy and lapse exactly when it is not. `probed: false` keeps the
-            // two apart and BuildInfoFromConfig fails closed on it.
-            .Timeout(TimeSpan.FromSeconds(15),
-                Observable.Return((path, node: (MeshNode?)null, probed: false)))
-            .Catch<(string path, MeshNode? node, bool probed), Exception>(
-                _ => Observable.Return((path, node: (MeshNode?)null, probed: false))));
+        var logger = Logger;
+        var lookups = declared.Select(path => Guarded(
+            $"declared type probe '{path}'",
+            () => meshQueryCore
+                .Query<MeshNode>(
+                    MeshQueryRequest.FromQuery($"path:{path} nodeType:NodeType"),
+                    hub.JsonSerializerOptions)
+                .Take(1)
+                .Select(change => (path, node: change.Items.FirstOrDefault(), probed: true)),
+            TimeSpan.FromSeconds(15),
+            logger,
+            // 🚨 A PROBE THAT DID NOT COMPLETE IS NOT AN ANSWER (still true after the retry):
+            // `probed: false` keeps it apart from a confirmed absence, and BuildInfoFromConfig
+            // fails closed on it so the create opt-out never lapses under load.
+            () => Observable.Return((path, node: (MeshNode?)null, probed: false))));
 
         return Observable.Merge(lookups)
             .Aggregate(empty, (acc, x) => x.probed ? acc.SetItem(x.path, x.node) : acc);
@@ -280,10 +323,12 @@ internal sealed class CreatableTypesProvider(
         if (staticNode?.Content is NodeTypeDefinition staticDef)
             return Observable.Return<NodeTypeDefinition?>(staticDef);
 
-        return hub.GetWorkspace().GetMeshNodeStream(currentType)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+        return Guarded(
+                $"parent type definition '{currentType}'",
+                () => hub.GetWorkspace().GetMeshNodeStream(currentType).Take(1),
+                TimeSpan.FromSeconds(10),
+                Logger,
+                () => Observable.Return<MeshNode?>(null))
             .Select(n => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions));
     }
 
