@@ -4,6 +4,7 @@ using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -63,7 +64,7 @@ public class CreatableTypesSourceFailureTest
 
         var nodes = await CreatableTypesProvider
             .QueryTypeNodes(core, Options, null, null, log, Short)
-            .FirstAsync();
+            .Take(1).Await(TestContext.Current.CancellationToken);
 
         nodes.Select(n => n.Path).Should().Contain(StandardType.Path,
             "one transient miss must be retried, not turned into an empty result");
@@ -82,7 +83,7 @@ public class CreatableTypesSourceFailureTest
 
         var nodes = await CreatableTypesProvider
             .QueryTypeNodes(core, Options, null, null, log, Short)
-            .FirstAsync();
+            .Take(1).Await(TestContext.Current.CancellationToken);
 
         nodes.Should().BeEmpty("the dynamic source is gone, the rest of the menu is built elsewhere");
         core.Calls.Should().Be(2, "exactly one retry");
@@ -99,7 +100,7 @@ public class CreatableTypesSourceFailureTest
 
         var nodes = await CreatableTypesProvider
             .QueryTypeNodes(core, Options, null, null, log, Short)
-            .FirstAsync();
+            .Take(1).Await(TestContext.Current.CancellationToken);
 
         nodes.Should().ContainSingle();
         core.Calls.Should().Be(1);
@@ -125,7 +126,7 @@ public class CreatableTypesSourceFailureTest
                 ? new Subject<(string path, MeshNode? node, bool probed)>()
                 : Observable.Return(("Acme/Q", (MeshNode?)null, true)),
             Short, log,
-            () => Observable.Return(("Acme/Q", (MeshNode?)null, false))).FirstAsync();
+            () => Observable.Return(("Acme/Q", (MeshNode?)null, false))).Take(1).Await(TestContext.Current.CancellationToken);
 
         result.Item3.Should().Be(probed);
         calls.Should().Be(2);
