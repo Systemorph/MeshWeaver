@@ -105,4 +105,30 @@ public class CreatableTypesSourceFailureTest
         core.Calls.Should().Be(1);
         log.Warnings.Should().BeEmpty();
     }
+
+    /// <summary>
+    /// The declared-type probe and the parent reads share <c>Guarded</c>: after BOTH attempts fail
+    /// the fallback is used (here the probe's <c>probed:false</c>, which BuildInfoFromConfig fails
+    /// closed on) — and a probe that succeeds on the retry is recorded as probed.
+    /// </summary>
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(int.MaxValue, false)]
+    public async Task AProbeThatMissesTwiceFallsBackToUnprobed_AndOneMissIsRecovered(int failures, bool probed)
+    {
+        var calls = 0;
+        var log = new CaptureLogger();
+
+        var result = await CreatableTypesProvider.Guarded(
+            "declared type probe 'Acme/Q'",
+            () => Interlocked.Increment(ref calls) <= failures
+                ? new Subject<(string path, MeshNode? node, bool probed)>()
+                : Observable.Return(("Acme/Q", (MeshNode?)null, true)),
+            Short, log,
+            () => Observable.Return(("Acme/Q", (MeshNode?)null, false))).FirstAsync();
+
+        result.Item3.Should().Be(probed);
+        calls.Should().Be(2);
+        log.Warnings.Should().NotBeEmpty();
+    }
 }

@@ -43,13 +43,16 @@ internal sealed class CreatableTypesProvider(
     IMessageHub hub,
     MeshConfiguration meshConfiguration) : ICreatableTypesProvider
 {
-    private ILogger? Logger => hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<CreatableTypesProvider>();
+    private readonly Lazy<ILogger?> logger = new(() =>
+        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<CreatableTypesProvider>());
+
+    private ILogger? Logger => logger.Value;
 
     /// <summary>
     /// 🚨 A SOURCE THAT DOES NOT ANSWER MUST NEVER BE A SILENT EMPTY. Runs <paramref name="factory"/>
     /// under <paramref name="timeout"/>; on a timeout or fault it logs a WARNING naming
     /// <paramref name="source"/> and RETRIES once (a transient miss is the common case), and only
-    /// if the retry also fails does it log again and use <paramref name="fallback"/>. Before this,
+    /// if the retry (half the budget) also fails does it log again and use <paramref name="fallback"/>. Before this,
     /// a single slow or failed read turned into an empty result with no log line, so the Create
     /// menu intermittently dropped types with nothing to grep.
     /// </summary>
@@ -63,9 +66,11 @@ internal sealed class CreatableTypesProvider(
             .Catch<T, Exception>(first =>
             {
                 logger?.LogWarning(first,
-                    "Create menu source {Source} did not answer within {Timeout} (or failed); retrying once",
-                    source, timeout);
-                return Observable.Defer(factory).Timeout(timeout)
+                    "Create menu source {Source} {Outcome}; retrying once with half the budget",
+                    source, first is TimeoutException ? $"did not answer within {timeout}" : "failed");
+                // The retry gets HALF the budget so a persistently dead source delays the menu by
+                // at most 1.5x its timeout, not 2x.
+                return Observable.Defer(factory).Timeout(timeout / 2)
                     .Catch<T, Exception>(second =>
                     {
                         logger?.LogWarning(second,
