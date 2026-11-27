@@ -97,6 +97,17 @@ public static class PackageInstaller
     public static bool RecordIsNotABaselineUnderThisRule(PackageManifest record) =>
         record.ComparisonEpoch != InstallComparisonEpoch;
 
+    /// <summary>
+    /// True when <paramref name="record"/> is PARTIAL because an earlier install skipped files for
+    /// want of a parser (<see cref="PackageManifest.PendingParserFiles"/>) AND the parser is
+    /// registered now — so a full install would complete it. False while the parser is still absent
+    /// (a retry would skip the same files again) and for every record that skipped nothing.
+    /// </summary>
+    /// <param name="record">The install record as stored.</param>
+    /// <param name="parsers">The registry the install would use.</param>
+    public static bool OwesParserRetry(PackageManifest record, FileFormatParserRegistry parsers) =>
+        record.PendingParserFiles is { Count: > 0 } && ParserBoundNodeTypes.AllParsersRegistered(parsers);
+
     /// <summary>Bounded concurrency for the per-node upsert fan-out (mirrors <c>NodeCopyHelper</c>).</summary>
     public const int DefaultBatchSize = 8;
 
@@ -3087,7 +3098,8 @@ public static class PackageInstaller
         IReadOnlyCollection<string>? examinedFiles = null,
         IReadOnlyCollection<string>? unreadableFiles = null,
         bool comparedEveryNode = true,
-        (IReadOnlyCollection<string>? Examined, IReadOnlyCollection<string>? Withheld) withheld = default)
+        (IReadOnlyCollection<string>? Examined, IReadOnlyCollection<string>? Withheld) withheld = default,
+        IReadOnlyCollection<string>? awaitingParserFiles = null)
     {
         var recordPath = $"{InstalledPartition}/{manifest.Id}";
         var serializerOptions = hub.JsonSerializerOptions;
@@ -3134,6 +3146,11 @@ public static class PackageInstaller
                     // update only examined what it fetched. See MergeUnreadableFiles.
                     UnreadableFiles = MergeUnreadableFiles(
                         existingRecord?.UnreadableFiles, examinedFiles, unreadableFiles,
+                        (moduleManifest?.Files ?? manifest.InstalledFiles)?.Keys.ToArray()),
+                    // 🚨 Files skipped for want of a parser on this host: the record is PARTIAL, not
+                    // complete-and-current, and the next pass retries (OwesParserRetry).
+                    PendingParserFiles = MergePendingParserFiles(
+                        existingRecord?.PendingParserFiles, examinedFiles, awaitingParserFiles,
                         (moduleManifest?.Files ?? manifest.InstalledFiles)?.Keys.ToArray()),
                     // 🚨 The NodeType rows a CLOSED type set does not hold (#6627) — recorded so the
                     // completeness sweep does not count them as owed. Null on an open mesh.
@@ -3677,6 +3694,7 @@ public static class PackageInstaller
         var parsed = ParseAll(parsers, files, manifest.Id, logger, hub.JsonSerializerOptions);
         var nodes = parsed.Nodes;
         var unreadable = parsed.Unreadable;
+        var awaitingParser = parsed.AwaitingParser;
         var examined = files.Select(f => f.RelativePath).ToArray();
 
         if (nodes.Length == 0)
@@ -4305,7 +4323,8 @@ public static class PackageInstaller
                             outcome, moduleManifest?.Files.Keys ?? manifest.InstalledFiles?.Keys, pathOf))))
                     .SelectMany(t => WriteInstalledRecord(
                             hub, manifest, installedFromRef, nodes.Length, moduleManifest,
-                            authorizingUserId, examined, unreadable, withheld: t.Withheld)
+                            authorizingUserId, examined, unreadable, withheld: t.Withheld,
+                            awaitingParserFiles: awaitingParser)
                         .Select(_ => t.Pruned))
                     // Adoption first (it can settle a release without compiling at all), then the
                     // FIRST wave: the root's own in-package NodeType, whose rebuild is precisely
@@ -4579,6 +4598,7 @@ public static class PackageInstaller
         var parsed = ParseAll(parsers, changedFiles, manifest.Id, logger, hub.JsonSerializerOptions);
         var nodes = parsed.Nodes;
         var unreadable = parsed.Unreadable;
+        var awaitingParser = parsed.AwaitingParser;
         var examined = changedFiles.Select(f => f.RelativePath).ToArray();
 
         // 🚨 A CLOSED type set holds no NodeType definition rows (#6627) — the same withholding as
@@ -4719,7 +4739,8 @@ public static class PackageInstaller
                         hub, manifest, manifest.TargetPartition ?? manifest.Id, logger))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
                         newManifest.Files.Count, newManifest, authorizingUserId,
-                        examined, unreadable, comparedEveryNode: false, withheld: t.Withheld))
+                        examined, unreadable, comparedEveryNode: false, withheld: t.Withheld,
+                        awaitingParserFiles: awaitingParser))
                     .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
                     // A changed BINARY is a changed file like any other: manifest.lock hashes the
                     // `content/**` assets too, so a re-cut video is in `changedFiles` and an
@@ -4782,16 +4803,19 @@ public static class PackageInstaller
     /// </summary>
     /// <param name="Nodes">The parsed nodes, in file order.</param>
     /// <param name="Unreadable">The node candidates whose content did not parse, ordinal-sorted.</param>
+    /// <param name="AwaitingParser">The candidates skipped because the parser their type needs is not
+    /// registered on this host — retryable, never a packaging defect (<see cref="PackageManifest.PendingParserFiles"/>).</param>
     private readonly record struct ParsedPackageFiles(
-        MeshNode[] Nodes, ImmutableSortedSet<string> Unreadable);
+        MeshNode[] Nodes, ImmutableSortedSet<string> Unreadable, ImmutableSortedSet<string> AwaitingParser);
 
     private static ParsedPackageFiles ParseAll(
         FileFormatParserRegistry parsers, IReadOnlyList<PackageFile> files, string packageId,
         ILogger? logger, JsonSerializerOptions? options = null)
     {
         var unparsed = new List<string>();
+        var awaitingParser = new List<string>();
         var nodes = files
-            .Select(f => ParseCanonical(parsers, f, logger, options, unparsed))
+            .Select(f => ParseCanonical(parsers, f, logger, options, unparsed, awaitingParser))
             .Where(n => n is not null).Select(n => n!)
             .ToArray();
 
@@ -4810,8 +4834,17 @@ public static class PackageInstaller
                 packageId, unparsed.Count, candidates, nodes.Length, files.Count,
                 files.Count - candidates, string.Join(", ", unparsed.Take(5)));
 
+        if (awaitingParser.Count > 0)
+            logger?.LogWarning(
+                "Package '{Package}': {Skipped} file(s) were NOT installed because the parser their "
+                + "type needs is not registered on this host: {Sample}. "
+                + "The install record is stamped PARTIAL (PendingParserFiles) and the next install "
+                + "pass retries the package once the parser is available.",
+                packageId, awaitingParser.Count, string.Join(", ", awaitingParser.Take(5)));
+
         return new ParsedPackageFiles(
-            nodes, unparsed.ToImmutableSortedSet(StringComparer.Ordinal));
+            nodes, unparsed.ToImmutableSortedSet(StringComparer.Ordinal),
+            awaitingParser.ToImmutableSortedSet(StringComparer.Ordinal));
     }
 
     /// <summary>
@@ -4871,7 +4904,8 @@ public static class PackageInstaller
 
     private static MeshNode? ParseCanonical(
         FileFormatParserRegistry parsers, PackageFile file, ILogger? logger,
-        JsonSerializerOptions? options = null, List<string>? unparsed = null)
+        JsonSerializerOptions? options = null, List<string>? unparsed = null,
+        List<string>? awaitingParser = null)
     {
         // 🚨 ONE predicate, shared with the install-completeness sweep (#3659). A file is a node
         // CANDIDATE when it is not a by-design non-node file AND some registered parser claims its
@@ -4885,9 +4919,13 @@ public static class PackageInstaller
         if (parsed is not null && ParserBoundNodeTypes.Describe(file.RelativePath, parsed) is { } unboundProblem)
         {
             // A Skill/Agent file the catch-all markdown parser swallowed: not parsed, not installed
-            // (fb-1fa1722b). Counted as unreadable so the install record and its landing line say so.
+            // (fb-1fa1722b). Recorded as AWAITING A PARSER — not unreadable: the same bytes install
+            // once the parser is registered, so the record is partial and the next pass retries.
             logger?.LogError("Package file not installed: {Problem}", unboundProblem);
-            unparsed?.Add(file.RelativePath);
+            if (awaitingParser is not null)
+                awaitingParser.Add(file.RelativePath);
+            else
+                unparsed?.Add(file.RelativePath);
             return null;
         }
         if (parsed is null)
@@ -5188,6 +5226,36 @@ public static class PackageInstaller
         if (ContentAssetMapper.IsContentPath(rel))
             return null;
         return NodePathForFile(rel, parsers) is { } path ? $"{rebaseUnder}/{path}" : null;
+    }
+
+    /// <summary>
+    /// The record's <see cref="PackageManifest.PendingParserFiles"/> after THIS install. Same merge
+    /// as <see cref="MergeUnreadableFiles"/>, with one difference that matters: a file this install
+    /// SKIPPED is recorded even when the record had no previous answer and the pass did not cover
+    /// the whole package — a positive finding needs no coverage, only a claim of "none" does. An
+    /// empty result is normalised to <c>null</c>: nothing pending.
+    /// </summary>
+    /// <param name="previous">The record's existing set, or <c>null</c>.</param>
+    /// <param name="examined">The files this install parsed, or <c>null</c> when it parsed none.</param>
+    /// <param name="awaitingNow">Those of <paramref name="examined"/> skipped for want of a parser.</param>
+    /// <param name="declaredNow">The file map the record is stamped with; entries outside it drop.</param>
+    internal static ImmutableSortedSet<string>? MergePendingParserFiles(
+        ImmutableSortedSet<string>? previous,
+        IReadOnlyCollection<string>? examined,
+        IReadOnlyCollection<string>? awaitingNow,
+        IReadOnlyCollection<string>? declaredNow)
+    {
+        var seen = (examined ?? []).ToImmutableHashSet(StringComparer.Ordinal);
+        var merged = (previous ?? ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal))
+            .Where(f => !seen.Contains(f))
+            .Concat(awaitingNow ?? [])
+            .ToImmutableSortedSet(StringComparer.Ordinal);
+        if (declaredNow is not null)
+        {
+            var declared = declaredNow.ToImmutableHashSet(StringComparer.Ordinal);
+            merged = merged.Where(declared.Contains).ToImmutableSortedSet(StringComparer.Ordinal);
+        }
+        return merged.Count == 0 ? null : merged;
     }
 
     /// <summary>
