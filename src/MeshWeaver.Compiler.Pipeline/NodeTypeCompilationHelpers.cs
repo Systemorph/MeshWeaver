@@ -4132,6 +4132,11 @@ internal static class NodeTypeCompilationHelpers
             {
                 var definition = current.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger);
                 var covered = registry.StampSuperseding(hubPath, current.Version) is not null
+                              // By IDENTITY too: the adoption's own write and any bookkeeping after it
+                              // move the node past the version the adoption observed, and a write
+                              // composed from a pre-adoption read can put the old coordinates back —
+                              // none of which un-adopts the build this process installed.
+                              || registry.StampNaming(hubPath, definition, FrameworkVersion) is not null
                               || (definition is { CompilationStatus: CompilationStatus.Ok }
                                   && HasUsableBuild(current, definition, guards));
                 if (covered)

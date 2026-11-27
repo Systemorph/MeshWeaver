@@ -442,6 +442,14 @@ both:
   framework-stale kickoff takes its single shot only after the interlock, so it stays armed for the
   record's next change.
 
+The untracked-module gate also judges coverage by IDENTITY (`StampNaming`), not only by version.
+The adoption's own write bumps the node past the version the adoption observed, and so does every
+later bookkeeping write, so a version test reads every admitted adoption as "not covered" and
+parked eleven adopted types on a client portal's 4.0.14338 pod. The process's own adoption of a build
+for the live framework covers the type unless a different build under the live framework replaced
+it, a forced release asked for the live source, or the source fingerprint moved past the bytes.
+Pinned by `AnAdoptionIsCoveredByIdentityNotByVersionTest`.
+
 Nothing about the gates changes. The bake gate, the publication gate and the untracked-module gate
 are untouched. A type that no adoption covers is still kicked, parked and judged, and a genuine
 regression still refuses readiness.
