@@ -42,6 +42,7 @@ public sealed class StaleCallbackScanRegistry
     private IDisposable? timer;
     private long nextId;
     private int timersStarted;
+    private int ticking;
 
     /// <summary>Creates a registry that scans every <paramref name="interval"/>. Applications use
     /// <see cref="Shared"/>; the scheduler is for tests.</summary>
@@ -82,6 +83,22 @@ public sealed class StaleCallbackScanRegistry
     }
 
     private void Tick()
+    {
+        // An overlapping tick (a walk that outlasted the interval) is skipped, never run beside
+        // the first: every hub is scanned by at most one pass at a time, as it was under the
+        // per-hub timers.
+        if (Interlocked.CompareExchange(ref ticking, 1, 0) != 0) return;
+        try
+        {
+            ScanAll();
+        }
+        finally
+        {
+            Volatile.Write(ref ticking, 0);
+        }
+    }
+
+    private void ScanAll()
     {
         foreach (var (id, target) in targets)
         {

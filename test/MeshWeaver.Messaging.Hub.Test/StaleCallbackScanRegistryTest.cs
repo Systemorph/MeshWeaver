@@ -104,4 +104,33 @@ public class StaleCallbackScanRegistryTest
         var registry = new StaleCallbackScanRegistry(Interval, new TestScheduler());
         Assert.Equal(0, registry.TimersStarted);
     }
+
+    [Fact]
+    public void AnOverlappingTickIsSkippedNotRunBesideTheFirst()
+    {
+        var clock = new TestScheduler();
+        var registry = new StaleCallbackScanRegistry(Interval, clock);
+        var concurrent = 0;
+        var maxConcurrent = 0;
+        var reentered = false;
+        Probe? probe = null;
+        probe = new Probe(onScan: () =>
+        {
+            var now = ++concurrent;
+            maxConcurrent = Math.Max(maxConcurrent, now);
+            if (!reentered)
+            {
+                reentered = true;
+                // The next interval fires while this walk is still running.
+                clock.AdvanceBy(Interval.Ticks);
+            }
+            concurrent--;
+        });
+        registry.Register(probe);
+
+        clock.AdvanceBy(Interval.Ticks);
+
+        Assert.Equal(1, maxConcurrent);
+        Assert.Equal(1, probe.Scans);
+    }
 }

@@ -522,9 +522,10 @@ public sealed class MessageHub : IMessageHub
         // per 5 s, phase-locked across a wave of activations.
         var sub = StaleCallbackScanRegistry.Shared.Register(new StaleCallbackScanAdapter(this, thresholdMs));
         staleCallbackScannerSub = sub;
-        // Also register in the disposables composite so a NORMAL teardown kills the
-        // timer promptly (rather than waiting for the next tick after GC). Double-dispose
-        // with the explicit Quiescing-phase dispose is harmless (Rx is idempotent).
+        // Also register in the disposables composite so a NORMAL teardown stops scanning THIS hub
+        // promptly (rather than waiting for the registry to find it dead). The shared timer keeps
+        // running for the other hubs; disposing the registration twice (here and at the
+        // Quiescing-phase dispose) is harmless because removing an absent entry is a no-op.
         disposables.Add(GuardRegistrant(sub));
     }
 
