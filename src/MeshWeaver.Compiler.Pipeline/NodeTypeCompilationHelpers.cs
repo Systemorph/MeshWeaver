@@ -2565,22 +2565,28 @@ internal static class NodeTypeCompilationHelpers
                     _ => NodeSources.GetSources(workspace, def, hubPath));
             })
             .Switch()
-            .Select(sources =>
+            // The generation the type has ALREADY published, read live: a source whose code is
+            // unchanged keeps that generation's version (SourceVersionCarry), so a write that
+            // does not touch the code - an AI description round, an icon, a rename - moves no
+            // snapshot and recompiles nothing. WithLatestFrom, never CombineLatest: the own node
+            // changes on every compile-state write, and each such change must not re-fold.
+            .WithLatestFrom(
+                ownStream.Select(n => n?.Content as NodeTypeDefinition),
+                (sources, latest) =>
             {
-                // Fold the full current set → path → NodeTypeDefinition.SourceVersionOf.
-                // Same rule CompiledSources is keyed on, so IsDirty compares like-for-like
-                // (empty set → empty snapshot → IsDirty=false when CompiledSources is also
-                // empty). Keying on the raw timestamp is what let an un-timestamped source
+                // Fold the full current set -> path -> NodeTypeDefinition.SourceVersionOf, with
+                // the carry above. Same rule CompiledSources is keyed on, so IsDirty compares
+                // like-for-like (empty set -> empty snapshot -> IsDirty=false when CompiledSources
+                // is also empty). Keying on the raw timestamp is what let an un-timestamped source
                 // record 1601 on both sides and never read as changed (#1836).
-                var snap = System.Collections.Immutable.ImmutableDictionary<string, long>.Empty;
-                foreach (var n in sources)
-                    if (!string.IsNullOrEmpty(n.Path))
-                        snap = snap.SetItem(n.Path!, NodeTypeDefinition.SourceVersionOf(n));
-                // #2813 — carry the live source NODES alongside the tick snapshot so the
+                var (snap, digests) = SourceVersionCarry.Fold(
+                    sources, latest?.CurrentSourceVersions, latest?.CurrentSourceDigests);
+                // #2813 - carry the live source NODES alongside the tick snapshot so the
                 // publication below can fingerprint their CONTENT when (and only when) there is an
                 // adopted fingerprint to compare it against. The nodes are already materialised
                 // here; the hash is what costs, and it is paid only where it is used.
-                return (Snapshot: (IReadOnlyDictionary<string, long>)snap, Nodes: sources);
+                return (Snapshot: (IReadOnlyDictionary<string, long>)snap,
+                    Digests: (IReadOnlyDictionary<string, string>)digests, Nodes: sources);
             })
             // 🚨 #4280 — an `@@`-include ARRIVAL re-runs the fingerprint stage over the SAME source
             // set. The stages above fire on the type's source QUERIES, and an include is matched by
@@ -2617,7 +2623,7 @@ internal static class NodeTypeCompilationHelpers
             // say which includes it covered, and the owner's completeness witness needs to know.
             .Select(published => NodeTypeSourceFingerprint
                 .ComputeWithIncludes(published.Nodes, hubPath, includeReader, logger)
-                .Select(computed => (published.Snapshot, Fingerprint: (string?)computed.Fingerprint,
+                .Select(computed => (published.Snapshot, published.Digests, Fingerprint: (string?)computed.Fingerprint,
                     Includes: (System.Collections.Immutable.ImmutableList<string>?)computed.Includes))
                 .Catch((SourceIncludeUnavailableException ex) =>
                 {
@@ -2626,7 +2632,7 @@ internal static class NodeTypeCompilationHelpers
                         + "established, so CurrentSourceFingerprint is left at its previous value "
                         + "for this emission — an unreadable include must never read as an absent "
                         + "one", hubPath);
-                    return Observable.Return((published.Snapshot, Fingerprint: (string?)null,
+                    return Observable.Return((published.Snapshot, published.Digests, Fingerprint: (string?)null,
                         Includes: (System.Collections.Immutable.ImmutableList<string>?)null));
                 })
                 // #3583 — the partition root's module version, read beside the fingerprint so the
@@ -2634,7 +2640,7 @@ internal static class NodeTypeCompilationHelpers
                 // source moved. One safe read (Present / Absent / Unavailable); an unreadable
                 // root keeps the previous value, exactly as an unreadable include does.
                 .SelectMany(p => ReadModuleVersion(hub, accessService, hubPath, logger)
-                    .Select(mv => (p.Snapshot, p.Fingerprint, p.Includes, ModuleVersion: mv))))
+                    .Select(mv => (p.Snapshot, p.Digests, p.Fingerprint, p.Includes, ModuleVersion: mv))))
             .Switch()
             // #5344 — the backoff wraps the WHOLE factory above, not only the per-path tail: the
             // path-set discovery (NodeSources.GetSources, the read the #5344 stall faults) and the
@@ -2682,6 +2688,7 @@ internal static class NodeTypeCompilationHelpers
                                 var refreshed = def with
                                 {
                                     CurrentSourceVersions = snapshot,
+                                    CurrentSourceDigests = published.Digests,
                                     CurrentSourceFingerprint = published.Fingerprint ?? def.CurrentSourceFingerprint,
                                     CurrentSourceIncludes = published.Includes ?? def.CurrentSourceIncludes,
                                     CurrentModuleVersion = published.ModuleVersion.Established
@@ -2754,7 +2761,8 @@ internal static class NodeTypeCompilationHelpers
                         // The equality, the generation rule and the stamp: PublishSourceSnapshot.
                         var updated = PublishSourceSnapshot(
                             def, snapshot, fingerprint, published.Includes, published.ModuleVersion,
-                            (d, live) => ApplyAdoptedSourceStampAndReport(d, live, hub, hubPath, logger));
+                            (d, live) => ApplyAdoptedSourceStampAndReport(d, live, hub, hubPath, logger),
+                            published.Digests);
                         if (updated is null)
                             return curr;
 
@@ -2803,7 +2811,8 @@ internal static class NodeTypeCompilationHelpers
         string? fingerprint,
         System.Collections.Immutable.ImmutableList<string>? includes,
         (string? Version, bool Established) moduleVersion,
-        Func<NodeTypeDefinition, IReadOnlyDictionary<string, long>, NodeTypeDefinition> applyStamp)
+        Func<NodeTypeDefinition, IReadOnlyDictionary<string, long>, NodeTypeDefinition> applyStamp,
+        IReadOnlyDictionary<string, string>? digests = null)
     {
         var pendingStamp = def.RequestedSourceStampAt is not null;
         var snapshotMoved = def.CurrentSourceVersions is null
@@ -2825,7 +2834,8 @@ internal static class NodeTypeCompilationHelpers
                 || (def.CurrentSourceIncludes is not null
                     && def.CurrentSourceIncludes.SequenceEqual(includes, StringComparer.Ordinal)))
             && (!moduleVersion.Established
-                || string.Equals(def.CurrentModuleVersion, moduleVersion.Version, StringComparison.Ordinal)))
+                || string.Equals(def.CurrentModuleVersion, moduleVersion.Version, StringComparison.Ordinal))
+            && DigestsEqual(def.CurrentSourceDigests, digests))
             return null;
 
         // 🚨 #8413 — a fingerprint is kept only for the snapshot it was measured over.
@@ -2833,6 +2843,7 @@ internal static class NodeTypeCompilationHelpers
         var updated = def with
         {
             CurrentSourceVersions = snapshot,
+            CurrentSourceDigests = digests,
             CurrentSourceFingerprint = fingerprint
                 ?? (inconclusiveMove ? null : def.CurrentSourceFingerprint),
             CurrentSourceIncludes = includes
@@ -2946,6 +2957,17 @@ internal static class NodeTypeCompilationHelpers
     /// (path, ticks) pairs return false for value-equality. We need a
     /// content-equal check so the watcher's no-op short-circuit fires.
     /// </summary>
+    private static bool DigestsEqual(
+        IReadOnlyDictionary<string, string>? a, IReadOnlyDictionary<string, string>? b)
+    {
+        if (a is null || b is null) return a is null && b is null;
+        if (a.Count != b.Count) return false;
+        foreach (var kvp in a)
+            if (!b.TryGetValue(kvp.Key, out var v) || !string.Equals(v, kvp.Value, StringComparison.Ordinal))
+                return false;
+        return true;
+    }
+
     private static bool DictEquals(
         IReadOnlyDictionary<string, long> a,
         IReadOnlyDictionary<string, long> b)
@@ -3353,10 +3375,19 @@ internal static class NodeTypeCompilationHelpers
                         hubPath, unreadable.Path);
                     return current.Select(c => c with { Established = false });
                 }
+                // A source whose CODE the snapshot's digest still shows is not behind, whatever
+                // timestamp its owner now holds: the write that moved it touched metadata only
+                // (SourceVersionCarry), and the snapshot deliberately keeps the older version.
                 var live = System.Collections.Immutable.ImmutableDictionary.ToImmutableDictionary(
                     reads,
                     r => r.Path,
-                    r => r.Outcome.Node is { } n ? OwnerVersionAsStored(n) : (long?)null);
+                    r => r.Outcome.Node is { } n
+                        ? (SourceVersionCarry.ShowsSameCode(requestedAgainst.CurrentSourceDigests, r.Path, n)
+                            ? Math.Min(OwnerVersionAsStored(n),
+                                requestedAgainst.CurrentSourceVersions is { } cv && cv.TryGetValue(r.Path, out var held)
+                                    ? held : OwnerVersionAsStored(n))
+                            : OwnerVersionAsStored(n))
+                        : (long?)null);
                 if (!SnapshotShows(requestedAgainst.CurrentSourceVersions, live))
                     logger?.LogInformation(
                         "[ReleaseRequestWatcher] {HubPath}: the source snapshot is behind the request ({Source}) "

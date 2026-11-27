@@ -721,6 +721,15 @@ public record NodeTypeDefinition : IDeclaresSourceGenerators
     public IReadOnlyDictionary<string, long>? CurrentSourceVersions { get; init; }
 
     /// <summary>
+    /// The digest of each source's CODE as of the generation <see cref="CurrentSourceVersions"/>
+    /// describes ({path → SHA-256 of the code text}). A source whose digest is unchanged keeps its
+    /// recorded version, so a write that does not touch the code (a description, an icon, a rename)
+    /// moves no snapshot, never marks the type dirty and recompiles nothing. Null on a record
+    /// written before the field existed: nothing is carried then, exactly the old behaviour.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? CurrentSourceDigests { get; init; }
+
+    /// <summary>
     /// A REQUEST to the owning per-NodeType hub: "stamp <see cref="CompiledSources"/> from your own
     /// <see cref="CurrentSourceVersions"/>". Written by
     /// <c>PrebuiltAssemblySeeder.Seed</c> when it adopts a prebuilt assembly; consumed —

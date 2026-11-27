@@ -74,6 +74,7 @@ public sealed class AReinstallLandsEveryAuthoredNodeTypeMemberTest
         if (type == typeof(ImmutableList<KeyedText>)) return ImmutableList.Create(KeyedText.Of("changed"));
         if (type == typeof(Dictionary<string, object>)) return new Dictionary<string, object> { ["changed"] = "yes" };
         if (type == typeof(IReadOnlyDictionary<string, long>)) return new Dictionary<string, long> { ["changed"] = 1 };
+        if (type == typeof(IReadOnlyDictionary<string, string>)) return new Dictionary<string, string> { ["changed"] = "yes" };
         if (type == typeof(ImmutableSortedDictionary<string, string>))
             return ImmutableSortedDictionary<string, string>.Empty.Add("changed", "yes");
         if (type == typeof(List<MeshWeaver.ContentCollections.ContentCollectionConfig>))
