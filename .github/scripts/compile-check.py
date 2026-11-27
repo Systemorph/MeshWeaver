@@ -850,19 +850,18 @@ MODULE_REFS_NOT_IN_IMAGE = ("MeshWeaver.AI", "MeshWeaver.Markdown.Collaboration"
 TARGET_FRAMEWORK = "net11.0"
 
 
-def sibling_plugins_checkouts(root=None):
+def sibling_plugins_checkouts():
     """Candidate MeshWeaver.Plugins checkouts beside this one — where the registry-served module
     projects (MODULE_REFS_NOT_IN_IMAGE) are built since they left core's src/. One list, shared by
     discover_module_refs and run-node-tests.py's sibling_plugin_refs."""
-    root = Path(root) if root is not None else ROOT
     return [
-        root.parent / "MeshWeaver.Plugins",
-        root.parent.parent / "MeshWeaver.Plugins",
+        ROOT.parent / "MeshWeaver.Plugins",
+        ROOT.parent.parent / "MeshWeaver.Plugins",
         Path(os.path.expanduser("~/code/MeshWeaver.Plugins")),
     ]
 
 
-def discover_module_refs(search_roots, include_repo_build: bool = True, repo_root=None):
+def discover_module_refs(search_roots, include_repo_build: bool = True, plugins_roots=None):
     """Locate the MODULE assemblies that are no longer in the platform image. CI supplies them in
        the flat `--refs` dir (unpacked from the run's module bundles); locally they come from this
        repo's own `src/<Module>/bin/{Release,Debug}/net11.0/`, since all three are built HERE.
@@ -892,13 +891,15 @@ def discover_module_refs(search_roots, include_repo_build: bool = True, repo_roo
             for cfg in ("Release", "Debug"):
                 for dll in glob.glob(str(ROOT / "src" / name / "bin" / cfg / TARGET_FRAMEWORK / f"{name}.dll")):
                     consider(dll, cfg == "Release")
-    # …and the sibling MeshWeaver.Plugins checkout, where these projects now live.
-    if include_repo_build:
-        for base in sibling_plugins_checkouts(repo_root):
-            for name in MODULE_REFS_NOT_IN_IMAGE:
-                for cfg in ("Release", "Debug"):
-                    for dll in glob.glob(str(base / "src" / name / "bin" / cfg / TARGET_FRAMEWORK / f"{name}.dll")):
-                        consider(dll, cfg == "Release")
+    # …and the sibling MeshWeaver.Plugins checkout, where these projects now live. `plugins_roots`
+    # overrides the candidates (the self-test passes its fixture, so no host build can leak in).
+    if plugins_roots is None:
+        plugins_roots = sibling_plugins_checkouts() if include_repo_build else []
+    for base in plugins_roots:
+        for name in MODULE_REFS_NOT_IN_IMAGE:
+            for cfg in ("Release", "Debug"):
+                for dll in glob.glob(str(Path(base) / "src" / name / "bin" / cfg / TARGET_FRAMEWORK / f"{name}.dll")):
+                    consider(dll, cfg == "Release")
     # …then anything the reference roots already carry (CI's flat dir, a sibling checkout's bins).
     for root in search_roots:
         if not root:
@@ -2214,7 +2215,8 @@ def _self_test() -> int:
             wrong = plug / "MeshWeaver.Maps" / "bin" / "Release" / "net0.0"
             wrong.mkdir(parents=True)
             (wrong / "MeshWeaver.Maps.dll").write_bytes(b"")
-            found = discover_module_refs([], repo_root=fake_core)
+            found = discover_module_refs([], include_repo_build=False,
+                                         plugins_roots=[Path(tmp) / "work" / "MeshWeaver.Plugins"])
             if "MeshWeaver.AI.dll" not in found:
                 failures.append("  module-refs discovery missed MeshWeaver.AI.dll in a sibling "
                                 "MeshWeaver.Plugins checkout")
