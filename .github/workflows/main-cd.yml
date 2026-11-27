@@ -1314,6 +1314,20 @@ jobs:
             echo "::warning::the in-flight probe failed (exit $?) — cannot tell whether an older run is publishing $SHORT; proceeding as before MeshWeaver#3376 (a duplicate image set is the worst case)"
             INFLIGHT=""
           fi
+          # 🚨 A REQUESTED REBUILD NEVER DEFERS TO AN OLDER RUN OF THE SAME COMMIT. The one-commit-one-set
+          # rule protects against two runs rebuilding the SAME inputs; a `rebuild` request exists
+          # precisely because the inputs moved where this run's own gate cannot see them (the portal
+          # HOSTS live in MeshWeaver.Plugins, #2622). The older run resolved Plugins' HEAD BEFORE the
+          # merge that asked for this rebuild, and — finding core's set already complete — it built
+          # nothing; deferring to it dropped the request, and the lane's handoff (which answers
+          # "does CORE's HEAD still have a publisher") had nothing owed, so a host-only change
+          # waited for an unrelated image-relevant build while both lanes read green (measured
+          # 2026-11-21: Plugins#5746). Rebuild dispatches already serialize among themselves in their
+          # own concurrency group, so a second request still never overlaps a first.
+          if [ -n "$INFLIGHT" ] && [ "${FORCE_REBUILD:-false}" = "true" ]; then
+            echo "an older run is live on $SHORT ($INFLIGHT), but rebuild=true is an explicit request for inputs that run could not have read — NOT deferring to it."
+            INFLIGHT=""
+          fi
           if [ -n "$INFLIGHT" ]; then
             # 🚨 THE SENTENCE USED TO END "If that run fails, the next reconcile tick heals HEAD."
             # That was true of a run that FAILS and false of the far commoner outcome: the run is
