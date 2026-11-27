@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -649,6 +650,51 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
             Interlocked.Exchange(ref phase, (int)BakePhase.Faulted);
             detail = FaultedDetail(message);
         }
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE ADOPTION VERDICT — "bake at build"</b> (owner directive, 2026-11-27). On an instance
+    /// that does not compile at boot (<c>PreWarm:DynamicTypes</c> off — the default), the gate
+    /// certifies a different fact than the sweep's: that every dynamic NodeType this image serves
+    /// arrived as a bundle CI already built, and was ADOPTED. Compiling is not what is measured, so
+    /// nothing is compiled; the report is the probe of the assembly store after the bundles were
+    /// seeded.
+    ///
+    /// <para>The same population and the same exemptions the sweep's gate uses
+    /// (<see cref="NodeTypeBakeReport.GateRelevant"/>): a type that was already broken, a first-ever
+    /// bake (nothing to protect — <see cref="DynamicTypePreWarmer.IsFirstBake"/>), and an image that
+    /// has already served here never hold a roll. What is left is a type a prior image served and
+    /// this image's CI did not deliver a build for — and that holds the roll, because lazily
+    /// compiling it in production is exactly what the directive retires.</para>
+    ///
+    /// <para>Recorded as <see cref="BakePhase.Faulted"/> ("unproven"), never <see cref="BakePhase.Regressed"/>:
+    /// nothing FAILED to compile, the proof is missing. So the existing operator hatch
+    /// (<see cref="AllowUnprovenBake"/>) and the served-build witness (<see cref="ServedBefore"/>) apply
+    /// unchanged, and a restart of an image that already served is never refused by it.</para>
+    /// </summary>
+    /// <param name="report">The adopt-only probe, taken after the bundles were seeded.</param>
+    /// <param name="elapsed">How long the adoption took, for the detail line.</param>
+    /// <returns><c>true</c> when the adoption proves the bake and the gate is Complete.</returns>
+    public bool ApplyAdoption(NodeTypeBakeReport report, TimeSpan elapsed)
+    {
+        var gating = report.GateRelevant;
+        var adopted = report.Entries.Count(e => !e.NeedsBake);
+        if (gating.Count == 0 || DynamicTypePreWarmer.IsFirstBake(report))
+        {
+            MarkComplete(
+                $"adopted the prebuilt bundles in {elapsed:hh\\:mm\\:ss} — adopted={adopted} "
+                + $"uncovered={report.Pending.Count} of {report.Entries.Count} dynamic NodeType(s), nothing compiled");
+            return true;
+        }
+
+        const int named = 10;
+        var list = string.Join(", ", gating.Take(named).Select(e => $"{e.TypePath} ({e.State})"));
+        if (gating.Count > named)
+            list += $", …and {gating.Count - named} more";
+        MarkFaulted(
+            $"{gating.Count} dynamic NodeType(s) have no CI-built bundle adopted on this image "
+            + $"(adopted={adopted} of {report.Entries.Count}): {list}");
+        return false;
     }
 
     /// <summary>
