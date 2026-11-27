@@ -168,8 +168,9 @@ German reader is handed *Hier unterschreiben*, *Löschen*, *Fertig*.
 
 # Image Canvas
 
-`ImageCanvasControl` is a picture the viewer edits by **dragging on it** — today a crop region with
-handles on its edges and corners. It is a thin overlay, never a second image renderer: the control
+`ImageCanvasControl` is a picture the viewer edits by **dragging on it** — a crop region with
+handles on its edges and corners, and vector shapes (annotations) drawn, selected, moved and deleted
+on the picture. It is a thin overlay, never a second image renderer: the control
 draws the picture exactly as given (the server has already rendered it) and, on top, only the crop
 frame and its handles. A drag is shown locally while it lasts and commits **once, on release**, as
 ordinary field edits of the four bound trims; the server re-renders and the new picture flows back.
@@ -194,8 +195,40 @@ Controls.Stack
 |---|---|---|
 | `WithModelSize(width, height)` | The picture's full extent in model units — required for the crop tool | — |
 | `WithCrop(left, top, right, bottom)` | Bind the crop tool to the four trims (typically `JsonPointerReference`s into the node) | no crop tool |
+| `WithShapes(shapes, tool, newShape?)` | Bind the shape tools: a list of shapes, the active `ImageCanvasTool`, and the template a new shape copies (its colour, stroke…) | no shape tools |
 | `WithMaxHeight(object)` | The tallest the picture is drawn (CSS length); its width never exceeds the container | `70vh` |
 | `WithAlt(object)` | The picture's accessible name | — |
+
+## Shapes
+
+With `WithShapes` bound, the viewer works on a list of shapes with the active tool. The renderer
+still draws no shape itself — they are part of the server-rendered picture; it hit-tests them,
+outlines the selected one and shows the gesture in progress. Every finished gesture writes the
+**whole list** back once:
+
+| Tool (`ImageCanvasTool`) | Gesture | Result |
+|---|---|---|
+| `Rectangle`, `Ellipse`, `Line`, `Arrow`, `Highlight`, `Blur` | drag | appends a shape from the press to the release |
+| `Text` | click | appends a point shape anchored at the click (the left end of its baseline) |
+| `Select` (and any unknown value) | click / drag / keys | selects the topmost shape under the pointer, moves it; arrows nudge it (Shift = 10), Delete removes it, Escape deselects |
+
+An element needs only the geometry of `ImageCanvasShape` — `kind, x, y, x2, y2` in model units, plus
+`text` and `fontSize` for a text shape. Every other property (colour, stroke width, a `$type`) is
+carried through unchanged, so a package keeps its own shape record; a new element copies the
+`newShape` template and sets its kind and points. The rules — topmost hit wins, segments hit by
+distance and boxes by inside, a move clamped to the picture, a press shorter than
+`ImageCanvasShapes.DragThreshold` screen pixels is a click — are `ImageCanvasShapes`, and every
+renderer applies them.
+
+```csharp --render InputImageCanvasShapes --show-code
+Controls.Stack
+    .WithView(Controls.ImageCanvas(
+            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='400' height='240'><rect width='400' height='240' fill='%234f46e5'/><rect x='40' y='30' width='150' height='90' fill='none' stroke='%23facc15' stroke-width='4'/></svg>",
+            "A blue picture with one yellow box")
+        .WithModelSize(400, 240)
+        .WithShapes(new[] { new ImageCanvasShape(ImageCanvasTool.Rectangle, 40, 30, 190, 120) },
+            ImageCanvasTool.Select))
+```
 
 The accessible names of the crop frame and its eight handles are catalog keys (`imageCanvas.*`), so
 a German reader hears *Linke Kante des Zuschnitts*. Every value the canvas edits should also be
