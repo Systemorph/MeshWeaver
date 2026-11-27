@@ -1,7 +1,4 @@
 using System.Reactive.Linq;
-using System.Text.Json;
-using MeshWeaver.Data;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.ContentCollections;
@@ -29,24 +26,8 @@ public static class OwnerCollectionConfigLookup
     /// <param name="timeout">How long the owner gets to answer.</param>
     public static IObservable<ContentCollectionConfig?> GetOwnerCollectionConfig(
         this IMessageHub issuer, Address owner, string collection, TimeSpan timeout)
-        => Observable.Defer(() => issuer.ReadIssuingHub()
-                .Observe(
-                    new GetDataRequest(new ContentCollectionReference([collection])),
-                    o => o.WithTarget(owner)))
-            .Take(1)
+        => ContentFileResolver.ObserveCollectionConfigs(issuer, owner, [collection], caller: null)
             .Timeout(timeout)
-            .Select(delivery => Pick(delivery.Message.Data, collection, issuer.JsonSerializerOptions));
-
-    /// <summary>The entry named <paramref name="collection"/> out of a configuration answer in either wire shape. Pure.</summary>
-    internal static ContentCollectionConfig? Pick(object? data, string collection, JsonSerializerOptions options)
-    {
-        IEnumerable<ContentCollectionConfig>? configs = data switch
-        {
-            JsonElement { ValueKind: JsonValueKind.Array } je =>
-                JsonSerializer.Deserialize<ContentCollectionConfig[]>(je, options),
-            IEnumerable<ContentCollectionConfig> direct => direct,
-            _ => null
-        };
-        return configs?.FirstOrDefault(c => string.Equals(c.Name, collection, StringComparison.Ordinal));
-    }
+            .Select(delivery => ContentFileResolver.ReadCollectionConfigs(delivery)?
+                .FirstOrDefault(c => string.Equals(c.Name, collection, StringComparison.Ordinal)));
 }

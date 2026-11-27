@@ -52,9 +52,9 @@ public class MappedCollectionExposureTest(ITestOutputHelper output) : HubTestBas
 
         var all = node.GetAllCollectionConfigs();
 
-        var mapped = all.SingleOrDefault(c => c.Name == "attachments");
-        mapped.Should().NotBeNull("the mapping declares itself child-visible, so the listing must carry it");
-        mapped!.ExposeInChildren.Should().BeTrue();
+        var mapped = all.SingleOrDefault(c => c.Name == "attachments")
+            ?? throw new Xunit.Sdk.XunitException("the mapping declares itself child-visible, so the listing must carry it");
+        mapped.ExposeInChildren.Should().BeTrue();
         mapped.IsEditable.Should().BeTrue("the mapping's writable flag still wins over the read-only source");
         mapped.BasePath.Should().EndWith(Path.Combine("attachments", "node1"));
 
@@ -68,10 +68,9 @@ public class MappedCollectionExposureTest(ITestOutputHelper output) : HubTestBas
     {
         var node = GetClient().ServiceProvider.GetRequiredService<IContentService>();
 
-        var byName = node.GetCollectionConfig("attachments");
-
-        byName.Should().NotBeNull();
-        byName!.ExposeInChildren.Should().BeTrue("the named lookup and the listing must agree");
+        var byName = node.GetCollectionConfig("attachments")
+            ?? throw new Xunit.Sdk.XunitException("the named lookup must resolve the mapped collection");
+        byName.ExposeInChildren.Should().BeTrue("the named lookup and the listing must agree");
     }
 
     /// <summary>The ambient identity a portal circuit carries when the browser asks (a post carries one or is refused).</summary>
@@ -88,9 +87,9 @@ public class MappedCollectionExposureTest(ITestOutputHelper output) : HubTestBas
         var declared = await Mesh.GetOwnerCollectionConfig(owner, "attachments", TimeSpan.FromSeconds(20))
             .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
-        declared.Should().NotBeNull("the owner declares it, so a client holding only the name can fetch it");
-        declared!.Name.Should().Be("attachments");
-        declared.BasePath.Should().EndWith(Path.Combine("attachments", "node1"));
+        var found = declared ?? throw new Xunit.Sdk.XunitException("the owner declares it, so a client holding only the name can fetch it");
+        found.Name.Should().Be("attachments");
+        found.BasePath.Should().EndWith(Path.Combine("attachments", "node1"));
     }
 
     [Fact(Timeout = 30000)]
