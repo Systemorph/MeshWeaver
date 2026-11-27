@@ -268,6 +268,27 @@ public sealed class NodeTypeAdoptionRegistry
     }
 
     /// <summary>
+    /// The overlay's identity clause: the snapshot is newer than the adoption by VERSION, but it
+    /// still names a real build (non-empty coordinates) that is NOT a newer build under the live
+    /// framework — the previous platform's build the adoption was about to replace. That is a
+    /// bookkeeping write (a release request from a public page's slow path, a hold written from a
+    /// pre-adoption read), not new evidence about the type: on a provisional pod the adoption's own
+    /// stamp is held, so the record keeps naming the old build and every write to it moves only its
+    /// version. An empty record (an owner refusal clears the coordinates) is NOT this case and the
+    /// snapshot wins, as does any build under the live framework.
+    /// </summary>
+    private AdoptedStamp? StillNamingThePreAdoptionBuild(string nodeTypePath, NodeTypeDefinition? snapshot)
+    {
+        if (snapshot is null
+            || string.IsNullOrEmpty(snapshot.LatestAssemblyPath)
+            || !stamped.TryGetValue(nodeTypePath, out var stamp))
+            return null;
+        return stamp.Definition.CompiledFrameworkVersion is { Length: > 0 } live
+            ? StampNaming(nodeTypePath, snapshot, live)
+            : null;
+    }
+
+    /// <summary>
     /// Lay this process's own adoption stamps over an enumeration snapshot, so the bake sweep
     /// classifies each type from the NEWER of the two — the projection, or the write this process
     /// made and knows the projection has not seen.
@@ -297,7 +318,8 @@ public sealed class NodeTypeAdoptionRegistry
         foreach (var (path, definition) in definitions)
         {
             if (nodes.TryGetValue(path, out var node)
-                && StampSuperseding(path, node.Version) is { } stamp)
+                && (StampSuperseding(path, node.Version)
+                    ?? StillNamingThePreAdoptionBuild(path, definition)) is { } stamp)
             {
                 result[path] = stamp.Definition;
                 applied.Add(path);

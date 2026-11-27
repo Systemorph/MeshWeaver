@@ -133,6 +133,43 @@ public class AdoptedTypeIsNotJudgedFromAStaleSnapshotTest
     /// <see cref="BakeState.Baked"/> over a record that no longer names any assembly — a stale
     /// serve, which is the one outcome the bake's conservatism exists to prevent.</para>
     /// </summary>
+    /// <summary>
+    /// Provisional adoption (stamp held): the record still names the PREVIOUS platform's build, and a
+    /// bookkeeping write (a public page's slow-path release request, a hold) moves its version past
+    /// the adoption's. The adoption still covers the type; a newer build under the live framework
+    /// and a cleared record (owner refusal) are the controls.
+    /// </summary>
+    [Fact]
+    public void ABookkeepingWriteOverAHeldAdoption_DoesNotHideTheAdoptionFromTheSweep()
+    {
+        var store = new FakeStore();
+        store.Add(Path, 25);
+        var registry = new NodeTypeAdoptionRegistry();
+        registry.RecordAdopted(Path, observedVersion: 25, Definition(Live, compiledVersion: 25));
+
+        // Still the previous framework's build, but the version moved (26 > 25).
+        var bookkept = Definition(Previous, compiledVersion: 24);
+        var overlay = registry.OverlayOnto(Definitions((Path, bookkept)), Nodes((Path, Node(26, bookkept))));
+        overlay.Applied.Should().Equal([Path]);
+        Probed(NodeTypeBakeStatus.Probe(overlay.Definitions, store, Live)).Entries.Single().State
+            .Should().Be(BakeState.Baked);
+
+        // Control 1: a different build under the live framework is newer evidence.
+        var newer = Definition(Live, compiledVersion: 30);
+        registry.OverlayOnto(Definitions((Path, newer)), Nodes((Path, Node(27, newer)))).Applied
+            .Should().BeEmpty();
+
+        // Control 2: a cleared record is an owner refusal, not bookkeeping.
+        var cleared = new NodeTypeDefinition
+        {
+            Configuration = "config => config",
+            Sources = ["namespace:Source scope:subtree"],
+            CompilationStatus = CompilationStatus.Pending,
+        };
+        registry.OverlayOnto(Definitions((Path, cleared)), Nodes((Path, Node(27, cleared)))).Applied
+            .Should().BeEmpty();
+    }
+
     [Fact]
     public void SnapshotNewerThanThisProcessAdoption_KeepsTheSnapshot_EvenWhenTheStoreHasBytes()
     {
