@@ -212,6 +212,91 @@ public sealed class NodeTypeAdoptionRegistry
             : null;
 
     /// <summary>
+    /// The stamp this process wrote for <paramref name="nodeTypePath"/> when <paramref name="current"/>
+    /// has not moved on from the build that adoption installed — judged by IDENTITY, never by node version.
+    ///
+    /// <para><b>Why the version is the wrong witness here.</b>
+    /// <see cref="StampSuperseding"/> answers "does this snapshot predate the adoption?", which is
+    /// true only until the adoption's OWN write lands: that write bumps the node past
+    /// <see cref="AdoptedStamp.ObservedVersion"/>, so every read of the record taken after an admitted
+    /// adoption reads "not covered", and so does any later bookkeeping write (a Pending flip, a
+    /// release request, an adoption stamp).</para>
+    ///
+    /// <para>The question the gate needs answered is "is the build this process adopted still the
+    /// build the record names?". It is: the record carries the stamped build's collection, path,
+    /// compiled version (and MVID when the stamp has one), under the live framework. Bookkeeping
+    /// writes leave those alone. What does NOT leave them alone — and so is never covered — is a
+    /// real change: a different build (a compile or a later adoption replaced the coordinates), a
+    /// FORCED release (the operator asked for the live source), or source whose fingerprint moved past
+    /// the one the bytes were built from.</para>
+    /// </summary>
+    /// <param name="nodeTypePath">The NodeType's mesh path.</param>
+    /// <param name="current">The record's definition as it stands now.</param>
+    /// <param name="liveFramework">The framework this process runs under.</param>
+    public AdoptedStamp? StampNaming(
+        string nodeTypePath, NodeTypeDefinition? current, string liveFramework)
+    {
+        if (current is null
+            || !stamped.TryGetValue(nodeTypePath, out var stamp))
+            return null;
+        var adopted = stamp.Definition;
+        if (!string.Equals(adopted.CompiledFrameworkVersion, liveFramework, StringComparison.Ordinal))
+            return null;
+        if (current.RequestedReleaseForce)
+            return null;
+        // Every compile and every adoption stamps CompiledFrameworkVersion with the LIVE framework
+        // (the framework identity is fixed for the process), so a newer build can only appear under
+        // the live framework; a foreign-framework record is the previous platform's build or a write
+        // composed from an older read. A framework rollback is excluded by the adopted-framework
+        // check above: a stamp adopted under another framework is never covered here.
+        // A DIFFERENT build under the live framework is a newer build (a compile or a later adoption
+        // replaced this one) and wins. A record that names NO build, or one of another framework, is
+        // not evidence of anything newer: a write composed from an older read of the record (a Pending
+        // flip, a hold, a release request) puts the previous coordinates back over the adoption, and
+        // the process still knows what it installed.
+        if (string.Equals(current.CompiledFrameworkVersion, liveFramework, StringComparison.Ordinal)
+            && !string.IsNullOrEmpty(current.LatestAssemblyPath)
+            && (!string.Equals(current.LatestAssemblyCollection, adopted.LatestAssemblyCollection, StringComparison.Ordinal)
+                || !string.Equals(current.LatestAssemblyPath, adopted.LatestAssemblyPath, StringComparison.Ordinal)
+                || current.LastCompiledVersion != adopted.LastCompiledVersion
+                // The path is content-addressed, so equal collection + path + compiled version name the
+                // same bytes; the MVID is a corroboration. A record that LOST its MVID (a partial
+                // clobber) is not a different build — only a present, different MVID is.
+                || (adopted.LatestAssemblyMvid is { Length: > 0 }
+                    && current.LatestAssemblyMvid is { Length: > 0 }
+                    && !string.Equals(current.LatestAssemblyMvid, adopted.LatestAssemblyMvid, StringComparison.Ordinal))))
+            return null;
+        // A real source change: the live sources' fingerprint moved past the one these bytes were
+        // built from. Absent fingerprints compare nothing (unknown is not proven stale).
+        if (adopted.AdoptedSourceFingerprint is { Length: > 0 } built
+            && current.CurrentSourceFingerprint is { Length: > 0 } live
+            && !string.Equals(built, live, StringComparison.Ordinal))
+            return null;
+        return stamp;
+    }
+
+    /// <summary>
+    /// The overlay's identity clause: the snapshot is newer than the adoption by VERSION, but it
+    /// still names a real build (non-empty coordinates) that is NOT a newer build under the live
+    /// framework — the previous platform's build the adoption was about to replace. That is a
+    /// bookkeeping write (a release request from a public page's slow path, a hold written from a
+    /// pre-adoption read), not new evidence about the type: on a provisional pod the adoption's own
+    /// stamp is held, so the record keeps naming the old build and every write to it moves only its
+    /// version. An empty record (an owner refusal clears the coordinates) is NOT this case and the
+    /// snapshot wins, as does any build under the live framework.
+    /// </summary>
+    private AdoptedStamp? StillNamingThePreAdoptionBuild(string nodeTypePath, NodeTypeDefinition? snapshot)
+    {
+        if (snapshot is null
+            || string.IsNullOrEmpty(snapshot.LatestAssemblyPath)
+            || !stamped.TryGetValue(nodeTypePath, out var stamp))
+            return null;
+        return stamp.Definition.CompiledFrameworkVersion is { Length: > 0 } live
+            ? StampNaming(nodeTypePath, snapshot, live)
+            : null;
+    }
+
+    /// <summary>
     /// Lay this process's own adoption stamps over an enumeration snapshot, so the bake sweep
     /// classifies each type from the NEWER of the two — the projection, or the write this process
     /// made and knows the projection has not seen.
@@ -241,7 +326,8 @@ public sealed class NodeTypeAdoptionRegistry
         foreach (var (path, definition) in definitions)
         {
             if (nodes.TryGetValue(path, out var node)
-                && StampSuperseding(path, node.Version) is { } stamp)
+                && (StampSuperseding(path, node.Version)
+                    ?? StillNamingThePreAdoptionBuild(path, definition)) is { } stamp)
             {
                 result[path] = stamp.Definition;
                 applied.Add(path);
