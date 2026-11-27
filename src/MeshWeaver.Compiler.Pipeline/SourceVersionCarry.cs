@@ -30,9 +30,15 @@ internal static class SourceVersionCarry
 {
     /// <summary>The digest of a source's compile-relevant content, or null when the node is not a
     /// typed code node (then nothing is carried).</summary>
+    /// <remarks>The compile reads exactly two members of a <see cref="CodeConfiguration"/>: its
+    /// <c>Code</c>, and <c>IsExecutable</c> (an executable cell runs in the kernel and is left out of the
+    /// compile, <c>NodeCompileShaping.CollectCompileSources</c>) — so both are in the digest, and toggling
+    /// a cell executable is a source change. The execution bookkeeping (<c>LastExecuted*</c>,
+    /// <c>LastActivityPath</c>) and <c>Language</c> reach no compiled byte and are not.</remarks>
     internal static string? DigestOf(MeshNode node) =>
         node.Content is CodeConfiguration cf
-            ? Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(cf.Code ?? string.Empty)))
+            ? Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+                (cf.IsExecutable ? "x:" : "c:") + (cf.Code ?? string.Empty))))
             : null;
 
     /// <summary>

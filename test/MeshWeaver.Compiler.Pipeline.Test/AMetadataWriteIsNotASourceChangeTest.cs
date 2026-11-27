@@ -76,6 +76,26 @@ public class AMetadataWriteIsNotASourceChangeTest
     }
 
     [Fact]
+    public void TogglingACellExecutable_IsASourceChange_ButExecutionBookkeepingIsNot()
+    {
+        // The compile leaves an executable cell out, so IsExecutable decides what is compiled.
+        var def = Published(Source("class A {}", T0));
+        var toggled = Source("class A {}", T0.AddMinutes(3)) with
+        {
+            Content = new CodeConfiguration { Code = "class A {}", IsExecutable = true },
+        };
+        var (toggledVersions, _) = SourceVersionCarry.Fold([toggled], def.CurrentSourceVersions, def.CurrentSourceDigests);
+        Assert.Equal(T0.AddMinutes(3).UtcTicks, toggledVersions[Path]);
+
+        var executedOnly = Source("class A {}", T0.AddMinutes(3)) with
+        {
+            Content = new CodeConfiguration { Code = "class A {}", LastExecutedAt = T0, LastExecutedBy = "someone" },
+        };
+        var (kept, _) = SourceVersionCarry.Fold([executedOnly], def.CurrentSourceVersions, def.CurrentSourceDigests);
+        Assert.Equal(def.CurrentSourceVersions![Path], kept[Path]);
+    }
+
+    [Fact]
     public void ARecordWithoutDigests_NeverCarries()
     {
         // A record written before the field existed: nothing is carried, exactly the old behaviour.
