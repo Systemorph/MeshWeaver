@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace MeshWeaver.Hosting;
 
@@ -146,7 +147,90 @@ public sealed record ThreadPoolQueueCensus(
 
         if (item is Delegate direct)
             return MethodOf(direct);
-        return FirstDelegate(item) is { } held ? $"{Display(type)} → {MethodOf(held)}" : Display(type);
+        if (FirstDelegate(item) is not { } held)
+            return Display(type);
+        var key = $"{Display(type)} → {MethodOf(held)}";
+        // A timer callback that is Rx's own plumbing (Observable.Interval / Timer(due, period) all read
+        // `PeriodicTimer.<>c.<.ctor>`) says nothing about WHO started the timer: name the first
+        // callback outside System.Reactive that it leads to (MeshWeaver#5388: 4,000+ of 9,000-14,800
+        // queued items on memex-cloud read as that one key).
+        // Walk from the timer's STATE, not the timer: the timer also holds the captured ExecutionContext,
+        // whose ambient values are other code's callbacks.
+        var origin = FieldValue(item, type, "_state") ?? FieldValue(item, type, "m_state");
+        return origin is not null && IsReactivePlumbing(held) && UserCallbackBehind(origin) is { } user
+            ? $"{key} ⇒ {user}"
+            : key;
+    }
+
+    private const int MaxWalkNodes = 160;
+
+    private const int MaxWalkDepth = 8;
+
+    /// <summary>Whether the walk may follow a field of this type or an object of this type. Reflection
+    /// metadata, the timer machinery itself (its queue links every timer in the process to this one) and
+    /// the captured ExecutionContext lead to unrelated code, so they are not followed.</summary>
+    private static bool IsWalkable(Type type)
+    {
+        if (type.IsPointer || type == typeof(string) || type.IsPrimitive || type.IsEnum || typeof(MemberInfo).IsAssignableFrom(type)
+            || type == typeof(Type) || type.IsSubclassOf(typeof(Type)))
+            return false;
+        // A System struct (TimeSpan, DateTime, Guid, …) holds no callback, but a ValueTuple is how Rx
+        // carries its scheduled state.
+        if (type.IsValueType && type.Namespace == "System" && !type.IsGenericType)
+            return false;
+        return type.Namespace is not ("System.Threading" or "System.Reflection") && type.Namespace?.StartsWith("System.Reflection", StringComparison.Ordinal) != true;
+    }
+
+    private static bool IsReactivePlumbing(Delegate action) =>
+        action.Method.DeclaringType?.Assembly.GetName().Name == "System.Reactive";
+
+    /// <summary>
+    /// The first delegate, breadth-first from <paramref name="root"/> through object fields and delegate
+    /// targets, whose method is declared outside <c>System.Reactive</c> and the core library: the code the
+    /// Rx timer ends up calling (the subscriber's lambda). Null when none is found within the bounds.
+    /// </summary>
+    internal static string? UserCallbackBehind(object root)
+    {
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance) { root };
+        var level = new List<object> { root };
+        for (var depth = 0; depth < MaxWalkDepth && level.Count > 0 && seen.Count < MaxWalkNodes; depth++)
+        {
+            var next = new List<object>();
+            foreach (var node in level)
+            {
+                if (node is Delegate action)
+                {
+                    var assembly = action.Method.DeclaringType?.Assembly.GetName().Name;
+                    if (assembly is not ("System.Reactive" or "System.Private.CoreLib"))
+                        return MethodOf(action);
+                    if (action.Target is { } target && seen.Add(target))
+                        next.Add(target);
+                    continue;
+                }
+
+                for (var type = node.GetType(); type is not null && type != typeof(object); type = type.BaseType)
+                {
+                    foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly))
+                    {
+                        if (!IsWalkable(field.FieldType))
+                            continue;
+                        // A boxed struct is a fresh object every read, so `seen` cannot bound it; the
+                        // node cap and the depth do. Rx keeps its upstream disposable in such a struct.
+                        if (field.GetValue(node) is { } value && value is not Array && IsWalkable(value.GetType()) && seen.Count < MaxWalkNodes
+                            && (field.FieldType.IsValueType || seen.Add(value)))
+                        {
+                            if (field.FieldType.IsValueType)
+                                seen.Add(value);
+                            next.Add(value);
+                        }
+                    }
+                }
+            }
+
+            level = next;
+        }
+
+        return null;
     }
 
     /// <summary>

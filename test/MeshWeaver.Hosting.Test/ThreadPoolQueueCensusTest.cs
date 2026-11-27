@@ -265,4 +265,58 @@ public class ThreadPoolQueueCensusTest
             parker.Release();
         }
     }
+
+    /// <summary>The callback an Rx timer's subscriber registered; a named method so the key can be asserted.</summary>
+    private static void TickedByTheSubscriber(long _) { }
+
+    /// <summary>
+    /// 🚨 Every <c>Observable.Interval</c> / <c>Observable.Timer(due, period)</c> queues as the SAME key,
+    /// <c>TimerQueueTimer → …PeriodicTimer.&lt;&gt;c.&lt;.ctor&gt;</c>. On memex-cloud 2026-11-27 4,000+ of
+    /// 9,000-14,800 queued items read as that one key, which names Rx and nobody who started the timer.
+    /// The key must continue to the subscriber's own callback (MeshWeaver#5388).
+    /// </summary>
+    [Fact]
+    public void AnRxIntervalTimer_IsKeyedByTheCallbackItsSubscriberRegistered()
+    {
+        using var subscription = System.Reactive.Linq.Observable.Interval(TimeSpan.FromHours(1))
+            .Subscribe(TickedByTheSubscriber);
+
+        var timerItem = FindByTypeName(subscription, "TimerQueueTimer");
+
+        timerItem.Should().NotBeNull("the premise: the Rx timer holds a System.Threading.Timer, whose queued item is a TimerQueueTimer");
+        var key = ThreadPoolQueueCensus.ProducerOf(timerItem!);
+        key.Should().Contain("PeriodicTimer").And.Contain(" ⇒ ")
+            .And.Contain(nameof(ThreadPoolQueueCensusTest)).And.Contain(nameof(TickedByTheSubscriber));
+    }
+
+    [Fact]
+    public void AnObjectHoldingNoUserCallback_HasNoRxOrigin()
+        => ThreadPoolQueueCensus.UserCallbackBehind(new object()).Should().BeNull();
+
+    private static object? FindByTypeName(object root, string typeName)
+    {
+        var seen = new System.Collections.Generic.HashSet<object>(System.Collections.Generic.ReferenceEqualityComparer.Instance) { root };
+        var level = new System.Collections.Generic.List<object> { root };
+        for (var depth = 0; depth < 12 && level.Count > 0; depth++)
+        {
+            var next = new System.Collections.Generic.List<object>();
+            foreach (var node in level)
+            {
+                if (node.GetType().Name == typeName)
+                    return node;
+                if (node is Delegate d && d.Target is { } target && seen.Add(target))
+                    next.Add(target);
+                for (var t = node.GetType(); t is not null && t != typeof(object); t = t.BaseType)
+                    foreach (var f in t.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.DeclaredOnly))
+                        if (!f.FieldType.IsPointer && f.FieldType != typeof(string) && !f.FieldType.IsPrimitive && !f.FieldType.IsEnum
+                            && !(f.FieldType.IsValueType && f.FieldType.Namespace == "System")
+                            && f.GetValue(node) is { } v && v is not Array && (f.FieldType.IsValueType || seen.Add(v)))
+                            next.Add(v);
+            }
+
+            level = next;
+        }
+
+        return null;
+    }
 }
