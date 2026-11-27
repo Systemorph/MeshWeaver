@@ -52,10 +52,12 @@ namespace MeshWeaver.Hosting;
 /// bundles anyway — for authoring a NodeType locally, where there is no CI bake by
 /// construction.</para>
 ///
-/// <para>🚨 <b>Readiness.</b> The bake gate certifies a bake by COMPILING; with the sweep off there
-/// is nothing to certify, so the gate is not armed and stays <c>NotStarted</c> (fail-open). A
-/// deployment that leaves <c>PreWarm:GateReadiness=true</c> while the sweep is off is told at
-/// Critical that its gate protects nothing — see <c>Memex.Portal.Distributed/Program.cs</c>.</para>
+/// <para>🚨 <b>Readiness - bake at BUILD</b> (owner directive, 2026-11-27). With the sweep off, an
+/// armed gate (<c>PreWarm:GateReadiness=true</c>) certifies the ADOPTION of the bundles CI built:
+/// <see cref="NodeTypeBakeGateState.ApplyAdoption"/> passes it when every gate-relevant dynamic type
+/// arrived as an adopted bundle and refuses it (unproven) when one did not. Gate-on/sweep-off is
+/// therefore the normal, measured configuration - never a permanently green gate, and it needs no
+/// workaround. An unarmed host is unchanged.</para>
 /// </summary>
 public sealed class DynamicTypePreWarmerHostedService(
     IServiceProvider services,
@@ -305,8 +307,14 @@ public sealed class DynamicTypePreWarmerHostedService(
         // 🚨 #5544 — the FIRST label only. It used to be the only one, held for the whole sweep, so a
         // pod 30 types into an activation sweep read "enumerating dynamic NodeTypes" for hours; every
         // later step now names itself through MarkProgress (see `progress` below).
+        // 🚨 "Bake at build": an ARMED gate over an adopt-only boot is Running too — it gates on the
+        // ADOPTION of the CI-built bundles (NodeTypeBakeGateState.ApplyAdoption), so the
+        // gate-on/sweep-off combination is a measured gate and no longer a permanently green one.
+        // An UNARMED adopt-only host keeps NotStarted exactly as before.
         if (sweepEnabled)
             gate?.MarkRunning("enumerating dynamic NodeTypes");
+        else if (gate is { GatesReadiness: true })
+            gate.MarkRunning("adopting the prebuilt bundles CI built for this image");
         Action<string>? progress = gate is null ? null : gate.MarkProgress;
         if (gate is { GatesReadiness: true })
             logger.LogInformation(
@@ -326,7 +334,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         // the marker to relax, and a dev host or test mesh should not write it.
         void OfferServedWitness()
         {
-            if (!sweepEnabled || gate is not { GatesReadiness: true })
+            if (gate is not { GatesReadiness: true })
                 return;
             _servedWitness.Disposable = ServedBuildWitness
                 // Read FIRST: a build that has served here relaxes a Faulted sweep too (it has no
@@ -540,9 +548,21 @@ public sealed class DynamicTypePreWarmerHostedService(
             _warmSubscription = seeded
                 .SelectMany(_ => DynamicTypePreWarmer.ProbeDynamicTypes(mesh, logger))
                 .Subscribe(
-                    report => ReportAdoption(report, startedAt, sweepMemory, publishedBundleRoot),
+                    report =>
+                    {
+                        ReportAdoption(report, startedAt, sweepMemory, publishedBundleRoot);
+                        JudgeAdoption(report, gate, admission, startedAt);
+                    },
                     ex =>
                     {
+                        // The adoption could not be measured, so it proved nothing: an armed gate
+                        // refuses (Faulted - AllowUnprovenBake / a served build relax it), exactly
+                        // like a sweep whose stream faulted. An unarmed gate is left untouched.
+                        if (gate is { GatesReadiness: true })
+                        {
+                            gate.MarkFaulted("the prebuilt-bundle adoption could not be measured");
+                            admission?.Reconsider();
+                        }
                         // The enumeration IS the measurement here. Losing it means the pod cannot
                         // say which types the adoption missed — and the uncovered set is the one
                         // thing this path owes its operator. Lazy compilation still covers
@@ -876,6 +896,33 @@ public sealed class DynamicTypePreWarmerHostedService(
     /// adopted nothing at all would otherwise put its entire type list on one line.
     /// </summary>
     private const int UncoveredReported = 25;
+
+    /// <summary>
+    /// The adopt-only readiness verdict (see <see cref="NodeTypeBakeGateState.ApplyAdoption"/>). Only an
+    /// ARMED gate is touched; the admission edge is taken so held stamps are settled either way.
+    /// </summary>
+    private void JudgeAdoption(
+        NodeTypeBakeReport report,
+        NodeTypeBakeGateState? gate,
+        MeshPublicationGate? admission,
+        DateTimeOffset startedAt)
+    {
+        if (gate is not { GatesReadiness: true })
+            return;
+        var proven = gate.ApplyAdoption(report, DateTimeOffset.UtcNow - startedAt);
+        admission?.Reconsider();
+        if (proven)
+            logger.LogInformation(
+                "DynamicTypePreWarmer: the bake gate PASSED on adoption - {Detail}", gate.Detail);
+        else
+            logger.LogCritical(
+                "DynamicTypePreWarmer: REFUSING READINESS - {Detail}. This instance bakes at BUILD "
+                + "({SweepKey}!=true), so nothing is compiled here: the image's CI bake must deliver "
+                + "these types. The rollout stalls with the previous image still serving until the "
+                + "bake covers them; '{AllowKey}'=true serves on an UNPROVEN adoption and says so on "
+                + "the health payload.",
+                gate.Detail, EnabledConfigKey, NodeTypeBakeGateExtensions.AllowUnprovenBakeConfigKey);
+    }
 
     /// <summary>
     /// The adopt-only verdict: what the prebuilt bundles COVERED, and — by name — what they did
