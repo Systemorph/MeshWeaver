@@ -9805,6 +9805,15 @@ public static class MeshExtensions
             || mainNode[mainNode.Length - id.Length - 1] != '/'
             || !mainNode.AsSpan(mainNode.Length - id.Length).SequenceEqual(id.AsSpan()))
             return false;
+        // 🚨 A global skill MIRROR is a DELIBERATE pointer: the Store's PreInstall writes
+        // Skill/{id} with MainNode = {plugin}/Skill/{id} as its ownership marker (IsOwnMirror), and
+        // that shape — same Id, different partition — is exactly this predicate's "frozen in another
+        // partition" test, so every mirror was "repaired" back onto its own path on create and could
+        // never again be refreshed or retracted. The global registry is the one single-segment
+        // "Skill" namespace; the other half of the historical Hosting/Skill ⇄ Skill cycle (the
+        // SOURCE pointing at the mirror) still matches below and is still repaired.
+        if (node.NodeType == "Skill" && string.Equals(ns, "Skill", StringComparison.Ordinal))
+            return false;
         // … and it was frozen in a DIFFERENT partition. The partition is the first segment of the
         // NAMESPACE, which is the first segment of Path without building Path.
         return !FirstSegment(mainNode).SequenceEqual(FirstSegment(ns));
