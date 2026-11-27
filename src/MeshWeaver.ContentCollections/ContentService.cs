@@ -164,6 +164,13 @@ public class ContentService : IContentService
             BasePath = fullPath,
             Address = mappedConfig.Address,
             IsEditable = mappedConfig.IsEditable,
+            // 🚨 Child-visibility comes from the MAPPING, never the source. The portal registers its
+            // `storage` backing store hidden (ExposeInChildren=false) on purpose; inheriting that flag
+            // here made GetAllCollectionConfigs — which filters on it — drop EVERY mapped per-node
+            // collection, so the Files tab of Posts/AzureBellCurveMeme rendered only its Back button
+            // while a by-name upload still worked (triage fb-5639c3b3). The mapping declares itself
+            // child-visible (MapContentCollection: "writable per-node view").
+            ExposeInChildren = mappedConfig.ExposeInChildren,
             // 🚨 HTTP publication comes from the MAPPING, never the source. Inheriting the backing
             // store's flag here would publish every per-node view over it (issue #587).
             IsStatic = mappedConfig.IsStatic,
