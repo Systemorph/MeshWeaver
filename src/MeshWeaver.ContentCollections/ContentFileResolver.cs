@@ -247,7 +247,7 @@ public static class ContentFileResolver
     /// <param name="target">The owning node's address.</param>
     /// <param name="names">The collection names to ask for.</param>
     /// <param name="caller">An identity to stamp, or null to use the ambient one.</param>
-    internal static IObservable<IMessageDelivery<GetDataResponse>> ObserveCollectionConfigs(
+    internal static IObservable<IMessageDelivery> ObserveCollectionConfigs(
         IMessageHub hub, Address target, IReadOnlyCollection<string> names, AccessContext? caller)
     {
         var issuingHub = hub.ReadIssuingHub();
@@ -260,7 +260,8 @@ public static class ContentFileResolver
                 })
             .Take(1)
             .FailIfNoFirstEmission(
-                issuingHub, target.ToString() ?? string.Empty, "content collection config");
+                issuingHub, target.ToString() ?? string.Empty, "content collection config")
+            .Select(delivery => (IMessageDelivery)delivery);
     }
 
     /// <summary>
