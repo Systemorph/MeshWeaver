@@ -601,6 +601,46 @@ public sealed class InstanceAutoRegistrationService(
     }
 
     /// <summary>
+    /// The hold reason when <paramref name="exception"/> (or an inner one) is the refusal
+    /// <c>NodeType 'X' is not registered</c> on a host that serves a CLOSED type set, and
+    /// <c>null</c> for every other failure, including that same message on an open mesh. Pure.
+    ///
+    /// <para>A closed type set activates only the NodeTypes its image registers in code and installs
+    /// no NodeType definition rows (<see cref="ClosedTypeSetPackageRows"/>), so a package whose root
+    /// (or whose <c>requires</c>) is rooted on a type the image does not register, such as
+    /// <c>Store/Plugin</c> on the control instance, can never install there until the image changes.
+    /// Measured on the control instance: Explorer and Spaces failed with an Error per package per
+    /// pass plus the "reconciled with FAILURES" roll-up, none of it actionable. On an open mesh the
+    /// same message is a real defect (a missing dependency), so it stays a failure.</para>
+    /// </summary>
+    /// <param name="exception">What the install raised.</param>
+    /// <param name="closedTypeSet">Whether this host serves a closed type set.</param>
+    internal static string? StandingTypeSetHold(Exception exception, bool closedTypeSet)
+    {
+        if (!closedTypeSet)
+            return null;
+        for (var e = exception; e is not null; e = e.InnerException)
+        {
+            if (e is AggregateException aggregate)
+            {
+                var reasons = aggregate.InnerExceptions.Select(i => StandingTypeSetHold(i, closedTypeSet)).ToList();
+                return reasons.Count > 0 && reasons.All(r => r is not null) ? reasons[0] : null;
+            }
+            var match = UnregisteredNodeType.Match(e.Message);
+            if (match.Success)
+                return $"its NodeType '{match.Groups[1].Value}' is not registered on this host, which serves a "
+                       + "closed type set (only the types its image registers are active); the package "
+                       + "installs where its root type is registered";
+        }
+        return null;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex UnregisteredNodeType = new(
+        @"NodeType '([^']+)' is not registered",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant
+        | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
     /// The registration pre-flight, as a PURE decision — every branch that decides whether this
     /// installation may present its bootstrap key is here, unit-testable with no mesh.
     ///
@@ -1556,6 +1596,14 @@ public sealed class InstanceAutoRegistrationService(
             .Select(g => g.First())
             .OrderBy(h => h.Package, StringComparer.Ordinal)
             .ToImmutableList();
+
+        // A hold is named ONCE per change: at Warning when it is new or its reason moved against the
+        // ledger, never on every pass of a standing one.
+        foreach (var hold in held.Where(h => !(ledger.Held ?? ImmutableList<DefaultInstallHold>.Empty).Contains(h)))
+            logger.LogWarning(
+                "[DefaultInstall] {Id} is HELD, not installed: {Reason}. Not a failure: it is "
+                + "re-derived each pass and recorded on {Ledger}; this line is logged once per change.",
+                hold.Package, hold.Reason, SeedLedgerPath);
 
         // 🚨 #4097 — a pass in which SOME source did not answer knows only what it saw. The
         // per-source catch in Candidates substitutes an empty list for a failed listing, so
@@ -3532,6 +3580,17 @@ public sealed class InstanceAutoRegistrationService(
                     });
                 })
                 : Observable.Throw<DefaultInstallSummary>(exception))
+            // A refusal that is a fact about THIS image (the package's root type is not registered on
+            // a host serving a CLOSED type set) is a HOLD too: a retry on this image changes nothing
+            // and an image change lifts it. Not logged here: RecordSeeded names a hold ONCE per
+            // change against the ledger, so a standing hold is not logged on every pass.
+            .Catch((Exception exception) =>
+                StandingTypeSetHold(exception, hub.ServiceProvider.IsClosedTypeSet()) is { } typeSetReason
+                    ? Observable.Return(DefaultInstallSummary.Empty with
+                    {
+                        Held = [new DefaultInstallHold(package.Id, typeSetReason)],
+                    })
+                    : Observable.Throw<DefaultInstallSummary>(exception))
             .Catch((Exception exception) =>
             {
                 logger.LogError(exception,
