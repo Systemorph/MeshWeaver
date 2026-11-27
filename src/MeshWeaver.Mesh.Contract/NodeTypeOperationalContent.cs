@@ -156,6 +156,11 @@ public static class NodeTypeOperationalContent
         // already-adopted — the bytes are never seeded and the type parks on a stamp nobody earned.
         "compiledDependencies",
         "currentSourceVersions",
+        // The per-source CODE digests of the generation currentSourceVersions describes. Operational
+        // for the same reason it is: a source whose digest matches keeps its recorded version, so an
+        // authored map would make a repo file declare edited code unchanged and suppress the
+        // recompile it needs (or forge a mismatch and force one).
+        "currentSourceDigests",
         // #1834 — the adopter's REQUEST that the owner stamp compiledSources from its own
         // currentSourceVersions. Operational for the same reason both of those are, and for one
         // sharper one: an authored value would ask the owner to re-stamp a compile's source
