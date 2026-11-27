@@ -24,9 +24,14 @@ public static class OwnerCollectionConfigLookup
     /// <param name="owner">The address of the hub that owns the collection.</param>
     /// <param name="collection">The collection name.</param>
     /// <param name="timeout">How long the owner gets to answer.</param>
+    /// <param name="caller">
+    /// An identity to stamp on the read, or null for the ambient one. The read is gated by the owning
+    /// hub's <c>[RequiresPermission(Read)]</c> either way, and a read with NO identity at all is refused
+    /// (no silent anonymous read) — the portal's file browser subscribes under the circuit viewer.
+    /// </param>
     public static IObservable<ContentCollectionConfig?> GetOwnerCollectionConfig(
-        this IMessageHub issuer, Address owner, string collection, TimeSpan timeout)
-        => ContentFileResolver.ObserveCollectionConfigs(issuer, owner, [collection], caller: null)
+        this IMessageHub issuer, Address owner, string collection, TimeSpan timeout, AccessContext? caller = null)
+        => ContentFileResolver.ObserveCollectionConfigs(issuer, owner, [collection], caller)
             .Timeout(timeout)
             .Select(delivery => ContentFileResolver.ReadCollectionConfigs(delivery)?
                 .FirstOrDefault(c => string.Equals(c.Name, collection, StringComparison.Ordinal)));

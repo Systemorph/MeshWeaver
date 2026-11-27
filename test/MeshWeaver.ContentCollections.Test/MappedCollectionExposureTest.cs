@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -102,5 +103,30 @@ public class MappedCollectionExposureTest(ITestOutputHelper output) : HubTestBas
             .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         missing.Should().BeNull("a collection the owner does not declare is not somebody else's files");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task ARead_WithNoIdentityAtAll_IsRefused_NotAnsweredAnonymously()
+    {
+        var owner = GetClient().Address;
+        // NEGATIVE CONTROL for the gate: no ambient identity and none stamped.
+        var outcome = await Mesh.GetOwnerCollectionConfig(owner, "attachments", TimeSpan.FromSeconds(20))
+            .Materialize()
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
+
+        outcome.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
+            "a read that carries no identity must be refused, never answered as an anonymous caller");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task AStampedCaller_IsHonoured_WithoutAnAmbientIdentity()
+    {
+        var owner = GetClient().Address;
+        var stamped = new MeshWeaver.Messaging.AccessContext { ObjectId = "stamped", Name = "Stamped" };
+
+        var found = await Mesh.GetOwnerCollectionConfig(owner, "attachments", TimeSpan.FromSeconds(20), stamped)
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
+
+        (found ?? throw new Xunit.Sdk.XunitException("a stamped caller must be enough to read")).Name.Should().Be("attachments");
     }
 }
