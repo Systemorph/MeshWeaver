@@ -9812,7 +9812,11 @@ public static class MeshExtensions
         // never again be refreshed or retracted. The global registry is the one single-segment
         // "Skill" namespace; the other half of the historical Hosting/Skill ⇄ Skill cycle (the
         // SOURCE pointing at the mirror) still matches below and is still repaired.
-        if (node.NodeType == "Skill" && string.Equals(ns, "Skill", StringComparison.Ordinal))
+        // Only the mirror marker shape — {plugin}/Skill/{id} — is exempt; any other cross-partition
+        // pointer in the registry stays repairable.
+        if (node.NodeType == "Skill" && string.Equals(ns, "Skill", StringComparison.Ordinal)
+            && mainNode.Length > id.Length + "/Skill/".Length
+            && mainNode.AsSpan(0, mainNode.Length - id.Length).EndsWith("/Skill/".AsSpan(), StringComparison.Ordinal))
             return false;
         // … and it was frozen in a DIFFERENT partition. The partition is the first segment of the
         // NAMESPACE, which is the first segment of Path without building Path.

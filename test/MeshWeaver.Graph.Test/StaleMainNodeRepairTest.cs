@@ -377,6 +377,9 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
         // The same shape in any other namespace/type is still the stale shape.
         (mirror with { NodeType = "Markdown" }).IsStaleSelfDefaultMainNode().Should().BeTrue(
             "the exemption is the global Skill registry only");
+        // A malformed cross-partition pointer in the registry (not {plugin}/Skill/{id}) is still stale.
+        (mirror with { MainNode = "Elsewhere/mirrored" }).IsStaleSelfDefaultMainNode().Should().BeTrue(
+            "only the {plugin}/Skill/{id} marker shape is exempt");
         // The SOURCE pointing at the mirror (the other half of the old cycle) is still repaired.
         new MeshNode("mirrored", "MirrorPlugin/Skill") { MainNode = "Skill/mirrored", NodeType = "Skill" }
             .IsStaleSelfDefaultMainNode().Should().BeTrue();
