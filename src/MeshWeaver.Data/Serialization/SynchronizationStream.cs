@@ -1950,6 +1950,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 // of a StreamErrorEvent behind [SynchronizationGate] measured on memex-cloud
                 // 2026-11-06. Its handler faults the stream, and the stream's OnError opens the gate.
                 || d.Message is StreamErrorEvent
+                // 🚨 …and the OWNER'S "I do not serve this stream" (StreamEndedEvent) — the other
+                // half of the same deadlock. A mirror whose INITIAL frame was lost (the owner acked
+                // the SubscribeRequest and then never delivered a Full) is exactly the mirror the
+                // heartbeat's named-stream answer exists to repair (#6047): the owner answers
+                // StreamEndedEvent, the handler re-asks. But that answer arrives while this gate is
+                // still shut, and it was deferred behind the one thing it exists to replace — the
+                // first frame. Measured on a live instance 2026-11-27: two such events every 45 s
+                // for 3 h, each deferred, each timed out at 30 s with a "Message delivery failed"
+                // Warning, none ever handled; the 512th hit the stuck-gate cap and the hub logged
+                // GATE-STUCK (MeshWeaver#8433). Its handler only charges the bounded re-ask budget
+                // (MaxRecycleReArms) and then re-subscribes or ENDS the stream with
+                // SyncStreamOwnerRefusedException — which opens this gate through OnError. So letting
+                // it through makes the gate open or fail visibly within that bound.
+                || d.Message is StreamEndedEvent
                 // 🚨 Pass BOTH Full AND Patch DataChangedEvents through during init.
                 // Gated (deferred) messages are LOST — TPL Dataflow's LinkTo from the
                 // deferred block to main doesn't re-flush queued items in this codebase
