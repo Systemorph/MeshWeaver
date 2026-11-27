@@ -354,4 +354,43 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
             .Should().Contain(node.Path,
                 "restoring MainNode == Path puts the node back into is:main — the whole point");
     }
+
+    /// <summary>
+    /// A global skill MIRROR (<c>Skill/{id}</c> whose MainNode is its source <c>{plugin}/Skill/{id}</c>)
+    /// is a deliberate pointer — the Store's ownership marker — not the stale shape. It must be neither
+    /// recognised by the predicate nor "repaired" onto its own path, which silently destroyed the marker
+    /// so mirrors could never be refreshed or retracted.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task A_global_skill_mirror_keeps_its_source_pointer()
+    {
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var mirror = new MeshNode("mirrored", "Skill")
+        {
+            MainNode = "MirrorPlugin/Skill/mirrored",
+            Name = "mirrored",
+            NodeType = "Skill",
+            State = MeshNodeState.Active,
+        };
+        mirror.IsStaleSelfDefaultMainNode().Should().BeFalse(
+            "a global skill mirror's cross-partition pointer is deliberate");
+        // The same shape in any other namespace/type is still the stale shape.
+        (mirror with { NodeType = "Markdown" }).IsStaleSelfDefaultMainNode().Should().BeTrue(
+            "the exemption is the global Skill registry only");
+        // A malformed cross-partition pointer in the registry (not {plugin}/Skill/{id}) is still stale.
+        (mirror with { MainNode = "Elsewhere/mirrored" }).IsStaleSelfDefaultMainNode().Should().BeTrue(
+            "only the {plugin}/Skill/{id} marker shape is exempt");
+        // The SOURCE pointing at the mirror (the other half of the old cycle) is still repaired.
+        new MeshNode("mirrored", "MirrorPlugin/Skill") { MainNode = "Skill/mirrored", NodeType = "Skill" }
+            .IsStaleSelfDefaultMainNode().Should().BeTrue();
+
+        await storage.Write(mirror, Mesh.JsonSerializerOptions).Take(1).Timeout(Budget)
+            .Await(TestContext.Current.CancellationToken);
+
+        var report = await RepairAsync("Skill");
+
+        report.Findings.Should().NotContain(f => f.Path == mirror.Path,
+            "a mirror is not a finding");
+        (await ReadRawAsync(mirror.Path)).MainNode.Should().Be("MirrorPlugin/Skill/mirrored");
+    }
 }
