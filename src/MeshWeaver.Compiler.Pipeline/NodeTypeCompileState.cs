@@ -130,6 +130,9 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.CurrentSourceVersions"/>.</summary>
     public IReadOnlyDictionary<string, long>? CurrentSourceVersions { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.CurrentSourceDigests"/>.</summary>
+    public IReadOnlyDictionary<string, string>? CurrentSourceDigests { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.RequestedSourceStampAt"/>.</summary>
     public DateTimeOffset? RequestedSourceStampAt { get; init; }
 
@@ -254,6 +257,7 @@ public record NodeTypeCompileState
                 LatestAssemblyMvid = definition.LatestAssemblyMvid,
                 CompiledSources = definition.CompiledSources,
                 CurrentSourceVersions = definition.CurrentSourceVersions,
+                CurrentSourceDigests = definition.CurrentSourceDigests,
                 RequestedSourceStampAt = definition.RequestedSourceStampAt,
                 CompiledFrameworkVersion = definition.CompiledFrameworkVersion,
                 CompiledPlatformVersion = definition.CompiledPlatformVersion,
@@ -292,7 +296,7 @@ public record NodeTypeCompileState
         && UnreleasedBuildFailureClass is null
         && LatestAssemblyCollection is null && LatestAssemblyPath is null
         && LatestAssemblyMvid is null
-        && CompiledSources is null && CurrentSourceVersions is null
+        && CompiledSources is null && CurrentSourceVersions is null && CurrentSourceDigests is null
         && RequestedSourceStampAt is null
         && CompiledFrameworkVersion is null && FailedBuildInputs is null
         && FailedPlatformVersion is null

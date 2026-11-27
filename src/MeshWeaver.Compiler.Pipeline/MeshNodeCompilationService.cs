@@ -705,15 +705,15 @@ internal class MeshNodeCompilationService(
         NodeTypeDefinition? ntDef, string selfPath,
         IReadOnlyList<MeshNode>? sourcesOverride = null) =>
         SnapshotSources(ntDef, selfPath, sourcesOverride)
-            .Select(nodes => nodes
-                .Where(n => !string.IsNullOrEmpty(n.Path))
-                .Aggregate(
-                    ImmutableDictionary<string, long>.Empty,
-                    // One rule for both snapshots — see NodeTypeDefinition.SourceVersionOf.
-                    // A raw .LastModified.UtcTicks here records 1601 for any source with no
-                    // real timestamp, which compares equal across an edit and hides the
-                    // change from IsDirty forever (#1836).
-                    (acc, n) => acc.SetItem(n.Path, NodeTypeDefinition.SourceVersionOf(n))));
+            // One rule for both snapshots — see NodeTypeDefinition.SourceVersionOf.
+            // A raw .LastModified.UtcTicks here records 1601 for any source with no
+            // real timestamp, which compares equal across an edit and hides the
+            // change from IsDirty forever (#1836). And the same carry the sources watcher
+            // applies (SourceVersionCarry): a source whose CODE is unchanged keeps the
+            // version of the generation the type already published, so a metadata-only
+            // write (description, icon) is not recorded as a source change.
+            .Select(nodes => SourceVersionCarry.Fold(
+                nodes, ntDef?.CurrentSourceVersions, ntDef?.CurrentSourceDigests).Versions);
 
     /// <summary>
     /// Resolves the source set for a compile run. When the caller hands in a

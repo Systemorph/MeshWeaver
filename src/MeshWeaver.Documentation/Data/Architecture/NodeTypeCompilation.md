@@ -3443,6 +3443,25 @@ fresh usable build on THIS image. Whether that watch can be starved when the typ
 by a previous-generation pod (whose rebuild is stamped for the old framework) is consistent with this
 incident's ~30-minute hold but was not established here.
 
+## A write that does not touch the code is not a source change
+
+The source snapshots (`CurrentSourceVersions`, `CompiledSources`) are keyed on each source node's
+`LastModified`, and every write stamps it — an AI description round, an icon, a rename. Read naively, each
+such write is an edit: the snapshot moves, the type reads dirty, a release is minted and the owner
+recompiles (measured on the public cloud instance: a full compile 3-4 s after a description round, twice,
+identical diagnostics), and a failing type has its failure re-drive re-armed for nothing.
+
+The bytes depend on the source's **code text and nothing else**, so each generation also records a digest of
+every source's code (`CurrentSourceDigests`). A source whose digest equals the previous generation's **keeps
+that generation's version** (`SourceVersionCarry`), in all three places that fold a snapshot — the sources
+watcher, the compile's consumed snapshot and `IsSourcesUpToDate` — so they keep agreeing. The version stays an
+ordered timestamp on purpose: the freshness checks (`SourceSetFreshness`, the release request's snapshot
+wait) rely on order, which a bare content hash cannot give; the wait additionally accepts an owner whose
+digest still matches the snapshot's. A digest that is unknown (a record written before the field existed, a
+node that is not typed code) carries nothing: the old behaviour, never a skipped compile. Pinned by
+`AMetadataWriteIsNotASourceChangeTest` (each negative control has its positive twin: a code edit still moves
+the snapshot).
+
 ## 🚨 That recompile can FAIL — and nothing upstream can warn you
 
 Rule 3 guarantees a framework upgrade recompiles **every** dynamic NodeType. That recompile
