@@ -589,8 +589,13 @@ public sealed class InstanceAutoRegistrationService(
         {
             if (e is PackagePlatformFloorException or ModuleLandingRefusedException)
                 return e.Message;
-            if (e is AggregateException { InnerExceptions.Count: 1 } aggregate)
-                return StandingPlatformHold(aggregate.InnerExceptions[0]);
+            // An aggregate is a hold only when EVERY inner is one: a real failure beside a hold
+            // must still be reported as a failure.
+            if (e is AggregateException aggregate)
+            {
+                var reasons = aggregate.InnerExceptions.Select(StandingPlatformHold).ToList();
+                return reasons.Count > 0 && reasons.All(r => r is not null) ? reasons[0] : null;
+            }
         }
         return null;
     }

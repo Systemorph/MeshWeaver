@@ -43,6 +43,11 @@ public class APlatformRefusalIsAHoldNotAFailedDefaultInstallTest
     {
         Assert.Null(InstanceAutoRegistrationService.StandingPlatformHold(new InvalidOperationException("boom")));
         Assert.Null(InstanceAutoRegistrationService.StandingPlatformHold(new TimeoutException()));
+        // A real failure beside a hold stays a failure; all-holds is a hold.
+        Assert.Null(InstanceAutoRegistrationService.StandingPlatformHold(
+            new AggregateException(new PackagePlatformFloorException("b"), new InvalidOperationException("a"))));
+        Assert.Equal("b", InstanceAutoRegistrationService.StandingPlatformHold(
+            new AggregateException(new PackagePlatformFloorException("b"), new ModuleLandingRefusedException("c"))));
     }
 
     [Fact]
