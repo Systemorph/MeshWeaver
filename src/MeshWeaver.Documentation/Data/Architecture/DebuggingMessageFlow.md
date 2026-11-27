@@ -686,3 +686,21 @@ must not be the mechanism that re-delivers content — relying on it both (a) ma
 the dropped-initial-Full bug above behind a 45 s stall, and (b) would re-ship every
 stream's **entire** content every 45 s, which is lethal at scale. Fix the handshake
 so the initial Full lands on subscribe; keep the heartbeat content-free.
+
+### Reading a `[POOLQUEUE]` census: a wall of `PeriodicTimer` is per-hub or per-stream timers
+
+`[POOLQUEUE]` keys each queued thread-pool item by the code it will run. A producer reading
+`System.Threading.TimerQueueTimer → System.Reactive.Concurrency.ConcurrencyAbstractionLayerImpl+PeriodicTimer`
+means thousands of `Observable.Interval` / `Observable.Timer(first, period)` subscriptions are due in the
+same instant, and one timer per hub or per stream is how that count scales with the number of hubs.
+
+Measured on memex-cloud, 2026-11-27 (portal 4.0.14289, 100,000-200,000 work items completed per 10 s):
+4,000-6,300 of the 9,000-14,800 queued items were this producer, in every census, and memex (far fewer
+live hubs) never reached a 2,000-item census. The source was `MessageHub`'s always-on stale-callback
+scanner: one `Observable.Interval(5 s)` per hub, phase-locked across any burst of activations.
+`StaleCallbackScanRegistry` replaces them with ONE process-wide timer that walks the registered hubs
+on one pool item (Systemorph/MeshWeaver#5388).
+
+The rule it leaves behind: a diagnostic or housekeeping tick that every hub needs registers with a
+shared ticker; it does not start a timer of its own. The per-stream heartbeat
+(`JsonSynchronizationStream`, spread by `HeartbeatSchedule`) is the remaining per-stream periodic timer.
