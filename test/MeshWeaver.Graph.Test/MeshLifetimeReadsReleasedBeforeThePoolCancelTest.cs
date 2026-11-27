@@ -1,3 +1,5 @@
+using System.Reactive.Subjects;
+using System.Reactive;
 using System;
 using System.Linq;
 using System.Reactive.Linq;
@@ -65,15 +67,28 @@ public class MeshLifetimeReadsReleasedBeforeThePoolCancelTest(ITestOutputHelper 
             .Emit("the UI contribution catalog listed", cancellationToken: ct);
 
         // The control: the same kind of standing mesh query, owned by nobody.
+        //
+        // 🚨 ATTACHED, not merely subscribed: a pooled subscribe opens its source on a pool thread and the pool
+        // names a leg as unowned only once that open has RETURNED. A SECOND query's answer proves nothing about
+        // this one — under a loaded runner the control's open was still queued, the report was empty and the
+        // precondition failed. Wait on the control's OWN first answer, then on the pools' in-flight count
+        // reaching zero, the point at which every setup leaf has released.
+        var controlAnswered = new AsyncSubject<Unit>();
         IDisposable control;
         using (access.ImpersonateAsSystem())
             control = meshService.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:Admin scope:children"))
                 .Select(UnownedControlRead)
-                .Subscribe(_ => { }, _ => { });
+                .Subscribe(_ =>
+                {
+                    controlAnswered.OnNext(Unit.Default);
+                    controlAnswered.OnCompleted();
+                }, controlAnswered.OnError);
         try
         {
-            await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:Admin scope:children"))
-                .Take(1).Should().Within(Budget).Emit("precondition: the query answers in this mesh", cancellationToken: ct);
+            await controlAnswered.Should().Within(Budget)
+                .Emit("precondition: the unowned control read answered, so it is attached to the Query pool", cancellationToken: ct);
+            await registry.WhenDrained(Budget).Should().Within(Budget)
+                .Emit("precondition: every pooled subscribe has returned, so the control's open is complete", cancellationToken: ct);
 
             // The silo's stop: IoPoolSiloTeardown disposes the registry while the mesh lives on.
             registry.Dispose();
