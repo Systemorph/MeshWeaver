@@ -2522,7 +2522,48 @@ public class MessageService : IMessageService
                     + $">{deferralTimeout.TotalSeconds:F0}s; initialization gates closed at deferral: "
                     + $"[{gatesAtDeferral}] — {sinceThen}."),
                 ErrorType.Unavailable);
+            EvictTimedOutDeferral(delivery);
         }, TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Takes a delivery whose deferral deadline has FIRED out of <see cref="deferredQueue"/>.
+    ///
+    /// <para>🚨 The timeout used to fail the delivery back to its sender and leave the parked turn
+    /// where it was. The turn could then do nothing at all — <see cref="ProcessDeferredMessage"/>
+    /// finds no tracker and answers <c>DEFERRAL_TIMEOUT_ALREADY_FIRED_DROPPED</c> — but it still
+    /// COUNTED against <see cref="MaxDeferredMessages"/>. A hub whose gate never opens and that
+    /// keeps receiving traffic therefore filled to the cap with corpses at the rate of its own
+    /// inbound messages, however slowly (a client sync hub fed two heartbeat answers every 45 s hit
+    /// the cap after about 3 h, MeshWeaver#8433), and from then on every NEW delivery was dropped
+    /// by the overflow branch even though nothing live was parked. The cap is a bound on LIVE
+    /// deferrals; this makes it one.</para>
+    ///
+    /// <para>No behaviour is lost: the parked turn's only possible outcome after the deadline was
+    /// the drop above. Arrival order of the survivors is preserved (the queue is rebuilt in order,
+    /// under the same <see cref="turnGate"/> that guards every other access). A turn that
+    /// <see cref="OpenGate"/> already restored to the main queue is not here and is left to the
+    /// existing drop path.</para>
+    /// </summary>
+    private void EvictTimedOutDeferral(IMessageDelivery delivery)
+    {
+        lock (turnGate)
+        {
+            if (deferredQueue.Count == 0)
+                return;
+            var kept = new Queue<QueuedTurn>(deferredQueue.Count);
+            var evicted = false;
+            while (deferredQueue.Count > 0)
+            {
+                var turn = deferredQueue.Dequeue();
+                if (!evicted && ReferenceEquals(turn.Delivery, delivery))
+                    evicted = true;
+                else
+                    kept.Enqueue(turn);
+            }
+            while (kept.Count > 0)
+                deferredQueue.Enqueue(kept.Dequeue());
+        }
     }
 
     private IObservable<IMessageDelivery> ProcessDeferredMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
