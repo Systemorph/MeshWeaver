@@ -514,7 +514,7 @@ it was finally told.
 subscriber's `sync/{id}` sub-hub defers every delivery behind `SynchronizationGate` except the
 ones that can populate the stream or end it: `SetCurrentRequest`, `GetDataResponse`, every
 `DataChangedEvent`, `UpdateStreamRequest`, a `DeliveryFailure`, and the owner's
-`StreamErrorEvent`. That last one was missing until #7919: an owner that ends a stream *before*
+`StreamErrorEvent` and `StreamEndedEvent`. `StreamErrorEvent` was missing until #7919: an owner that ends a stream *before*
 its first frame (a followed read whose first verdict refuses or reaches none, or a reducer that
 faults on the initial snapshot) posts a `StreamErrorEvent` and never a frame, so the error
 waited behind a gate only a frame could open. The mirror never faulted, the view stayed on
@@ -522,6 +522,19 @@ waited behind a gate only a frame could open. The mirror never faulted, the view
 discarded when something finally disposed the sub-hub (`[DISPOSE-DISCARD] … StreamErrorEvent …
 [SynchronizationGate]`). A message that can end a stream must pass this gate, or the stream can
 only end by timing out. Pinned by `StreamErrorBeforeFirstFrameTest`.
+
+`StreamEndedEvent` was missing until #8433, and it is the same deadlock from the other side. A
+mirror whose *initial* frame was lost (the owner acked the `SubscribeRequest` and never delivered a
+Full) is exactly what the heartbeat's named-stream answer repairs (#6047): the owner says it does
+not serve the stream and the mirror re-asks. That answer was deferred behind the first frame it was
+meant to replace, so it was never handled. Measured on a live instance, 2026-11-27: two such events
+every 45 s for about 3 h, each timing out at 30 s with a `Message delivery failed … deferred
+StreamEndedEvent … [SynchronizationGate]` Warning, until the hub's deferred backlog reached its cap
+and logged `GATE-STUCK`. Two fixes, both pinned: the event passes the gate, so the mirror re-asks
+and then either gets its frame or ends the stream with `SyncStreamOwnerRefusedException` once the
+re-ask budget is spent (`AMirrorWithoutItsFirstFrameStillHearsTheOwnerEndTest`); and a delivery
+whose 30 s deferral deadline has fired is taken out of the deferred queue, so the cap bounds LIVE
+deferrals instead of filling with already-failed ones (`ATimedOutDeferralLeavesTheDeferredQueueTest`).
 
 **The operator signal** is `[SYNC_STREAM] Resync gave up for {StreamId}: N consecutive
 fresh-snapshot requests to {Owner} were acknowledged and none produced a base snapshot` at
