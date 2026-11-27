@@ -601,9 +601,9 @@ public sealed class InstanceAutoRegistrationService(
     }
 
     /// <summary>
-    /// The hold reason when <paramref name="exception"/> (or an inner one) is the refusal
-    /// <c>NodeType 'X' is not registered</c> on a host that serves a CLOSED type set, and
-    /// <c>null</c> for every other failure, including that same message on an open mesh. Pure.
+    /// The hold reason when <paramref name="exception"/> (or an inner one) is a
+    /// <see cref="NodeTypeNotRegisteredException"/> on a host that serves a CLOSED type set, and
+    /// <c>null</c> for every other failure, including that same refusal on an open mesh. Pure.
     ///
     /// <para>A closed type set activates only the NodeTypes its image registers in code and installs
     /// no NodeType definition rows (<see cref="ClosedTypeSetPackageRows"/>), so a package whose root
@@ -611,34 +611,38 @@ public sealed class InstanceAutoRegistrationService(
     /// <c>Store/Plugin</c> on the control instance, can never install there until the image changes.
     /// Measured on the control instance: Explorer and Spaces failed with an Error per package per
     /// pass plus the "reconciled with FAILURES" roll-up, none of it actionable. On an open mesh the
-    /// same message is a real defect (a missing dependency), so it stays a failure.</para>
+    /// same refusal is a real defect (a missing dependency), so it stays a failure. An aggregate is
+    /// a hold only when EVERY inner is one, and the reason names every type any of them refused.</para>
     /// </summary>
     /// <param name="exception">What the install raised.</param>
     /// <param name="closedTypeSet">Whether this host serves a closed type set.</param>
     internal static string? StandingTypeSetHold(Exception exception, bool closedTypeSet)
     {
-        if (!closedTypeSet)
+        if (!closedTypeSet || UnregisteredTypes(exception) is not { Count: > 0 } types)
             return null;
+        return $"its NodeType(s) {string.Join(", ", types.Select(t => $"'{t}'"))} are not registered on this host, "
+               + "which serves a closed type set (only the types its image registers are active); the "
+               + "package installs where its root type is registered";
+    }
+
+    /// <summary>Every type a <see cref="NodeTypeNotRegisteredException"/> in the chain names, in
+    /// order, distinct; <c>null</c> when anything in the chain is some other failure.</summary>
+    private static IReadOnlyList<string>? UnregisteredTypes(Exception exception)
+    {
         for (var e = exception; e is not null; e = e.InnerException)
         {
+            if (e is NodeTypeNotRegisteredException typed)
+                return typed.TypeNames;
             if (e is AggregateException aggregate)
             {
-                var reasons = aggregate.InnerExceptions.Select(i => StandingTypeSetHold(i, closedTypeSet)).ToList();
-                return reasons.Count > 0 && reasons.All(r => r is not null) ? reasons[0] : null;
+                var inner = aggregate.InnerExceptions.Select(UnregisteredTypes).ToList();
+                return inner.Count > 0 && inner.All(t => t is not null)
+                    ? inner.SelectMany(t => t!).Distinct(StringComparer.Ordinal).ToList()
+                    : null;
             }
-            var match = UnregisteredNodeType.Match(e.Message);
-            if (match.Success)
-                return $"its NodeType '{match.Groups[1].Value}' is not registered on this host, which serves a "
-                       + "closed type set (only the types its image registers are active); the package "
-                       + "installs where its root type is registered";
         }
         return null;
     }
-
-    private static readonly System.Text.RegularExpressions.Regex UnregisteredNodeType = new(
-        @"NodeType '([^']+)' is not registered",
-        System.Text.RegularExpressions.RegexOptions.CultureInvariant
-        | System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>
     /// The registration pre-flight, as a PURE decision — every branch that decides whether this
@@ -3504,7 +3508,7 @@ public sealed class InstanceAutoRegistrationService(
         // scope at Subscribe and closes it on the way out of that same Subscribe; the whole cold
         // pipeline is composed inside the factory, so what is ISSUED is still issued impersonated
         // and the emission-time behaviour is unchanged.
-        return accessService
+        var install = accessService
             .RunAsSystem(() => CatalogLayoutAreas
                     .InstallOrUpdate(hub, candidate.Source.Source, candidate.Source.GitRef, package, logger,
                         authorizingUserId: principal,
@@ -3535,7 +3539,27 @@ public sealed class InstanceAutoRegistrationService(
                 Authorized = principal is null
                     ? ImmutableList<DefaultInstallAuthorization>.Empty
                     : [new DefaultInstallAuthorization(package.Id, principal, candidate.ConfigAuthority!, DateTimeOffset.UtcNow)],
-            })
+            });
+
+        return ClassifyInstallFailures(
+            install, package.Id, hub.ServiceProvider.IsClosedTypeSet(), logger);
+    }
+
+    /// <summary>
+    /// The per-package failure classification, split out of the install chain so a test can drive
+    /// the REAL catch order: a standing refusal (authorization, platform floor, module landing, a
+    /// closed type set that does not register the package's root type) is recorded as a SKIP or a
+    /// HOLD, and only what is left is a FAILURE (an Error, the ledger's retry). Each <c>Catch</c>
+    /// that does not recognise the exception rethrows it to the next, so the ORDER is the contract.
+    /// </summary>
+    /// <param name="install">The package's install, completed.</param>
+    /// <param name="packageId">The package id.</param>
+    /// <param name="closedTypeSet">Whether this host serves a closed type set.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static IObservable<DefaultInstallSummary> ClassifyInstallFailures(
+        IObservable<DefaultInstallSummary> install, string packageId, bool closedTypeSet, ILogger logger)
+    {
+        return install
             // 🚨 The safety net behind TerminalSkipReason (#2536): a refusal that only becomes
             // visible AT install time — commerciality stamped registry-side after listing, or a
             // licence that requires an acceptance no boot-time principal can give — is STILL
@@ -3554,10 +3578,10 @@ public sealed class InstanceAutoRegistrationService(
                     logger.LogWarning(
                         "[DefaultInstall] {Id} was refused and is SKIPPED, not failed — no boot "
                         + "re-attempts it (recorded on {Ledger}): {Reason}",
-                        package.Id, SeedLedgerPath, exception.Message);
+                        packageId, SeedLedgerPath, exception.Message);
                     return Observable.Return(DefaultInstallSummary.Empty with
                     {
-                        Skipped = [new DefaultInstallSkip(package.Id, exception.Message)],
+                        Skipped = [new DefaultInstallSkip(packageId, exception.Message)],
                     });
                 }))
             // 🚨 A refusal that is a fact about THIS platform — the version the source serves needs a
@@ -3573,10 +3597,10 @@ public sealed class InstanceAutoRegistrationService(
                     logger.LogWarning(
                         "[DefaultInstall] {Id} is HELD, not installed — {Reason}. Not a failure: the "
                         + "next pass re-derives it, and a platform roll lifts it.",
-                        package.Id, holdReason);
+                        packageId, holdReason);
                     return Observable.Return(DefaultInstallSummary.Empty with
                     {
-                        Held = [new DefaultInstallHold(package.Id, holdReason)],
+                        Held = [new DefaultInstallHold(packageId, holdReason)],
                     });
                 })
                 : Observable.Throw<DefaultInstallSummary>(exception))
@@ -3585,10 +3609,10 @@ public sealed class InstanceAutoRegistrationService(
             // and an image change lifts it. Not logged here: RecordSeeded names a hold ONCE per
             // change against the ledger, so a standing hold is not logged on every pass.
             .Catch((Exception exception) =>
-                StandingTypeSetHold(exception, hub.ServiceProvider.IsClosedTypeSet()) is { } typeSetReason
+                StandingTypeSetHold(exception, closedTypeSet) is { } typeSetReason
                     ? Observable.Return(DefaultInstallSummary.Empty with
                     {
-                        Held = [new DefaultInstallHold(package.Id, typeSetReason)],
+                        Held = [new DefaultInstallHold(packageId, typeSetReason)],
                     })
                     : Observable.Throw<DefaultInstallSummary>(exception))
             .Catch((Exception exception) =>
@@ -3596,18 +3620,18 @@ public sealed class InstanceAutoRegistrationService(
                 logger.LogError(exception,
                     "[DefaultInstall] installing package {Id} failed — continuing with the rest. It "
                     + "is recorded as FAILED on {Ledger}, stays OFF the seeded list, and the next "
-                    + "boot re-attempts it; that retry is the repair", package.Id, SeedLedgerPath);
+                    + "boot re-attempts it; that retry is the repair", packageId, SeedLedgerPath);
                 // 🚨 NAMED, not just counted. The id has to travel so the ledger can keep it off
                 // the seeded list — counting it and still listing it under Packages is what made a
                 // failed install permanent (#2254).
-                return Observable.Return(new DefaultInstallSummary(0, 0, 1, [package.Id])
+                return Observable.Return(new DefaultInstallSummary(0, 0, 1, [packageId])
                 {
-                    Failures = [package.Id],
+                    Failures = [packageId],
                     // 🚨 …and WHY. The id alone left the ledger and the boot's summary line saying
                     // "Anthropic failed" with nothing to triage from: the cause lived only in a
                     // separate per-package line, which a reader of the summary or the ledger never
                     // sees (#5826).
-                    FailureCauses = [DefaultInstallFailure.Of(package.Id, exception)],
+                    FailureCauses = [DefaultInstallFailure.Of(packageId, exception)],
                 });
             });
     }
