@@ -9,8 +9,7 @@ namespace MeshWeaver.Deployment.Contract.Test;
 /// instance's tier-NODE names (<c>chat</c>, <c>coding</c>, <c>reasoning</c>, <c>utility</c>,
 /// <c>review</c>) and renders each as <c>AI__Tiers__{tier id}</c>. The old rank names
 /// (<c>heavy</c>/<c>standard</c>/<c>light</c>) stay ALIASES for one release, so every record written
-/// before keeps its mapping, and the deprecated <c>ModelTier__*</c> keys are still rendered from the same
-/// fold so an image that predates the tier keys keeps its seed.
+/// before keeps its mapping, and the deprecated <c>ModelTier__*</c> keys are no longer rendered (Plugins#4882).
 /// </summary>
 public class TierVocabularyRecordTest
 {
@@ -42,12 +41,8 @@ public class TierVocabularyRecordTest
         Assert.Equal("m/util", c["AI__Tiers__utility"]);
         Assert.Equal("m/review", c["AI__Tiers__review"]);
 
-        // The one-release bridge for an image that predates the tier keys — the same fold, by rank.
-        Assert.Equal("Provider/OpenRouterEU/z-ai/glm-5.3", c["ModelTier__Heavy"]);
-        Assert.Equal("m/reason", c["ModelTier__Standard"]);
-        Assert.Equal("m/chat", c["ModelTier__Light"]);
-        Assert.Equal("m/util", c["ModelTier__Utility"]);
-        Assert.False(c.ContainsKey("ModelTier__Review"), "review never had a rank key — an older image reads none");
+        // The deprecated rank keys are no longer rendered (Plugins#4882): the tier keys are the only seed.
+        Assert.DoesNotContain(c.Keys, k => k.StartsWith("ModelTier__", StringComparison.Ordinal));
 
         Assert.Empty(record.Ai!.Tiers!.LegacyAliasesInUse());
     }
@@ -69,7 +64,7 @@ public class TierVocabularyRecordTest
         Assert.Equal("m/heavy", c["AI__Tiers__coding"]);
         Assert.Equal("m/standard", c["AI__Tiers__reasoning"]);
         Assert.Equal("m/light", c["AI__Tiers__chat"]);
-        Assert.Equal("m/heavy", c["ModelTier__Heavy"]);
+        Assert.DoesNotContain(c.Keys, k => k.StartsWith("ModelTier__", StringComparison.Ordinal));
         Assert.False(c.ContainsKey("AI__Tiers__review"), "a tier the record does not name renders nothing");
         Assert.False(c.ContainsKey("AI__Tiers__heavy"), "an alias is never rendered as a tier of its own");
 
@@ -91,11 +86,12 @@ public class TierVocabularyRecordTest
             [new KeyValuePair<string, string>("chat", "m/light"), new KeyValuePair<string, string>("coding", "m/coding")],
             tiers.Declared());
 
-        // A STORED blank alias still renders its raw rank key, so the removal sweep must see it.
+        // A STORED blank alias is still a legacy name the removal sweep must see, and renders no key at all.
         var blankAlias = new ModelTiers { Chat = "m/chat", Light = "" };
         Assert.Equal(["light"], blankAlias.LegacyAliasesInUse());
-        Assert.Equal("", DeploymentPortalConfig.PortalConfig(
-            new DeploymentContent { Ai = new AiProviders { Tiers = blankAlias with { Chat = null } } }, PortalConfigOptions.Helm)["ModelTier__Light"]);
+        Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(
+            new DeploymentContent { Ai = new AiProviders { Tiers = blankAlias with { Chat = null } } }, PortalConfigOptions.Helm).Keys,
+            k => k.StartsWith("ModelTier__", StringComparison.Ordinal));
     }
 
     [Fact]

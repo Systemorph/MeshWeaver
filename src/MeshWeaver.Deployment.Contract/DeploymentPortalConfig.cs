@@ -42,7 +42,7 @@ public static class DeploymentPortalConfig
     /// The prefix of the record's per-tier seed: <c>AI__Tiers__{tier id}</c> (<c>AI:Tiers:coding</c> to the
     /// portal), one key per tier the record's <c>ai.tiers</c> names, keyed by the instance's tier NODE id
     /// (<see cref="ModelTiers.TierIds"/>). Replaces the deprecated <c>ModelTier__Heavy/Standard/Light/Utility</c>
-    /// rank keys, which are still rendered alongside for one release.
+    /// rank keys, which are no longer rendered (Plugins#4882).
     /// </summary>
     public const string TierKeyPrefix = "AI__Tiers__";
 
@@ -1358,16 +1358,6 @@ public static class DeploymentPortalConfig
             if (ai.Tiers is { } tiers)
                 foreach (var (tier, model) in tiers.Declared())
                     Set($"{TierKeyPrefix}{tier}", model);
-            // 🕰️ The deprecated rank keys, for ONE release: an image that predates the tier keys reads
-            // only these, so a record rolled onto it must not lose its seed. Rendered from the SAME
-            // pair, so a record that says `coding` still reaches an older image as ModelTier__Heavy.
-            // Raw, exactly as before ("" included, untrimmed): a record that still uses the rank names
-            // renders these keys byte-identically. `review` has no rank key — no image ever read one.
-            static string? RankKey(string? tier, string? alias) => string.IsNullOrWhiteSpace(tier) ? alias : tier;
-            Set("ModelTier__Heavy", RankKey(ai.Tiers?.Coding, ai.Tiers?.Heavy));
-            Set("ModelTier__Standard", RankKey(ai.Tiers?.Reasoning, ai.Tiers?.Standard));
-            Set("ModelTier__Light", RankKey(ai.Tiers?.Chat, ai.Tiers?.Light));
-            Set("ModelTier__Utility", ai.Tiers?.Utility);
             // Policy model-settings-seed-and-ceiling: on a customer-governed record that names models,
             // the record's model lists and tiers are the instance's SEED and CEILING, not its value.
             Set(ModelGovernanceKey, IsModelCeiling(d) ? ModelGovernanceSeedAndCeiling : null);
