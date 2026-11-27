@@ -289,6 +289,29 @@ public class ThreadPoolQueueCensusTest
             .And.Contain(nameof(ThreadPoolQueueCensusTest)).And.Contain(nameof(TickedByTheSubscriber));
     }
 
+    private sealed class TwoCallbacks(Action zebra, Action alpha)
+    {
+        public readonly Action Zebra = zebra;
+        public readonly Action Alpha = alpha;
+    }
+
+    private static void ZebraCallback() { }
+
+    private static void AlphaCallback() { }
+
+    /// <summary>The key must not depend on the runtime's field order: every distinct callback at the
+    /// nearest level is named, in ordinal order.</summary>
+    [Fact]
+    public void SeveralUserCallbacks_AreNamedInOrdinalOrder_NotInFieldOrder()
+    {
+        var origin = ThreadPoolQueueCensus.UserCallbackBehind(new TwoCallbacks(ZebraCallback, AlphaCallback));
+
+        origin.Should().NotBeNull();
+        origin!.IndexOf(nameof(AlphaCallback), StringComparison.Ordinal)
+            .Should().BeGreaterThan(-1)
+            .And.BeLessThan(origin.IndexOf(nameof(ZebraCallback), StringComparison.Ordinal));
+    }
+
     [Fact]
     public void AnObjectHoldingNoUserCallback_HasNoRxOrigin()
         => ThreadPoolQueueCensus.UserCallbackBehind(new object()).Should().BeNull();

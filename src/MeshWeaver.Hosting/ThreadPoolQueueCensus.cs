@@ -155,11 +155,12 @@ public sealed record ThreadPoolQueueCensus(
         // callback outside System.Reactive that it leads to (MeshWeaver#5388: 4,000+ of 9,000-14,800
         // queued items on memex-cloud read as that one key).
         // Walk from the timer's STATE, not the timer: the timer also holds the captured ExecutionContext,
-        // whose ambient values are other code's callbacks.
+        // whose ambient values are other code's callbacks. The cheap check comes first so an item that is
+        // not Rx plumbing pays no reflection.
+        if (!IsReactivePlumbing(held))
+            return key;
         var origin = FieldValue(item, type, "_state") ?? FieldValue(item, type, "m_state");
-        return origin is not null && IsReactivePlumbing(held) && UserCallbackBehind(origin) is { } user
-            ? $"{key} ⇒ {user}"
-            : key;
+        return origin is not null && UserCallbackBehind(origin) is { } user ? $"{key} ⇒ {user}" : key;
     }
 
     private const int MaxWalkNodes = 160;
@@ -196,13 +197,17 @@ public sealed record ThreadPoolQueueCensus(
         for (var depth = 0; depth < MaxWalkDepth && level.Count > 0 && seen.Count < MaxWalkNodes; depth++)
         {
             var next = new List<object>();
+            var found = new SortedSet<string>(StringComparer.Ordinal);
             foreach (var node in level)
             {
                 if (node is Delegate action)
                 {
                     var assembly = action.Method.DeclaringType?.Assembly.GetName().Name;
                     if (assembly is not ("System.Reactive" or "System.Private.CoreLib"))
-                        return MethodOf(action);
+                    {
+                        found.Add(MethodOf(action));
+                        continue;
+                    }
                     if (action.Target is { } target && seen.Add(target))
                         next.Add(target);
                     continue;
@@ -227,6 +232,10 @@ public sealed record ThreadPoolQueueCensus(
                 }
             }
 
+            // Every distinct callback at the NEAREST level that has any, in ordinal order, so the key does
+            // not depend on the runtime's field order and a timer reaching several of them names them all.
+            if (found.Count > 0)
+                return string.Join(" | ", found.Take(3));
             level = next;
         }
 
