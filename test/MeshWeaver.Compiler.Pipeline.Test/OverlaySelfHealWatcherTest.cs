@@ -101,10 +101,61 @@ public class OverlaySelfHealWatcherTest
         IScheduler? scheduler = null,
         NodeTypeCompilationHelpers.BuildGuards? guards = null,
         Func<IObservable<MeshNode?>>? reRead = null,
-        OverlayHealBudget? budget = null)
+        OverlayHealBudget? budget = null,
+        Func<MeshNode, NodeTypeDefinition, IObservable<bool>>? buildLoadable = null)
         => NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
             typeStream, InstancePath, new JsonSerializerOptions(), recycler.Recycle, reportStuck: () => { },
-            NodeTypePath, typeVersionAtOverlay, logger: null, scheduler, guards, reRead, budget);
+            NodeTypePath, typeVersionAtOverlay, logger: null, scheduler, guards, reRead, budget, buildLoadable);
+
+    /// <summary>A type mid-recompile: status Compiling, still naming the PREVIOUS (usable-looking) build.</summary>
+    private static MeshNode CompilingWithPreviousBuild(long version) =>
+        new MeshNode("SelfHealType", "TestData")
+        {
+            NodeType = MeshNode.NodeTypePath,
+            Version = version,
+            Content = new NodeTypeDefinition
+            {
+                CompilationStatus = CompilationStatus.Compiling,
+                LatestAssemblyCollection = "assemblies",
+                LatestAssemblyPath = $"{NodeTypePath}/Release/v{version - 1}.dll",
+                CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
+            }
+        };
+
+    /// <summary>
+    /// THE DEFECT: a type that is Compiling and whose only recorded assembly is stale and missing
+    /// from the store reads "usable" by metadata alone. The self-heal must NOT recycle the instance
+    /// (it cannot bind yet; the hub would die mid-compile) — it waits for the compile to settle,
+    /// then heals on the loadable settled build.
+    /// </summary>
+    [Fact]
+    public void CompilingWithMissingAssembly_DoesNotRecycle_UntilCompileSettles()
+    {
+        var recycler = new Recycler();
+        var typeStream = new Subject<MeshNode>();
+        using var watcher = Arm(recycler, typeStream, typeVersionAtOverlay: 5,
+            buildLoadable: (_, d) => Observable.Return(d.CompilationStatus == CompilationStatus.Ok));
+
+        typeStream.OnNext(CompilingWithPreviousBuild(version: 6));
+        typeStream.OnNext(CompilingWithPreviousBuild(version: 7));
+        AssertNoDispose(recycler);
+
+        typeStream.OnNext(TypeNode(version: 8, usable: true));
+        AssertDisposedExactlyOnce(recycler);
+    }
+
+    /// <summary>Negative control: a Compiling type whose named build IS in the store still heals.</summary>
+    [Fact]
+    public void CompilingWithLoadableNewerBuild_Recycles()
+    {
+        var recycler = new Recycler();
+        var typeStream = new Subject<MeshNode>();
+        using var watcher = Arm(recycler, typeStream, typeVersionAtOverlay: 5,
+            buildLoadable: (_, _) => Observable.Return(true));
+
+        typeStream.OnNext(CompilingWithPreviousBuild(version: 6));
+        AssertDisposedExactlyOnce(recycler);
+    }
 
     [Fact]
     public void VersionGated_FiresExactlyOnce_OnVersionAdvancingUsableEmission()

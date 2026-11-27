@@ -2664,7 +2664,8 @@ internal static class NodeTypeEnrichmentHelpers
                             // The escape hatch out of a permanently silent type stream — see
                             // ArmOverlaySelfHeal's re-evaluation route (issue #1814 defect B).
                             reRead: AuthoritativeTypeRead(meshHub, nodeType),
-                            budget: meshHub.ServiceProvider.GetService<OverlayHealBudget>()));
+                            budget: meshHub.ServiceProvider.GetService<OverlayHealBudget>(),
+                            buildLoadable: (t, d) => BuildBytesPresent(meshHub, t, d)));
                     }
                     catch (Exception ex)
                     {
@@ -2674,6 +2675,24 @@ internal static class NodeTypeEnrichmentHelpers
                     }
                 });
         return overlaid with { HubConfiguration = withWatcher };
+    }
+
+    /// <summary>
+    /// Whether the assembly store of THIS process holds the bytes of the build a NodeType record
+    /// names (by identity, never refetching) — the "loadable" half of "usable" for an in-flight
+    /// type (see <see cref="ArmOverlaySelfHeal"/>). The framework's own assemblies are in-process.
+    /// </summary>
+    private static IObservable<bool> BuildBytesPresent(
+        IMessageHub meshHub, MeshNode typeNode, NodeTypeDefinition def)
+    {
+        if (string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal))
+            return Observable.Return(true);
+        var store = meshHub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+        return store
+            .TryGetBuildPath(typeNode.Path, def.LastCompiledVersion ?? typeNode.Version,
+                def.LatestAssemblyPath, def.LatestAssemblyMvid)
+            .Take(1)
+            .Select(p => !string.IsNullOrEmpty(p));
     }
 
     /// <summary>
@@ -3088,9 +3107,28 @@ internal static class NodeTypeEnrichmentHelpers
         IScheduler? scheduler = null,
         NodeTypeCompilationHelpers.BuildGuards? guards = null,
         Func<IObservable<MeshNode?>>? reRead = null,
-        OverlayHealBudget? budget = null)
+        OverlayHealBudget? budget = null,
+        Func<MeshNode, NodeTypeDefinition, IObservable<bool>>? buildLoadable = null)
     {
         var clock = scheduler ?? Scheduler.Default;
+
+        // 🚨 "Usable" means a build THIS process can load, not merely one the record names. While
+        // a compile is in flight (Pending/Compiling) the record still carries the PREVIOUS
+        // coordinates, and after a restart or a store purge those bytes may be gone: metadata-only
+        // HasUsableBuild then reads true, the watcher recycles an instance that cannot bind yet, and
+        // the hub dies mid-compile under its callers (Cornerstone SourceDocumentDataLoadingTest).
+        // So an in-flight type is only a heal signal when the store holds its named bytes; otherwise
+        // the emission is dropped and the heal waits for the compile to settle (a later emission, the
+        // grace route or the re-read ladder). Settled types keep the metadata rule: a recycle there
+        // re-resolves (and may refetch) the bytes.
+        IObservable<bool> Loadable(MeshNode t, NodeTypeDefinition d)
+            => buildLoadable is null
+               || d.CompilationStatus is not (CompilationStatus.Pending or CompilationStatus.Compiling)
+                ? Observable.Return(true)
+                : Observable.Defer(() => buildLoadable(t, d))
+                    .Take(1)
+                    .DefaultIfEmpty(false)
+                    .Catch<bool, Exception>(_ => Observable.Return(false));
 
         // ContentAs, never `is NodeTypeDefinition` — the #1669 blindness on un-materialized JSON
         // emissions; see ArmStaleAssemblySelfHeal's predicate note. Deserialize ONCE per node and
@@ -3148,7 +3186,10 @@ internal static class NodeTypeEnrichmentHelpers
             return Observable.Never<MeshNode>();
         });
 
-        var usable = guardedTypeStream.Where(t => Evaluate(t).Usable);
+        var usable = guardedTypeStream
+            .Select(t => (Node: t, Verdict: Evaluate(t)))
+            .Where(x => x.Verdict.Usable)
+            .SelectMany(x => Loadable(x.Node, x.Verdict.Def!).Where(ok => ok).Select(_ => x.Node));
 
         // FAST path — the version advanced past the overlay: a genuinely NEW build landed, heal now.
         var advanced = usable.Where(t =>
@@ -3209,7 +3250,7 @@ internal static class NodeTypeEnrichmentHelpers
                     .Do(x => ReportReEvaluation(attempt, x.Node, x.Verdict)))
                 .Concat()
                 .Where(x => x.Verdict.Usable)
-                .Select(x => x.Node!);
+                .SelectMany(x => Loadable(x.Node!, x.Verdict.Def!).Where(ok => ok).Select(_ => x.Node!));
 
         var healed = 0;
         var heal = advanced
