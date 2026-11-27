@@ -2466,7 +2466,17 @@ public class MessageService : IMessageService
     {
         lock (turnGate)
         {
-            if (deferredQueue.Count == 0)
+            // 🚨 A LIVE tracker for this id means the delivery has been deferred AGAIN since this
+            // timer was armed (a restore by OpenGate, then a park behind another gate): the turn in
+            // the queue belongs to that newer deferral, whose own timer owns its fate. The check
+            // is inside turnGate on purpose — a re-deferral registers its tracker BEFORE it
+            // enqueues under this same lock, so either we see the tracker, or its turn is not yet
+            // in the queue to be mistaken for ours.
+            if (deferredDeliveries.ContainsKey(delivery.Id))
+                return;
+            // Nothing to rebuild when the turn is not parked here (already restored to the main
+            // queue): avoids the allocation and the full pass in the common no-op case.
+            if (!deferredQueue.Any(t => ReferenceEquals(t.Delivery, delivery)))
                 return;
             var kept = new Queue<QueuedTurn>(deferredQueue.Count);
             var evicted = false;

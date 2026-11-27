@@ -31,6 +31,7 @@ public class AMirrorWithoutItsFirstFrameStillHearsTheOwnerEndTest(ITestOutputHel
 
     private int subscribes;
     private IMessageHub? owner;
+    private readonly Lock streamGate = new();
     private (string StreamId, Address Subscriber)? stream;
     private readonly ReplaySubject<int> secondAsk = new();
 
@@ -41,7 +42,8 @@ public class AMirrorWithoutItsFirstFrameStillHearsTheOwnerEndTest(ITestOutputHel
                 if (d.Message is not SubscribeRequest subscribe)
                     return next.Invoke(d, ct);
                 var n = Interlocked.Increment(ref subscribes);
-                stream ??= (subscribe.StreamId, d.Sender);
+                lock (streamGate)
+                    stream ??= (subscribe.StreamId, d.Sender);
                 if (n == 1)
                     return Observable.Return(d.Processed()); // the lost initial: no ack, no Full
                 secondAsk.OnNext(n);
@@ -78,13 +80,15 @@ public class AMirrorWithoutItsFirstFrameStillHearsTheOwnerEndTest(ITestOutputHel
 
         // The first ask has been swallowed, so the mirror is waiting for a frame that never comes.
         await Observable.Interval(TimeSpan.FromMilliseconds(20))
-            .Where(_ => stream is not null)
+            .Where(_ => { lock (streamGate) return stream is not null; })
             .Take(1)
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
         Volatile.Read(ref count).Should().Be(0, "the owner swallowed the initial subscribe");
 
-        var (streamId, subscriber) = stream!.Value;
+        (string StreamId, Address Subscriber) held2;
+        lock (streamGate) held2 = stream!.Value;
+        var (streamId, subscriber) = held2;
         owner.Post(new StreamEndedEvent(streamId), o => o.WithTarget(subscriber));
 
         await secondAsk.Should().Within(TestTimeouts.Convergence)
